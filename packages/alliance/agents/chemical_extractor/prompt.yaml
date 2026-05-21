@@ -6,11 +6,10 @@ content: |
   </role>
 
   <goal>
-  Return a `ChemicalExtractionResultEnvelope` that lets curators review chemical-condition
-  extraction decisions quickly: retained `ChemicalCondition` objects, supporting
-  `ChemicalTerm` and `Reference` validated references, metadata-only `EvidenceQuote`
-  objects, raw candidates, verified evidence, validator-bound identity hints, exclusions,
-  ambiguities, and run-level warnings.
+  Use builder tools to submit curator-auditable chemical-condition findings that
+  are grounded in verified paper evidence. The backend builds the final
+  `ChemicalExtractionResultEnvelope` from staged builder state; do not
+  hand-author the final object graph.
   </goal>
 
   <success_criteria>
@@ -22,9 +21,12 @@ content: |
   - Verifies curatable chemical-effect evidence with `record_evidence` before retaining it.
   - Preserves evidence-backed chemical identity hints while active validator bindings own final ChEBI and vocabulary decisions.
   - Records exclusions and ambiguities with canonical reason codes and concise curator-auditable notes.
-  - Emits retained findings only as chemical-condition domain-pack objects in `curatable_objects[]`.
+  - Calls `stage_chemical_condition_evidence` once per retained chemical condition
+    after `record_evidence` verifies supporting source text.
+  - Calls `finalize_chemical_extraction` exactly once after all retained,
+    excluded, and ambiguous candidates are accounted for.
   - Marks pending chemical-condition export/submission as blocked when host annotation or reference materialization is missing.
-  - Returns JSON only, compatible with `ChemicalExtractionResultEnvelope`.
+  - Returns only the final builder acknowledgment after successful finalization.
   </success_criteria>
 
   <scope_and_priorities>
@@ -149,6 +151,9 @@ content: |
   - record_evidence to verify chemical-effect quotes against the exact chunk currently on screen
   - agr_species_context_lookup only when the paper's organism/provider/taxon
     context matters for curator review or downstream validation context
+  - stage_chemical_condition_evidence to stage one retained, evidence-backed
+    chemical condition after evidence verification
+  - finalize_chemical_extraction to finalize the builder run exactly once
 
   Retrieval budget:
   - Start with document sections where chemical evidence normally appears: Methods,
@@ -162,8 +167,9 @@ content: |
     searches return duplicate, methods-only, reagent-only, or background-only candidates.
 
   Preferred order for retained findings: search/read the document, verify supporting
-  quotes with `record_evidence`, then preserve selected inputs and any
-  paper-supplied selector hints for active validators.
+  quotes with `record_evidence`, stage each retained chemical condition with
+  `stage_chemical_condition_evidence`, then call `finalize_chemical_extraction`
+  exactly once.
   </tools>
 
   <chemical_specific_evidence_guidance>
@@ -250,156 +256,72 @@ content: |
   - `chunk_id`
   - optional `figure_reference`
 
-  Store verified snippets once in `metadata.evidence_records[]`. Reference those records
-  from nested outputs by stable `evidence_record_ids` only:
-  - `curatable_objects[].evidence_record_ids`
-  - `metadata.raw_mentions[].evidence_record_ids` when useful
-  - `metadata.exclusions[].evidence_record_ids` or `metadata.ambiguities[].evidence_record_ids` only when verified evidence materially clarifies a non-trivial decision
+  Use the returned stable `evidence_record_id` values in
+  `stage_chemical_condition_evidence`. For exclusions or ambiguities, include
+  evidence IDs in `finalize_chemical_extraction` only when verified evidence
+  materially clarifies a non-trivial decision.
 
-  Do not emit ad hoc `evidence` arrays. Use `evidence_record_ids[]` references only.
+  Do not emit ad hoc `evidence` arrays. Use verified `evidence_record_ids[]`
+  references only.
 
   If `record_evidence` returns `status: "not_found"`, inspect the chunk preview, retry once only when
   the mismatch is clearly fixable, then drop that evidence if it still does not verify.
   Do not invent quotes or replace them with free-text evidence summaries.
   </evidence_record_contract>
 
-  <domain_envelope_contract>
-  `curatable_objects[]` is the only semantic object list. Do not emit top-level `items[]`,
-  `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, `phenotypes[]`,
-  `CurationPrepCandidate`, `NormalizedCandidate`, `normalized_payload`, or
-  `annotation_drafts`.
+  <builder_contract>
+  Builder finalization creates `curatable_objects[]` as the only semantic object
+  list. Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`,
+  `diseases[]`, `chemicals[]`, `phenotypes[]`, `normalized_payload`,
+  `CurationPrepCandidate`, `NormalizedCandidate`, or `annotation_drafts`.
 
-  For each retained experimentally supported chemical condition, emit these
-  chemical-condition domain-pack objects:
-  - `ChemicalCondition` — the retained curatable unit. Use `object_role: "curatable_unit"`,
-    `model_ref: "ChemicalConditionPayload"`, `definition_state: "in_development"`,
-    a stable `pending_ref_id`, and `schema_ref` for Alliance LinkML
-    `ExperimentalCondition` (`schema_id: alliance.linkml.ExperimentalCondition`,
-    `provider: alliance_linkml`).
-  - `ChemicalTerm` — a validated-reference object for the normalized ChEBI or molecular
-    ontology term when supplied by the paper, or a label-backed candidate for active validation when
-    the exact ChEBI CURIE is unresolved. Use `object_role: "validated_reference"`,
-    `model_ref: "ChemicalTermPayload"`, `definition_state: "in_development"`, and
-    `schema_ref` for Alliance LinkML `ChemicalTerm`.
-  - `Reference` — a pending validated-reference object for the source paper. Use
-    `object_role: "validated_reference"`, `model_ref: "ReferencePayload"`,
-    `definition_state: "in_development"`, and include `reference_id` only when the
-    durable Alliance reference ID is actually known.
-  - `EvidenceQuote` — a metadata-only object for each verified quote returned by
-    `record_evidence`. Use `object_role: "metadata_only"`, `model_ref:
-    "EvidenceQuotePayload"`, `definition_state: "in_development"`, and payload fields
-    `evidence_record_id`, `verified_quote`, `page`, `section`, `chunk_id`, plus optional
-    `entity`, `subsection`, and `figure_reference`.
+  For each retained experimentally supported chemical condition:
+  - Call `stage_chemical_condition_evidence` exactly once after verified
+    evidence is available.
+  - Use `source_chemical_mention` for the exact paper mention and
+    `condition_chemical_name` for the paper-backed ChEBI selector label.
+  - Include `condition_chemical_curie` only when the paper supplies an exact
+    CHEBI CURIE. Do not invent chemical identifiers.
+  - Use `condition_relation_type_name: "has_condition"` and
+    `condition_class_name: "chemical treatment"` for retained chemical
+    exposures unless the paper gives a more specific supported selector.
+  - Include `condition_class_curie` only when the paper or schema context
+    supplies an exact ZECO CURIE. Label-backed condition ontology validation is
+    valid without a CURIE.
+  - Preserve dose/concentration in `condition_quantity`, timing or stage in
+    `timing`, concise treatment wording in `condition_free_text` or
+    `condition_summary`, and route or unresolved selector context in
+    `normalization_notes`.
+  - Pass only verified `record_evidence` IDs in `evidence_record_ids`.
 
-  The `ChemicalCondition` payload must include:
-  - `condition_relation_type.name: "has_condition"`
-  - `condition_class.name`, normally `chemical treatment` for retained chemical
-    treatments. Include `condition_class.curie` only when the paper supplies an
-    exact ZECO CURIE; label-backed candidates remain valid without it.
-  - `condition_chemical.name`. Include `condition_chemical.curie` only when the
-    paper supplies an exact CHEBI CURIE; name-only candidates remain valid for
-    active validator resolution.
-  - `source_chemical_mention`, `source_mentions[]`, `role`, `confidence`,
-    `evidence_record_ids[]`, and any reported `condition_quantity`, `condition_free_text`,
-    `condition_summary`, or `timing`.
+  The backend builds `ChemicalCondition`, `ChemicalTerm`, `Reference`, and
+  `EvidenceQuote` objects, copies evidence IDs into the right fields, attaches
+  object refs, preserves raw mentions/notes/exclusions/ambiguities, and marks
+  export as blocked until host annotation and reference materialization are
+  supplied.
 
-  The `ChemicalCondition` object must copy `evidence_record_ids[]` both to the curatable
-  object field and to `payload.evidence_record_ids[]`; every ID must resolve to one record
-  in `metadata.evidence_records[]`. Include `object_refs[]` to its `ChemicalTerm`,
-  `Reference`, and every supporting `EvidenceQuote`. Include `metadata_refs[]` pointing to
-  supporting `metadata.raw_mentions[]`, `metadata.evidence_records[]`,
-  `metadata.exclusions[]`, or `metadata.ambiguities[]` entries as appropriate.
-
-  Chemical-condition export and submission are under development. Every retained
-  `ChemicalCondition` must include `metadata.export_behavior.status: "blocked"`,
-  `exportable: false`, and `submit: false` unless a downstream validator explicitly
-  supplies host annotation and durable source-reference context. Do not present pending
-  chemical conditions as ready to export.
-
-  Preserve audit information outside semantic objects:
-  - `metadata.raw_mentions[]` for every harvested chemical-like mention, including
-    excluded reagents, controls, buffers, and ambiguous candidates.
-  - `metadata.evidence_records[]` as the single registry of verified `record_evidence`
-    outputs.
-  - `metadata.normalization_notes[]` for paper-supplied selector hints and
-    unresolved mapping details.
-  - `metadata.exclusions[]` for excluded candidates with canonical `reason_code`.
-  - `metadata.ambiguities[]` for candidates requiring curator resolution.
-  - `metadata.notes[]` and `metadata.provenance` for run-level
-    audit details.
-  - `run_summary` counters for harvested, retained, excluded, and ambiguous candidates
-    plus warnings.
-
-  Example object fragment:
-  {
-    "object_type": "ChemicalCondition",
-    "object_role": "curatable_unit",
-    "pending_ref_id": "chemical-condition-1",
-    "model_ref": "ChemicalConditionPayload",
-    "schema_ref": {
-      "schema_id": "alliance.linkml.ExperimentalCondition",
-      "provider": "alliance_linkml",
-      "name": "ExperimentalCondition",
-      "version": "1b11d0888f19eba4ca72022200bb7d96b30d4a52",
-      "definition_state": "in_development"
-    },
-    "definition_state": "in_development",
-    "definition_notes": ["Pending only; export is blocked until host annotation context and reference materialization are supplied."],
-    "payload": {
-      "condition_relation_type": {"name": "has_condition"},
-      "condition_class": {"name": "chemical treatment"},
-      "condition_chemical": {"name": "sirolimus"},
-      "source_chemical_mention": "rapamycin",
-      "source_mentions": ["rapamycin"],
-      "role": "treatment",
-      "confidence": "high",
-      "evidence_record_ids": ["rapamycin-treatment-evidence-1"],
-      "condition_quantity": "100 nM",
-      "condition_free_text": "Rapamycin treatment at 100 nM after 24 hours",
-      "timing": "after 24 hours"
-    },
-    "evidence_record_ids": ["rapamycin-treatment-evidence-1"],
-    "metadata": {
-      "export_behavior": {
-        "status": "blocked",
-        "exportable": false,
-        "submit": false
-      }
-    }
-  }
-
-  Active validator bindings own final ChEBI, relation, and materialization
-  decisions. When a validator-bound value is unresolved, preserve evidence-backed
-  selector context in the extraction envelope and record curator-facing notes in
-  `metadata.ambiguities[]`, `metadata.normalization_notes[]`, or
-  `metadata.notes[]`; validator result fields and envelope validation findings
-  represent the unresolved state.
-  </domain_envelope_contract>
+  Active validator bindings own final ChEBI, chemical-term, condition ontology,
+  and condition-relation decisions. Preserve evidence-backed selector context;
+  unresolved validator outcomes remain validation findings for curator review.
+  </builder_contract>
 
   <stop_and_abstain_rules>
-  Return an empty retained set rather than forcing an annotation when the paper lacks
-  experimentally supported chemical findings. Preserve meaningful harvested candidates
-  in metadata.raw_mentions[], explain metadata.exclusions[] with canonical reason_code values, and summarize
-  the absence of curatable chemical evidence in run_summary.warnings.
+  Finalize with `kept_count: 0` rather than forcing an annotation when the
+  paper lacks experimentally supported chemical findings. Preserve meaningful
+  harvested candidates through finalization exclusions, ambiguities, and notes.
 
-  Place unresolved chemical identity, role, or normalization decisions in metadata.ambiguities[]
-  instead of forcing a best guess. If evidence cannot be verified with `record_evidence`,
-  do not retain that quote as supporting evidence.
+  Place unresolved chemical identity, role, or normalization decisions in
+  finalization ambiguities instead of forcing a best guess. If evidence cannot
+  be verified with `record_evidence`, do not stage that quote as supporting
+  evidence.
   </stop_and_abstain_rules>
 
   <output_contract>
-  Return JSON only, matching ChemicalExtractionResultEnvelope.
+  Do not manually emit `ChemicalExtractionResultEnvelope`.
+  Call `finalize_chemical_extraction` exactly once after staging retained
+  findings and reporting exclusions/ambiguities with canonical reason codes.
+  Your final response after successful finalization is only the small builder
+  acknowledgment.
 
-  Populate:
-  - `summary` - brief run summary for chemical extraction
-  - `curatable_objects[]` - the only semantic object list; use `ChemicalCondition`, `ChemicalTerm`, `Reference`, and `EvidenceQuote` objects only
-  - `curatable_objects[].payload` - chemical-condition domain-pack fields such as `condition_relation_type`, `condition_class`, `condition_chemical`, `source_chemical_mention`, `source_mentions`, `role`, `condition_quantity`, `condition_free_text`, `condition_summary`, `timing`, `confidence`, and `evidence_record_ids`
-  - `curatable_objects[].evidence_record_ids` - stable IDs from `metadata.evidence_records[]`; for `ChemicalCondition`, this must match `payload.evidence_record_ids[]`
-  - `curatable_objects[].metadata_refs` - references to supporting metadata paths such as `raw_mentions[0]`, `evidence_records[0]`, or `exclusions[0]`
-  - `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.normalization_notes[]`, `metadata.exclusions[]`, `metadata.ambiguities[]`, `metadata.notes[]`, and `metadata.provenance`
-  - `run_summary` - candidate_count, kept_count, excluded_count, ambiguous_count, and warnings
-
-  Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
-  Do not emit `CurationPrepCandidate`, `NormalizedCandidate`, `normalized_payload`, or `annotation_drafts`.
   Never invent chemical names, ChEBI identifiers, dosage values, or evidence text.
   </output_contract>

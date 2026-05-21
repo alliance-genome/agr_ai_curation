@@ -22,7 +22,9 @@ import dev_release_smoke as smoke
 DEFAULT_BASE_URL = "http://192.168.86.44:8900"
 DEFAULT_OUTPUT_DIR = Path("docs/design/pdf-corpus-trials")
 DEFAULT_DOWNLOAD_DIR = Path("/tmp/agr_domain_envelope_pdf_corpus")
-BUILDER_REQUIRED_DOMAINS = frozenset({"allele", "gene", "disease"})
+BUILDER_REQUIRED_DOMAINS = frozenset(
+    {"allele", "gene", "disease", "chemical_condition"}
+)
 
 
 @dataclass(frozen=True)
@@ -152,6 +154,8 @@ TRIALS: tuple[CorpusTrial, ...] = (
         ),
         expected_validator_bindings=(
             "chemical_condition.chebi_api_lookup",
+            "chemical_condition.term_chebi_api_lookup",
+            "chemical_condition.condition_ontology_lookup",
             "chemical_condition.condition_relation_type_lookup",
         ),
     ),
@@ -717,6 +721,12 @@ def _summarize_flow_events(flow_result: dict[str, Any]) -> dict[str, Any]:
             or _event_tool_name(event) == "record_evidence"
             or _event_tool_name(event) == "stage_allele_paper_evidence"
             or _event_tool_name(event) == "finalize_allele_extraction"
+            or _event_tool_name(event) == "stage_gene_mention_evidence"
+            or _event_tool_name(event) == "finalize_gene_extraction"
+            or _event_tool_name(event) == "stage_disease_assertion_evidence"
+            or _event_tool_name(event) == "finalize_disease_extraction"
+            or _event_tool_name(event) == "stage_chemical_condition_evidence"
+            or _event_tool_name(event) == "finalize_chemical_extraction"
             or _event_tool_name(event) == "agr_species_context_lookup"
         ],
     }

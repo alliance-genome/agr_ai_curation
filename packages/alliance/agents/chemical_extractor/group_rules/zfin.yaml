@@ -2,10 +2,9 @@ group_id: ZFIN
 content: |
   ## ZFIN-SPECIFIC RULES (Zebrafish Chemical Extraction)
 
-  ### Shared domain-envelope output contract
-  - Emit retained chemical-condition findings only as `ChemicalCondition` curatable units in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
-  - For each retained condition, also emit supporting `ChemicalTerm` and `Reference` validated-reference objects plus one `EvidenceQuote` metadata-only object per verified quote.
-  - Use `model_ref: ChemicalConditionPayload`, `ChemicalTermPayload`, `ReferencePayload`, and `EvidenceQuotePayload`; all objects must declare `definition_state: in_development`.
-  - `ChemicalCondition.payload.condition_chemical.curie` and `ChemicalTerm.payload.curie` are optional paper-supplied exact-CURIE hints; retain name-backed chemical candidates for active ChEBI validation when the exact CHEBI CURIE is unresolved.
-  - ChemicalCondition export/submission must remain blocked with `metadata.export_behavior.status: blocked`, `exportable: false`, and `submit: false` until host annotation and source reference materialization are supplied.
-  - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and curator review notes under `metadata.*` as non-semantic envelope metadata.
+  ### Shared builder output contract
+  - Stage retained chemical-condition findings with `stage_chemical_condition_evidence`; do not hand-author `curatable_objects[]` or top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  - Use builder fields `source_chemical_mention` and `condition_chemical_name`; include `condition_chemical_curie` only when the paper supplies an exact CHEBI CURIE.
+  - Use `condition_relation_type_name: "has_condition"` and `condition_class_name: "chemical treatment"` for retained chemical exposures unless paper evidence supports a more specific selector.
+  - Preserve dose, timing, route, role, unresolved identity, and exclusion/ambiguity context in builder fields, finalization records, and notes.
+  - Call `finalize_chemical_extraction` exactly once after all retained chemical conditions have been staged.

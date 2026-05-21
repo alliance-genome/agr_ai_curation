@@ -82,6 +82,25 @@ def _load_disease_output_type():
 DiseaseExtractionResultEnvelope = _load_disease_output_type()
 
 
+def _load_chemical_output_type():
+    schema_path = REPO_ROOT / "packages/alliance/agents/chemical_extractor/schema.py"
+    spec = importlib.util.spec_from_file_location(
+        "chemical_builder_test_schema",
+        schema_path,
+    )
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    module.ChemicalExtractionResultEnvelope.model_rebuild(
+        _types_namespace=module.__dict__,
+    )
+    return module.ChemicalExtractionResultEnvelope
+
+
+ChemicalExtractionResultEnvelope = _load_chemical_output_type()
+
+
 def _builder() -> DomainPackExtractionBuilder:
     return DomainPackExtractionBuilder.model_validate(
         {
@@ -235,6 +254,17 @@ def _gene_builder() -> DomainPackExtractionBuilder:
 
 def _disease_builder() -> DomainPackExtractionBuilder:
     pack_path = REPO_ROOT / "packages/alliance/domain_packs/disease/domain_pack.yaml"
+    pack = yaml.safe_load(pack_path.read_text(encoding="utf-8"))
+    return DomainPackExtractionBuilder.model_validate(
+        pack["metadata"]["extraction_builder"]
+    )
+
+
+def _chemical_builder() -> DomainPackExtractionBuilder:
+    pack_path = (
+        REPO_ROOT
+        / "packages/alliance/domain_packs/chemical_condition/domain_pack.yaml"
+    )
     pack = yaml.safe_load(pack_path.read_text(encoding="utf-8"))
     return DomainPackExtractionBuilder.model_validate(
         pack["metadata"]["extraction_builder"]
@@ -693,6 +723,102 @@ def test_disease_builder_materializes_multi_target_disease_envelope():
         assert disease_object["metadata"]["write_behavior"]["status"] == "blocked"
         assert envelope["metadata"]["normalization_notes"] == [
             "Mouse Pkd1 model context supports MGI provider selector."
+        ]
+    finally:
+        clear_extraction_staging(token)
+
+
+def test_chemical_builder_materializes_full_condition_graph():
+    token = activate_extraction_staging(
+        agent_id="chemical_extractor",
+        specialist_name="Chemical Extraction",
+        domain_pack_id="agr.alliance.chemical_condition",
+        domain_pack_version="0.1.0",
+        builder=_chemical_builder(),
+        curation_output_type=ChemicalExtractionResultEnvelope,
+    )
+    try:
+        state = current_extraction_staging_state(required=True)
+        record_document_retrieval_call("search_document", {"query": "estradiol"})
+        register_verified_evidence_record(
+            {
+                "evidence_record_id": "ev-chemical-estradiol",
+                "entity": "estradiol",
+                "verified_quote": (
+                    "Estradiol treatment altered zebrafish segmentation during "
+                    "embryonic development."
+                ),
+                "page": 5,
+                "section": "Results",
+                "subsection": "Small molecule screen",
+                "chunk_id": "chunk-chemical-1",
+                "figure_reference": "Figure 3",
+            }
+        )
+
+        staged = stage_extraction_builder_payload(
+            {
+                "source_chemical_mention": "estradiol",
+                "condition_chemical_name": "estradiol",
+                "evidence_record_ids": ["ev-chemical-estradiol"],
+                "role": "treatment",
+                "confidence": "high",
+                "condition_quantity": "10 uM",
+                "condition_free_text": (
+                    "Estradiol treatment during zebrafish embryonic development"
+                ),
+                "timing": "embryonic development",
+                "normalization_notes": [
+                    "Retain estradiol as a name-backed ChEBI selector."
+                ],
+                "raw_mentions": ["estradiol"],
+            }
+        )
+        assert staged["status"] == "staged"
+
+        finalized = finalize_extraction_builder_payload(
+            {
+                "summary": "Retained one chemical condition.",
+                "candidate_count": 1,
+                "kept_count": 1,
+                "excluded_count": 0,
+                "ambiguous_count": 0,
+            }
+        )
+        assert finalized["status"] == "finalized"
+        assert state.validator_target_count == 4
+
+        envelope = finalized_envelope_from_state()
+        assert envelope is not None
+        object_types = [item["object_type"] for item in envelope["curatable_objects"]]
+        assert object_types == [
+            "Reference",
+            "ChemicalTerm",
+            "EvidenceQuote",
+            "ChemicalCondition",
+        ]
+
+        condition = envelope["curatable_objects"][3]
+        assert condition["object_role"] == "curatable_unit"
+        assert condition["model_ref"] == "ChemicalConditionPayload"
+        assert condition["payload"]["condition_relation_type"]["name"] == (
+            "has_condition"
+        )
+        assert condition["payload"]["condition_class"]["name"] == "chemical treatment"
+        assert condition["payload"]["condition_chemical"]["name"] == "estradiol"
+        assert condition["payload"]["source_chemical_mention"] == "estradiol"
+        assert condition["payload"]["condition_quantity"] == "10 uM"
+        assert condition["payload"]["evidence_record_ids"] == [
+            "ev-chemical-estradiol"
+        ]
+        assert {ref["object_type"] for ref in condition["object_refs"]} == {
+            "ChemicalTerm",
+            "Reference",
+            "EvidenceQuote",
+        }
+        assert condition["metadata"]["export_behavior"]["status"] == "blocked"
+        assert envelope["metadata"]["normalization_notes"] == [
+            "Retain estradiol as a name-backed ChEBI selector."
         ]
     finally:
         clear_extraction_staging(token)

@@ -197,6 +197,59 @@ def test_disease_pack_declares_builder_tool_contract():
     assert builder["finalize_tool"] in agent["tools"]
 
 
+def test_chemical_pack_declares_builder_tool_contract():
+    alliance_registry = load_alliance_domain_pack_registry()
+    metadata = alliance_registry.get_pack("agr.alliance.chemical_condition").metadata
+    builder = metadata.metadata["extraction_builder"]
+
+    assert builder["enabled"] is True
+    assert builder["stage_tool"] == "stage_chemical_condition_evidence"
+    assert builder["finalize_tool"] == "finalize_chemical_extraction"
+    assert builder["model_final_ack_schema"] == "ExtractionToolFinalizationAck"
+    assert builder["curation_output_schema"] == "ChemicalExtractionResultEnvelope"
+    assert builder["fields"]["source_chemical_mention"]["required"] is True
+    assert builder["fields"]["condition_chemical_name"]["required"] is True
+    assert builder["fields"]["evidence_record_ids"]["min_items"] == 1
+    assert builder["fields"]["condition_relation_type_name"]["default"] == (
+        "has_condition"
+    )
+    assert builder["fields"]["condition_class_name"]["default"] == (
+        "chemical treatment"
+    )
+    assert {
+        target["binding_id"]
+        for target in builder["object_graph"]["validator_targets"]
+    } >= {
+        "chemical_condition.chebi_api_lookup",
+        "chemical_condition.term_chebi_api_lookup",
+        "chemical_condition.condition_ontology_lookup",
+        "chemical_condition.condition_relation_type_lookup",
+    }
+    assert builder["object_graph"]["required_objects"] == [
+        "ChemicalCondition",
+        "ChemicalTerm",
+        "Reference",
+        "EvidenceQuote",
+    ]
+
+    bindings = yaml.safe_load(
+        (REPO_ROOT / "packages/alliance/tools/bindings.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    tool_ids = {tool["tool_id"] for tool in bindings["tools"]}
+    assert builder["stage_tool"] in tool_ids
+    assert builder["finalize_tool"] in tool_ids
+
+    agent = yaml.safe_load(
+        (
+            REPO_ROOT / "packages/alliance/agents/chemical_extractor/agent.yaml"
+        ).read_text(encoding="utf-8")
+    )
+    assert builder["stage_tool"] in agent["tools"]
+    assert builder["finalize_tool"] in agent["tools"]
+
+
 def test_active_bindings_have_active_capability_metadata():
     alliance_registry = load_alliance_domain_pack_registry()
     pack_ids = {

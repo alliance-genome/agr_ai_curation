@@ -276,11 +276,116 @@ def finalize_disease_extraction(
     )
 
 
+@function_tool(
+    name_override="stage_chemical_condition_evidence",
+    description_override=(
+        "Stage one retained chemical-condition finding after verifying "
+        "supporting quotes with record_evidence. Submit one chemical mention "
+        "with chemical label/optional CURIE hints, condition class/relation "
+        "selector context, dose/timing text when available, and one or more "
+        "verified evidence_record_ids. The backend builds the "
+        "ChemicalExtractionResultEnvelope."
+    ),
+)
+def stage_chemical_condition_evidence(
+    source_chemical_mention: str,
+    condition_chemical_name: str,
+    evidence_record_ids: list[str],
+    role: Literal[
+        "treatment",
+        "assay_reagent",
+        "buffer",
+        "control",
+        "other",
+        "unspecified",
+    ],
+    confidence: Literal["high", "medium", "low"],
+    condition_relation_type_name: str = "has_condition",
+    condition_class_name: str = "chemical treatment",
+    condition_chemical_curie: str | None = None,
+    condition_class_curie: str | None = None,
+    condition_quantity: str | None = None,
+    condition_free_text: str | None = None,
+    condition_summary: str | None = None,
+    timing: str | None = None,
+    host_annotation_type: str | None = None,
+    host_annotation_id: str | None = None,
+    reference: BuilderReferenceInput | None = None,
+    normalization_notes: list[str] | None = None,
+    raw_mentions: list[str] | None = None,
+) -> dict[str, Any]:
+    """Stage one retained chemical-condition finding in builder state."""
+
+    return stage_extraction_builder_payload(
+        {
+            "source_chemical_mention": source_chemical_mention,
+            "condition_chemical_name": condition_chemical_name,
+            "condition_chemical_curie": condition_chemical_curie,
+            "condition_relation_type_name": condition_relation_type_name,
+            "condition_class_name": condition_class_name,
+            "condition_class_curie": condition_class_curie,
+            "evidence_record_ids": evidence_record_ids,
+            "role": role,
+            "confidence": confidence,
+            "condition_quantity": condition_quantity,
+            "condition_free_text": condition_free_text,
+            "condition_summary": condition_summary,
+            "timing": timing,
+            "host_annotation_type": host_annotation_type,
+            "host_annotation_id": host_annotation_id,
+            "reference": reference.model_dump(mode="json") if reference else None,
+            "normalization_notes": normalization_notes or [],
+            "raw_mentions": raw_mentions or [],
+        }
+    )
+
+
+@function_tool(
+    name_override="finalize_chemical_extraction",
+    description_override=(
+        "Finalize chemical extraction exactly once after all retained chemical "
+        "conditions have been staged. The backend builds the final "
+        "ChemicalExtractionResultEnvelope from staged state; the model should "
+        "only return a small acknowledgment."
+    ),
+)
+def finalize_chemical_extraction(
+    summary: str,
+    candidate_count: int,
+    kept_count: int,
+    excluded_count: int,
+    ambiguous_count: int,
+    exclusions: list[BuilderExclusionInput] | None = None,
+    ambiguities: list[BuilderAmbiguityInput] | None = None,
+    notes: list[str] | None = None,
+) -> dict[str, Any]:
+    """Finalize staged chemical-condition findings into curation output."""
+
+    return finalize_extraction_builder_payload(
+        {
+            "summary": summary,
+            "candidate_count": candidate_count,
+            "kept_count": kept_count,
+            "excluded_count": excluded_count,
+            "ambiguous_count": ambiguous_count,
+            "exclusions": [
+                exclusion.model_dump(mode="json") for exclusion in (exclusions or [])
+            ],
+            "ambiguities": [
+                ambiguity.model_dump(mode="json") for ambiguity in (ambiguities or [])
+            ],
+            "notes": notes or [],
+        }
+    )
+
+
 __all__ = [
     "finalize_allele_extraction",
+    "finalize_chemical_extraction",
     "finalize_disease_extraction",
     "finalize_gene_extraction",
     "stage_allele_paper_evidence",
+    "stage_chemical_condition_evidence",
     "stage_disease_assertion_evidence",
     "stage_gene_mention_evidence",
 ]

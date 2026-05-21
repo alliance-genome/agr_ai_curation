@@ -585,6 +585,306 @@ metadata:
     - curatable_unit
     - validated_reference
     - metadata_only
+  extraction_builder:
+    enabled: true
+    stage_tool: stage_chemical_condition_evidence
+    finalize_tool: finalize_chemical_extraction
+    retained_unit: chemical_condition
+    per_retained_finding: true
+    model_final_ack_schema: ExtractionToolFinalizationAck
+    curation_output_schema: ChemicalExtractionResultEnvelope
+    primary_stage_field: source_chemical_mention
+    dedupe_fields:
+      - source_chemical_mention
+      - condition_chemical_name
+      - evidence_record_ids
+    stage_description: Submit one retained chemical condition after verifying supporting quote text with record_evidence.
+    finalize_description: Call exactly once after all retained chemical conditions have been staged; the backend builds the final chemical-condition envelope.
+    fields:
+      source_chemical_mention:
+        json_type: string
+        required: true
+        maps_to: ChemicalCondition.payload.source_chemical_mention
+        hint: Exact chemical mention as written in the paper; do not combine multiple chemicals.
+      condition_chemical_name:
+        json_type: string
+        required: true
+        maps_to: ChemicalCondition.payload.condition_chemical.name
+        hint: Paper-backed chemical label or most searchable name for ChEBI validation.
+      condition_chemical_curie:
+        json_type: string
+        maps_to: ChemicalCondition.payload.condition_chemical.curie
+        hint: Optional exact CHEBI CURIE only when supplied by the paper; do not invent ontology IDs.
+      condition_relation_type_name:
+        json_type: string
+        default: has_condition
+        maps_to: ChemicalCondition.payload.condition_relation_type.name
+        hint: Condition relation type selector; use has_condition for retained chemical treatments unless the paper requires a different supported term.
+      condition_class_name:
+        json_type: string
+        default: chemical treatment
+        maps_to: ChemicalCondition.payload.condition_class.name
+        hint: Condition ontology label selector; normally chemical treatment for retained chemical exposures.
+      condition_class_curie:
+        json_type: string
+        maps_to: ChemicalCondition.payload.condition_class.curie
+        hint: Optional exact ZECO CURIE only when supplied by the paper or schema context; label-backed validation is valid without it.
+      evidence_record_ids:
+        json_type: array
+        required: true
+        collection: true
+        min_items: 1
+        maps_to: ChemicalCondition.payload.evidence_record_ids
+        hint: Each value must be returned by a verified record_evidence call from the current run.
+      role:
+        json_type: string
+        required: true
+        maps_to: ChemicalCondition.payload.role
+        hint: One of treatment, assay_reagent, buffer, control, other, or unspecified.
+      confidence:
+        json_type: string
+        required: true
+        maps_to: ChemicalCondition.payload.confidence
+        hint: Extractor confidence; use high, medium, or low.
+      condition_quantity:
+        json_type: string
+        maps_to: ChemicalCondition.payload.condition_quantity
+        hint: Paper wording for dose, concentration, or amount when stated.
+      condition_free_text:
+        json_type: string
+        maps_to: ChemicalCondition.payload.condition_free_text
+        hint: Exact or lightly trimmed treatment wording from the paper.
+      condition_summary:
+        json_type: string
+        maps_to: ChemicalCondition.payload.condition_summary
+        hint: Concise paper-backed condition summary for curator review.
+      timing:
+        json_type: string
+        maps_to: ChemicalCondition.payload.timing
+        hint: Paper wording for timing, stage, duration, or exposure window when stated.
+      host_annotation_type:
+        json_type: string
+        maps_to: ChemicalCondition.payload.host_annotation_type
+        hint: Optional host annotation type only when paper-supported; export remains blocked without downstream materialization.
+      host_annotation_id:
+        json_type: string
+        maps_to: ChemicalCondition.payload.host_annotation_id
+        hint: Optional host annotation identifier only when directly supplied by the workflow; do not invent.
+      reference:
+        json_type: object
+        maps_to: Reference.payload
+        hint: Optional source-reference metadata such as title or source_filename.
+      normalization_notes:
+        json_type: array
+        collection: true
+        maps_to: metadata.normalization_notes
+        hint: Optional curator-facing chemical, dose, route, abbreviation, or condition-class notes.
+      raw_mentions:
+        json_type: array
+        collection: true
+        maps_to: metadata.raw_mentions
+        hint: Optional supporting harvested chemical mentions for audit metadata.
+    finalize_fields:
+      summary:
+        json_type: string
+        required: true
+        hint: Concise run summary.
+      candidate_count:
+        json_type: integer
+        required: true
+        hint: Number of harvested chemical candidates considered.
+      kept_count:
+        json_type: integer
+        required: true
+        hint: Must equal the number of successfully staged retained chemical conditions.
+      excluded_count:
+        json_type: integer
+        required: true
+        hint: Must equal exclusions.length.
+      ambiguous_count:
+        json_type: integer
+        required: true
+        hint: Must equal ambiguities.length.
+      exclusions:
+        json_type: array
+        collection: true
+        hint: Excluded chemical candidates with allowed reason codes.
+      ambiguities:
+        json_type: array
+        collection: true
+        hint: Unresolved candidates requiring curator review.
+      notes:
+        json_type: array
+        collection: true
+        hint: Optional run-level audit notes.
+    object_graph:
+      required_objects:
+        - ChemicalCondition
+        - ChemicalTerm
+        - Reference
+        - EvidenceQuote
+      validator_targets:
+        - target_id: chemical_condition_identity
+          binding_id: chemical_condition.chebi_api_lookup
+          object_type: ChemicalCondition
+          field_path: condition_chemical.name
+        - target_id: chemical_term_identity
+          binding_id: chemical_condition.term_chebi_api_lookup
+          object_type: ChemicalTerm
+          field_path: name
+        - target_id: condition_ontology
+          binding_id: chemical_condition.condition_ontology_lookup
+          object_type: ChemicalCondition
+          field_path: condition_class.name
+        - target_id: condition_relation_type
+          binding_id: chemical_condition.condition_relation_type_lookup
+          object_type: ChemicalCondition
+          field_path: condition_relation_type.name
+      objects:
+        - object_type: Reference
+          model_ref: ReferencePayload
+          schema_ref:
+            schema_id: alliance.linkml.Reference
+            provider: alliance_linkml
+            name: Reference
+            version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/reference.yaml
+          object_role: validated_reference
+          definition_state: in_development
+          pending_ref_template: source_reference_{staged_id}
+          payload_fields:
+            title: reference.title
+            filename: reference.source_filename
+          metadata:
+            validation_state: pending_reference_materialization
+        - object_type: ChemicalTerm
+          model_ref: ChemicalTermPayload
+          schema_ref:
+            schema_id: alliance.linkml.ChemicalTerm
+            provider: alliance_linkml
+            name: ChemicalTerm
+            version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/ontologyTerm.yaml
+          object_role: validated_reference
+          definition_state: in_development
+          pending_ref_template: chemical_reference_{staged_id}
+          payload_fields:
+            curie: condition_chemical_curie
+            name: condition_chemical_name
+            source_mentions: raw_mentions
+          metadata:
+            validation_state: pending_chebi_lookup
+            validator_binding_id: chemical_condition.term_chebi_api_lookup
+        - object_type: EvidenceQuote
+          model_ref: EvidenceQuotePayload
+          object_role: metadata_only
+          definition_state: in_development
+          pending_ref_template: evidence_quote_{evidence_record_id}
+          repeat_for: evidence_record_ids
+          payload_fields:
+            evidence_record_id: evidence_record_id
+            entity: entity
+            verified_quote: verified_quote
+            page: page
+            section: section
+            subsection: subsection
+            chunk_id: chunk_id
+            figure_reference: figure_reference
+        - object_type: ChemicalCondition
+          model_ref: ChemicalConditionPayload
+          schema_ref:
+            schema_id: alliance.linkml.ExperimentalCondition
+            provider: alliance_linkml
+            name: ExperimentalCondition
+            version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/phenotypeAndDiseaseAnnotation.yaml
+            definition_state: in_development
+          object_role: curatable_unit
+          definition_state: in_development
+          definition_notes:
+            - Pending only; export is blocked until host annotation context and reference materialization are supplied.
+          pending_ref_template: chemical_condition_{staged_id}
+          payload_fields:
+            condition_relation_type.name: condition_relation_type_name
+            condition_class.curie: condition_class_curie
+            condition_class.name: condition_class_name
+            condition_chemical.curie: condition_chemical_curie
+            condition_chemical.name: condition_chemical_name
+            source_chemical_mention: source_chemical_mention
+            source_mentions: raw_mentions
+            role: role
+            confidence: confidence
+            evidence_record_ids: evidence_record_ids
+            condition_quantity: condition_quantity
+            condition_free_text: condition_free_text
+            condition_summary: condition_summary
+            timing: timing
+            host_annotation_type: host_annotation_type
+            host_annotation_id: host_annotation_id
+          object_refs:
+            - field_path: chemical
+              object_type: ChemicalTerm
+            - field_path: source_reference
+              object_type: Reference
+            - field_path: evidence_quote
+              object_type: EvidenceQuote
+              collection: true
+          metadata:
+            condition_kind: chemical_condition
+            semantic_source: domain_envelope.objects
+            validator_binding_ids:
+              - chemical_condition.chebi_api_lookup
+              - chemical_condition.term_chebi_api_lookup
+              - chemical_condition.condition_ontology_lookup
+              - chemical_condition.condition_relation_type_lookup
+            export_behavior:
+              status: blocked
+              exportable: false
+              submit: false
+              reason: Chemical condition export requires a host annotation, materialized reference, and downstream submission adapter.
+              required_export_context_fields:
+                - host_annotation_type
+                - host_annotation_id
+                - source_reference.reference_id
+    allowed_exclusion_reason_codes:
+      - previously_reported
+      - non_experimental_claim
+      - insufficient_experimental_evidence
+      - out_of_scope
+      - ambiguous_entity
+      - duplicate_mention
+      - unsupported_entity_type
+      - buffer_or_media_component
+      - standard_lab_reagent
+      - vehicle_control_only
+      - assay_reagent_only
+      - reference_list_only
+    allowed_ambiguity_reason_codes:
+      - ambiguous_entity
+      - insufficient_selector_context
+      - unresolved_identity
+    examples:
+      stage:
+        source_chemical_mention: rapamycin
+        condition_chemical_name: sirolimus
+        evidence_record_ids:
+          - ev_verified_chemical_quote_1
+        role: treatment
+        confidence: high
+        condition_quantity: 100 nM
+        condition_free_text: Rapamycin treatment at 100 nM after 24 hours
+        timing: after 24 hours
+      finalize:
+        summary: Staged one retained chemical condition and excluded one vehicle-only candidate.
+        candidate_count: 2
+        kept_count: 1
+        excluded_count: 1
+        ambiguous_count: 0
+    repair_messages:
+      invalid_stage_input: Submit one chemical condition with a paper-backed chemical name, role, confidence, and verified evidence_record_ids from this run.
+      invalid_finalize_input: Finalization requires internally consistent counts and allowed reason codes.
+      invalid_finalization: Resolve builder finalization issues before ending the run.
+      duplicate_finalization: finalize_chemical_extraction must be called exactly once, after all retained chemical conditions are staged.
   validators:
     active:
       - validator_id: chemical_condition.domain_envelope_shape

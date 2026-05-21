@@ -236,6 +236,42 @@ def test_builder_tools_topic_uses_real_disease_domain_pack():
     }
 
 
+def test_builder_tools_topic_uses_real_chemical_domain_pack():
+    tools = get_agent_contract("chemical_extractor", "tools")
+    tool_ids = {tool["tool_id"] for tool in tools["tools"]}
+    assert "stage_chemical_condition_evidence" in tool_ids
+    assert "finalize_chemical_extraction" in tool_ids
+
+    result = get_agent_contract(
+        "chemical_extractor",
+        "builder_tools",
+        detail_level="detail",
+    )
+
+    assert result["success"] is True
+    pack = result["domain_packs"][0]
+    assert pack["domain_pack_id"] == "agr.alliance.chemical_condition"
+    assert pack["stage_tool"] == "stage_chemical_condition_evidence"
+    assert pack["finalize_tool"] == "finalize_chemical_extraction"
+    assert pack["curation_output_schema"] == "ChemicalExtractionResultEnvelope"
+    assert {
+        "source_chemical_mention",
+        "condition_chemical_name",
+        "evidence_record_ids",
+        "role",
+        "confidence",
+    }.issubset(set(pack["stage_required_fields"]))
+    assert {
+        target["binding_id"]
+        for target in pack["object_graph"]["validator_targets"]
+    } >= {
+        "chemical_condition.chebi_api_lookup",
+        "chemical_condition.term_chebi_api_lookup",
+        "chemical_condition.condition_ontology_lookup",
+        "chemical_condition.condition_relation_type_lookup",
+    }
+
+
 def test_field_specific_detail_response_uses_domain_pack_metadata(tmp_path):
     registry = _fixture_registry(tmp_path)
 
