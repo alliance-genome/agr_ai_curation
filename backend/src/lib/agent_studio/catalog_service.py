@@ -76,11 +76,13 @@ _RECORD_EVIDENCE_RUNTIME_NOTE = (
     "- Only persist evidence records that came back `verified`.\n"
 )
 _INLINE_PACKAGE_TOOL_IDS = frozenset({
+    "finalize_allele_extraction",
     "get_agent_contract",
     "record_evidence",
     "search_document",
     "read_section",
     "read_subsection",
+    "stage_allele_paper_evidence",
 })
 
 
@@ -1872,6 +1874,34 @@ def _resolve_output_schema(schema_key: str) -> Optional[Any]:
     return resolve_output_schema(schema_key)
 
 
+def _builder_runtime_config_for_agent(agent_key: str) -> Optional[Dict[str, Any]]:
+    """Resolve extraction-builder runtime metadata for one system/custom agent."""
+
+    from src.lib.domain_packs.extraction_builder import extraction_builder_from_metadata
+    from src.lib.flows.validation_attachments import domain_pack_validation_registries
+
+    entry = AGENT_REGISTRY.get(agent_key)
+    if not isinstance(entry, dict):
+        return None
+    curation = entry.get("curation")
+    if not isinstance(curation, dict):
+        return None
+    domain_pack_id = str(curation.get("domain_pack_id") or "").strip()
+    if not domain_pack_id:
+        return None
+    registry = domain_pack_validation_registries().get(domain_pack_id)
+    if registry is None:
+        return None
+    builder = extraction_builder_from_metadata(registry.domain_pack.metadata.metadata)
+    if builder is None:
+        return None
+    return {
+        "builder": builder,
+        "domain_pack_id": registry.domain_pack.metadata.pack_id,
+        "domain_pack_version": registry.domain_pack.metadata.version,
+    }
+
+
 def validate_active_agent_output_schemas(db: Any) -> None:
     """Fail fast when active agents reference unknown output schema keys."""
     from src.models.sql.agent import Agent as DBAgent
@@ -1925,6 +1955,7 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
             raise ValueError(
                 f"Unknown output schema '{output_schema_key}' for agent '{db_agent.agent_key}'"
             )
+    curation_output_schema = output_schema
     # Resolve tools from explicit binding metadata (no runtime fallbacks).
     output_guardrails: List[Any] = []
     if requested_tool_ids:
@@ -1968,6 +1999,28 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
         tools = resolve_tools(requested_tool_ids, execution_context)
     else:
         tools = []
+
+    builder_runtime_config = _builder_runtime_config_for_agent(
+        str(getattr(db_agent, "agent_key", "") or "")
+    )
+    builder_config = (
+        builder_runtime_config.get("builder")
+        if isinstance(builder_runtime_config, dict)
+        else None
+    )
+    builder_runtime_enabled = False
+    if builder_config is not None:
+        builder_tool_ids = {builder_config.stage_tool, builder_config.finalize_tool}
+        if builder_tool_ids <= set(canonical_tool_ids):
+            builder_runtime_enabled = True
+            ack_schema = _resolve_output_schema(builder_config.model_final_ack_schema)
+            if ack_schema is None:
+                raise ValueError(
+                    "Unknown builder final acknowledgment schema "
+                    f"'{builder_config.model_final_ack_schema}' for agent "
+                    f"'{db_agent.agent_key}'"
+                )
+            output_schema = ack_schema
 
     prompt_bundle = _build_runtime_instructions(
         db_agent=db_agent,
@@ -2017,6 +2070,24 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
         output_type=output_schema,
         output_guardrails=output_guardrails,
     )
+    if (
+        builder_runtime_enabled
+        and builder_config is not None
+        and builder_runtime_config is not None
+    ):
+        setattr(runtime_agent, "_extraction_builder_config", builder_config)
+        setattr(
+            runtime_agent,
+            "_extraction_builder_domain_pack_id",
+            builder_runtime_config["domain_pack_id"],
+        )
+        setattr(
+            runtime_agent,
+            "_extraction_builder_domain_pack_version",
+            builder_runtime_config["domain_pack_version"],
+        )
+        setattr(runtime_agent, "_curation_output_type", curation_output_schema)
+        setattr(runtime_agent, "_curation_output_schema_key", output_schema_key)
     prompt_run_id = set_pending_prompts(
         runtime_agent.name,
         list(prompt_templates_for_bundle(prompt_bundle)),

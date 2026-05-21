@@ -65,6 +65,27 @@ def test_build_json_only_instruction_without_schema():
     assert "schema exactly" not in text.lower()
 
 
+def test_tool_output_summary_marks_builder_repair_payloads():
+    summary = streaming_tools._tool_output_summary(
+        "stage_allele_paper_evidence",
+        json.dumps(
+            {
+                "status": "needs_repair",
+                "repair_code": "invalid_stage_input",
+                "repair_instructions": "Use a verified evidence ID.",
+                "invalid_fields": ["evidence_record_ids"],
+            }
+        ),
+    )
+
+    assert summary == {
+        "status": "needs_repair",
+        "repair_code": "invalid_stage_input",
+        "repair_instructions": "Use a verified evidence ID.",
+        "invalid_fields": ["evidence_record_ids"],
+    }
+
+
 def test_domain_envelope_output_schema_uses_relaxed_sdk_strictness():
     source_agent = SimpleNamespace(
         name="Gene Extraction",
@@ -962,6 +983,25 @@ async def test_chat_domain_envelope_dispatch_warns_when_no_validator_jobs_run(
     assert dispatch_complete["details"]["validatorAgentRunCount"] == 0
     assert "(no validator jobs)" in dispatch_complete["details"]["friendlyName"]
     assert "zero validator jobs" in caplog.text
+
+    emitted.clear()
+    with pytest.raises(streaming_tools.SpecialistOutputError):
+        await streaming_tools._dispatch_domain_envelope_validators_for_chat(
+            _gene_extractor_domain_output(),
+            expected_output_type=GeneExtractionResultEnvelope,
+            specialist_name="Gene Extraction",
+            tool_name="ask_gene_extractor_specialist",
+            zero_validator_jobs_error=True,
+        )
+
+    error = [
+        event
+        for event in emitted
+        if event["type"] == "SPECIALIST_ERROR"
+        and event["details"]["reason"] == "no_active_validator_jobs"
+    ][0]
+    assert error["details"]["object_count"] == 1
+    assert error["details"]["validator_agent_run_count"] == 0
 
 
 @pytest.mark.asyncio

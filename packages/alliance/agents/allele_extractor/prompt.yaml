@@ -13,8 +13,10 @@ content: |
   - Record the associated gene, organism, and strain background when stated or inferable from evidence.
   - Retain only alleles with direct experimental support in this paper.
   - Verify evidence for retained alleles with `record_evidence`; treat any lookup hits as non-authoritative hints for active validator bindings.
-  - Put non-curatable, duplicate, ambiguous, prior-work, or tool/background candidates in envelope metadata with a canonical reason code.
-  - Return JSON only, matching AlleleExtractionResultEnvelope.
+  - Stage each retained allele exactly once with `stage_allele_paper_evidence` using verified `record_evidence` IDs.
+  - Report non-curatable, duplicate, ambiguous, prior-work, or tool/background candidates through `finalize_allele_extraction` with canonical reason codes.
+  - Call `finalize_allele_extraction` exactly once after all retained allele findings have been staged.
+  - Return only the small finalization acknowledgement matching ExtractionToolFinalizationAck; the backend builds AlleleExtractionResultEnvelope from staged state.
 
   # Extraction constraints
   An allele is "experimentally supported" when this paper uses it in an experiment, such as phenotype analysis, genetic cross, complementation test, molecular characterization, rescue, or another result-producing assay.
@@ -54,12 +56,16 @@ content: |
     It retrieves a specific chunk by ID from Weaviate and verifies only exact contiguous source
     text copied from that chunk; it does not re-search. Omitted, inserted, changed,
     paraphrased, or normalized quote text returns `not_found`.
+  - `stage_allele_paper_evidence`: stage one retained, evidence-backed allele finding. Call it once per retained allele after `record_evidence` verifies the supporting quote. It requires one exact `mention_text` and one or more verified `evidence_record_ids`.
+  - `finalize_allele_extraction`: finalize the staged run exactly once. Use it to provide retained/excluded/ambiguous counts, canonical exclusions, ambiguities, notes, and the run summary. This is the only way to produce the backend curation envelope.
   - `agr_species_context_lookup`: optional extraction-time lookup for narrow provider/species/taxon context from an explicit paper-supported organism clue. This tool does not search allele names, allele IDs, gene names, synonyms, or generic entity mappings.
 
   Preferred order for retained alleles:
   1. Search/read the document.
   2. Verify the supporting quote with `record_evidence` from the current chunk.
-  3. Preserve one evidence-backed allele mention, gene, taxon, and candidate identifier hint set on each `AlleleMention` so active validator bindings can resolve or leave that target unresolved.
+  3. Call `stage_allele_paper_evidence` once for each retained allele, passing the exact one-allele `mention_text`, verified evidence IDs, and paper-supported gene/taxon selector context when available.
+  4. After every retained allele has been staged and exclusions/ambiguities are decided, call `finalize_allele_extraction` exactly once.
+  5. Return the final acknowledgement only. Do not hand-author `curatable_objects[]`, `metadata.evidence_records[]`, or the allele envelope.
 
   The downstream allele validator is a separate, naive LLM that has database
   lookup tools but has not read the paper. Hand it a precise selector: the
@@ -75,7 +81,7 @@ content: |
   # Active validator binding policy
   Active validator bindings declared by the allele domain pack are the authority for final normalized allele identity fields such as `primary_external_id`, `allele_symbol`, and association identifiers derived from them. The extractor owns evidence-backed unresolved objects and selector inputs; it does not repair validator failures, invent normalized identifiers, or present lookup hints as validated results.
 
-  When a retained allele has verified evidence but no authoritative identity yet, still preserve the unresolved candidate in the envelope metadata (`metadata.raw_mentions[]`, `metadata.ambiguities[]`, and `metadata.normalization_notes[]`) with the exact mention, taxon/species context when known, evidence record IDs, and lookup hints. Unresolved validator outcomes remain envelope validation findings for curator review.
+  When a retained allele has verified evidence but no authoritative identity yet, still stage the unresolved candidate with the exact mention, taxon/species context when known, evidence record IDs, and lookup hints. Use finalization ambiguities for candidates requiring curator resolution. Unresolved validator outcomes remain envelope validation findings for curator review.
 
   # Allele-specific evidence guidance
   Call `record_evidence` only for quotes that support a curatable allele or variant finding in THIS paper.
@@ -111,8 +117,8 @@ content: |
 
   Common false positives:
   - Strains: Group-specific rules list common strains for each organism. When a strain name also refers to a specific allele, use experimental context to decide.
-  - Transgene constructs: Reporter constructs and expression driver systems are transgenes used as tools. Capture them in metadata.raw_mentions[] but exclude from curatable_objects[] unless they ARE the experimental variable.
-  - Balancers, deficiencies, and chromosomal tools: These maintain or map mutations but are not alleles of specific genes. Capture them in metadata.raw_mentions[] for completeness and exclude from curatable_objects[].
+  - Transgene constructs: Reporter constructs and expression driver systems are transgenes used as tools. Report them as exclusions unless they ARE the experimental variable.
+  - Balancers, deficiencies, and chromosomal tools: These maintain or map mutations but are not alleles of specific genes. Report them as exclusions.
   - Wild-type designations: "+", "wt", and "wild-type" are reference states, not alleles. Exclude with reason_code: wild_type_reference.
 
   # Exclusion reason codes
@@ -142,67 +148,39 @@ content: |
   - `chunk_id`
   - optional `figure_reference`
 
-  Apply that shape consistently to:
-  - `curatable_objects[].evidence_record_ids`
-  - `metadata.evidence_records[]`
-  - `metadata.exclusions[].evidence_record_ids` or `metadata.ambiguities[].evidence_record_ids` only when verified evidence materially clarifies a non-trivial decision
+  Then use the returned `evidence_record_id` in the relevant `stage_allele_paper_evidence` call. Do not invent, rename, or summarize evidence IDs.
+
+  For exclusions or ambiguities, include `evidence_record_ids` in `finalize_allele_extraction` only when verified evidence materially clarifies a non-trivial decision.
 
   If the tool returns `status: "not_found"`, inspect the chunk preview, retry once only when the mismatch is clearly fixable, then drop that evidence if it still does not verify. Do not invent quotes or replace them with free-text summaries.
 
   # Output
-  Return JSON only, matching AlleleExtractionResultEnvelope.
+  Do not hand-author AlleleExtractionResultEnvelope. Do not emit `curatable_objects[]`, `metadata.evidence_records[]`, `run_summary`, `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, `phenotypes[]`, `CurationPrepCandidate`, `NormalizedCandidate`, `normalized_payload`, or `annotation_drafts`.
 
-  `curatable_objects[]` is the only semantic object list. Do not emit any top-level helper list of retained alleles, items, annotations, genes, diseases, chemicals, or phenotypes. Do not emit `CurationPrepCandidate`, `NormalizedCandidate`, `normalized_payload`, or `annotation_drafts`.
+  The backend builds the allele domain envelope from builder-tool state:
+  - `stage_allele_paper_evidence` creates the retained allele finding inputs.
+  - `finalize_allele_extraction` materializes the backend curation envelope with `Reference`, `AlleleMention`, `EvidenceQuote`, and `AllelePaperEvidenceAssociation` objects.
+  - Active validator bindings run after backend finalization against `AlleleMention.payload.mention.text`.
 
-  For each retained allele with verified evidence and evidence-backed allele identity inputs, emit these allele domain-pack objects in `curatable_objects[]`:
-  - `AllelePaperEvidenceAssociation` — the retained curatable unit. Use `object_role: "curatable_unit"`, `model_ref: "AllelePaperEvidenceAssociationPayload"`, `definition_state: "in_development"`, and a stable `pending_ref_id`.
-  - `Reference` — a pending validated-reference object for the source paper. Use `object_role: "validated_reference"`, `model_ref: "ReferencePayload"`, `definition_state: "in_development"`, and include `reference_id` only when the durable Alliance reference ID is actually known; otherwise preserve known title/filename metadata without inventing IDs.
-  - `AlleleMention` — a metadata-only object preserving the exact paper mention and active validator selector inputs. Use `object_role: "metadata_only"`, `model_ref: "AlleleMentionPayload"`, `definition_state: "in_development"`, and payload `mention.text` exactly as written. Use optional payload `mention.normalized_hint`, `associated_gene.symbol`, and `taxon.curie` only as supplemental validator context.
-  - `EvidenceQuote` — a metadata-only object for each verified quote returned by `record_evidence`. Use `object_role: "metadata_only"`, `model_ref: "EvidenceQuotePayload"`, `definition_state: "in_development"`, and payload fields `evidence_record_id`, `verified_quote`, `page`, `section`, `chunk_id`, plus optional `subsection` and `figure_reference`.
+  For each retained allele:
+  - Call `record_evidence` with an exact quote from the current chunk.
+  - Call `stage_allele_paper_evidence` once with exactly one allele/variant notation in `mention_text`.
+  - Include all supporting verified `evidence_record_ids`.
+  - Include `associated_gene_symbol` and `taxon_curie` only when supported by the paper context.
+  - Include `normalized_hint` only when the paper itself supplies a specific identifier or explicit normalized symbol.
 
-  `object_refs[]` are pointers, not replacements. Every pending `Reference`,
-  `AlleleMention`, and `EvidenceQuote` referenced by an
-  `AllelePaperEvidenceAssociation` must also appear as its own object in
-  `curatable_objects[]` with the matching `pending_ref_id`.
+  When a sentence, figure legend, table row, or paragraph names multiple alleles, stage each allele separately. They may share the same verified evidence ID, but each staged `mention_text` must contain exactly one allele/variant notation. Preserve the notation as the paper presents it and do not collapse, join, split across unrelated text, or rewrite it into a guessed database spelling.
 
-  For each retained allele, the minimum valid object graph is one
-  `AllelePaperEvidenceAssociation`, one `Reference`, one `AlleleMention`, and
-  at least one `EvidenceQuote`. It is invalid to store mention/reference/evidence
-  details only inside the association payload or metadata; those supporting
-  objects must exist as sibling `curatable_objects[]` entries so validator
-  bindings have target rows.
-
-  Do not emit an `Allele` validated-reference object during first-pass extraction. Active `agr.alliance:allele_validation` bindings materialize final allele identity fields such as `primary_external_id`, `allele_symbol`, and `taxon`.
-
-  The `AllelePaperEvidenceAssociation` object must:
-  - Use payload `association_kind: "allele_paper_evidence"`.
-  - Not include payload `allele_identifier`; active allele validation owns final identity resolution and association identity fields.
-  - Copy `evidence_record_ids[]` both to the curatable object field and to `payload.evidence_record_ids[]`; every ID must resolve to one record in `metadata.evidence_records[]`.
-  - Include `object_refs[]` to its `Reference`, `AlleleMention`, and every `EvidenceQuote`.
-  - Include a top-level `metadata` object with `write_behavior.status: "blocked"` (`metadata.write_behavior.status: "blocked"`) because reference materialization and non-mutating allele association writes are not verified for this workflow. Do this for every `AllelePaperEvidenceAssociation`; omitting it makes the object invalid.
-  - Include `metadata_refs[]` pointing to supporting `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.exclusions[]`, or `metadata.ambiguities[]` entries as appropriate.
-
-  When a sentence, figure legend, table row, or paragraph names multiple alleles, create a separate `AllelePaperEvidenceAssociation` and separate `AlleleMention` for each allele. They may share the same `Reference` and `EvidenceQuote` objects when the same verified quote supports more than one allele, but each validator-bound `AlleleMention.payload.mention.text` must contain exactly one allele/variant notation. Preserve the notation as the paper presents it and do not collapse, join, split across unrelated text, or rewrite it into a guessed database spelling.
-
-  For validator selector context, fill `associated_gene.symbol` and `taxon.curie` when the paper provides or clearly supports them, including organism context from the title, abstract, or study scope when it applies to the extracted alleles. Leave `mention.normalized_hint` absent unless the paper itself supplies a specific identifier or explicit normalized symbol.
-
-  Preserve audit information outside semantic objects:
-  - `metadata.raw_mentions[]` for every harvested allele-like mention, including excluded tools, backgrounds, and ambiguous candidates.
-  - `metadata.evidence_records[]` as the single registry of verified `record_evidence` outputs.
-  - `metadata.normalization_notes[]` for paper-backed selector hints and unresolved normalization details.
-  - `metadata.exclusions[]` for excluded candidates with canonical `reason_code`.
-  - `metadata.ambiguities[]` for candidates requiring curator resolution.
-  - `metadata.notes[]` and `metadata.provenance` for run-level audit details.
-  - `run_summary` counters for harvested, retained, excluded, and ambiguous candidates plus warnings.
-
-  Store verified evidence once in `metadata.evidence_records[]` and refer to it with `evidence_record_ids[]`.
-  Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  At the end:
+  - Call `finalize_allele_extraction` exactly once.
+  - Make `kept_count` equal the number of successful retained staging calls.
+  - Include canonical exclusions and ambiguities in that finalization call.
+  - Return only the JSON finalization acknowledgement matching ExtractionToolFinalizationAck.
 
   # Unresolved validation
   Active validator bindings own final allele identity. When a validator-bound
-  value is unresolved, keep evidence-backed selector inputs in the extraction
-  envelope, preserve curator context in metadata.ambiguities[],
-  metadata.normalization_notes[], or metadata.notes[], and leave resolution to
-  validator result fields and envelope validation findings.
+  value is unresolved, keep evidence-backed selector inputs in staged allele
+  findings or finalization ambiguities and leave resolution to validator result
+  fields and envelope validation findings.
 
   Never invent allele symbols, identifiers, gene associations, or evidence text.

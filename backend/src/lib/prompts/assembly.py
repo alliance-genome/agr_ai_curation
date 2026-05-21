@@ -15,6 +15,10 @@ from src.lib.config.agent_loader import (
     load_agent_definitions,
 )
 from src.lib.config.schema_discovery import resolve_output_schema
+from src.lib.domain_packs.extraction_builder import (
+    extraction_builder_from_metadata,
+    render_builder_prompt_snippet,
+)
 from src.lib.domain_packs.validation_registry import ValidationBindingState
 from src.lib.openai_agents.tool_call_policy import (
     DOCUMENT_REQUIRED_TOOL_NAMES,
@@ -289,10 +293,14 @@ def _build_core_generated_content(agent: AgentDefinition) -> str:
 
     schema_key = str(agent.output_schema or "").strip()
     if schema_key:
-        output_type = resolve_output_schema(schema_key)
+        builder = _agent_extraction_builder(agent)
+        output_schema_key = (
+            builder.model_final_ack_schema if builder is not None else schema_key
+        )
+        output_type = resolve_output_schema(output_schema_key)
         if output_type is None:
             raise ValueError(
-                f"Output schema '{schema_key}' for agent '{agent.agent_id}' is not registered"
+                f"Output schema '{output_schema_key}' for agent '{agent.agent_id}' is not registered"
             )
 
         fragments.append(
@@ -316,6 +324,8 @@ def _core_generated_source_ref(agent: AgentDefinition) -> str:
     domain_pack_id = _agent_domain_pack_id(agent)
     if domain_pack_id:
         refs.append(f"domain_pack:{domain_pack_id}")
+    if _agent_extraction_builder(agent) is not None:
+        refs.append("extraction_builder:metadata")
     return "|".join(refs)
 
 
@@ -346,11 +356,19 @@ def _build_compact_runtime_contract(agent: AgentDefinition) -> str:
             if tool_name in agent.tools
         )
 
+    builder = _agent_extraction_builder(agent)
     if agent.output_schema:
-        lines.append(
-            f"- Output contract from agent.yaml: produce JSON matching {agent.output_schema}; "
-            "the structured-output layer below is authoritative for final response shape."
-        )
+        if builder is not None:
+            lines.append(
+                f"- Curation output contract from agent.yaml: backend-built {agent.output_schema}; "
+                f"model final response must be the small {builder.model_final_ack_schema} "
+                "acknowledgment after builder finalization."
+            )
+        else:
+            lines.append(
+                f"- Output contract from agent.yaml: produce JSON matching {agent.output_schema}; "
+                "the structured-output layer below is authoritative for final response shape."
+            )
 
     domain_lines = _build_domain_pack_contract_lines(agent)
     lines.extend(domain_lines)
@@ -368,6 +386,16 @@ def _build_compact_runtime_contract(agent: AgentDefinition) -> str:
 
 def _agent_domain_pack_id(agent: AgentDefinition) -> str | None:
     return str(agent.curation.domain_pack_id or "").strip() or None
+
+
+def _agent_extraction_builder(agent: AgentDefinition) -> Any | None:
+    domain_pack_id = _agent_domain_pack_id(agent)
+    if not domain_pack_id:
+        return None
+    registry = _domain_pack_validation_registries().get(domain_pack_id)
+    if registry is None:
+        return None
+    return extraction_builder_from_metadata(registry.domain_pack.metadata.metadata)
 
 
 def _agent_uses_extraction_safety_rule(agent: AgentDefinition) -> bool:
@@ -412,6 +440,10 @@ def _build_domain_pack_contract_lines(agent: AgentDefinition) -> list[str]:
     validator_fields = _format_validator_bound_fields(metadata.object_definitions)
     if validator_fields:
         lines.append(f"- Validator-bound fields: {validator_fields}.")
+
+    builder = extraction_builder_from_metadata(metadata.metadata)
+    if builder is not None:
+        lines.append(render_builder_prompt_snippet(builder))
 
     active_bindings = [
         binding
@@ -496,7 +528,10 @@ def _format_validator_bound_fields(object_definitions: Sequence[Any]) -> str:
     fields: list[str] = []
     for object_definition in object_definitions:
         for field in object_definition.fields:
-            binding_id = _metadata_text(field.metadata, "validator_binding_id")
+            binding_id = _metadata_text(
+                field.metadata,
+                "validator_binding_id",
+            ) or _metadata_text(field.metadata, "validation_result_binding_id")
             if binding_id:
                 fields.append(
                     f"{object_definition.object_type}.{field.field_path}->{binding_id}"

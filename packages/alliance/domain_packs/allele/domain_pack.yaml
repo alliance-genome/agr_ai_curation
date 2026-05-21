@@ -172,6 +172,8 @@ object_definitions:
         required: true
         object_type_ref: EvidenceQuote
         metadata:
+          collection: true
+          allows_repeated_refs: true
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -299,8 +301,9 @@ object_definitions:
       - field_path: reference_id
         field_type: integer
         display_name: Reference ID
-        required: true
+        required: false
         metadata:
+          builder_note: Durable Alliance reference IDs are optional in first-pass extraction and must not be invented.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -388,6 +391,214 @@ metadata:
     - curatable_unit
     - validated_reference
     - metadata_only
+  extraction_builder:
+    enabled: true
+    stage_tool: stage_allele_paper_evidence
+    finalize_tool: finalize_allele_extraction
+    retained_unit: AllelePaperEvidenceAssociation
+    per_retained_finding: true
+    model_final_ack_schema: ExtractionToolFinalizationAck
+    curation_output_schema: AlleleExtractionResultEnvelope
+    stage_description: Submit one retained allele or variant finding after verifying its supporting quote with record_evidence.
+    finalize_description: Call exactly once after all retained allele findings have been staged; the backend builds the final allele envelope.
+    fields:
+      mention_text:
+        json_type: string
+        required: true
+        maps_to: AlleleMention.payload.mention.text
+        hint: Exact allele or variant notation as written in the paper; do not combine multiple alleles.
+        examples:
+          - daf-2(m41)
+          - crb<sup>11A22</sup>
+        repair_messages:
+          missing: Provide the exact allele or variant notation from the paper.
+          invalid: Submit one allele mention, not a comma-separated list or normalized database guess.
+      evidence_record_ids:
+        json_type: array
+        required: true
+        collection: true
+        min_items: 1
+        maps_to: EvidenceQuote.payload.evidence_record_id
+        hint: Each value must be returned by a verified record_evidence call from the current run.
+        examples:
+          - ["ev_daf2_m41_1"]
+        repair_messages:
+          missing: Verify supporting source text with record_evidence before staging the allele.
+          unverified: Use only evidence_record_id values returned by successful record_evidence calls.
+      verified_quotes:
+        json_type: array
+        collection: true
+        maps_to: EvidenceQuote.payload.verified_quote
+        hint: Optional echoes of the verified quotes; if present they must match record_evidence output exactly.
+      page:
+        json_type: integer
+        maps_to: EvidenceQuote.payload.page
+        hint: Optional page echo from record_evidence for repair diagnostics.
+      section:
+        json_type: string
+        maps_to: EvidenceQuote.payload.section
+        hint: Optional section echo from record_evidence for repair diagnostics.
+      chunk_id:
+        json_type: string
+        maps_to: EvidenceQuote.payload.chunk_id
+        hint: Optional chunk_id echo from record_evidence for repair diagnostics.
+      associated_gene_symbol:
+        json_type: string
+        maps_to: AlleleMention.payload.associated_gene.symbol
+        hint: Include only when paper-supported or clear from study context.
+      taxon_curie:
+        json_type: string
+        maps_to: AlleleMention.payload.taxon.curie
+        hint: Include only when paper-supported or clear from study context.
+      normalized_hint:
+        json_type: string
+        maps_to: AlleleMention.payload.mention.normalized_hint
+        hint: Optional only when the paper itself supplies an explicit identifier or normalized name; do not invent final allele identity.
+      reference:
+        json_type: object
+        maps_to: Reference.payload
+        hint: Optional paper/runtime reference metadata. Durable Alliance reference_id is optional and must not be invented.
+      finding_notes:
+        json_type: string
+        maps_to: metadata.notes
+        hint: Optional concise curator-facing note for this retained finding.
+      raw_mentions:
+        json_type: array
+        collection: true
+        maps_to: metadata.raw_mentions
+        hint: Optional supporting harvested mentions for audit metadata.
+    finalize_fields:
+      summary:
+        json_type: string
+        required: true
+        hint: Concise run summary.
+      candidate_count:
+        json_type: integer
+        required: true
+        hint: Number of harvested allele-like candidates considered.
+      kept_count:
+        json_type: integer
+        required: true
+        hint: Must equal the number of successfully staged retained allele findings.
+      excluded_count:
+        json_type: integer
+        required: true
+        hint: Must equal exclusions.length.
+      ambiguous_count:
+        json_type: integer
+        required: true
+        hint: Must equal ambiguities.length.
+      exclusions:
+        json_type: array
+        collection: true
+        hint: Excluded allele-like candidates with allowed reason codes.
+      ambiguities:
+        json_type: array
+        collection: true
+        hint: Unresolved candidates requiring curator review.
+      notes:
+        json_type: array
+        collection: true
+        hint: Optional run-level audit notes.
+    object_graph:
+      required_objects:
+        - AllelePaperEvidenceAssociation
+        - Reference
+        - AlleleMention
+        - EvidenceQuote
+      validator_target:
+        object_type: AlleleMention
+        field_path: mention.text
+      objects:
+        - object_type: Reference
+          model_ref: ReferencePayload
+          object_role: validated_reference
+          definition_state: in_development
+          pending_ref_template: reference_{staged_id}
+          payload_fields:
+            reference_id: reference.reference_id
+            curie: reference.curie
+            pmid: reference.pmid
+            doi: reference.doi
+            title: reference.title
+        - object_type: AlleleMention
+          model_ref: AlleleMentionPayload
+          object_role: metadata_only
+          definition_state: in_development
+          pending_ref_template: mention_{staged_id}
+          payload_fields:
+            mention.text: mention_text
+            mention.normalized_hint: normalized_hint
+            associated_gene.symbol: associated_gene_symbol
+            taxon.curie: taxon_curie
+            source_mentions: raw_mentions
+        - object_type: EvidenceQuote
+          model_ref: EvidenceQuotePayload
+          object_role: metadata_only
+          definition_state: in_development
+          pending_ref_template: evidence_quote_{evidence_record_id}
+          payload_fields:
+            evidence_record_id: evidence_record_id
+            verified_quote: verified_quote
+            page: page
+            section: section
+            subsection: subsection
+            chunk_id: chunk_id
+            figure_reference: figure_reference
+        - object_type: AllelePaperEvidenceAssociation
+          model_ref: AllelePaperEvidenceAssociationPayload
+          object_role: curatable_unit
+          definition_state: in_development
+          pending_ref_template: association_{staged_id}
+          payload_fields:
+            association_kind: literal:allele_paper_evidence
+            evidence_record_ids: evidence_record_ids
+          metadata:
+            write_behavior:
+              status: blocked
+          object_refs:
+            - field_path: reference
+              object_type: Reference
+            - field_path: mention
+              object_type: AlleleMention
+            - field_path: evidence_quote
+              object_type: EvidenceQuote
+              collection: true
+    allowed_exclusion_reason_codes:
+      - previously_reported
+      - non_experimental_claim
+      - insufficient_experimental_evidence
+      - out_of_scope
+      - ambiguous_entity
+      - duplicate_mention
+      - unsupported_entity_type
+      - strain_not_allele
+      - transgene_construct
+      - balancer_or_deficiency
+      - wild_type_reference
+      - background_genotype_only
+    allowed_ambiguity_reason_codes:
+      - ambiguous_entity
+      - insufficient_selector_context
+      - unresolved_identity
+    examples:
+      stage:
+        mention_text: daf-2(m41)
+        evidence_record_ids:
+          - ev_verified_quote_1
+        associated_gene_symbol: daf-2
+        taxon_curie: NCBITaxon:6239
+      finalize:
+        summary: Staged one retained allele finding and excluded two background genotypes.
+        candidate_count: 3
+        kept_count: 1
+        excluded_count: 2
+        ambiguous_count: 0
+    repair_messages:
+      invalid_stage_input: Submit one allele finding with mention_text and verified evidence_record_ids from this run.
+      invalid_finalize_input: Finalization requires internally consistent counts and allowed reason codes.
+      invalid_finalization: Resolve builder finalization issues before ending the run.
+      duplicate_finalization: finalize_allele_extraction must be called exactly once, after all retained findings are staged.
   provider_refs:
     alliance_linkml:
       schema_ref: alliance.linkml

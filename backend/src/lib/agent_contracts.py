@@ -7,6 +7,10 @@ from typing import Any, Callable, Mapping
 
 from pydantic import BaseModel
 
+from src.lib.domain_packs.extraction_builder import (
+    builder_contract_payload,
+    extraction_builder_from_metadata,
+)
 from src.lib.flows.validation_attachments import domain_pack_validation_registries
 from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
 
@@ -14,6 +18,7 @@ from src.lib.domain_packs.validation_registry import DomainPackValidationRegistr
 AGENT_CONTRACT_TOPICS = frozenset(
     {
         "tools",
+        "builder_tools",
         "output_schema",
         "domain_envelope",
         "validator_bindings",
@@ -122,6 +127,23 @@ def get_agent_contract(
                 _domain_envelope_contract(resolved_registries[pack_id], normalized_detail_level)
                 for pack_id in owned_domain_pack_ids
                 if pack_id in resolved_registries
+            ],
+        }
+
+    if normalized_topic == "builder_tools":
+        return {
+            **base,
+            "domain_packs": [
+                contract
+                for pack_id in owned_domain_pack_ids
+                if pack_id in resolved_registries
+                for contract in (
+                    _builder_tools_contract(
+                        resolved_registries[pack_id],
+                        detail_level=normalized_detail_level,
+                    ),
+                )
+                if contract is not None
             ],
         }
 
@@ -381,6 +403,23 @@ def _domain_envelope_contract(
             for object_definition in metadata.object_definitions
         ]
     return contract
+
+
+def _builder_tools_contract(
+    registry: DomainPackValidationRegistry,
+    *,
+    detail_level: str,
+) -> dict[str, Any] | None:
+    metadata = registry.domain_pack.metadata
+    builder = extraction_builder_from_metadata(metadata.metadata)
+    if builder is None:
+        return None
+    return builder_contract_payload(
+        builder,
+        domain_pack_id=metadata.pack_id,
+        domain_pack_version=metadata.version,
+        detail_level=detail_level,
+    )
 
 
 def _validator_binding_contract(

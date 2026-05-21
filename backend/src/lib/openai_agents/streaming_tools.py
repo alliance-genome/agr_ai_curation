@@ -42,6 +42,17 @@ from .evidence_summary import (
     structured_result_requires_evidence,
 )
 from .event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
+from .extraction_staging import (
+    BuilderRuntimeError,
+    activate_extraction_staging,
+    clear_extraction_staging,
+    current_extraction_staging_state,
+    enforce_builder_finalized_or_raise,
+    finalized_ack_from_state,
+    finalized_envelope_from_state,
+    record_document_retrieval_call,
+    register_verified_evidence_record,
+)
 from .tool_call_policy import (
     DOCUMENT_REQUIRED_TOOL_NAMES,
     required_package_tool_names_from_metadata,
@@ -110,6 +121,28 @@ def _tool_output_summary(tool_name: str, output: Any) -> Optional[Dict[str, Any]
     payload = coerce_tool_event_dict(output)
     if not isinstance(payload, dict):
         return None
+
+    if tool_name in {"stage_allele_paper_evidence", "finalize_allele_extraction"}:
+        summary_fields = (
+            "status",
+            "repair_code",
+            "repair_instructions",
+            "missing_fields",
+            "invalid_fields",
+            "staged_id",
+            "idempotent",
+            "finalized_run_id",
+            "staged_count",
+            "finalized_count",
+            "finalized_object_count",
+            "validator_target_count",
+            "warnings",
+        )
+        summary = {}
+        for field_name in summary_fields:
+            if field_name in payload:
+                summary[field_name] = payload.get(field_name)
+        return summary or None
 
     if tool_name != "record_evidence":
         return None
@@ -1823,6 +1856,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
     expected_output_type: Any,
     specialist_name: str,
     tool_name: Optional[str],
+    zero_validator_jobs_error: bool = False,
 ) -> str:
     """Run active domain-pack validators before extractor output reaches supervisor."""
 
@@ -2027,6 +2061,12 @@ async def _dispatch_domain_envelope_validators_for_chat(
             if no_active_validator_jobs
             else None
         )
+        builder_state = current_extraction_staging_state()
+        if builder_state is not None:
+            if no_active_validator_jobs:
+                builder_state.zero_validator_jobs_status = "no_active_validator_jobs"
+            elif object_count > 0:
+                builder_state.zero_validator_jobs_status = "validator_jobs_executed"
         if no_active_validator_jobs:
             logger.warning(
                 "%s active validator dispatch completed with zero validator jobs "
@@ -2093,6 +2133,32 @@ async def _dispatch_domain_envelope_validators_for_chat(
             skipped_request_binding_keys=streamed_validator_lookup_keys,
         )
 
+        if no_active_validator_jobs and zero_validator_jobs_error:
+            error_message = (
+                "Builder-finalized domain envelope was non-empty but no active "
+                "validator jobs were executed."
+            )
+            add_specialist_event({
+                "type": "SPECIALIST_ERROR",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "details": {
+                    "specialist": specialist_name,
+                    "output_type": getattr(expected_output_type, "__name__", "response"),
+                    "error": error_message,
+                    "reason": "no_active_validator_jobs",
+                    "severity": "error",
+                    "object_count": object_count,
+                    "matched_binding_count": matched_binding_count,
+                    "validator_result_count": validator_result_count,
+                    "validator_agent_run_count": validator_agent_run_count,
+                },
+            })
+            raise SpecialistOutputError(
+                specialist_name=specialist_name,
+                output_type_name=getattr(expected_output_type, "__name__", "response"),
+                message=error_message,
+            )
+
         logger.info(
             "%s chat domain-envelope validation dispatched %s binding(s), "
             "%s validator result(s), %s finding(s)",
@@ -2113,6 +2179,8 @@ async def _dispatch_domain_envelope_validators_for_chat(
             serialization_started_at
         )
         return serialized_envelope
+    except SpecialistOutputError:
+        raise
     except Exception as exc:
         logger.warning(
             "Domain-envelope chat validation failed for %s: %s",
@@ -2492,6 +2560,52 @@ async def run_specialist_with_events(
     max_turns: Optional[int] = None,
     tool_name: Optional[str] = None,
 ) -> str:
+    """Run a specialist agent and collect its internal tool call events."""
+
+    builder = getattr(agent, "_extraction_builder_config", None)
+    if builder is None:
+        return await _run_specialist_with_events_impl(
+            agent,
+            input_text,
+            specialist_name,
+            run_config=run_config,
+            max_turns=max_turns,
+            tool_name=tool_name,
+        )
+
+    token = activate_extraction_staging(
+        agent_id=tool_name or getattr(agent, "name", None) or specialist_name,
+        specialist_name=specialist_name,
+        domain_pack_id=getattr(agent, "_extraction_builder_domain_pack_id", "unknown"),
+        domain_pack_version=getattr(agent, "_extraction_builder_domain_pack_version", None),
+        builder=builder,
+        curation_output_type=getattr(
+            agent,
+            "_curation_output_type",
+            DomainEnvelopeExtractionResult,
+        ),
+    )
+    try:
+        return await _run_specialist_with_events_impl(
+            agent,
+            input_text,
+            specialist_name,
+            run_config=run_config,
+            max_turns=max_turns,
+            tool_name=tool_name,
+        )
+    finally:
+        clear_extraction_staging(token)
+
+
+async def _run_specialist_with_events_impl(
+    agent: Agent,
+    input_text: str,
+    specialist_name: str,
+    run_config: Optional[RunConfig] = None,
+    max_turns: Optional[int] = None,
+    tool_name: Optional[str] = None,
+) -> str:
     """
     Run a specialist agent and collect its internal tool call events.
 
@@ -2540,6 +2654,9 @@ async def run_specialist_with_events(
     )
 
     expected_output_type = getattr(agent, "output_type", None)
+    builder_state = current_extraction_staging_state()
+    builder_enabled = builder_state is not None
+    curation_output_type = getattr(agent, "_curation_output_type", expected_output_type)
     groq_tool_json_compat_mode = False
     runtime_agent = agent
 
@@ -2982,10 +3099,32 @@ async def run_specialist_with_events(
                         )
                         if evidence_record is not None:
                             live_evidence_records.append(evidence_record)
+                            register_verified_evidence_record(evidence_record)
+
+                        if current_tool_name in (
+                            "search_document",
+                            "read_section",
+                            "read_subsection",
+                        ):
+                            record_document_retrieval_call(
+                                current_tool_name,
+                                completed_tool.get("tool_args"),
+                            )
 
                         # Extract chunk provenance from PDF tool outputs for highlighting
                         if current_tool_name in ("search_document", "read_section"):
                             _emit_chunk_provenance_from_output(current_tool_name, output)
+
+                        tool_success = True
+                        tool_error = None
+                        if (
+                            current_tool_name
+                            in {"stage_allele_paper_evidence", "finalize_allele_extraction"}
+                            and isinstance(output_summary, dict)
+                            and output_summary.get("status") == "needs_repair"
+                        ):
+                            tool_success = False
+                            tool_error = output_summary.get("repair_instructions")
 
                         # Emit event for real-time visibility
                         # Use standard TOOL_COMPLETE type so frontend can display it
@@ -2999,8 +3138,10 @@ async def run_specialist_with_events(
                                     current_tool_name,
                                     complete=True,
                                 ),
-                                "success": True,
+                                "success": tool_success,
+                                "error": tool_error,
                                 "durationMs": duration_ms,
+                                "outputSummary": output_summary,
                                 "isSpecialistInternal": True  # Mark as internal specialist tool
                             }
                         })
@@ -3186,6 +3327,15 @@ async def run_specialist_with_events(
                     )
     else:
         logger.warning("%s has no final_output!", specialist_name)
+        builder_ack = finalized_ack_from_state() if builder_enabled else None
+        if builder_ack is not None:
+            final_output = json.dumps(builder_ack)
+            logger.info(
+                "%s recovered model-facing finalization ack from builder state "
+                "(run_id=%s)",
+                specialist_name,
+                builder_ack.get("finalized_run_id"),
+            )
 
         # =============================================================================
         # TEXT OUTPUT FALLBACK PARSING
@@ -3241,7 +3391,7 @@ async def run_specialist_with_events(
                 e,
             )
 
-        if text_from_items and output_type is not None:
+        if not final_output and text_from_items and output_type is not None:
             # Try to extract JSON from the text
             text_stripped = text_from_items.strip()
 
@@ -3315,7 +3465,7 @@ async def run_specialist_with_events(
                     len(text_stripped),
                     text_stripped[:200],
                 )
-        elif text_from_items:
+        elif not final_output and text_from_items:
             # Plain text agent - use text_from_items directly as output
             logger.info(
                 "%s: Using text from new_items as plain text output (%s chars)",
@@ -3323,7 +3473,7 @@ async def run_specialist_with_events(
                 len(text_from_items),
             )
             final_output = text_from_items
-        elif output_type is not None:
+        elif not final_output and output_type is not None:
             logger.warning(
                 "%s: No text found in new_items, cannot extract %s",
                 specialist_name,
@@ -3362,6 +3512,12 @@ async def run_specialist_with_events(
         if final_output:
             logger.info(
                 "%s TEXT FALLBACK: Skipping retry mechanism - output successfully extracted from text",
+                specialist_name,
+            )
+        elif builder_enabled:
+            logger.warning(
+                "%s builder run produced no final ack; skipping retry so "
+                "finalization enforcement can fail on the missing builder envelope.",
                 specialist_name,
             )
         else:
@@ -3557,7 +3713,79 @@ async def run_specialist_with_events(
                         message=f"{specialist_name} retry failed with error: {str(e)}"
                     )
 
-    if _is_domain_envelope_extraction_output_type(expected_output_type):
+    pipeline_expected_output_type = expected_output_type
+    if builder_enabled:
+        output_type_name = getattr(expected_output_type, "__name__", "response")
+        try:
+            enforce_builder_finalized_or_raise()
+            if expected_output_type is not None:
+                validated_ack = _try_validate_json_output(
+                    final_output,
+                    expected_output_type,
+                )
+                if not validated_ack:
+                    raise ValueError(
+                        f"Builder final response did not match {output_type_name}."
+                    )
+                final_output = validated_ack
+            builder_envelope = finalized_envelope_from_state()
+            if builder_envelope is None:
+                raise BuilderRuntimeError(
+                    "Builder finalized without a backend curation envelope."
+                )
+        except BuilderRuntimeError as exc:
+            error_message = str(exc)
+            logger.error("%s builder finalization failure: %s", specialist_name, exc)
+            add_specialist_event({
+                "type": "SPECIALIST_ERROR",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "details": {
+                    "specialist": specialist_name,
+                    "output_type": output_type_name,
+                    "error": error_message,
+                    "reason": "builder_finalization_missing",
+                    "severity": "error",
+                },
+            })
+            raise SpecialistOutputError(
+                specialist_name=specialist_name,
+                output_type_name=output_type_name,
+                message=error_message,
+            ) from exc
+        except Exception as exc:
+            error_message = (
+                f"{specialist_name} completed a builder run but did not return "
+                f"a valid {output_type_name} final acknowledgement."
+            )
+            logger.error("%s builder ack validation failure: %s", specialist_name, exc)
+            add_specialist_event({
+                "type": "SPECIALIST_ERROR",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "details": {
+                    "specialist": specialist_name,
+                    "output_type": output_type_name,
+                    "error": error_message,
+                    "reason": "builder_ack_validation_failed",
+                    "schema_error": str(exc),
+                    "severity": "error",
+                },
+            })
+            raise SpecialistOutputError(
+                specialist_name=specialist_name,
+                output_type_name=output_type_name,
+                message=error_message,
+            ) from exc
+
+        final_output = json.dumps(builder_envelope)
+        pipeline_expected_output_type = curation_output_type
+        final_output = _validate_domain_envelope_output_text_or_raise(
+            final_output,
+            expected_output_type=pipeline_expected_output_type,
+            specialist_name=specialist_name,
+            live_evidence_records=live_evidence_records,
+            reason="builder_finalized_envelope_validation_failed",
+        )
+    elif _is_domain_envelope_extraction_output_type(expected_output_type):
         final_output = _validate_domain_envelope_output_text_or_raise(
             final_output,
             expected_output_type=expected_output_type,
@@ -3588,7 +3816,7 @@ async def run_specialist_with_events(
     _emit_specialist_evidence_summary_or_raise(
         specialist_name=specialist_name,
         tool_name=tool_name,
-        expected_output_type=expected_output_type,
+        expected_output_type=pipeline_expected_output_type,
         final_output=final_output,
         live_evidence_records=live_evidence_records,
     )
@@ -3599,9 +3827,10 @@ async def run_specialist_with_events(
     validator_dispatch_started_at = time.monotonic()
     final_output = await _dispatch_domain_envelope_validators_for_chat(
         final_output,
-        expected_output_type=expected_output_type,
+        expected_output_type=pipeline_expected_output_type,
         specialist_name=specialist_name,
         tool_name=tool_name,
+        zero_validator_jobs_error=builder_enabled,
     )
     phase_timings_ms["domain_validator_dispatch_ms"] = _elapsed_ms(
         validator_dispatch_started_at
@@ -3613,7 +3842,7 @@ async def run_specialist_with_events(
     internal_event_started_at = time.monotonic()
     if tool_name and _is_domain_envelope_output_json(
         final_output,
-        expected_output_type=expected_output_type,
+        expected_output_type=pipeline_expected_output_type,
     ):
         add_specialist_event({
             "type": INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
@@ -3636,7 +3865,7 @@ async def run_specialist_with_events(
     supervisor_reduction_started_at = time.monotonic()
     final_output = _reduce_specialist_output_for_supervisor(
         final_output,
-        expected_output_type=expected_output_type,
+        expected_output_type=pipeline_expected_output_type,
     )
     phase_timings_ms["supervisor_output_reduction_ms"] = _elapsed_ms(
         supervisor_reduction_started_at
@@ -3656,37 +3885,41 @@ async def run_specialist_with_events(
         phase_timings_ms.get("stream_consume_ms", 0) - tool_duration_total_ms,
     )
 
+    summary_details = {
+        "specialist": specialist_name,
+        "toolCallCount": len(tool_calls),
+        "totalDurationMs": total_duration_ms,
+        "streamDurationMs": stream_duration_ms,
+        "phaseTimingsMs": dict(phase_timings_ms),
+        "toolDurationTotalMs": tool_duration_total_ms,
+        "toolDurationKnownCount": tool_duration_known_count,
+        "toolDurationUnknownCount": len(tool_calls) - tool_duration_known_count,
+        "nonToolStreamDurationMs": non_tool_stream_duration_ms,
+        "liveEvidenceRecordCount": len(live_evidence_records),
+        "liveEvidenceRecords": list(live_evidence_records),
+        "retainedEvidenceRecordCount": len(retained_evidence_records),
+        "retainedEvidenceRecords": retained_evidence_records,
+        "eventCount": total_event_count,
+        "eventTypeCounts": dict(event_type_counts),
+        "toolCalls": [
+            {
+                "name": tc.tool_name,
+                "args": tc.tool_args,
+                "durationMs": tc.duration_ms,
+                "outputPreview": tc.output_preview,
+                "outputSummary": tc.output_summary,
+            }
+            for tc in tool_calls
+        ],
+    }
+    if builder_state is not None:
+        summary_details.update(builder_state.summary_metrics())
+
     # Emit summary event
     add_specialist_event({
         "type": "SPECIALIST_SUMMARY",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "details": {
-            "specialist": specialist_name,
-            "toolCallCount": len(tool_calls),
-            "totalDurationMs": total_duration_ms,
-            "streamDurationMs": stream_duration_ms,
-            "phaseTimingsMs": dict(phase_timings_ms),
-            "toolDurationTotalMs": tool_duration_total_ms,
-            "toolDurationKnownCount": tool_duration_known_count,
-            "toolDurationUnknownCount": len(tool_calls) - tool_duration_known_count,
-            "nonToolStreamDurationMs": non_tool_stream_duration_ms,
-            "liveEvidenceRecordCount": len(live_evidence_records),
-            "liveEvidenceRecords": list(live_evidence_records),
-            "retainedEvidenceRecordCount": len(retained_evidence_records),
-            "retainedEvidenceRecords": retained_evidence_records,
-            "eventCount": total_event_count,
-            "eventTypeCounts": dict(event_type_counts),
-            "toolCalls": [
-                {
-                    "name": tc.tool_name,
-                    "args": tc.tool_args,
-                    "durationMs": tc.duration_ms,
-                    "outputPreview": tc.output_preview,
-                    "outputSummary": tc.output_summary,
-                }
-                for tc in tool_calls
-            ]
-        }
+        "details": summary_details,
     })
 
     logger.info(

@@ -13,8 +13,8 @@ from src.lib.agent_contracts import get_agent_contract as _get_agent_contract
     name_override="get_agent_contract",
     description_override=(
         "Read deterministic runtime contract metadata for an agent. "
-        "Use when schema, tool, domain-envelope, validator-binding, ontology, "
-        "or field details are needed beyond the compact prompt."
+        "Use when schema, tool, builder-tool, domain-envelope, validator-binding, "
+        "ontology, or field details are needed beyond the compact prompt."
     ),
 )
 def get_agent_contract(

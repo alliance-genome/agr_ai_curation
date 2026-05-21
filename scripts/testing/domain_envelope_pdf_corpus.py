@@ -643,6 +643,10 @@ def _evidence_usage_audit(
     }
 
 
+def _event_tool_name(event: dict[str, Any]) -> str:
+    return str(((event.get("details") or {}).get("toolName") or "")).strip()
+
+
 def _summarize_flow_events(flow_result: dict[str, Any]) -> dict[str, Any]:
     events = flow_result.get("events") or []
     event_types = flow_result.get("event_types") or []
@@ -708,9 +712,11 @@ def _summarize_flow_events(flow_result: dict[str, Any]) -> dict[str, Any]:
             or str(event.get("type", "")) == "SPECIALIST_SUMMARY"
             or "validation" in json.dumps(event, sort_keys=True).lower()
             or "lookup_attempt" in json.dumps(event, sort_keys=True).lower()
-            or str(((event.get("details") or {}).get("toolName") or "")) == "domain_validator_lookup"
-            or str(((event.get("details") or {}).get("toolName") or "")) == "record_evidence"
-            or str(((event.get("details") or {}).get("toolName") or "")) == "agr_species_context_lookup"
+            or _event_tool_name(event) == "domain_validator_lookup"
+            or _event_tool_name(event) == "record_evidence"
+            or _event_tool_name(event) == "stage_allele_paper_evidence"
+            or _event_tool_name(event) == "finalize_allele_extraction"
+            or _event_tool_name(event) == "agr_species_context_lookup"
         ],
     }
 
@@ -782,9 +788,98 @@ def _validator_problem_events(events: Iterable[dict[str, Any]]) -> list[dict[str
             or outcome == "error"
             or "validator_agent_error" in event_text
             or "invalid_schema" in event_text
+            or "domain_output_schema_validation_failed" in event_text
+            or "builder_finalized_envelope_validation_failed" in event_text
         ):
             problem_events.append(event)
     return problem_events
+
+
+def _tool_events(
+    events: Iterable[dict[str, Any]],
+    *,
+    tool_name: str,
+    event_type: str | None = None,
+) -> list[dict[str, Any]]:
+    return [
+        event
+        for event in events
+        if (event_type is None or str(event.get("type") or "") == event_type)
+        and _event_tool_name(event) == tool_name
+    ]
+
+
+def _builder_observation_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
+    builder_summaries = [
+        event.get("details") or {}
+        for event in events
+        if event.get("type") == "SPECIALIST_SUMMARY"
+        and isinstance(event.get("details"), dict)
+        and (event.get("details") or {}).get("builderEnabled") is True
+    ]
+    zero_validator_events = [
+        event
+        for event in events
+        if (
+            (event.get("details") or {}).get("reason") == "no_active_validator_jobs"
+            or (event.get("details") or {}).get("validatorDispatchStatus")
+            == "no_active_validator_jobs"
+        )
+    ]
+    return {
+        "stage_tool_start_count": len(
+            _tool_events(
+                events,
+                tool_name="stage_allele_paper_evidence",
+                event_type="TOOL_START",
+            )
+        ),
+        "stage_tool_complete_count": len(
+            _tool_events(
+                events,
+                tool_name="stage_allele_paper_evidence",
+                event_type="TOOL_COMPLETE",
+            )
+        ),
+        "finalize_tool_start_count": len(
+            _tool_events(
+                events,
+                tool_name="finalize_allele_extraction",
+                event_type="TOOL_START",
+            )
+        ),
+        "finalize_tool_complete_count": len(
+            _tool_events(
+                events,
+                tool_name="finalize_allele_extraction",
+                event_type="TOOL_COMPLETE",
+            )
+        ),
+        "builder_summary_count": len(builder_summaries),
+        "builder_staged_counts": [
+            details.get("builderStagedCount") for details in builder_summaries
+        ],
+        "builder_finalized_counts": [
+            details.get("builderFinalizedCount") for details in builder_summaries
+        ],
+        "builder_finalization_called": [
+            details.get("builderFinalizationCalled") for details in builder_summaries
+        ],
+        "builder_staged_evidence_ids": [
+            details.get("builderStagedEvidenceIds") for details in builder_summaries
+        ],
+        "builder_finalized_object_counts": [
+            details.get("builderFinalizedObjectCount") for details in builder_summaries
+        ],
+        "builder_validator_target_counts": [
+            details.get("builderValidatorTargetCount") for details in builder_summaries
+        ],
+        "builder_zero_validator_job_statuses": [
+            details.get("builderZeroValidatorJobsStatus")
+            for details in builder_summaries
+        ],
+        "zero_validator_job_event_count": len(zero_validator_events),
+    }
 
 
 def _active_validator_dispatch_events(
@@ -1144,6 +1239,7 @@ def _validator_observation_summary(events: list[dict[str, Any]]) -> dict[str, An
         "validator_agent_run_count": validator_agent_run_count,
         "validator_agent_run_count_source": count_source,
         "validator_dispatch_completion_details": _validator_dispatch_completion_details(events),
+        "builder_observations": _builder_observation_summary(events),
         "validator_first_request_event_timestamp": (
             _first_event_timestamp(request_events).isoformat()
             if _first_event_timestamp(request_events)
@@ -1199,11 +1295,40 @@ def validate_tightened_trial_gate(
     )
     fallback_ok = allow_specialist_text_fallback or not fallback_events
     no_problem_events = not problem_events
+    builder_observations = _builder_observation_summary(events)
+    builder_ok = True
+    if trial.domain == "allele":
+        finalized_object_counts = [
+            int(value)
+            for value in builder_observations["builder_finalized_object_counts"]
+            if isinstance(value, int)
+        ]
+        validator_target_counts = [
+            int(value)
+            for value in builder_observations["builder_validator_target_counts"]
+            if isinstance(value, int)
+        ]
+        zero_statuses = [
+            str(value)
+            for value in builder_observations["builder_zero_validator_job_statuses"]
+            if value is not None
+        ]
+        builder_ok = (
+            builder_observations["stage_tool_complete_count"] >= 1
+            and builder_observations["finalize_tool_complete_count"] == 1
+            and builder_observations["builder_summary_count"] >= 1
+            and any(builder_observations["builder_finalization_called"])
+            and max(finalized_object_counts or [0]) > 0
+            and max(validator_target_counts or [0]) > 0
+            and "no_active_validator_jobs" not in zero_statuses
+            and builder_observations["zero_validator_job_event_count"] == 0
+        )
     ok = (
         enough_expected_bindings
         and request_lifecycle_ok
         and fallback_ok
         and no_problem_events
+        and builder_ok
     )
     payload = {
         "expected_validator_bindings": expected_bindings,
@@ -1219,6 +1344,7 @@ def validate_tightened_trial_gate(
         "specialist_text_fallback_event_count": len(fallback_events),
         "validator_problem_event_count": len(problem_events),
         "allow_specialist_text_fallback": allow_specialist_text_fallback,
+        "builder_observations": builder_observations,
     }
     checks.append(
         {
@@ -1247,6 +1373,11 @@ def validate_tightened_trial_gate(
         if not no_problem_events:
             reasons.append(
                 f"validator error/invalid-schema events present: {len(problem_events)}"
+            )
+        if not builder_ok:
+            reasons.append(
+                "allele builder gate failed: "
+                + json.dumps(builder_observations, sort_keys=True)
             )
         raise smoke.SmokeFailure(
             f"Tightened corpus gate failed for {trial.trial_id}: " + "; ".join(reasons)
@@ -1392,6 +1523,7 @@ def _annotate_note_with_flow_result(
         "validator_agent_run_count",
         "validator_agent_run_count_source",
         "validator_dispatch_completion_details",
+        "builder_observations",
         "validator_first_request_event_timestamp",
         "validator_last_request_event_timestamp",
     ):
@@ -1448,6 +1580,7 @@ def run_trial(
         "observed_validator_lookup_counts": {},
         "validator_agent_run_count": None,
         "validator_agent_run_count_source": None,
+        "builder_observations": {},
     }
     trial_checks: list[dict[str, Any]] = note["checks"]
     document_id: str | None = None

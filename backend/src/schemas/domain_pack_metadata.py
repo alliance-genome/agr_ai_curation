@@ -365,18 +365,253 @@ class DomainPackValidatorBindings(DomainPackMetadataBaseModel):
         return self
 
 
-def _validate_metadata_mapping(value: dict[str, Any]) -> dict[str, Any]:
-    raw_bindings = value.get("validator_bindings")
-    if raw_bindings is None:
+class DomainPackBuilderField(DomainPackMetadataBaseModel):
+    """One model-facing input field in a domain-pack extraction builder."""
+
+    json_type: Literal["string", "integer", "number", "boolean", "object", "array"]
+    required: bool = False
+    collection: bool = False
+    min_items: Optional[int] = Field(default=None, ge=0)
+    maps_to: Optional[str] = None
+    hint: str = ""
+    examples: list[Any] = Field(default_factory=list)
+    default: Any = None
+    repair_messages: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("maps_to")
+    @classmethod
+    def _validate_optional_mapping_path(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if value.startswith("metadata."):
+            return validate_field_path_syntax(value.removeprefix("metadata."))
+        parts = value.split(".", 1)
+        if len(parts) == 2 and parts[0]:
+            validate_field_path_syntax(parts[1])
+            return value
+        return validate_field_path_syntax(value)
+
+    @field_validator("hint")
+    @classmethod
+    def _validate_hint(cls, value: str) -> str:
+        if value != value.strip():
+            raise ValueError("builder field hint must not include surrounding whitespace")
         return value
-    validated_bindings = DomainPackValidatorBindings.model_validate(raw_bindings)
-    return {
-        **value,
-        "validator_bindings": validated_bindings.model_dump(
+
+    @model_validator(mode="after")
+    def _validate_collection_shape(self) -> "DomainPackBuilderField":
+        if self.min_items is not None and not self.collection:
+            raise ValueError("min_items is only valid when collection: true")
+        if self.collection and self.json_type != "array":
+            raise ValueError("collection builder fields must declare json_type: array")
+        return self
+
+
+class DomainPackBuilderValidatorTarget(DomainPackMetadataBaseModel):
+    """Validator target emitted by a finalized extraction builder envelope."""
+
+    object_type: str
+    field_path: str
+
+    @field_validator("object_type")
+    @classmethod
+    def _validate_object_type(cls, value: str) -> str:
+        return _validate_symbolic_name(
+            value,
+            "extraction_builder.validator_target.object_type",
+        )
+
+    @field_validator("field_path")
+    @classmethod
+    def _validate_field_path(cls, value: str) -> str:
+        return validate_field_path_syntax(value)
+
+
+class DomainPackBuilderObjectRefRule(DomainPackMetadataBaseModel):
+    """Object-ref rule used when constructing finalized builder objects."""
+
+    field_path: str
+    object_type: str
+    collection: bool = False
+    role: Optional[str] = None
+
+    @field_validator("field_path")
+    @classmethod
+    def _validate_field_path(cls, value: str) -> str:
+        return validate_field_path_syntax(value)
+
+    @field_validator("object_type", "role")
+    @classmethod
+    def _validate_optional_symbolic(cls, value: Optional[str], info) -> Optional[str]:
+        if value is None:
+            return None
+        return _validate_symbolic_name(
+            value,
+            f"extraction_builder.object_refs.{info.field_name}",
+        )
+
+
+class DomainPackBuilderObjectRule(DomainPackMetadataBaseModel):
+    """Object construction rule used by an extraction builder finalizer."""
+
+    object_type: str
+    model_ref: Optional[str] = None
+    object_role: str
+    definition_state: DefinitionState = DefinitionState.IN_DEVELOPMENT
+    pending_ref_template: str
+    payload_fields: dict[str, str] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    object_refs: list[DomainPackBuilderObjectRefRule] = Field(default_factory=list)
+
+    @field_validator("object_type", "model_ref", "object_role")
+    @classmethod
+    def _validate_optional_refs(cls, value: Optional[str], info) -> Optional[str]:
+        if value is None:
+            return None
+        return _validate_symbolic_name(
+            value,
+            f"extraction_builder.objects.{info.field_name}",
+        )
+
+    @field_validator("pending_ref_template")
+    @classmethod
+    def _validate_template(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("pending_ref_template must not be empty")
+        if value != value.strip():
+            raise ValueError("pending_ref_template must not include surrounding whitespace")
+        return value
+
+    @field_validator("payload_fields")
+    @classmethod
+    def _validate_payload_field_paths(cls, value: dict[str, str]) -> dict[str, str]:
+        for field_path, source in value.items():
+            validate_field_path_syntax(field_path)
+            if not isinstance(source, str) or not source.strip():
+                raise ValueError("payload field sources must be non-empty strings")
+        return value
+
+
+class DomainPackBuilderObjectGraph(DomainPackMetadataBaseModel):
+    """Domain object graph built by an extraction builder finalizer."""
+
+    required_objects: list[str] = Field(min_length=1)
+    validator_target: DomainPackBuilderValidatorTarget
+    objects: list[DomainPackBuilderObjectRule] = Field(default_factory=list)
+
+    @field_validator("required_objects")
+    @classmethod
+    def _validate_required_objects(cls, value: list[str]) -> list[str]:
+        validated = [
+            _validate_symbolic_name(
+                item,
+                "extraction_builder.object_graph.required_objects",
+            )
+            for item in value
+        ]
+        _require_unique(validated, "extraction_builder.object_graph.required_objects")
+        return validated
+
+    @model_validator(mode="after")
+    def _validate_object_rule_coverage(self) -> "DomainPackBuilderObjectGraph":
+        rule_types = [item.object_type for item in self.objects]
+        _require_unique(rule_types, "extraction_builder.object_graph.objects")
+        missing = sorted(set(self.required_objects) - set(rule_types))
+        if missing:
+            raise ValueError(
+                "extraction_builder.object_graph.objects must define required object(s): "
+                + ", ".join(missing)
+            )
+        return self
+
+
+class DomainPackExtractionBuilder(DomainPackMetadataBaseModel):
+    """Typed ``metadata.extraction_builder`` contract for tool-authored extraction."""
+
+    enabled: bool = False
+    stage_tool: str
+    finalize_tool: str
+    retained_unit: str
+    per_retained_finding: bool = True
+    model_final_ack_schema: str = "ExtractionToolFinalizationAck"
+    curation_output_schema: Optional[str] = None
+    stage_description: str = ""
+    finalize_description: str = ""
+    fields: dict[str, DomainPackBuilderField] = Field(default_factory=dict)
+    finalize_fields: dict[str, DomainPackBuilderField] = Field(default_factory=dict)
+    object_graph: DomainPackBuilderObjectGraph
+    allowed_exclusion_reason_codes: list[str] = Field(default_factory=list)
+    allowed_ambiguity_reason_codes: list[str] = Field(default_factory=list)
+    examples: dict[str, Any] = Field(default_factory=dict)
+    repair_messages: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator(
+        "stage_tool",
+        "finalize_tool",
+        "retained_unit",
+        "model_final_ack_schema",
+        "curation_output_schema",
+    )
+    @classmethod
+    def _validate_symbolic_optional(cls, value: Optional[str], info) -> Optional[str]:
+        if value is None:
+            return None
+        return _validate_symbolic_name(value, f"extraction_builder.{info.field_name}")
+
+    @field_validator("allowed_exclusion_reason_codes", "allowed_ambiguity_reason_codes")
+    @classmethod
+    def _validate_reason_codes(cls, value: list[str], info) -> list[str]:
+        validated = [
+            _validate_symbolic_name(item, f"extraction_builder.{info.field_name}")
+            for item in value
+        ]
+        _require_unique(validated, f"extraction_builder.{info.field_name}")
+        return validated
+
+    @field_validator("fields", "finalize_fields")
+    @classmethod
+    def _validate_field_keys(
+        cls,
+        value: dict[str, DomainPackBuilderField],
+        info,
+    ) -> dict[str, DomainPackBuilderField]:
+        for key in value:
+            _validate_symbolic_name(key, f"extraction_builder.{info.field_name}")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_required_stage_fields(self) -> "DomainPackExtractionBuilder":
+        if self.enabled:
+            required = {"mention_text", "evidence_record_ids"}
+            missing = sorted(required - set(self.fields))
+            if missing:
+                raise ValueError(
+                    "enabled extraction_builder must declare stage field(s): "
+                    + ", ".join(missing)
+                )
+        return self
+
+
+def _validate_metadata_mapping(value: dict[str, Any]) -> dict[str, Any]:
+    result = dict(value)
+
+    raw_bindings = value.get("validator_bindings")
+    if raw_bindings is not None:
+        validated_bindings = DomainPackValidatorBindings.model_validate(raw_bindings)
+        result["validator_bindings"] = validated_bindings.model_dump(
             mode="json",
             exclude_none=True,
-        ),
-    }
+        )
+
+    raw_builder = value.get("extraction_builder")
+    if raw_builder is not None:
+        validated_builder = DomainPackExtractionBuilder.model_validate(raw_builder)
+        result["extraction_builder"] = validated_builder.model_dump(
+            mode="json",
+            exclude_none=True,
+        )
+
+    return result
 
 
 class DomainPackFieldType(str, Enum):
@@ -758,6 +993,12 @@ __all__ = [
     "DomainFixturePack",
     "DomainPackEnumDefinition",
     "DomainPackEnumValue",
+    "DomainPackBuilderField",
+    "DomainPackBuilderObjectGraph",
+    "DomainPackBuilderObjectRefRule",
+    "DomainPackBuilderObjectRule",
+    "DomainPackBuilderValidatorTarget",
+    "DomainPackExtractionBuilder",
     "DomainPackFieldDefinition",
     "DomainPackFieldType",
     "DomainPackFixturePackRef",

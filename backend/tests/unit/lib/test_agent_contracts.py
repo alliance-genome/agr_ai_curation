@@ -173,6 +173,34 @@ def test_tools_topic_uses_default_catalog_resolver_for_real_agent():
     assert "search_document" in tool_ids
 
 
+def test_builder_tools_topic_uses_real_allele_domain_pack():
+    tools = get_agent_contract("allele_extractor", "tools")
+    tool_ids = {tool["tool_id"] for tool in tools["tools"]}
+    assert "stage_allele_paper_evidence" in tool_ids
+    assert "finalize_allele_extraction" in tool_ids
+
+    result = get_agent_contract(
+        "allele_extractor",
+        "builder_tools",
+        detail_level="detail",
+    )
+
+    assert result["success"] is True
+    pack = result["domain_packs"][0]
+    assert pack["domain_pack_id"] == "agr.alliance.allele"
+    assert pack["enabled"] is True
+    assert pack["stage_tool"] == "stage_allele_paper_evidence"
+    assert pack["finalize_tool"] == "finalize_allele_extraction"
+    assert pack["model_final_ack_schema"] == "ExtractionToolFinalizationAck"
+    assert pack["curation_output_schema"] == "AlleleExtractionResultEnvelope"
+    assert "mention_text" in pack["stage_required_fields"]
+    assert "evidence_record_ids" in pack["stage_required_fields"]
+    assert pack["object_graph"]["validator_target"] == {
+        "object_type": "AlleleMention",
+        "field_path": "mention.text",
+    }
+
+
 def test_field_specific_detail_response_uses_domain_pack_metadata(tmp_path):
     registry = _fixture_registry(tmp_path)
 

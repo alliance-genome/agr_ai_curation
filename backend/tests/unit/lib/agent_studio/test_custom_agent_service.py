@@ -364,6 +364,13 @@ def test_create_custom_agent_allows_inherited_system_managed_tool_ids(monkeypatc
     assert custom.tool_ids == ["search_document", "record_evidence"]
 
 
+def test_allele_builder_tools_are_system_managed_inherited():
+    import src.lib.agent_studio.custom_agent_service as service
+
+    assert "stage_allele_paper_evidence" in service._SYSTEM_MANAGED_INHERITED_TOOL_IDS
+    assert "finalize_allele_extraction" in service._SYSTEM_MANAGED_INHERITED_TOOL_IDS
+
+
 def test_create_custom_agent_preserves_inherited_system_managed_tool_ids(monkeypatch):
     import src.lib.agent_studio.custom_agent_service as service
 

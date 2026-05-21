@@ -265,6 +265,51 @@ def test_allele_pack_declares_object_roles_and_validator_bindings():
     assert allele_lookup["curator_override"] == {"allowed": False}
 
 
+def test_allele_pack_declares_builder_tool_contract():
+    metadata = _allele_pack().metadata
+    builder = metadata.metadata["extraction_builder"]
+
+    assert builder["enabled"] is True
+    assert builder["stage_tool"] == "stage_allele_paper_evidence"
+    assert builder["finalize_tool"] == "finalize_allele_extraction"
+    assert builder["model_final_ack_schema"] == "ExtractionToolFinalizationAck"
+    assert builder["curation_output_schema"] == "AlleleExtractionResultEnvelope"
+    assert builder["fields"]["mention_text"]["required"] is True
+    assert builder["fields"]["evidence_record_ids"]["min_items"] == 1
+    assert builder["object_graph"]["validator_target"] == {
+        "object_type": "AlleleMention",
+        "field_path": "mention.text",
+    }
+    assert set(builder["object_graph"]["required_objects"]) == {
+        "AllelePaperEvidenceAssociation",
+        "Reference",
+        "AlleleMention",
+        "EvidenceQuote",
+    }
+    assert "strain_not_allele" in builder["allowed_exclusion_reason_codes"]
+
+    reference = next(
+        item
+        for item in metadata.object_definitions
+        if item.object_type == "Reference"
+    )
+    reference_id = next(
+        field for field in reference.fields if field.field_path == "reference_id"
+    )
+    assert reference_id.required is False
+
+    association = next(
+        item
+        for item in metadata.object_definitions
+        if item.object_type == "AllelePaperEvidenceAssociation"
+    )
+    evidence_quote = next(
+        field for field in association.fields if field.field_path == "evidence_quote"
+    )
+    assert evidence_quote.metadata["collection"] is True
+    assert evidence_quote.metadata["allows_repeated_refs"] is True
+
+
 def test_allele_mention_binding_selects_crb_examples_for_validation():
     registry = DomainPackValidationRegistry.from_domain_pack(_allele_pack())
 

@@ -11,6 +11,7 @@ import pytest
 from pydantic import BaseModel
 
 from src.lib.config.agent_loader import AgentDefinition, CurationConfig
+from src.lib.openai_agents.models import ExtractionToolFinalizationAck
 from src.lib.prompts import assembly
 from src.lib.prompts.cache import PromptNotFoundError
 from src.models.sql.prompts import PromptTemplate
@@ -156,6 +157,53 @@ def test_core_generated_contract_summarizes_tool_and_domain_metadata(monkeypatch
     assert len(generated.split()) <= 1500
     assert "prompt_templates:" not in bundle.layers[1].source_ref
     assert "domain_pack:agr.alliance.phenotype" in bundle.layers[1].source_ref
+
+
+def test_core_generated_contract_uses_builder_ack_schema(monkeypatch):
+    monkeypatch.setattr(
+        assembly,
+        "load_agent_definitions",
+        lambda: {
+            "allele_extractor": _agent(
+                folder_name="allele_extractor",
+                agent_id="allele_extractor",
+                category="Extraction",
+                tools=[
+                    "search_document",
+                    "record_evidence",
+                    "stage_allele_paper_evidence",
+                    "finalize_allele_extraction",
+                ],
+                output_schema="AlleleExtractionResultEnvelope",
+                domain_pack_id="agr.alliance.allele",
+            )
+        },
+    )
+    monkeypatch.setattr(
+        assembly,
+        "_domain_pack_validation_registries",
+        lambda: {"agr.alliance.allele": _allele_builder_registry_stub()},
+    )
+    monkeypatch.setattr(
+        assembly,
+        "resolve_output_schema",
+        lambda schema_key: (
+            ExtractionToolFinalizationAck
+            if schema_key == "ExtractionToolFinalizationAck"
+            else DemoStructuredOutput
+        ),
+    )
+
+    bundle = assembly.build_agent_core_prompt("allele_extractor")
+    generated = bundle.layers[1].content
+
+    assert "backend-built AlleleExtractionResultEnvelope" in generated
+    assert "ExtractionToolFinalizationAck structured output" in generated
+    assert "## Builder Tool Extraction Contract" in generated
+    assert "Do not hand-author final `curatable_objects[]`" in generated
+    assert "stage_allele_paper_evidence" in generated
+    assert "finalize_allele_extraction" in generated
+    assert "extraction_builder:metadata" in bundle.layers[1].source_ref
 
 
 def test_phenotype_editable_prompts_do_not_duplicate_generated_contract_facts():
@@ -404,6 +452,104 @@ def _phenotype_registry_stub() -> SimpleNamespace:
                 value=["MP", "WBPhenotype", "ZP"],
             ),
         },
+        required=True,
+        blocking=False,
+        allow_opt_out=True,
+    )
+    return SimpleNamespace(
+        domain_pack=SimpleNamespace(metadata=metadata),
+        bindings=(binding,),
+    )
+
+
+def _allele_builder_registry_stub() -> SimpleNamespace:
+    metadata = SimpleNamespace(
+        pack_id="agr.alliance.allele",
+        version="0.1.0",
+        status=_value("in_development"),
+        metadata_api_version="1.0.0",
+        metadata={
+            "semantic_source": "domain_envelope.objects",
+            "extraction_builder": {
+                "enabled": True,
+                "stage_tool": "stage_allele_paper_evidence",
+                "finalize_tool": "finalize_allele_extraction",
+                "retained_unit": "allele_paper_evidence",
+                "model_final_ack_schema": "ExtractionToolFinalizationAck",
+                "curation_output_schema": "AlleleExtractionResultEnvelope",
+                "fields": {
+                    "mention_text": {
+                        "json_type": "string",
+                        "required": True,
+                        "hint": "Exact allele mention.",
+                    },
+                    "evidence_record_ids": {
+                        "json_type": "array",
+                        "required": True,
+                        "collection": True,
+                        "min_items": 1,
+                        "hint": "Verified evidence IDs.",
+                    },
+                },
+                "finalize_fields": {
+                    "summary": {"json_type": "string", "required": True},
+                    "candidate_count": {"json_type": "integer", "required": True},
+                    "kept_count": {"json_type": "integer", "required": True},
+                    "excluded_count": {"json_type": "integer", "required": True},
+                    "ambiguous_count": {"json_type": "integer", "required": True},
+                },
+                "object_graph": {
+                    "required_objects": [
+                        "AllelePaperEvidenceAssociation",
+                        "Reference",
+                        "AlleleMention",
+                        "EvidenceQuote",
+                    ],
+                    "validator_target": {
+                        "object_type": "AlleleMention",
+                        "field_path": "mention.text",
+                    },
+                    "objects": [
+                        {
+                            "object_type": "AllelePaperEvidenceAssociation",
+                            "model_ref": "AllelePaperEvidenceAssociationPayload",
+                            "object_role": "curatable_unit",
+                            "pending_ref_template": "association_{staged_id}",
+                        },
+                        {
+                            "object_type": "Reference",
+                            "model_ref": "ReferencePayload",
+                            "object_role": "validated_reference",
+                            "pending_ref_template": "reference_{staged_id}",
+                        },
+                        {
+                            "object_type": "AlleleMention",
+                            "model_ref": "AlleleMentionPayload",
+                            "object_role": "metadata_only",
+                            "pending_ref_template": "mention_{staged_id}",
+                        },
+                        {
+                            "object_type": "EvidenceQuote",
+                            "model_ref": "EvidenceQuotePayload",
+                            "object_role": "metadata_only",
+                            "pending_ref_template": (
+                                "evidence_quote_{evidence_record_id}"
+                            ),
+                        },
+                    ],
+                },
+                "allowed_exclusion_reason_codes": ["previously_reported"],
+            },
+        },
+        schema_refs=[],
+        object_definitions=[],
+    )
+    binding = SimpleNamespace(
+        state=assembly.ValidationBindingState.ACTIVE,
+        binding_id="allele_mention_reference_validation",
+        object_types=("AlleleMention",),
+        field_paths=("mention.text",),
+        input_fields={"mention": _selector("payload", path="mention.text")},
         required=True,
         blocking=False,
         allow_opt_out=True,

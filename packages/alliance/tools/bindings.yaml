@@ -22,7 +22,7 @@ tools:
           - name: topic
             type: string
             required: true
-            description: One of tools, output_schema, domain_envelope, validator_bindings, ontology_constraints, or field.
+            description: One of tools, builder_tools, output_schema, domain_envelope, validator_bindings, ontology_constraints, or field.
           - name: field_path
             type: string
             required: false
@@ -624,6 +624,70 @@ tools:
       - user_id
     description: Verify exact source text against a document chunk and optionally echo envelope target refs
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
+  - tool_id: stage_allele_paper_evidence
+    binding_kind: static
+    callable: src.lib.openai_agents.tools.extraction_builder:stage_allele_paper_evidence
+    required_context: []
+    description: Stage one verified retained allele paper/evidence finding in run-scoped builder state
+    source_file: backend/src/lib/openai_agents/tools/extraction_builder.py
+    metadata:
+      name: Stage Allele Paper Evidence
+      category: Extraction Builder
+      audit:
+        display_name: Stage Allele Paper Evidence
+      documentation:
+        summary: Inline builder tool for submitting exactly one retained allele or variant finding after record_evidence verification. The backend validates evidence IDs and builds the final allele envelope during finalization.
+        parameters:
+          - name: mention_text
+            type: string
+            required: true
+            description: Exact allele or variant notation as written in the paper.
+          - name: evidence_record_ids
+            type: array[string]
+            required: true
+            description: One or more verified record_evidence IDs supporting this retained allele finding.
+          - name: associated_gene_symbol
+            type: string
+            required: false
+            description: Paper-supported gene selector context when available.
+          - name: taxon_curie
+            type: string
+            required: false
+            description: Paper-supported NCBI Taxon CURIE selector context when available.
+  - tool_id: finalize_allele_extraction
+    binding_kind: static
+    callable: src.lib.openai_agents.tools.extraction_builder:finalize_allele_extraction
+    required_context: []
+    description: Finalize staged allele extraction exactly once and build backend curation output
+    source_file: backend/src/lib/openai_agents/tools/extraction_builder.py
+    metadata:
+      name: Finalize Allele Extraction
+      category: Extraction Builder
+      audit:
+        display_name: Finalize Allele Extraction
+      documentation:
+        summary: Inline builder tool called exactly once when no retained allele findings remain to stage. The backend builds the final AlleleExtractionResultEnvelope from staged state.
+        parameters:
+          - name: summary
+            type: string
+            required: true
+            description: Concise run summary.
+          - name: candidate_count
+            type: integer
+            required: true
+            description: Number of harvested allele-like candidates considered.
+          - name: kept_count
+            type: integer
+            required: true
+            description: Number of retained allele findings staged.
+          - name: excluded_count
+            type: integer
+            required: true
+            description: Number of excluded candidates reported.
+          - name: ambiguous_count
+            type: integer
+            required: true
+            description: Number of ambiguous candidates reported.
   - tool_id: curation_db_sql
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.sql:create_curation_db_sql_tool

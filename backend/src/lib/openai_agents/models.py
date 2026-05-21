@@ -58,6 +58,33 @@ class Answer(BaseModel):
     sources: List[str] = []  # tools or agents involved in the answer
 
 
+class ExtractionToolFinalizationAck(BaseModel):
+    """Small model-facing acknowledgment for tool-authored extraction builders."""
+
+    status: Literal["complete", "failed"] = Field(
+        ...,
+        description="Whether builder finalization completed before the final response",
+    )
+    finalized_run_id: Optional[str] = Field(
+        None,
+        description="Run-scoped builder finalization identifier returned by the backend",
+    )
+    summary: str = Field(
+        ...,
+        description="Concise finalization acknowledgment; not the curation envelope",
+    )
+    staged_count: int = Field(
+        default=0,
+        ge=0,
+        description="Number of retained findings staged before finalization",
+    )
+    finalized_count: int = Field(
+        default=0,
+        ge=0,
+        description="Number of retained findings included in finalized backend state",
+    )
+
+
 # ============================================================================
 # Generic PDF Extraction Structured Output Models
 # ============================================================================
