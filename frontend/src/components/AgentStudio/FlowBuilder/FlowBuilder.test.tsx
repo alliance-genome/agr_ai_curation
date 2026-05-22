@@ -241,6 +241,10 @@ function dispatchKeyboardShortcut(
   return event
 }
 
+function expectedPrimaryShortcutLabel() {
+  return /Mac|iPhone|iPad|iPod/i.test(window.navigator.platform) ? 'Cmd' : 'Ctrl'
+}
+
 describe('FlowBuilder', () => {
   beforeEach(() => {
     serviceMocks.createFlow.mockReset()
@@ -1262,6 +1266,7 @@ describe('FlowBuilder', () => {
 
   it('shows accelerator labels only for wired shortcuts', async () => {
     const user = userEvent.setup()
+    const primaryShortcutLabel = expectedPrimaryShortcutLabel()
 
     render(<FlowBuilder />)
 
@@ -1272,13 +1277,33 @@ describe('FlowBuilder', () => {
     expect(within(fileMenu).queryByText('Ctrl+N')).not.toBeInTheDocument()
     expect(within(fileMenu).queryByText('Ctrl+O')).not.toBeInTheDocument()
     expect(within(fileMenu).queryByText('Ctrl+Shift+S')).not.toBeInTheDocument()
-    expect(within(fileMenu).getByText('Ctrl+S')).toBeInTheDocument()
+    expect(within(fileMenu).getByText(`${primaryShortcutLabel}+S`)).toBeInTheDocument()
 
     await user.keyboard('{Escape}')
     await user.click(screen.getByText('Edit'))
     const editMenu = await screen.findByRole('menu')
-    expect(within(editMenu).getByText('Ctrl+A')).toBeInTheDocument()
+    expect(within(editMenu).getByText(`${primaryShortcutLabel}+A`)).toBeInTheDocument()
     expect(within(editMenu).getByText('Del')).toBeInTheDocument()
+  }, 15000)
+
+  it('shows Cmd accelerator labels on macOS platforms', async () => {
+    const user = userEvent.setup()
+    const platformSpy = vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue('MacIntel')
+
+    try {
+      render(<FlowBuilder />)
+
+      await screen.findByText('1 step')
+
+      await user.click(screen.getByText('File'))
+      expect(within(await screen.findByRole('menu')).getByText('Cmd+S')).toBeInTheDocument()
+
+      await user.keyboard('{Escape}')
+      await user.click(screen.getByText('Edit'))
+      expect(within(await screen.findByRole('menu')).getByText('Cmd+A')).toBeInTheDocument()
+    } finally {
+      platformSpy.mockRestore()
+    }
   }, 15000)
 
   it('surfaces the shared auth error when opening saved flows', async () => {

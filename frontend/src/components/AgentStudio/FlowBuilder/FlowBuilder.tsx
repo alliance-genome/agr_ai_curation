@@ -501,6 +501,11 @@ const isEditableShortcutTarget = (target: EventTarget | null): boolean => {
   return Boolean(target.closest('input, textarea, select, [contenteditable]'))
 }
 
+const getPrimaryShortcutLabel = (): 'Ctrl' | 'Cmd' => {
+  if (typeof navigator === 'undefined') return 'Ctrl'
+  return /Mac|iPhone|iPad|iPod/i.test(navigator.platform) ? 'Cmd' : 'Ctrl'
+}
+
 function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }: FlowBuilderProps) {
   const { agents: agentMetadata } = useAgentMetadata()
 
@@ -517,6 +522,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
   // React Flow state
   const builderRootRef = useRef<HTMLDivElement>(null)
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
+  const primaryShortcutLabel = useMemo(getPrimaryShortcutLabel, [])
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null)
   const [nodes, setNodes, onNodesChange] = useNodesState<AgentNodeData>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<FlowEdge['data']>([])
@@ -1528,11 +1534,21 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     setEdges((eds) => eds.map((e) => ({ ...e, selected: true })))
   }, [setNodes, setEdges])
 
+  const selectedNodeIds = useMemo(
+    () => nodes.filter((n) => n.selected).map((n) => n.id),
+    [nodes]
+  )
+  const selectedEdgeIds = useMemo(
+    () => edges.filter((e) => e.selected).map((e) => e.id),
+    [edges]
+  )
+  const selectedNodesCount = selectedNodeIds.length
+  const selectedEdgesCount = selectedEdgeIds.length
+  const selectedElementsCount = selectedNodesCount + selectedEdgesCount
+
   // Handle delete all selected nodes and edges (for Edit menu and keyboard shortcut)
   const handleDeleteAllSelected = useCallback(() => {
     setEditMenuAnchor(null)
-    const selectedNodeIds = nodes.filter((n) => n.selected).map((n) => n.id)
-    const selectedEdgeIds = edges.filter((e) => e.selected).map((e) => e.id)
     if (selectedNodeIds.length === 0 && selectedEdgeIds.length === 0) {
       setSnackbar({ message: 'No nodes or connections selected', severity: 'error' })
       return
@@ -1551,7 +1567,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       selectedNodeIds.forEach(id => delete next[id])
       return next
     })
-  }, [nodes, edges, setNodes, setEdges])
+  }, [selectedNodeIds, selectedEdgeIds, setNodes, setEdges])
 
   // Handle delete flow - show confirmation dialog
   const handleDeleteFlowClick = useCallback(() => {
@@ -1586,11 +1602,6 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
   const handleDeleteFlowCancel = useCallback(() => {
     setDeleteConfirmOpen(false)
   }, [])
-
-  // Count selected nodes for Edit menu
-  const selectedNodesCount = nodes.filter((n) => n.selected).length
-  const selectedEdgesCount = edges.filter((e) => e.selected).length
-  const selectedElementsCount = selectedNodesCount + selectedEdgesCount
 
   useEffect(() => {
     const isBuilderShortcutContext = (event: KeyboardEvent): boolean => {
@@ -1672,7 +1683,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
           <Divider sx={{ my: 0.5 }} />
           <StyledMenuItem onClick={handleSaveClick} disabled={saving || nodes.length === 0}>
             <span>{saving ? 'Saving...' : 'Save'}</span>
-            <Shortcut>Ctrl+S</Shortcut>
+            <Shortcut>{primaryShortcutLabel}+S</Shortcut>
           </StyledMenuItem>
           <StyledMenuItem onClick={handleSaveAsClick} disabled={saving || nodes.length === 0}>
             <span>Save As...</span>
@@ -1696,7 +1707,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         >
           <StyledMenuItem onClick={handleSelectAll} disabled={nodes.length === 0}>
             <span>Select All</span>
-            <Shortcut>Ctrl+A</Shortcut>
+            <Shortcut>{primaryShortcutLabel}+A</Shortcut>
           </StyledMenuItem>
           <StyledMenuItem onClick={handleDeleteAllSelected} disabled={selectedElementsCount === 0}>
             <Typography sx={{ color: selectedElementsCount > 0 ? 'error.main' : 'inherit', fontSize: '0.8rem' }}>
