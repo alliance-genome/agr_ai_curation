@@ -402,9 +402,9 @@ const BatchPage: React.FC = () => {
                   return {
                     ...d,
                     status: docStatus,
-                    result_file_path: data.result_file_path ?? data.data?.result_file_path,
-                    error_message: data.error_message ?? data.data?.error_message,
-                    processing_time_ms: data.processing_time_ms ?? data.data?.processing_time_ms,
+                    result_file_path: data.result_file_path ?? data.data?.result_file_path ?? d.result_file_path,
+                    error_message: data.error_message ?? data.data?.error_message ?? d.error_message,
+                    processing_time_ms: data.processing_time_ms ?? data.data?.processing_time_ms ?? d.processing_time_ms,
                     trace_id: data.trace_id ?? data.data?.trace_id ?? d.trace_id,
                   };
                 }

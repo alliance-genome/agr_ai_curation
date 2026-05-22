@@ -44,6 +44,26 @@ describe('ModelessFeedbackSurface', () => {
     expect(onClose).toHaveBeenCalledTimes(2)
   })
 
+  it('keeps Escape available to a focused foreground dialog', () => {
+    const onClose = vi.fn()
+
+    render(
+      <>
+        <ModelessFeedbackSurface open title="Background Feedback" onClose={onClose}>
+          Feedback form
+        </ModelessFeedbackSurface>
+        <div role="dialog" aria-modal="true" aria-label="Foreground dialog">
+          <button type="button">Foreground action</button>
+        </div>
+      </>
+    )
+
+    screen.getByRole('button', { name: 'Foreground action' }).focus()
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
   it('keeps desktop drag movement inside the viewport bounds', () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 500 })
     Object.defineProperty(window, 'innerHeight', { configurable: true, value: 360 })

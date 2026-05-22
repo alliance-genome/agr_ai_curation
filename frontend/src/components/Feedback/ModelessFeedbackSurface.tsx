@@ -53,6 +53,7 @@ interface DragState {
 const VIEWPORT_MARGIN = 16
 const DESKTOP_TOP_OFFSET = 88
 const KEYBOARD_NUDGE = 24
+const ESTIMATED_PANEL_HEIGHT = 360
 
 function resolveWidth(width: SurfaceWidth): number {
   if (typeof width === 'number') {
@@ -64,8 +65,8 @@ function resolveWidth(width: SurfaceWidth): number {
 
 function getViewportSize() {
   return {
-    width: window.innerWidth || document.documentElement.clientWidth || 1024,
-    height: window.innerHeight || document.documentElement.clientHeight || 768,
+    width: window.innerWidth || document.documentElement.clientWidth,
+    height: window.innerHeight || document.documentElement.clientHeight,
   }
 }
 
@@ -107,13 +108,13 @@ function ModelessFeedbackSurface({
   const panelWidth = useMemo(() => resolveWidth(width), [width])
   const panelRef = useRef<HTMLDivElement | null>(null)
   const dragStateRef = useRef<DragState | null>(null)
-  const [position, setPosition] = useState<Position>(() => getDefaultPosition(panelWidth, 360))
+  const [position, setPosition] = useState<Position>(() => getDefaultPosition(panelWidth, ESTIMATED_PANEL_HEIGHT))
 
   const getPanelSize = useCallback(() => {
     const rect = panelRef.current?.getBoundingClientRect()
     return {
       width: rect?.width || panelWidth,
-      height: rect?.height || 360,
+      height: rect?.height || ESTIMATED_PANEL_HEIGHT,
     }
   }, [panelWidth])
 
@@ -128,7 +129,7 @@ function ModelessFeedbackSurface({
       return
     }
 
-    setPosition(getDefaultPosition(panelWidth, 360))
+    setPosition(getDefaultPosition(panelWidth, ESTIMATED_PANEL_HEIGHT))
   }, [isSmallScreen, open, panelWidth])
 
   useLayoutEffect(() => {
@@ -187,6 +188,12 @@ function ModelessFeedbackSurface({
 
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === 'Escape') {
+        const activeDialog = document.activeElement?.closest('[role="dialog"]')
+        if (activeDialog && activeDialog !== panelRef.current && !panelRef.current?.contains(activeDialog)) {
+          return
+        }
+
+        event.stopPropagation()
         onClose()
       }
     }
@@ -209,7 +216,6 @@ function ModelessFeedbackSurface({
       originX: position.x,
       originY: position.y,
     }
-    event.currentTarget.setPointerCapture?.(event.pointerId)
     window.addEventListener('pointermove', handlePointerMove)
     window.addEventListener('pointerup', handlePointerUp)
   }

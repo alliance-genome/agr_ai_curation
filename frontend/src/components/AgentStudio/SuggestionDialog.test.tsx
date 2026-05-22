@@ -35,7 +35,7 @@ describe('SuggestionDialog', () => {
           context={{
             active_tab: 'agents',
             selected_agent_id: 'agent-1',
-            selected_group_id: 'WB',
+            selected_group_id: 'group-alpha',
             trace_id: 'trace-1',
           }}
           selectedAgent={{
@@ -77,7 +77,7 @@ describe('SuggestionDialog', () => {
         summary: 'Clarify allele lookup behavior',
         detailed_reasoning: 'The current prompt is hard to compare against the trace.',
         proposed_change: undefined,
-        group_id: 'WB',
+        group_id: 'group-alpha',
         trace_id: 'trace-1',
       })
     })
