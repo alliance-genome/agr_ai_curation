@@ -494,6 +494,13 @@ const edgeTypes = {
   deletable: DeletableEdge,
 }
 
+const isEditableShortcutTarget = (target: EventTarget | null): boolean => {
+  if (!(target instanceof Element)) return false
+  if (target instanceof HTMLElement && target.isContentEditable) return true
+
+  return Boolean(target.closest('input, textarea, select, [contenteditable]'))
+}
+
 function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }: FlowBuilderProps) {
   const { agents: agentMetadata } = useAgentMetadata()
 
@@ -508,6 +515,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
   )
 
   // React Flow state
+  const builderRootRef = useRef<HTMLDivElement>(null)
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null)
   const [nodes, setNodes, onNodesChange] = useNodesState<AgentNodeData>([])
@@ -1342,6 +1350,8 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
 
   // Save Dialog handlers
   const handleSaveClick = useCallback(() => {
+    if (saving) return
+
     setFileMenuAnchor(null)
     if (nodes.length === 0) {
       setSnackbar({ message: 'Add at least one agent to the flow', severity: 'error' })
@@ -1356,7 +1366,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       setSaveDialogName(flowName === 'New Flow' ? '' : flowName)
       setSaveDialogOpen(true)
     }
-  }, [currentFlowId, flowName, nodes.length, handleSave])
+  }, [currentFlowId, flowName, nodes.length, saving, handleSave])
 
   const handleSaveAsClick = useCallback(() => {
     setFileMenuAnchor(null)
@@ -1513,22 +1523,27 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
   // Handle select all nodes
   const handleSelectAll = useCallback(() => {
     setEditMenuAnchor(null)
-    // React Flow handles selection via onNodesChange, but we can select all by updating selection state
+    // React Flow handles selection via onNodesChange, but menu/shortcut select-all updates both collections directly.
     setNodes((nds) => nds.map((n) => ({ ...n, selected: true })))
-  }, [setNodes])
+    setEdges((eds) => eds.map((e) => ({ ...e, selected: true })))
+  }, [setNodes, setEdges])
 
-  // Handle delete all selected nodes (for Edit menu)
+  // Handle delete all selected nodes and edges (for Edit menu and keyboard shortcut)
   const handleDeleteAllSelected = useCallback(() => {
     setEditMenuAnchor(null)
-    // Get all selected nodes
     const selectedNodeIds = nodes.filter((n) => n.selected).map((n) => n.id)
-    if (selectedNodeIds.length === 0) {
-      setSnackbar({ message: 'No nodes selected', severity: 'error' })
+    const selectedEdgeIds = edges.filter((e) => e.selected).map((e) => e.id)
+    if (selectedNodeIds.length === 0 && selectedEdgeIds.length === 0) {
+      setSnackbar({ message: 'No nodes or connections selected', severity: 'error' })
       return
     }
-    // Remove selected nodes and their edges
+
     setNodes((nds) => nds.filter((n) => !n.selected))
-    setEdges((eds) => eds.filter((e) => !selectedNodeIds.includes(e.source) && !selectedNodeIds.includes(e.target)))
+    setEdges((eds) => eds.filter((e) => (
+      !selectedEdgeIds.includes(e.id)
+      && !selectedNodeIds.includes(e.source)
+      && !selectedNodeIds.includes(e.target)
+    )))
     setSelectedNode(null)
     // Clean up config state for deleted nodes (prevents memory leak)
     setInputConfigState(prev => {
@@ -1536,7 +1551,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       selectedNodeIds.forEach(id => delete next[id])
       return next
     })
-  }, [nodes, setNodes, setEdges])
+  }, [nodes, edges, setNodes, setEdges])
 
   // Handle delete flow - show confirmation dialog
   const handleDeleteFlowClick = useCallback(() => {
@@ -1574,9 +1589,66 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
 
   // Count selected nodes for Edit menu
   const selectedNodesCount = nodes.filter((n) => n.selected).length
+  const selectedEdgesCount = edges.filter((e) => e.selected).length
+  const selectedElementsCount = selectedNodesCount + selectedEdgesCount
+
+  useEffect(() => {
+    const isBuilderShortcutContext = (event: KeyboardEvent): boolean => {
+      const root = builderRootRef.current
+      if (!root) return false
+
+      const target = event.target
+      if (target instanceof Node && root.contains(target)) return true
+
+      const activeElement = document.activeElement
+      return activeElement === document.body
+        || (activeElement instanceof Node && root.contains(activeElement))
+    }
+
+    const isCanvasShortcutContext = (event: KeyboardEvent): boolean => {
+      const canvas = reactFlowWrapper.current
+      if (!canvas) return false
+
+      const target = event.target
+      if (target instanceof Node && canvas.contains(target)) return true
+
+      const activeElement = document.activeElement
+      return activeElement instanceof Node && canvas.contains(activeElement)
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isEditableShortcutTarget(event.target)) return
+      if (!isBuilderShortcutContext(event)) return
+
+      const isPrimaryModifier = event.ctrlKey || event.metaKey
+      const key = event.key.toLowerCase()
+
+      if (isPrimaryModifier && !event.shiftKey && key === 's') {
+        event.preventDefault()
+        handleSaveClick()
+        return
+      }
+
+      if (!isCanvasShortcutContext(event)) return
+
+      if (event.key === 'Delete' && selectedElementsCount > 0) {
+        event.preventDefault()
+        handleDeleteAllSelected()
+        return
+      }
+
+      if (isPrimaryModifier && !event.shiftKey && key === 'a' && nodes.length > 0) {
+        event.preventDefault()
+        handleSelectAll()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [handleSaveClick, handleSelectAll, handleDeleteAllSelected, nodes.length, selectedElementsCount])
 
   return (
-    <BuilderContainer>
+    <BuilderContainer ref={builderRootRef}>
       {/* Unified Toolbar */}
       <Toolbar>
         {/* File Menu */}
@@ -1590,11 +1662,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         >
           <StyledMenuItem onClick={() => { handleFileMenuClose(); handleNewFlow(); }}>
             <span>New Flow</span>
-            <Shortcut>Ctrl+N</Shortcut>
           </StyledMenuItem>
           <StyledMenuItem onClick={handleOpenDialogOpen}>
             <span>Open Flow...</span>
-            <Shortcut>Ctrl+O</Shortcut>
           </StyledMenuItem>
           <StyledMenuItem onClick={handleManageDialogOpen}>
             <span>Manage Flows...</span>
@@ -1606,7 +1676,6 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
           </StyledMenuItem>
           <StyledMenuItem onClick={handleSaveAsClick} disabled={saving || nodes.length === 0}>
             <span>Save As...</span>
-            <Shortcut>Ctrl+Shift+S</Shortcut>
           </StyledMenuItem>
           <Divider sx={{ my: 0.5 }} />
           <StyledMenuItem onClick={handleDeleteFlowClick} disabled={!currentFlowId}>
@@ -1629,9 +1698,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
             <span>Select All</span>
             <Shortcut>Ctrl+A</Shortcut>
           </StyledMenuItem>
-          <StyledMenuItem onClick={handleDeleteAllSelected} disabled={selectedNodesCount === 0}>
-            <Typography sx={{ color: selectedNodesCount > 0 ? 'error.main' : 'inherit', fontSize: '0.8rem' }}>
-              Delete Selected {selectedNodesCount > 0 && `(${selectedNodesCount})`}
+          <StyledMenuItem onClick={handleDeleteAllSelected} disabled={selectedElementsCount === 0}>
+            <Typography sx={{ color: selectedElementsCount > 0 ? 'error.main' : 'inherit', fontSize: '0.8rem' }}>
+              Delete Selected {selectedElementsCount > 0 && `(${selectedElementsCount})`}
             </Typography>
             <Shortcut>Del</Shortcut>
           </StyledMenuItem>
@@ -1699,7 +1768,11 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
           <ResizeHandle />
 
           <Panel defaultSize={72} minSize={60}>
-            <CanvasArea ref={reactFlowWrapper}>
+            <CanvasArea
+              ref={reactFlowWrapper}
+              tabIndex={-1}
+              onMouseDown={() => reactFlowWrapper.current?.focus()}
+            >
               {loading ? (
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
                   <CircularProgress />
