@@ -4,6 +4,24 @@ import { describe, expect, it, vi } from 'vitest'
 import ModelessFeedbackSurface from './ModelessFeedbackSurface'
 
 describe('ModelessFeedbackSurface', () => {
+  it('opens centered on desktop with a resizable surface', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1000 })
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 })
+
+    render(
+      <ModelessFeedbackSurface open title="Centered Feedback" onClose={vi.fn()}>
+        Feedback form
+      </ModelessFeedbackSurface>
+    )
+
+    const dialog = screen.getByTestId('modeless-feedback-surface')
+    expect(dialog).toHaveStyle({
+      left: '220px',
+      top: '190px',
+      resize: 'both',
+    })
+  })
+
   it('renders as a non-modal dialog without blocking the page behind it', () => {
     const behindClick = vi.fn()
 

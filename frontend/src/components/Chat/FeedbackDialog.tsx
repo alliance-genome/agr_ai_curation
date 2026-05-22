@@ -198,7 +198,7 @@ function FeedbackDialog({
           </Box>
         </Box>
       ) : (
-        <>
+        <Box sx={{ display: 'flex', flex: 1, flexDirection: 'column', minHeight: 0 }}>
           {error && (
             <Alert severity="error" sx={{ mb: 2 }}>
               {error}
@@ -207,7 +207,7 @@ function FeedbackDialog({
           <TextField
             autoFocus
             multiline
-            rows={6}
+            minRows={6}
             fullWidth
             variant="outlined"
             placeholder="Enter your detailed feedback here..."
@@ -215,7 +215,11 @@ function FeedbackDialog({
             onChange={(e) => setFeedbackText(e.target.value)}
             disabled={isSubmitting}
             sx={(theme) => ({
+              flex: 1,
+              minHeight: 0,
               '& .MuiOutlinedInput-root': {
+                height: '100%',
+                alignItems: 'stretch',
                 color: theme.palette.text.primary,
                 '& fieldset': {
                   borderColor: theme.palette.divider,
@@ -230,13 +234,18 @@ function FeedbackDialog({
               '& .MuiInputBase-input': {
                 color: theme.palette.text.primary,
               },
+              '& .MuiInputBase-inputMultiline': {
+                height: '100% !important',
+                overflow: 'auto !important',
+                boxSizing: 'border-box',
+              },
               '& .MuiInputBase-input::placeholder': {
                 color: theme.palette.text.secondary,
                 opacity: 1,
               }
             })}
           />
-        </>
+        </Box>
       )}
     </ModelessFeedbackSurface>
   )

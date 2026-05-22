@@ -51,9 +51,10 @@ interface DragState {
 }
 
 const VIEWPORT_MARGIN = 16
-const DESKTOP_TOP_OFFSET = 88
 const KEYBOARD_NUDGE = 24
-const ESTIMATED_PANEL_HEIGHT = 360
+const DEFAULT_PANEL_HEIGHT = 420
+const MIN_PANEL_WIDTH = 360
+const MIN_PANEL_HEIGHT = 300
 
 function resolveWidth(width: SurfaceWidth): number {
   if (typeof width === 'number') {
@@ -72,13 +73,10 @@ function getViewportSize() {
 
 function getDefaultPosition(panelWidth: number, panelHeight: number): Position {
   const viewport = getViewportSize()
-  const x = viewport.width - panelWidth - VIEWPORT_MARGIN
-  const y = Math.min(DESKTOP_TOP_OFFSET, viewport.height - panelHeight - VIEWPORT_MARGIN)
+  const x = (viewport.width - panelWidth) / 2
+  const y = (viewport.height - panelHeight) / 2
 
-  return {
-    x: Math.max(VIEWPORT_MARGIN, x),
-    y: Math.max(VIEWPORT_MARGIN, y),
-  }
+  return clampPosition({ x, y }, panelWidth, panelHeight)
 }
 
 function clampPosition(position: Position, panelWidth: number, panelHeight: number): Position {
@@ -108,13 +106,13 @@ function ModelessFeedbackSurface({
   const panelWidth = useMemo(() => resolveWidth(width), [width])
   const panelRef = useRef<HTMLDivElement | null>(null)
   const dragStateRef = useRef<DragState | null>(null)
-  const [position, setPosition] = useState<Position>(() => getDefaultPosition(panelWidth, ESTIMATED_PANEL_HEIGHT))
+  const [position, setPosition] = useState<Position>(() => getDefaultPosition(panelWidth, DEFAULT_PANEL_HEIGHT))
 
   const getPanelSize = useCallback(() => {
     const rect = panelRef.current?.getBoundingClientRect()
     return {
       width: rect?.width || panelWidth,
-      height: rect?.height || ESTIMATED_PANEL_HEIGHT,
+      height: rect?.height || DEFAULT_PANEL_HEIGHT,
     }
   }, [panelWidth])
 
@@ -129,7 +127,7 @@ function ModelessFeedbackSurface({
       return
     }
 
-    setPosition(getDefaultPosition(panelWidth, ESTIMATED_PANEL_HEIGHT))
+    setPosition(getDefaultPosition(panelWidth, DEFAULT_PANEL_HEIGHT))
   }, [isSmallScreen, open, panelWidth])
 
   useLayoutEffect(() => {
@@ -139,6 +137,15 @@ function ModelessFeedbackSurface({
 
     setPosition((currentPosition) => clampCurrentPosition(currentPosition))
   }, [clampCurrentPosition, isSmallScreen, open])
+
+  useLayoutEffect(() => {
+    if (!open || isSmallScreen) {
+      return
+    }
+
+    const size = getPanelSize()
+    setPosition(getDefaultPosition(size.width, size.height))
+  }, [getPanelSize, isSmallScreen, open])
 
   useEffect(() => {
     if (!open || isSmallScreen) {
@@ -152,6 +159,21 @@ function ModelessFeedbackSurface({
     window.addEventListener('resize', handleResize)
     return () => {
       window.removeEventListener('resize', handleResize)
+    }
+  }, [clampCurrentPosition, isSmallScreen, open])
+
+  useEffect(() => {
+    if (!open || isSmallScreen || !panelRef.current || typeof ResizeObserver === 'undefined') {
+      return
+    }
+
+    const observer = new ResizeObserver(() => {
+      setPosition((currentPosition) => clampCurrentPosition(currentPosition))
+    })
+    observer.observe(panelRef.current)
+
+    return () => {
+      observer.disconnect()
     }
   }, [clampCurrentPosition, isSmallScreen, open])
 
@@ -262,14 +284,19 @@ function ModelessFeedbackSurface({
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
+            resize: 'both',
             bgcolor: 'background.paper',
             color: 'text.primary',
             border: `1px solid ${surfaceTheme.palette.divider}`,
             borderRadius: 1,
             boxShadow: surfaceTheme.shadows[8],
             width: panelWidth,
+            height: DEFAULT_PANEL_HEIGHT,
+            minWidth: MIN_PANEL_WIDTH,
+            minHeight: MIN_PANEL_HEIGHT,
             maxWidth: `calc(100vw - ${VIEWPORT_MARGIN * 2}px)`,
             maxHeight: `calc(100vh - ${VIEWPORT_MARGIN * 2}px)`,
+            boxSizing: 'border-box',
             left: position.x,
             top: position.y,
             [surfaceTheme.breakpoints.down('sm')]: {
@@ -278,8 +305,12 @@ function ModelessFeedbackSurface({
               top: 'auto',
               bottom: VIEWPORT_MARGIN / 2,
               width: 'auto',
+              height: 'auto',
+              minWidth: 0,
+              minHeight: 0,
               maxWidth: 'none',
               maxHeight: 'min(78vh, 640px)',
+              resize: 'none',
             },
           }),
           ...(Array.isArray(sx) ? sx : [sx]),
@@ -294,6 +325,7 @@ function ModelessFeedbackSurface({
             py: 1.25,
             borderBottom: `1px solid ${theme.palette.divider}`,
             bgcolor: alpha(theme.palette.primary.main, 0.04),
+            flexShrink: 0,
             userSelect: 'none',
           }}
         >
@@ -333,7 +365,7 @@ function ModelessFeedbackSurface({
           </Tooltip>
         </Box>
 
-        <Box sx={{ overflow: 'auto', px: 3, py: 2 }}>
+        <Box sx={{ display: 'flex', flex: 1, flexDirection: 'column', minHeight: 0, overflow: 'auto', px: 3, py: 2 }}>
           {children}
         </Box>
 
@@ -345,6 +377,7 @@ function ModelessFeedbackSurface({
               gap: 1,
               px: 3,
               py: 2,
+              flexShrink: 0,
               borderTop: `1px solid ${theme.palette.divider}`,
             }}
           >
