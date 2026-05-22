@@ -228,6 +228,23 @@ function buildFlowListResponse(name: string) {
   }
 }
 
+function dispatchKeyboardShortcut(
+  target: EventTarget,
+  init: KeyboardEventInit & { key: string }
+) {
+  const event = new KeyboardEvent('keydown', {
+    bubbles: true,
+    cancelable: true,
+    ...init,
+  })
+  target.dispatchEvent(event)
+  return event
+}
+
+function expectedPrimaryShortcutLabel() {
+  return /Mac|iPhone|iPad|iPod/i.test(window.navigator.platform) ? 'Cmd' : 'Ctrl'
+}
+
 describe('FlowBuilder', () => {
   beforeEach(() => {
     serviceMocks.createFlow.mockReset()
@@ -1141,6 +1158,153 @@ describe('FlowBuilder', () => {
       reason: 'updated',
     })
   }, 15000) // Create-then-update coverage depends on two async refresh cycles and needs more headroom under suite load.
+
+  it('saves the current flow with the primary save shortcut', async () => {
+    const user = userEvent.setup()
+
+    serviceMocks.createFlow.mockResolvedValue(buildFlowResponse({ name: 'Shortcut Flow' }))
+    serviceMocks.updateFlow.mockResolvedValue(
+      buildFlowResponse({
+        name: 'Shortcut Flow',
+        updated_at: '2026-04-03T01:00:00Z',
+      })
+    )
+    serviceMocks.listFlows
+      .mockResolvedValueOnce(buildFlowListResponse('Shortcut Flow'))
+      .mockResolvedValueOnce(buildFlowListResponse('Shortcut Flow'))
+
+    render(<FlowBuilder />)
+
+    await screen.findByText('1 step')
+
+    await user.click(screen.getByText('File'))
+    await user.click(within(await screen.findByRole('menu')).getByText('Save'))
+
+    const saveDialog = await screen.findByRole('dialog', { name: 'Save Flow' })
+    await user.type(within(saveDialog).getByPlaceholderText('Flow name'), 'Shortcut Flow')
+    await user.click(within(saveDialog).getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(serviceMocks.createFlow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'Shortcut Flow',
+        })
+      )
+    })
+    await waitFor(() => {
+      expect(screen.getByText('Flow saved successfully')).toBeInTheDocument()
+    })
+
+    const saveShortcutEvent = dispatchKeyboardShortcut(screen.getByTestId('react-flow'), {
+      key: 's',
+      ctrlKey: true,
+    })
+
+    expect(saveShortcutEvent.defaultPrevented).toBe(true)
+    await waitFor(() => {
+      expect(serviceMocks.updateFlow).toHaveBeenCalledWith(
+        'flow-1',
+        expect.objectContaining({
+          name: 'Shortcut Flow',
+        })
+      )
+    })
+  }, 15000)
+
+  it('does not handle save shortcuts from editable dialog fields', async () => {
+    const user = userEvent.setup()
+
+    render(<FlowBuilder />)
+
+    await screen.findByText('1 step')
+
+    await user.click(screen.getByText('File'))
+    await user.click(within(await screen.findByRole('menu')).getByText('Save'))
+
+    const saveDialog = await screen.findByRole('dialog', { name: 'Save Flow' })
+    const flowNameInput = within(saveDialog).getByPlaceholderText('Flow name')
+    await user.type(flowNameInput, 'Draft name')
+
+    const saveShortcutEvent = dispatchKeyboardShortcut(flowNameInput, {
+      key: 's',
+      ctrlKey: true,
+    })
+
+    expect(saveShortcutEvent.defaultPrevented).toBe(false)
+    expect(serviceMocks.createFlow).not.toHaveBeenCalled()
+    expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
+  }, 15000)
+
+  it('selects all and deletes selected flow elements only from the canvas shortcut context', async () => {
+    const user = userEvent.setup()
+
+    render(<FlowBuilder />)
+
+    await screen.findByText('1 step')
+
+    const canvas = screen.getByTestId('react-flow')
+    const selectAllEvent = dispatchKeyboardShortcut(canvas, {
+      key: 'a',
+      ctrlKey: true,
+    })
+
+    expect(selectAllEvent.defaultPrevented).toBe(true)
+
+    await user.click(screen.getByText('Edit'))
+    expect(within(await screen.findByRole('menu')).getByText('Delete Selected (1)')).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+
+    const deleteEvent = dispatchKeyboardShortcut(canvas, {
+      key: 'Delete',
+    })
+
+    expect(deleteEvent.defaultPrevented).toBe(true)
+    await waitFor(() => {
+      expect(screen.queryByText('1 step')).not.toBeInTheDocument()
+    })
+  }, 15000)
+
+  it('shows accelerator labels only for wired shortcuts', async () => {
+    const user = userEvent.setup()
+    const primaryShortcutLabel = expectedPrimaryShortcutLabel()
+
+    render(<FlowBuilder />)
+
+    await screen.findByText('1 step')
+
+    await user.click(screen.getByText('File'))
+    const fileMenu = await screen.findByRole('menu')
+    expect(within(fileMenu).queryByText('Ctrl+N')).not.toBeInTheDocument()
+    expect(within(fileMenu).queryByText('Ctrl+O')).not.toBeInTheDocument()
+    expect(within(fileMenu).queryByText('Ctrl+Shift+S')).not.toBeInTheDocument()
+    expect(within(fileMenu).getByText(`${primaryShortcutLabel}+S`)).toBeInTheDocument()
+
+    await user.keyboard('{Escape}')
+    await user.click(screen.getByText('Edit'))
+    const editMenu = await screen.findByRole('menu')
+    expect(within(editMenu).getByText(`${primaryShortcutLabel}+A`)).toBeInTheDocument()
+    expect(within(editMenu).getByText('Del')).toBeInTheDocument()
+  }, 15000)
+
+  it('shows Cmd accelerator labels on macOS platforms', async () => {
+    const user = userEvent.setup()
+    const platformSpy = vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue('MacIntel')
+
+    try {
+      render(<FlowBuilder />)
+
+      await screen.findByText('1 step')
+
+      await user.click(screen.getByText('File'))
+      expect(within(await screen.findByRole('menu')).getByText('Cmd+S')).toBeInTheDocument()
+
+      await user.keyboard('{Escape}')
+      await user.click(screen.getByText('Edit'))
+      expect(within(await screen.findByRole('menu')).getByText('Cmd+A')).toBeInTheDocument()
+    } finally {
+      platformSpy.mockRestore()
+    }
+  }, 15000)
 
   it('surfaces the shared auth error when opening saved flows', async () => {
     const user = userEvent.setup()
