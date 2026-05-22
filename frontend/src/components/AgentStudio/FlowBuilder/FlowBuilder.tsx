@@ -1542,9 +1542,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     () => edges.filter((e) => e.selected).map((e) => e.id),
     [edges]
   )
-  const selectedNodesCount = selectedNodeIds.length
-  const selectedEdgesCount = selectedEdgeIds.length
-  const selectedElementsCount = selectedNodesCount + selectedEdgesCount
+  const selectedElementsCount = selectedNodeIds.length + selectedEdgeIds.length
 
   // Handle delete all selected nodes and edges (for Edit menu and keyboard shortcut)
   const handleDeleteAllSelected = useCallback(() => {
