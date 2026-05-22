@@ -57,10 +57,10 @@ function ChatHeader({
     prepButtonDisabled,
   )
   const activeDocumentLabel = activeDocument
-    ? `Active PDF: ${activeDocument.filename || activeDocument.id}`
+    ? `Active PDF: ${activeDocument.filename ?? activeDocument.id}`
     : 'No PDF loaded'
   const memoryFileCount =
-    conversationStatus?.memory_stats?.memory_sizes?.short_term?.file_count || 0
+    conversationStatus?.memory_stats?.memory_sizes?.short_term?.file_count ?? 0
   const memoryLabel = `${memoryFileCount} memory ${memoryFileCount === 1 ? 'item' : 'items'}`
 
   return (
