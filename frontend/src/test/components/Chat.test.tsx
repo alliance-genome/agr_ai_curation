@@ -880,25 +880,41 @@ describe('Chat persistence', () => {
   it('shows the durable session ID controls in the header when a session exists', () => {
     renderChat({ sessionId: 'session-1' })
 
-    expect(screen.getByText('Session:')).toBeInTheDocument()
-    expect(screen.getByText('session-1')).toBeInTheDocument()
+    expect(screen.getByText('Session: session-1')).toBeInTheDocument()
+    expect(screen.getByText('Full session ID: session-1')).toHaveClass('chat-header__sr-only')
     expect(screen.getByRole('button', { name: 'Copy session ID' })).toBeInTheDocument()
   })
 
   it('does not render session ID controls when there is no session ID', () => {
     renderChat({ sessionId: null })
 
-    expect(screen.queryByText('Session:')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Session:/)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Copy session ID' })).not.toBeInTheDocument()
+  })
+
+  it('keeps long session IDs compact while exposing the full value for copy access', () => {
+    const longSessionId = '31c45cf4-5dbf-48fe-811c-a9184351fe15'
+
+    renderChat({ sessionId: longSessionId })
+
+    expect(screen.getByText('Session: 31c45cf4...51fe15')).toBeInTheDocument()
+    expect(screen.queryByText(longSessionId)).not.toBeInTheDocument()
+    expect(screen.getByText(`Full session ID: ${longSessionId}`)).toHaveClass('chat-header__sr-only')
+    expect(screen.getByRole('button', { name: 'Copy session ID' })).toHaveAttribute(
+      'title',
+      `Copy session ID: ${longSessionId}`,
+    )
   })
 
   it('copies the durable session ID from the header and clears the feedback after 1.5 seconds', async () => {
     const user = userEvent.setup()
+    const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText')
 
     renderChat({ sessionId: 'session-1' })
 
     await user.click(screen.getByRole('button', { name: 'Copy session ID' }))
 
+    expect(writeTextSpy).toHaveBeenCalledWith('session-1')
     expect(screen.getByText('Copied!')).toBeInTheDocument()
 
     await waitFor(() => {

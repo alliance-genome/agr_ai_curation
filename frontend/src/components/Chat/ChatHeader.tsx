@@ -1,3 +1,5 @@
+import { useId } from 'react'
+
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import { useTheme } from '@mui/material/styles'
 
@@ -19,6 +21,14 @@ interface ChatHeaderProps {
   onOpenPrepDialog: () => void
 }
 
+function formatSessionPreview(sessionId: string) {
+  if (sessionId.length <= 20) {
+    return sessionId
+  }
+
+  return `${sessionId.slice(0, 8)}...${sessionId.slice(-6)}`
+}
+
 function ChatHeader({
   activeDocument,
   conversationStatus,
@@ -34,6 +44,7 @@ function ChatHeader({
   onOpenPrepDialog,
 }: ChatHeaderProps) {
   const theme = useTheme()
+  const sessionDescriptionId = useId()
   const resetButtonStyle = buildSolidButtonStyle(theme, theme.palette.error.main, isResetting)
   const unloadButtonStyle = buildSolidButtonStyle(
     theme,
@@ -45,76 +56,74 @@ function ChatHeader({
     theme.palette.success.main,
     prepButtonDisabled,
   )
+  const activeDocumentLabel = activeDocument
+    ? `Active PDF: ${activeDocument.filename || activeDocument.id}`
+    : 'No PDF loaded'
+  const memoryFileCount =
+    conversationStatus?.memory_stats?.memory_sizes?.short_term?.file_count || 0
+  const memoryLabel = `${memoryFileCount} memory ${memoryFileCount === 1 ? 'item' : 'items'}`
 
   return (
     <div className="chat-header">
-      <h2>AI Assistant Chat</h2>
-      <div className="chat-status">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-          {activeDocument ? (
-            <span>
-              Active PDF: {activeDocument.filename || activeDocument.id}
-            </span>
-          ) : (
-            <span>No PDF loaded</span>
-          )}
-
-          {conversationStatus && (
-            <span style={{ fontSize: '0.9em', color: theme.palette.text.secondary }}>
-              Memory: {
-                conversationStatus.memory_stats?.memory_sizes?.short_term?.file_count || 0
-              } items
-            </span>
-          )}
-
-          {normalizedSessionId && (
+      <div className="chat-header__main">
+        <div className="chat-header__summary">
+          <h2>AI Assistant Chat</h2>
+          <div className="chat-status" aria-label="Chat context">
             <span
-              style={{
-                fontSize: '0.9em',
-                color: theme.palette.text.secondary,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                flexWrap: 'wrap',
-              }}
+              className="chat-header__document"
+              title={activeDocumentLabel}
             >
-              <span>Session:</span>
-              <span
-                style={{
-                  fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace',
-                  overflowWrap: 'anywhere',
-                }}
-              >
-                {normalizedSessionId}
-              </span>
-              <button
-                type="button"
-                onClick={onCopySessionId}
-                aria-label="Copy session ID"
-                title="Copy session ID"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: 0,
-                  border: 'none',
-                  background: 'transparent',
-                  color: theme.palette.text.secondary,
-                  cursor: 'pointer',
-                  fontSize: '0.9em',
-                  lineHeight: 1,
-                }}
-              >
-                <ContentCopyIcon fontSize="inherit" />
-              </button>
-              {sessionIdCopied && (
-                <span role="status" aria-live="polite">
-                  Copied!
-                </span>
-              )}
+              {activeDocumentLabel}
             </span>
-          )}
 
+            {(conversationStatus || normalizedSessionId) && (
+              <span className="chat-header__meta" aria-label="Conversation metadata">
+                {conversationStatus && (
+                  <span title={`Short-term memory: ${memoryLabel}`}>
+                    {memoryLabel}
+                  </span>
+                )}
+
+                {normalizedSessionId && (
+                  <span className="chat-header__session">
+                    <span
+                      className="chat-header__session-preview"
+                      title={`Full session ID: ${normalizedSessionId}`}
+                    >
+                      Session: {formatSessionPreview(normalizedSessionId)}
+                    </span>
+                    <span
+                      id={sessionDescriptionId}
+                      className="chat-header__sr-only"
+                    >
+                      Full session ID: {normalizedSessionId}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={onCopySessionId}
+                      aria-label="Copy session ID"
+                      aria-describedby={sessionDescriptionId}
+                      title={`Copy session ID: ${normalizedSessionId}`}
+                      className="chat-header__icon-button"
+                      style={{
+                        color: theme.palette.text.secondary,
+                      }}
+                    >
+                      <ContentCopyIcon fontSize="inherit" />
+                    </button>
+                    {sessionIdCopied && (
+                      <span role="status" aria-live="polite">
+                        Copied!
+                      </span>
+                    )}
+                  </span>
+                )}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="chat-header__actions">
           <button
             onClick={onResetConversation}
             disabled={isResetting}
@@ -129,6 +138,7 @@ function ChatHeader({
               display: 'flex',
               alignItems: 'center',
               gap: '4px',
+              whiteSpace: 'nowrap',
             }}
             title="Reset chat and clear all messages"
           >
@@ -153,6 +163,7 @@ function ChatHeader({
                 display: 'flex',
                 alignItems: 'center',
                 gap: '4px',
+                whiteSpace: 'nowrap',
               }}
               title="Unload the active PDF"
             >
@@ -177,6 +188,7 @@ function ChatHeader({
               display: 'flex',
               alignItems: 'center',
               gap: '4px',
+              whiteSpace: 'nowrap',
             }}
             title="Prepare the current chat scope for curation review"
           >

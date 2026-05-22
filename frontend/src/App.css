@@ -64,23 +64,122 @@
 }
 
 .chat-header {
-  padding: 2rem;
+  padding: 0.75rem 1rem;
   border-bottom: 1px solid var(--chat-divider);
   text-align: left;
   background-color: transparent;
   flex-shrink: 0; /* Never shrink */
 }
 
+.chat-header__main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.chat-header__summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+  flex: 1 1 14rem;
+}
+
 .chat-header h2 {
   color: var(--chat-text-primary);
-  font-size: 1.2rem;
+  font-size: 1.05rem;
   font-weight: 500;
+  line-height: 1.2;
+  margin: 0;
 }
 
 .chat-status {
-  margin-top: 0.35rem;
   color: var(--chat-text-secondary);
   font-size: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.chat-header__document {
+  color: var(--chat-text-primary);
+  display: block;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-header__meta {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-height: 1.2rem;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.chat-header__session {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.chat-header__session-preview {
+  font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-header__icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.95em;
+  line-height: 1;
+}
+
+.chat-header__icon-button:hover,
+.chat-header__icon-button:focus-visible {
+  background-color: var(--chat-action-hover-bg);
+  outline: none;
+}
+
+.chat-header__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+.chat-header__sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .weaviate-warning {
