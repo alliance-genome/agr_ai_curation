@@ -1,9 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
 import {
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
   TextField,
   Button,
   Box,
@@ -12,6 +8,8 @@ import {
 } from '@mui/material'
 import { alpha } from '@mui/material/styles'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
+
+import ModelessFeedbackSurface from '@/components/Feedback/ModelessFeedbackSurface'
 
 interface FeedbackDialogProps {
   open: boolean
@@ -136,87 +134,13 @@ function FeedbackDialog({
   const isValid = feedbackText.trim().length > 0
 
   return (
-    <Dialog
+    <ModelessFeedbackSurface
       open={open}
       onClose={handleCancel}
-      maxWidth="sm"
-      fullWidth
-      PaperProps={{
-        sx: (theme) => ({
-          backgroundColor: theme.palette.background.paper,
-          color: theme.palette.text.primary,
-          border: `1px solid ${theme.palette.divider}`,
-        })
-      }}
-    >
-      <DialogTitle>Provide Feedback</DialogTitle>
-      <DialogContent>
-        {success ? (
-          <Box
-            sx={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              minHeight: '200px',
-              gap: 2
-            }}
-          >
-            <CheckCircleIcon
-              sx={{
-                fontSize: 64,
-                color: 'success.main',
-                animation: 'fadeInScale 0.5s ease-in-out'
-              }}
-            />
-            <Box sx={{ fontSize: '1.1rem', fontWeight: 500 }}>
-              Feedback submitted successfully!
-            </Box>
-          </Box>
-        ) : (
-          <>
-            {error && (
-              <Alert severity="error" sx={{ mb: 2 }}>
-                {error}
-              </Alert>
-            )}
-            <TextField
-              autoFocus
-              multiline
-              rows={6}
-              fullWidth
-              variant="outlined"
-              placeholder="Enter your detailed feedback here..."
-              value={feedbackText}
-              onChange={(e) => setFeedbackText(e.target.value)}
-              disabled={isSubmitting}
-              sx={(theme) => ({
-                '& .MuiOutlinedInput-root': {
-                  color: theme.palette.text.primary,
-                  '& fieldset': {
-                    borderColor: theme.palette.divider,
-                  },
-                  '&:hover fieldset': {
-                    borderColor: alpha(theme.palette.text.primary, 0.4),
-                  },
-                  '&.Mui-focused fieldset': {
-                    borderColor: theme.palette.primary.main,
-                  },
-                },
-                '& .MuiInputBase-input': {
-                  color: theme.palette.text.primary,
-                },
-                '& .MuiInputBase-input::placeholder': {
-                  color: theme.palette.text.secondary,
-                  opacity: 1,
-                }
-              })}
-            />
-          </>
-        )}
-      </DialogContent>
-      {!success && (
-        <DialogActions sx={{ padding: '16px 24px' }}>
+      title="Provide Feedback"
+      width="sm"
+      actions={!success && (
+        <>
           <Button
             onClick={handleCancel}
             disabled={isSubmitting}
@@ -248,9 +172,73 @@ function FeedbackDialog({
               'Send'
             )}
           </Button>
-        </DialogActions>
+        </>
       )}
-    </Dialog>
+    >
+      {success ? (
+        <Box
+          sx={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            minHeight: '200px',
+            gap: 2
+          }}
+        >
+          <CheckCircleIcon
+            sx={{
+              fontSize: 64,
+              color: 'success.main',
+              animation: 'fadeInScale 0.5s ease-in-out'
+            }}
+          />
+          <Box sx={{ fontSize: '1.1rem', fontWeight: 500 }}>
+            Feedback submitted successfully!
+          </Box>
+        </Box>
+      ) : (
+        <>
+          {error && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              {error}
+            </Alert>
+          )}
+          <TextField
+            autoFocus
+            multiline
+            rows={6}
+            fullWidth
+            variant="outlined"
+            placeholder="Enter your detailed feedback here..."
+            value={feedbackText}
+            onChange={(e) => setFeedbackText(e.target.value)}
+            disabled={isSubmitting}
+            sx={(theme) => ({
+              '& .MuiOutlinedInput-root': {
+                color: theme.palette.text.primary,
+                '& fieldset': {
+                  borderColor: theme.palette.divider,
+                },
+                '&:hover fieldset': {
+                  borderColor: alpha(theme.palette.text.primary, 0.4),
+                },
+                '&.Mui-focused fieldset': {
+                  borderColor: theme.palette.primary.main,
+                },
+              },
+              '& .MuiInputBase-input': {
+                color: theme.palette.text.primary,
+              },
+              '& .MuiInputBase-input::placeholder': {
+                color: theme.palette.text.secondary,
+                opacity: 1,
+              }
+            })}
+          />
+        </>
+      )}
+    </ModelessFeedbackSurface>
   )
 }
 

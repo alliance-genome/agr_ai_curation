@@ -67,4 +67,37 @@ describe('FeedbackDialog', () => {
 
     expect(onClose).not.toHaveBeenCalled()
   })
+
+  it('keeps the feedback draft mounted while underlying chat controls are used', () => {
+    const behindClick = vi.fn()
+
+    render(
+      <>
+        <button type="button" onClick={behindClick}>
+          Underlying chat action
+        </button>
+        <FeedbackDialog
+          open
+          onClose={vi.fn()}
+          sessionId="session-1"
+          traceIds={['trace-1']}
+          onSubmit={vi.fn().mockResolvedValue(undefined)}
+        />
+      </>
+    )
+
+    const dialog = screen.getByRole('dialog', { name: 'Provide Feedback' })
+    expect(dialog).toHaveAttribute('aria-modal', 'false')
+    expect(document.querySelector('.MuiBackdrop-root')).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByPlaceholderText(/enter your detailed feedback here/i), {
+      target: { value: 'I need to inspect the chat while writing this.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Underlying chat action' }))
+
+    expect(behindClick).toHaveBeenCalledTimes(1)
+    expect(screen.getByPlaceholderText(/enter your detailed feedback here/i)).toHaveValue(
+      'I need to inspect the chat while writing this.'
+    )
+  })
 })

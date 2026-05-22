@@ -38,6 +38,7 @@ import {
   createAgentStudioSession,
   streamOpusChat,
 } from '@/services/agentStudioService'
+import ModelessFeedbackSurface from '@/components/Feedback/ModelessFeedbackSurface'
 import type {
   ChatMessage,
   ChatContext,
@@ -855,6 +856,13 @@ function OpusChat({
     })
   }
 
+  const handleCloseDirectSubmission = useCallback(() => {
+    if (!isSubmittingDirect && !submissionSent) {
+      setConfirmDialogOpen(false)
+      setFeedbackComment('')
+    }
+  }, [isSubmittingDirect, submissionSent])
+
   // Handle direct AI-assisted submission (bypasses chat UI)
   const handleDirectSubmission = useCallback(async (additionalComment?: string) => {
     setIsSubmittingDirect(true)
@@ -1404,73 +1412,64 @@ Claude is responding...
         </Tooltip>
       </InputContainer>
 
-      {/* Confirmation Dialog for AI-Assisted Submission */}
-      <Dialog
+      {/* Confirmation surface for AI-Assisted Submission */}
+      <ModelessFeedbackSurface
         open={confirmDialogOpen}
-        onClose={() => {
-          if (!isSubmittingDirect && !submissionSent) {
-            setConfirmDialogOpen(false)
-            setFeedbackComment('')
-          }
-        }}
-        maxWidth="sm"
-        fullWidth
-      >
-        {submissionSent ? (
-          // Success state
+        onClose={handleCloseDirectSubmission}
+        title="Submit Feedback to Developers?"
+        titleIcon={<AutoAwesomeIcon color="primary" />}
+        width="sm"
+        actions={!submissionSent && (
           <>
-            <DialogContent sx={{ textAlign: 'center', py: 4 }}>
-              <CheckCircleIcon sx={{ fontSize: 64, color: 'success.main', mb: 2 }} />
-              <DialogContentText sx={{ fontSize: '1.25rem', fontWeight: 500 }}>
-                Submission sent!
-              </DialogContentText>
-            </DialogContent>
-          </>
-        ) : (
-          // Normal state
-          <>
-            <DialogTitle>Submit Feedback to Developers?</DialogTitle>
-            <DialogContent>
-              <DialogContentText sx={{ mb: 2 }}>
-                Claude will analyze your conversation and submit a feedback report to the development team.
-              </DialogContentText>
-              <TextField
-                fullWidth
-                multiline
-                rows={3}
-                placeholder="Add any additional comments for the developers (optional)"
-                value={feedbackComment}
-                onChange={(e) => setFeedbackComment(e.target.value)}
-                variant="outlined"
-                size="small"
-                sx={{ mt: 1 }}
-                disabled={isSubmittingDirect}
-              />
-            </DialogContent>
-            <DialogActions>
-              <Button
-                onClick={() => {
-                  setConfirmDialogOpen(false)
-                  setFeedbackComment('')
-                }}
-                color="inherit"
-                disabled={isSubmittingDirect}
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={() => handleDirectSubmission(feedbackComment)}
-                variant="contained"
-                color="primary"
-                disabled={isSubmittingDirect}
-                startIcon={isSubmittingDirect ? <CircularProgress size={16} /> : <AutoAwesomeIcon />}
-              >
-                {isSubmittingDirect ? 'Submitting...' : 'Submit'}
-              </Button>
-            </DialogActions>
+            <Button
+              onClick={() => {
+                setConfirmDialogOpen(false)
+                setFeedbackComment('')
+              }}
+              color="inherit"
+              disabled={isSubmittingDirect}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => handleDirectSubmission(feedbackComment)}
+              variant="contained"
+              color="primary"
+              disabled={isSubmittingDirect}
+              startIcon={isSubmittingDirect ? <CircularProgress size={16} /> : <AutoAwesomeIcon />}
+            >
+              {isSubmittingDirect ? 'Submitting...' : 'Submit'}
+            </Button>
           </>
         )}
-      </Dialog>
+      >
+        {submissionSent ? (
+          <Box sx={{ textAlign: 'center', py: 4 }}>
+            <CheckCircleIcon sx={{ fontSize: 64, color: 'success.main', mb: 2 }} />
+            <Typography sx={{ fontSize: '1.25rem', fontWeight: 500 }}>
+              Submission sent!
+            </Typography>
+          </Box>
+        ) : (
+          <>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Claude will analyze your conversation and submit a feedback report to the development team.
+            </Typography>
+            <TextField
+              autoFocus
+              fullWidth
+              multiline
+              rows={3}
+              placeholder="Add any additional comments for the developers (optional)"
+              value={feedbackComment}
+              onChange={(e) => setFeedbackComment(e.target.value)}
+              variant="outlined"
+              size="small"
+              disabled={isSubmittingDirect}
+            />
+          </>
+        )}
+      </ModelessFeedbackSurface>
 
       {/* Approval Dialog for Workshop Prompt Updates */}
       <Dialog

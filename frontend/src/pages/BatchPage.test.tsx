@@ -1,16 +1,13 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import BatchPage from './BatchPage'
 import { DEFAULT_FLOW_LIST_PAGE_SIZE } from '@/services/agentStudioService'
+import { submitFeedback } from '@/services/feedbackService'
 
 vi.mock('@/components/AuditPanel', () => ({
   default: () => <div data-testid="audit-panel" />,
-}))
-
-vi.mock('@/components/Chat/FeedbackDialog', () => ({
-  default: () => null,
 }))
 
 vi.mock('@/features/curation/components/PreparedReviewAndCurateButton', () => ({
@@ -141,5 +138,124 @@ describe('BatchPage', () => {
     renderPage()
 
     expect(await screen.findByText('Please log in to view your flows')).toBeInTheDocument()
+  })
+
+  it('opens completed document feedback modeless with the active batch session and trace id', async () => {
+    vi.mocked(submitFeedback).mockResolvedValue({
+      status: 'success',
+      feedback_id: 'feedback-1',
+      message: 'Feedback submitted.',
+    })
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url =
+        typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url
+
+      if (url === `/api/flows?page=1&page_size=${DEFAULT_FLOW_LIST_PAGE_SIZE}`) {
+        return Promise.resolve(
+          jsonResponse({
+            flows: [
+              {
+                id: 'flow-1',
+                user_id: 7,
+                name: 'Evidence Flow',
+                description: 'Collects structured evidence',
+                step_count: 2,
+                execution_count: 3,
+                last_executed_at: '2026-04-03T00:00:00Z',
+                created_at: '2026-04-02T00:00:00Z',
+                updated_at: '2026-04-03T00:00:00Z',
+              },
+            ],
+            total: 1,
+            page: 1,
+            page_size: DEFAULT_FLOW_LIST_PAGE_SIZE,
+          }),
+        )
+      }
+
+      if (url === '/api/batches') {
+        return Promise.resolve(
+          jsonResponse({
+            batches: [
+              {
+                id: 'batch-1',
+                flow_id: 'flow-1',
+                flow_name: 'Evidence Flow',
+                status: 'completed',
+                total_documents: 1,
+                completed_documents: 1,
+                failed_documents: 0,
+                created_at: '2026-04-03T00:00:00Z',
+              },
+            ],
+          }),
+        )
+      }
+
+      if (url === '/api/batches/batch-1') {
+        return Promise.resolve(
+          jsonResponse({
+            id: 'batch-1',
+            flow_id: 'flow-1',
+            status: 'completed',
+            total_documents: 1,
+            completed_documents: 1,
+            failed_documents: 0,
+            documents: [
+              {
+                id: 'batch-doc-1',
+                document_id: 'doc-1',
+                document_title: 'Alpha paper',
+                position: 1,
+                status: 'completed',
+                processing_time_ms: 42,
+                trace_id: 'trace-batch-doc-1',
+              },
+            ],
+          }),
+        )
+      }
+
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`))
+    })
+
+    renderPage()
+
+    const evidenceFlowLabels = await screen.findAllByText('Evidence Flow')
+    fireEvent.click(evidenceFlowLabels[evidenceFlowLabels.length - 1])
+    await screen.findByText('Batch Complete')
+
+    fireEvent.click(screen.getByRole('button', { name: 'document actions' }))
+    fireEvent.click(await screen.findByText('Provide Feedback'))
+
+    const dialog = screen.getByRole('dialog', { name: 'Provide Feedback' })
+    expect(dialog).toHaveAttribute('aria-modal', 'false')
+    await waitFor(() => {
+      expect(document.querySelector('.MuiBackdrop-root')).not.toBeInTheDocument()
+    })
+
+    fireEvent.change(screen.getByPlaceholderText(/enter your detailed feedback here/i), {
+      target: { value: 'Batch document trace feedback' },
+    })
+    fireEvent.click(screen.getByText('Batch Complete'))
+
+    expect(screen.getByPlaceholderText(/enter your detailed feedback here/i)).toHaveValue(
+      'Batch document trace feedback'
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => {
+      expect(submitFeedback).toHaveBeenCalledWith({
+        session_id: 'batch-1',
+        curator_id: 'curator@example.org',
+        feedback_text: 'Batch document trace feedback',
+        trace_ids: ['trace-batch-doc-1'],
+      })
+    })
   })
 })

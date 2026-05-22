@@ -623,6 +623,46 @@ describe('Chat persistence', () => {
     }
   })
 
+  it('opens message feedback as a modeless draft while chat remains editable', async () => {
+    renderChat({
+      sessionId: 'session-1',
+      events: [
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          content: 'The assistant response that needs curator feedback.',
+          trace_id: 'trace-1',
+        },
+      ],
+    })
+
+    expect(
+      await screen.findByText('The assistant response that needs curator feedback.')
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'more actions' }))
+    fireEvent.click(await screen.findByText('Provide Feedback'))
+
+    const dialog = screen.getByRole('dialog', { name: 'Provide Feedback' })
+    expect(dialog).toHaveAttribute('aria-modal', 'false')
+    await waitFor(() => {
+      expect(document.querySelector('.MuiBackdrop-root')).not.toBeInTheDocument()
+    })
+
+    fireEvent.change(screen.getByPlaceholderText(/enter your detailed feedback here/i), {
+      target: { value: 'I need to compare this against another turn.' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('Type your message...'), {
+      target: { value: 'Follow-up question behind the popup' },
+    })
+
+    expect(screen.getByPlaceholderText(/enter your detailed feedback here/i)).toHaveValue(
+      'I need to compare this against another turn.'
+    )
+    expect(screen.getByPlaceholderText('Type your message...')).toHaveValue(
+      'Follow-up question behind the popup'
+    )
+  })
+
   it('attaches evidence summaries to the latest assistant message', async () => {
     renderChat({
       events: [
