@@ -48,6 +48,11 @@ import SearchIcon from '@mui/icons-material/Search'
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined'
 import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord'
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh'
+import NoteAddIcon from '@mui/icons-material/NoteAdd'
+import FolderOpenIcon from '@mui/icons-material/FolderOpen'
+import ListAltIcon from '@mui/icons-material/ListAlt'
+import SaveIcon from '@mui/icons-material/Save'
+import SaveAsIcon from '@mui/icons-material/SaveAs'
 import EditIcon from '@mui/icons-material/Edit'
 import DeleteIcon from '@mui/icons-material/Delete'
 import CheckIcon from '@mui/icons-material/Check'
@@ -378,6 +383,33 @@ const MenuTrigger = styled(Box)(({ theme }) => ({
   '&:hover': {
     backgroundColor: alpha(theme.palette.action.hover, 0.8),
     color: theme.palette.text.primary,
+  },
+}))
+
+const FileActionStrip = styled(Box)(({ theme }) => ({
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: theme.spacing(0.25),
+  marginLeft: theme.spacing(0.5),
+  paddingLeft: theme.spacing(0.75),
+  borderLeft: `1px solid ${theme.palette.divider}`,
+}))
+
+const FileActionButton = styled(IconButton)(({ theme }) => ({
+  width: 26,
+  height: 26,
+  padding: 0,
+  borderRadius: 4,
+  color: theme.palette.text.secondary,
+  '& .MuiSvgIcon-root': {
+    fontSize: 17,
+  },
+  '&:hover': {
+    backgroundColor: alpha(theme.palette.action.hover, 0.8),
+    color: theme.palette.text.primary,
+  },
+  '&.Mui-disabled': {
+    color: theme.palette.text.disabled,
   },
 }))
 
@@ -1656,6 +1688,8 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [handleSaveClick, handleSelectAll, handleDeleteAllSelected, nodes.length, selectedElementsCount])
 
+  const saveActionsDisabled = saving || nodes.length === 0
+
   return (
     <BuilderContainer ref={builderRootRef}>
       {/* Unified Toolbar */}
@@ -1679,11 +1713,11 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
             <span>Manage Flows...</span>
           </StyledMenuItem>
           <Divider sx={{ my: 0.5 }} />
-          <StyledMenuItem onClick={handleSaveClick} disabled={saving || nodes.length === 0}>
+          <StyledMenuItem onClick={handleSaveClick} disabled={saveActionsDisabled}>
             <span>{saving ? 'Saving...' : 'Save'}</span>
             <Shortcut>{primaryShortcutLabel}+S</Shortcut>
           </StyledMenuItem>
-          <StyledMenuItem onClick={handleSaveAsClick} disabled={saving || nodes.length === 0}>
+          <StyledMenuItem onClick={handleSaveAsClick} disabled={saveActionsDisabled}>
             <span>Save As...</span>
           </StyledMenuItem>
           <Divider sx={{ my: 0.5 }} />
@@ -1714,6 +1748,66 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
             <Shortcut>Del</Shortcut>
           </StyledMenuItem>
         </StyledMenu>
+
+        <FileActionStrip role="toolbar" aria-label="File actions">
+          <Tooltip title="New flow">
+            <span>
+              <FileActionButton
+                aria-label="New flow"
+                size="small"
+                onClick={handleNewFlow}
+              >
+                <NoteAddIcon />
+              </FileActionButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="Open flow">
+            <span>
+              <FileActionButton
+                aria-label="Open flow"
+                size="small"
+                onClick={handleOpenDialogOpen}
+              >
+                <FolderOpenIcon />
+              </FileActionButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="Manage flows">
+            <span>
+              <FileActionButton
+                aria-label="Manage flows"
+                size="small"
+                onClick={handleManageDialogOpen}
+              >
+                <ListAltIcon />
+              </FileActionButton>
+            </span>
+          </Tooltip>
+          <Tooltip title={saving ? 'Saving...' : 'Save flow'}>
+            <span>
+              <FileActionButton
+                aria-label="Save flow"
+                size="small"
+                onClick={handleSaveClick}
+                disabled={saveActionsDisabled}
+              >
+                <SaveIcon />
+              </FileActionButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="Save flow as">
+            <span>
+              <FileActionButton
+                aria-label="Save flow as"
+                size="small"
+                onClick={handleSaveAsClick}
+                disabled={saveActionsDisabled}
+              >
+                <SaveAsIcon />
+              </FileActionButton>
+            </span>
+          </Tooltip>
+        </FileActionStrip>
 
         {/* Verify with Claude Button */}
         {onVerifyRequest && nodes.length > 0 && (

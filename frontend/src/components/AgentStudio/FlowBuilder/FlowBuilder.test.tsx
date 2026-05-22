@@ -259,6 +259,109 @@ describe('FlowBuilder', () => {
     agentMetadataMocks.agents = {}
   })
 
+  it('shows file action icon shortcuts wired to existing file actions', async () => {
+    const user = userEvent.setup()
+
+    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Toolbar Flow'))
+
+    render(<FlowBuilder />)
+
+    await screen.findByText('1 step')
+
+    const fileActions = screen.getByRole('toolbar', { name: 'File actions' })
+    expect(within(fileActions).getByRole('button', { name: 'New flow' })).toBeInTheDocument()
+    expect(within(fileActions).getByRole('button', { name: 'Open flow' })).toBeInTheDocument()
+    expect(within(fileActions).getByRole('button', { name: 'Manage flows' })).toBeInTheDocument()
+    expect(within(fileActions).getByRole('button', { name: 'Save flow' })).toBeEnabled()
+    expect(within(fileActions).getByRole('button', { name: 'Save flow as' })).toBeEnabled()
+    expect(within(fileActions).queryByRole('button', { name: /delete/i })).not.toBeInTheDocument()
+
+    fireEvent.drop(screen.getByTestId('react-flow'), {
+      clientX: 320,
+      clientY: 220,
+      dataTransfer: {
+        getData: vi.fn((format: string) => (
+          format === 'application/reactflow'
+            ? JSON.stringify({
+              type: 'agent',
+              agentId: 'toolbar_agent',
+              agentName: 'Toolbar Agent',
+              agentDescription: 'Added to prove New flow resets through the shared handler',
+            })
+            : ''
+        )),
+      },
+    })
+
+    await screen.findByText('2 steps')
+
+    await user.click(within(fileActions).getByRole('button', { name: 'New flow' }))
+    await screen.findByText('1 step')
+    expect(screen.queryByText('2 steps')).not.toBeInTheDocument()
+
+    await user.click(within(fileActions).getByRole('button', { name: 'Open flow' }))
+    const openDialog = await screen.findByRole('dialog', { name: 'Open Flow' })
+    expect(within(openDialog).getByText('Toolbar Flow')).toBeInTheDocument()
+    await user.click(within(openDialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Open Flow' })).not.toBeInTheDocument()
+    })
+
+    await user.click(within(fileActions).getByRole('button', { name: 'Manage flows' }))
+    const manageDialog = (await screen.findByText('Manage Flows')).closest('[role="dialog"]')
+    expect(manageDialog).not.toBeNull()
+    expect(within(manageDialog as HTMLElement).getByText('Toolbar Flow')).toBeInTheDocument()
+    await user.click(within(manageDialog as HTMLElement).getByRole('button', { name: 'Close' }))
+    await waitFor(() => {
+      expect(screen.queryByText('Manage Flows')).not.toBeInTheDocument()
+    })
+
+    await user.click(within(fileActions).getByRole('button', { name: 'Save flow' }))
+    const saveDialog = await screen.findByRole('dialog', { name: 'Save Flow' })
+    await user.click(within(saveDialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Save Flow' })).not.toBeInTheDocument()
+    })
+
+    await user.click(within(fileActions).getByRole('button', { name: 'Save flow as' }))
+    expect(await screen.findByRole('dialog', { name: 'Save Flow As' })).toBeInTheDocument()
+  }, 15000)
+
+  it('disables file action save shortcuts when there are no flow nodes', async () => {
+    const user = userEvent.setup()
+
+    render(<FlowBuilder />)
+
+    await screen.findByText('1 step')
+
+    const canvas = screen.getByTestId('react-flow')
+    dispatchKeyboardShortcut(canvas, {
+      key: 'a',
+      ctrlKey: true,
+    })
+
+    await user.click(screen.getByText('Edit'))
+    expect(within(await screen.findByRole('menu')).getByText('Delete Selected (1)')).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+
+    dispatchKeyboardShortcut(canvas, {
+      key: 'Delete',
+    })
+
+    await waitFor(() => {
+      expect(screen.queryByText('1 step')).not.toBeInTheDocument()
+    })
+
+    const fileActions = screen.getByRole('toolbar', { name: 'File actions' })
+    expect(within(fileActions).getByRole('button', { name: 'Save flow' })).toBeDisabled()
+    expect(within(fileActions).getByRole('button', { name: 'Save flow as' })).toBeDisabled()
+
+    await user.click(screen.getByText('File'))
+    const fileMenu = await screen.findByRole('menu')
+    expect(within(fileMenu).getByText('Save').closest('[role="menuitem"]')).toHaveAttribute('aria-disabled', 'true')
+    expect(within(fileMenu).getByText('Save As...').closest('[role="menuitem"]')).toHaveAttribute('aria-disabled', 'true')
+  }, 15000)
+
   it('reverts validation groups when a custom validator attachment edge is deleted', () => {
     const [extractorNode] = rebuildValidationGroupsFromEdges(
       [
