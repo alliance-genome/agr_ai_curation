@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import logging
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
@@ -90,6 +91,8 @@ GENE_EXPRESSION_LINKML_CONTRACT_VALIDATOR_ID = (
 )
 VALID_GENE_EXPRESSION_RELATION_NAMES = frozenset({"is_expressed_in"})
 EXPRESSION_RELATION_VOCABULARY = "Expression Relation"
+CONTROLLED_FIELD_HELPER_TOOL_NAME = "get_domain_field_term_options"
+LOGGER = logging.getLogger(__name__)
 FORBIDDEN_PAYLOAD_EVIDENCE_FIELDS = frozenset(
     {
         "evidence_text",
@@ -142,6 +145,42 @@ def _payload_value_missing_or_blank(payload: Mapping[str, Any], field_path: str)
     if not field_path_exists(payload, field_path):
         return True
     return _value_missing_or_blank(_payload_value(payload, field_path))
+
+
+def _helper_selections(output: DomainEnvelopeExtractionResult) -> list[Mapping[str, Any]]:
+    selections = output.metadata.provenance.get("helper_selections")
+    if not isinstance(selections, list):
+        return []
+    valid_selections: list[Mapping[str, Any]] = []
+    dropped_count = 0
+    for entry in selections:
+        if isinstance(entry, Mapping):
+            valid_selections.append(entry)
+        else:
+            dropped_count += 1
+    if dropped_count:
+        LOGGER.warning(
+            "Dropped %s malformed gene expression helper_selections entries",
+            dropped_count,
+        )
+    return valid_selections
+
+
+def _has_helper_selection(
+    output: DomainEnvelopeExtractionResult,
+    *,
+    field_path: str,
+    selected_value: str,
+) -> bool:
+    for selection in _helper_selections(output):
+        if selection.get("field_path") != field_path:
+            continue
+        if selection.get("source_tool") != CONTROLLED_FIELD_HELPER_TOOL_NAME:
+            continue
+        value = selection.get("selected_value")
+        if isinstance(value, str) and value.strip() == selected_value:
+            return True
+    return False
 
 
 def _diagnostic_details(
@@ -256,6 +295,16 @@ def validate_gene_expression_extraction_objects(
             errors.append(
                 f"{location}.payload relation.name must be a valid "
                 f"{EXPRESSION_RELATION_VOCABULARY} option"
+            )
+        elif not _has_helper_selection(
+            output,
+            field_path="relation.name",
+            selected_value=relation_name.strip(),
+        ):
+            errors.append(
+                f"{location}.payload relation.name must include "
+                "metadata.provenance.helper_selections[] evidence from "
+                f"{CONTROLLED_FIELD_HELPER_TOOL_NAME}"
             )
         data_provider = obj.payload.get("data_provider")
         provider_abbreviation = (

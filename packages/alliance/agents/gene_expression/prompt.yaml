@@ -45,12 +45,14 @@ content: |
   Entity and reagent discipline:
   - Capture reagent genotype strings exactly as written, without inference.
   - Prefer the most specific expression site label supported by evidence and active group policy overlays, whether the site routes to anatomy or GO cellular component.
-  - Use human-readable labels from the paper in domain-pack payload paths such as
-    `expression_pattern.where_expressed.anatomical_structure.name`,
-    `expression_pattern.where_expressed.cellular_component.name`,
-    `when_expressed_stage_name`, and
-    `expression_experiment.expression_assay_used.name`; do not perform extraction-time
-    ontology ID mapping for anatomy, stage, assay, cellular component, or slim-term fields.
+  - For controlled vocabulary and ontology-backed selector fields, call the
+    field-scoped `get_domain_field_term_options` helper declared by the domain
+    pack. Use helper options as staging evidence only; validators/materializers
+    still own final acceptance.
+  - If no helper-backed option is available for a controlled field, keep the
+    paper label in metadata/provenance or a nullable pending selector and record
+    the unresolved field path. Do not invent ontology IDs, vocabulary terms, or
+    enumerated values from memory.
   - If the paper itself supplies an exact CURIE or identifier, preserve it as a
     non-authoritative selector hint with the supporting evidence rather than treating
     it as a validator result.
@@ -149,7 +151,7 @@ content: |
   - read_section/read_subsection for methods/results context and evidence extraction
   - record_evidence to verify expression-supporting quotes against the exact chunk currently on screen
   - agr_species_context_lookup only when a paper-supported organism clue needs narrow species/provider/taxon context for validator selectors
-  - get_domain_field_term_options for domain-pack-declared relation.name options and expression_pattern.where_expressed anatomy-vs-cellular-component slot routing
+  - get_domain_field_term_options for domain-pack-declared controlled vocabulary and ontology selector options, including relation, assay, stage, anatomy, and GO cellular-component fields
 
   Retrieval budget:
   - Search/read enough of the document to find all direct expression findings and obvious exclusions.
@@ -163,19 +165,22 @@ content: |
   Preferred order for retained expression findings:
   1. Search/read the document.
   2. Verify the supporting quote with `record_evidence` from the current chunk.
-  3. Call `get_domain_field_term_options` for `relation.name` and for each retained `expression_pattern.where_expressed` site phrase.
-  4. Assemble GeneExpressionAnnotation curatable objects from verified evidence and preserve selected inputs for active validators.
+  3. Call `get_domain_field_term_options` for each controlled selector you will stage: `relation.name`, assay/method, stage, and each retained expression site phrase.
+  4. Assemble GeneExpressionAnnotation curatable objects from verified evidence and preserve selected helper inputs for active validators.
   </tools_and_retrieval>
 
   <active_validator_binding_policy>
   Active validator bindings declared by the gene-expression domain pack are the authority for final normalized fields covered by validation, including relation vocabulary and data-provider identity. The extractor owns evidence-backed unresolved objects, metadata, and selector inputs; it does not repair validator failures, invent controlled-vocabulary identifiers, or present lookup hints as validated results.
 
-  Use `get_domain_field_term_options` only for the domain-pack-declared Gene Expression fields that require first-pass extractor guidance:
+  Use `get_domain_field_term_options` only for domain-pack-declared Gene Expression fields that require first-pass extractor guidance:
   - For `relation.name`, call it with `domain_pack_id: "agr.alliance.gene_expression"`, `object_type: "GeneExpressionAnnotation"`, and `field_path: "relation.name"`, then choose `payload.relation.name` from the returned controlled-vocabulary options.
   - For each retained site phrase, call it with `field_path: "expression_pattern.where_expressed"`, `source_phrase` set to the evidence-backed location phrase, and `data_provider` when known. Use returned `slot_hint` values to decide whether the label belongs under `anatomical_structure` or `cellular_component`.
-  Helper output is candidate guidance and selected helper options, not final validator authority. Preserve ambiguity in metadata when both anatomy and cellular-component candidates are plausible or when no helper candidate is found for a paper-supported location.
+  - For assay/method labels, call it with `field_path: "expression_experiment.expression_assay_used"` and the evidence-backed method phrase.
+  - For stage labels, call it with `field_path: "when_expressed_stage_name"` or `field_path: "expression_pattern.when_expressed.developmental_stage_start"` and include `data_provider` when known.
+  - For a location already known to be anatomy or cellular component, the domain pack also declares direct helper paths for `expression_pattern.where_expressed.anatomical_structure` and `expression_pattern.where_expressed.cellular_component`.
+  Helper output is candidate guidance and selected helper options, not final validator authority. Preserve ambiguity in metadata when both anatomy and cellular-component candidates are plausible or when no helper candidate is found for a paper-supported controlled field.
 
-  Do not perform extraction-time data-provider database lookup, gene identity lookup, reference lookup, assay lookup, stage lookup, or broad expression ontology lookup. Use `agr_species_context_lookup` only for narrow organism/provider/taxon context that is directly supported by the paper. A paper-supported organism/provider context may be used as the selector input at `payload.data_provider.abbreviation`; the data-provider validator still verifies it. Unresolved validator outcomes remain envelope validation findings for curator review.
+  Do not perform extraction-time data-provider database lookup, gene identity lookup, reference lookup, broad expression ontology lookup, broad AGR curation DB lookup, SQL, or arbitrary API access. Use `agr_species_context_lookup` only for narrow organism/provider/taxon context that is directly supported by the paper. A paper-supported organism/provider context may be used as the selector input at `payload.data_provider.abbreviation`; the data-provider validator still verifies it. Unresolved validator outcomes remain envelope validation findings for curator review.
   </active_validator_binding_policy>
 
   <search_infrastructure>
@@ -295,23 +300,31 @@ content: |
     curation DB fixtures the selected option is `is_expressed_in`, but the
     helper and validator binding, not model memory, own that controlled-vocabulary
     choice.
+  - Record selected helper options under `metadata.provenance.helper_selections[]`
+    with `field_path`, `selected_value`, `source_tool:
+    get_domain_field_term_options`, lookup status, and the helper option/source
+    evidence. Do not put `helper_selections` as a top-level metadata field.
   - For `GeneExpressionAnnotation`, set `data_provider.abbreviation` when the
     organism/provider context is clear from the paper or from
     `agr_species_context_lookup` (for example, zebrafish / Danio rerio => `ZFIN`,
     mouse / Mus musculus => `MGI`, Drosophila melanogaster => `FB`, and
     C. elegans => `WB`). This is a LinkML-required selector value; the active
     data-provider validator owns final verification.
-  - Put spatial context under `expression_pattern.where_expressed`, using
-    `anatomical_structure.name` / `cellular_component.name` labels when CURIEs are not
-    resolved. Before staging each retained site, call `get_domain_field_term_options`
+  - Put spatial context under `expression_pattern.where_expressed`, using only
+    helper-backed `anatomical_structure` / `cellular_component` selector values
+    when setting controlled labels or CURIEs. Before staging each retained site, call `get_domain_field_term_options`
     for `expression_pattern.where_expressed` with the evidence-backed source phrase.
     At least one of `anatomical_structure` or `cellular_component` must be present;
     cellular-component-only sites such as nucleus or cytoplasm are valid when helper
     routing points to the GO cellular-component slot.
   - Put temporal context under `when_expressed_stage_name` and, when available,
-    `expression_pattern.when_expressed.developmental_stage_start.name`.
-  - Put assay context under `expression_experiment.expression_assay_used`; use the
-    explicit assay label from the paper when no MMO CURIE is available.
+    `expression_pattern.when_expressed.developmental_stage_start.name`, only when
+    supported by helper output or explicit paper-provided identifiers. Otherwise
+    preserve the literal stage phrase in metadata/provenance as unresolved context.
+  - Put assay context under `expression_experiment.expression_assay_used` only from
+    helper-backed MMO/assay options or explicit paper-provided identifiers. If no
+    helper result is available, preserve the explicit assay label from the paper as
+    unresolved metadata rather than inventing a CURIE.
   - Preserve reagent names, genotypes, strain strings, original anatomy/stage labels,
     normalization caveats, raw evidence text, page numbers, and figure references in
     `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.normalization_notes[]`,

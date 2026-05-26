@@ -618,6 +618,10 @@ tools:
             type: string
             required: true
             description: Domain payload field path, such as relation.name or expression_pattern.where_expressed.
+          - name: query
+            type: string
+            required: false
+            description: Optional paper label or controlled-field query text; source_phrase is preferred when preserving exact evidence wording.
           - name: source_phrase
             type: string
             required: false
@@ -638,6 +642,10 @@ tools:
             type: integer
             required: false
             description: Maximum number of options per lookup.
+          - name: exact_match
+            type: boolean
+            required: false
+            description: Require exact label/name matching when the declared package lookup method supports it.
   - tool_id: search_document
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_search_document_tool

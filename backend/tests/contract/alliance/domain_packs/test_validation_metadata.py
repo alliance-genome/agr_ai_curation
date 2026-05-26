@@ -506,6 +506,42 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         "expression_pattern.where_expressed.anatomical_structure",
         "expression_pattern.where_expressed.cellular_component",
     }
+    assert expression_fields[
+        "expression_experiment.expression_assay_used"
+    ].metadata["term_helper"]["term_source"] == {
+        "kind": "ontology",
+        "ontology_family": "assay",
+        "ontology_term_type": "MMOTerm",
+    }
+    assert expression_fields[
+        "when_expressed_stage_name"
+    ].metadata["term_helper"]["lookup"] == {
+        "package_tool": "get_domain_field_term_options",
+        "method": "search_life_stage_terms",
+        "provider_required": True,
+        "candidate_authority": "selector_evidence",
+    }
+    assert expression_fields[
+        "expression_pattern.where_expressed.cellular_component"
+    ].metadata["term_helper"]["term_source"] == {
+        "kind": "ontology",
+        "ontology_family": "go",
+        "go_aspect": "cellular_component",
+    }
+    helper_gaps = {
+        gap["field_path"]
+        for gap in (
+            alliance_registry.get_pack(
+                "agr.alliance.gene_expression"
+            ).metadata.object_definitions[0].metadata["controlled_field_helper_gaps"]
+        )
+    }
+    assert {
+        "condition_relations[].condition_relation_type",
+        "expression_experiment.detection_reagents",
+        "expression_experiment.specimen_genomic_model",
+        "expression_experiment.specimen_alleles",
+    } <= helper_gaps
 
     expression_provider_binding = gene_expression_bindings["data_provider_validation"]
     assert expression_provider_binding.validator_agent is not None

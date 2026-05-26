@@ -1,3 +1,4 @@
+import logging
 from copy import deepcopy
 from pathlib import Path
 
@@ -91,6 +92,10 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
     assert "`relation.name`" in content
     assert "controlled-vocabulary options" in content
     assert "`expression_pattern.where_expressed`" in content
+    assert "`expression_experiment.expression_assay_used`" in content
+    assert "`when_expressed_stage_name`" in content
+    assert "metadata.provenance.helper_selections[]" in content
+    assert "Do not put `helper_selections` as a top-level metadata field" in content
     assert "slot_hint" in content
     assert "cellular-component-only sites such as nucleus or cytoplasm are valid" in content
     assert "`data_provider.abbreviation`" in content
@@ -189,6 +194,53 @@ def test_gene_expression_schema_rejects_null_relation_name():
         schema.model_validate(payload)
 
     assert "relation.name must be selected explicitly" in str(exc_info.value)
+
+
+def test_gene_expression_schema_rejects_relation_without_helper_selection():
+    schema = _load_gene_expression_schema()
+    payload = deepcopy(_load_tmem67_output())
+    payload["metadata"]["provenance"]["helper_selections"] = [
+        selection
+        for selection in payload["metadata"]["provenance"]["helper_selections"]
+        if selection["field_path"] != "relation.name"
+    ]
+
+    with pytest.raises(ValidationError) as exc_info:
+        schema.model_validate(payload)
+
+    assert "metadata.provenance.helper_selections[]" in str(exc_info.value)
+
+
+def test_gene_expression_schema_rejects_relation_helper_selection_without_selected_value():
+    schema = _load_gene_expression_schema()
+    payload = deepcopy(_load_tmem67_output())
+    for selection in payload["metadata"]["provenance"]["helper_selections"]:
+        if selection["field_path"] == "relation.name":
+            selection["value"] = selection.pop("selected_value")
+
+    with pytest.raises(ValidationError) as exc_info:
+        schema.model_validate(payload)
+
+    assert "metadata.provenance.helper_selections[]" in str(exc_info.value)
+
+
+def test_gene_expression_schema_logs_malformed_helper_selection(caplog):
+    schema = _load_gene_expression_schema()
+    payload = deepcopy(_load_tmem67_output())
+    payload["metadata"]["provenance"]["helper_selections"].insert(0, "bad-selection")
+
+    with caplog.at_level(
+        logging.WARNING,
+        logger=(
+            "agr_ai_curation_alliance.domain_packs.gene_expression.conversion"
+        ),
+    ):
+        schema.model_validate(payload)
+
+    assert (
+        "Dropped 1 malformed gene expression helper_selections entries"
+        in caplog.text
+    )
 
 
 def test_gene_expression_schema_rejects_null_data_provider_abbreviation():
