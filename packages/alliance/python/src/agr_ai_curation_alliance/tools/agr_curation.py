@@ -3281,11 +3281,12 @@ def _ontology_lookup_result(
     lookup_method: str,
     normalized_phrase: str,
     term_source: Mapping[str, Any],
-    lookup: Mapping[str, Any],
     data_provider: Optional[str],
     exact_match: bool,
     limit_value: int,
 ) -> AgrQueryResult:
+    # term_source is the canonical field-scoped selector metadata. lookup declares
+    # which package-owned method may be called, but must not override term filters.
     if lookup_method == "search_anatomy_terms":
         return _AGR_QUERY_CALLABLE(
             method="search_anatomy_terms",
@@ -3305,19 +3306,29 @@ def _ontology_lookup_result(
             limit=limit_value,
         )
     if lookup_method == "search_go_terms":
+        go_aspect = term_source.get("go_aspect")
+        if not isinstance(go_aspect, str) or not go_aspect.strip():
+            return _err(
+                "Ontology helper term_source metadata requires go_aspect for search_go_terms.",
+                method="get_domain_field_term_options",
+                failure_classification=LOOKUP_STATUS_BLOCKED,
+            )
         return _AGR_QUERY_CALLABLE(
             method="search_go_terms",
             term=normalized_phrase,
-            go_aspect=term_source.get("go_aspect") or lookup.get("go_aspect"),
+            go_aspect=go_aspect,
             exact_match=exact_match,
             include_synonyms=True,
             limit=limit_value,
         )
     if lookup_method == "search_ontology_terms":
-        ontology_term_type = (
-            term_source.get("ontology_term_type")
-            or lookup.get("ontology_term_type")
-        )
+        ontology_term_type = term_source.get("ontology_term_type")
+        if not isinstance(ontology_term_type, str) or not ontology_term_type.strip():
+            return _err(
+                "Ontology helper term_source metadata requires ontology_term_type for search_ontology_terms.",
+                method="get_domain_field_term_options",
+                failure_classification=LOOKUP_STATUS_BLOCKED,
+            )
         return _AGR_QUERY_CALLABLE(
             method="search_ontology_terms",
             term=normalized_phrase,
@@ -3485,7 +3496,6 @@ def get_domain_field_term_options(
                 lookup_method=lookup_method,
                 normalized_phrase=normalized_phrase,
                 term_source=term_source,
-                lookup=lookup,
                 data_provider=data_provider,
                 exact_match=exact_match,
                 limit_value=limit_value,

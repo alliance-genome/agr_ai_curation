@@ -603,7 +603,6 @@ object_definitions:
             lookup:
               package_tool: get_domain_field_term_options
               method: search_ontology_terms
-              ontology_term_type: MMOTerm
               candidate_authority: selector_evidence
           provider_refs:
             alliance_linkml:

@@ -542,6 +542,56 @@ def test_domain_field_term_options_reads_canonical_evidence_context_keys(monkeyp
     assert calls[0]["term"] == "reverse transcription polymerase chain reaction assay"
 
 
+def test_domain_field_term_options_uses_term_source_for_ontology_filter(monkeypatch):
+    calls = []
+
+    class FakeDb:
+        @staticmethod
+        def search_ontology_terms(**kwargs):
+            calls.append(kwargs)
+            return [
+                SimpleNamespace(
+                    curie="MMO:0000655",
+                    name="reverse transcription polymerase chain reaction assay",
+                    ontology_type="MMOTerm",
+                )
+            ]
+
+    def helper_policy(**_kwargs):
+        return {
+            "term_source": {
+                "kind": "ontology",
+                "ontology_family": "assay",
+                "ontology_term_type": "MMOTerm",
+            },
+            "lookup": {
+                "package_tool": "get_domain_field_term_options",
+                "method": "search_ontology_terms",
+                "ontology_term_type": "ConflictingLookupTerm",
+                "candidate_authority": "selector_evidence",
+            },
+        }
+
+    monkeypatch.setattr(
+        agr_curation,
+        "get_curation_resolver",
+        lambda: _Resolver(FakeDb()),
+    )
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+    monkeypatch.setattr(agr_curation, "_field_term_helper_policy", helper_policy)
+
+    result = _term_helper_fn()(
+        domain_pack_id="agr.alliance.gene_expression",
+        object_type="GeneExpressionAnnotation",
+        field_path="expression_experiment.expression_assay_used",
+        source_phrase="reverse transcription polymerase chain reaction assay",
+    )
+
+    assert result.status == "ok"
+    assert result.data["term_source"]["ontology_term_type"] == "MMOTerm"
+    assert calls[0]["ontology_type"] == "MMOTerm"
+
+
 def test_domain_field_term_options_routes_gene_expression_site(monkeypatch):
     calls = []
 
