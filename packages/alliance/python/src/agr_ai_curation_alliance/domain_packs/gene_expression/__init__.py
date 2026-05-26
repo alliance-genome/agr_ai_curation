@@ -18,7 +18,6 @@ from .constants import (
 from .conversion import (
     FORBIDDEN_LEGACY_COLLECTIONS,
     FORBIDDEN_PAYLOAD_EVIDENCE_FIELDS,
-    GENE_EXPRESSION_RELATION_NAME,
     REQUIRED_GENE_EXPRESSION_PAYLOAD_FIELDS,
     GeneExpressionExtractionOutput,
     gene_expression_extraction_output_to_pending_envelope,
@@ -53,7 +52,6 @@ __all__ = [
     "GENE_EXPRESSION_MODEL_ID",
     "GENE_EXPRESSION_OBJECT_ROLE",
     "GENE_EXPRESSION_OBJECT_TYPE",
-    "GENE_EXPRESSION_RELATION_NAME",
     "GENE_EXPRESSION_TARGET_KEY",
     "GENE_EXPRESSION_VALIDATOR_STATES",
     "GeneExpressionExportAdapter",

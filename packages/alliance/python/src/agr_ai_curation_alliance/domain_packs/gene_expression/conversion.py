@@ -45,8 +45,6 @@ from .constants import (
     GENE_EXPRESSION_OBJECT_TYPE,
 )
 
-
-GENE_EXPRESSION_RELATION_NAME = "is_expressed_in"
 REQUIRED_GENE_EXPRESSION_PAYLOAD_FIELDS = frozenset(
     {
         "date_created",
@@ -638,7 +636,6 @@ def validate_pending_gene_expression_envelope(
 __all__ = [
     "FORBIDDEN_LEGACY_COLLECTIONS",
     "FORBIDDEN_PAYLOAD_EVIDENCE_FIELDS",
-    "GENE_EXPRESSION_RELATION_NAME",
     "GeneExpressionExtractionOutput",
     "REQUIRED_GENE_EXPRESSION_PAYLOAD_FIELDS",
     "gene_expression_extraction_output_to_pending_envelope",
