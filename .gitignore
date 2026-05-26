@@ -192,6 +192,20 @@ docs/plans/*
 docs/design/2026-04-01-pdf-evidence-fuzzy-search-experiments.md
 docs/design/2026-04-02-flow-evidence-curation-integration-plan.md
 docs/design/pdf-evidence-native-search-simplification-plan.md
+# Local design/corpus artifacts restored from stashed exploratory work.
+docs/design/2026-05-16-go-annotation-flow-view-plan.md
+docs/design/2026-05-17-symphony-full-auto-review-design.md
+docs/design/2026-05-17-validation-agent-rationalization-plan.md
+docs/design/2026-05-18-alliance-identifier-weaviate-index-design.md
+docs/design/2026-05-20-go-flow-demo-restore-handoff.md
+docs/design/2026-05-20-go-flow-demo-side-sandbox-handoff.md
+docs/design/2026-05-21-allele-builder-tool-design.md
+docs/design/2026-05-21-cross-domain-builder-rollout-plan.md
+docs/design/2026-05-22-gene-expression-linkml-linear-ticket-review.md
+docs/design/pdf-corpus-trials/main-cross-agent-handoff-20260520-231032/
+docs/design/pdf-corpus-trials/main-cross-agent-handoff-allele-rerun-20260520-233439/
+docs/design/pdf-corpus-trials/main-cross-agent-handoff-final-20260520-233829/
+docs/design/pdf-corpus-trials/validator-streaming-20260521-004900/
 docs/research/
 docs/evidence-review.md
 external_review_prompt.md
