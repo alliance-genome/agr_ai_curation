@@ -64,7 +64,8 @@ This file is a fast startup map for humans and coding agents working in `agr_ai_
 
 ## 3.6) Agent Semantic Navigation Tools
 
-- Use `rg` first for broad text/file discovery. Use the repo-local LSP helper when symbol identity matters: definitions, references, imports/exports, large-file outlines, or reviewing shared API changes.
+- Use `rg` first for broad text/file discovery. Use the repo-local LSP helper when symbol identity matters: definitions, references, imports/exports, large-file outlines, shared API edits, or review blast-radius checks.
+- After `rg` finds a likely implementation point, pause and ask whether the remaining uncertainty is semantic: symbol ownership, call/reference coverage, imports/exports, method overrides, or shared API blast radius. If yes, run the appropriate LSP helper command (`symbols`, `definition`, or `references`) before editing or final review.
 - Main helper: `scripts/utilities/agent_lsp.py`.
 - Commands:
   - `status`: show cached workspace LSP state and whether warm state exists.

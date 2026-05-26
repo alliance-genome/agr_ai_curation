@@ -206,6 +206,7 @@ ssh_args=(
   -i "${pem_file}"
   -N
   -o BatchMode=yes
+  -o ConnectTimeout=8
   -o ExitOnForwardFailure=yes
   -o ServerAliveInterval=30
   -o ServerAliveCountMax=3
@@ -226,11 +227,24 @@ else
   )"
 fi
 
-sleep 1
+ssh_ready=0
+for _ in $(seq 1 12); do
+  if prod_loki_tcp_ready "127.0.0.1" "${raw_port}"; then
+    ssh_ready=1
+    break
+  fi
+  if ! prod_loki_pid_running "${SSH_PID}"; then
+    break
+  fi
+  sleep 1
+done
+
 if ! prod_loki_pid_running "${SSH_PID}"; then
   prod_loki_error "Production SSH tunnel failed to start."
   if rg -i "permission denied|publickey" "${ssh_log_file}" >/dev/null 2>&1; then
     prod_loki_error "SSH reported Permission denied (publickey). Ask Chris to run unlock-ssh, then retry."
+  elif rg -i "connection timed out|no route to host|network is unreachable|operation timed out" "${ssh_log_file}" >/dev/null 2>&1; then
+    prod_loki_error "Production host ${remote_host}:22 is unreachable. Check the VPN/network route to the Alliance production VPC, then retry."
   else
     prod_loki_error "If ${pem_file} is locked or unavailable, ask Chris to run unlock-ssl."
   fi
@@ -238,7 +252,7 @@ if ! prod_loki_pid_running "${SSH_PID}"; then
   exit 3
 fi
 
-if ! prod_loki_tcp_ready "127.0.0.1" "${raw_port}"; then
+if [[ "${ssh_ready}" -ne 1 ]]; then
   prod_loki_error "Timed out waiting for raw Loki tunnel on 127.0.0.1:${raw_port}"
   tail -n 20 "${ssh_log_file}" 2>/dev/null || true
   exit 1

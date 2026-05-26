@@ -102,6 +102,7 @@ test_start_status_stop_with_stub_ssh() {
   export SYMPHONY_PROD_LOKI_STATE_ROOT="${state_root}"
   export SYMPHONY_PROD_LOKI_ENDPOINT_FILE="${endpoint_file}"
   export SYMPHONY_PROD_LOKI_ALLOW_LOCALHOST_BIND=1
+  export SYMPHONY_PROD_LOKI_SKIP_VM_ENDPOINT_SYNC=1
   export SYMPHONY_PROD_LOKI_SSH_KEY="${temp_dir}/AGR-ssl3.pem"
 
   output="$(bash "${START_HELPER}" --bind-ip 127.0.0.1 --port "${bind_port}" --raw-port "${raw_port}" --remote-host 127.0.0.1)"
@@ -123,7 +124,8 @@ test_start_status_stop_with_stub_ssh() {
 
   export PATH="${old_path}"
   unset SYMPHONY_PROD_LOKI_STATE_ROOT SYMPHONY_PROD_LOKI_ENDPOINT_FILE \
-    SYMPHONY_PROD_LOKI_ALLOW_LOCALHOST_BIND SYMPHONY_PROD_LOKI_SSH_KEY
+    SYMPHONY_PROD_LOKI_ALLOW_LOCALHOST_BIND SYMPHONY_PROD_LOKI_SKIP_VM_ENDPOINT_SYNC \
+    SYMPHONY_PROD_LOKI_SSH_KEY
 }
 
 test_foreground_records_proxy_and_cleans_up_children() {
@@ -142,6 +144,7 @@ test_foreground_records_proxy_and_cleans_up_children() {
   export SYMPHONY_PROD_LOKI_STATE_ROOT="${state_root}"
   export SYMPHONY_PROD_LOKI_ENDPOINT_FILE="${endpoint_file}"
   export SYMPHONY_PROD_LOKI_ALLOW_LOCALHOST_BIND=1
+  export SYMPHONY_PROD_LOKI_SKIP_VM_ENDPOINT_SYNC=1
   export SYMPHONY_PROD_LOKI_SSH_KEY="${temp_dir}/AGR-ssl3.pem"
 
   bash "${START_HELPER}" --foreground --bind-ip 127.0.0.1 --port "${bind_port}" --raw-port "${raw_port}" --remote-host 127.0.0.1 >"${temp_dir}/foreground.log" 2>&1 &
@@ -181,7 +184,8 @@ test_foreground_records_proxy_and_cleans_up_children() {
 
   export PATH="${old_path}"
   unset SYMPHONY_PROD_LOKI_STATE_ROOT SYMPHONY_PROD_LOKI_ENDPOINT_FILE \
-    SYMPHONY_PROD_LOKI_ALLOW_LOCALHOST_BIND SYMPHONY_PROD_LOKI_SSH_KEY
+    SYMPHONY_PROD_LOKI_ALLOW_LOCALHOST_BIND SYMPHONY_PROD_LOKI_SKIP_VM_ENDPOINT_SYNC \
+    SYMPHONY_PROD_LOKI_SSH_KEY
 }
 
 test_start_status_stop_with_stub_ssh
