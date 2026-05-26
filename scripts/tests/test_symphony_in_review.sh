@@ -79,6 +79,7 @@ EOF
   set +e
   output="$(bash "${SCRIPT_PATH}" \
     --issue-identifier ALL-99 \
+    --branch "" \
     --linear-json-file "${linear_json}" 2>&1)"
   rc=$?
   set -e
@@ -137,6 +138,7 @@ EOF
   set +e
   output="$(bash "${SCRIPT_PATH}" \
     --issue-identifier ALL-50 \
+    --branch "" \
     --linear-json-file "${linear_json}" 2>&1)"
   rc=$?
   set -e
@@ -330,6 +332,7 @@ EOF
   set +e
   output="$(bash "${SCRIPT_PATH}" \
     --issue-identifier ALL-10 \
+    --branch "" \
     --linear-json-file "${linear_json}" \
     --output-file "${output_path}" 2>&1)"
   rc=$?
@@ -366,6 +369,7 @@ EOF
   set +e
   output="$(bash "${SCRIPT_PATH}" \
     --issue-identifier ALL-999 \
+    --branch "" \
     --linear-json-file "${linear_json}" 2>&1)"
   rc=$?
   set -e
@@ -404,6 +408,7 @@ EOF
   set +e
   output="$(bash "${SCRIPT_PATH}" \
     --issue-identifier ALL-13 \
+    --branch "" \
     --linear-json-file "${linear_json}" 2>&1)"
   rc=$?
   set -e

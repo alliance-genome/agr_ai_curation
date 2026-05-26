@@ -101,6 +101,7 @@ test_first_implementation_from_todo() {
   set +e
   output="$(bash "${SCRIPT_PATH}" \
     --issue-identifier ALL-50 \
+    --branch "" \
     --linear-json-file "${linear_json}" \
     --history-json-file "${history_json}" 2>&1)"
   rc=$?
@@ -144,6 +145,7 @@ test_bounce_from_in_review() {
   set +e
   output="$(bash "${SCRIPT_PATH}" \
     --issue-identifier ALL-60 \
+    --branch "" \
     --linear-json-file "${linear_json}" \
     --history-json-file "${history_json}" 2>&1)"
   rc=$?
@@ -313,6 +315,7 @@ test_bounce_from_human_review() {
   set +e
   output="$(bash "${SCRIPT_PATH}" \
     --issue-identifier ALL-80 \
+    --branch "" \
     --linear-json-file "${linear_json}" \
     --history-json-file "${history_json}" 2>&1)"
   rc=$?
@@ -363,6 +366,7 @@ test_invalid_linear_response() {
   set +e
   output="$(bash "${SCRIPT_PATH}" \
     --issue-identifier ALL-999 \
+    --branch "" \
     --linear-json-file "${linear_json}" \
     --history-json-file "${history_json}" 2>&1)"
   rc=$?
@@ -395,6 +399,7 @@ test_multiple_bounces_counts_correctly() {
   set +e
   output="$(bash "${SCRIPT_PATH}" \
     --issue-identifier ALL-90 \
+    --branch "" \
     --linear-json-file "${linear_json}" \
     --history-json-file "${history_json}" 2>&1)"
   rc=$?
@@ -432,6 +437,7 @@ test_output_file_option() {
   set +e
   output="$(bash "${SCRIPT_PATH}" \
     --issue-identifier ALL-10 \
+    --branch "" \
     --linear-json-file "${linear_json}" \
     --history-json-file "${history_json}" \
     --output-file "${output_path}" 2>&1)"
@@ -468,6 +474,7 @@ test_empty_history_defaults_to_pass_one() {
   set +e
   output="$(bash "${SCRIPT_PATH}" \
     --issue-identifier ALL-11 \
+    --branch "" \
     --linear-json-file "${linear_json}" \
     --history-json-file "${history_json}" 2>&1)"
   rc=$?
@@ -503,6 +510,7 @@ test_lsp_warm_status_is_emitted() {
   set +e
   output="$(bash "${SCRIPT_PATH}" \
     --issue-identifier ALL-12 \
+    --branch "" \
     --linear-json-file "${linear_json}" \
     --history-json-file "${history_json}" 2>&1)"
   rc=$?
