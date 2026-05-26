@@ -1242,19 +1242,60 @@ def _enforce_expected_result_fields(
         for field_name in request.expected_result_fields
         if _missing_resolved_value(result.resolved_values.get(field_name))
     ]
-    if not missing_fields:
+    invalid_array_fields = _invalid_array_resolved_fields(result, request=request)
+    invalid_fields = [
+        field_name
+        for field_name in invalid_array_fields
+        if field_name not in missing_fields
+    ]
+    if not missing_fields and not invalid_fields:
         return result
+
+    unresolved_fields = [*missing_fields, *invalid_fields]
+    explanation = "Validator result omitted expected resolved field(s): "
+    if invalid_fields and not missing_fields:
+        explanation = (
+            "Validator result did not return one resolved value per selected "
+            "array item for expected field(s): "
+        )
+    elif invalid_fields:
+        explanation = (
+            "Validator result omitted or underfilled expected resolved field(s): "
+        )
 
     return result.model_copy(
         update={
             "status": "unresolved",
-            "missing_expected_fields": missing_fields,
-            "explanation": (
-                "Validator result omitted expected resolved field(s): "
-                + ", ".join(missing_fields)
-            ),
+            "missing_expected_fields": unresolved_fields,
+            "explanation": explanation + ", ".join(unresolved_fields),
         },
     )
+
+
+def _invalid_array_resolved_fields(
+    result: DomainValidatorResultBase,
+    *,
+    request: DomainValidationRequest,
+) -> list[str]:
+    invalid_fields: list[str] = []
+    for field_name in request.expected_result_fields:
+        selected_value = request.selected_inputs.get(field_name)
+        if not isinstance(selected_value, list):
+            continue
+
+        resolved_value = result.resolved_values.get(field_name)
+        if _missing_resolved_value(resolved_value):
+            continue
+        if not isinstance(resolved_value, list):
+            invalid_fields.append(field_name)
+            continue
+        if len(resolved_value) != len(selected_value):
+            invalid_fields.append(field_name)
+            continue
+        if any(_missing_resolved_value(item) for item in resolved_value):
+            invalid_fields.append(field_name)
+
+    return invalid_fields
 
 
 def _missing_resolved_value(value: Any) -> bool:

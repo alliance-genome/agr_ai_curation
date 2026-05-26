@@ -16,6 +16,7 @@ content: |
   Read these values from `selected_inputs` and `target.input_values` when present:
   - `curie`: ontology CURIE supplied by the payload.
   - `label` or `name`: free-text term label supplied by the payload.
+  - `terms`: ordered repeated ontology term inputs for one array-valued field. Each item may be a CURIE string, label string, or object containing `curie`, `label`, or `name`.
   - `ontology_family`: request family such as `phenotype`, `evidence`, `taxon`, `anatomy`, `life_stage`, `go`, `disease`, `condition`, `mmo`, `zeco`, or `xco`.
   - `ontology_term_type`: curation DB ontologytermtype such as `DOTerm`, `ECOTerm`, `GOTerm`, `MPTerm`, or `WBPhenotypeTerm`.
   - `accepted_prefixes`: allowed CURIE prefixes such as `DOID`, `ECO`, `GO`, `MP`, `WBPhenotype`, `ZP`, `NCBITaxon`, `MMO`, `ZECO`, or `XCO`.
@@ -43,7 +44,11 @@ content: |
 
   Use a bounded lookup path:
   1. If `curie` is present, call `get_ontology_term` first with `term=curie` and `ontology_term_type` when supplied.
-  2. If several CURIEs are supplied, call `get_ontology_terms`.
+  2. If `terms` is present, resolve each item independently and preserve input order:
+     - If every item supplies a CURIE, call `get_ontology_terms` once with those CURIEs.
+     - If any item supplies only a label/name, run the narrowest label helper for that item (`search_anatomy_terms`, `search_life_stage_terms`, `search_go_terms`, or `search_ontology_terms`) using the same structured family/type/provider/aspect rules as scalar label lookup.
+     - Record an item-addressed `lookup_attempts[].query` with `item_index` for each per-item label lookup, and include item indexes in curator messages for ambiguous, no-match, conflict, or tool-error cases.
+     - Return `status: "resolved"` for a `terms` request only when every input item resolves to exactly one authoritative term from tool evidence.
   3. If only a label/name is present, choose the narrowest search helper supported by the request:
      - `search_anatomy_terms` for anatomy with `data_provider`.
      - `search_life_stage_terms` for life stage with `data_provider`.
@@ -69,7 +74,7 @@ content: |
   - `validator_binding_id`: copy from the validator request.
   - `validator_agent`: copy the package and agent identity from the request.
   - `target`: copy the target object from the request.
-  - `resolved_values`: scalar values keyed by expected result field, such as `curie`, `label`, `name`, `ontology_term_type`, `ontology_family`, or provider-specific result keys.
+  - `resolved_values`: scalar values keyed by expected result field, such as `curie`, `label`, `name`, `ontology_term_type`, `ontology_family`, or provider-specific result keys. For repeated term bindings that expect `terms`, return `resolved_values.terms` as an ordered list with one resolved object per input item.
   - `resolved_objects`: raw or normalized ontology term facts returned by lookup for resolved matches.
   - `missing_expected_fields`: expected fields this validator could not populate from lookup evidence.
   - `candidates`: generic candidate records for exact, ambiguous, alternate, or prefix-conflicting matches, with `value`, `label`, `object_type`, `matched_fields`, and relevant `details`.
@@ -80,8 +85,10 @@ content: |
 
   # Output Rules
 
-  For resolved terms, copy expected scalar outputs into `resolved_values` using the binding's `expected_result_fields` keys. For example, if the binding expects `curie` and `label`, return those keys exactly.
+  For resolved scalar terms, copy expected scalar outputs into `resolved_values` using the binding's `expected_result_fields` keys. For example, if the binding expects `curie` and `label`, return those keys exactly.
 
-  For unresolved terms, keep `resolved_values` empty or partial, list all unfilled expected keys in `missing_expected_fields`, and write a curator-facing `curator_message` that says whether the issue was no match, ambiguity, prefix/type conflict, missing organism/provider context, or a tool error.
+  For resolved repeated `terms`, set `resolved_values.terms` to an ordered list with the same length as the input `terms`. Each list item must preserve the authoritative `curie` and `name` or `label` returned by lookup, plus any relevant ontology type/family fields supplied by tool evidence. Do not drop unresolved items or return a shorter list.
+
+  For unresolved scalar or repeated terms, keep `resolved_values` empty or partial, list all unfilled expected keys in `missing_expected_fields`, and write a curator-facing `curator_message` that says whether the issue was no match, ambiguity, prefix/type conflict, missing organism/provider context, or a tool error. For repeated `terms`, preserve any resolved and unresolved candidates with item indexes in `candidates`, `lookup_attempts`, or `ontology_term_candidates` instead of inventing the missing array entries.
 
   Do not use metadata-only validator states as result statuses. Envelope composition belongs outside validator results.

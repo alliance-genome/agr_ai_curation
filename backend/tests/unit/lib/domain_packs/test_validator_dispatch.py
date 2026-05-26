@@ -335,6 +335,15 @@ def _gene_expression_envelope() -> DomainEnvelope:
                         "primary_external_id": "Tmem67",
                         "gene_symbol": "Tmem67",
                     },
+                    "when_expressed_stage_name": "TS26",
+                    "expression_pattern": {
+                        "where_expressed": {
+                            "anatomical_structure": {
+                                "curie": "EMAPA:17373",
+                                "name": "metanephros",
+                            }
+                        }
+                    },
                     "relation": {"name": "is_expressed_in"},
                     "single_reference": {
                         "pmid": "PMID:203506",
@@ -430,6 +439,43 @@ def _validation_request() -> DomainValidationRequest:
         ),
         selected_inputs={"identifier": "BAD:0001"},
         expected_result_fields={"identifier": "gene.identifier"},
+    )
+
+
+def _array_terms_validation_request() -> DomainValidationRequest:
+    return DomainValidationRequest(
+        request_id="domain-validation:array-terms",
+        validator_binding_id="fixture.ontology_terms_lookup",
+        validator_agent=ValidatorAgentRef(
+            package_id="fixture.validators",
+            agent_id="ontology_term_validation",
+        ),
+        target=ValidationTarget(
+            domain_pack_id="fixture.dispatch",
+            object_type="GeneExpressionAnnotation",
+            field_path="expression_pattern.where_expressed.cellular_component_qualifiers",
+            expected_fields=["terms"],
+            input_values={
+                "terms": [
+                    {"name": "nuclear lumen"},
+                    {"name": "nucleoplasm"},
+                ],
+                "ontology_family": "go",
+                "go_aspect": "cellular_component",
+            },
+        ),
+        selected_inputs={
+            "terms": [
+                {"name": "nuclear lumen"},
+                {"name": "nucleoplasm"},
+            ],
+            "ontology_family": "go",
+            "go_aspect": "cellular_component",
+            "lookup_method": "search_go_terms",
+        },
+        expected_result_fields={
+            "terms": "expression_pattern.where_expressed.cellular_component_qualifiers"
+        },
     )
 
 
@@ -1024,6 +1070,41 @@ def test_alliance_gene_expression_materializes_subject_gene_and_reference_fields
                     }
                 ],
             }
+        if binding.binding_id == "expression_anatomical_structure_validation":
+            return {
+                **base,
+                "resolved_values": {
+                    "curie": "EMAPA:17373",
+                    "name": "metanephros",
+                },
+                "lookup_attempts": [
+                    {
+                        "provider": "agr_curation_query",
+                        "method": "search_anatomy_terms",
+                        "query": {"term": "metanephros", "data_provider": "MGI"},
+                        "result_count": 1,
+                        "outcome": "success",
+                    }
+                ],
+            }
+        if binding.binding_id == "expression_stage_ontology_validation":
+            return {
+                **base,
+                "resolved_values": {
+                    "label": "Theiler stage 26",
+                    "curie": "FIXTURE_STAGE:00026",
+                    "name": "Theiler stage 26",
+                },
+                "lookup_attempts": [
+                    {
+                        "provider": "agr_curation_query",
+                        "method": "search_life_stage_terms",
+                        "query": {"term": "TS26", "data_provider": "MGI"},
+                        "result_count": 1,
+                        "outcome": "success",
+                    }
+                ],
+            }
         if binding.binding_id == "relation_vocabulary_validation":
             return {
                 **base,
@@ -1051,13 +1132,15 @@ def test_alliance_gene_expression_materializes_subject_gene_and_reference_fields
         max_parallel_validators=1,
     )
 
-    assert result.validator_agent_run_count == 4
-    assert captured_bindings == [
+    assert result.validator_agent_run_count == 6
+    assert set(captured_bindings) == {
         "data_provider_validation",
+        "expression_anatomical_structure_validation",
+        "expression_stage_ontology_validation",
         "relation_vocabulary_validation",
         "source_reference_validation",
         "subject_gene_validation",
-    ]
+    }
     annotation = result.envelope.objects[0]
     assert annotation.payload["expression_annotation_subject"] == {
         "primary_external_id": "MGI:1923928",
@@ -1069,13 +1152,14 @@ def test_alliance_gene_expression_materializes_subject_gene_and_reference_fields
         "reference_id": 203506,
         "curie": "PMID:203506",
     }
-    patch_events = annotation.metadata["validator_resolved_value_materialization"]
-    assert patch_events[0]["validator_binding_id"] == "source_reference_validation"
-    assert patch_events[0]["original_values"] == {
+    patch_events = {
+        event["validator_binding_id"]: event
+        for event in annotation.metadata["validator_resolved_value_materialization"]
+    }
+    assert patch_events["source_reference_validation"]["original_values"] == {
         "single_reference.title": "Paper supplied title"
     }
-    assert patch_events[1]["validator_binding_id"] == "subject_gene_validation"
-    assert patch_events[1]["original_values"] == {
+    assert patch_events["subject_gene_validation"]["original_values"] == {
         "expression_annotation_subject.primary_external_id": "Tmem67",
         "expression_annotation_subject.gene_symbol": "Tmem67",
     }
@@ -1152,6 +1236,51 @@ def test_alliance_gene_expression_unresolved_gene_and_reference_remain_visible()
                 ],
                 "curator_message": "No unambiguous reference match found.",
                 "explanation": "The API-backed lookup found no source reference.",
+            }
+        if binding.binding_id == "expression_anatomical_structure_validation":
+            return {
+                **base,
+                "status": "resolved",
+                "resolved_values": {
+                    "curie": "EMAPA:17373",
+                    "name": "metanephros",
+                },
+                "missing_expected_fields": [],
+                "candidates": [],
+                "lookup_attempts": [
+                    {
+                        "provider": "agr_curation_query",
+                        "method": "search_anatomy_terms",
+                        "query": {"term": "metanephros", "data_provider": "MGI"},
+                        "result_count": 1,
+                        "outcome": "success",
+                    }
+                ],
+                "curator_message": "Anatomy resolved.",
+                "explanation": "Fixture anatomy term resolved.",
+            }
+        if binding.binding_id == "expression_stage_ontology_validation":
+            return {
+                **base,
+                "status": "resolved",
+                "resolved_values": {
+                    "label": "Theiler stage 26",
+                    "curie": "FIXTURE_STAGE:00026",
+                    "name": "Theiler stage 26",
+                },
+                "missing_expected_fields": [],
+                "candidates": [],
+                "lookup_attempts": [
+                    {
+                        "provider": "agr_curation_query",
+                        "method": "search_life_stage_terms",
+                        "query": {"term": "TS26", "data_provider": "MGI"},
+                        "result_count": 1,
+                        "outcome": "success",
+                    }
+                ],
+                "curator_message": "Stage resolved.",
+                "explanation": "Fixture stage term resolved.",
             }
         return {
             **base,
@@ -1524,6 +1653,84 @@ def test_resolved_validator_missing_expected_fields_is_unresolved(
     assert result.validator_results[0].missing_expected_fields == ["symbol"]
     assert finding.details["failure_classification"] == "missing_expected_result_field"
     assert finding.details["missing_expected_fields"] == ["symbol"]
+
+
+def test_resolved_array_validator_result_requires_per_item_values():
+    request = _array_terms_validation_request()
+    payload = _result_payload(
+        request,
+        resolved_values={
+            "terms": [
+                {"curie": "GO:0031981", "name": "nuclear lumen"},
+                {"curie": "GO:0005654", "name": "nucleoplasm"},
+            ]
+        },
+    )
+
+    result = validator_result_from_agent_output(payload, request=request)
+
+    assert result.status == "resolved"
+    assert result.resolved_values["terms"] == [
+        {"curie": "GO:0031981", "name": "nuclear lumen"},
+        {"curie": "GO:0005654", "name": "nucleoplasm"},
+    ]
+    assert result.missing_expected_fields == []
+
+
+@pytest.mark.parametrize(
+    "resolved_terms",
+    [
+        [{"curie": "GO:0031981", "name": "nuclear lumen"}],
+        {"curie": "GO:0031981", "name": "nuclear lumen"},
+        [{"curie": "GO:0031981", "name": "nuclear lumen"}, {}],
+    ],
+)
+def test_resolved_array_validator_result_rejects_invalid_item_projection(
+    resolved_terms: Any,
+):
+    request = _array_terms_validation_request()
+    payload = _result_payload(
+        request,
+        resolved_values={"terms": resolved_terms},
+    )
+
+    result = validator_result_from_agent_output(payload, request=request)
+
+    assert result.status == "unresolved"
+    assert result.missing_expected_fields == ["terms"]
+    assert "one resolved value per selected array item" in result.explanation
+
+
+@pytest.mark.parametrize("outcome", ["ambiguous", "not_found", "conflict"])
+def test_unresolved_array_validator_outcomes_remain_field_addressed(outcome: str):
+    request = _array_terms_validation_request()
+    payload = _result_payload(
+        request,
+        status="unresolved",
+        resolved_values={},
+        missing_expected_fields=["terms"],
+        outcome=outcome,
+    )
+    payload["lookup_attempts"][0] = {
+        "provider": "agr_curation_query",
+        "method": "search_go_terms",
+        "query": {
+            "term": "nuclear lumen",
+            "go_aspect": "cellular_component",
+            "item_index": 0,
+        },
+        "result_count": 2 if outcome == "ambiguous" else 0,
+        "outcome": outcome,
+    }
+
+    result = validator_result_from_agent_output(payload, request=request)
+
+    assert result.status == "unresolved"
+    assert result.target.field_path == (
+        "expression_pattern.where_expressed.cellular_component_qualifiers"
+    )
+    assert result.missing_expected_fields == ["terms"]
+    assert result.lookup_attempts[0].outcome == outcome
 
 
 def test_runner_error_becomes_controlled_unresolved_result(tmp_path: Path):

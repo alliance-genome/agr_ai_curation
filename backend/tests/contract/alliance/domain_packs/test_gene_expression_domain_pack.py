@@ -484,6 +484,14 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
 
 def test_gene_expression_context_ontology_requests_are_field_scoped():
     envelope = _converted_tmem67_envelope()
+    payload = copy.deepcopy(envelope.objects[0].payload)
+    payload["expression_pattern"].setdefault("when_expressed", {})[
+        "stage_uberon_slim_terms"
+    ] = [{"curie": "UBERON:0000068", "name": "embryonic stage"}]
+    payload["expression_pattern"]["where_expressed"][
+        "cellular_component_qualifiers"
+    ] = [{"curie": "GO:0005634", "name": "nucleus"}]
+    envelope = _with_payload(envelope, payload)
 
     stage_match = _active_binding_match(
         envelope,
@@ -521,16 +529,59 @@ def test_gene_expression_context_ontology_requests_are_field_scoped():
         "lookup_method": "search_anatomy_terms",
     }
 
-    uberon_match = _active_binding_match(
+    stage_uberon_match = _active_binding_match(
+        envelope,
+        "expression_stage_uberon_slim_validation",
+    )
+    stage_uberon_request = build_domain_validation_request(
+        stage_uberon_match
+    ).request
+    assert stage_uberon_request is not None
+    assert stage_uberon_request.selected_inputs == {
+        "terms": [{"curie": "UBERON:0000068", "name": "embryonic stage"}],
+        "ontology_family": "uberon",
+        "ontology_term_type": "UBERONTerm",
+        "lookup_method": "search_ontology_terms",
+    }
+    assert stage_uberon_request.expected_result_fields == {
+        "terms": "expression_pattern.when_expressed.stage_uberon_slim_terms"
+    }
+
+    anatomical_uberon_match = _active_binding_match(
         envelope,
         "expression_anatomical_uberon_slim_validation",
     )
-    uberon_request = build_domain_validation_request(uberon_match).request
-    assert uberon_request is not None
-    assert uberon_request.selected_inputs["terms"] == [
-        {"curie": "UBERON:0001008", "name": "renal system"}
-    ]
-    assert uberon_request.selected_inputs["ontology_term_type"] == "UBERONTerm"
+    anatomical_uberon_request = build_domain_validation_request(
+        anatomical_uberon_match
+    ).request
+    assert anatomical_uberon_request is not None
+    assert anatomical_uberon_request.selected_inputs == {
+        "terms": [{"curie": "UBERON:0001008", "name": "renal system"}],
+        "ontology_family": "uberon",
+        "ontology_term_type": "UBERONTerm",
+        "lookup_method": "search_ontology_terms",
+    }
+    assert anatomical_uberon_request.expected_result_fields == {
+        "terms": "expression_pattern.where_expressed.anatomical_structure_uberon_terms"
+    }
+
+    qualifier_match = _active_binding_match(
+        envelope,
+        "expression_cellular_component_qualifier_validation",
+    )
+    qualifier_request = build_domain_validation_request(qualifier_match).request
+    assert qualifier_request is not None
+    assert qualifier_request.selected_inputs == {
+        "terms": [{"curie": "GO:0005634", "name": "nucleus"}],
+        "ontology_family": "go",
+        "go_aspect": "cellular_component",
+        "lookup_method": "search_go_terms",
+    }
+    assert qualifier_request.expected_result_fields == {
+        "terms": (
+            "expression_pattern.where_expressed.cellular_component_qualifiers"
+        )
+    }
 
 
 def test_gene_expression_cellular_component_only_site_remains_validatable():
