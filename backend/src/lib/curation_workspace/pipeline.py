@@ -20,7 +20,10 @@ from src.lib.curation_workspace.validation_runtime import (
     field_validation_status,
     increment_validation_count,
 )
-from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
+from src.lib.curation_workspace.adapter_registry import (
+    resolve_curation_domain_envelope_validator_by_id,
+    resolve_curation_domain_pack_by_id,
+)
 from src.lib.curation_workspace.models import (
     CurationExtractionResultRecord as ExtractionResultModel,
     DomainEnvelopeModel,
@@ -55,6 +58,7 @@ from src.schemas.curation_workspace import (
 )
 from src.lib.domain_packs.materialization import materialize_persisted_envelope_review_rows
 from src.lib.domain_packs.structural_checks import run_domain_envelope_structural_checks
+from src.lib.domain_packs.validation_findings import append_validation_findings_to_envelope
 from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
 from src.lib.domain_envelopes.persistence import (
     DomainEnvelopeCheckpointRequest,
@@ -444,14 +448,28 @@ def _refresh_domain_envelope_validation_for_ref(
         envelope,
         domain_pack,
     )
+    package_validator = resolve_curation_domain_envelope_validator_by_id(
+        envelope.domain_pack_id
+    )
+    package_appended_findings = ()
+    validator_envelope = structural_result.envelope
+    if package_validator is not None:
+        validator_envelope, package_appended_findings = (
+            append_validation_findings_to_envelope(
+                structural_result.envelope,
+                package_validator(structural_result.envelope),
+                actor_id=f"{envelope.domain_pack_id}.domain_envelope_validator",
+            )
+        )
     dispatch_result = dispatch_active_validator_bindings(
-        structural_result.envelope,
+        validator_envelope,
         domain_pack,
         registry=structural_result.registry,
         source_envelope_revision=envelope_row.revision,
     )
     appended_findings = (
         *structural_result.appended_findings,
+        *package_appended_findings,
         *dispatch_result.appended_findings,
     )
     if not appended_findings:

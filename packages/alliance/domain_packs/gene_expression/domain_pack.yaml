@@ -861,6 +861,9 @@ metadata:
       - validator_id: gene_expression.extractor_output_migration
         display_name: Gene expression extractor format
         description: Validate runtime extractor output through the GeneExpressionAnnotation domain-envelope schema and pending-envelope conversion.
+      - validator_id: gene_expression.linkml_extraction_contract
+        display_name: Gene expression LinkML extraction contract
+        description: Package-owned deterministic validator emits field-addressed extraction diagnostics for LinkML-required selectors, evidence integrity, relation vocabulary, assay/method selectors, and expression context postconditions.
       - validator_id: gene_expression.export_submission_projection
         display_name: Gene expression ready for export
         description: Validate GeneExpressionAnnotation export/submission target projection payloads.
@@ -871,9 +874,6 @@ metadata:
         display_name: Data provider validation
         description: Active package binding validates the LinkML-required data provider abbreviation through the shared Alliance data-provider validator.
     under_development:
-      - validator_id: gene_expression.linkml_anatomical_site_postcondition
-        display_name: Anatomical site postcondition
-        description: Enforce the LinkML AnatomicalSite rule requiring anatomical_structure or cellular_component once validator runtime wiring lands.
       - validator_id: gene_expression.ontology_term_resolution
         display_name: Expression ontology term resolution
         description: Validate embedded MMO assay, stage, anatomy, UBERON, and GO term CURIEs against configured Alliance ontology sources.
