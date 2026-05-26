@@ -592,6 +592,52 @@ tools:
             type: integer
             required: false
             description: Maximum number of provider candidates to return.
+  - tool_id: get_domain_field_term_options
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.agr_curation:get_domain_field_term_options
+    required_context: []
+    description: Return extractor-facing term options and slot hints declared by domain-pack field metadata without making helper output final validator authority
+    source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
+    metadata:
+      name: Domain Field Term Options
+      category: Database
+      audit:
+        display_name: Domain Field Term Options
+      documentation:
+        summary: Narrow extractor-safe helper for domain-pack declared controlled-vocabulary options and first-pass ontology slot routing hints.
+        parameters:
+          - name: domain_pack_id
+            type: string
+            required: true
+            description: Domain pack identifier, such as agr.alliance.gene_expression.
+          - name: object_type
+            type: string
+            required: true
+            description: Curatable object type, such as GeneExpressionAnnotation.
+          - name: field_path
+            type: string
+            required: true
+            description: Domain payload field path, such as relation.name or expression_pattern.where_expressed.
+          - name: source_phrase
+            type: string
+            required: false
+            description: Evidence-backed paper phrase to route or search.
+          - name: evidence_context
+            type: object
+            required: false
+            description: Optional source phrase, quote, figure, provider, or taxon context from verified evidence.
+          - name: data_provider
+            type: string
+            required: false
+            description: Alliance provider abbreviation for provider-scoped anatomy lookup.
+          - name: taxon
+            type: string
+            required: false
+            description: Optional taxon context preserved for audit and future routing.
+          - name: limit
+            type: integer
+            required: false
+            description: Maximum number of options per lookup.
   - tool_id: search_document
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_search_document_tool

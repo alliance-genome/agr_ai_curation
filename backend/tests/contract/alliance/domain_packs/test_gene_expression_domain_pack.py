@@ -35,7 +35,6 @@ from agr_ai_curation_alliance.domain_packs.gene_expression import (  # noqa: E40
     GENE_EXPRESSION_FIXTURE_PACK_ID,
     GENE_EXPRESSION_MODEL_ID,
     GENE_EXPRESSION_OBJECT_TYPE,
-    GENE_EXPRESSION_RELATION_NAME,
     GENE_EXPRESSION_VALIDATOR_STATES,
     gene_expression_extraction_output_to_pending_envelope,
     get_gene_expression_domain_pack_metadata_path,
@@ -415,22 +414,84 @@ def test_tmem67_extractor_output_converts_to_pending_gene_expression_envelope():
     assert validate_pending_gene_expression_envelope(converted) == ()
 
 
-def test_gene_expression_conversion_restores_class_relation_default():
+def test_gene_expression_conversion_rejects_missing_relation_name():
     raw_fixture = yaml.safe_load(
         GENE_EXPRESSION_OUTPUT_FIXTURE_PATH.read_text(encoding="utf-8")
     )
     output = raw_fixture["output"]
     output["curatable_objects"][0]["payload"]["relation"]["name"] = None
 
+    with pytest.raises(ValueError) as exc_info:
+        gene_expression_extraction_output_to_pending_envelope(
+            output,
+            envelope_id="gene-expression-missing-relation",
+        )
+
+    assert "relation.name must be selected explicitly" in str(exc_info.value)
+
+
+def test_gene_expression_conversion_accepts_cellular_component_only_site():
+    raw_fixture = yaml.safe_load(
+        GENE_EXPRESSION_OUTPUT_FIXTURE_PATH.read_text(encoding="utf-8")
+    )
+    output = raw_fixture["output"]
+    payload = output["curatable_objects"][0]["payload"]
+    payload["where_expressed_statement"] = "nucleus"
+    payload["expression_pattern"]["where_expressed"] = {
+        "cellular_component": {
+            "name": "nucleus",
+        }
+    }
+
     converted = gene_expression_extraction_output_to_pending_envelope(
         output,
-        envelope_id="gene-expression-relation-default",
+        envelope_id="gene-expression-cellular-component-only",
     )
 
-    assert converted.objects[0].payload["relation"]["name"] == (
-        GENE_EXPRESSION_RELATION_NAME
-    )
+    where_expressed = converted.objects[0].payload["expression_pattern"][
+        "where_expressed"
+    ]
+    assert where_expressed == {"cellular_component": {"name": "nucleus"}}
     assert validate_pending_gene_expression_envelope(converted) == ()
+
+
+def test_gene_expression_conversion_rejects_missing_anatomical_site_slots():
+    raw_fixture = yaml.safe_load(
+        GENE_EXPRESSION_OUTPUT_FIXTURE_PATH.read_text(encoding="utf-8")
+    )
+    output = raw_fixture["output"]
+    output["curatable_objects"][0]["payload"]["expression_pattern"][
+        "where_expressed"
+    ] = {}
+
+    with pytest.raises(ValueError) as exc_info:
+        gene_expression_extraction_output_to_pending_envelope(
+            output,
+            envelope_id="gene-expression-missing-site",
+        )
+
+    assert "anatomical_structure or cellular_component" in str(exc_info.value)
+
+
+def test_gene_expression_conversion_rejects_blank_anatomical_site_slots():
+    raw_fixture = yaml.safe_load(
+        GENE_EXPRESSION_OUTPUT_FIXTURE_PATH.read_text(encoding="utf-8")
+    )
+    output = raw_fixture["output"]
+    output["curatable_objects"][0]["payload"]["expression_pattern"][
+        "where_expressed"
+    ] = {
+        "anatomical_structure": {},
+        "cellular_component": None,
+    }
+
+    with pytest.raises(ValueError) as exc_info:
+        gene_expression_extraction_output_to_pending_envelope(
+            output,
+            envelope_id="gene-expression-blank-site",
+        )
+
+    assert "anatomical_structure or cellular_component" in str(exc_info.value)
 
 
 def test_gene_expression_conversion_rejects_legacy_semantic_lists():

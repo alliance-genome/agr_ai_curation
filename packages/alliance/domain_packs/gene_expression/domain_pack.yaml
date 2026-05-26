@@ -202,7 +202,7 @@ object_definitions:
     definition_state: stable
     definition_notes:
       - The envelope carries exactly one GeneExpressionAnnotation object per annotation; gene, reference, experiment, assay, and expression context values are embedded in that object's payload.
-      - LinkML postconditions that require one of anatomical_structure or cellular_component are declared for validator execution rather than represented as helper semantic lists.
+      - LinkML postconditions require one of anatomical_structure or cellular_component for expression_pattern.where_expressed; extraction helper metadata exposes that routing without making helper output validator authority.
     metadata:
       object_role: curatable_unit
       provider_refs:
@@ -407,6 +407,16 @@ object_definitions:
         metadata:
           editable: true
           source_of_truth: alliance_linkml
+          term_helper:
+            field_path: relation.name
+            authority: live_validated_option
+            term_source:
+              kind: controlled_vocabulary
+              vocabulary: Expression Relation
+            lookup:
+              package_tool: get_domain_field_term_options
+              method: search_vocabulary_terms
+              candidate_authority: live_validated_option
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -630,6 +640,38 @@ object_definitions:
         required: true
         model_ref: AnatomicalSitePayload
         metadata:
+          anatomical_site_postcondition:
+            required_any:
+              - expression_pattern.where_expressed.anatomical_structure
+              - expression_pattern.where_expressed.cellular_component
+          term_helper:
+            field_path: expression_pattern.where_expressed
+            authority: hint_only
+            term_source:
+              kind: anatomical_site
+            site_routing:
+              required_any:
+                - expression_pattern.where_expressed.anatomical_structure
+                - expression_pattern.where_expressed.cellular_component
+              candidates:
+                - slot_hint: expression_pattern.where_expressed.anatomical_structure
+                  term_source:
+                    kind: ontology
+                    ontology_family: anatomy
+                  lookup:
+                    package_tool: get_domain_field_term_options
+                    method: search_anatomy_terms
+                    provider_required: true
+                    candidate_authority: hint_only
+                - slot_hint: expression_pattern.where_expressed.cellular_component
+                  term_source:
+                    kind: ontology
+                    ontology_family: go
+                    go_aspect: cellular_component
+                  lookup:
+                    package_tool: get_domain_field_term_options
+                    method: search_go_terms
+                    candidate_authority: hint_only
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml

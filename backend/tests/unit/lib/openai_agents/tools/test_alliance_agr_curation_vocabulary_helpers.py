@@ -14,6 +14,13 @@ def _query_fn():
     )
 
 
+def _term_helper_fn():
+    return agr_curation._unwrap_function_tool_callable(
+        agr_curation.get_domain_field_term_options,
+        "get_domain_field_term_options",
+    )
+
+
 class _Resolver:
     def __init__(self, db):
         self._db = db
@@ -244,3 +251,149 @@ def test_search_vocabulary_terms_and_unavailable_helper(monkeypatch):
     assert unavailable.status == "error"
     assert unavailable.lookup_status == "under_development"
     assert "search_vocabulary_terms" in (unavailable.message or "")
+
+
+def test_domain_field_term_options_returns_gene_expression_relation(monkeypatch):
+    calls = []
+
+    class FakeDb:
+        @staticmethod
+        def search_vocabulary_terms(**kwargs):
+            calls.append(kwargs)
+            return [
+                _term(
+                    internal_id=200000200,
+                    vocabulary="Expression Relation",
+                    name="is_expressed_in",
+                )
+            ]
+
+    monkeypatch.setattr(
+        agr_curation,
+        "get_curation_resolver",
+        lambda: _Resolver(FakeDb()),
+    )
+
+    result = _term_helper_fn()(
+        domain_pack_id="agr.alliance.gene_expression",
+        object_type="GeneExpressionAnnotation",
+        field_path="relation.name",
+    )
+
+    assert result.status == "ok"
+    assert result.lookup_status == "success"
+    assert result.count == 1
+    helper_result = result.data["helper_results"][0]
+    assert helper_result["term_source"] == {
+        "kind": "controlled_vocabulary",
+        "vocabulary": "Expression Relation",
+    }
+    assert helper_result["helper_result"] == {
+        "name": "is_expressed_in",
+        "term_name": "is_expressed_in",
+        "internal_id": 200000200,
+        "abbreviation": None,
+        "synonyms": [],
+        "obsolete": False,
+        "authority": "live_validated_option",
+    }
+    assert calls == [
+        {
+            "term": None,
+            "vocabulary": "Expression Relation",
+            "exact_match": False,
+            "include_synonyms": True,
+            "include_obsolete": False,
+            "limit": 25,
+        }
+    ]
+
+
+def test_domain_field_term_options_routes_gene_expression_site(monkeypatch):
+    calls = []
+
+    class FakeDb:
+        @staticmethod
+        def search_anatomy_terms(**kwargs):
+            calls.append(("anatomy", kwargs))
+            return [
+                SimpleNamespace(
+                    curie="ZFA:0001094",
+                    name="brain",
+                    ontology_type="ZFATerm",
+                )
+            ]
+
+        @staticmethod
+        def search_go_terms(**kwargs):
+            calls.append(("go", kwargs))
+            return [
+                SimpleNamespace(
+                    curie="GO:0005634",
+                    name="nucleus",
+                    namespace="cellular_component",
+                )
+            ]
+
+    monkeypatch.setattr(
+        agr_curation,
+        "get_curation_resolver",
+        lambda: _Resolver(FakeDb()),
+    )
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+
+    result = _term_helper_fn()(
+        domain_pack_id="agr.alliance.gene_expression",
+        object_type="GeneExpressionAnnotation",
+        field_path="expression_pattern.where_expressed",
+        source_phrase="nucleus",
+        data_provider="ZFIN",
+        limit=3,
+    )
+
+    assert result.status == "ok"
+    assert result.count == 2
+    by_slot = {
+        item["slot_hint"]: item
+        for item in result.data["helper_results"]
+    }
+    assert by_slot[
+        "expression_pattern.where_expressed.anatomical_structure"
+    ]["candidate"]["curie"] == "ZFA:0001094"
+    cellular = by_slot["expression_pattern.where_expressed.cellular_component"]
+    assert cellular["term_source"] == {
+        "kind": "ontology",
+        "ontology_family": "go",
+        "go_aspect": "cellular_component",
+    }
+    assert cellular["candidate"] == {
+        "curie": "GO:0005634",
+        "label": "nucleus",
+        "name": "nucleus",
+        "namespace": "cellular_component",
+        "ontology_type": None,
+        "obsolete": False,
+        "authority": "hint_only",
+    }
+    assert calls == [
+        (
+            "anatomy",
+            {
+                "term": "nucleus",
+                "data_provider": "ZFIN",
+                "exact_match": False,
+                "include_synonyms": True,
+                "limit": 3,
+            },
+        ),
+        (
+            "go",
+            {
+                "term": "nucleus",
+                "go_aspect": "cellular_component",
+                "exact_match": False,
+                "include_synonyms": True,
+                "limit": 3,
+            },
+        ),
+    ]

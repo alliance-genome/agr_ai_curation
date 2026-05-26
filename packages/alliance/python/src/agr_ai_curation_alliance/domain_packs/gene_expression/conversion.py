@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any
 
@@ -95,6 +95,27 @@ FORBIDDEN_LEGACY_COLLECTIONS = frozenset(
 )
 
 
+def _value_missing_or_blank(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, Mapping):
+        return len(value) == 0
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return len(value) == 0
+    return False
+
+
+def _has_anatomical_site_slot(where_expressed: Any) -> bool:
+    if not isinstance(where_expressed, Mapping):
+        return False
+    return (
+        not _value_missing_or_blank(where_expressed.get("anatomical_structure"))
+        or not _value_missing_or_blank(where_expressed.get("cellular_component"))
+    )
+
+
 class GeneExpressionExtractionOutput(DomainEnvelopeExtractionResult):
     """Validated extractor output for one gene-expression domain-envelope run."""
 
@@ -159,8 +180,8 @@ def validate_gene_expression_extraction_objects(
         )
         if not isinstance(relation_name, str) or not relation_name.strip():
             errors.append(
-                f"{location}.payload relation.name must be "
-                f"{GENE_EXPRESSION_RELATION_NAME}"
+                f"{location}.payload relation.name must be selected explicitly "
+                "from domain-pack term helper options"
             )
         data_provider = obj.payload.get("data_provider")
         provider_abbreviation = (
@@ -175,6 +196,17 @@ def validate_gene_expression_extraction_objects(
             errors.append(
                 f"{location}.payload data_provider.abbreviation must be a "
                 "non-empty Alliance provider abbreviation"
+            )
+
+        where_expressed = (
+            obj.payload.get("expression_pattern", {}).get("where_expressed", {})
+            if isinstance(obj.payload.get("expression_pattern"), Mapping)
+            else {}
+        )
+        if not _has_anatomical_site_slot(where_expressed):
+            errors.append(
+                f"{location}.payload expression_pattern.where_expressed must "
+                "include anatomical_structure or cellular_component"
             )
 
         if not obj.evidence_record_ids:
@@ -242,39 +274,6 @@ def _object_ref(obj: CuratableObjectEnvelope) -> ObjectRef:
     raise ValueError("GeneExpressionAnnotation object is missing an object ref")
 
 
-def _payload_with_gene_expression_defaults(payload: Mapping[str, Any]) -> dict[str, Any]:
-    normalized = copy.deepcopy(dict(payload))
-    relation = normalized.get("relation")
-    if not isinstance(relation, Mapping):
-        relation = {}
-    else:
-        relation = dict(relation)
-    relation_name = relation.get("name")
-    if not isinstance(relation_name, str) or not relation_name.strip():
-        relation["name"] = GENE_EXPRESSION_RELATION_NAME
-    normalized["relation"] = relation
-    return normalized
-
-
-def _output_payload_with_gene_expression_defaults(
-    payload: Mapping[str, Any],
-) -> dict[str, Any]:
-    normalized = copy.deepcopy(dict(payload))
-    curatable_objects = normalized.get("curatable_objects")
-    if isinstance(curatable_objects, list):
-        for item in curatable_objects:
-            if not isinstance(item, dict):
-                continue
-            if item.get("object_type") != GENE_EXPRESSION_OBJECT_TYPE:
-                continue
-            object_payload = item.get("payload")
-            if isinstance(object_payload, Mapping):
-                item["payload"] = _payload_with_gene_expression_defaults(
-                    object_payload
-                )
-    return normalized
-
-
 def _pending_object_from_extraction_object(
     obj: CuratableObjectEnvelope,
 ) -> CuratableObjectEnvelope:
@@ -287,7 +286,7 @@ def _pending_object_from_extraction_object(
     return CuratableObjectEnvelope(
         object_type=GENE_EXPRESSION_OBJECT_TYPE,
         object_role=GENE_EXPRESSION_OBJECT_ROLE,
-        payload=_payload_with_gene_expression_defaults(obj.payload),
+        payload=copy.deepcopy(dict(obj.payload)),
         object_id=obj.object_id,
         pending_ref_id=obj.pending_ref_id,
         schema_ref=obj.schema_ref,
@@ -334,9 +333,7 @@ def gene_expression_extraction_output_to_pending_envelope(
     source = (
         payload
         if isinstance(payload, GeneExpressionExtractionOutput)
-        else GeneExpressionExtractionOutput.model_validate(
-            _output_payload_with_gene_expression_defaults(payload)
-        )
+        else GeneExpressionExtractionOutput.model_validate(payload)
     )
     timestamp = produced_at or datetime.now(timezone.utc)
 
@@ -511,11 +508,11 @@ def validate_pending_gene_expression_envelope(
                     severity=ValidationFindingSeverity.ERROR,
                     code="alliance.gene_expression.relation_name_missing",
                     message=(
-                        "GeneExpressionAnnotation requires relation.name "
-                        f"{GENE_EXPRESSION_RELATION_NAME}."
+                        "GeneExpressionAnnotation requires relation.name selected "
+                        "explicitly from domain-pack term helper options."
                     ),
                     object_ref=object_ref,
-                    details={"expected_relation_name": GENE_EXPRESSION_RELATION_NAME},
+                    details={"term_helper_field": "relation.name"},
                 )
             )
         data_provider = expression_object.payload.get("data_provider")
@@ -564,13 +561,7 @@ def validate_pending_gene_expression_envelope(
             if isinstance(expression_object.payload.get("expression_pattern"), Mapping)
             else {}
         )
-        if not (
-            isinstance(where_expressed, Mapping)
-            and (
-                "anatomical_structure" in where_expressed
-                or "cellular_component" in where_expressed
-            )
-        ):
+        if not _has_anatomical_site_slot(where_expressed):
             findings.append(
                 ValidationFinding(
                     severity=ValidationFindingSeverity.ERROR,

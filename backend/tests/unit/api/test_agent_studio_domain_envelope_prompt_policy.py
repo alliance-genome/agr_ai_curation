@@ -173,6 +173,8 @@ def test_agent_studio_system_prompt_grounded_in_domain_envelope_tools():
     assert "Extractor and validator responsibilities are deliberately separate" in prompt
     assert "First-pass extractors must not use broad database/entity lookup tools" in prompt
     assert "`agr_species_context_lookup` is the shared narrow context tool" in prompt
+    assert "`get_domain_field_term_options` may provide controlled-vocabulary options" in prompt
+    assert "helper output remains candidate guidance, not validator authority" in prompt
     assert "Validators receive `DomainValidationRequest` payloads" in prompt
     assert "Materialized/resolved fields belong to validator results" in prompt
     assert "Do not infer that an extractor called a validator directly" in prompt
