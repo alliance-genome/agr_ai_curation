@@ -123,7 +123,7 @@ def _read_repo_text(relative_path: str) -> str:
 
 
 def _validator_dispatch_cleanup_surface_paths() -> tuple[str, ...]:
-    paths = set(VALIDATOR_DISPATCH_CLEANUP_SURFACE_PATHS)
+    paths: set[str] = set(VALIDATOR_DISPATCH_CLEANUP_SURFACE_PATHS)
     for pattern in VALIDATOR_DISPATCH_CLEANUP_SURFACE_GLOBS:
         paths.update(
             str(path.relative_to(REPO_ROOT))
@@ -173,7 +173,8 @@ def test_agent_studio_system_prompt_grounded_in_domain_envelope_tools():
     assert "Extractor and validator responsibilities are deliberately separate" in prompt
     assert "First-pass extractors must not use broad database/entity lookup tools" in prompt
     assert "`agr_species_context_lookup` is the shared narrow context tool" in prompt
-    assert "`get_domain_field_term_options` may provide controlled-vocabulary options" in prompt
+    assert "Domain-pack-declared extractor helper tools may provide" in prompt
+    assert "controlled-vocabulary options or slot-routing hints" in prompt
     assert "helper output remains candidate guidance, not validator authority" in prompt
     assert "Validators receive `DomainValidationRequest` payloads" in prompt
     assert "Materialized/resolved fields belong to validator results" in prompt

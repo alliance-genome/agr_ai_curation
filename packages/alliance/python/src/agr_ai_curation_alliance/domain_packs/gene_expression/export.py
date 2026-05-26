@@ -18,6 +18,12 @@ from src.schemas.curation_workspace import (
 )
 
 from ..schema_refs import ALLIANCE_LINKML_COMMIT, ALLIANCE_LINKML_PROVIDER_KEY
+from ._payload_terms import (
+    has_term_selector as _has_term_selector,
+    term_list as _term_list,
+    term_payload as _term_payload,
+    value_missing_or_blank as _value_missing_or_blank,
+)
 from .constants import (
     GENE_EXPRESSION_DOMAIN_PACK_ID,
     GENE_EXPRESSION_LINKML_SCHEMA_NAME,
@@ -511,33 +517,6 @@ def _readiness_blocker_from_export_blocker(
     )
 
 
-def _term_payload(value: Any) -> dict[str, Any] | None:
-    if not isinstance(value, Mapping):
-        return None
-    payload = _drop_empty(
-        {
-            "curie": value.get("curie"),
-            "name": value.get("name"),
-            "abbreviation": value.get("abbreviation"),
-        }
-    )
-    return payload or None
-
-
-def _has_term_selector(value: Any) -> bool:
-    return _term_payload(value) is not None
-
-
-def _term_list(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
-        return []
-    return [
-        term
-        for item in value
-        if (term := _term_payload(item)) is not None
-    ]
-
-
 def _payload_value(payload: Mapping[str, Any], field_path: str) -> Any:
     current: Any = payload
     for part in field_path.split("."):
@@ -545,18 +524,6 @@ def _payload_value(payload: Mapping[str, Any], field_path: str) -> Any:
             return None
         current = current[part]
     return current
-
-
-def _value_missing_or_blank(value: Any) -> bool:
-    if value is None:
-        return True
-    if isinstance(value, str):
-        return not value.strip()
-    if isinstance(value, Mapping):
-        return len(value) == 0
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return len(value) == 0
-    return False
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
@@ -33,6 +33,7 @@ from ..schema_refs import (
     OBJECT_ROLE_METADATA_KEY,
     PROVIDER_REFS_METADATA_KEY,
 )
+from ._payload_terms import has_term_selector as _has_term_selector
 from .constants import (
     GENE_EXPRESSION_DOMAIN_PACK_CONVERTER_ID,
     GENE_EXPRESSION_DOMAIN_PACK_ID,
@@ -91,27 +92,6 @@ FORBIDDEN_LEGACY_COLLECTIONS = frozenset(
         "annotation_drafts",
     }
 )
-
-
-def _value_missing_or_blank(value: Any) -> bool:
-    if value is None:
-        return True
-    if isinstance(value, str):
-        return not value.strip()
-    if isinstance(value, Mapping):
-        return len(value) == 0
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return len(value) == 0
-    return False
-
-
-def _has_term_selector(value: Any) -> bool:
-    if not isinstance(value, Mapping):
-        return False
-    return any(
-        not _value_missing_or_blank(value.get(selector))
-        for selector in ("curie", "name", "abbreviation")
-    )
 
 
 def _has_anatomical_site_slot(where_expressed: Any) -> bool:
