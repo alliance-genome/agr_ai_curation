@@ -16,6 +16,7 @@ from agr_ai_curation_alliance.domain_packs.loader import get_alliance_domain_pac
 from agr_ai_curation_alliance.domain_packs.gene_expression import (
     GeneExpressionExportAdapter,
     GeneExpressionSubmissionAdapter,
+    validate_pending_gene_expression_envelope,
 )
 from agr_ai_curation_alliance.domain_packs.phenotype import (
     PhenotypeAnnotationExportAdapter,
@@ -56,6 +57,9 @@ _DOMAIN_SUBMISSION_TRANSPORTS = {
     "gene_expression": GeneExpressionSubmissionAdapter,
     "phenotype": PhenotypeAnnotationSubmissionBlockerAdapter,
 }
+_DOMAIN_ENVELOPE_VALIDATORS = {
+    "gene_expression": validate_pending_gene_expression_envelope,
+}
 
 
 def register_curation_adapters(registry) -> None:
@@ -72,6 +76,7 @@ def register_curation_adapters(registry) -> None:
             export_adapter=export_adapter,
             submission_transport_adapters=submission_transport_adapters,
             domain_pack=domain_pack,
+            domain_envelope_validator=_domain_envelope_validator_for(adapter_key),
             review_row_materializer=DomainPackMetadataReviewRowMaterializer(
                 metadata=domain_pack.metadata,
             ),
@@ -96,3 +101,7 @@ def _submission_transport_adapters_for(adapter_key: str):
     if submission_adapter_factory is None:
         return ()
     return (submission_adapter_factory(),)
+
+
+def _domain_envelope_validator_for(adapter_key: str):
+    return _DOMAIN_ENVELOPE_VALIDATORS.get(adapter_key)

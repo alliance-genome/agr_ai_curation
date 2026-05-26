@@ -23,6 +23,7 @@ class RegisteredCurationAdapter:
     export_adapter: Any | None = None
     submission_transport_adapters: tuple[Any, ...] = ()
     domain_pack: Any | None = None
+    domain_envelope_validator: Any | None = None
     review_row_materializer: Any | None = None
 
 
@@ -35,6 +36,7 @@ class CurationAdapterRegistry:
         self._submission_transport_adapters: list[Any] = []
         self._domain_packs: dict[str, Any] = {}
         self._domain_packs_by_id: dict[str, Any] = {}
+        self._domain_envelope_validators_by_pack_id: dict[str, Any] = {}
         self._review_row_materializers: dict[str, Any] = {}
         self._review_row_materializers_by_domain_pack: dict[str, Any] = {}
 
@@ -46,6 +48,7 @@ class CurationAdapterRegistry:
         export_adapter: Any | None = None,
         submission_transport_adapters: Any | None = None,
         domain_pack: Any | None = None,
+        domain_envelope_validator: Any | None = None,
         review_row_materializer: Any | None = None,
     ) -> None:
         normalized_key = str(adapter_key).strip()
@@ -86,6 +89,29 @@ class CurationAdapterRegistry:
                         f"Curation domain pack id '{domain_pack_id}' is already registered"
                     )
                 self._domain_packs_by_id[domain_pack_id] = domain_pack
+
+        if domain_envelope_validator is not None:
+            if not callable(domain_envelope_validator):
+                raise ValueError("domain_envelope_validator must be callable")
+            domain_pack_id = _domain_pack_id(domain_pack)
+            if domain_pack_id is None:
+                raise ValueError(
+                    "domain_envelope_validator requires a registered domain_pack"
+                )
+            existing_validator = self._domain_envelope_validators_by_pack_id.get(
+                domain_pack_id
+            )
+            if (
+                existing_validator is not None
+                and existing_validator is not domain_envelope_validator
+            ):
+                raise ValueError(
+                    "Curation domain-envelope validator for domain pack "
+                    f"'{domain_pack_id}' is already registered"
+                )
+            self._domain_envelope_validators_by_pack_id[domain_pack_id] = (
+                domain_envelope_validator
+            )
 
         if review_row_materializer is not None:
             existing_materializer = self._review_row_materializers.get(normalized_key)
@@ -135,6 +161,11 @@ class CurationAdapterRegistry:
 
     def get_domain_pack_by_id(self, domain_pack_id: str) -> Any | None:
         return self._domain_packs_by_id.get(str(domain_pack_id).strip())
+
+    def get_domain_envelope_validator_by_id(self, domain_pack_id: str) -> Any | None:
+        return self._domain_envelope_validators_by_pack_id.get(
+            str(domain_pack_id).strip()
+        )
 
     def get_review_row_materializer(self, adapter_key: str) -> Any | None:
         return self._review_row_materializers.get(str(adapter_key).strip())
@@ -213,6 +244,17 @@ def resolve_curation_domain_pack_by_id(domain_pack_id: str) -> Any | None:
         return domain_pack
 
     return load_curation_adapter_registry().get_domain_pack_by_id(normalized_id)
+
+
+def resolve_curation_domain_envelope_validator_by_id(domain_pack_id: str) -> Any | None:
+    """Resolve a package-owned deterministic envelope validator by domain pack ID."""
+
+    normalized_id = str(domain_pack_id).strip()
+    if not normalized_id:
+        return None
+    return load_curation_adapter_registry().get_domain_envelope_validator_by_id(
+        normalized_id
+    )
 
 
 def _default_packages_dir() -> Path:

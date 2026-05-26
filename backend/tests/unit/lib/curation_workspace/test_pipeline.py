@@ -98,6 +98,7 @@ def test_envelope_refresh_uses_structural_checks_and_active_dispatch():
     source = inspect.getsource(_REAL_REFRESH_DOMAIN_ENVELOPE_VALIDATION_FOR_REF)
 
     assert "run_domain_envelope_structural_checks" in source
+    assert "resolve_curation_domain_envelope_validator_by_id" in source
     assert "dispatch_active_validator_bindings" in source
     assert "run_validation_supervisor" not in source
 

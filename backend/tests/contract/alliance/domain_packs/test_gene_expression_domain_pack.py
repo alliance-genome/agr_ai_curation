@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -15,7 +16,11 @@ from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
     ValidationBindingState,
 )
-from src.schemas.domain_envelope import CuratableObjectStatus, field_path_exists
+from src.schemas.domain_envelope import (
+    CuratableObjectStatus,
+    ValidationFindingSeverity,
+    field_path_exists,
+)
 from src.schemas.domain_envelope import DefinitionState
 from src.schemas.domain_pack_metadata import DomainPackFieldType
 
@@ -36,6 +41,7 @@ from agr_ai_curation_alliance.domain_packs.gene_expression import (  # noqa: E40
     GENE_EXPRESSION_MODEL_ID,
     GENE_EXPRESSION_OBJECT_TYPE,
     GENE_EXPRESSION_VALIDATOR_STATES,
+    VALID_GENE_EXPRESSION_RELATION_NAMES,
     gene_expression_extraction_output_to_pending_envelope,
     get_gene_expression_domain_pack_metadata_path,
     validate_pending_gene_expression_envelope,
@@ -105,6 +111,31 @@ def _assert_metadata_refs_resolve(envelope: Any) -> None:
     assert unresolved == []
 
 
+def _converted_tmem67_envelope():
+    raw_fixture = yaml.safe_load(
+        GENE_EXPRESSION_OUTPUT_FIXTURE_PATH.read_text(encoding="utf-8")
+    )
+    context = raw_fixture["envelope_context"]
+    return gene_expression_extraction_output_to_pending_envelope(
+        raw_fixture["output"],
+        envelope_id=context["envelope_id"],
+        document_id=context["document_id"],
+        produced_by=context["produced_by"],
+        produced_at=context["produced_at"],
+    )
+
+
+def _with_payload(envelope: Any, payload: Mapping[str, Any]):
+    annotation = envelope.objects[0].model_copy(update={"payload": dict(payload)})
+    return envelope.model_copy(update={"objects": [annotation]})
+
+
+def _finding_by_code(findings: tuple[Any, ...], code: str):
+    matches = [finding for finding in findings if finding.code == code]
+    assert len(matches) == 1
+    return matches[0]
+
+
 def test_gene_expression_domain_pack_is_bundled_with_concrete_metadata():
     pack = _gene_expression_pack()
     metadata = pack.metadata
@@ -146,6 +177,7 @@ def test_gene_expression_domain_pack_is_bundled_with_concrete_metadata():
         ),
     }
     assert "gene_expression.extractor_output_migration" in active_validator_ids
+    assert "gene_expression.linkml_extraction_contract" in active_validator_ids
     assert "gene_expression.export_submission_projection" in active_validator_ids
     assert (
         "gene_expression.extractor_output_migration"
@@ -155,10 +187,15 @@ def test_gene_expression_domain_pack_is_bundled_with_concrete_metadata():
         "gene_expression.export_submission_projection"
         not in under_development_validator_ids
     )
+    assert (
+        "gene_expression.linkml_anatomical_site_postcondition"
+        not in under_development_validator_ids
+    )
     assert all(
         validator.get("blocked_by") != "ALL-407"
         for validator in validators["under_development"]
     )
+    assert VALID_GENE_EXPRESSION_RELATION_NAMES == frozenset({"is_expressed_in"})
 
     provider_ref = metadata.metadata[PROVIDER_REFS_METADATA_KEY]["alliance_linkml"]
     assert provider_ref["commit"] == curatable_unit.schema_ref.version
@@ -380,18 +417,7 @@ def test_tmem67_fixture_carries_anatomical_site_for_linkml_postcondition():
 
 
 def test_tmem67_extractor_output_converts_to_pending_gene_expression_envelope():
-    raw_fixture = yaml.safe_load(
-        GENE_EXPRESSION_OUTPUT_FIXTURE_PATH.read_text(encoding="utf-8")
-    )
-    context = raw_fixture["envelope_context"]
-
-    converted = gene_expression_extraction_output_to_pending_envelope(
-        raw_fixture["output"],
-        envelope_id=context["envelope_id"],
-        document_id=context["document_id"],
-        produced_by=context["produced_by"],
-        produced_at=context["produced_at"],
-    )
+    converted = _converted_tmem67_envelope()
 
     assert converted.envelope_id == "gene-expression-tmem67-mgi-206552169"
     assert converted.domain_pack_id == GENE_EXPRESSION_DOMAIN_PACK_ID
@@ -412,6 +438,172 @@ def test_tmem67_extractor_output_converts_to_pending_gene_expression_envelope():
     ].startswith("Tmem67 expression was detected")
     _assert_metadata_refs_resolve(converted)
     assert validate_pending_gene_expression_envelope(converted) == ()
+
+
+def test_gene_expression_linkml_validator_reports_missing_gene_selector_field():
+    envelope = _converted_tmem67_envelope()
+    payload = copy.deepcopy(envelope.objects[0].payload)
+    payload["expression_annotation_subject"]["primary_external_id"] = " "
+
+    findings = validate_pending_gene_expression_envelope(_with_payload(envelope, payload))
+
+    finding = _finding_by_code(
+        findings,
+        "alliance.gene_expression.subject_gene_missing",
+    )
+    assert finding.severity is ValidationFindingSeverity.BLOCKER
+    assert finding.field_ref.field_path == (
+        "expression_annotation_subject.primary_external_id"
+    )
+    assert finding.details["blocking"] is True
+    assert finding.details["classification"] == "repairable_extraction_error"
+
+
+def test_gene_expression_linkml_validator_reports_missing_reference_field():
+    envelope = _converted_tmem67_envelope()
+    payload = copy.deepcopy(envelope.objects[0].payload)
+    payload["single_reference"]["reference_id"] = None
+
+    findings = validate_pending_gene_expression_envelope(_with_payload(envelope, payload))
+
+    finding = _finding_by_code(findings, "alliance.gene_expression.reference_missing")
+    assert finding.field_ref.field_path == "single_reference.reference_id"
+    assert finding.details["expected_selector"] == (
+        "PMID or Alliance reference identifier"
+    )
+
+
+def test_gene_expression_linkml_validator_reports_missing_and_unknown_evidence():
+    envelope = _converted_tmem67_envelope()
+    annotation = envelope.objects[0].model_copy(update={"evidence_record_ids": []})
+    missing_envelope = envelope.model_copy(update={"objects": [annotation]})
+
+    missing_finding = _finding_by_code(
+        validate_pending_gene_expression_envelope(missing_envelope),
+        "alliance.gene_expression.evidence_record_ids_missing",
+    )
+    assert missing_finding.field_ref.field_path == "evidence_record_ids"
+    assert (
+        missing_finding.details["classification"]
+        == "non_repairable_extraction_error"
+    )
+
+    unknown_annotation = envelope.objects[0].model_copy(
+        update={"evidence_record_ids": ["evidence-not-in-metadata"]}
+    )
+    unknown_envelope = envelope.model_copy(update={"objects": [unknown_annotation]})
+    unknown_finding = _finding_by_code(
+        validate_pending_gene_expression_envelope(unknown_envelope),
+        "alliance.gene_expression.evidence_records_missing",
+    )
+    assert unknown_finding.field_ref.field_path == "evidence_record_ids"
+    assert unknown_finding.details["missing_evidence_record_ids"] == [
+        "evidence-not-in-metadata"
+    ]
+
+
+def test_gene_expression_linkml_validator_reports_relation_missing_and_invalid():
+    envelope = _converted_tmem67_envelope()
+    missing_payload = copy.deepcopy(envelope.objects[0].payload)
+    missing_payload["relation"]["name"] = " "
+
+    missing_finding = _finding_by_code(
+        validate_pending_gene_expression_envelope(
+            _with_payload(envelope, missing_payload)
+        ),
+        "alliance.gene_expression.relation_name_missing",
+    )
+    assert missing_finding.field_ref.field_path == "relation.name"
+    assert missing_finding.details["expected_vocabulary"] == "Expression Relation"
+    assert missing_finding.details["expected_values"] == ["is_expressed_in"]
+
+    invalid_payload = copy.deepcopy(envelope.objects[0].payload)
+    invalid_payload["relation"]["name"] = "expressed_in"
+
+    invalid_finding = _finding_by_code(
+        validate_pending_gene_expression_envelope(
+            _with_payload(envelope, invalid_payload)
+        ),
+        "alliance.gene_expression.relation_name_invalid",
+    )
+    assert invalid_finding.field_ref.field_path == "relation.name"
+    assert invalid_finding.details["submitted_value"] == "expressed_in"
+    assert invalid_finding.details["expected_vocabulary"] == "Expression Relation"
+
+
+def test_gene_expression_linkml_validator_reports_invalid_and_ambiguous_assay():
+    envelope = _converted_tmem67_envelope()
+    invalid_payload = copy.deepcopy(envelope.objects[0].payload)
+    invalid_payload["expression_experiment"]["expression_assay_used"][
+        "curie"
+    ] = "not-a-curie"
+
+    invalid_finding = _finding_by_code(
+        validate_pending_gene_expression_envelope(
+            _with_payload(envelope, invalid_payload)
+        ),
+        "alliance.gene_expression.assay_method_invalid",
+    )
+    assert invalid_finding.field_ref.field_path == (
+        "expression_experiment.expression_assay_used.curie"
+    )
+
+    ambiguous_payload = copy.deepcopy(envelope.objects[0].payload)
+    ambiguous_payload["expression_experiment"]["expression_assay_used"] = {
+        "candidates": [
+            {"curie": "MMO:0000655", "name": "RT-PCR"},
+            {"curie": "MMO:0000642", "name": "in situ hybridization"},
+        ]
+    }
+
+    ambiguous_finding = _finding_by_code(
+        validate_pending_gene_expression_envelope(
+            _with_payload(envelope, ambiguous_payload)
+        ),
+        "alliance.gene_expression.assay_method_ambiguous",
+    )
+    assert ambiguous_finding.field_ref.field_path == (
+        "expression_experiment.expression_assay_used"
+    )
+    assert ambiguous_finding.details["candidate_count"] == 2
+
+
+def test_gene_expression_linkml_validator_reports_missing_expression_context():
+    envelope = _converted_tmem67_envelope()
+    payload = copy.deepcopy(envelope.objects[0].payload)
+    payload["when_expressed_stage_name"] = ""
+    payload["expression_pattern"]["where_expressed"] = {}
+
+    findings = validate_pending_gene_expression_envelope(_with_payload(envelope, payload))
+    findings_by_field = {
+        finding.field_ref.field_path: finding
+        for finding in findings
+        if finding.field_ref is not None
+    }
+
+    assert (
+        findings_by_field["when_expressed_stage_name"].code
+        == "alliance.gene_expression.expression_context_missing"
+    )
+    assert (
+        findings_by_field["expression_pattern.where_expressed"].code
+        == "alliance.gene_expression.anatomical_site_missing"
+    )
+
+
+def test_gene_expression_linkml_validator_accepts_negated_and_mixed_site_context():
+    envelope = _converted_tmem67_envelope()
+    payload = copy.deepcopy(envelope.objects[0].payload)
+    payload["negated"] = True
+    payload["where_expressed_statement"] = "metanephros nucleus"
+    payload["expression_pattern"]["where_expressed"]["cellular_component"] = {
+        "curie": "GO:0005634",
+        "name": "nucleus",
+    }
+
+    assert validate_pending_gene_expression_envelope(
+        _with_payload(envelope, payload)
+    ) == ()
 
 
 def test_gene_expression_conversion_rejects_missing_relation_name():
