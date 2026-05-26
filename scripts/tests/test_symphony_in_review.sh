@@ -5,6 +5,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SCRIPT_PATH="${REPO_ROOT}/scripts/utilities/symphony_in_review.sh"
+LSP_STUB="$(mktemp /tmp/symphony-lsp-warm-stub-XXXXXX)"
+
+cat > "${LSP_STUB}" <<'EOF'
+#!/usr/bin/env bash
+echo "SYMPHONY_LSP_STATUS=ready"
+echo "SYMPHONY_LSP_REASON=test_stub"
+echo "SYMPHONY_LSP_WORKSPACE_ROOT=/tmp/test-workspace"
+echo "SYMPHONY_LSP_CACHE_DIR=/tmp/test-cache"
+EOF
+chmod +x "${LSP_STUB}"
+export SYMPHONY_LSP_WARM_HELPER="${LSP_STUB}"
+trap 'rm -f "${LSP_STUB}"' EXIT
 
 assert_contains() {
   local expected="$1"
@@ -86,12 +98,13 @@ EOF
   assert_contains "Build Curation Prep Agent" "${brief_content}"
   assert_contains "## 1. Issue Description" "${brief_content}"
   assert_contains "Build the agent" "${brief_content}"
-  assert_contains "## 2. Issue Comments (2 total)" "${brief_content}"
+  assert_contains "## 2. Current Handoff Signals" "${brief_content}"
+  assert_contains "## 3. Fetched Issue Comments (2 fetched)" "${brief_content}"
   assert_contains "Comment 1" "${brief_content}"
   assert_contains "Comment 2" "${brief_content}"
   assert_contains "Workpad" "${brief_content}"
   assert_contains "adapter_key is missing" "${brief_content}"
-  assert_contains "## 4. Review Instructions" "${brief_content}"
+  assert_contains "## 5. Review Instructions" "${brief_content}"
 
   rm -f "${brief_file}"
   echo "  PASS: test_basic_brief_generation"
@@ -135,7 +148,7 @@ EOF
   brief_file="$(echo "${output}" | grep 'IN_REVIEW_BRIEF_FILE=' | cut -d= -f2)"
   brief_content="$(cat "${brief_file}")"
 
-  assert_contains "0 total" "${brief_content}"
+  assert_contains "0 fetched" "${brief_content}"
   assert_contains "No comments on this issue" "${brief_content}"
 
   rm -f "${brief_file}"
@@ -365,6 +378,48 @@ EOF
   rm -rf "${temp_dir}"
 }
 
+# ── Test: LSP warm status is emitted and non-blocking ────────────────
+
+test_lsp_warm_status_is_emitted() {
+  local temp_dir linear_json rc output
+  temp_dir="$(mktemp -d)"
+  linear_json="${temp_dir}/linear.json"
+
+  cat > "${linear_json}" <<'EOF'
+{
+  "data": {
+    "issue": {
+      "identifier": "ALL-13",
+      "title": "LSP status smoke",
+      "description": "Review it.",
+      "url": "https://linear.app/test/issue/ALL-13",
+      "state": {"name": "In Review"},
+      "labels": {"nodes": []},
+      "comments": {"nodes": []}
+    }
+  }
+}
+EOF
+
+  set +e
+  output="$(bash "${SCRIPT_PATH}" \
+    --issue-identifier ALL-13 \
+    --linear-json-file "${linear_json}" 2>&1)"
+  rc=$?
+  set -e
+
+  assert_exit_code "0" "${rc}"
+  assert_contains "SYMPHONY_LSP_STATUS=ready" "${output}"
+  assert_contains "SYMPHONY_LSP_REASON=test_stub" "${output}"
+  assert_contains "agent_lsp.py" "${output}"
+
+  local brief_file
+  brief_file="$(echo "${output}" | grep 'IN_REVIEW_BRIEF_FILE=' | cut -d= -f2)"
+  rm -f "${brief_file}"
+  echo "  PASS: test_lsp_warm_status_is_emitted"
+  rm -rf "${temp_dir}"
+}
+
 # ── Run all tests ────────────────────────────────────────────────────
 
 echo "Running symphony_in_review tests..."
@@ -375,5 +430,6 @@ test_pr_no_claude_review
 test_missing_identifier
 test_output_file_option
 test_invalid_linear_response
+test_lsp_warm_status_is_emitted
 
-echo "symphony_in_review tests passed (7/7)"
+echo "symphony_in_review tests passed (8/8)"

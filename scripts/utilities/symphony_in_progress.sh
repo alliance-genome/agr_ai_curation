@@ -8,6 +8,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd -P)"
 source "${REPO_ROOT}/scripts/lib/symphony_linear_common.sh"
 
 CONTEXT_HELPER="${REPO_ROOT}/scripts/utilities/symphony_linear_issue_context.sh"
+LSP_WARM_HELPER="${SYMPHONY_LSP_WARM_HELPER:-${REPO_ROOT}/scripts/utilities/symphony_lsp_warm.sh}"
 
 # =============================================================================
 # symphony_in_progress.sh
@@ -81,6 +82,25 @@ fi
 if [[ -z "${branch}" ]]; then
   branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 fi
+
+run_lsp_warm() {
+  if [[ "${SYMPHONY_LSP_WARM_DISABLED:-}" == "1" ]]; then
+    echo "SYMPHONY_LSP_STATUS=skipped"
+    echo "SYMPHONY_LSP_REASON=disabled"
+    echo "SYMPHONY_LSP_WORKSPACE_ROOT=${REPO_ROOT}"
+    return 0
+  fi
+
+  if [[ ! -f "${LSP_WARM_HELPER}" && ! -x "${LSP_WARM_HELPER}" ]]; then
+    echo "SYMPHONY_LSP_STATUS=error"
+    echo "SYMPHONY_LSP_REASON=warm_helper_missing"
+    echo "SYMPHONY_LSP_WORKSPACE_ROOT=${REPO_ROOT}"
+    echo "SYMPHONY_LSP_ERROR=${LSP_WARM_HELPER}"
+    return 0
+  fi
+
+  bash "${LSP_WARM_HELPER}" --root "${REPO_ROOT}" --timeout "${SYMPHONY_LSP_WARM_TIMEOUT:-20}" 2>&1 || true
+}
 
 # ── Load Linear API key ─────────────────────────────────────────────
 
@@ -434,6 +454,10 @@ build_brief() {
   echo "5. **Check PR Status** (Section 5) for failing checks and Claude review"
   echo "   feedback that needs addressing."
   echo ""
+  echo "Semantic navigation is warmed automatically when available. Use"
+  echo "\`scripts/utilities/agent_lsp.py symbols|definition|references|diagnostics\`"
+  echo "when symbol identity matters more than plain text search."
+  echo ""
   echo "For syntax-only checks, use \`PYTHONPYCACHEPREFIX=/tmp/symphony-pycache python3 -m py_compile backend/src/path/to/file.py\`"
   echo "so compile artifacts stay out of the workspace."
   echo ""
@@ -477,6 +501,8 @@ build_brief() {
   echo ""
 }
 
+lsp_warm_output="$(run_lsp_warm)"
+
 if [[ -n "${output_file}" ]]; then
   build_brief > "${output_file}"
   target_file="${output_file}"
@@ -489,6 +515,9 @@ fi
 # ── Emit machine-readable output ────────────────────────────────────
 
 echo "IN_PROGRESS_STATUS=ok"
+if [[ -n "${lsp_warm_output}" ]]; then
+  printf '%s\n' "${lsp_warm_output}"
+fi
 echo "IN_PROGRESS_BRIEF_FILE=${target_file}"
 echo "IN_PROGRESS_ISSUE=${issue_identifier}"
 echo "IN_PROGRESS_ENTRY_FROM=${entry_from}"
@@ -513,5 +542,6 @@ IN_PROGRESS_INSTRUCTIONS=In Progress brief generated for ${issue_identifier} (pa
 1. Read the FULL brief at: ${target_file}
 2. Section 1 tells you WHY you are in In Progress and what to focus on.
 3. The brief contains the issue description, current handoff signals, fetched comment context, and PR status.
-4. After addressing the issue, push and move to Needs Review.
+4. Check the SYMPHONY_LSP_* lines above; use scripts/utilities/agent_lsp.py for symbols, definitions, references, and scoped diagnostics when useful.
+5. After addressing the issue, push and move to Needs Review.
 INST

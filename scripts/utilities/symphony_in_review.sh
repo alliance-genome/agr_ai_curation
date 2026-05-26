@@ -5,6 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd -P)"
 CONTEXT_HELPER="${REPO_ROOT}/scripts/utilities/symphony_linear_issue_context.sh"
+LSP_WARM_HELPER="${SYMPHONY_LSP_WARM_HELPER:-${REPO_ROOT}/scripts/utilities/symphony_lsp_warm.sh}"
 
 # =============================================================================
 # symphony_in_review.sh
@@ -74,6 +75,25 @@ fi
 if [[ -z "${branch}" ]]; then
   branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 fi
+
+run_lsp_warm() {
+  if [[ "${SYMPHONY_LSP_WARM_DISABLED:-}" == "1" ]]; then
+    echo "SYMPHONY_LSP_STATUS=skipped"
+    echo "SYMPHONY_LSP_REASON=disabled"
+    echo "SYMPHONY_LSP_WORKSPACE_ROOT=${REPO_ROOT}"
+    return 0
+  fi
+
+  if [[ ! -f "${LSP_WARM_HELPER}" && ! -x "${LSP_WARM_HELPER}" ]]; then
+    echo "SYMPHONY_LSP_STATUS=error"
+    echo "SYMPHONY_LSP_REASON=warm_helper_missing"
+    echo "SYMPHONY_LSP_WORKSPACE_ROOT=${REPO_ROOT}"
+    echo "SYMPHONY_LSP_ERROR=${LSP_WARM_HELPER}"
+    return 0
+  fi
+
+  bash "${LSP_WARM_HELPER}" --root "${REPO_ROOT}" --timeout "${SYMPHONY_LSP_WARM_TIMEOUT:-20}" 2>&1 || true
+}
 
 # ── Load Linear API key ─────────────────────────────────────────────
 
@@ -285,7 +305,13 @@ build_brief() {
   echo "5. **Review the code changes** against all of the above. Classify findings as"
   echo "   \`blocking\` (with evidence: file, line, unmet criterion) or \`non-blocking\`."
   echo ""
+  echo "Semantic navigation is warmed automatically when available. Use"
+  echo "\`scripts/utilities/agent_lsp.py symbols|definition|references|diagnostics\`"
+  echo "when symbol identity matters more than plain text search."
+  echo ""
 }
+
+lsp_warm_output="$(run_lsp_warm)"
 
 if [[ -n "${output_file}" ]]; then
   build_brief > "${output_file}"
@@ -299,6 +325,9 @@ target_file="${output_file:-${brief_file}}"
 # ── Emit machine-readable output ────────────────────────────────────
 
 echo "IN_REVIEW_STATUS=ok"
+if [[ -n "${lsp_warm_output}" ]]; then
+  printf '%s\n' "${lsp_warm_output}"
+fi
 echo "IN_REVIEW_BRIEF_FILE=${target_file}"
 echo "IN_REVIEW_ISSUE=${issue_identifier}"
 echo "IN_REVIEW_COMMENT_COUNT=${comment_count}"
@@ -314,6 +343,7 @@ IN_REVIEW_INSTRUCTIONS=Review brief generated for ${issue_identifier}. YOU MUST:
 1. Read the FULL review brief at: ${target_file}
 2. The brief contains the issue description, current handoff signals, fetched comment context, and any PR feedback.
 3. Review the code changes against the brief — check scope, out-of-scope boundaries, and design constraints.
-4. Classify findings as blocking (with evidence) or non-blocking.
-5. If clean, move forward. If blocking issues exist, move to In Progress with evidence.
+4. Check the SYMPHONY_LSP_* lines above; use scripts/utilities/agent_lsp.py for symbols, definitions, references, and scoped diagnostics when useful.
+5. Classify findings as blocking (with evidence) or non-blocking.
+6. If clean, move forward. If blocking issues exist, move to In Progress with evidence.
 INST

@@ -62,6 +62,33 @@ This file is a fast startup map for humans and coding agents working in `agr_ai_
   - `./.symphony/with_github_pat.sh gh auth status`
   - `./.symphony/with_github_pat.sh gh pr checks <number>`
 
+## 3.6) Agent Semantic Navigation Tools
+
+- Use `rg` first for broad text/file discovery. Use the repo-local LSP helper when symbol identity matters: definitions, references, imports/exports, large-file outlines, or reviewing shared API changes.
+- Main helper: `scripts/utilities/agent_lsp.py`.
+- Commands:
+  - `status`: show cached workspace LSP state and whether warm state exists.
+  - `symbols`: print a compact outline of classes, functions, methods, variables, and other document symbols for one Python/TypeScript file.
+  - `definition`: jump from a file position to the symbol definition location.
+  - `references`: find known references for the symbol at a file position.
+  - `diagnostics`: run scoped Ruff/Pyright/frontend changed-file diagnostics.
+  - `cleanup`: remove old per-workspace LSP cache state.
+  - `warm`: refresh workspace LSP state. Usually automatic in Symphony lanes; run manually only for local smoke testing or stale-state recovery.
+- Help and status:
+  - `scripts/utilities/agent_lsp.py --help`
+  - `scripts/utilities/agent_lsp.py <command> --help`
+  - `scripts/utilities/agent_lsp.py --root . status`
+- Navigation:
+  - `scripts/utilities/agent_lsp.py symbols path/to/file.py`
+  - `scripts/utilities/agent_lsp.py definition path/to/file.py 120 17`
+  - `scripts/utilities/agent_lsp.py references path/to/file.py 120 17`
+- Positions are 1-based by default. Add `--zero-based` only if you are passing raw editor/LSP coordinates.
+- Scoped diagnostics:
+  - `scripts/utilities/agent_lsp.py --timeout 30 diagnostics --changed`
+  - `scripts/utilities/agent_lsp.py diagnostics backend/src/path.py frontend/src/path.tsx`
+- Diagnostics are navigation/review aids, not replacements for required Docker tests or lane-specific validation.
+- In Symphony `In Progress` and `In Review` lanes, the lane brief helpers warm the LSP automatically when available and emit `SYMPHONY_LSP_*` status lines. Agents should not run `warm` manually during normal lane work. Run `warm` only for local smoke testing or recovery after clearly stale/missing LSP state. If warm status is `error` or `skipped`, continue with normal repo tools and required validation.
+
 ## 4) Dangerous Areas
 
 - Secrets: never commit `.env`, API keys, or any credential files.
