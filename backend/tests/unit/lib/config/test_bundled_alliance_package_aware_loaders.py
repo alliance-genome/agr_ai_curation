@@ -81,6 +81,7 @@ def test_bundled_alliance_gene_expression_declares_record_evidence(monkeypatch):
         "record_evidence",
         "get_agent_contract",
         "agr_species_context_lookup",
+        "get_domain_field_term_options",
     ]
 
 
@@ -177,7 +178,7 @@ def test_bundled_alliance_gene_extractor_prompt_teaches_verified_evidence_flow(m
     assert "`verified_quote`" in prompt_content
     assert "`chunk_id`" in prompt_content
     assert "Do not call `record_evidence` for every gene mentioned anywhere in the paper." in prompt_content
-    assert "Do not place free-text evidence summaries inside these fields." in prompt_content
+    assert "Do not place free-text evidence summaries in staging fields." in prompt_content
 
 
 def test_bundled_alliance_load_prompts_tracks_package_paths(monkeypatch):

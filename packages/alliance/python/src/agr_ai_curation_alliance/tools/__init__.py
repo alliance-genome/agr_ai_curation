@@ -18,6 +18,10 @@ _LAZY_EXPORTS = {
     "create_read_section_tool": (".documents", "create_read_section_tool"),
     "create_read_subsection_tool": (".documents", "create_read_subsection_tool"),
     "create_search_document_tool": (".documents", "create_search_document_tool"),
+    "get_domain_field_term_options": (
+        ".agr_curation",
+        "get_domain_field_term_options",
+    ),
     "go_api_call": (".rest", "go_api_call"),
     "quickgo_api_call": (".rest", "quickgo_api_call"),
     "save_csv_file": (".file_output", "save_csv_file"),

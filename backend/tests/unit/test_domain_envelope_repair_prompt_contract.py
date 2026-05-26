@@ -38,6 +38,7 @@ EXTRACTION_SAFE_TOOLS = {
     "record_evidence",
     "get_agent_contract",
     "agr_species_context_lookup",
+    "get_domain_field_term_options",
 }
 
 FORBIDDEN_EXTRACTOR_METADATA_PHRASES = (

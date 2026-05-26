@@ -478,6 +478,34 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         "GeneExpressionAnnotation",
         "relation.name",
     ).validator_binding_ids
+    expression_fields = {
+        field.field_path: field
+        for field in alliance_registry.get_pack(
+            "agr.alliance.gene_expression"
+        ).metadata.object_definitions[0].fields
+    }
+    relation_helper = expression_fields["relation.name"].metadata["term_helper"]
+    assert relation_helper["term_source"] == {
+        "kind": "controlled_vocabulary",
+        "vocabulary": "Expression Relation",
+    }
+    assert relation_helper["lookup"]["package_tool"] == (
+        "get_domain_field_term_options"
+    )
+    site_helper = expression_fields[
+        "expression_pattern.where_expressed"
+    ].metadata["term_helper"]
+    assert site_helper["site_routing"]["required_any"] == [
+        "expression_pattern.where_expressed.anatomical_structure",
+        "expression_pattern.where_expressed.cellular_component",
+    ]
+    assert {
+        candidate["slot_hint"]
+        for candidate in site_helper["site_routing"]["candidates"]
+    } == {
+        "expression_pattern.where_expressed.anatomical_structure",
+        "expression_pattern.where_expressed.cellular_component",
+    }
 
     expression_provider_binding = gene_expression_bindings["data_provider_validation"]
     assert expression_provider_binding.validator_agent is not None

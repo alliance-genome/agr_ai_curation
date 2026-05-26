@@ -351,10 +351,9 @@ def test_gene_extractor_prompt_agent_and_group_rules_name_domain_envelope_contra
 
     assert "gene_mention_evidence" in agent_data["description"]
     assert "curatable_objects[]" in agent_data["supervisor_routing"]["description"]
-    assert '"object_type": "gene_mention_evidence"' in prompt_content
-    assert "`object_role`: `validated_reference`" in prompt_content
-    assert "`model_ref`: `GeneMentionEvidencePayload`" in prompt_content
-    assert "`payload.proposed_primary_external_id`" in prompt_content
+    assert "Backend builder finalization creates the GeneExtractionResultEnvelope" in prompt_content
+    assert "stage_gene_mention_evidence(" in prompt_content
+    assert "proposed_primary_external_id" in prompt_content
     assert "agr_species_context_lookup" in prompt_content
     assert "agr_species_context_lookup" in agent_data["tools"]
     assert "agr_curation_query" not in agent_data["tools"]
@@ -363,7 +362,7 @@ def test_gene_extractor_prompt_agent_and_group_rules_name_domain_envelope_contra
     assert "most specific paper-backed gene or protein" in prompt_content
     assert "useful as a database lookup" in prompt_content
     assert "`payload.identity_resolution_notes`" in prompt_content
-    assert "Include one to three high-signal" in prompt_content
+    assert "one to three `identity_resolution_notes`" in prompt_content
     assert "Active validator bindings own final Alliance Gene identity decisions" in prompt_content
     assert "Actin 5C" not in prompt_content
     assert "Opsin-1" not in prompt_content
@@ -374,10 +373,10 @@ def test_gene_extractor_prompt_agent_and_group_rules_name_domain_envelope_contra
     assert '"object_type": "GeneAssertion"' not in prompt_content
     assert '"normalized_symbol"' not in prompt_content
     assert '"normalized_id"' not in prompt_content
-    example_object_count = prompt_content.count('"object_type": "gene_mention_evidence"')
+    example_object_count = prompt_content.count("stage_gene_mention_evidence(")
     assert example_object_count == 3
-    assert prompt_content.count('"schema_ref": {') == example_object_count
-    assert prompt_content.count('"definition_notes": [') == example_object_count
+    assert prompt_content.count("record_evidence(") >= example_object_count
+    assert prompt_content.count("finalize_gene_extraction(") == 2
 
     for group_rule_file in source.group_rule_files:
         content = str(yaml.safe_load(group_rule_file.read_text(encoding="utf-8"))["content"])

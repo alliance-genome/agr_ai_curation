@@ -61,6 +61,7 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
         "record_evidence",
         "get_agent_contract",
         "agr_species_context_lookup",
+        "get_domain_field_term_options",
     ]
 
     assert "Return JSON only, matching GeneExpressionEnvelope." in content
@@ -86,12 +87,16 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
     assert "metadata.repair_notes" not in content
     assert "Do not emit top-level `items[]`" in content
     assert "agr_species_context_lookup" in content
-    assert "Do not perform extraction-time relation vocabulary lookup" in content
-    assert "`relation.name` to `is_expressed_in`" in content
+    assert "get_domain_field_term_options" in content
+    assert "`relation.name`" in content
+    assert "controlled-vocabulary options" in content
+    assert "`expression_pattern.where_expressed`" in content
+    assert "slot_hint" in content
+    assert "cellular-component-only sites such as nucleus or cytoplasm are valid" in content
     assert "`data_provider.abbreviation`" in content
     assert '"data_provider": {"abbreviation": "ZFIN"}' in content
     assert "zebrafish / Danio rerio => `ZFIN`" in content
-    assert "expression ontology lookup" in content
+    assert "broad expression ontology lookup" in content
     assert "agr_curation_query" not in content
 
 
@@ -183,7 +188,7 @@ def test_gene_expression_schema_rejects_null_relation_name():
     with pytest.raises(ValidationError) as exc_info:
         schema.model_validate(payload)
 
-    assert "relation.name must be is_expressed_in" in str(exc_info.value)
+    assert "relation.name must be selected explicitly" in str(exc_info.value)
 
 
 def test_gene_expression_schema_rejects_null_data_provider_abbreviation():

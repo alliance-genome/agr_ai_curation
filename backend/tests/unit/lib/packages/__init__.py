@@ -12,6 +12,7 @@ SHIPPED_TOOLS_PACKAGE_EXPORTS = (
     "create_read_section_tool",
     "create_read_subsection_tool",
     "create_search_document_tool",
+    "get_domain_field_term_options",
     "go_api_call",
     "quickgo_api_call",
     "save_csv_file",

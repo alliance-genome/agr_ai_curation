@@ -11,10 +11,13 @@ import re
 import json
 import inspect
 from collections import defaultdict
+from collections.abc import Mapping
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Tuple
 
 from pydantic import BaseModel
 from agents import function_tool
+import yaml
 
 from agr_ai_curation_runtime.agr_lookup import (
     LOOKUP_STATUS_AMBIGUOUS,
@@ -44,6 +47,7 @@ from agr_ai_curation_runtime import get_curation_resolver, is_valid_curie, list_
 from .search_helpers import (
     enrich_with_match_context,
 )
+from agr_ai_curation_alliance.domain_packs.paths import get_alliance_domain_packs_dir
 
 logger = logging.getLogger(__name__)
 
@@ -3076,6 +3080,361 @@ def _derive_agr_query_optional_arg_keys() -> Tuple[str, ...]:
 
 
 _AGR_QUERY_OPTIONAL_ARG_KEYS = _derive_agr_query_optional_arg_keys()
+
+
+def _load_domain_pack_data(domain_pack_id: str) -> Dict[str, Any] | None:
+    for metadata_path in get_alliance_domain_packs_dir().glob("*/domain_pack.yaml"):
+        loaded = yaml.safe_load(metadata_path.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict) and loaded.get("pack_id") == domain_pack_id:
+            return loaded
+    return None
+
+
+def _field_term_helper_policy(
+    *,
+    domain_pack_id: str,
+    object_type: str,
+    field_path: str,
+) -> Dict[str, Any] | None:
+    pack = _load_domain_pack_data(domain_pack_id)
+    if not pack:
+        return None
+    normalized_field_path = field_path
+    object_prefix = f"{object_type}."
+    if normalized_field_path.startswith(object_prefix):
+        normalized_field_path = normalized_field_path[len(object_prefix) :]
+    normalized_field_path = normalized_field_path.removeprefix("payload.")
+
+    for object_definition in pack.get("object_definitions", []) or []:
+        if not isinstance(object_definition, dict):
+            continue
+        if object_definition.get("object_type") != object_type:
+            continue
+        for field in object_definition.get("fields", []) or []:
+            if not isinstance(field, dict):
+                continue
+            if field.get("field_path") != normalized_field_path:
+                continue
+            metadata = field.get("metadata")
+            if not isinstance(metadata, dict):
+                return None
+            policy = metadata.get("term_helper")
+            return policy if isinstance(policy, dict) else None
+    return None
+
+
+def _helper_attempt(
+    *,
+    domain_pack_id: str,
+    object_type: str,
+    field_path: str,
+    source_phrase: Optional[str],
+    data_provider: Optional[str],
+    taxon: Optional[str],
+    limit: Optional[int],
+) -> Dict[str, Any]:
+    return _attempt_query(
+        "get_domain_field_term_options",
+        domain_pack_id=domain_pack_id,
+        object_type=object_type,
+        field_path=field_path,
+        source_phrase=source_phrase,
+        data_provider=data_provider,
+        taxon=taxon,
+        limit=limit,
+    )
+
+
+def _term_name(value: Mapping[str, Any]) -> Optional[str]:
+    name = _first_present(value.get("name"), value.get("term_name"), value.get("label"))
+    return str(name) if name is not None else None
+
+
+def _controlled_vocabulary_helper_result(
+    *,
+    term: Mapping[str, Any],
+    field_path: str,
+    vocabulary: str,
+    queried_at: str,
+) -> Dict[str, Any]:
+    name = _term_name(term)
+    internal_id = _first_present(term.get("internal_id"), term.get("id"))
+    return {
+        "field_path": field_path,
+        "term_source": {
+            "kind": "controlled_vocabulary",
+            "vocabulary": vocabulary,
+        },
+        "helper_result": {
+            "name": name,
+            "term_name": name,
+            "internal_id": internal_id,
+            "abbreviation": term.get("abbreviation"),
+            "synonyms": term.get("synonyms") or [],
+            "obsolete": bool(term.get("obsolete", False)),
+            "authority": "live_validated_option",
+        },
+        "lookup": {
+            "method": "search_vocabulary_terms",
+            "queried_at": queried_at,
+        },
+    }
+
+
+def _ontology_helper_result(
+    *,
+    term: Mapping[str, Any],
+    field_path: str,
+    slot_hint: str,
+    term_source: Mapping[str, Any],
+    lookup_method: str,
+    source_phrase: str,
+    queried_at: str,
+) -> Dict[str, Any]:
+    label = _term_name(term)
+    normalized_label = (label or "").casefold()
+    normalized_source = source_phrase.strip().casefold()
+    match_type = "exact_label" if normalized_label == normalized_source else "candidate"
+    return {
+        "source_phrase": source_phrase,
+        "field_path": field_path,
+        "slot_hint": slot_hint,
+        "term_source": dict(term_source),
+        "candidate": {
+            "curie": term.get("curie"),
+            "label": label,
+            "name": label,
+            "namespace": _first_present(term.get("namespace"), term.get("ontology_type")),
+            "ontology_type": term.get("ontology_type"),
+            "obsolete": bool(term.get("obsolete", False)),
+            "authority": "hint_only",
+        },
+        "lookup": {
+            "method": lookup_method,
+            "matched_value": label,
+            "match_type": match_type,
+            "queried_at": queried_at,
+        },
+    }
+
+
+@function_tool(strict_mode=False)
+def get_domain_field_term_options(
+    domain_pack_id: str,
+    object_type: str,
+    field_path: str,
+    source_phrase: Optional[str] = None,
+    evidence_context: Optional[Dict[str, Any]] = None,
+    data_provider: Optional[str] = None,
+    taxon: Optional[str] = None,
+    limit: Optional[int] = None,
+) -> AgrQueryResult:
+    """Return extractor-facing term options declared by domain-pack field metadata.
+
+    Helper results are selector guidance for extraction. Validator and
+    materializer bindings remain the authority for final accepted IDs.
+    """
+
+    evidence_context = evidence_context or {}
+    phrase = source_phrase
+    if phrase is None:
+        phrase_value = evidence_context.get("source_phrase") or evidence_context.get("term")
+        phrase = str(phrase_value) if phrase_value is not None else None
+    normalized_phrase = phrase.strip() if isinstance(phrase, str) else None
+    limit_value = limit or 25
+    queried_at = datetime.now(timezone.utc).isoformat()
+    attempted_query = _helper_attempt(
+        domain_pack_id=domain_pack_id,
+        object_type=object_type,
+        field_path=field_path,
+        source_phrase=normalized_phrase,
+        data_provider=data_provider,
+        taxon=taxon,
+        limit=limit_value,
+    )
+
+    policy = _field_term_helper_policy(
+        domain_pack_id=domain_pack_id,
+        object_type=object_type,
+        field_path=field_path,
+    )
+    if policy is None:
+        return _err(
+            "No domain-pack term helper policy is declared for this field.",
+            method="get_domain_field_term_options",
+            attempted_query=attempted_query,
+            failure_classification=LOOKUP_STATUS_NOT_FOUND,
+        )
+
+    term_source = policy.get("term_source")
+    if not isinstance(term_source, dict):
+        return _err(
+            "Domain-pack term helper policy is missing term_source metadata.",
+            method="get_domain_field_term_options",
+            attempted_query=attempted_query,
+            failure_classification=LOOKUP_STATUS_BLOCKED,
+        )
+
+    helper_results: list[Dict[str, Any]] = []
+    lookup_attempts: list[Dict[str, Any]] = []
+    warnings: list[str] = []
+
+    if term_source.get("kind") == "controlled_vocabulary":
+        vocabulary = term_source.get("vocabulary")
+        if not isinstance(vocabulary, str) or not vocabulary.strip():
+            return _err(
+                "Controlled-vocabulary helper policy requires a vocabulary.",
+                method="get_domain_field_term_options",
+                attempted_query=attempted_query,
+                failure_classification=LOOKUP_STATUS_BLOCKED,
+            )
+        result = _AGR_QUERY_CALLABLE(
+            method="search_vocabulary_terms",
+            vocabulary=vocabulary,
+            term=normalized_phrase,
+            include_obsolete=False,
+            limit=limit_value,
+        )
+        lookup_attempts.extend(result.lookup_attempts or [])
+        if result.status != "ok":
+            return result
+        for term in result.data or []:
+            if isinstance(term, Mapping):
+                helper_results.append(
+                    _controlled_vocabulary_helper_result(
+                        term=term,
+                        field_path=field_path,
+                        vocabulary=vocabulary,
+                        queried_at=queried_at,
+                    )
+                )
+        data = {
+            "domain_pack_id": domain_pack_id,
+            "object_type": object_type,
+            "field_path": field_path,
+            "source_phrase": normalized_phrase,
+            "term_source": dict(term_source),
+            "helper_results": helper_results,
+            "authority": "helper_guidance",
+        }
+        return AgrQueryResult(
+            status="ok",
+            data=data,
+            count=len(helper_results),
+            warnings=result.warnings,
+            message=result.message,
+            lookup_status=(
+                LOOKUP_STATUS_SUCCESS if helper_results else LOOKUP_STATUS_NOT_FOUND
+            ),
+            lookup_attempts=lookup_attempts,
+        )
+
+    if term_source.get("kind") == "anatomical_site":
+        if not normalized_phrase:
+            return _err(
+                "expression_pattern.where_expressed helper requires source_phrase.",
+                method="get_domain_field_term_options",
+                attempted_query=attempted_query,
+            )
+        routing = policy.get("site_routing")
+        candidates = (
+            routing.get("candidates")
+            if isinstance(routing, Mapping)
+            else None
+        )
+        if not isinstance(candidates, list):
+            return _err(
+                "Anatomical-site helper policy requires site_routing candidates.",
+                method="get_domain_field_term_options",
+                attempted_query=attempted_query,
+                failure_classification=LOOKUP_STATUS_BLOCKED,
+            )
+        for candidate_policy in candidates:
+            if not isinstance(candidate_policy, Mapping):
+                continue
+            slot_hint = candidate_policy.get("slot_hint")
+            lookup = candidate_policy.get("lookup")
+            candidate_source = candidate_policy.get("term_source")
+            if not (
+                isinstance(slot_hint, str)
+                and isinstance(lookup, Mapping)
+                and isinstance(candidate_source, Mapping)
+            ):
+                continue
+            lookup_method = lookup.get("method")
+            if lookup_method == "search_anatomy_terms":
+                if not data_provider:
+                    warnings.append("anatomy_lookup_skipped:data_provider_required")
+                    continue
+                result = _AGR_QUERY_CALLABLE(
+                    method="search_anatomy_terms",
+                    term=normalized_phrase,
+                    data_provider=data_provider,
+                    exact_match=False,
+                    include_synonyms=True,
+                    limit=limit_value,
+                )
+            elif lookup_method == "search_go_terms":
+                result = _AGR_QUERY_CALLABLE(
+                    method="search_go_terms",
+                    term=normalized_phrase,
+                    go_aspect=candidate_source.get("go_aspect"),
+                    exact_match=False,
+                    include_synonyms=True,
+                    limit=limit_value,
+                )
+            else:
+                warnings.append(f"unsupported_lookup_method:{lookup_method}")
+                continue
+            lookup_attempts.extend(result.lookup_attempts or [])
+            if result.status != "ok":
+                warnings.extend(result.warnings or [])
+                if result.message:
+                    warnings.append(f"{lookup_method}:{result.message}")
+                continue
+            warnings.extend(result.warnings or [])
+            for term in result.data or []:
+                if isinstance(term, Mapping):
+                    helper_results.append(
+                        _ontology_helper_result(
+                            term=term,
+                            field_path=field_path,
+                            slot_hint=slot_hint,
+                            term_source=candidate_source,
+                            lookup_method=str(lookup_method),
+                            source_phrase=normalized_phrase,
+                            queried_at=queried_at,
+                        )
+                    )
+        data = {
+            "domain_pack_id": domain_pack_id,
+            "object_type": object_type,
+            "field_path": field_path,
+            "source_phrase": normalized_phrase,
+            "term_source": dict(term_source),
+            "helper_results": helper_results,
+            "required_any": (
+                routing.get("required_any") if isinstance(routing, Mapping) else None
+            ),
+            "authority": "helper_guidance",
+        }
+        return AgrQueryResult(
+            status="ok",
+            data=data,
+            count=len(helper_results),
+            warnings=warnings or None,
+            lookup_status=(
+                LOOKUP_STATUS_SUCCESS if helper_results else LOOKUP_STATUS_NOT_FOUND
+            ),
+            lookup_attempts=lookup_attempts or [attempted_query],
+        )
+
+    return _err(
+        f"Unsupported term helper kind: {term_source.get('kind')}",
+        method="get_domain_field_term_options",
+        attempted_query=attempted_query,
+        failure_classification=LOOKUP_STATUS_UNDER_DEVELOPMENT,
+    )
 
 
 @function_tool(strict_mode=False)
