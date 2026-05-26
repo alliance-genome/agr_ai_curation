@@ -769,6 +769,12 @@ def _chat_dispatch_domain_cases():
                         payload={
                             "relation": {"name": "is_expressed_in"},
                             "data_provider": {"abbreviation": "ZFIN"},
+                            "expression_annotation_subject": {
+                                "gene_symbol": "flcn",
+                            },
+                            "single_reference": {
+                                "pmid": "PMID:27528223",
+                            },
                         },
                     )
                 ],
@@ -777,6 +783,7 @@ def _chat_dispatch_domain_cases():
                 "relation_vocabulary_validation",
                 "data_provider_validation",
                 "subject_gene_validation",
+                "source_reference_validation",
             },
             id="gene-expression",
         ),
@@ -1017,12 +1024,13 @@ async def test_chat_domain_envelope_dispatch_covers_launchable_active_validator_
         if event["details"]["toolName"] == "dispatch_active_validator_bindings"
         and event["type"] == "TOOL_COMPLETE"
     ][0]
-    assert len(captured_requests) >= len(expected_binding_ids)
-    assert dispatch_complete["details"]["matchedBindingCount"] >= len(
+    assert len(captured_requests) == len(expected_binding_ids)
+    assert dispatch_complete["details"]["validatorAgentRunCount"] == len(
         captured_requests
     )
-    assert dispatch_complete["details"]["validatorResultCount"] >= len(
-        captured_requests
+    assert (
+        dispatch_complete["details"]["matchedBindingCount"]
+        == dispatch_complete["details"]["validatorResultCount"]
     )
 
 

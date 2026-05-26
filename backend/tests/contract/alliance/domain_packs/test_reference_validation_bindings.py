@@ -93,7 +93,7 @@ def test_reference_validation_bindings_have_expected_lifecycle_state():
         bindings = {binding.binding_id: binding for binding in registry.bindings}
         binding = bindings[expected["binding_id"]]
 
-        expected_state = expected.get("state", ValidationBindingState.UNDER_DEVELOPMENT)
+        expected_state = expected["state"]
         assert binding.state is expected_state
         assert binding.validator_agent is not None
         assert binding.validator_agent.package_id == "agr.alliance"
