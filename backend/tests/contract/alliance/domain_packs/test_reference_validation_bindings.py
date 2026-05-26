@@ -75,11 +75,12 @@ REFERENCE_BINDING_CASES = {
             "curie": "single_reference.curie",
             "title": "single_reference.title",
         },
+        "state": ValidationBindingState.ACTIVE,
     },
 }
 
 
-def test_reference_validation_bindings_remain_under_development_metadata_only():
+def test_reference_validation_bindings_have_expected_lifecycle_state():
     alliance_registry = load_alliance_domain_pack_registry()
 
     for pack_id, expected in REFERENCE_BINDING_CASES.items():
@@ -88,17 +89,20 @@ def test_reference_validation_bindings_remain_under_development_metadata_only():
         bindings = {binding.binding_id: binding for binding in registry.bindings}
         binding = bindings[expected["binding_id"]]
 
-        assert binding.state is ValidationBindingState.UNDER_DEVELOPMENT
+        expected_state = expected.get("state", ValidationBindingState.UNDER_DEVELOPMENT)
+        assert binding.state is expected_state
         assert binding.validator_agent is not None
         assert binding.validator_agent.package_id == "agr.alliance"
         assert binding.validator_agent.agent_id == "reference_validation"
-        assert binding.required is False
+        assert binding.required is (expected_state is ValidationBindingState.ACTIVE)
         assert binding.blocking is False
-        assert binding.allow_opt_out is False
+        assert binding.allow_opt_out is (expected_state is ValidationBindingState.ACTIVE)
         assert binding.object_types == expected["object_types"]
         assert binding.field_paths == expected["field_paths"]
         assert binding.expected_result_fields == expected["expected_result_fields"]
-        assert binding.reason
+        assert bool(binding.reason) is (
+            expected_state is ValidationBindingState.UNDER_DEVELOPMENT
+        )
 
         active_reference_bindings = [
             item
@@ -107,7 +111,10 @@ def test_reference_validation_bindings_remain_under_development_metadata_only():
             and item.validator_agent is not None
             and item.validator_agent.agent_id == "reference_validation"
         ]
-        assert active_reference_bindings == []
+        if expected_state is ValidationBindingState.ACTIVE:
+            assert active_reference_bindings == [binding]
+        else:
+            assert active_reference_bindings == []
 
 
 def test_reference_validation_bindings_select_optional_lookup_context():

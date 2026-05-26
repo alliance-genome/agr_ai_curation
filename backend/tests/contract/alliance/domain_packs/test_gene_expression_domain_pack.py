@@ -259,12 +259,31 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
     assert set(active_bindings) == {
         "data_provider_validation",
         "relation_vocabulary_validation",
+        "source_reference_validation",
+        "subject_gene_validation",
     }
     assert active_bindings["data_provider_validation"].field_paths == (
         "data_provider.abbreviation",
     )
     assert active_bindings["relation_vocabulary_validation"].field_paths == (
         "relation.name",
+    )
+    assert active_bindings["subject_gene_validation"].validator_agent is not None
+    assert active_bindings["subject_gene_validation"].validator_agent.agent_id == (
+        "gene_validation"
+    )
+    assert active_bindings["subject_gene_validation"].field_paths == (
+        "expression_annotation_subject.primary_external_id",
+        "expression_annotation_subject.gene_symbol",
+    )
+    assert active_bindings["source_reference_validation"].validator_agent is not None
+    assert active_bindings["source_reference_validation"].validator_agent.agent_id == (
+        "reference_validation"
+    )
+    assert active_bindings["source_reference_validation"].field_paths == (
+        "single_reference.reference_id",
+        "single_reference.curie",
+        "single_reference.title",
     )
 
     active_validator_ids = {
@@ -275,6 +294,8 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
     assert {
         "data_provider_validation",
         "relation_vocabulary_validation",
+        "source_reference_validation",
+        "subject_gene_validation",
     } <= active_validator_ids
 
     under_development_binding_ids = {
@@ -283,9 +304,7 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
         if binding.state is ValidationBindingState.UNDER_DEVELOPMENT
     }
     assert {
-        "subject_gene_validation",
         "expression_context_ontology_validation",
-        "source_reference_validation",
         "reagent_context_materialization",
     } <= under_development_binding_ids
 
@@ -295,16 +314,11 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
         if entry.state is ValidationBindingState.UNDER_DEVELOPMENT
     }
     assert {
-        "gene_expression.subject_gene_resolution",
         "gene_expression.ontology_term_resolution",
-        "source_reference_validation",
         "gene_expression.reagent_context_materialization",
     } <= under_development_validator_ids
 
     planned_gap_fields = {
-        "expression_annotation_subject.primary_external_id",
-        "expression_annotation_subject.gene_symbol",
-        "single_reference.reference_id",
         "expression_experiment.expression_assay_used.curie",
         "expression_experiment.expression_assay_used.name",
         "when_expressed_stage_name",
@@ -313,12 +327,20 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
         "expression_pattern.where_expressed.cellular_component.curie",
         "expression_pattern.where_expressed.cellular_component.name",
     }
+    promoted_normalization_fields = {
+        "expression_annotation_subject.primary_external_id",
+        "expression_annotation_subject.gene_symbol",
+        "single_reference.reference_id",
+        "single_reference.curie",
+        "single_reference.title",
+    }
     active_field_paths = {
         field_path
         for binding in active_bindings.values()
         for field_path in binding.field_paths
     }
     assert planned_gap_fields.isdisjoint(active_field_paths)
+    assert promoted_normalization_fields <= active_field_paths
 
     under_development_field_paths = {
         field_path
@@ -327,6 +349,7 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
         for field_path in binding.field_paths
     }
     assert planned_gap_fields <= under_development_field_paths
+    assert promoted_normalization_fields.isdisjoint(under_development_field_paths)
 
     fields_by_path = {field.field_path: field for field in curatable_unit.fields}
     silently_active_gap_fields = [
@@ -335,6 +358,8 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
         if fields_by_path[field_path].metadata.get("validator_state") == "active"
     ]
     assert silently_active_gap_fields == []
+    for field_path in promoted_normalization_fields:
+        assert fields_by_path[field_path].metadata["validator_state"] == "active"
 
 
 def test_tmem67_fixture_validates_as_pending_gene_expression_annotation():

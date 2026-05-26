@@ -232,6 +232,23 @@ def _alliance_gene_pack() -> LoadedDomainPack:
     )
 
 
+def _alliance_gene_expression_pack() -> LoadedDomainPack:
+    repo_root = Path(__file__).resolve().parents[5]
+    pack_path = (
+        repo_root / "packages" / "alliance" / "domain_packs" / "gene_expression"
+    )
+    metadata_path = pack_path / "domain_pack.yaml"
+    metadata = load_domain_pack_metadata(metadata_path)
+    return LoadedDomainPack(
+        pack_id=metadata.pack_id,
+        display_name=metadata.display_name,
+        version=metadata.version,
+        pack_path=pack_path,
+        metadata_path=metadata_path,
+        metadata=metadata,
+    )
+
+
 def _envelope(
     *,
     identifier: str = "BAD:0001",
@@ -299,6 +316,33 @@ def _multi_object_envelope(
         envelope_id="dispatch-env",
         domain_pack_id="fixture.dispatch",
         objects=objects,
+    )
+
+
+def _gene_expression_envelope() -> DomainEnvelope:
+    return DomainEnvelope(
+        envelope_id="gene-expression-env",
+        domain_pack_id="agr.alliance.gene_expression",
+        metadata={"document_id": "paper-tmem67"},
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneExpressionAnnotation",
+                pending_ref_id="gene-expression-1",
+                object_role="curatable_unit",
+                payload={
+                    "data_provider": {"abbreviation": "MGI"},
+                    "expression_annotation_subject": {
+                        "primary_external_id": "Tmem67",
+                        "gene_symbol": "Tmem67",
+                    },
+                    "relation": {"name": "is_expressed_in"},
+                    "single_reference": {
+                        "pmid": "PMID:203506",
+                        "title": "Paper supplied title",
+                    },
+                },
+            )
+        ],
     )
 
 
@@ -901,6 +945,304 @@ def test_alliance_gene_pack_uses_singleton_gene_validation_with_handoff_context(
         "ninaE",
         None,
     ]
+
+
+def test_alliance_gene_expression_materializes_subject_gene_and_reference_fields():
+    pack = _alliance_gene_expression_pack()
+    captured_bindings: list[str] = []
+
+    def _runner(request, *, binding):
+        captured_bindings.append(binding.binding_id)
+        base = {
+            "status": "resolved",
+            "request_id": request.request_id,
+            "validator_binding_id": request.validator_binding_id,
+            "validator_agent": request.validator_agent.model_dump(mode="json"),
+            "target": request.target.model_dump(mode="json"),
+            "resolved_objects": [],
+            "missing_expected_fields": [],
+            "candidates": [],
+            "curator_message": f"{binding.binding_id} resolved.",
+            "explanation": "Fixture validator resolved this field.",
+        }
+        if binding.binding_id == "subject_gene_validation":
+            assert request.selected_inputs == {
+                "gene_id": "Tmem67",
+                "gene_symbol": "Tmem67",
+                "data_provider": "MGI",
+            }
+            return {
+                **base,
+                "resolved_values": {
+                    "primary_external_id": "MGI:1923928",
+                    "gene_symbol": "Tmem67",
+                },
+                "lookup_attempts": [
+                    {
+                        "provider": "agr_curation_query",
+                        "method": "search_genes",
+                        "query": {"gene_symbol": "Tmem67", "data_provider": "MGI"},
+                        "result_count": 1,
+                        "outcome": "success",
+                    }
+                ],
+            }
+        if binding.binding_id == "source_reference_validation":
+            assert request.selected_inputs == {
+                "pmid": "PMID:203506",
+                "title": "Paper supplied title",
+                "source_document_id": "paper-tmem67",
+            }
+            return {
+                **base,
+                "resolved_values": {
+                    "reference_id": 203506,
+                    "curie": "PMID:203506",
+                    "title": "Resolved literature title",
+                },
+                "lookup_attempts": [
+                    {
+                        "provider": "agr_literature_reference_lookup",
+                        "method": "get_literature_reference",
+                        "query": {"value": "PMID:203506"},
+                        "result_count": 1,
+                        "outcome": "success",
+                    }
+                ],
+            }
+        if binding.binding_id == "data_provider_validation":
+            return {
+                **base,
+                "resolved_values": {"abbreviation": "MGI"},
+                "lookup_attempts": [
+                    {
+                        "provider": "fixture_data_provider",
+                        "method": "lookup",
+                        "query": {"abbreviation": "MGI"},
+                        "result_count": 1,
+                        "outcome": "success",
+                    }
+                ],
+            }
+        if binding.binding_id == "relation_vocabulary_validation":
+            return {
+                **base,
+                "resolved_values": {
+                    "term_name": "is_expressed_in",
+                    "vocabulary": "Expression Relation",
+                    "internal_id": 1,
+                },
+                "lookup_attempts": [
+                    {
+                        "provider": "fixture_vocabulary",
+                        "method": "lookup",
+                        "query": {"term_name": "is_expressed_in"},
+                        "result_count": 1,
+                        "outcome": "success",
+                    }
+                ],
+            }
+        raise AssertionError(f"Unexpected binding {binding.binding_id}")
+
+    result = dispatch_active_validator_bindings(
+        _gene_expression_envelope(),
+        pack,
+        runner=_runner,
+        max_parallel_validators=1,
+    )
+
+    assert result.validator_agent_run_count == 4
+    assert captured_bindings == [
+        "data_provider_validation",
+        "relation_vocabulary_validation",
+        "source_reference_validation",
+        "subject_gene_validation",
+    ]
+    annotation = result.envelope.objects[0]
+    assert annotation.payload["expression_annotation_subject"] == {
+        "primary_external_id": "MGI:1923928",
+        "gene_symbol": "Tmem67",
+    }
+    assert annotation.payload["single_reference"] == {
+        "pmid": "PMID:203506",
+        "title": "Resolved literature title",
+        "reference_id": 203506,
+        "curie": "PMID:203506",
+    }
+    patch_events = annotation.metadata["validator_resolved_value_materialization"]
+    assert patch_events[0]["validator_binding_id"] == "source_reference_validation"
+    assert patch_events[0]["original_values"] == {
+        "single_reference.title": "Paper supplied title"
+    }
+    assert patch_events[1]["validator_binding_id"] == "subject_gene_validation"
+    assert patch_events[1]["original_values"] == {
+        "expression_annotation_subject.primary_external_id": "Tmem67",
+        "expression_annotation_subject.gene_symbol": "Tmem67",
+    }
+    field_paths = [
+        finding.field_ref.field_path
+        for finding in result.appended_findings
+        if finding.field_ref is not None
+    ]
+    assert {
+        "expression_annotation_subject.primary_external_id",
+        "expression_annotation_subject.gene_symbol",
+        "single_reference.reference_id",
+        "single_reference.curie",
+        "single_reference.title",
+    } <= set(field_paths)
+
+
+def test_alliance_gene_expression_unresolved_gene_and_reference_remain_visible():
+    pack = _alliance_gene_expression_pack()
+
+    def _runner(request, *, binding):
+        base = {
+            "request_id": request.request_id,
+            "validator_binding_id": request.validator_binding_id,
+            "validator_agent": request.validator_agent.model_dump(mode="json"),
+            "target": request.target.model_dump(mode="json"),
+            "resolved_objects": [],
+        }
+        if binding.binding_id == "subject_gene_validation":
+            return {
+                **base,
+                "status": "unresolved",
+                "resolved_values": {},
+                "missing_expected_fields": ["primary_external_id", "gene_symbol"],
+                "candidates": [
+                    {
+                        "value": "MGI:1923928",
+                        "label": "Tmem67",
+                        "object_type": "Gene",
+                    },
+                    {
+                        "value": "RGD:1586167",
+                        "label": "Tmem67",
+                        "object_type": "Gene",
+                    },
+                ],
+                "lookup_attempts": [
+                    {
+                        "provider": "agr_curation_query",
+                        "method": "search_genes",
+                        "query": {"gene_symbol": "Tmem67"},
+                        "result_count": 2,
+                        "outcome": "ambiguous",
+                    }
+                ],
+                "curator_message": "Subject gene lookup is ambiguous.",
+                "explanation": "Multiple provider candidates matched.",
+            }
+        if binding.binding_id == "source_reference_validation":
+            return {
+                **base,
+                "status": "unresolved",
+                "resolved_values": {},
+                "missing_expected_fields": ["reference_id", "curie"],
+                "candidates": [],
+                "lookup_attempts": [
+                    {
+                        "provider": "agr_literature_reference_lookup",
+                        "method": "get_literature_reference",
+                        "query": {"value": "PMID:203506"},
+                        "result_count": 0,
+                        "outcome": "not_found",
+                    }
+                ],
+                "curator_message": "No unambiguous reference match found.",
+                "explanation": "The API-backed lookup found no source reference.",
+            }
+        return {
+            **base,
+            "status": "resolved",
+            "resolved_values": (
+                {"abbreviation": "MGI"}
+                if binding.binding_id == "data_provider_validation"
+                else {
+                    "term_name": "is_expressed_in",
+                    "vocabulary": "Expression Relation",
+                    "internal_id": 1,
+                }
+            ),
+            "missing_expected_fields": [],
+            "candidates": [],
+            "lookup_attempts": [
+                {
+                    "provider": "fixture",
+                    "method": "lookup",
+                    "query": {},
+                    "result_count": 1,
+                    "outcome": "success",
+                }
+            ],
+            "curator_message": f"{binding.binding_id} resolved.",
+            "explanation": "Fixture resolved supporting field.",
+        }
+
+    result = dispatch_active_validator_bindings(
+        _gene_expression_envelope(),
+        pack,
+        runner=_runner,
+        max_parallel_validators=1,
+    )
+
+    annotation = result.envelope.objects[0]
+    assert annotation.payload["expression_annotation_subject"] == {
+        "primary_external_id": "Tmem67",
+        "gene_symbol": "Tmem67",
+    }
+    assert annotation.payload["single_reference"] == {
+        "pmid": "PMID:203506",
+        "title": "Paper supplied title",
+    }
+    open_findings = [
+        finding
+        for finding in result.appended_findings
+        if finding.status.value == "open"
+    ]
+    assert {
+        finding.field_ref.field_path
+        for finding in open_findings
+        if finding.field_ref is not None
+    } == {
+        "expression_annotation_subject.primary_external_id",
+        "expression_annotation_subject.gene_symbol",
+        "single_reference.reference_id",
+        "single_reference.curie",
+        "single_reference.title",
+    }
+    classifications = {
+        finding.field_ref.field_path: finding.details["failure_classification"]
+        for finding in open_findings
+        if finding.field_ref is not None
+    }
+    assert classifications["expression_annotation_subject.primary_external_id"] == (
+        "missing_expected_result_field"
+    )
+    assert classifications["single_reference.reference_id"] == (
+        "missing_expected_result_field"
+    )
+    gene_finding = next(
+        finding
+        for finding in open_findings
+        if finding.field_ref is not None
+        and finding.field_ref.field_path
+        == "expression_annotation_subject.primary_external_id"
+    )
+    assert [item["value"] for item in gene_finding.details["candidate_matches"]] == [
+        "MGI:1923928",
+        "RGD:1586167",
+    ]
+    reference_finding = next(
+        finding
+        for finding in open_findings
+        if finding.field_ref is not None
+        and finding.field_ref.field_path == "single_reference.reference_id"
+    )
+    assert reference_finding.details["lookup_attempts"][0]["lookup_status"] == (
+        "not_found"
+    )
 
 
 def test_invalid_validator_schema_becomes_controlled_unresolved_result(
