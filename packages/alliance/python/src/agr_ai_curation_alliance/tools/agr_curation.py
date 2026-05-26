@@ -3163,12 +3163,18 @@ def _controlled_vocabulary_helper_result(
 ) -> Dict[str, Any]:
     name = _term_name(term)
     internal_id = _first_present(term.get("internal_id"), term.get("id"))
+    source = {
+        "provider": "alliance_curation_db",
+        "tool": "agr_curation_query",
+        "method": "search_vocabulary_terms",
+    }
     return {
         "field_path": field_path,
         "value": name,
         "term_name": name,
         "vocabulary": vocabulary,
         "internal_id": internal_id,
+        "source": source,
         "term_source": {
             "kind": "controlled_vocabulary",
             "vocabulary": vocabulary,
@@ -3183,11 +3189,7 @@ def _controlled_vocabulary_helper_result(
             "synonyms": term.get("synonyms") or [],
             "obsolete": bool(term.get("obsolete", False)),
             "authority": "live_validated_option",
-            "source": {
-                "provider": "alliance_curation_db",
-                "tool": "agr_curation_query",
-                "method": "search_vocabulary_terms",
-            },
+            "source": source,
         },
         "lookup": {
             "method": "search_vocabulary_terms",
@@ -3259,10 +3261,7 @@ def _helper_lookup_status(helper_results: list[Dict[str, Any]]) -> str:
 
 
 def _helper_option(result: Mapping[str, Any]) -> Dict[str, Any]:
-    helper_result = result.get("helper_result")
     source = result.get("source")
-    if source is None and isinstance(helper_result, Mapping):
-        source = helper_result.get("source")
     option = {
         "field_path": result.get("field_path"),
         "value": result.get("value"),
@@ -3359,8 +3358,6 @@ def get_domain_field_term_options(
         phrase_value = (
             evidence_context.get("source_phrase")
             or evidence_context.get("query")
-            or evidence_context.get("term")
-            or evidence_context.get("label")
         )
         phrase = str(phrase_value) if phrase_value is not None else None
     normalized_phrase = phrase.strip() if isinstance(phrase, str) else None

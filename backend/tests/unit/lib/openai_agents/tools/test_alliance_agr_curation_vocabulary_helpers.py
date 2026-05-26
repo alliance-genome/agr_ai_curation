@@ -292,6 +292,11 @@ def test_domain_field_term_options_returns_gene_expression_relation(monkeypatch)
     assert helper_result["helper_result"]["value"] == "is_expressed_in"
     assert helper_result["helper_result"]["vocabulary"] == "Expression Relation"
     assert helper_result["helper_result"]["internal_id"] == 200000200
+    assert helper_result["source"] == {
+        "provider": "alliance_curation_db",
+        "tool": "agr_curation_query",
+        "method": "search_vocabulary_terms",
+    }
     assert helper_result["helper_result"]["source"] == {
         "provider": "alliance_curation_db",
         "tool": "agr_curation_query",
@@ -320,6 +325,25 @@ def test_domain_field_term_options_returns_gene_expression_relation(monkeypatch)
             "limit": 25,
         }
     ]
+
+
+def test_domain_field_term_option_uses_only_canonical_source_location():
+    option = agr_curation._helper_option(
+        {
+            "field_path": "relation.name",
+            "value": "is_expressed_in",
+            "term_name": "is_expressed_in",
+            "helper_result": {
+                "source": {
+                    "provider": "legacy_nested_source",
+                    "tool": "agr_curation_query",
+                    "method": "search_vocabulary_terms",
+                },
+            },
+        }
+    )
+
+    assert "source" not in option
 
 
 def test_domain_field_term_options_refuses_undeclared_field(monkeypatch):
@@ -477,6 +501,45 @@ def test_domain_field_term_options_searches_assay_stage_and_direct_site_fields(m
             },
         ),
     ]
+
+
+def test_domain_field_term_options_reads_canonical_evidence_context_keys(monkeypatch):
+    calls = []
+
+    class FakeDb:
+        @staticmethod
+        def search_ontology_terms(**kwargs):
+            calls.append(kwargs)
+            return [
+                SimpleNamespace(
+                    curie="MMO:0000655",
+                    name="reverse transcription polymerase chain reaction assay",
+                    ontology_type="MMOTerm",
+                )
+            ]
+
+    monkeypatch.setattr(
+        agr_curation,
+        "get_curation_resolver",
+        lambda: _Resolver(FakeDb()),
+    )
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+
+    result = _term_helper_fn()(
+        domain_pack_id="agr.alliance.gene_expression",
+        object_type="GeneExpressionAnnotation",
+        field_path="expression_experiment.expression_assay_used",
+        evidence_context={
+            "label": "ignored legacy label",
+            "query": "reverse transcription polymerase chain reaction assay",
+        },
+    )
+
+    assert result.status == "ok"
+    assert result.data["source_phrase"] == (
+        "reverse transcription polymerase chain reaction assay"
+    )
+    assert calls[0]["term"] == "reverse transcription polymerase chain reaction assay"
 
 
 def test_domain_field_term_options_routes_gene_expression_site(monkeypatch):

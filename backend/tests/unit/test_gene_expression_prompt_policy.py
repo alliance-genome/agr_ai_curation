@@ -1,3 +1,4 @@
+import logging
 from copy import deepcopy
 from pathlib import Path
 
@@ -208,6 +209,38 @@ def test_gene_expression_schema_rejects_relation_without_helper_selection():
         schema.model_validate(payload)
 
     assert "metadata.provenance.helper_selections[]" in str(exc_info.value)
+
+
+def test_gene_expression_schema_rejects_relation_helper_selection_without_selected_value():
+    schema = _load_gene_expression_schema()
+    payload = deepcopy(_load_tmem67_output())
+    for selection in payload["metadata"]["provenance"]["helper_selections"]:
+        if selection["field_path"] == "relation.name":
+            selection["value"] = selection.pop("selected_value")
+
+    with pytest.raises(ValidationError) as exc_info:
+        schema.model_validate(payload)
+
+    assert "metadata.provenance.helper_selections[]" in str(exc_info.value)
+
+
+def test_gene_expression_schema_logs_malformed_helper_selection(caplog):
+    schema = _load_gene_expression_schema()
+    payload = deepcopy(_load_tmem67_output())
+    payload["metadata"]["provenance"]["helper_selections"].insert(0, "bad-selection")
+
+    with caplog.at_level(
+        logging.WARNING,
+        logger=(
+            "agr_ai_curation_alliance.domain_packs.gene_expression.conversion"
+        ),
+    ):
+        schema.model_validate(payload)
+
+    assert (
+        "Dropped 1 malformed gene expression helper_selections entries"
+        in caplog.text
+    )
 
 
 def test_gene_expression_schema_rejects_null_data_provider_abbreviation():

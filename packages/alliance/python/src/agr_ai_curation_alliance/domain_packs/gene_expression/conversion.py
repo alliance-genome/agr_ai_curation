@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import logging
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
@@ -91,6 +92,7 @@ GENE_EXPRESSION_LINKML_CONTRACT_VALIDATOR_ID = (
 VALID_GENE_EXPRESSION_RELATION_NAMES = frozenset({"is_expressed_in"})
 EXPRESSION_RELATION_VOCABULARY = "Expression Relation"
 CONTROLLED_FIELD_HELPER_TOOL_NAME = "get_domain_field_term_options"
+LOGGER = logging.getLogger(__name__)
 FORBIDDEN_PAYLOAD_EVIDENCE_FIELDS = frozenset(
     {
         "evidence_text",
@@ -149,7 +151,19 @@ def _helper_selections(output: DomainEnvelopeExtractionResult) -> list[Mapping[s
     selections = output.metadata.provenance.get("helper_selections")
     if not isinstance(selections, list):
         return []
-    return [entry for entry in selections if isinstance(entry, Mapping)]
+    valid_selections: list[Mapping[str, Any]] = []
+    dropped_count = 0
+    for entry in selections:
+        if isinstance(entry, Mapping):
+            valid_selections.append(entry)
+        else:
+            dropped_count += 1
+    if dropped_count:
+        LOGGER.warning(
+            "Dropped %s malformed gene expression helper_selections entries",
+            dropped_count,
+        )
+    return valid_selections
 
 
 def _has_helper_selection(
@@ -163,7 +177,7 @@ def _has_helper_selection(
             continue
         if selection.get("source_tool") != CONTROLLED_FIELD_HELPER_TOOL_NAME:
             continue
-        value = selection.get("selected_value", selection.get("value"))
+        value = selection.get("selected_value")
         if isinstance(value, str) and value.strip() == selected_value:
             return True
     return False
