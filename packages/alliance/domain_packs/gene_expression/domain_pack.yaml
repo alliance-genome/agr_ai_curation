@@ -338,6 +338,9 @@ object_definitions:
         required: true
         model_ref: GeneReferenceSnapshotPayload
         metadata:
+          validatable: true
+          validator_binding_id: subject_gene_validation
+          validator_state: active
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -354,6 +357,9 @@ object_definitions:
         required: true
         metadata:
           editable: true
+          validatable: true
+          validator_binding_id: subject_gene_validation
+          validator_state: active
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
@@ -373,6 +379,9 @@ object_definitions:
           - Flattened from the Gene.gene_symbol slot annotation display text for pending envelope review.
         metadata:
           editable: true
+          validatable: true
+          validator_binding_id: subject_gene_validation
+          validator_state: active
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
@@ -433,6 +442,9 @@ object_definitions:
         required: true
         model_ref: ReferenceSnapshotPayload
         metadata:
+          validatable: true
+          validator_binding_id: source_reference_validation
+          validator_state: active
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -449,6 +461,9 @@ object_definitions:
         required: true
         metadata:
           editable: true
+          validatable: true
+          validator_binding_id: source_reference_validation
+          validator_state: active
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
@@ -460,6 +475,74 @@ object_definitions:
               range: integer
               db_table: reference
               db_column: id
+      - field_path: single_reference.curie
+        field_type: string
+        display_name: Reference CURIE
+        metadata:
+          editable: true
+          validatable: true
+          validator_binding_id: source_reference_validation
+          validator_state: active
+          source_of_truth: alliance_literature_reference_lookup
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/core.yaml
+              class: Reference
+              slot: curie
+              range: uriorcurie
+      - field_path: single_reference.title
+        field_type: string
+        display_name: Reference title
+        metadata:
+          editable: true
+          validatable: true
+          validator_binding_id: source_reference_validation
+          validator_state: active
+          source_of_truth: alliance_literature_reference_lookup
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/reference.yaml
+              class: Reference
+              slot: title
+              range: string
+      - field_path: single_reference.pmid
+        field_type: string
+        display_name: PMID lookup input
+        metadata:
+          editable: true
+          validatable: true
+          validator_binding_id: source_reference_validation
+          validator_state: active
+          source_of_truth: extractor_evidence
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/core.yaml
+              class: Reference
+              slot: cross_references
+              range: string
+      - field_path: single_reference.doi
+        field_type: string
+        display_name: DOI lookup input
+        metadata:
+          editable: true
+          validatable: true
+          validator_binding_id: source_reference_validation
+          validator_state: active
+          source_of_truth: extractor_evidence
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/core.yaml
+              class: Reference
+              slot: cross_references
+              range: string
       - field_path: expression_experiment
         field_type: object
         display_name: Expression experiment
@@ -873,16 +956,16 @@ metadata:
       - validator_id: data_provider_validation
         display_name: Data provider validation
         description: Active package binding validates the LinkML-required data provider abbreviation through the shared Alliance data-provider validator.
+      - validator_id: subject_gene_validation
+        display_name: Subject gene validation
+        description: Active package binding resolves embedded expression annotation subject gene identifiers and symbols through the shared Alliance gene validator.
+      - validator_id: source_reference_validation
+        display_name: Source reference validation
+        description: Active package binding resolves embedded literature/reference identifiers through the API-backed reference validator.
     under_development:
       - validator_id: gene_expression.ontology_term_resolution
         display_name: Expression ontology term resolution
         description: Validate embedded MMO assay, stage, anatomy, UBERON, and GO term CURIEs against configured Alliance ontology sources.
-      - validator_id: gene_expression.subject_gene_resolution
-        display_name: Subject gene validation
-        description: Validate embedded expression annotation subject gene identifiers and symbols through the shared Alliance gene validator.
-      - validator_id: source_reference_validation
-        display_name: Source reference validation
-        description: Validate embedded literature/reference identifiers through the API-backed reference validator once gene-expression materialization and export flows are ready.
       - validator_id: gene_expression.reagent_context_materialization
         display_name: Reagent context materialization
         description: Preserve reagent, genotype, reporter, and strain context as evidence metadata until explicit LinkML/export materialization targets and validators are active.
@@ -941,13 +1024,11 @@ metadata:
         allow_opt_out: true
         curator_override:
           allowed: false
-    under_development:
       - binding_id: subject_gene_validation
         display_name: Subject gene validation
         validator_agent:
           package_id: agr.alliance
           agent_id: gene_validation
-        state_explanation: Subject gene validation is planned for embedded GeneExpressionAnnotation subjects but is not active until request selectors and materialization targets are promoted for this pack.
         applies_to:
           domain_pack_id: agr.alliance.gene_expression
           object_types:
@@ -971,43 +1052,19 @@ metadata:
         expected_result_fields:
           primary_external_id: expression_annotation_subject.primary_external_id
           gene_symbol: expression_annotation_subject.gene_symbol
-      - binding_id: expression_context_ontology_validation
-        display_name: Expression context ontology validation
-        validator_agent:
-          package_id: agr.alliance
-          agent_id: ontology_term_validation
-        state_explanation: Assay, stage, anatomy, UBERON, cellular-component, and qualifier ontology validation remains metadata-only until per-field selectors and result materialization are promoted.
-        applies_to:
-          domain_pack_id: agr.alliance.gene_expression
-          object_types:
-            - GeneExpressionAnnotation
-          field_paths:
-            - expression_experiment.expression_assay_used.curie
-            - expression_experiment.expression_assay_used.name
-            - when_expressed_stage_name
-            - expression_pattern.when_expressed.developmental_stage_start
-            - expression_pattern.when_expressed.stage_uberon_slim_terms
-            - expression_pattern.where_expressed.anatomical_structure
-            - expression_pattern.where_expressed.anatomical_structure.curie
-            - expression_pattern.where_expressed.anatomical_structure.name
-            - expression_pattern.where_expressed.anatomical_structure_uberon_terms
-            - expression_pattern.where_expressed.cellular_component
-            - expression_pattern.where_expressed.cellular_component.curie
-            - expression_pattern.where_expressed.cellular_component.name
-            - expression_pattern.where_expressed.cellular_component_qualifiers
-      - binding_id: reagent_context_materialization
-        display_name: Reagent context materialization
-        state_explanation: Reagent, genotype, reporter, and strain details currently remain in metadata.raw_mentions, metadata.normalization_notes, metadata.ambiguities, or object metadata; no LinkML payload field or validator materialization target is active yet.
-        applies_to:
-          domain_pack_id: agr.alliance.gene_expression
-          object_types:
-            - GeneExpressionAnnotation
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
+        batch:
+          enabled: false
+          family: gene_expression_subject_gene_validation
       - binding_id: source_reference_validation
         display_name: Source reference validation
         validator_agent:
           package_id: agr.alliance
           agent_id: reference_validation
-        state_explanation: Reference validation is prepared around the API-backed package tool but remains metadata-only until dependent gene-expression materialization and export flows are activated.
         applies_to:
           domain_pack_id: agr.alliance.gene_expression
           object_types:
@@ -1045,6 +1102,43 @@ metadata:
           reference_id: single_reference.reference_id
           curie: single_reference.curie
           title: single_reference.title
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
+    under_development:
+      - binding_id: expression_context_ontology_validation
+        display_name: Expression context ontology validation
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: ontology_term_validation
+        state_explanation: Assay, stage, anatomy, UBERON, cellular-component, and qualifier ontology validation remains metadata-only until per-field selectors and result materialization are promoted.
+        applies_to:
+          domain_pack_id: agr.alliance.gene_expression
+          object_types:
+            - GeneExpressionAnnotation
+          field_paths:
+            - expression_experiment.expression_assay_used.curie
+            - expression_experiment.expression_assay_used.name
+            - when_expressed_stage_name
+            - expression_pattern.when_expressed.developmental_stage_start
+            - expression_pattern.when_expressed.stage_uberon_slim_terms
+            - expression_pattern.where_expressed.anatomical_structure
+            - expression_pattern.where_expressed.anatomical_structure.curie
+            - expression_pattern.where_expressed.anatomical_structure.name
+            - expression_pattern.where_expressed.anatomical_structure_uberon_terms
+            - expression_pattern.where_expressed.cellular_component
+            - expression_pattern.where_expressed.cellular_component.curie
+            - expression_pattern.where_expressed.cellular_component.name
+            - expression_pattern.where_expressed.cellular_component_qualifiers
+      - binding_id: reagent_context_materialization
+        display_name: Reagent context materialization
+        state_explanation: Reagent, genotype, reporter, and strain details currently remain in metadata.raw_mentions, metadata.normalization_notes, metadata.ambiguities, or object metadata; no LinkML payload field or validator materialization target is active yet.
+        applies_to:
+          domain_pack_id: agr.alliance.gene_expression
+          object_types:
+            - GeneExpressionAnnotation
   provider_refs:
     alliance_linkml:
       schema_ref: alliance.linkml

@@ -516,9 +516,15 @@ def test_validator_result_materialization_patches_target_payload_from_resolved_v
         "gene_symbol": "crb",
         "taxon": "NCBITaxon:7227",
     }
-    assert patched.metadata["validator_resolved_value_materialization"][0][
-        "validator_binding_id"
-    ] == "fixture.gene_lookup"
+    patch_event = patched.metadata["validator_resolved_value_materialization"][0]
+    assert patch_event["validator_binding_id"] == "fixture.gene_lookup"
+    assert patch_event["selected_inputs"] == {"mention": "crumbs"}
+    assert patch_event["input_selectors"]["mention"] == {
+        "source": "payload",
+        "path": "mention",
+        "required": True,
+    }
+    assert patch_event["original_values"] == {}
     finding = result.appended_findings[0]
     assert finding.status is ValidationFindingStatus.RESOLVED
     assert finding.details["validation_result"]["resolved_values"]["curie"] == (

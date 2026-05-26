@@ -130,6 +130,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/curation_workspace/test_session_service.py"),
     Path("backend/tests/unit/lib/domain_packs/test_allele_domain_pack_fixtures.py"),
     Path("backend/tests/unit/lib/domain_packs/test_materialization.py"),
+    Path("backend/tests/unit/lib/domain_packs/test_validator_dispatch.py"),
     Path("backend/tests/unit/lib/domain_packs/test_validation_registry_metadata.py"),
     Path("backend/tests/unit/lib/feedback/test_service.py"),
     Path("backend/tests/unit/lib/flows/test_executor.py"),

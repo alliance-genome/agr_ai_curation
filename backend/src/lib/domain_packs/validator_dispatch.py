@@ -509,7 +509,6 @@ def _validator_request_dedupe_key(request: DomainValidationRequest) -> str:
                 "domain_pack_id": request.target.domain_pack_id,
                 "object_type": request.target.object_type,
                 "object_role": request.target.object_role,
-                "field_path": request.target.field_path,
                 "expected_fields": list(request.target.expected_fields),
             },
             "selected_inputs": selected_identity_inputs,

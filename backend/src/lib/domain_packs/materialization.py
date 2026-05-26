@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
@@ -382,7 +383,7 @@ def _patch_target_object_from_resolved_values(
         return envelope, None
 
     declared_fields = {field.field_path: field for field in object_definition.fields}
-    payload = dict(target.payload)
+    payload = copy.deepcopy(target.payload)
     changed = False
 
     for result_field, raw_field_path in item.request.expected_result_fields.items():
@@ -404,9 +405,14 @@ def _patch_target_object_from_resolved_values(
             continue
         _set_payload_value(payload, materialized_field_path, resolved_value)
         changed = True
-
     if not changed:
         return envelope, None
+
+    original_values = _original_materialized_values(
+        target.payload,
+        item.request.expected_result_fields.values(),
+        declared_fields=declared_fields,
+    )
 
     metadata = dict(target.metadata)
     existing_patch_metadata = metadata.get("validator_resolved_value_materialization")
@@ -421,6 +427,9 @@ def _patch_target_object_from_resolved_values(
             "request_id": result.request_id,
             "validator_binding_id": result.validator_binding_id,
             "validator_agent": result.validator_agent.model_dump(mode="json"),
+            "selected_inputs": dict(item.request.selected_inputs),
+            "input_selectors": dict(item.request.input_selectors),
+            "original_values": original_values,
             **(
                 {"source_envelope_revision": source_envelope_revision}
                 if source_envelope_revision is not None
@@ -442,6 +451,30 @@ def _patch_target_object_from_resolved_values(
         for candidate in envelope.objects
     ]
     return envelope.model_copy(update={"objects": objects}), None
+
+
+def _original_materialized_values(
+    payload: Mapping[str, Any],
+    raw_field_paths: Iterable[Any],
+    *,
+    declared_fields: Mapping[str, DomainPackFieldDefinition],
+) -> dict[str, Any]:
+    """Return existing target payload values for fields a validator may patch."""
+
+    original_values: dict[str, Any] = {}
+    for raw_field_path in raw_field_paths:
+        if not isinstance(raw_field_path, str) or not raw_field_path.strip():
+            continue
+        materialized_field_path = _materialized_field_path(
+            raw_field_path,
+            declared_fields=declared_fields,
+        )
+        if materialized_field_path is None:
+            continue
+        original_value = _payload_value(payload, materialized_field_path)
+        if original_value is not _MISSING:
+            original_values[materialized_field_path] = original_value
+    return original_values
 
 
 def _current_object_for_match(
