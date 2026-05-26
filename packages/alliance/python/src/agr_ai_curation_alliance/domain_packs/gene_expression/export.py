@@ -251,8 +251,8 @@ def gene_expression_export_blockers(
         _payload_value(payload, "expression_pattern.where_expressed")
     )
     if (
-        _value_missing_or_blank(where_expressed.get("anatomical_structure"))
-        and _value_missing_or_blank(where_expressed.get("cellular_component"))
+        not _has_term_selector(where_expressed.get("anatomical_structure"))
+        and not _has_term_selector(where_expressed.get("cellular_component"))
     ):
         blockers.append(
             GeneExpressionExportBlocker(
@@ -522,6 +522,10 @@ def _term_payload(value: Any) -> dict[str, Any] | None:
         }
     )
     return payload or None
+
+
+def _has_term_selector(value: Any) -> bool:
+    return _term_payload(value) is not None
 
 
 def _term_list(value: Any) -> list[dict[str, Any]]:

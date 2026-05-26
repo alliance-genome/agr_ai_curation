@@ -285,6 +285,31 @@ def test_gene_expression_adapter_readiness_blocks_missing_anatomical_site_terms(
     assert blockers[0].projection_ref == candidate["projection_ref"]
 
 
+def test_gene_expression_adapter_readiness_blocks_blank_nested_site_term():
+    candidate = copy.deepcopy(_candidate_from_fixture())
+    candidate["payload"]["where_expressed_statement"] = "nucleus"
+    candidate["payload"]["expression_pattern"]["where_expressed"] = {
+        "cellular_component": {
+            "name": "   ",
+        },
+    }
+
+    blockers = GeneExpressionExportAdapter().domain_envelope_readiness_blockers(
+        candidate=candidate,
+    )
+
+    assert {
+        (blocker.object_id, blocker.field_path, blocker.code)
+        for blocker in blockers
+    } == {
+        (
+            "gene-expression-annotation-206552169",
+            "expression_pattern.where_expressed",
+            "alliance.gene_expression.anatomical_site_required",
+        )
+    }
+
+
 def test_gene_expression_submission_adapter_records_target_state():
     export_payload = GeneExpressionExportAdapter().build_submission_payload(
         mode=SubmissionMode.DIRECT_SUBMIT,

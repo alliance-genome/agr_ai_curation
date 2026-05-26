@@ -494,6 +494,29 @@ def test_gene_expression_conversion_rejects_blank_anatomical_site_slots():
     assert "anatomical_structure or cellular_component" in str(exc_info.value)
 
 
+def test_gene_expression_conversion_rejects_blank_nested_site_term():
+    raw_fixture = yaml.safe_load(
+        GENE_EXPRESSION_OUTPUT_FIXTURE_PATH.read_text(encoding="utf-8")
+    )
+    output = raw_fixture["output"]
+    output["curatable_objects"][0]["payload"]["where_expressed_statement"] = "nucleus"
+    output["curatable_objects"][0]["payload"]["expression_pattern"][
+        "where_expressed"
+    ] = {
+        "cellular_component": {
+            "name": "   ",
+        },
+    }
+
+    with pytest.raises(ValueError) as exc_info:
+        gene_expression_extraction_output_to_pending_envelope(
+            output,
+            envelope_id="gene-expression-blank-nested-site",
+        )
+
+    assert "anatomical_structure or cellular_component" in str(exc_info.value)
+
+
 def test_gene_expression_conversion_rejects_legacy_semantic_lists():
     raw_fixture = yaml.safe_load(
         GENE_EXPRESSION_OUTPUT_FIXTURE_PATH.read_text(encoding="utf-8")

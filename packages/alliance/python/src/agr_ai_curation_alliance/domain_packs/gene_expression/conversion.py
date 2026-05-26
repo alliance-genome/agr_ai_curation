@@ -107,12 +107,21 @@ def _value_missing_or_blank(value: Any) -> bool:
     return False
 
 
+def _has_term_selector(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    return any(
+        not _value_missing_or_blank(value.get(selector))
+        for selector in ("curie", "name", "abbreviation")
+    )
+
+
 def _has_anatomical_site_slot(where_expressed: Any) -> bool:
     if not isinstance(where_expressed, Mapping):
         return False
     return (
-        not _value_missing_or_blank(where_expressed.get("anatomical_structure"))
-        or not _value_missing_or_blank(where_expressed.get("cellular_component"))
+        _has_term_selector(where_expressed.get("anatomical_structure"))
+        or _has_term_selector(where_expressed.get("cellular_component"))
     )
 
 
