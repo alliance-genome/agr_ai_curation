@@ -27,6 +27,7 @@ REFERENCE_BINDING_CASES = {
             "curie": "Reference.curie",
             "title": "Reference.title",
         },
+        "state": ValidationBindingState.UNDER_DEVELOPMENT,
     },
     "agr.alliance.chemical_condition": {
         "binding_id": "source_reference_validation",
@@ -37,6 +38,7 @@ REFERENCE_BINDING_CASES = {
             "curie": "Reference.curie",
             "title": "Reference.title",
         },
+        "state": ValidationBindingState.UNDER_DEVELOPMENT,
     },
     "agr.alliance.disease": {
         "binding_id": "disease_reference_materialization",
@@ -51,6 +53,7 @@ REFERENCE_BINDING_CASES = {
             "curie": "single_reference.curie",
             "title": "single_reference.title",
         },
+        "state": ValidationBindingState.UNDER_DEVELOPMENT,
     },
     "agr.alliance.phenotype": {
         "binding_id": "phenotype_reference_validator",
@@ -61,6 +64,7 @@ REFERENCE_BINDING_CASES = {
             "curie": "Reference.curie",
             "title": "Reference.title",
         },
+        "state": ValidationBindingState.UNDER_DEVELOPMENT,
     },
     "agr.alliance.gene_expression": {
         "binding_id": "source_reference_validation",

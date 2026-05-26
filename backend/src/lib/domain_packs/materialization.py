@@ -405,14 +405,14 @@ def _patch_target_object_from_resolved_values(
             continue
         _set_payload_value(payload, materialized_field_path, resolved_value)
         changed = True
+    if not changed:
+        return envelope, None
+
     original_values = _original_materialized_values(
         target.payload,
         item.request.expected_result_fields.values(),
         declared_fields=declared_fields,
     )
-
-    if not changed:
-        return envelope, None
 
     metadata = dict(target.metadata)
     existing_patch_metadata = metadata.get("validator_resolved_value_materialization")
