@@ -90,6 +90,46 @@ output:
     provenance:
       source_fixture: tmem67_gene_expression_output
       linkml_commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      helper_selections:
+        - field_path: relation.name
+          selected_value: is_expressed_in
+          source_tool: get_domain_field_term_options
+          lookup_status: resolved
+          option:
+            value: is_expressed_in
+            term_name: is_expressed_in
+            vocabulary: Expression Relation
+            internal_id: 200000200
+            source:
+              provider: alliance_curation_db
+              tool: agr_curation_query
+              method: search_vocabulary_terms
+        - field_path: expression_experiment.expression_assay_used
+          selected_value: MMO:0000655
+          source_tool: get_domain_field_term_options
+          lookup_status: resolved
+          option:
+            value: MMO:0000655
+            term_name: reverse transcription polymerase chain reaction assay
+            curie: MMO:0000655
+            ontology_type: MMOTerm
+            source:
+              provider: alliance_curation_db
+              tool: agr_curation_query
+              method: search_ontology_terms
+        - field_path: expression_pattern.where_expressed.anatomical_structure
+          selected_value: EMAPA:17373
+          source_tool: get_domain_field_term_options
+          lookup_status: resolved
+          option:
+            value: EMAPA:17373
+            term_name: metanephros
+            curie: EMAPA:17373
+            ontology_type: EMAPATerm
+            source:
+              provider: alliance_curation_db
+              tool: agr_curation_query
+              method: search_anatomy_terms
   run_summary:
     candidate_count: 2
     kept_count: 1

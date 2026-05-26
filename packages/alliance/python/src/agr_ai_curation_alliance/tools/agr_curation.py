@@ -3128,20 +3128,24 @@ def _helper_attempt(
     domain_pack_id: str,
     object_type: str,
     field_path: str,
+    query: Optional[str],
     source_phrase: Optional[str],
     data_provider: Optional[str],
     taxon: Optional[str],
     limit: Optional[int],
+    exact_match: bool,
 ) -> Dict[str, Any]:
     return _attempt_query(
         "get_domain_field_term_options",
         domain_pack_id=domain_pack_id,
         object_type=object_type,
         field_path=field_path,
+        query=query,
         source_phrase=source_phrase,
         data_provider=data_provider,
         taxon=taxon,
         limit=limit,
+        exact_match=exact_match,
     )
 
 
@@ -3161,18 +3165,29 @@ def _controlled_vocabulary_helper_result(
     internal_id = _first_present(term.get("internal_id"), term.get("id"))
     return {
         "field_path": field_path,
+        "value": name,
+        "term_name": name,
+        "vocabulary": vocabulary,
+        "internal_id": internal_id,
         "term_source": {
             "kind": "controlled_vocabulary",
             "vocabulary": vocabulary,
         },
         "helper_result": {
+            "value": name,
             "name": name,
             "term_name": name,
+            "vocabulary": vocabulary,
             "internal_id": internal_id,
             "abbreviation": term.get("abbreviation"),
             "synonyms": term.get("synonyms") or [],
             "obsolete": bool(term.get("obsolete", False)),
             "authority": "live_validated_option",
+            "source": {
+                "provider": "alliance_curation_db",
+                "tool": "agr_curation_query",
+                "method": "search_vocabulary_terms",
+            },
         },
         "lookup": {
             "method": "search_vocabulary_terms",
@@ -3199,6 +3214,10 @@ def _ontology_helper_result(
         "source_phrase": source_phrase,
         "field_path": field_path,
         "slot_hint": slot_hint,
+        "value": term.get("curie") or label,
+        "term_name": label,
+        "curie": term.get("curie"),
+        "ontology_type": term.get("ontology_type"),
         "term_source": dict(term_source),
         "candidate": {
             "curie": term.get("curie"),
@@ -3215,7 +3234,104 @@ def _ontology_helper_result(
             "match_type": match_type,
             "queried_at": queried_at,
         },
+        "source": {
+            "provider": "alliance_curation_db",
+            "tool": "agr_curation_query",
+            "method": lookup_method,
+        },
     }
+
+
+def _helper_match_status(helper_results: list[Dict[str, Any]]) -> str:
+    if not helper_results:
+        return "unresolved"
+    if len(helper_results) == 1:
+        return "resolved"
+    return "ambiguous"
+
+
+def _helper_lookup_status(helper_results: list[Dict[str, Any]]) -> str:
+    if not helper_results:
+        return LOOKUP_STATUS_NOT_FOUND
+    if len(helper_results) == 1:
+        return LOOKUP_STATUS_SUCCESS
+    return LOOKUP_STATUS_AMBIGUOUS
+
+
+def _helper_option(result: Mapping[str, Any]) -> Dict[str, Any]:
+    helper_result = result.get("helper_result")
+    source = result.get("source")
+    if source is None and isinstance(helper_result, Mapping):
+        source = helper_result.get("source")
+    option = {
+        "field_path": result.get("field_path"),
+        "value": result.get("value"),
+        "term_name": result.get("term_name"),
+        "curie": result.get("curie"),
+        "internal_id": result.get("internal_id"),
+        "vocabulary": result.get("vocabulary"),
+        "ontology_type": result.get("ontology_type"),
+        "slot_hint": result.get("slot_hint"),
+        "source": source,
+    }
+    return {key: value for key, value in option.items() if value is not None}
+
+
+def _ontology_lookup_result(
+    *,
+    lookup_method: str,
+    normalized_phrase: str,
+    term_source: Mapping[str, Any],
+    lookup: Mapping[str, Any],
+    data_provider: Optional[str],
+    exact_match: bool,
+    limit_value: int,
+) -> AgrQueryResult:
+    if lookup_method == "search_anatomy_terms":
+        return _AGR_QUERY_CALLABLE(
+            method="search_anatomy_terms",
+            term=normalized_phrase,
+            data_provider=data_provider,
+            exact_match=exact_match,
+            include_synonyms=True,
+            limit=limit_value,
+        )
+    if lookup_method == "search_life_stage_terms":
+        return _AGR_QUERY_CALLABLE(
+            method="search_life_stage_terms",
+            term=normalized_phrase,
+            data_provider=data_provider,
+            exact_match=exact_match,
+            include_synonyms=True,
+            limit=limit_value,
+        )
+    if lookup_method == "search_go_terms":
+        return _AGR_QUERY_CALLABLE(
+            method="search_go_terms",
+            term=normalized_phrase,
+            go_aspect=term_source.get("go_aspect") or lookup.get("go_aspect"),
+            exact_match=exact_match,
+            include_synonyms=True,
+            limit=limit_value,
+        )
+    if lookup_method == "search_ontology_terms":
+        ontology_term_type = (
+            term_source.get("ontology_term_type")
+            or lookup.get("ontology_term_type")
+        )
+        return _AGR_QUERY_CALLABLE(
+            method="search_ontology_terms",
+            term=normalized_phrase,
+            ontology_term_type=ontology_term_type,
+            exact_match=exact_match,
+            include_synonyms=True,
+            limit=limit_value,
+        )
+    return _err(
+        f"Unsupported ontology helper lookup method: {lookup_method}",
+        method="get_domain_field_term_options",
+        failure_classification=LOOKUP_STATUS_UNDER_DEVELOPMENT,
+    )
 
 
 @function_tool(strict_mode=False)
@@ -3223,11 +3339,13 @@ def get_domain_field_term_options(
     domain_pack_id: str,
     object_type: str,
     field_path: str,
+    query: Optional[str] = None,
     source_phrase: Optional[str] = None,
     evidence_context: Optional[Dict[str, Any]] = None,
     data_provider: Optional[str] = None,
     taxon: Optional[str] = None,
     limit: Optional[int] = None,
+    exact_match: bool = False,
 ) -> AgrQueryResult:
     """Return extractor-facing term options declared by domain-pack field metadata.
 
@@ -3236,21 +3354,29 @@ def get_domain_field_term_options(
     """
 
     evidence_context = evidence_context or {}
-    phrase = source_phrase
+    phrase = source_phrase or query
     if phrase is None:
-        phrase_value = evidence_context.get("source_phrase") or evidence_context.get("term")
+        phrase_value = (
+            evidence_context.get("source_phrase")
+            or evidence_context.get("query")
+            or evidence_context.get("term")
+            or evidence_context.get("label")
+        )
         phrase = str(phrase_value) if phrase_value is not None else None
     normalized_phrase = phrase.strip() if isinstance(phrase, str) else None
+    normalized_query = query.strip() if isinstance(query, str) and query.strip() else None
     limit_value = limit or 25
     queried_at = datetime.now(timezone.utc).isoformat()
     attempted_query = _helper_attempt(
         domain_pack_id=domain_pack_id,
         object_type=object_type,
         field_path=field_path,
+        query=normalized_query,
         source_phrase=normalized_phrase,
         data_provider=data_provider,
         taxon=taxon,
         limit=limit_value,
+        exact_match=exact_match,
     )
 
     policy = _field_term_helper_policy(
@@ -3292,6 +3418,7 @@ def get_domain_field_term_options(
             method="search_vocabulary_terms",
             vocabulary=vocabulary,
             term=normalized_phrase,
+            exact_match=exact_match,
             include_obsolete=False,
             limit=limit_value,
         )
@@ -3315,6 +3442,8 @@ def get_domain_field_term_options(
             "source_phrase": normalized_phrase,
             "term_source": dict(term_source),
             "helper_results": helper_results,
+            "options": [_helper_option(item) for item in helper_results],
+            "match_status": _helper_match_status(helper_results),
             "authority": "helper_guidance",
         }
         return AgrQueryResult(
@@ -3323,10 +3452,84 @@ def get_domain_field_term_options(
             count=len(helper_results),
             warnings=result.warnings,
             message=result.message,
-            lookup_status=(
-                LOOKUP_STATUS_SUCCESS if helper_results else LOOKUP_STATUS_NOT_FOUND
-            ),
+            lookup_status=_helper_lookup_status(helper_results),
+            failure_classification=None if helper_results else LOOKUP_STATUS_NOT_FOUND,
             lookup_attempts=lookup_attempts,
+        )
+
+    if term_source.get("kind") == "ontology":
+        if not normalized_phrase:
+            return _err(
+                f"{field_path} helper requires query or source_phrase.",
+                method="get_domain_field_term_options",
+                attempted_query=attempted_query,
+            )
+        lookup = policy.get("lookup")
+        if not isinstance(lookup, Mapping):
+            return _err(
+                "Ontology helper policy requires lookup metadata.",
+                method="get_domain_field_term_options",
+                attempted_query=attempted_query,
+                failure_classification=LOOKUP_STATUS_BLOCKED,
+            )
+        lookup_method = lookup.get("method")
+        if not isinstance(lookup_method, str):
+            return _err(
+                "Ontology helper policy requires a package lookup method.",
+                method="get_domain_field_term_options",
+                attempted_query=attempted_query,
+                failure_classification=LOOKUP_STATUS_BLOCKED,
+            )
+        if lookup.get("provider_required") and not data_provider:
+            warnings.append(f"{lookup_method}_skipped:data_provider_required")
+            result = None
+        else:
+            result = _ontology_lookup_result(
+                lookup_method=lookup_method,
+                normalized_phrase=normalized_phrase,
+                term_source=term_source,
+                lookup=lookup,
+                data_provider=data_provider,
+                exact_match=exact_match,
+                limit_value=limit_value,
+            )
+        if result is not None:
+            lookup_attempts.extend(result.lookup_attempts or [])
+            if result.status != "ok":
+                return result
+            warnings.extend(result.warnings or [])
+            for term in result.data or []:
+                if isinstance(term, Mapping):
+                    helper_results.append(
+                        _ontology_helper_result(
+                            term=term,
+                            field_path=field_path,
+                            slot_hint=field_path,
+                            term_source=term_source,
+                            lookup_method=lookup_method,
+                            source_phrase=normalized_phrase,
+                            queried_at=queried_at,
+                        )
+                    )
+        data = {
+            "domain_pack_id": domain_pack_id,
+            "object_type": object_type,
+            "field_path": field_path,
+            "source_phrase": normalized_phrase,
+            "term_source": dict(term_source),
+            "helper_results": helper_results,
+            "options": [_helper_option(item) for item in helper_results],
+            "match_status": _helper_match_status(helper_results),
+            "authority": "helper_guidance",
+        }
+        return AgrQueryResult(
+            status="ok",
+            data=data,
+            count=len(helper_results),
+            warnings=warnings or None,
+            lookup_status=_helper_lookup_status(helper_results),
+            failure_classification=None if helper_results else LOOKUP_STATUS_NOT_FOUND,
+            lookup_attempts=lookup_attempts or [attempted_query],
         )
 
     if term_source.get("kind") == "anatomical_site":
@@ -3370,7 +3573,7 @@ def get_domain_field_term_options(
                     method="search_anatomy_terms",
                     term=normalized_phrase,
                     data_provider=data_provider,
-                    exact_match=False,
+                    exact_match=exact_match,
                     include_synonyms=True,
                     limit=limit_value,
                 )
@@ -3379,7 +3582,7 @@ def get_domain_field_term_options(
                     method="search_go_terms",
                     term=normalized_phrase,
                     go_aspect=candidate_source.get("go_aspect"),
-                    exact_match=False,
+                    exact_match=exact_match,
                     include_synonyms=True,
                     limit=limit_value,
                 )
@@ -3413,6 +3616,8 @@ def get_domain_field_term_options(
             "source_phrase": normalized_phrase,
             "term_source": dict(term_source),
             "helper_results": helper_results,
+            "options": [_helper_option(item) for item in helper_results],
+            "match_status": _helper_match_status(helper_results),
             "required_any": (
                 routing.get("required_any") if isinstance(routing, Mapping) else None
             ),
@@ -3423,9 +3628,8 @@ def get_domain_field_term_options(
             data=data,
             count=len(helper_results),
             warnings=warnings or None,
-            lookup_status=(
-                LOOKUP_STATUS_SUCCESS if helper_results else LOOKUP_STATUS_NOT_FOUND
-            ),
+            lookup_status=_helper_lookup_status(helper_results),
+            failure_classification=None if helper_results else LOOKUP_STATUS_NOT_FOUND,
             lookup_attempts=lookup_attempts or [attempted_query],
         )
 

@@ -90,6 +90,7 @@ GENE_EXPRESSION_LINKML_CONTRACT_VALIDATOR_ID = (
 )
 VALID_GENE_EXPRESSION_RELATION_NAMES = frozenset({"is_expressed_in"})
 EXPRESSION_RELATION_VOCABULARY = "Expression Relation"
+CONTROLLED_FIELD_HELPER_TOOL_NAME = "get_domain_field_term_options"
 FORBIDDEN_PAYLOAD_EVIDENCE_FIELDS = frozenset(
     {
         "evidence_text",
@@ -142,6 +143,30 @@ def _payload_value_missing_or_blank(payload: Mapping[str, Any], field_path: str)
     if not field_path_exists(payload, field_path):
         return True
     return _value_missing_or_blank(_payload_value(payload, field_path))
+
+
+def _helper_selections(output: DomainEnvelopeExtractionResult) -> list[Mapping[str, Any]]:
+    selections = output.metadata.provenance.get("helper_selections")
+    if not isinstance(selections, list):
+        return []
+    return [entry for entry in selections if isinstance(entry, Mapping)]
+
+
+def _has_helper_selection(
+    output: DomainEnvelopeExtractionResult,
+    *,
+    field_path: str,
+    selected_value: str,
+) -> bool:
+    for selection in _helper_selections(output):
+        if selection.get("field_path") != field_path:
+            continue
+        if selection.get("source_tool") != CONTROLLED_FIELD_HELPER_TOOL_NAME:
+            continue
+        value = selection.get("selected_value", selection.get("value"))
+        if isinstance(value, str) and value.strip() == selected_value:
+            return True
+    return False
 
 
 def _diagnostic_details(
@@ -256,6 +281,16 @@ def validate_gene_expression_extraction_objects(
             errors.append(
                 f"{location}.payload relation.name must be a valid "
                 f"{EXPRESSION_RELATION_VOCABULARY} option"
+            )
+        elif not _has_helper_selection(
+            output,
+            field_path="relation.name",
+            selected_value=relation_name.strip(),
+        ):
+            errors.append(
+                f"{location}.payload relation.name must include "
+                "metadata.provenance.helper_selections[] evidence from "
+                f"{CONTROLLED_FIELD_HELPER_TOOL_NAME}"
             )
         data_provider = obj.payload.get("data_provider")
         provider_abbreviation = (

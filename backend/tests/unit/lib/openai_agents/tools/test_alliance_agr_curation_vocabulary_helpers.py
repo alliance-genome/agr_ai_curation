@@ -288,15 +288,28 @@ def test_domain_field_term_options_returns_gene_expression_relation(monkeypatch)
         "kind": "controlled_vocabulary",
         "vocabulary": "Expression Relation",
     }
-    assert helper_result["helper_result"] == {
-        "name": "is_expressed_in",
+    assert helper_result["value"] == "is_expressed_in"
+    assert helper_result["helper_result"]["value"] == "is_expressed_in"
+    assert helper_result["helper_result"]["vocabulary"] == "Expression Relation"
+    assert helper_result["helper_result"]["internal_id"] == 200000200
+    assert helper_result["helper_result"]["source"] == {
+        "provider": "alliance_curation_db",
+        "tool": "agr_curation_query",
+        "method": "search_vocabulary_terms",
+    }
+    assert result.data["options"][0] == {
+        "field_path": "relation.name",
+        "value": "is_expressed_in",
         "term_name": "is_expressed_in",
         "internal_id": 200000200,
-        "abbreviation": None,
-        "synonyms": [],
-        "obsolete": False,
-        "authority": "live_validated_option",
+        "vocabulary": "Expression Relation",
+        "source": {
+            "provider": "alliance_curation_db",
+            "tool": "agr_curation_query",
+            "method": "search_vocabulary_terms",
+        },
     }
+    assert result.data["match_status"] == "resolved"
     assert calls == [
         {
             "term": None,
@@ -306,6 +319,163 @@ def test_domain_field_term_options_returns_gene_expression_relation(monkeypatch)
             "include_obsolete": False,
             "limit": 25,
         }
+    ]
+
+
+def test_domain_field_term_options_refuses_undeclared_field(monkeypatch):
+    class FakeDb:
+        @staticmethod
+        def search_vocabulary_terms(**_kwargs):
+            raise AssertionError("undeclared fields must not reach broad lookup")
+
+    monkeypatch.setattr(
+        agr_curation,
+        "get_curation_resolver",
+        lambda: _Resolver(FakeDb()),
+    )
+
+    result = _term_helper_fn()(
+        domain_pack_id="agr.alliance.gene_expression",
+        object_type="GeneExpressionAnnotation",
+        field_path="single_reference.reference_id",
+        query="PMID:1",
+    )
+
+    assert result.status == "error"
+    assert result.lookup_status == "not_found"
+    assert "No domain-pack term helper policy" in (result.message or "")
+
+
+def test_domain_field_term_options_searches_assay_stage_and_direct_site_fields(monkeypatch):
+    calls = []
+
+    class FakeDb:
+        @staticmethod
+        def search_ontology_terms(**kwargs):
+            calls.append(("ontology", kwargs))
+            return [
+                SimpleNamespace(
+                    curie="MMO:0000655",
+                    name="reverse transcription polymerase chain reaction assay",
+                    ontology_type="MMOTerm",
+                )
+            ]
+
+        @staticmethod
+        def search_life_stage_terms(**kwargs):
+            calls.append(("stage", kwargs))
+            return [
+                SimpleNamespace(
+                    curie="ZFS:0000037",
+                    name="18 hpf",
+                    ontology_type="ZFSTerm",
+                )
+            ]
+
+        @staticmethod
+        def search_anatomy_terms(**kwargs):
+            calls.append(("anatomy", kwargs))
+            return [
+                SimpleNamespace(
+                    curie="ZFA:0001094",
+                    name="brain",
+                    ontology_type="ZFATerm",
+                )
+            ]
+
+        @staticmethod
+        def search_go_terms(**kwargs):
+            calls.append(("go", kwargs))
+            return [
+                SimpleNamespace(
+                    curie="GO:0005634",
+                    name="nucleus",
+                    namespace="cellular_component",
+                )
+            ]
+
+    monkeypatch.setattr(
+        agr_curation,
+        "get_curation_resolver",
+        lambda: _Resolver(FakeDb()),
+    )
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+
+    assay = _term_helper_fn()(
+        domain_pack_id="agr.alliance.gene_expression",
+        object_type="GeneExpressionAnnotation",
+        field_path="expression_experiment.expression_assay_used",
+        query="reverse transcription polymerase chain reaction assay",
+        exact_match=True,
+        limit=2,
+    )
+    stage = _term_helper_fn()(
+        domain_pack_id="agr.alliance.gene_expression",
+        object_type="GeneExpressionAnnotation",
+        field_path="when_expressed_stage_name",
+        source_phrase="18 hpf",
+        data_provider="ZFIN",
+    )
+    anatomy = _term_helper_fn()(
+        domain_pack_id="agr.alliance.gene_expression",
+        object_type="GeneExpressionAnnotation",
+        field_path="expression_pattern.where_expressed.anatomical_structure",
+        source_phrase="brain",
+        data_provider="ZFIN",
+    )
+    cellular = _term_helper_fn()(
+        domain_pack_id="agr.alliance.gene_expression",
+        object_type="GeneExpressionAnnotation",
+        field_path="expression_pattern.where_expressed.cellular_component",
+        source_phrase="nucleus",
+    )
+
+    assert assay.data["options"][0]["curie"] == "MMO:0000655"
+    assert assay.data["options"][0]["source"]["method"] == "search_ontology_terms"
+    assert stage.data["options"][0]["curie"] == "ZFS:0000037"
+    assert anatomy.data["options"][0]["curie"] == "ZFA:0001094"
+    assert cellular.data["options"][0]["curie"] == "GO:0005634"
+    assert calls == [
+        (
+            "ontology",
+            {
+                "term": "reverse transcription polymerase chain reaction assay",
+                "ontology_type": "MMOTerm",
+                "exact_match": True,
+                "include_synonyms": True,
+                "limit": 2,
+            },
+        ),
+        (
+            "stage",
+            {
+                "term": "18 hpf",
+                "data_provider": "ZFIN",
+                "exact_match": False,
+                "include_synonyms": True,
+                "limit": 25,
+            },
+        ),
+        (
+            "anatomy",
+            {
+                "term": "brain",
+                "data_provider": "ZFIN",
+                "exact_match": False,
+                "include_synonyms": True,
+                "limit": 25,
+            },
+        ),
+        (
+            "go",
+            {
+                "term": "nucleus",
+                "go_aspect": "cellular_component",
+                "exact_match": False,
+                "include_synonyms": True,
+                "limit": 25,
+            },
+        ),
     ]
 
 

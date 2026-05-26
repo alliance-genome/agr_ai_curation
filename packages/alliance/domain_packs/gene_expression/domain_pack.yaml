@@ -222,6 +222,19 @@ object_definitions:
             gene_primary_external_id: RGD:1586167
             gene_symbol: Tmem67
             data_provider: RGD
+      controlled_field_helper_gaps:
+        - field_path: condition_relations[].condition_relation_type
+          status: under_development
+          reason: Gene Expression condition context is not an active LinkML/domain-pack payload target in this pack yet; preserve condition text in metadata instead of inventing a relation vocabulary value.
+        - field_path: expression_experiment.detection_reagents
+          status: under_development
+          reason: Detection reagent/probe/construct/reporter LinkML payload materialization and package lookup helpers are not active yet; preserve exact paper labels and genotypes in metadata.
+        - field_path: expression_experiment.specimen_genomic_model
+          status: under_development
+          reason: Specimen AGM/genotype helper-backed materialization is not active for Gene Expression extraction yet; preserve specimen context in metadata.
+        - field_path: expression_experiment.specimen_alleles
+          status: under_development
+          reason: Specimen allele helper-backed materialization is not active for Gene Expression extraction yet; preserve allele/genotype context in metadata.
     fields:
       - field_path: unique_id
         field_type: string
@@ -580,6 +593,18 @@ object_definitions:
         required: true
         model_ref: OntologyTermSnapshotPayload
         metadata:
+          term_helper:
+            field_path: expression_experiment.expression_assay_used
+            authority: selector_evidence
+            term_source:
+              kind: ontology
+              ontology_family: assay
+              ontology_term_type: MMOTerm
+            lookup:
+              package_tool: get_domain_field_term_options
+              method: search_ontology_terms
+              ontology_term_type: MMOTerm
+              candidate_authority: selector_evidence
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -630,6 +655,17 @@ object_definitions:
         metadata:
           editable: true
           source_of_truth: alliance_linkml
+          term_helper:
+            field_path: when_expressed_stage_name
+            authority: selector_evidence
+            term_source:
+              kind: ontology
+              ontology_family: life_stage
+            lookup:
+              package_tool: get_domain_field_term_options
+              method: search_life_stage_terms
+              provider_required: true
+              candidate_authority: selector_evidence
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -693,6 +729,17 @@ object_definitions:
         display_name: Developmental stage start
         model_ref: OntologyTermSnapshotPayload
         metadata:
+          term_helper:
+            field_path: expression_pattern.when_expressed.developmental_stage_start
+            authority: selector_evidence
+            term_source:
+              kind: ontology
+              ontology_family: life_stage
+            lookup:
+              package_tool: get_domain_field_term_options
+              method: search_life_stage_terms
+              provider_required: true
+              candidate_authority: selector_evidence
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -770,6 +817,17 @@ object_definitions:
         display_name: Anatomical structure
         model_ref: OntologyTermSnapshotPayload
         metadata:
+          term_helper:
+            field_path: expression_pattern.where_expressed.anatomical_structure
+            authority: selector_evidence
+            term_source:
+              kind: ontology
+              ontology_family: anatomy
+            lookup:
+              package_tool: get_domain_field_term_options
+              method: search_anatomy_terms
+              provider_required: true
+              candidate_authority: selector_evidence
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -831,6 +889,17 @@ object_definitions:
         display_name: Cellular component
         model_ref: OntologyTermSnapshotPayload
         metadata:
+          term_helper:
+            field_path: expression_pattern.where_expressed.cellular_component
+            authority: selector_evidence
+            term_source:
+              kind: ontology
+              ontology_family: go
+              go_aspect: cellular_component
+            lookup:
+              package_tool: get_domain_field_term_options
+              method: search_go_terms
+              candidate_authority: selector_evidence
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
