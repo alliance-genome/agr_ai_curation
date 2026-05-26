@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -12,19 +11,6 @@ from src.lib.packages import (
     load_package_registry,
 )
 from src.lib.packages.paths import get_runtime_packages_dir
-
-
-@dataclass(frozen=True)
-class RegisteredCurationAdapter:
-    """One fully registered curation adapter."""
-
-    adapter_key: str
-    candidate_normalizer: Any
-    export_adapter: Any | None = None
-    submission_transport_adapters: tuple[Any, ...] = ()
-    domain_pack: Any | None = None
-    domain_envelope_validator: Any | None = None
-    review_row_materializer: Any | None = None
 
 
 class CurationAdapterRegistry:
