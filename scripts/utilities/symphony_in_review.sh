@@ -41,6 +41,7 @@ EOF
 
 issue_identifier=""
 branch=""
+branch_provided="false"
 repo=""
 review_author="claude"
 linear_api_key=""
@@ -53,7 +54,7 @@ linear_json_file=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --issue-identifier) issue_identifier="${2:-}"; shift 2 ;;
-    --branch) branch="${2:-}"; shift 2 ;;
+    --branch) branch="${2:-}"; branch_provided="true"; shift 2 ;;
     --repo) repo="${2:-}"; shift 2 ;;
     --review-author) review_author="${2:-}"; shift 2 ;;
     --linear-api-key) linear_api_key="${2:-}"; shift 2 ;;
@@ -72,7 +73,7 @@ if [[ -z "${issue_identifier}" ]]; then
   exit 2
 fi
 
-if [[ -z "${branch}" ]]; then
+if [[ -z "${branch}" && "${branch_provided}" != "true" ]]; then
   branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 fi
 
