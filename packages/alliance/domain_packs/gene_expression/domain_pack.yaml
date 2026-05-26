@@ -653,6 +653,9 @@ object_definitions:
         required: true
         metadata:
           editable: true
+          validatable: true
+          validator_binding_id: expression_stage_ontology_validation
+          validator_state: active
           source_of_truth: alliance_linkml
           term_helper:
             field_path: when_expressed_stage_name
@@ -728,6 +731,9 @@ object_definitions:
         display_name: Developmental stage start
         model_ref: OntologyTermSnapshotPayload
         metadata:
+          validatable: true
+          validator_binding_id: expression_stage_ontology_validation
+          validator_state: active
           term_helper:
             field_path: expression_pattern.when_expressed.developmental_stage_start
             authority: selector_evidence
@@ -749,11 +755,63 @@ object_definitions:
               range: StageTerm
               db_table: temporalcontext
               db_column: developmentalstagestart_id
+      - field_path: expression_pattern.when_expressed.developmental_stage_start.curie
+        field_type: string
+        display_name: Developmental stage start CURIE
+        metadata:
+          editable: true
+          validatable: true
+          validator_binding_id: expression_stage_ontology_validation
+          validator_state: active
+          source_of_truth: alliance_linkml
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/core.yaml
+              class: StageTerm
+              slot: curie
+              range: uriorcurie
+              db_table: ontologyterm
+              db_column: curie
+      - field_path: expression_pattern.when_expressed.developmental_stage_start.name
+        field_type: string
+        display_name: Developmental stage start name
+        metadata:
+          editable: true
+          validatable: true
+          validator_binding_id: expression_stage_ontology_validation
+          validator_state: active
+          source_of_truth: alliance_linkml
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/core.yaml
+              class: StageTerm
+              slot: name
+              range: string
+              db_table: ontologyterm
+              db_column: name
       - field_path: expression_pattern.when_expressed.stage_uberon_slim_terms
         field_type: array
         display_name: Stage UBERON slim terms
         model_ref: OntologyTermSnapshotPayload
         metadata:
+          validatable: true
+          validator_binding_id: expression_stage_uberon_slim_validation
+          validator_state: active
+          term_helper:
+            field_path: expression_pattern.when_expressed.stage_uberon_slim_terms
+            authority: selector_evidence
+            term_source:
+              kind: ontology
+              ontology_family: uberon
+              ontology_term_type: UBERONTerm
+            lookup:
+              package_tool: get_domain_field_term_options
+              method: search_ontology_terms
+              candidate_authority: selector_evidence
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -816,6 +874,9 @@ object_definitions:
         display_name: Anatomical structure
         model_ref: OntologyTermSnapshotPayload
         metadata:
+          validatable: true
+          validator_binding_id: expression_anatomical_structure_validation
+          validator_state: active
           term_helper:
             field_path: expression_pattern.where_expressed.anatomical_structure
             authority: selector_evidence
@@ -842,6 +903,9 @@ object_definitions:
         display_name: Anatomical structure CURIE
         metadata:
           editable: true
+          validatable: true
+          validator_binding_id: expression_anatomical_structure_validation
+          validator_state: active
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
@@ -858,6 +922,9 @@ object_definitions:
         display_name: Anatomical structure name
         metadata:
           editable: true
+          validatable: true
+          validator_binding_id: expression_anatomical_structure_validation
+          validator_state: active
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
@@ -874,6 +941,20 @@ object_definitions:
         display_name: Anatomical structure UBERON slim terms
         model_ref: OntologyTermSnapshotPayload
         metadata:
+          validatable: true
+          validator_binding_id: expression_anatomical_uberon_slim_validation
+          validator_state: active
+          term_helper:
+            field_path: expression_pattern.where_expressed.anatomical_structure_uberon_terms
+            authority: selector_evidence
+            term_source:
+              kind: ontology
+              ontology_family: uberon
+              ontology_term_type: UBERONTerm
+            lookup:
+              package_tool: get_domain_field_term_options
+              method: search_ontology_terms
+              candidate_authority: selector_evidence
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -888,6 +969,9 @@ object_definitions:
         display_name: Cellular component
         model_ref: OntologyTermSnapshotPayload
         metadata:
+          validatable: true
+          validator_binding_id: expression_cellular_component_validation
+          validator_state: active
           term_helper:
             field_path: expression_pattern.where_expressed.cellular_component
             authority: selector_evidence
@@ -914,6 +998,9 @@ object_definitions:
         display_name: Cellular component CURIE
         metadata:
           editable: true
+          validatable: true
+          validator_binding_id: expression_cellular_component_validation
+          validator_state: active
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
@@ -930,6 +1017,9 @@ object_definitions:
         display_name: Cellular component name
         metadata:
           editable: true
+          validatable: true
+          validator_binding_id: expression_cellular_component_validation
+          validator_state: active
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
@@ -946,6 +1036,20 @@ object_definitions:
         display_name: Cellular component qualifiers
         model_ref: OntologyTermSnapshotPayload
         metadata:
+          validatable: true
+          validator_binding_id: expression_cellular_component_qualifier_validation
+          validator_state: active
+          term_helper:
+            field_path: expression_pattern.where_expressed.cellular_component_qualifiers
+            authority: selector_evidence
+            term_source:
+              kind: ontology
+              ontology_family: go
+              go_aspect: cellular_component
+            lookup:
+              package_tool: get_domain_field_term_options
+              method: search_go_terms
+              candidate_authority: selector_evidence
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -1030,10 +1134,28 @@ metadata:
       - validator_id: source_reference_validation
         display_name: Source reference validation
         description: Active package binding resolves embedded literature/reference identifiers through the API-backed reference validator.
+      - validator_id: expression_stage_ontology_validation
+        display_name: Expression stage ontology lookup
+        description: Active package binding resolves paper-facing GeneExpressionAnnotation stage labels to authoritative stage ontology terms while preserving original labels in materialization metadata.
+      - validator_id: expression_stage_uberon_slim_validation
+        display_name: Stage UBERON slim lookup
+        description: Active package binding validates and materializes stage UBERON slim term arrays through ontology lookup evidence.
+      - validator_id: expression_anatomical_structure_validation
+        display_name: Anatomical structure ontology lookup
+        description: Active package binding resolves anatomical expression-site labels and CURIEs to authoritative anatomy ontology terms.
+      - validator_id: expression_anatomical_uberon_slim_validation
+        display_name: Anatomical UBERON slim lookup
+        description: Active package binding validates and materializes anatomical UBERON slim term arrays through ontology lookup evidence.
+      - validator_id: expression_cellular_component_validation
+        display_name: GO cellular component lookup
+        description: Active package binding resolves GO cellular-component expression-site labels and CURIEs while allowing cellular-component-only sites.
+      - validator_id: expression_cellular_component_qualifier_validation
+        display_name: GO cellular component qualifier lookup
+        description: Active package binding validates and materializes cellular-component qualifier term arrays through GO cellular-component lookup evidence.
     under_development:
       - validator_id: gene_expression.ontology_term_resolution
-        display_name: Expression ontology term resolution
-        description: Validate embedded MMO assay, stage, anatomy, UBERON, and GO term CURIEs against configured Alliance ontology sources.
+        display_name: Assay ontology term resolution
+        description: Validate embedded MMO assay/method CURIEs against configured Alliance ontology sources after the assay/context split promotes those targets.
       - validator_id: gene_expression.reagent_context_materialization
         display_name: Reagent context materialization
         description: Preserve reagent, genotype, reporter, and strain context as evidence metadata until explicit LinkML/export materialization targets and validators are active.
@@ -1175,13 +1297,221 @@ metadata:
         allow_opt_out: true
         curator_override:
           allowed: false
-    under_development:
-      - binding_id: expression_context_ontology_validation
-        display_name: Expression context ontology validation
+      - binding_id: expression_stage_ontology_validation
+        display_name: Expression stage ontology lookup
         validator_agent:
           package_id: agr.alliance
           agent_id: ontology_term_validation
-        state_explanation: Assay, stage, anatomy, UBERON, cellular-component, and qualifier ontology validation remains metadata-only until per-field selectors and result materialization are promoted.
+        applies_to:
+          domain_pack_id: agr.alliance.gene_expression
+          object_types:
+            - GeneExpressionAnnotation
+          field_paths:
+            - when_expressed_stage_name
+        input_fields:
+          label:
+            source: payload
+            path: when_expressed_stage_name
+          data_provider:
+            source: payload
+            path: data_provider.abbreviation
+            required: false
+          ontology_family:
+            source: literal
+            value: life_stage
+          lookup_method:
+            source: literal
+            value: search_life_stage_terms
+        expected_result_fields:
+          label: when_expressed_stage_name
+          curie: expression_pattern.when_expressed.developmental_stage_start.curie
+          name: expression_pattern.when_expressed.developmental_stage_start.name
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
+      - binding_id: expression_stage_uberon_slim_validation
+        display_name: Stage UBERON slim lookup
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: ontology_term_validation
+        applies_to:
+          domain_pack_id: agr.alliance.gene_expression
+          object_types:
+            - GeneExpressionAnnotation
+          field_paths:
+            - expression_pattern.when_expressed.stage_uberon_slim_terms
+        input_fields:
+          terms:
+            source: payload
+            path: expression_pattern.when_expressed.stage_uberon_slim_terms
+            required: false
+            allow_multiple: true
+          ontology_family:
+            source: literal
+            value: uberon
+          ontology_term_type:
+            source: literal
+            value: UBERONTerm
+          lookup_method:
+            source: literal
+            value: search_ontology_terms
+        expected_result_fields:
+          terms: expression_pattern.when_expressed.stage_uberon_slim_terms
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
+      - binding_id: expression_anatomical_structure_validation
+        display_name: Anatomical structure ontology lookup
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: ontology_term_validation
+        applies_to:
+          domain_pack_id: agr.alliance.gene_expression
+          object_types:
+            - GeneExpressionAnnotation
+          field_paths:
+            - expression_pattern.where_expressed.anatomical_structure
+        input_fields:
+          curie:
+            source: payload
+            path: expression_pattern.where_expressed.anatomical_structure.curie
+            required: false
+          label:
+            source: payload
+            path: expression_pattern.where_expressed.anatomical_structure.name
+            required: false
+          data_provider:
+            source: payload
+            path: data_provider.abbreviation
+            required: false
+          ontology_family:
+            source: literal
+            value: anatomy
+          lookup_method:
+            source: literal
+            value: search_anatomy_terms
+        expected_result_fields:
+          curie: expression_pattern.where_expressed.anatomical_structure.curie
+          name: expression_pattern.where_expressed.anatomical_structure.name
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
+      - binding_id: expression_anatomical_uberon_slim_validation
+        display_name: Anatomical UBERON slim lookup
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: ontology_term_validation
+        applies_to:
+          domain_pack_id: agr.alliance.gene_expression
+          object_types:
+            - GeneExpressionAnnotation
+          field_paths:
+            - expression_pattern.where_expressed.anatomical_structure_uberon_terms
+        input_fields:
+          terms:
+            source: payload
+            path: expression_pattern.where_expressed.anatomical_structure_uberon_terms
+            required: false
+            allow_multiple: true
+          ontology_family:
+            source: literal
+            value: uberon
+          ontology_term_type:
+            source: literal
+            value: UBERONTerm
+          lookup_method:
+            source: literal
+            value: search_ontology_terms
+        expected_result_fields:
+          terms: expression_pattern.where_expressed.anatomical_structure_uberon_terms
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
+      - binding_id: expression_cellular_component_validation
+        display_name: GO cellular component lookup
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: ontology_term_validation
+        applies_to:
+          domain_pack_id: agr.alliance.gene_expression
+          object_types:
+            - GeneExpressionAnnotation
+          field_paths:
+            - expression_pattern.where_expressed.cellular_component
+        input_fields:
+          curie:
+            source: payload
+            path: expression_pattern.where_expressed.cellular_component.curie
+            required: false
+          label:
+            source: payload
+            path: expression_pattern.where_expressed.cellular_component.name
+            required: false
+          ontology_family:
+            source: literal
+            value: go
+          go_aspect:
+            source: literal
+            value: cellular_component
+          lookup_method:
+            source: literal
+            value: search_go_terms
+        expected_result_fields:
+          curie: expression_pattern.where_expressed.cellular_component.curie
+          name: expression_pattern.where_expressed.cellular_component.name
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
+      - binding_id: expression_cellular_component_qualifier_validation
+        display_name: GO cellular component qualifier lookup
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: ontology_term_validation
+        applies_to:
+          domain_pack_id: agr.alliance.gene_expression
+          object_types:
+            - GeneExpressionAnnotation
+          field_paths:
+            - expression_pattern.where_expressed.cellular_component_qualifiers
+        input_fields:
+          terms:
+            source: payload
+            path: expression_pattern.where_expressed.cellular_component_qualifiers
+            required: false
+            allow_multiple: true
+          ontology_family:
+            source: literal
+            value: go
+          go_aspect:
+            source: literal
+            value: cellular_component
+          lookup_method:
+            source: literal
+            value: search_go_terms
+        expected_result_fields:
+          terms: expression_pattern.where_expressed.cellular_component_qualifiers
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
+    under_development:
+      - binding_id: expression_context_ontology_validation
+        display_name: Assay ontology validation
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: ontology_term_validation
+        state_explanation: Assay/method ontology validation remains metadata-only until the assay/context split promotes per-field selectors and result materialization.
         applies_to:
           domain_pack_id: agr.alliance.gene_expression
           object_types:
@@ -1189,17 +1519,6 @@ metadata:
           field_paths:
             - expression_experiment.expression_assay_used.curie
             - expression_experiment.expression_assay_used.name
-            - when_expressed_stage_name
-            - expression_pattern.when_expressed.developmental_stage_start
-            - expression_pattern.when_expressed.stage_uberon_slim_terms
-            - expression_pattern.where_expressed.anatomical_structure
-            - expression_pattern.where_expressed.anatomical_structure.curie
-            - expression_pattern.where_expressed.anatomical_structure.name
-            - expression_pattern.where_expressed.anatomical_structure_uberon_terms
-            - expression_pattern.where_expressed.cellular_component
-            - expression_pattern.where_expressed.cellular_component.curie
-            - expression_pattern.where_expressed.cellular_component.name
-            - expression_pattern.where_expressed.cellular_component_qualifiers
       - binding_id: reagent_context_materialization
         display_name: Reagent context materialization
         state_explanation: Reagent, genotype, reporter, and strain details currently remain in metadata.raw_mentions, metadata.normalization_notes, metadata.ambiguities, or object metadata; no LinkML payload field or validator materialization target is active yet.

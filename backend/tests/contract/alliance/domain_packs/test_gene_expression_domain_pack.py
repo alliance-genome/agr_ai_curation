@@ -11,11 +11,17 @@ from typing import Any
 import pytest
 import yaml
 
+from src.lib.domain_packs.input_selectors import build_domain_validation_request
 from src.lib.domain_packs.loader import load_domain_fixture_pack
+from src.lib.domain_packs.materialization import (
+    ValidatorResultMaterializationInput,
+    materialize_validator_results_into_envelope,
+)
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
     ValidationBindingState,
 )
+from src.schemas.domain_validator import DomainValidatorResultBase
 from src.schemas.domain_envelope import (
     CuratableObjectStatus,
     ValidationFindingSeverity,
@@ -134,6 +140,59 @@ def _finding_by_code(findings: tuple[Any, ...], code: str):
     matches = [finding for finding in findings if finding.code == code]
     assert len(matches) == 1
     return matches[0]
+
+
+def _active_binding_match(envelope: Any, binding_id: str):
+    matches = [
+        match
+        for match in _gene_expression_validation_registry().match_bindings(
+            envelope,
+            states=[ValidationBindingState.ACTIVE],
+        )
+        if match.binding.binding_id == binding_id
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def _validator_result(
+    request: Any,
+    *,
+    status: str,
+    resolved_values: Mapping[str, Any] | None = None,
+    missing_expected_fields: list[str] | None = None,
+    lookup_outcome: str = "success",
+    candidates: list[dict[str, Any]] | None = None,
+    curator_message: str | None = None,
+) -> DomainValidatorResultBase:
+    return DomainValidatorResultBase(
+        status=status,
+        request_id=request.request_id,
+        validator_binding_id=request.validator_binding_id,
+        validator_agent=request.validator_agent,
+        target=request.target,
+        resolved_values=dict(resolved_values or {}),
+        resolved_objects=[],
+        missing_expected_fields=(
+            missing_expected_fields
+            if missing_expected_fields is not None
+            else list(request.expected_result_fields)
+            if status != "resolved"
+            else []
+        ),
+        candidates=list(candidates or []),
+        lookup_attempts=[
+            {
+                "provider": "fixture",
+                "method": request.selected_inputs.get("lookup_method", "fixture_lookup"),
+                "query": dict(request.selected_inputs),
+                "result_count": 1 if status == "resolved" else len(candidates or []),
+                "outcome": lookup_outcome,
+            }
+        ],
+        curator_message=curator_message or f"Fixture {status} ontology result.",
+        explanation="Fixture-backed validator result for gene-expression contract tests.",
+    )
 
 
 def test_gene_expression_domain_pack_is_bundled_with_concrete_metadata():
@@ -258,6 +317,12 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
     }
     assert set(active_bindings) == {
         "data_provider_validation",
+        "expression_anatomical_structure_validation",
+        "expression_anatomical_uberon_slim_validation",
+        "expression_cellular_component_qualifier_validation",
+        "expression_cellular_component_validation",
+        "expression_stage_ontology_validation",
+        "expression_stage_uberon_slim_validation",
         "relation_vocabulary_validation",
         "source_reference_validation",
         "subject_gene_validation",
@@ -285,6 +350,39 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
         "single_reference.curie",
         "single_reference.title",
     )
+    assert active_bindings["expression_stage_ontology_validation"].field_paths == (
+        "when_expressed_stage_name",
+    )
+    assert active_bindings["expression_stage_ontology_validation"].validator_agent is not None
+    assert active_bindings["expression_stage_ontology_validation"].validator_agent.agent_id == (
+        "ontology_term_validation"
+    )
+    assert active_bindings[
+        "expression_stage_ontology_validation"
+    ].expected_result_fields == {
+        "label": "when_expressed_stage_name",
+        "curie": "expression_pattern.when_expressed.developmental_stage_start.curie",
+        "name": "expression_pattern.when_expressed.developmental_stage_start.name",
+    }
+    assert active_bindings["expression_stage_uberon_slim_validation"].field_paths == (
+        "expression_pattern.when_expressed.stage_uberon_slim_terms",
+    )
+    assert active_bindings["expression_anatomical_structure_validation"].field_paths == (
+        "expression_pattern.where_expressed.anatomical_structure",
+    )
+    assert active_bindings[
+        "expression_anatomical_uberon_slim_validation"
+    ].field_paths == (
+        "expression_pattern.where_expressed.anatomical_structure_uberon_terms",
+    )
+    assert active_bindings["expression_cellular_component_validation"].field_paths == (
+        "expression_pattern.where_expressed.cellular_component",
+    )
+    assert active_bindings[
+        "expression_cellular_component_qualifier_validation"
+    ].field_paths == (
+        "expression_pattern.where_expressed.cellular_component_qualifiers",
+    )
 
     active_validator_ids = {
         entry.validator_id
@@ -293,6 +391,12 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
     }
     assert {
         "data_provider_validation",
+        "expression_anatomical_structure_validation",
+        "expression_anatomical_uberon_slim_validation",
+        "expression_cellular_component_qualifier_validation",
+        "expression_cellular_component_validation",
+        "expression_stage_ontology_validation",
+        "expression_stage_uberon_slim_validation",
         "relation_vocabulary_validation",
         "source_reference_validation",
         "subject_gene_validation",
@@ -321,11 +425,21 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
     planned_gap_fields = {
         "expression_experiment.expression_assay_used.curie",
         "expression_experiment.expression_assay_used.name",
+    }
+    promoted_materialization_fields = {
         "when_expressed_stage_name",
+        "expression_pattern.when_expressed.developmental_stage_start",
+        "expression_pattern.when_expressed.developmental_stage_start.curie",
+        "expression_pattern.when_expressed.developmental_stage_start.name",
+        "expression_pattern.when_expressed.stage_uberon_slim_terms",
+        "expression_pattern.where_expressed.anatomical_structure",
         "expression_pattern.where_expressed.anatomical_structure.curie",
         "expression_pattern.where_expressed.anatomical_structure.name",
+        "expression_pattern.where_expressed.anatomical_structure_uberon_terms",
+        "expression_pattern.where_expressed.cellular_component",
         "expression_pattern.where_expressed.cellular_component.curie",
         "expression_pattern.where_expressed.cellular_component.name",
+        "expression_pattern.where_expressed.cellular_component_qualifiers",
     }
     promoted_normalization_fields = {
         "expression_annotation_subject.primary_external_id",
@@ -333,6 +447,12 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
         "single_reference.reference_id",
         "single_reference.curie",
         "single_reference.title",
+        "when_expressed_stage_name",
+        "expression_pattern.when_expressed.stage_uberon_slim_terms",
+        "expression_pattern.where_expressed.anatomical_structure",
+        "expression_pattern.where_expressed.anatomical_structure_uberon_terms",
+        "expression_pattern.where_expressed.cellular_component",
+        "expression_pattern.where_expressed.cellular_component_qualifiers",
     }
     active_field_paths = {
         field_path
@@ -358,8 +478,357 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
         if fields_by_path[field_path].metadata.get("validator_state") == "active"
     ]
     assert silently_active_gap_fields == []
-    for field_path in promoted_normalization_fields:
+    for field_path in promoted_materialization_fields:
         assert fields_by_path[field_path].metadata["validator_state"] == "active"
+
+
+def test_gene_expression_context_ontology_requests_are_field_scoped():
+    envelope = _converted_tmem67_envelope()
+
+    stage_match = _active_binding_match(
+        envelope,
+        "expression_stage_ontology_validation",
+    )
+    stage_request = build_domain_validation_request(stage_match).request
+    assert stage_request is not None
+    assert stage_request.target.field_path == "when_expressed_stage_name"
+    assert stage_request.selected_inputs == {
+        "label": "TS26",
+        "data_provider": "MGI",
+        "ontology_family": "life_stage",
+        "lookup_method": "search_life_stage_terms",
+    }
+    assert stage_request.expected_result_fields == {
+        "label": "when_expressed_stage_name",
+        "curie": "expression_pattern.when_expressed.developmental_stage_start.curie",
+        "name": "expression_pattern.when_expressed.developmental_stage_start.name",
+    }
+
+    anatomy_match = _active_binding_match(
+        envelope,
+        "expression_anatomical_structure_validation",
+    )
+    anatomy_request = build_domain_validation_request(anatomy_match).request
+    assert anatomy_request is not None
+    assert anatomy_request.target.field_path == (
+        "expression_pattern.where_expressed.anatomical_structure"
+    )
+    assert anatomy_request.selected_inputs == {
+        "curie": "EMAPA:17373",
+        "label": "metanephros",
+        "data_provider": "MGI",
+        "ontology_family": "anatomy",
+        "lookup_method": "search_anatomy_terms",
+    }
+
+    uberon_match = _active_binding_match(
+        envelope,
+        "expression_anatomical_uberon_slim_validation",
+    )
+    uberon_request = build_domain_validation_request(uberon_match).request
+    assert uberon_request is not None
+    assert uberon_request.selected_inputs["terms"] == [
+        {"curie": "UBERON:0001008", "name": "renal system"}
+    ]
+    assert uberon_request.selected_inputs["ontology_term_type"] == "UBERONTerm"
+
+
+def test_gene_expression_cellular_component_only_site_remains_validatable():
+    envelope = _converted_tmem67_envelope()
+    payload = copy.deepcopy(envelope.objects[0].payload)
+    payload["expression_pattern"]["where_expressed"] = {
+        "cellular_component": {"name": "nucleus"}
+    }
+    envelope = _with_payload(envelope, payload)
+
+    findings = validate_pending_gene_expression_envelope(envelope)
+    assert [
+        finding
+        for finding in findings
+        if finding.code == "alliance.gene_expression.anatomical_site_missing"
+    ] == []
+
+    match = _active_binding_match(envelope, "expression_cellular_component_validation")
+    request = build_domain_validation_request(match).request
+    assert request is not None
+    assert request.selected_inputs == {
+        "label": "nucleus",
+        "ontology_family": "go",
+        "go_aspect": "cellular_component",
+        "lookup_method": "search_go_terms",
+    }
+
+    result = materialize_validator_results_into_envelope(
+        envelope,
+        _gene_expression_pack().metadata,
+        [
+            ValidatorResultMaterializationInput(
+                match=match,
+                request=request,
+                result=_validator_result(
+                    request,
+                    status="resolved",
+                    resolved_values={
+                        "curie": "GO:0005634",
+                        "name": "nucleus",
+                    },
+                ),
+            )
+        ],
+    )
+
+    where_expressed = result.envelope.objects[0].payload["expression_pattern"][
+        "where_expressed"
+    ]
+    assert where_expressed == {
+        "cellular_component": {
+            "curie": "GO:0005634",
+            "name": "nucleus",
+        }
+    }
+    patch_event = result.envelope.objects[0].metadata[
+        "validator_resolved_value_materialization"
+    ][0]
+    assert patch_event["original_values"] == {
+        "expression_pattern.where_expressed.cellular_component.name": "nucleus"
+    }
+    resolved_field_ref = result.appended_findings[0].field_ref
+    assert resolved_field_ref is not None
+    assert resolved_field_ref.field_path == (
+        "expression_pattern.where_expressed.cellular_component"
+    )
+
+
+def test_gene_expression_stage_and_site_terms_materialize_from_validator_results():
+    envelope = _converted_tmem67_envelope()
+    stage_match = _active_binding_match(
+        envelope,
+        "expression_stage_ontology_validation",
+    )
+    anatomy_match = _active_binding_match(
+        envelope,
+        "expression_anatomical_structure_validation",
+    )
+    stage_request = build_domain_validation_request(stage_match).request
+    anatomy_request = build_domain_validation_request(anatomy_match).request
+    assert stage_request is not None
+    assert anatomy_request is not None
+
+    result = materialize_validator_results_into_envelope(
+        envelope,
+        _gene_expression_pack().metadata,
+        [
+            ValidatorResultMaterializationInput(
+                match=stage_match,
+                request=stage_request,
+                result=_validator_result(
+                    stage_request,
+                    status="resolved",
+                    resolved_values={
+                        "label": "Theiler stage 26",
+                        "curie": "FIXTURE_STAGE:00026",
+                        "name": "Theiler stage 26",
+                    },
+                ),
+            ),
+            ValidatorResultMaterializationInput(
+                match=anatomy_match,
+                request=anatomy_request,
+                result=_validator_result(
+                    anatomy_request,
+                    status="resolved",
+                    resolved_values={
+                        "curie": "EMAPA:17373",
+                        "name": "metanephros",
+                    },
+                ),
+            ),
+        ],
+    )
+
+    payload = result.envelope.objects[0].payload
+    assert payload["when_expressed_stage_name"] == "Theiler stage 26"
+    assert payload["expression_pattern"]["when_expressed"][
+        "developmental_stage_start"
+    ] == {
+        "curie": "FIXTURE_STAGE:00026",
+        "name": "Theiler stage 26",
+    }
+    assert payload["expression_pattern"]["where_expressed"][
+        "anatomical_structure"
+    ] == {
+        "curie": "EMAPA:17373",
+        "name": "metanephros",
+    }
+    stage_patch = result.envelope.objects[0].metadata[
+        "validator_resolved_value_materialization"
+    ][0]
+    assert stage_patch["original_values"] == {
+        "when_expressed_stage_name": "TS26"
+    }
+    assert [finding.status.value for finding in result.appended_findings] == [
+        "resolved",
+        "resolved",
+    ]
+
+
+def test_gene_expression_slim_and_qualifier_arrays_materialize_from_validator_results():
+    envelope = _converted_tmem67_envelope()
+    payload = copy.deepcopy(envelope.objects[0].payload)
+    payload["expression_pattern"]["when_expressed"] = {
+        "stage_uberon_slim_terms": [{"name": "embryonic stage"}]
+    }
+    payload["expression_pattern"]["where_expressed"][
+        "cellular_component_qualifiers"
+    ] = [{"name": "nuclear lumen"}]
+    envelope = _with_payload(envelope, payload)
+
+    stage_uberon_match = _active_binding_match(
+        envelope,
+        "expression_stage_uberon_slim_validation",
+    )
+    anatomy_uberon_match = _active_binding_match(
+        envelope,
+        "expression_anatomical_uberon_slim_validation",
+    )
+    qualifier_match = _active_binding_match(
+        envelope,
+        "expression_cellular_component_qualifier_validation",
+    )
+    stage_request = build_domain_validation_request(stage_uberon_match).request
+    anatomy_request = build_domain_validation_request(anatomy_uberon_match).request
+    qualifier_request = build_domain_validation_request(qualifier_match).request
+    assert stage_request is not None
+    assert anatomy_request is not None
+    assert qualifier_request is not None
+
+    result = materialize_validator_results_into_envelope(
+        envelope,
+        _gene_expression_pack().metadata,
+        [
+            ValidatorResultMaterializationInput(
+                match=stage_uberon_match,
+                request=stage_request,
+                result=_validator_result(
+                    stage_request,
+                    status="resolved",
+                    resolved_values={
+                        "terms": [
+                            {
+                                "curie": "UBERON:0000068",
+                                "name": "embryonic stage",
+                            }
+                        ]
+                    },
+                ),
+            ),
+            ValidatorResultMaterializationInput(
+                match=anatomy_uberon_match,
+                request=anatomy_request,
+                result=_validator_result(
+                    anatomy_request,
+                    status="resolved",
+                    resolved_values={
+                        "terms": [
+                            {
+                                "curie": "UBERON:0001008",
+                                "name": "renal system",
+                            }
+                        ]
+                    },
+                ),
+            ),
+            ValidatorResultMaterializationInput(
+                match=qualifier_match,
+                request=qualifier_request,
+                result=_validator_result(
+                    qualifier_request,
+                    status="resolved",
+                    resolved_values={
+                        "terms": [
+                            {
+                                "curie": "GO:0031981",
+                                "name": "nuclear lumen",
+                            }
+                        ]
+                    },
+                ),
+            ),
+        ],
+    )
+
+    payload = result.envelope.objects[0].payload
+    assert payload["expression_pattern"]["when_expressed"][
+        "stage_uberon_slim_terms"
+    ] == [{"curie": "UBERON:0000068", "name": "embryonic stage"}]
+    assert payload["expression_pattern"]["where_expressed"][
+        "anatomical_structure_uberon_terms"
+    ] == [{"curie": "UBERON:0001008", "name": "renal system"}]
+    assert payload["expression_pattern"]["where_expressed"][
+        "cellular_component_qualifiers"
+    ] == [{"curie": "GO:0031981", "name": "nuclear lumen"}]
+
+
+@pytest.mark.parametrize(
+    ("lookup_outcome", "expected_status"),
+    [
+        ("ambiguous", "ambiguous"),
+        ("not_found", "not_found"),
+        ("conflict", "blocked"),
+    ],
+)
+def test_gene_expression_context_ontology_unresolved_outcomes_stay_field_addressed(
+    lookup_outcome: str,
+    expected_status: str,
+):
+    envelope = _converted_tmem67_envelope()
+    match = _active_binding_match(
+        envelope,
+        "expression_anatomical_structure_validation",
+    )
+    request = build_domain_validation_request(match).request
+    assert request is not None
+
+    result = materialize_validator_results_into_envelope(
+        envelope,
+        _gene_expression_pack().metadata,
+        [
+            ValidatorResultMaterializationInput(
+                match=match,
+                request=request,
+                result=_validator_result(
+                    request,
+                    status="unresolved",
+                    missing_expected_fields=[],
+                    lookup_outcome=lookup_outcome,
+                    candidates=[
+                        {
+                            "value": "EMAPA:17373",
+                            "label": "metanephros",
+                            "object_type": "OntologyTerm",
+                        }
+                    ],
+                    curator_message=(
+                        "Paper-facing anatomy label requires curator review."
+                    ),
+                ),
+            )
+        ],
+    )
+
+    assert result.materialized_objects == ()
+    assert result.envelope.objects[0].payload == envelope.objects[0].payload
+    finding = result.appended_findings[0]
+    assert finding.code == "domain_pack.validator_unresolved"
+    assert finding.field_ref is not None
+    assert finding.field_ref.field_path == (
+        "expression_pattern.where_expressed.anatomical_structure"
+    )
+    assert finding.details["validation_result"]["status"] == "unresolved"
+    assert finding.details["validation_result"]["lookup_attempts"][0]["outcome"] == (
+        lookup_outcome
+    )
+    assert finding.details["lookup_attempts"][0]["lookup_status"] == expected_status
 
 
 def test_tmem67_fixture_validates_as_pending_gene_expression_annotation():
