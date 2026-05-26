@@ -1701,6 +1701,86 @@ def test_resolved_array_validator_result_rejects_invalid_item_projection(
     assert "one resolved value per selected array item" in result.explanation
 
 
+def test_resolved_array_validator_result_accepts_allowed_term_curies():
+    base_request = _array_terms_validation_request()
+    request = base_request.model_copy(
+        update={
+            "selected_inputs": {
+                **base_request.selected_inputs,
+                "allowed_term_curies": ["GO:0031981", "GO:0005654"],
+            }
+        }
+    )
+    payload = _result_payload(
+        request,
+        resolved_values={
+            "terms": [
+                {"curie": "GO:0031981", "name": "nuclear lumen"},
+                {"curie": "GO:0005654", "name": "nucleoplasm"},
+            ]
+        },
+    )
+
+    result = validator_result_from_agent_output(payload, request=request)
+
+    assert result.status == "resolved"
+    assert result.missing_expected_fields == []
+
+
+def test_resolved_array_validator_result_rejects_out_of_allowlist_term_curie():
+    base_request = _array_terms_validation_request()
+    request = base_request.model_copy(
+        update={
+            "selected_inputs": {
+                **base_request.selected_inputs,
+                "allowed_term_curies": ["GO:0031981"],
+            }
+        }
+    )
+    payload = _result_payload(
+        request,
+        resolved_values={
+            "terms": [
+                {"curie": "GO:0031981", "name": "nuclear lumen"},
+                {"curie": "GO:0005654", "name": "nucleoplasm"},
+            ]
+        },
+    )
+
+    result = validator_result_from_agent_output(payload, request=request)
+
+    assert result.status == "unresolved"
+    assert result.missing_expected_fields == ["terms"]
+    assert "outside the field-specific allowed term list" in result.explanation
+    assert "GO:0005654" in result.explanation
+
+
+def test_resolved_array_validator_result_rejects_schema_allowed_unresolved_label():
+    base_request = _array_terms_validation_request()
+    request = base_request.model_copy(
+        update={
+            "selected_inputs": {
+                **base_request.selected_inputs,
+                "terms": [{"name": "post embryonic, pre-adult"}],
+                "allowed_term_curies": ["UBERON:0000068", "UBERON:0000113"],
+                "unresolved_allowed_term_labels": ["post embryonic, pre-adult"],
+            }
+        }
+    )
+    payload = _result_payload(
+        request,
+        resolved_values={
+            "terms": [{"name": "post embryonic, pre-adult"}],
+        },
+    )
+
+    result = validator_result_from_agent_output(payload, request=request)
+
+    assert result.status == "unresolved"
+    assert result.missing_expected_fields == ["terms"]
+    assert "post embryonic, pre-adult" in result.explanation
+
+
 @pytest.mark.parametrize("outcome", ["ambiguous", "not_found", "conflict"])
 def test_unresolved_array_validator_outcomes_remain_field_addressed(outcome: str):
     request = _array_terms_validation_request()

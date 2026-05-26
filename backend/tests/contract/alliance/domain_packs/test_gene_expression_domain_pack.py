@@ -71,6 +71,36 @@ GENE_EXPRESSION_OUTPUT_FIXTURE_PATH = (
     / "gene_expression"
     / "tmem67_gene_expression_output.yaml"
 )
+STAGE_UBERON_SLIM_ALLOWED_CURIES = ["UBERON:0000068", "UBERON:0000113"]
+STAGE_UBERON_SLIM_UNRESOLVED_LABELS = ["post embryonic, pre-adult"]
+ANATOMICAL_UBERON_SLIM_ALLOWED_CURIES = [
+    "UBERON:0001009",
+    "UBERON:0005409",
+    "UBERON:0000949",
+    "UBERON:0001008",
+    "UBERON:0002330",
+    "UBERON:0002193",
+    "UBERON:0002416",
+    "UBERON:0002423",
+    "UBERON:0002204",
+    "UBERON:0001016",
+    "UBERON:0000990",
+    "UBERON:0001004",
+    "UBERON:0001032",
+    "UBERON:0005726",
+    "UBERON:0007037",
+    "UBERON:0002105",
+    "UBERON:0002104",
+    "UBERON:0000924",
+    "UBERON:0000925",
+    "UBERON:0000926",
+    "UBERON:0003104",
+    "UBERON:0001013",
+    "UBERON:0000026",
+    "UBERON:0016887",
+    "UBERON:6005023",
+    "UBERON:0002539",
+]
 FORBIDDEN_LEGACY_COLLECTIONS = {
     "items",
     "annotations",
@@ -542,6 +572,8 @@ def test_gene_expression_context_ontology_requests_are_field_scoped():
         "ontology_family": "uberon",
         "ontology_term_type": "UBERONTerm",
         "lookup_method": "search_ontology_terms",
+        "allowed_term_curies": STAGE_UBERON_SLIM_ALLOWED_CURIES,
+        "unresolved_allowed_term_labels": STAGE_UBERON_SLIM_UNRESOLVED_LABELS,
     }
     assert stage_uberon_request.expected_result_fields == {
         "terms": "expression_pattern.when_expressed.stage_uberon_slim_terms"
@@ -560,6 +592,7 @@ def test_gene_expression_context_ontology_requests_are_field_scoped():
         "ontology_family": "uberon",
         "ontology_term_type": "UBERONTerm",
         "lookup_method": "search_ontology_terms",
+        "allowed_term_curies": ANATOMICAL_UBERON_SLIM_ALLOWED_CURIES,
     }
     assert anatomical_uberon_request.expected_result_fields == {
         "terms": "expression_pattern.where_expressed.anatomical_structure_uberon_terms"
@@ -581,6 +614,30 @@ def test_gene_expression_context_ontology_requests_are_field_scoped():
         "terms": (
             "expression_pattern.where_expressed.cellular_component_qualifiers"
         )
+    }
+
+
+def test_gene_expression_uberon_slim_metadata_carries_linkml_allowlists():
+    fields_by_path = {
+        field.field_path: field
+        for field in _gene_expression_pack().metadata.object_definitions[0].fields
+    }
+
+    stage_helper = fields_by_path[
+        "expression_pattern.when_expressed.stage_uberon_slim_terms"
+    ].metadata["term_helper"]
+    assert stage_helper["term_source"]["slim_membership"] == {
+        "source": "alliance_linkml",
+        "allowed_term_curies": STAGE_UBERON_SLIM_ALLOWED_CURIES,
+        "unresolved_allowed_term_labels": STAGE_UBERON_SLIM_UNRESOLVED_LABELS,
+    }
+
+    anatomical_helper = fields_by_path[
+        "expression_pattern.where_expressed.anatomical_structure_uberon_terms"
+    ].metadata["term_helper"]
+    assert anatomical_helper["term_source"]["slim_membership"] == {
+        "source": "alliance_linkml",
+        "allowed_term_curies": ANATOMICAL_UBERON_SLIM_ALLOWED_CURIES,
     }
 
 
@@ -818,6 +875,164 @@ def test_gene_expression_slim_and_qualifier_arrays_materialize_from_validator_re
     assert payload["expression_pattern"]["where_expressed"][
         "cellular_component_qualifiers"
     ] == [{"curie": "GO:0031981", "name": "nuclear lumen"}]
+
+
+def test_gene_expression_stage_uberon_slim_rejects_out_of_slim_materialization():
+    envelope = _converted_tmem67_envelope()
+    payload = copy.deepcopy(envelope.objects[0].payload)
+    payload["expression_pattern"]["when_expressed"] = {
+        "stage_uberon_slim_terms": [{"name": "adult"}]
+    }
+    envelope = _with_payload(envelope, payload)
+    match = _active_binding_match(
+        envelope,
+        "expression_stage_uberon_slim_validation",
+    )
+    request = build_domain_validation_request(match).request
+    assert request is not None
+
+    result = materialize_validator_results_into_envelope(
+        envelope,
+        _gene_expression_pack().metadata,
+        [
+            ValidatorResultMaterializationInput(
+                match=match,
+                request=request,
+                result=_validator_result(
+                    request,
+                    status="resolved",
+                    resolved_values={
+                        "terms": [
+                            {
+                                "curie": "UBERON:0000113",
+                                "name": "post-embryonic organismal stage",
+                            }
+                        ]
+                    },
+                ),
+            )
+        ],
+    )
+
+    assert result.envelope.objects[0].payload["expression_pattern"]["when_expressed"][
+        "stage_uberon_slim_terms"
+    ] == [
+        {
+            "curie": "UBERON:0000113",
+            "name": "post-embryonic organismal stage",
+        }
+    ]
+    finding = result.appended_findings[0]
+    assert finding.code == "domain_pack.validator_resolved"
+
+    bad_result = materialize_validator_results_into_envelope(
+        envelope,
+        _gene_expression_pack().metadata,
+        [
+            ValidatorResultMaterializationInput(
+                match=match,
+                request=request,
+                result=_validator_result(
+                    request,
+                    status="resolved",
+                    resolved_values={
+                        "terms": [
+                            {
+                                "curie": "UBERON:0000105",
+                                "name": "life cycle stage",
+                            }
+                        ]
+                    },
+                ),
+            )
+        ],
+    )
+
+    assert bad_result.envelope.objects[0].payload == envelope.objects[0].payload
+    bad_finding = bad_result.appended_findings[0]
+    assert bad_finding.code == "domain_pack.validator_materialization_invalid"
+    assert "UBERON:0000105" in bad_finding.details["materialization_error"]
+
+
+def test_gene_expression_anatomical_uberon_slim_rejects_out_of_slim_materialization():
+    envelope = _converted_tmem67_envelope()
+    payload = copy.deepcopy(envelope.objects[0].payload)
+    payload["expression_pattern"]["where_expressed"][
+        "anatomical_structure_uberon_terms"
+    ] = [{"name": "kidney"}]
+    envelope = _with_payload(envelope, payload)
+    match = _active_binding_match(
+        envelope,
+        "expression_anatomical_uberon_slim_validation",
+    )
+    request = build_domain_validation_request(match).request
+    assert request is not None
+
+    result = materialize_validator_results_into_envelope(
+        envelope,
+        _gene_expression_pack().metadata,
+        [
+            ValidatorResultMaterializationInput(
+                match=match,
+                request=request,
+                result=_validator_result(
+                    request,
+                    status="resolved",
+                    resolved_values={
+                        "terms": [
+                            {
+                                "curie": "UBERON:0002113",
+                                "name": "kidney",
+                            }
+                        ]
+                    },
+                ),
+            )
+        ],
+    )
+
+    assert result.envelope.objects[0].payload == envelope.objects[0].payload
+    finding = result.appended_findings[0]
+    assert finding.code == "domain_pack.validator_materialization_invalid"
+    assert "UBERON:0002113" in finding.details["materialization_error"]
+
+
+def test_gene_expression_stage_uberon_slim_schema_allowed_non_uberon_stays_unresolved():
+    envelope = _converted_tmem67_envelope()
+    payload = copy.deepcopy(envelope.objects[0].payload)
+    payload["expression_pattern"]["when_expressed"] = {
+        "stage_uberon_slim_terms": [{"name": "post embryonic, pre-adult"}]
+    }
+    envelope = _with_payload(envelope, payload)
+    match = _active_binding_match(
+        envelope,
+        "expression_stage_uberon_slim_validation",
+    )
+    request = build_domain_validation_request(match).request
+    assert request is not None
+
+    result = materialize_validator_results_into_envelope(
+        envelope,
+        _gene_expression_pack().metadata,
+        [
+            ValidatorResultMaterializationInput(
+                match=match,
+                request=request,
+                result=_validator_result(
+                    request,
+                    status="resolved",
+                    resolved_values={
+                        "terms": [{"name": "post embryonic, pre-adult"}],
+                    },
+                ),
+            )
+        ],
+    )
+
+    assert result.envelope.objects[0].payload == envelope.objects[0].payload
+    finding = result.appended_findings[0]
+    assert finding.code == "domain_pack.validator_materialization_invalid"
+    assert "post embryonic, pre-adult" in finding.details["materialization_error"]
 
 
 @pytest.mark.parametrize(

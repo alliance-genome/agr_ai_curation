@@ -241,6 +241,8 @@ def test_ontology_term_prompt_and_tool_grant_agree_on_available_methods():
         "`terms`",
         "`ontology_family`",
         "`accepted_prefixes`",
+        "`allowed_term_curies`",
+        "`unresolved_allowed_term_labels`",
         "`exact_match`",
         "`status`",
         "lookup_attempts[].query",

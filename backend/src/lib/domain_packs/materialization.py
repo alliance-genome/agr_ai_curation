@@ -55,6 +55,9 @@ from src.lib.domain_packs.validator_result_classification import (
     lookup_status_for_validator_outcome,
     validator_failure_classification,
 )
+from src.lib.domain_packs.validator_result_policies import (
+    allowed_term_policy_violations,
+)
 
 
 REVIEW_ROW_PROJECTION_TYPE = "workspace_review_row"
@@ -371,6 +374,11 @@ def _patch_target_object_from_resolved_values(
     matched_target = item.match.object_envelope
     if result.status != "resolved" or matched_target is None or not result.resolved_values:
         return envelope, None
+    policy_violations = allowed_term_policy_violations(result, request=item.request)
+    if policy_violations:
+        return envelope, "; ".join(
+            violation.message for violation in policy_violations
+        )
 
     target = _current_object_for_match(envelope, matched_target)
     if target is None:

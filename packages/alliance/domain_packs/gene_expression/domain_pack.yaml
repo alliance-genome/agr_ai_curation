@@ -808,6 +808,13 @@ object_definitions:
               kind: ontology
               ontology_family: uberon
               ontology_term_type: UBERONTerm
+              slim_membership:
+                source: alliance_linkml
+                allowed_term_curies:
+                  - UBERON:0000068
+                  - UBERON:0000113
+                unresolved_allowed_term_labels:
+                  - post embryonic, pre-adult
             lookup:
               package_tool: get_domain_field_term_options
               method: search_ontology_terms
@@ -951,6 +958,35 @@ object_definitions:
               kind: ontology
               ontology_family: uberon
               ontology_term_type: UBERONTerm
+              slim_membership:
+                source: alliance_linkml
+                allowed_term_curies:
+                  - UBERON:0001009
+                  - UBERON:0005409
+                  - UBERON:0000949
+                  - UBERON:0001008
+                  - UBERON:0002330
+                  - UBERON:0002193
+                  - UBERON:0002416
+                  - UBERON:0002423
+                  - UBERON:0002204
+                  - UBERON:0001016
+                  - UBERON:0000990
+                  - UBERON:0001004
+                  - UBERON:0001032
+                  - UBERON:0005726
+                  - UBERON:0007037
+                  - UBERON:0002105
+                  - UBERON:0002104
+                  - UBERON:0000924
+                  - UBERON:0000925
+                  - UBERON:0000926
+                  - UBERON:0003104
+                  - UBERON:0001013
+                  - UBERON:0000026
+                  - UBERON:0016887
+                  - UBERON:6005023
+                  - UBERON:0002539
             lookup:
               package_tool: get_domain_field_term_options
               method: search_ontology_terms
@@ -1357,6 +1393,15 @@ metadata:
           lookup_method:
             source: literal
             value: search_ontology_terms
+          allowed_term_curies:
+            source: literal
+            value:
+              - UBERON:0000068
+              - UBERON:0000113
+          unresolved_allowed_term_labels:
+            source: literal
+            value:
+              - post embryonic, pre-adult
         expected_result_fields:
           terms: expression_pattern.when_expressed.stage_uberon_slim_terms
         required: true
@@ -1428,6 +1473,35 @@ metadata:
           lookup_method:
             source: literal
             value: search_ontology_terms
+          allowed_term_curies:
+            source: literal
+            value:
+              - UBERON:0001009
+              - UBERON:0005409
+              - UBERON:0000949
+              - UBERON:0001008
+              - UBERON:0002330
+              - UBERON:0002193
+              - UBERON:0002416
+              - UBERON:0002423
+              - UBERON:0002204
+              - UBERON:0001016
+              - UBERON:0000990
+              - UBERON:0001004
+              - UBERON:0001032
+              - UBERON:0005726
+              - UBERON:0007037
+              - UBERON:0002105
+              - UBERON:0002104
+              - UBERON:0000924
+              - UBERON:0000925
+              - UBERON:0000926
+              - UBERON:0003104
+              - UBERON:0001013
+              - UBERON:0000026
+              - UBERON:0016887
+              - UBERON:6005023
+              - UBERON:0002539
         expected_result_fields:
           terms: expression_pattern.where_expressed.anatomical_structure_uberon_terms
         required: true

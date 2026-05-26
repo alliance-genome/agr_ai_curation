@@ -44,6 +44,7 @@ from .validator_result_classification import (
     lookup_status_for_validator_outcome,
     validator_failure_classification,
 )
+from .validator_result_policies import allowed_term_policy_violations
 from .validation_findings import append_validation_findings_to_envelope
 
 
@@ -1243,17 +1244,22 @@ def _enforce_expected_result_fields(
         if _missing_resolved_value(result.resolved_values.get(field_name))
     ]
     invalid_array_fields = _invalid_array_resolved_fields(result, request=request)
-    invalid_fields = [
-        field_name
-        for field_name in invalid_array_fields
-        if field_name not in missing_fields
-    ]
+    policy_violations = allowed_term_policy_violations(result, request=request)
+    invalid_policy_fields = [violation.field_name for violation in policy_violations]
+    invalid_fields: list[str] = []
+    for field_name in [*invalid_array_fields, *invalid_policy_fields]:
+        if field_name not in missing_fields and field_name not in invalid_fields:
+            invalid_fields.append(field_name)
     if not missing_fields and not invalid_fields:
         return result
 
     unresolved_fields = [*missing_fields, *invalid_fields]
     explanation = "Validator result omitted expected resolved field(s): "
-    if invalid_fields and not missing_fields:
+    if invalid_policy_fields and not missing_fields and not invalid_array_fields:
+        explanation = "; ".join(
+            violation.message for violation in policy_violations
+        ) + ". Expected field(s): "
+    elif invalid_fields and not missing_fields:
         explanation = (
             "Validator result did not return one resolved value per selected "
             "array item for expected field(s): "
