@@ -71,6 +71,21 @@ def test_resolve_evidence_span_id_parses_offsets_and_validates_hash():
     assert resolved.section_title == "Results"
 
 
+def test_parse_evidence_span_id_accepts_more_than_four_span_digits():
+    parsed = parse_evidence_span_id("chunk-abc:s12345:c0000-c0005:deadbeef")
+
+    assert parsed.chunk_id == "chunk-abc"
+    assert parsed.span_index == 12345
+    assert parsed.char_start == 0
+    assert parsed.char_end == 5
+    assert parsed.text_hash == "deadbeef"
+
+
+def test_parse_evidence_span_id_rejects_non_string_values():
+    with pytest.raises(TypeError, match="span_id must be a string"):
+        parse_evidence_span_id(None)  # type: ignore[arg-type]
+
+
 def test_resolve_evidence_span_id_rejects_wrong_chunk_or_changed_text():
     text = "Alpha sentence. Beta sentence supports evidence."
     selected = build_evidence_spans(chunk_id="chunk-abc", chunk_text=text)[1]

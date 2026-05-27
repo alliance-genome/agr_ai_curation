@@ -80,10 +80,7 @@ class ChunkReadResult(BaseModel):
 def _coerce_chunk_index(value: Any) -> Optional[int]:
     if value is None:
         return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
+    return int(value)
 
 
 def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCallTracker"] = None):
@@ -191,76 +188,71 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
             document_id[:8],
         )
 
-        try:
-            chunk = await get_chunk_by_id(
-                chunk_id=chunk_id,
-                user_id=user_id,
-                document_id=document_id,
-            )
-            if not chunk:
-                return ChunkReadResult(
-                    summary=f"No chunk found for chunk_id '{chunk_id}'.",
-                    chunk=None,
-                )
-
-            content = chunk.get("text") or chunk.get("content") or ""
-            metadata = chunk.get("metadata", {}) or {}
-            if not isinstance(metadata, dict):
-                metadata = {}
-
-            actual_chunk_id = str(chunk.get("id") or chunk_id)
-            chunk_index = _coerce_chunk_index(chunk.get("chunk_index"))
-            if chunk_index is None:
-                chunk_index = _coerce_chunk_index(metadata.get("chunk_index"))
-            page_number = chunk.get("page_number") or metadata.get("page_number")
-            section_title = (
-                chunk.get("section_title")
-                or metadata.get("section_title")
-                or metadata.get("sectionTitle")
-            )
-
-            neighbor_ids = await get_chunk_neighbor_ids(
-                document_id=document_id,
-                user_id=user_id,
-                chunk_index=chunk_index,
-            )
-            spans = [
-                EvidenceSpanResult(**span.to_dict())
-                for span in build_evidence_spans(
-                    chunk_id=actual_chunk_id,
-                    chunk_text=content,
-                    page_number=page_number,
-                    section_title=section_title,
-                )
-            ]
-
-            page_text = f" from page {page_number}" if page_number else ""
+        chunk = await get_chunk_by_id(
+            chunk_id=chunk_id,
+            user_id=user_id,
+            document_id=document_id,
+        )
+        if not chunk:
             return ChunkReadResult(
-                summary=(
-                    f"Read chunk '{actual_chunk_id}'{page_text}. "
-                    "Select evidence_spans[].span_id for record_evidence."
-                ),
-                chunk=ChunkReadContent(
-                    chunk_id=actual_chunk_id,
-                    chunk_index=chunk_index,
-                    chunk_number=chunk_index + 1 if chunk_index is not None else None,
-                    previous_chunk_id=neighbor_ids.get("previous_chunk_id"),
-                    next_chunk_id=neighbor_ids.get("next_chunk_id"),
-                    page_number=page_number,
-                    section_title=section_title,
-                    subsection=chunk.get("subsection") or metadata.get("subsection"),
-                    content=content,
-                    evidence_spans=spans,
-                    doc_items=chunk.get("doc_items") or metadata.get("doc_items") or None,
-                ),
-            )
-
-        except Exception as e:
-            logger.error("Read chunk error: %s", e, exc_info=True)
-            return ChunkReadResult(
-                summary=f"Error reading chunk: {str(e)}",
+                summary=f"No chunk found for chunk_id '{chunk_id}'.",
                 chunk=None,
             )
+
+        content = chunk.get("text")
+        if not isinstance(content, str):
+            raise ValueError(f"Chunk '{chunk_id}' is missing exact raw text content")
+
+        metadata = chunk.get("metadata", {}) or {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        actual_chunk_id = str(chunk.get("id") or chunk_id)
+        chunk_index = _coerce_chunk_index(chunk.get("chunk_index"))
+        if chunk_index is None:
+            chunk_index = _coerce_chunk_index(metadata.get("chunk_index"))
+        page_number = chunk.get("page_number") or metadata.get("page_number")
+        section_title = (
+            chunk.get("section_title")
+            or metadata.get("section_title")
+            or metadata.get("sectionTitle")
+        )
+
+        neighbor_ids = await get_chunk_neighbor_ids(
+            document_id=document_id,
+            user_id=user_id,
+            chunk_index=chunk_index,
+        )
+        spans = [
+            EvidenceSpanResult(**span.to_dict())
+            for span in build_evidence_spans(
+                chunk_id=actual_chunk_id,
+                chunk_text=content,
+                page_number=page_number,
+                section_title=section_title,
+            )
+        ]
+
+        page_text = f" from page {page_number}" if page_number else ""
+        return ChunkReadResult(
+            summary=(
+                f"Read chunk '{actual_chunk_id}'{page_text}. "
+                "Select evidence_spans[].span_id for record_evidence."
+            ),
+            chunk=ChunkReadContent(
+                chunk_id=actual_chunk_id,
+                chunk_index=chunk_index,
+                chunk_number=chunk_index + 1 if chunk_index is not None else None,
+                previous_chunk_id=neighbor_ids.get("previous_chunk_id"),
+                next_chunk_id=neighbor_ids.get("next_chunk_id"),
+                page_number=page_number,
+                section_title=section_title,
+                subsection=chunk.get("subsection") or metadata.get("subsection"),
+                content=content,
+                evidence_spans=spans,
+                doc_items=chunk.get("doc_items") or metadata.get("doc_items") or None,
+            ),
+        )
 
     return read_chunk
 

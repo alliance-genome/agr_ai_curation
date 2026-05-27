@@ -374,11 +374,10 @@ async def get_chunk_neighbor_ids(
         raise ValueError("user_id is required for tenant-scoped chunk navigation")
     if chunk_index is None:
         return {"previous_chunk_id": None, "next_chunk_id": None}
+    if not isinstance(chunk_index, int):
+        raise TypeError("chunk_index must be an int or None")
 
-    try:
-        normalized_index = int(chunk_index)
-    except (TypeError, ValueError):
-        return {"previous_chunk_id": None, "next_chunk_id": None}
+    normalized_index = chunk_index
 
     connection = get_connection()
     if not connection:
@@ -415,18 +414,7 @@ async def get_chunk_neighbor_ids(
     if _run_sync_in_package_tool_subprocess():
         return _fetch()
 
-    try:
-        return await asyncio.to_thread(_fetch)
-    except (RuntimeError, OSError) as e:
-        if _should_fallback_to_sync(e):
-            logger.warning(
-                "Falling back to synchronous chunk neighbor fetch for %s:%s: %s",
-                document_id,
-                normalized_index,
-                e,
-            )
-            return _fetch()
-        raise
+    return await asyncio.to_thread(_fetch)
 
 
 async def hybrid_search_chunks(

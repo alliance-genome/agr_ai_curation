@@ -8,6 +8,15 @@ tool_policies:
     allow_execute: true
     config: {}
 
+  read_chunk:
+    display_name: Read Chunk
+    description: Read one active-document chunk with deterministic exact evidence spans.
+    category: Document
+    curator_visible: true
+    allow_attach: true
+    allow_execute: true
+    config: {}
+
   read_section:
     display_name: Read Section
     description: Read a specific section from the active document.

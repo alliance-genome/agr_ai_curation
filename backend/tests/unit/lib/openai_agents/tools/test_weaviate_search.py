@@ -176,6 +176,38 @@ async def test_read_chunk_tool_handles_missing_chunk(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_read_chunk_tool_raises_when_raw_text_missing(monkeypatch):
+    async def _fake_get_chunk_by_id(**_kwargs):
+        return {
+            "id": "chunk-2",
+            "content": "Alias content is not the exact read_chunk source field.",
+            "chunk_index": 1,
+        }
+
+    monkeypatch.setattr(weaviate_search, "get_chunk_by_id", _fake_get_chunk_by_id)
+    tool = weaviate_search.create_read_chunk_tool("doc-12345678", "user-1")
+
+    with pytest.raises(ValueError, match="missing exact raw text content"):
+        await tool("chunk-2")
+
+
+@pytest.mark.asyncio
+async def test_read_chunk_tool_raises_on_malformed_chunk_index(monkeypatch):
+    async def _fake_get_chunk_by_id(**_kwargs):
+        return {
+            "id": "chunk-2",
+            "text": "Exact raw chunk text.",
+            "chunk_index": "not-an-index",
+        }
+
+    monkeypatch.setattr(weaviate_search, "get_chunk_by_id", _fake_get_chunk_by_id)
+    tool = weaviate_search.create_read_chunk_tool("doc-12345678", "user-1")
+
+    with pytest.raises(ValueError, match="invalid literal"):
+        await tool("chunk-2")
+
+
+@pytest.mark.asyncio
 async def test_read_section_tool_no_content(monkeypatch):
     captured = {}
 

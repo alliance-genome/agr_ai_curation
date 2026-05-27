@@ -466,6 +466,33 @@ async def test_get_chunk_neighbor_ids_returns_empty_when_index_missing():
 
 
 @pytest.mark.asyncio
+async def test_get_chunk_neighbor_ids_rejects_invalid_chunk_index_type():
+    with pytest.raises(TypeError, match="chunk_index must be an int or None"):
+        await chunks.get_chunk_neighbor_ids(
+            document_id="doc-1",
+            user_id="user-1",
+            chunk_index="5",  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.asyncio
+async def test_get_chunk_neighbor_ids_propagates_thread_creation_failure(monkeypatch):
+    async def _broken_to_thread(_func, *args, **kwargs):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(asyncio, "to_thread", _broken_to_thread)
+    connection = _connection_with_client(MagicMock())
+
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection):
+        with pytest.raises(RuntimeError, match="can't start new thread"):
+            await chunks.get_chunk_neighbor_ids(
+                document_id="doc-1",
+                user_id="user-1",
+                chunk_index=5,
+            )
+
+
+@pytest.mark.asyncio
 async def test_hybrid_search_retry_adapter_branches(monkeypatch):
     _sync_to_thread(monkeypatch)
 

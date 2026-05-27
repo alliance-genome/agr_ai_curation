@@ -16,7 +16,7 @@ EVIDENCE_SPAN_HASH_POLICY = (
 )
 
 _SPAN_ID_PATTERN = re.compile(
-    r"^(?P<chunk_id>.+):s(?P<span_index>\d{4}):"
+    r"^(?P<chunk_id>.+):s(?P<span_index>\d+):"
     r"c(?P<char_start>\d+)-c(?P<char_end>\d+):(?P<text_hash>[0-9a-f]{8})$"
 )
 _SENTENCE_TERMINATORS = frozenset(".!?")
@@ -95,7 +95,10 @@ def _format_span_id(
 
 
 def parse_evidence_span_id(span_id: str) -> ParsedEvidenceSpanId:
-    match = _SPAN_ID_PATTERN.match(str(span_id or ""))
+    if not isinstance(span_id, str):
+        raise TypeError("span_id must be a string")
+
+    match = _SPAN_ID_PATTERN.match(span_id)
     if not match:
         raise EvidenceSpanResolutionError("Invalid evidence span ID format")
 
