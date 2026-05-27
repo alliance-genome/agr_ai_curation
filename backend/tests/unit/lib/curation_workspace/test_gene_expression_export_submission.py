@@ -92,6 +92,7 @@ def _candidate_from_fixture() -> dict:
     annotation = envelope.objects[0]
     object_id = annotation.pending_ref_id or annotation.object_id
     assert object_id is not None
+    assert annotation.schema_ref is not None
     return {
         "candidate_id": "candidate-tmem67",
         "adapter_key": GENE_EXPRESSION_ADAPTER_KEY,
@@ -114,11 +115,7 @@ def _candidate_from_fixture() -> dict:
         "definition_state": annotation.definition_state.value,
         "payload": annotation.payload,
         "object": annotation.model_dump(mode="json"),
-        "schema_ref": (
-            annotation.schema_ref.model_dump(mode="json")
-            if annotation.schema_ref is not None
-            else {}
-        ),
+        "schema_ref": annotation.schema_ref.model_dump(mode="json"),
         "object_model_ref": {},
         "model_field_ref": {},
         "projection_refs": [],
@@ -134,6 +131,7 @@ def _candidate_from_curator_guidance_fixture(object_index: int = 0) -> dict:
     annotation = envelope.objects[object_index]
     object_id = annotation.pending_ref_id or annotation.object_id
     assert object_id is not None
+    assert annotation.schema_ref is not None
     return {
         "candidate_id": f"candidate-{object_id}",
         "adapter_key": GENE_EXPRESSION_ADAPTER_KEY,
@@ -158,11 +156,7 @@ def _candidate_from_curator_guidance_fixture(object_index: int = 0) -> dict:
         "definition_state": annotation.definition_state.value,
         "payload": annotation.payload,
         "object": annotation.model_dump(mode="json"),
-        "schema_ref": (
-            annotation.schema_ref.model_dump(mode="json")
-            if annotation.schema_ref is not None
-            else {}
-        ),
+        "schema_ref": annotation.schema_ref.model_dump(mode="json"),
         "object_model_ref": {},
         "model_field_ref": {},
         "projection_refs": [],
