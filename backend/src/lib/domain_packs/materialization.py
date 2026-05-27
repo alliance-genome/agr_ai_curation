@@ -1291,7 +1291,10 @@ def _workspace_group_fields(
     configured_fields: list[tuple[str, dict[str, Any]]] = []
     for group_index, raw_group in enumerate(raw_groups):
         if not isinstance(raw_group, Mapping):
-            continue
+            raise DomainEnvelopeMaterializationError(
+                "workspace_display.groups"
+                f"[{group_index}] must be an object"
+            )
         group_id = _optional_string(raw_group.get("id"))
         if group_id is None:
             continue

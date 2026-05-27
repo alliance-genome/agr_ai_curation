@@ -69,6 +69,7 @@ from src.lib.curation_workspace.session_validation_service import (
     _apply_candidate_validation,
     _load_candidate_for_write,
 )
+from src.lib.domain_packs.registry import LoadedDomainPack
 from src.schemas.curation_workspace import (
     CurationActionType,
     CurationActorType,
@@ -1541,7 +1542,7 @@ def _coerce_integer_draft_value(field_key: str, value: Any) -> int | None:
 
 
 def _ensure_domain_pack_declares_field_path(
-    domain_pack: Any,
+    domain_pack: LoadedDomainPack,
     *,
     object_type: str,
     field_path: str,

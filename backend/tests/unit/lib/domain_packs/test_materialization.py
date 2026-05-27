@@ -473,6 +473,54 @@ def test_workspace_display_group_requires_explicit_label():
         )
 
 
+def test_workspace_display_group_requires_object_entry():
+    metadata = DomainPackMetadata(
+        pack_id="fixture.pack",
+        display_name="Fixture Pack",
+        version="0.1.0",
+        metadata_api_version="1.0.0",
+        object_definitions=[
+            DomainPackObjectDefinition(
+                object_type="GeneAssertion",
+                display_name="Gene assertion",
+                metadata={
+                    "object_role": "curatable_unit",
+                    "workspace_display": {
+                        "groups": ["subject"],
+                    },
+                },
+                fields=[
+                    DomainPackFieldDefinition(
+                        field_path="gene.symbol",
+                        field_type=DomainPackFieldType.STRING,
+                        display_name="Gene symbol",
+                    )
+                ],
+            )
+        ],
+    )
+    envelope = DomainEnvelope(
+        envelope_id="env-review-1",
+        domain_pack_id="fixture.pack",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneAssertion",
+                pending_ref_id="object-1",
+                payload={"gene": {"symbol": "ABC-1"}},
+            )
+        ],
+    )
+
+    with pytest.raises(
+        DomainEnvelopeMaterializationError,
+        match=r"workspace_display\.groups\[0\] must be an object",
+    ):
+        DomainPackMetadataReviewRowMaterializer(metadata).materialize(
+            envelope,
+            envelope_revision=1,
+        )
+
+
 def test_workspace_field_without_definition_and_missing_value_uses_any_field_type():
     metadata = DomainPackMetadata(
         pack_id="fixture.pack",
