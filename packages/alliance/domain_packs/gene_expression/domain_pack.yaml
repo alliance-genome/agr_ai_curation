@@ -987,8 +987,6 @@ object_definitions:
               class: ExpressionExperiment
               slot: specimen_genomic_model
               range: AffectedGenomicModel
-              db_table: geneexpressionexperiment
-              db_column: specimengenomicmodel_id
       - field_path: expression_experiment.specimen_alleles
         field_type: array
         display_name: Specimen alleles

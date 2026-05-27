@@ -244,7 +244,7 @@ def test_gene_expression_export_maps_tmem67_fixture_to_target_db_shape():
     assert annotation["export_diagnostics"]["warnings"] == []
 
 
-def test_gene_expression_export_projects_supported_specimen_genomic_model():
+def test_gene_expression_export_preserves_specimen_genomic_model_as_warning():
     candidate = copy.deepcopy(_candidate_from_fixture())
     candidate["payload"]["expression_experiment"]["specimen_genomic_model"] = {
         "primary_external_id": "MGI:8308849",
@@ -258,17 +258,30 @@ def test_gene_expression_export_projects_supported_specimen_genomic_model():
     )
 
     assert payload.payload_json is not None
-    target_rows = payload.payload_json["gene_expression_annotations"][0]["target_rows"]
-    assert target_rows["geneexpressionexperiment"]["lookups"][
-        "specimengenomicmodel_id"
-    ] == {
-        "match": {"primaryexternalid": "MGI:8308849"},
-        "projection": {
-            "name": "Tmem67 targeted mutant",
-            "primary_external_id": "MGI:8308849",
-        },
-        "table": "affectedgenomicmodel",
-    }
+    annotation = payload.payload_json["gene_expression_annotations"][0]
+    assert "specimengenomicmodel_id" not in annotation["target_rows"][
+        "geneexpressionexperiment"
+    ]["lookups"]
+    warnings = annotation["export_diagnostics"]["warnings"]
+    assert warnings == [
+        {
+            "severity": "warning",
+            "status": "audit_only",
+            "code": "alliance.gene_expression.context_not_exported",
+            "field_path": "expression_experiment.specimen_genomic_model",
+            "message": (
+                "Specimen genomic model export mapping is not approved for the Gene "
+                "Expression 0.7.0 curation DB handoff."
+            ),
+            "details": {
+                "reason_code": "export_mapping_not_approved",
+                "source_context": {
+                    "name": "Tmem67 targeted mutant",
+                    "primary_external_id": "MGI:8308849",
+                },
+            },
+        }
+    ]
 
 
 def test_gene_expression_export_preserves_unmapped_experiment_context_as_warnings():
@@ -279,6 +292,9 @@ def test_gene_expression_export_preserves_unmapped_experiment_context_as_warning
     candidate["payload"]["expression_experiment"]["specimen_alleles"] = [
         {"primary_external_id": "MGI:1234567"}
     ]
+    candidate["payload"]["expression_experiment"]["specimen_genomic_model"] = {
+        "name": "Tmem67 specimen genotype"
+    }
     candidate["payload"]["condition_relations"] = [
         {"conditions": [{"condition_free_text": "heat shock"}]}
     ]
@@ -302,6 +318,10 @@ def test_gene_expression_export_preserves_unmapped_experiment_context_as_warning
             "export_mapping_not_approved",
         ),
         ("expression_experiment.specimen_alleles", "export_mapping_not_approved"),
+        (
+            "expression_experiment.specimen_genomic_model",
+            "export_mapping_not_approved",
+        ),
         ("condition_relations", "export_mapping_not_approved"),
     }
     assert warnings[0]["status"] == "audit_only"

@@ -72,6 +72,10 @@ _AUDIT_ONLY_CONTEXT_FIELDS = {
         "Specimen allele export mapping is not approved for the Gene Expression "
         "0.7.0 curation DB handoff."
     ),
+    "expression_experiment.specimen_genomic_model": (
+        "Specimen genomic model export mapping is not approved for the Gene "
+        "Expression 0.7.0 curation DB handoff."
+    ),
     "condition_relations": (
         "Condition relation export mapping is not approved for the Gene Expression "
         "0.7.0 curation DB handoff."
@@ -315,30 +319,7 @@ def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[st
     assay = _mapping(expression_experiment["expression_assay_used"])
     experiment_reference = _mapping(expression_experiment["single_reference"])
     entity_assayed = _mapping(expression_experiment["entity_assayed"])
-    specimen_genomic_model = _mapping(
-        expression_experiment.get("specimen_genomic_model")
-    )
-    specimen_genomic_model_lookup = _specimen_genomic_model_lookup(
-        specimen_genomic_model
-    )
     export_warnings = _audit_only_context_warnings(payload)
-    if (
-        specimen_genomic_model
-        and specimen_genomic_model_lookup is None
-        and not _is_placeholder_context(specimen_genomic_model)
-    ):
-        export_warnings.append(
-            _export_warning(
-                field_path="expression_experiment.specimen_genomic_model",
-                message=(
-                    "Specimen genomic model context is present but does not include "
-                    "a supported primary_external_id or curie selector for "
-                    "geneexpressionexperiment.specimengenomicmodel_id."
-                ),
-                source_context=specimen_genomic_model,
-                reason_code="specimen_agm_export_selector_missing",
-            )
-        )
 
     temporal_target = {
         "table": "temporalcontext",
@@ -459,7 +440,6 @@ def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[st
                         "table": "organization",
                         "match": {"abbreviation": data_provider["abbreviation"]},
                     },
-                    "specimengenomicmodel_id": specimen_genomic_model_lookup,
                 }
             ),
         },
@@ -590,36 +570,6 @@ def _export_warning(
             "source_context": source_context,
         },
     }
-
-
-def _specimen_genomic_model_lookup(value: Mapping[str, Any]) -> dict[str, Any] | None:
-    if not value or _is_placeholder_context(value):
-        return None
-    primary_external_id = _optional_string(value.get("primary_external_id"))
-    curie = _optional_string(value.get("curie"))
-    if primary_external_id is None and curie is None:
-        return None
-    match = (
-        {"primaryexternalid": primary_external_id}
-        if primary_external_id is not None
-        else {"curie": curie}
-    )
-    return {
-        "table": "affectedgenomicmodel",
-        "match": match,
-        "projection": _drop_empty(
-            {
-                "primary_external_id": primary_external_id,
-                "curie": curie,
-                "name": value.get("name"),
-                "mod_internal_id": value.get("mod_internal_id"),
-            }
-        ),
-    }
-
-
-def _is_placeholder_context(value: Mapping[str, Any]) -> bool:
-    return value.get("placeholder") is True
 
 
 def _export_warning_messages(payload: Mapping[str, Any]) -> list[str]:
