@@ -288,6 +288,8 @@ def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[st
     relation = _mapping(payload["relation"])
     single_reference = _mapping(payload["single_reference"])
     assay = _mapping(expression_experiment["expression_assay_used"])
+    experiment_reference = _mapping(expression_experiment["single_reference"])
+    entity_assayed = _mapping(expression_experiment["entity_assayed"])
 
     temporal_target = {
         "table": "temporalcontext",
@@ -390,13 +392,18 @@ def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[st
                 {
                     "singlereference_id": {
                         "table": "reference",
-                        "match": {"id": single_reference["reference_id"]},
+                        "match": {"id": experiment_reference["reference_id"]},
                     },
                     "entityassayed_id": {
                         "table": "biologicalentity",
                         "match": {
-                            "primaryexternalid": subject["primary_external_id"],
+                            "primaryexternalid": entity_assayed["primary_external_id"],
                         },
+                        "projection": _drop_empty(
+                            {
+                                "gene_symbol": entity_assayed.get("gene_symbol"),
+                            }
+                        ),
                     },
                     "expressionassayused_id": _term_lookup(assay),
                     "dataprovider_id": {

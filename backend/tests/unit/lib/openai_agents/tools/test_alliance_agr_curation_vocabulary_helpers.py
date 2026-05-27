@@ -429,7 +429,7 @@ def test_domain_field_term_options_searches_assay_stage_and_direct_site_fields(m
         domain_pack_id="agr.alliance.gene_expression",
         object_type="GeneExpressionAnnotation",
         field_path="expression_experiment.expression_assay_used",
-        query="reverse transcription polymerase chain reaction assay",
+        query="immunohistochemistry assay",
         exact_match=True,
         limit=2,
     )
@@ -463,7 +463,7 @@ def test_domain_field_term_options_searches_assay_stage_and_direct_site_fields(m
         (
             "ontology",
             {
-                "term": "reverse transcription polymerase chain reaction assay",
+                "term": "immunohistochemistry assay",
                 "ontology_type": "MMOTerm",
                 "exact_match": True,
                 "include_synonyms": True,
@@ -531,15 +531,60 @@ def test_domain_field_term_options_reads_canonical_evidence_context_keys(monkeyp
         field_path="expression_experiment.expression_assay_used",
         evidence_context={
             "label": "ignored legacy label",
-            "query": "reverse transcription polymerase chain reaction assay",
+            "query": "immunohistochemistry assay",
         },
     )
 
     assert result.status == "ok"
-    assert result.data["source_phrase"] == (
-        "reverse transcription polymerase chain reaction assay"
+    assert result.data["source_phrase"] == "immunohistochemistry assay"
+    assert calls[0]["term"] == "immunohistochemistry assay"
+
+
+def test_domain_field_term_options_uses_configured_assay_label_mapping(monkeypatch):
+    class FakeDb:
+        @staticmethod
+        def search_ontology_terms(**_kwargs):
+            raise AssertionError("configured assay labels should not hit live lookup")
+
+    monkeypatch.setattr(
+        agr_curation,
+        "get_curation_resolver",
+        lambda: _Resolver(FakeDb()),
     )
-    assert calls[0]["term"] == "reverse transcription polymerase chain reaction assay"
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+
+    result = _term_helper_fn()(
+        domain_pack_id="agr.alliance.gene_expression",
+        object_type="GeneExpressionAnnotation",
+        field_path="expression_experiment.expression_assay_used",
+        source_phrase="whole-mount in situ hybridization",
+    )
+
+    assert result.status == "ok"
+    assert result.lookup_status == "success"
+    assert result.data["match_status"] == "resolved"
+    assert result.data["options"] == [
+        {
+            "field_path": "expression_experiment.expression_assay_used",
+            "value": "MMO:0000658",
+            "term_name": "whole mount in situ hybridization assay",
+            "curie": "MMO:0000658",
+            "ontology_type": "MMOTerm",
+            "slot_hint": "expression_experiment.expression_assay_used",
+            "source": {
+                "provider": "domain_pack_config",
+                "tool": "get_domain_field_term_options",
+                "method": "configured_label_mapping",
+                "mapping_index": 0,
+                "mapping_id": (
+                    "gene_expression_assay.whole_mount_in_situ_hybridization"
+                ),
+            },
+        }
+    ]
+    assert result.data["helper_results"][0]["candidate"]["authority"] == (
+        "configured_mapping"
+    )
 
 
 def test_domain_field_term_options_uses_term_source_for_ontology_filter(monkeypatch):

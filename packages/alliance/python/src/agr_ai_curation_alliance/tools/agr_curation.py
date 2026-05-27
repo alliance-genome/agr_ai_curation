@@ -3207,6 +3207,8 @@ def _ontology_helper_result(
     lookup_method: str,
     source_phrase: str,
     queried_at: str,
+    source: Optional[Mapping[str, Any]] = None,
+    authority: str = "hint_only",
 ) -> Dict[str, Any]:
     label = _term_name(term)
     normalized_label = (label or "").casefold()
@@ -3228,7 +3230,7 @@ def _ontology_helper_result(
             "namespace": _first_present(term.get("namespace"), term.get("ontology_type")),
             "ontology_type": term.get("ontology_type"),
             "obsolete": bool(term.get("obsolete", False)),
-            "authority": "hint_only",
+            "authority": authority,
         },
         "lookup": {
             "method": lookup_method,
@@ -3236,7 +3238,9 @@ def _ontology_helper_result(
             "match_type": match_type,
             "queried_at": queried_at,
         },
-        "source": {
+        "source": dict(source)
+        if source is not None
+        else {
             "provider": "alliance_curation_db",
             "tool": "agr_curation_query",
             "method": lookup_method,
@@ -3342,6 +3346,62 @@ def _ontology_lookup_result(
         method="get_domain_field_term_options",
         failure_classification=LOOKUP_STATUS_UNDER_DEVELOPMENT,
     )
+
+
+def _configured_ontology_mapping_results(
+    *,
+    policy: Mapping[str, Any],
+    normalized_phrase: str,
+    field_path: str,
+    term_source: Mapping[str, Any],
+    lookup_method: str,
+    queried_at: str,
+) -> list[Dict[str, Any]]:
+    mappings = policy.get("configured_mappings")
+    if not isinstance(mappings, list):
+        return []
+
+    phrase_key = normalized_phrase.strip().casefold()
+    helper_results: list[Dict[str, Any]] = []
+    for index, mapping in enumerate(mappings):
+        if not isinstance(mapping, Mapping):
+            continue
+        labels = mapping.get("labels")
+        if isinstance(labels, str):
+            label_values = [labels]
+        elif isinstance(labels, list):
+            label_values = [label for label in labels if isinstance(label, str)]
+        else:
+            label_values = []
+        if phrase_key not in {label.strip().casefold() for label in label_values}:
+            continue
+
+        candidate = mapping.get("candidate")
+        if not isinstance(candidate, Mapping):
+            continue
+        source = {
+            "provider": "domain_pack_config",
+            "tool": "get_domain_field_term_options",
+            "method": "configured_label_mapping",
+            "mapping_index": index,
+        }
+        mapping_id = mapping.get("mapping_id")
+        if isinstance(mapping_id, str) and mapping_id.strip():
+            source["mapping_id"] = mapping_id
+        helper_results.append(
+            _ontology_helper_result(
+                term=candidate,
+                field_path=field_path,
+                slot_hint=field_path,
+                term_source=term_source,
+                lookup_method=lookup_method,
+                source_phrase=normalized_phrase,
+                queried_at=queried_at,
+                source=source,
+                authority="configured_mapping",
+            )
+        )
+    return helper_results
 
 
 @function_tool(strict_mode=False)
@@ -3488,7 +3548,18 @@ def get_domain_field_term_options(
                 attempted_query=attempted_query,
                 failure_classification=LOOKUP_STATUS_BLOCKED,
             )
-        if lookup.get("provider_required") and not data_provider:
+        configured_results = _configured_ontology_mapping_results(
+            policy=policy,
+            normalized_phrase=normalized_phrase,
+            field_path=field_path,
+            term_source=term_source,
+            lookup_method=lookup_method,
+            queried_at=queried_at,
+        )
+        if configured_results:
+            helper_results.extend(configured_results)
+            result = None
+        elif lookup.get("provider_required") and not data_provider:
             warnings.append(f"{lookup_method}_skipped:data_provider_required")
             result = None
         else:

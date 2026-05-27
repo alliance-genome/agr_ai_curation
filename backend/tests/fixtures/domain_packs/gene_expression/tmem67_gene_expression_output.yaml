@@ -36,6 +36,11 @@ output:
           reference_id: 203506
         expression_experiment:
           unique_id: MGI:1923928|AGRKB:101000000232912|MMO:0000655
+          single_reference:
+            reference_id: 203506
+          entity_assayed:
+            primary_external_id: MGI:1923928
+            gene_symbol: Tmem67
           expression_assay_used:
             curie: MMO:0000655
             name: reverse transcription polymerase chain reaction assay

@@ -789,7 +789,7 @@ def _chat_dispatch_domain_cases():
                 "subject_gene_validation",
                 "source_reference_validation",
             },
-            6,
+            7,
             id="gene-expression",
         ),
     ]
