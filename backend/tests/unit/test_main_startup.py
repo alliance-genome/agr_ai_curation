@@ -358,11 +358,12 @@ async def test_lifespan_supports_core_only_runtime_packages(monkeypatch, tmp_pat
     monkeypatch.setenv("CONTENT_PREVIEW_CHARS", "400")
 
     from src.lib.agent_studio import catalog_service
-    from src.lib.config import agent_loader, prompt_loader, schema_discovery
+    from src.lib.config import agent_loader, connections_loader, prompt_loader, schema_discovery
     from src.lib.config.models_loader import reset_cache as reset_model_cache
     from src.lib.config.providers_loader import reset_cache as reset_provider_cache
 
     agent_loader.reset_cache()
+    connections_loader.reset_cache()
     prompt_loader.reset_cache()
     schema_discovery.reset_cache()
     reset_model_cache()
@@ -442,6 +443,14 @@ async def test_lifespan_supports_core_only_runtime_packages(monkeypatch, tmp_pat
          ), \
          patch("src.lib.agent_studio.catalog_service.validate_active_agent_output_schemas"), \
          patch("src.lib.agent_studio.runtime_validation._fetch_active_agents", lambda: []), \
+         patch("src.lib.config.connections_loader.load_connections", return_value={}), \
+         patch("src.lib.config.connections_loader.get_required_connections", return_value=[]), \
+         patch("src.lib.config.connections_loader.get_optional_connections", return_value=[]), \
+         patch(
+             "src.lib.config.connections_loader.check_required_services_healthy",
+             new_callable=AsyncMock,
+             return_value=(True, []),
+         ), \
          patch("src.lib.openai_agents.langfuse_client.is_langfuse_configured", return_value=False):
         async with main.lifespan(FastAPI()):
             pass
