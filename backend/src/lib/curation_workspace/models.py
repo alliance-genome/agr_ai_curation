@@ -964,6 +964,12 @@ class CurationValidationSnapshot(Base):
         nullable=True,
     )
     adapter_key: Mapped[str | None] = mapped_column(String(), nullable=True)
+    envelope_id: Mapped[str | None] = mapped_column(
+        String(),
+        _fk("domain_envelopes.envelope_id"),
+        nullable=True,
+    )
+    envelope_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
     state: Mapped[CurationValidationSnapshotState] = mapped_column(
         _enum_type(CurationValidationSnapshotState),
         nullable=False,
@@ -1000,6 +1006,12 @@ class CurationValidationSnapshot(Base):
         CheckConstraint(
             "scope <> 'candidate' OR candidate_id IS NOT NULL",
             name="ck_validation_snapshots_candidate_scope",
+        ),
+        CheckConstraint(
+            "(envelope_id IS NULL AND envelope_revision IS NULL) "
+            "OR (envelope_id IS NOT NULL AND envelope_revision IS NOT NULL "
+            "AND envelope_revision >= 1)",
+            name="ck_validation_snapshots_envelope_revision",
         ),
         Index("ix_validation_snapshots_session", "session_id"),
         Index(

@@ -792,6 +792,15 @@ class CurationValidationSnapshot(CurationWorkspaceBaseModel):
         default=None,
         description="Adapter key responsible for the validation plan",
     )
+    envelope_id: Optional[str] = Field(
+        default=None,
+        description="Domain envelope validated by this candidate snapshot when applicable",
+    )
+    envelope_revision: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Domain envelope revision validated by this candidate snapshot",
+    )
     state: CurationValidationSnapshotState = Field(
         description="Lifecycle state of this validation snapshot",
     )

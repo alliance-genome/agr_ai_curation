@@ -65,6 +65,8 @@ class PreparedValidationSnapshotInput:
     requested_at: datetime | None = None
     completed_at: datetime | None = None
     adapter_key: str | None = None
+    envelope_id: str | None = None
+    envelope_revision: int | None = None
 
 
 @dataclass(frozen=True)

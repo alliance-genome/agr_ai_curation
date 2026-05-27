@@ -10,6 +10,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
 from src.lib.curation_workspace.models import (
     CurationCandidate,
     CurationReviewSession as ReviewSessionModel,
@@ -34,6 +35,12 @@ from src.lib.curation_workspace.validation_runtime import (
     field_validation_status,
     increment_validation_count,
 )
+from src.lib.domain_envelopes.persistence import (
+    DomainEnvelopeCheckpointRequest,
+    DomainEnvelopePersistenceError,
+    write_domain_envelope_checkpoint,
+)
+from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
 from src.schemas.curation_workspace import (
     CurationCandidateValidationRequest,
     CurationCandidateValidationResponse,
@@ -179,10 +186,16 @@ def _compute_candidate_validation(
         latest_snapshot is None
         or latest_snapshot.state != CurationValidationSnapshotState.COMPLETED
     )
-    envelope_results, envelope_warnings = _envelope_validation_results_for_candidate(
+    (
+        envelope_results,
+        envelope_warnings,
+        envelope_id,
+        envelope_revision,
+    ) = _envelope_validation_results_for_candidate(
         db,
         candidate,
         draft_fields=draft_fields,
+        validated_at=validated_at,
     )
     warnings.extend(envelope_warnings)
 
@@ -247,6 +260,8 @@ def _compute_candidate_validation(
         requested_at=validated_at,
         completed_at=validated_at,
         adapter_key=candidate.adapter_key,
+        envelope_id=envelope_id,
+        envelope_revision=envelope_revision,
     )
 
     return CandidateValidationComputation(
@@ -299,13 +314,14 @@ def _envelope_validation_results_for_candidate(
     candidate: CurationCandidate,
     *,
     draft_fields: Sequence[CurationDraftFieldSchema],
-) -> tuple[dict[str, FieldValidationResult] | None, list[str]]:
+    validated_at: datetime,
+) -> tuple[dict[str, FieldValidationResult] | None, list[str], str | None, int | None]:
     if (
         candidate.envelope_id is None
         or candidate.object_id is None
         or candidate.envelope_revision is None
     ):
-        return None, []
+        return None, [], None, None
 
     envelope_row = candidate.domain_envelope
     if envelope_row is None:
@@ -325,15 +341,25 @@ def _envelope_validation_results_for_candidate(
                 for field in draft_fields
             },
             [warning],
+            str(candidate.envelope_id),
+            candidate.envelope_revision,
         )
 
     envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
+    envelope, envelope_revision, dispatch_warnings = _dispatch_workspace_envelope_validation(
+        db,
+        candidate,
+        envelope_row=envelope_row,
+        envelope=envelope,
+        validated_at=validated_at,
+    )
     field_results, warnings = domain_envelope_field_validation_results(
         envelope,
-        envelope_revision=envelope_row.revision,
+        envelope_revision=envelope_revision,
         object_id=candidate.object_id,
         field_keys=[field.field_key for field in draft_fields],
     )
+    warnings = [*dispatch_warnings, *warnings]
     if candidate.envelope_revision != envelope_row.revision:
         warnings = [
             *warnings,
@@ -343,7 +369,59 @@ def _envelope_validation_results_for_candidate(
                 f"{candidate.envelope_revision}."
             ),
         ]
-    return field_results, dedupe(warnings)
+    return field_results, dedupe(warnings), envelope.envelope_id, envelope_revision
+
+
+def _dispatch_workspace_envelope_validation(
+    db: Session,
+    candidate: CurationCandidate,
+    *,
+    envelope_row: DomainEnvelopeModel,
+    envelope: DomainEnvelope,
+    validated_at: datetime,
+) -> tuple[DomainEnvelope, int, list[str]]:
+    domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
+    if domain_pack is None:
+        warning = (
+            f"Domain pack {envelope.domain_pack_id} is not available for workspace "
+            "candidate validation."
+        )
+        return envelope, int(envelope_row.revision), [warning]
+
+    source_revision = int(envelope_row.revision)
+    dispatch_result = dispatch_active_validator_bindings(
+        envelope,
+        domain_pack,
+        actor_id="workspace_candidate_validation",
+        source_envelope_revision=source_revision,
+    )
+    if not dispatch_result.appended_findings:
+        return dispatch_result.envelope, source_revision, []
+
+    try:
+        checkpoint = write_domain_envelope_checkpoint(
+            db,
+            DomainEnvelopeCheckpointRequest(
+                project_key=envelope_row.project_key,
+                envelope=dispatch_result.envelope,
+                expected_revision=source_revision,
+                document_id=envelope_row.document_id,
+                session_id=envelope_row.session_id,
+                flow_run_id=envelope_row.flow_run_id,
+                object_model_ref_json=dict(envelope_row.object_model_ref_json or {}),
+                model_field_ref_json=dict(envelope_row.model_field_ref_json or {}),
+            ),
+            manage_transaction=False,
+        )
+    except DomainEnvelopePersistenceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+    candidate.envelope_revision = checkpoint.revision
+    candidate.updated_at = validated_at
+    return dispatch_result.envelope, checkpoint.revision, []
 
 
 def _aggregate_session_validation_snapshot(
@@ -398,6 +476,8 @@ def _prepared_validation_snapshot_schema(
         session_id=str(session_id),
         candidate_id=str(candidate_id) if candidate_id is not None else None,
         adapter_key=snapshot.adapter_key,
+        envelope_id=snapshot.envelope_id,
+        envelope_revision=snapshot.envelope_revision,
         state=snapshot.state,
         field_results=snapshot.field_results,
         summary=snapshot.summary,
