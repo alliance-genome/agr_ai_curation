@@ -41,8 +41,10 @@ from src.models.sql.database import Base
 from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.user import User
 from src.schemas.curation_workspace import (
+    CurationCandidateDraftUpdateRequest,
     CurationCandidateSource,
     CurationCandidateStatus,
+    CurationDraftFieldChange,
     CurationEnvelopeFieldPatchRequest,
     CurationSessionStatus,
 )
@@ -144,6 +146,22 @@ object_definitions:
         field_type: string
         metadata:
           editable: true
+          materializes_to_field_paths:
+            - experiment.entity_assayed.symbol
+      - field_path: experiment.entity_assayed.symbol
+        field_type: string
+        metadata:
+          derived_from_field_path: gene.symbol
+      - field_path: reference.reference_id
+        field_type: integer
+        metadata:
+          editable: true
+          materializes_to_field_paths:
+            - experiment.single_reference.reference_id
+      - field_path: experiment.single_reference.reference_id
+        field_type: integer
+        metadata:
+          derived_from_field_path: reference.reference_id
       - field_path: protected_note
         field_type: string
         metadata:
@@ -231,6 +249,11 @@ def _create_session_with_envelope_projection(db_session) -> tuple[CurationReview
                 object_id="gene-1",
                 payload={
                     "gene": {"symbol": "abc-1"},
+                    "reference": {"reference_id": 101},
+                    "experiment": {
+                        "entity_assayed": {"symbol": "abc-1"},
+                        "single_reference": {"reference_id": 101},
+                    },
                     "protected_note": "do not edit",
                 },
             )
@@ -288,7 +311,69 @@ def _create_session_with_envelope_projection(db_session) -> tuple[CurationReview
                     "dirty": False,
                     "stale_validation": False,
                     "evidence_anchor_ids": [],
-                    "metadata": {"source_field_path": "gene.symbol"},
+                    "metadata": {
+                        "source_field_path": "gene.symbol",
+                        "materializes_to_field_paths": [
+                            "experiment.entity_assayed.symbol"
+                        ],
+                    },
+                },
+                {
+                    "field_key": "reference.reference_id",
+                    "label": "Reference ID",
+                    "value": 101,
+                    "seed_value": 101,
+                    "field_type": "integer",
+                    "group_key": "reference",
+                    "group_label": "Reference",
+                    "order": 1,
+                    "required": True,
+                    "read_only": False,
+                    "dirty": False,
+                    "stale_validation": False,
+                    "evidence_anchor_ids": [],
+                    "metadata": {
+                        "source_field_path": "reference.reference_id",
+                        "materializes_to_field_paths": [
+                            "experiment.single_reference.reference_id"
+                        ],
+                    },
+                },
+                {
+                    "field_key": "experiment.single_reference.reference_id",
+                    "label": "Experiment reference ID",
+                    "value": 101,
+                    "seed_value": 101,
+                    "field_type": "integer",
+                    "group_key": "experiment",
+                    "group_label": "Experiment",
+                    "order": 2,
+                    "required": True,
+                    "read_only": True,
+                    "dirty": False,
+                    "stale_validation": False,
+                    "evidence_anchor_ids": [],
+                    "metadata": {
+                        "source_field_path": "experiment.single_reference.reference_id"
+                    },
+                },
+                {
+                    "field_key": "experiment.entity_assayed.symbol",
+                    "label": "Entity assayed symbol",
+                    "value": "abc-1",
+                    "seed_value": "abc-1",
+                    "field_type": "string",
+                    "group_key": "experiment",
+                    "group_label": "Experiment",
+                    "order": 3,
+                    "required": True,
+                    "read_only": True,
+                    "dirty": False,
+                    "stale_validation": False,
+                    "evidence_anchor_ids": [],
+                    "metadata": {
+                        "source_field_path": "experiment.entity_assayed.symbol"
+                    },
                 }
             ],
             draft_metadata={},
@@ -366,6 +451,157 @@ def test_patch_envelope_field_refreshes_projection_without_legacy_payload(
         HistoryEventKind.FIELD_UPDATED,
         HistoryEventKind.CURATOR_FIELD_PATCH_ACCEPTED,
     ]
+
+
+def test_update_candidate_draft_materializes_envelope_backed_payload(
+    db_session,
+    loaded_pack,
+):
+    session, candidate = _create_session_with_envelope_projection(db_session)
+    draft_id = str(candidate.draft.id)
+
+    response = module.update_candidate_draft(
+        db_session,
+        session.id,
+        candidate.id,
+        CurationCandidateDraftUpdateRequest(
+            session_id=str(session.id),
+            candidate_id=str(candidate.id),
+            draft_id=draft_id,
+            expected_version=1,
+            field_changes=[
+                CurationDraftFieldChange(
+                    field_key="gene.symbol",
+                    value="abc-3",
+                )
+            ],
+            autosave=True,
+        ),
+        {"sub": "curator-1", "email": "curator@example.org"},
+    )
+
+    assert response.candidate.normalized_payload == {}
+    assert response.candidate.projection_ref is not None
+    assert response.candidate.projection_ref.envelope_revision == 2
+    assert response.draft.fields[0].value == "abc-3"
+    assert response.draft.fields[0].seed_value == "abc-3"
+    assert response.draft.fields[0].dirty is False
+    assert response.draft.fields[0].stale_validation is False
+
+    envelope_row = db_session.get(DomainEnvelopeModel, "env-1")
+    assert envelope_row.revision == 2
+    assert envelope_row.envelope_json["objects"][0]["payload"]["gene"]["symbol"] == "abc-3"
+    assert (
+        envelope_row.envelope_json["objects"][0]["payload"]["experiment"][
+            "entity_assayed"
+        ]["symbol"]
+        == "abc-3"
+    )
+    assert envelope_row.envelope_json["history"][-1]["details"]["reason"] == (
+        "draft_materialization"
+    )
+
+
+def test_update_candidate_draft_coerces_integer_and_materializes_projection(
+    db_session,
+    loaded_pack,
+):
+    session, candidate = _create_session_with_envelope_projection(db_session)
+    draft_id = str(candidate.draft.id)
+
+    response = module.update_candidate_draft(
+        db_session,
+        session.id,
+        candidate.id,
+        CurationCandidateDraftUpdateRequest(
+            session_id=str(session.id),
+            candidate_id=str(candidate.id),
+            draft_id=draft_id,
+            expected_version=1,
+            field_changes=[
+                CurationDraftFieldChange(
+                    field_key="reference.reference_id",
+                    value="202",
+                )
+            ],
+            autosave=True,
+        ),
+        {"sub": "curator-1", "email": "curator@example.org"},
+    )
+
+    assert response.draft.fields[1].value == 202
+    assert response.draft.fields[1].seed_value == 202
+    assert response.draft.fields[2].value == 202
+    assert response.draft.fields[2].seed_value == 202
+
+    envelope_row = db_session.get(DomainEnvelopeModel, "env-1")
+    payload = envelope_row.envelope_json["objects"][0]["payload"]
+    assert payload["reference"]["reference_id"] == 202
+    assert payload["experiment"]["single_reference"]["reference_id"] == 202
+
+
+def test_update_candidate_draft_rejects_non_integer_materialization_value(
+    db_session,
+    loaded_pack,
+):
+    session, candidate = _create_session_with_envelope_projection(db_session)
+    draft_id = str(candidate.draft.id)
+
+    with pytest.raises(HTTPException) as exc:
+        module.update_candidate_draft(
+            db_session,
+            session.id,
+            candidate.id,
+            CurationCandidateDraftUpdateRequest(
+                session_id=str(session.id),
+                candidate_id=str(candidate.id),
+                draft_id=draft_id,
+                expected_version=1,
+                field_changes=[
+                    CurationDraftFieldChange(
+                        field_key="reference.reference_id",
+                        value="not-an-integer",
+                    )
+                ],
+                autosave=True,
+            ),
+            {"sub": "curator-1", "email": "curator@example.org"},
+        )
+
+    assert exc.value.status_code == 422
+    assert "must be an integer" in exc.value.detail
+
+
+def test_update_candidate_draft_rejects_read_only_projection_field_mutation(
+    db_session,
+    loaded_pack,
+):
+    session, candidate = _create_session_with_envelope_projection(db_session)
+    draft_id = str(candidate.draft.id)
+
+    with pytest.raises(HTTPException) as exc:
+        module.update_candidate_draft(
+            db_session,
+            session.id,
+            candidate.id,
+            CurationCandidateDraftUpdateRequest(
+                session_id=str(session.id),
+                candidate_id=str(candidate.id),
+                draft_id=draft_id,
+                expected_version=1,
+                field_changes=[
+                    CurationDraftFieldChange(
+                        field_key="experiment.single_reference.reference_id",
+                        value=202,
+                    )
+                ],
+                autosave=True,
+            ),
+            {"sub": "curator-1", "email": "curator@example.org"},
+        )
+
+    assert exc.value.status_code == 400
+    assert "not declared editable" in exc.value.detail
 
 
 def test_patch_envelope_field_rejects_stale_revision_without_checkpoint(

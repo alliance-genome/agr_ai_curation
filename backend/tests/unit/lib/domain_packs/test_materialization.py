@@ -400,10 +400,174 @@ def test_metadata_materializer_projects_provider_agnostic_fixture_pack_objects()
         "artifact.accession_id",
         "artifact.title",
         "condition.status",
+    ]
+    workspace_fields = rows[0].metadata["workspace_fields"]
+    assert [field["field_path"] for field in workspace_fields] == [
+        "artifact.accession_id",
+        "artifact.title",
+        "condition.status",
         "curator_review.status",
         "curator_review.measurements",
         "related_artifacts[0].accession_id",
     ]
+    assert workspace_fields[0]["metadata"]["workspace_group"] == {
+        "id": "artifact_identity",
+        "label": "Artifact identity",
+        "order": 0,
+        "field_order": 0,
+    }
+    assert workspace_fields[0]["metadata"]["required"] is True
+    assert workspace_fields[0]["metadata"]["read_only"] is False
+
+
+def test_workspace_display_group_requires_explicit_label():
+    metadata = DomainPackMetadata(
+        pack_id="fixture.pack",
+        display_name="Fixture Pack",
+        version="0.1.0",
+        metadata_api_version="1.0.0",
+        object_definitions=[
+            DomainPackObjectDefinition(
+                object_type="GeneAssertion",
+                display_name="Gene assertion",
+                metadata={
+                    "object_role": "curatable_unit",
+                    "workspace_display": {
+                        "groups": [
+                            {
+                                "id": "subject",
+                                "fields": ["gene.symbol"],
+                            }
+                        ]
+                    },
+                },
+                fields=[
+                    DomainPackFieldDefinition(
+                        field_path="gene.symbol",
+                        field_type=DomainPackFieldType.STRING,
+                        display_name="Gene symbol",
+                    )
+                ],
+            )
+        ],
+    )
+    envelope = DomainEnvelope(
+        envelope_id="env-review-1",
+        domain_pack_id="fixture.pack",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneAssertion",
+                pending_ref_id="object-1",
+                payload={"gene": {"symbol": "ABC-1"}},
+            )
+        ],
+    )
+
+    with pytest.raises(
+        DomainEnvelopeMaterializationError,
+        match=r"workspace_display\.groups\[0\]\.label",
+    ):
+        DomainPackMetadataReviewRowMaterializer(metadata).materialize(
+            envelope,
+            envelope_revision=1,
+        )
+
+
+def test_workspace_display_group_requires_object_entry():
+    metadata = DomainPackMetadata(
+        pack_id="fixture.pack",
+        display_name="Fixture Pack",
+        version="0.1.0",
+        metadata_api_version="1.0.0",
+        object_definitions=[
+            DomainPackObjectDefinition(
+                object_type="GeneAssertion",
+                display_name="Gene assertion",
+                metadata={
+                    "object_role": "curatable_unit",
+                    "workspace_display": {
+                        "groups": ["subject"],
+                    },
+                },
+                fields=[
+                    DomainPackFieldDefinition(
+                        field_path="gene.symbol",
+                        field_type=DomainPackFieldType.STRING,
+                        display_name="Gene symbol",
+                    )
+                ],
+            )
+        ],
+    )
+    envelope = DomainEnvelope(
+        envelope_id="env-review-1",
+        domain_pack_id="fixture.pack",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneAssertion",
+                pending_ref_id="object-1",
+                payload={"gene": {"symbol": "ABC-1"}},
+            )
+        ],
+    )
+
+    with pytest.raises(
+        DomainEnvelopeMaterializationError,
+        match=r"workspace_display\.groups\[0\] must be an object",
+    ):
+        DomainPackMetadataReviewRowMaterializer(metadata).materialize(
+            envelope,
+            envelope_revision=1,
+        )
+
+
+def test_workspace_field_without_definition_and_missing_value_uses_any_field_type():
+    metadata = DomainPackMetadata(
+        pack_id="fixture.pack",
+        display_name="Fixture Pack",
+        version="0.1.0",
+        metadata_api_version="1.0.0",
+        object_definitions=[
+            DomainPackObjectDefinition(
+                object_type="GeneAssertion",
+                display_name="Gene assertion",
+                metadata={
+                    "object_role": "curatable_unit",
+                    "workspace_display": {
+                        "groups": [
+                            {
+                                "id": "subject",
+                                "label": "Subject",
+                                "fields": ["gene.missing"],
+                            }
+                        ]
+                    },
+                },
+                fields=[],
+            )
+        ],
+    )
+    envelope = DomainEnvelope(
+        envelope_id="env-review-1",
+        domain_pack_id="fixture.pack",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneAssertion",
+                pending_ref_id="object-1",
+                payload={"gene": {"symbol": "ABC-1"}},
+            )
+        ],
+    )
+
+    rows = DomainPackMetadataReviewRowMaterializer(metadata).materialize(
+        envelope,
+        envelope_revision=1,
+    )
+
+    workspace_fields = rows[0].metadata["workspace_fields"]
+    assert workspace_fields[0]["field_path"] == "gene.missing"
+    assert workspace_fields[0]["value"] is None
+    assert workspace_fields[0]["field_type"] == "any"
 
 
 def test_validator_result_materialization_creates_reference_object_and_finding():

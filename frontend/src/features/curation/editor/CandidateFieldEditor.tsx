@@ -566,6 +566,25 @@ function metadataPairs(field: CurationDraftField): string[] {
   return pairs
 }
 
+function fieldStateLabels(field: CurationDraftField): string[] {
+  const labels: string[] = []
+  const fieldMetadata = field.metadata.field_metadata
+  const protectedByPack = isRecord(fieldMetadata) && fieldMetadata.protected === true
+  const hasTermHelper = isRecord(fieldMetadata) && isRecord(fieldMetadata.term_helper)
+
+  if (field.required) {
+    labels.push('Required')
+  }
+  if (field.read_only || protectedByPack) {
+    labels.push('Read only')
+  }
+  if (hasTermHelper) {
+    labels.push('Controlled')
+  }
+
+  return labels
+}
+
 function FieldSupportDetails({
   candidate,
   field,
@@ -588,36 +607,64 @@ function FieldSupportDetails({
     ...metadataPairs(field),
     metadataText,
   ].filter((detail): detail is string => Boolean(detail))
+  const stateLabels = fieldStateLabels(field)
 
-  if (details.length === 0) {
+  if (details.length === 0 && stateLabels.length === 0) {
     return null
   }
 
   return (
-    <Box
+    <Stack
       data-testid={`field-support-details-${field.field_key}`}
-      sx={{
-        color: 'text.secondary',
-        display: show ? 'block' : 'none',
-        mt: 0.25,
-      }}
+      direction="column"
+      spacing={0.35}
+      sx={{ mt: 0.35 }}
     >
-      <Typography
-        color="text.secondary"
-        sx={{
-          display: 'block',
-          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-          fontSize: '0.66rem',
-          letterSpacing: 0,
-          lineHeight: 1.35,
-          opacity: 0.72,
-          wordBreak: 'break-word',
-        }}
-        variant="caption"
-      >
-        {details.join(' · ')}
-      </Typography>
-    </Box>
+      {stateLabels.length > 0 ? (
+        <Stack direction="row" flexWrap="wrap" gap={0.35}>
+          {stateLabels.map((label) => (
+            <Chip
+              key={label}
+              label={label}
+              size="small"
+              sx={{
+                height: 18,
+                '& .MuiChip-label': {
+                  fontSize: '0.62rem',
+                  fontWeight: 700,
+                  px: 0.65,
+                },
+              }}
+              variant="outlined"
+            />
+          ))}
+        </Stack>
+      ) : null}
+      {details.length > 0 ? (
+        <Box
+          sx={{
+            color: 'text.secondary',
+            display: show ? 'block' : 'none',
+          }}
+        >
+          <Typography
+            color="text.secondary"
+            sx={{
+              display: 'block',
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+              fontSize: '0.66rem',
+              letterSpacing: 0,
+              lineHeight: 1.35,
+              opacity: 0.72,
+              wordBreak: 'break-word',
+            }}
+            variant="caption"
+          >
+            {details.join(' · ')}
+          </Typography>
+        </Box>
+      ) : null}
+    </Stack>
   )
 }
 

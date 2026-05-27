@@ -102,6 +102,61 @@ describe('FieldRow', () => {
     expect(onChange).toHaveBeenCalledWith(0.42)
   })
 
+  it('parses integer fields to integer values before notifying the parent', () => {
+    const { onChange } = renderFieldRow({
+      field: createField({
+        field_key: 'reference_id',
+        label: 'Reference ID',
+        field_type: 'integer',
+        value: 101,
+        seed_value: 101,
+      }),
+      value: 101,
+    })
+
+    fireEvent.change(screen.getByLabelText('Reference ID'), {
+      target: { value: '202' },
+    })
+
+    expect(onChange).toHaveBeenCalledWith(202)
+  })
+
+  it('keeps invalid integer input as text for backend validation', () => {
+    const { onChange } = renderFieldRow({
+      field: createField({
+        field_key: 'reference_id',
+        label: 'Reference ID',
+        field_type: 'integer',
+        value: 101,
+        seed_value: 101,
+      }),
+      value: 101,
+    })
+
+    fireEvent.change(screen.getByLabelText('Reference ID'), {
+      target: { value: '202.5' },
+    })
+
+    expect(onChange).toHaveBeenCalledWith('202.5')
+  })
+
+  it('renders object and array fields as JSON editors', () => {
+    renderFieldRow({
+      field: createField({
+        field_key: 'context',
+        label: 'Context',
+        field_type: 'array',
+        value: [{ label: 'probe A' }],
+        seed_value: [{ label: 'probe A' }],
+      }),
+      value: [{ label: 'probe A' }],
+    })
+
+    expect(screen.getByLabelText('Context')).toHaveValue(
+      JSON.stringify([{ label: 'probe A' }], null, 2),
+    )
+  })
+
   it('supports adapter-owned custom input renderers', () => {
     const onChange = vi.fn()
 

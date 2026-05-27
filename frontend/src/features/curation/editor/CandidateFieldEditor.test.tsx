@@ -90,13 +90,19 @@ function buildWorkspace(): CurationWorkspace {
               group_label: 'Details',
               order: 1,
               required: false,
-              read_only: false,
+              read_only: true,
               dirty: false,
               stale_validation: false,
               evidence_anchor_ids: [],
               validation_result: null,
               metadata: {
                 source_field_path: 'gene.curie',
+                field_metadata: {
+                  term_helper: {
+                    field_path: 'gene.curie',
+                    term_source: { kind: 'ontology' },
+                  },
+                },
               },
             },
             {
@@ -442,6 +448,21 @@ describe('CandidateFieldEditor', () => {
     expect(screen.getByTestId('field-validation-state-field_curie')).toHaveTextContent(
       'CURIE lookup is being wired.',
     )
+  })
+
+  it('surfaces required, read-only, and controlled field states from layout metadata', () => {
+    renderEditor()
+
+    expect(screen.getByTestId('field-support-details-field_symbol')).toHaveTextContent(
+      'Required',
+    )
+    expect(screen.getByTestId('field-support-details-field_curie')).toHaveTextContent(
+      'Read only',
+    )
+    expect(screen.getByTestId('field-support-details-field_curie')).toHaveTextContent(
+      'Controlled',
+    )
+    expect(screen.getByLabelText('Gene CURIE')).toBeDisabled()
   })
 
   it('marks missing evidence text explicitly', () => {
