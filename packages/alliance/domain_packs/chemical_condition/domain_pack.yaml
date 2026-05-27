@@ -804,6 +804,7 @@ metadata:
             source: envelope_metadata
             path: document_id
             required: false
+            context_only: true
         expected_result_fields:
           reference_id: Reference.reference_id
           curie: Reference.curie
@@ -869,6 +870,7 @@ metadata:
             source: evidence_record
             path: verified_quote
             required: false
+            context_only: true
         expected_result_fields:
           condition_id: ExperimentalCondition.condition_id
           normalized_components: ExperimentalCondition.components

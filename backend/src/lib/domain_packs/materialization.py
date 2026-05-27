@@ -55,6 +55,10 @@ from src.lib.domain_packs.validator_result_classification import (
     lookup_status_for_validator_outcome,
     validator_failure_classification,
 )
+from src.lib.domain_packs.validator_result_policies import (
+    allowed_term_policy_violations,
+)
+from src.lib.domain_packs.value_presence import missing_resolved_value
 
 
 REVIEW_ROW_PROJECTION_TYPE = "workspace_review_row"
@@ -371,6 +375,11 @@ def _patch_target_object_from_resolved_values(
     matched_target = item.match.object_envelope
     if result.status != "resolved" or matched_target is None or not result.resolved_values:
         return envelope, None
+    policy_violations = allowed_term_policy_violations(result, request=item.request)
+    if policy_violations:
+        return envelope, "; ".join(
+            violation.message for violation in policy_violations
+        )
 
     target = _current_object_for_match(envelope, matched_target)
     if target is None:
@@ -392,7 +401,7 @@ def _patch_target_object_from_resolved_values(
                 "expected_result_fields values must be non-empty field path strings"
             )
         resolved_value = result.resolved_values.get(result_field)
-        if _missing_resolved_value(resolved_value):
+        if missing_resolved_value(resolved_value):
             continue
         materialized_field_path = _materialized_field_path(
             raw_field_path,
@@ -643,7 +652,7 @@ def _validated_reference_payload(
                 "expected_result_fields values must be non-empty field path strings"
             )
         resolved_value = item.result.resolved_values.get(result_field)
-        if _missing_resolved_value(resolved_value):
+        if missing_resolved_value(resolved_value):
             continue
         materialized_field_path = _materialized_field_path(
             raw_field_path,
@@ -984,10 +993,6 @@ def _set_payload_value(payload: dict[str, Any], field_path: str, value: Any) -> 
             "Materialized validator payload paths cannot end with a list index"
         )
     current[leaf] = value
-
-
-def _missing_resolved_value(value: Any) -> bool:
-    return value is None or value == "" or value == [] or value == {}
 
 
 def project_evidence_anchor_projections(

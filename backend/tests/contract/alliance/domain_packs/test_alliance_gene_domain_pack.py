@@ -257,11 +257,13 @@ def test_gene_pack_declares_reference_validator_binding():
             "source": "payload",
             "path": "taxon_hint",
             "required": False,
+            "context_only": True,
         },
         "data_provider_hint": {
             "source": "payload",
             "path": "data_provider_hint",
             "required": False,
+            "context_only": True,
         },
         "species": {
             "source": "payload",
@@ -272,6 +274,7 @@ def test_gene_pack_declares_reference_validator_binding():
             "source": "payload",
             "path": "verified_quote",
             "required": False,
+            "context_only": True,
         },
         "identity_resolution_notes": {
             "source": "payload",

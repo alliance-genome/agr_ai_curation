@@ -396,6 +396,7 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
         "source": "evidence_record",
         "path": "verified_quote",
         "required": False,
+        "context_only": True,
     }
     assert composite_binding["expected_result_fields"] == {
         "condition_id": "ExperimentalCondition.condition_id",

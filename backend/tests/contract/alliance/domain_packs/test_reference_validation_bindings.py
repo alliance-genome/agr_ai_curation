@@ -143,3 +143,4 @@ def test_reference_validation_bindings_select_optional_lookup_context():
         assert all(not selector.required for selector in binding.input_fields.values())
         assert binding.input_fields["source_document_id"].source == "envelope_metadata"
         assert binding.input_fields["source_document_id"].path == "document_id"
+        assert binding.input_fields["source_document_id"].context_only is True

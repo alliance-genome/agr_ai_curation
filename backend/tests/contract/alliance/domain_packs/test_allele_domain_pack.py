@@ -252,6 +252,7 @@ def test_allele_pack_declares_object_roles_and_validator_bindings():
             "source": "evidence_record",
             "path": "verified_quote",
             "required": False,
+            "context_only": True,
         },
     }
     assert allele_lookup["expected_result_fields"] == {

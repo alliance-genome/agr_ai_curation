@@ -128,6 +128,93 @@ def test_ontology_term_validator_bundle_uses_shared_result_contract(monkeypatch)
 
     assert schema.model_validate(resolved_payload).status == "resolved"
 
+    terms_payload = _base_payload(status="resolved")
+    terms_payload.update(
+        {
+            "request_id": "domain-validation:ontology-term-array-contract",
+            "validator_binding_id": "expression_cellular_component_qualifier_validation",
+            "target": {
+                "domain_pack_id": "agr.alliance.gene_expression",
+                "object_type": "GeneExpressionAnnotation",
+                "object_id": "gene-expression-1",
+                "field_path": (
+                    "expression_pattern.where_expressed."
+                    "cellular_component_qualifiers"
+                ),
+                "expected_fields": ["terms"],
+                "input_values": {
+                    "terms": [
+                        {"name": "nuclear lumen"},
+                        {"name": "nucleoplasm"},
+                    ],
+                    "ontology_family": "go",
+                    "go_aspect": "cellular_component",
+                },
+            },
+            "resolved_values": {
+                "terms": [
+                    {"curie": "GO:0031981", "name": "nuclear lumen"},
+                    {"curie": "GO:0005654", "name": "nucleoplasm"},
+                ]
+            },
+            "resolved_objects": [
+                {"curie": "GO:0031981", "name": "nuclear lumen"},
+                {"curie": "GO:0005654", "name": "nucleoplasm"},
+            ],
+            "missing_expected_fields": [],
+            "lookup_attempts": [
+                {
+                    "provider": "agr_curation_query",
+                    "method": "search_go_terms",
+                    "query": {
+                        "term": "nuclear lumen",
+                        "go_aspect": "cellular_component",
+                        "item_index": 0,
+                    },
+                    "result_count": 1,
+                    "outcome": "success",
+                },
+                {
+                    "provider": "agr_curation_query",
+                    "method": "search_go_terms",
+                    "query": {
+                        "term": "nucleoplasm",
+                        "go_aspect": "cellular_component",
+                        "item_index": 1,
+                    },
+                    "result_count": 1,
+                    "outcome": "success",
+                },
+            ],
+            "curator_message": "Resolved all repeated ontology terms.",
+            "explanation": "Each repeated term resolved from tool evidence.",
+            "ontology_term_candidates": [
+                {
+                    "curie": "GO:0031981",
+                    "label": "nuclear lumen",
+                    "ontology_type": "GOTerm",
+                    "ontology_family": "go",
+                    "match_type": "exact_label",
+                    "context": {"go_aspect": "cellular_component", "item_index": 0},
+                },
+                {
+                    "curie": "GO:0005654",
+                    "label": "nucleoplasm",
+                    "ontology_type": "GOTerm",
+                    "ontology_family": "go",
+                    "match_type": "exact_label",
+                    "context": {"go_aspect": "cellular_component", "item_index": 1},
+                },
+            ],
+        }
+    )
+    repeated = schema.model_validate(terms_payload)
+    assert repeated.status == "resolved"
+    assert repeated.resolved_values["terms"] == [
+        {"curie": "GO:0031981", "name": "nuclear lumen"},
+        {"curie": "GO:0005654", "name": "nucleoplasm"},
+    ]
+
 
 def test_ontology_term_prompt_and_tool_grant_agree_on_available_methods():
     prompt_payload = _load_yaml(AGENT_DIR / "prompt.yaml")
@@ -151,8 +238,11 @@ def test_ontology_term_prompt_and_tool_grant_agree_on_available_methods():
     for fragment in [
         "`curie`",
         "`label`",
+        "`terms`",
         "`ontology_family`",
         "`accepted_prefixes`",
+        "`allowed_term_curies`",
+        "`unresolved_allowed_term_labels`",
         "`exact_match`",
         "`status`",
         "lookup_attempts[].query",
@@ -164,6 +254,8 @@ def test_ontology_term_prompt_and_tool_grant_agree_on_available_methods():
         "lookup_attempts",
         "missing_expected_fields",
         "curator_message",
+        "resolved_values.terms",
+        "same length as the input `terms`",
     ]:
         assert fragment in content
 

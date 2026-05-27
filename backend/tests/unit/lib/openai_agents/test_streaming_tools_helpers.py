@@ -646,6 +646,7 @@ def _chat_dispatch_domain_cases():
                 ],
             ),
             {"allele_mention_reference_validation"},
+            0,
             id="allele",
         ),
         pytest.param(
@@ -683,6 +684,7 @@ def _chat_dispatch_domain_cases():
                 "disease_condition_relation_lookup",
                 "disease_data_provider_lookup",
             },
+            0,
             id="disease",
         ),
         pytest.param(
@@ -726,6 +728,7 @@ def _chat_dispatch_domain_cases():
                 "chemical_condition.condition_ontology_lookup",
                 "chemical_condition.condition_relation_type_lookup",
             },
+            0,
             id="chemical",
         ),
         pytest.param(
@@ -753,6 +756,7 @@ def _chat_dispatch_domain_cases():
                 ],
             ),
             {"phenotype_term_ontology_validator"},
+            0,
             id="phenotype",
         ),
         pytest.param(
@@ -785,6 +789,7 @@ def _chat_dispatch_domain_cases():
                 "subject_gene_validation",
                 "source_reference_validation",
             },
+            6,
             id="gene-expression",
         ),
     ]
@@ -951,7 +956,10 @@ async def test_chat_domain_envelope_dispatch_uses_real_gene_binding(monkeypatch)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "tool_name,agent_key,adapter_key,envelope,expected_binding_ids",
+    (
+        "tool_name,agent_key,adapter_key,envelope,expected_binding_ids,"
+        "expected_selector_suppressed_binding_count"
+    ),
     _chat_dispatch_domain_cases(),
 )
 async def test_chat_domain_envelope_dispatch_covers_launchable_active_validator_domains(
@@ -961,6 +969,7 @@ async def test_chat_domain_envelope_dispatch_covers_launchable_active_validator_
     adapter_key,
     envelope,
     expected_binding_ids,
+    expected_selector_suppressed_binding_count,
 ):
     monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
     emitted = []
@@ -1028,9 +1037,12 @@ async def test_chat_domain_envelope_dispatch_covers_launchable_active_validator_
     assert dispatch_complete["details"]["validatorAgentRunCount"] == len(
         captured_requests
     )
-    assert (
-        dispatch_complete["details"]["matchedBindingCount"]
-        == dispatch_complete["details"]["validatorResultCount"]
+    assert dispatch_complete["details"]["matchedBindingCount"] == (
+        dispatch_complete["details"]["validatorResultCount"]
+        + expected_selector_suppressed_binding_count
+    )
+    assert dispatch_complete["details"]["validatorResultCount"] >= len(
+        captured_requests
     )
 
 

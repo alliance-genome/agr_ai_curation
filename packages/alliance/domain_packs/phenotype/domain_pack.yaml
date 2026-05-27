@@ -646,26 +646,32 @@ metadata:
             source: payload
             path: ontology_lookup_hint.data_provider
             required: false
+            context_only: true
           taxon_id:
             source: payload
             path: ontology_lookup_hint.taxon_id
             required: false
+            context_only: true
           evidence_record_id:
             source: payload
             path: ontology_lookup_hint.evidence_record_id
             required: false
+            context_only: true
           evidence_quote:
             source: evidence_record
             path: verified_quote
             required: false
+            context_only: true
           source_chunk_id:
             source: evidence_record
             path: chunk_id
             required: false
+            context_only: true
           source_section:
             source: evidence_record
             path: section
             required: false
+            context_only: true
           ontology_family:
             source: literal
             value: phenotype
@@ -793,6 +799,7 @@ metadata:
             source: envelope_metadata
             path: document_id
             required: false
+            context_only: true
         expected_result_fields:
           reference_id: Reference.reference_id
           curie: Reference.curie

@@ -45,6 +45,10 @@ object_definitions:
               slot: value
       - field_path: aliases
         field_type: array
+      - field_path: data_provider
+        field_type: string
+      - field_path: organism_id
+        field_type: string
       - field_path: ref
         field_type: object_ref
         object_type_ref: RefObject
@@ -294,6 +298,34 @@ def test_optional_payload_selector_missing_suppresses_literal_only_request(
         "source": "payload",
         "path": "value",
         "required": False,
+    }
+
+
+def test_optional_context_only_selectors_do_not_launch_request(tmp_path: Path):
+    result = _run_selector(
+        tmp_path,
+        """
+          curie:
+            source: payload
+            path: value
+            required: false
+          organism_id:
+            source: payload
+            path: organism_id
+            required: false
+            context_only: true
+          ontology_term_type:
+            source: literal
+            value: DOTerm
+""",
+        _assertion_envelope(payload={"organism_id": "NCBITaxon:6239"}),
+    )
+
+    assert result.findings == ()
+    assert result.request is None
+    assert result.selected_inputs == {
+        "organism_id": "NCBITaxon:6239",
+        "ontology_term_type": "DOTerm",
     }
 
 

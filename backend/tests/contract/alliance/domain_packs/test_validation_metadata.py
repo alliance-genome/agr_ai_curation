@@ -666,9 +666,11 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     assert phenotype_term_binding.input_fields["data_provider"].path == (
         "ontology_lookup_hint.data_provider"
     )
+    assert phenotype_term_binding.input_fields["data_provider"].context_only is True
     assert phenotype_term_binding.input_fields["taxon_id"].path == (
         "ontology_lookup_hint.taxon_id"
     )
+    assert phenotype_term_binding.input_fields["taxon_id"].context_only is True
     assert (
         phenotype_term_binding.input_fields["provider_taxon_ontology_mappings"]
         .value[0]["ontology_term_type"]
@@ -993,6 +995,54 @@ def test_representative_ontology_term_bindings_target_generic_validator():
                     "condition_class_curie": "condition_class.curie",
                 },
             }
+        },
+        "agr.alliance.gene_expression": {
+            "expression_stage_ontology_validation": {
+                "state": ValidationBindingState.ACTIVE,
+                "ontology_family": "life_stage",
+                "optional_inputs": ["data_provider"],
+                "expected_result_fields": {
+                    "label": "when_expressed_stage_name",
+                    "curie": (
+                        "expression_pattern.when_expressed."
+                        "developmental_stage_start.curie"
+                    ),
+                    "name": (
+                        "expression_pattern.when_expressed."
+                        "developmental_stage_start.name"
+                    ),
+                },
+            },
+            "expression_anatomical_structure_validation": {
+                "state": ValidationBindingState.ACTIVE,
+                "ontology_family": "anatomy",
+                "optional_inputs": ["curie", "label", "data_provider"],
+                "expected_result_fields": {
+                    "curie": (
+                        "expression_pattern.where_expressed."
+                        "anatomical_structure.curie"
+                    ),
+                    "name": (
+                        "expression_pattern.where_expressed."
+                        "anatomical_structure.name"
+                    ),
+                },
+            },
+            "expression_cellular_component_validation": {
+                "state": ValidationBindingState.ACTIVE,
+                "ontology_family": "go",
+                "optional_inputs": ["curie", "label"],
+                "expected_result_fields": {
+                    "curie": (
+                        "expression_pattern.where_expressed."
+                        "cellular_component.curie"
+                    ),
+                    "name": (
+                        "expression_pattern.where_expressed."
+                        "cellular_component.name"
+                    ),
+                },
+            },
         },
     }
 
