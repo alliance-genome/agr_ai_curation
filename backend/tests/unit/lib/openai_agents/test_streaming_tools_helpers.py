@@ -1,6 +1,7 @@
 """Focused helper tests for streaming_tools core runtime behavior."""
 
 import json
+import os
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,6 +10,7 @@ import pytest
 from agents import AgentOutputSchema
 from pydantic import BaseModel
 
+from src.lib.curation_workspace import adapter_registry
 from src.lib.openai_agents import streaming_tools
 from src.lib.openai_agents.models import GeneExtractionResultEnvelope
 from src.lib.prompts.context import (
@@ -42,6 +44,19 @@ def _reset_streaming_state():
     streaming_tools.reset_consecutive_call_tracker()
     streaming_tools.clear_collected_events()
     streaming_tools.set_live_event_list(None)
+
+
+@pytest.fixture(scope="module")
+def _repo_package_curation_registry():
+    original_packages_dir = os.environ.get("AGR_RUNTIME_PACKAGES_DIR")
+    os.environ["AGR_RUNTIME_PACKAGES_DIR"] = str(REPO_PACKAGES_DIR)
+    adapter_registry.load_curation_adapter_registry.cache_clear()
+    yield
+    adapter_registry.load_curation_adapter_registry.cache_clear()
+    if original_packages_dir is None:
+        os.environ.pop("AGR_RUNTIME_PACKAGES_DIR", None)
+    else:
+        os.environ["AGR_RUNTIME_PACKAGES_DIR"] = original_packages_dir
 
 
 def test_extract_model_identifier_handles_string_and_object():
@@ -891,15 +906,16 @@ async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(mo
 
 
 @pytest.mark.asyncio
-async def test_chat_domain_envelope_dispatch_uses_real_gene_binding(monkeypatch):
-    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+async def test_chat_domain_envelope_dispatch_uses_real_gene_binding(
+    monkeypatch,
+    _repo_package_curation_registry,
+):
     emitted = []
     monkeypatch.setattr(streaming_tools, "add_specialist_event", emitted.append)
 
-    from src.lib.curation_workspace import adapter_registry, extraction_results
+    from src.lib.curation_workspace import extraction_results
     from src.lib.domain_packs import validator_dispatch
 
-    adapter_registry.load_curation_adapter_registry.cache_clear()
     monkeypatch.setattr(
         extraction_results,
         "_get_agent_curation_metadata",
@@ -964,6 +980,7 @@ async def test_chat_domain_envelope_dispatch_uses_real_gene_binding(monkeypatch)
 )
 async def test_chat_domain_envelope_dispatch_covers_launchable_active_validator_domains(
     monkeypatch,
+    _repo_package_curation_registry,
     tool_name,
     agent_key,
     adapter_key,
@@ -971,18 +988,15 @@ async def test_chat_domain_envelope_dispatch_covers_launchable_active_validator_
     expected_binding_ids,
     expected_selector_suppressed_binding_count,
 ):
-    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
     emitted = []
     monkeypatch.setattr(streaming_tools, "add_specialist_event", emitted.append)
 
     from src.lib.curation_workspace import (
-        adapter_registry,
         curation_prep_service,
         extraction_results,
     )
     from src.lib.domain_packs import validator_dispatch
 
-    adapter_registry.load_curation_adapter_registry.cache_clear()
     monkeypatch.setattr(
         extraction_results,
         "_get_agent_curation_metadata",
@@ -1049,15 +1063,14 @@ async def test_chat_domain_envelope_dispatch_covers_launchable_active_validator_
 @pytest.mark.asyncio
 async def test_chat_domain_envelope_dispatch_surfaces_validator_lookup_errors(
     monkeypatch,
+    _repo_package_curation_registry,
 ):
-    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
     emitted = []
     monkeypatch.setattr(streaming_tools, "add_specialist_event", emitted.append)
 
-    from src.lib.curation_workspace import adapter_registry, extraction_results
+    from src.lib.curation_workspace import extraction_results
     from src.lib.domain_packs import validator_dispatch
 
-    adapter_registry.load_curation_adapter_registry.cache_clear()
     monkeypatch.setattr(
         extraction_results,
         "_get_agent_curation_metadata",

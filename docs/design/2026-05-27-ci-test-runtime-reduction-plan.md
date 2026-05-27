@@ -116,6 +116,26 @@ Acceptance criteria:
   slow-test report setting, and JUnit artifact path.
 - The GitHub check remains named `Backend Unit Tests`.
 
+Local follow-up profiling on 2026-05-27 found two immediate lessons:
+
+- Keep `--dist loadscope` for now. A no-coverage full-suite comparison on the
+  same Docker image passed in both modes, but `loadscope` was faster
+  (`3301 passed, 10 skipped in 78.32s`) than item-level `load`
+  (`3301 passed, 10 skipped in 87.15s`). The single slow
+  `test_package_runner.py` file does improve under `--dist load`, but the full
+  suite does not currently benefit enough to justify changing CI behavior.
+- Repeated curation adapter registry rebuilds are a real test-local cost. A
+  fresh `load_curation_adapter_registry()` build takes about `1.42-1.50s`,
+  while a cached lookup is effectively zero. Tests that do not mutate the
+  registry input should clear this cache once per module, not once per test.
+  This reduced `test_curation_prep_invocation.py` plus
+  `test_curation_prep_service.py` from about `13.7s` to `2.8s`, and
+  `test_streaming_tools_helpers.py` from about `13.3s` to `3.7s`.
+- Unit retry tests should mock retry sleep consistently. The feedback email
+  notifier retry tests were paying real `1s + 2s` backoff waits in several
+  cases; after mocking `time.sleep`, that file dropped from about `3.8s` to
+  `0.8s` elapsed in the same Docker image.
+
 ### Phase 0: Add Timing Visibility
 
 Goal: know whether the 8-minute runtime is broad suite growth, coverage/report

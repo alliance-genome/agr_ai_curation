@@ -62,7 +62,8 @@ class TestEmailNotifierSendNotification:
         from src.lib.feedback.email_notifier import EmailNotifier
 
         notifier = EmailNotifier()
-        notifier.send_feedback_notification(sample_feedback_report)
+        with patch("src.lib.feedback.email_notifier.time.sleep"):
+            notifier.send_feedback_notification(sample_feedback_report)
 
         # Should call SMTP methods
         assert mock_smtp.starttls.called
@@ -79,7 +80,8 @@ class TestEmailNotifierSendNotification:
         from src.lib.feedback.email_notifier import EmailNotifier
 
         notifier = EmailNotifier()
-        notifier.send_feedback_notification(sample_feedback_report)
+        with patch("src.lib.feedback.email_notifier.time.sleep"):
+            notifier.send_feedback_notification(sample_feedback_report)
 
         # Get the message that was sent
         sent_message = mock_smtp.send_message.call_args[0][0]
@@ -115,7 +117,8 @@ class TestEmailNotifierSendNotification:
         ]
 
         notifier = EmailNotifier()
-        notifier.send_feedback_notification(sample_feedback_report)
+        with patch("src.lib.feedback.email_notifier.time.sleep"):
+            notifier.send_feedback_notification(sample_feedback_report)
 
         # Should retry 3 times total
         assert mock_smtp.send_message.call_count == 3
@@ -135,8 +138,9 @@ class TestEmailNotifierSendNotification:
         notifier = EmailNotifier()
 
         # Should raise exception after 3 retries
-        with pytest.raises(Exception):
-            notifier.send_feedback_notification(sample_feedback_report)
+        with patch("src.lib.feedback.email_notifier.time.sleep"):
+            with pytest.raises(Exception):
+                notifier.send_feedback_notification(sample_feedback_report)
 
         # Should have attempted 3 times
         assert mock_smtp.send_message.call_count == 3
@@ -206,13 +210,14 @@ class TestEmailNotifierSendNotification:
 
         notifier = EmailNotifier()
 
-        with patch("src.lib.feedback.email_notifier.logger") as mock_logger:
-            notifier.send_feedback_notification(sample_feedback_report)
+        with patch("src.lib.feedback.email_notifier.time.sleep"):
+            with patch("src.lib.feedback.email_notifier.logger") as mock_logger:
+                notifier.send_feedback_notification(sample_feedback_report)
 
-            # Should log warning about retry
-            mock_logger.warning.assert_called()
-            log_message = mock_logger.warning.call_args[0][0]
-            assert "attempt" in log_message.lower()
+                # Should log warning about retry
+                mock_logger.warning.assert_called()
+                log_message = mock_logger.warning.call_args[0][0]
+                assert "attempt" in log_message.lower()
 
     def test_send_feedback_notification_logs_final_failure(
         self, mock_smtp, mock_config, sample_feedback_report
@@ -228,17 +233,18 @@ class TestEmailNotifierSendNotification:
 
         notifier = EmailNotifier()
 
-        with patch("src.lib.feedback.email_notifier.logger") as mock_logger:
-            try:
-                notifier.send_feedback_notification(sample_feedback_report)
-            except Exception:
-                pass
+        with patch("src.lib.feedback.email_notifier.time.sleep"):
+            with patch("src.lib.feedback.email_notifier.logger") as mock_logger:
+                try:
+                    notifier.send_feedback_notification(sample_feedback_report)
+                except Exception:
+                    pass
 
-            # Should log error (format string + args with %s pattern)
-            mock_logger.error.assert_called()
-            call_args = mock_logger.error.call_args[0]
-            assert "feedback_123" in str(call_args)
-            assert "failed" in call_args[0].lower()
+                # Should log error (format string + args with %s pattern)
+                mock_logger.error.assert_called()
+                call_args = mock_logger.error.call_args[0]
+                assert "feedback_123" in str(call_args)
+                assert "failed" in call_args[0].lower()
 
     def test_send_feedback_notification_includes_langfuse_link(
         self, mock_smtp, mock_config, sample_feedback_report

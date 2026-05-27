@@ -10,7 +10,7 @@ from src.schemas.curation_prep import CurationPrepAgentOutput, CurationPrepChatR
 from src.schemas.curation_workspace import CurationExtractionResultRecord, CurationExtractionSourceKind
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True, scope="module")
 def _reset_adapter_registry():
     adapter_registry_module.load_curation_adapter_registry.cache_clear()
     yield
