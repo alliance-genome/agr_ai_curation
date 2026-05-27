@@ -26,6 +26,7 @@ if str(ALLIANCE_PYTHON_SRC) not in sys.path:
 
 from agr_ai_curation_alliance.domain_packs.gene_expression import (  # noqa: E402
     GENE_EXPRESSION_ADAPTER_KEY,
+    GENE_EXPRESSION_CURATOR_GUIDANCE_FIXTURE_PACK_ID,
     GENE_EXPRESSION_DOMAIN_PACK_ID,
     GENE_EXPRESSION_DOMAIN_PACK_VERSION,
     GENE_EXPRESSION_LINKML_SCHEMA_ID,
@@ -45,6 +46,15 @@ TMEM67_FIXTURE_PATH = (
     / "gene_expression"
     / "fixtures"
     / "tmem67_pending.yaml"
+)
+CURATOR_GUIDANCE_FIXTURE_PATH = (
+    REPO_ROOT
+    / "packages"
+    / "alliance"
+    / "domain_packs"
+    / "gene_expression"
+    / "fixtures"
+    / "curator_guidance_pending.yaml"
 )
 
 
@@ -82,6 +92,7 @@ def _candidate_from_fixture() -> dict:
     annotation = envelope.objects[0]
     object_id = annotation.pending_ref_id or annotation.object_id
     assert object_id is not None
+    assert annotation.schema_ref is not None
     return {
         "candidate_id": "candidate-tmem67",
         "adapter_key": GENE_EXPRESSION_ADAPTER_KEY,
@@ -104,11 +115,48 @@ def _candidate_from_fixture() -> dict:
         "definition_state": annotation.definition_state.value,
         "payload": annotation.payload,
         "object": annotation.model_dump(mode="json"),
-        "schema_ref": (
-            annotation.schema_ref.model_dump(mode="json")
-            if annotation.schema_ref is not None
-            else {}
-        ),
+        "schema_ref": annotation.schema_ref.model_dump(mode="json"),
+        "object_model_ref": {},
+        "model_field_ref": {},
+        "projection_refs": [],
+        "provider_refs": {},
+        "metadata": {"semantic_source": "domain_envelope.objects"},
+    }
+
+
+def _candidate_from_curator_guidance_fixture(object_index: int = 0) -> dict:
+    fixture_pack = load_domain_fixture_pack(CURATOR_GUIDANCE_FIXTURE_PATH)
+    assert fixture_pack.fixture_pack_id == GENE_EXPRESSION_CURATOR_GUIDANCE_FIXTURE_PACK_ID
+    envelope = fixture_pack.fixtures[0].envelope
+    annotation = envelope.objects[object_index]
+    object_id = annotation.pending_ref_id or annotation.object_id
+    assert object_id is not None
+    assert annotation.schema_ref is not None
+    return {
+        "candidate_id": f"candidate-{object_id}",
+        "adapter_key": GENE_EXPRESSION_ADAPTER_KEY,
+        "display_label": annotation.payload["expression_annotation_subject"][
+            "gene_symbol"
+        ],
+        "secondary_label": annotation.payload["where_expressed_statement"],
+        "semantic_source": "domain_envelope.objects",
+        "projection_ref": {
+            "envelope_id": envelope.envelope_id,
+            "object_id": object_id,
+            "envelope_revision": 1,
+        },
+        "envelope_id": envelope.envelope_id,
+        "envelope_revision": 1,
+        "domain_pack_id": envelope.domain_pack_id,
+        "domain_pack_version": envelope.domain_pack_version,
+        "object_id": object_id,
+        "object_type": annotation.object_type,
+        "object_role": annotation.object_role,
+        "object_status": annotation.status.value,
+        "definition_state": annotation.definition_state.value,
+        "payload": annotation.payload,
+        "object": annotation.model_dump(mode="json"),
+        "schema_ref": annotation.schema_ref.model_dump(mode="json"),
         "object_model_ref": {},
         "model_field_ref": {},
         "projection_refs": [],
@@ -349,6 +397,53 @@ def test_gene_expression_export_preserves_unmapped_experiment_context_as_warning
     assert "detection_reagents" not in payload.payload_json[
         "gene_expression_annotations"
     ][0]["target_rows"]["geneexpressionexperiment"]["lookups"]
+
+
+def test_gene_expression_export_maps_curator_guidance_mixed_site_and_context_warnings():
+    candidate = _candidate_from_curator_guidance_fixture(object_index=2)
+
+    payload = GeneExpressionExportAdapter().build_submission_payload(
+        mode=SubmissionMode.EXPORT,
+        target_key=GENE_EXPRESSION_TARGET_KEY,
+        payload_context=_payload_context(candidate),
+    )
+
+    assert payload.payload_json is not None
+    annotation = payload.payload_json["gene_expression_annotations"][0]
+    target_rows = annotation["target_rows"]
+
+    assert target_rows["geneexpressionannotation"]["columns"]["negated"] is True
+    assert target_rows["geneexpressionannotation"]["columns"]["uncertain"] is True
+    assert target_rows["anatomicalsite"]["lookups"]["anatomicalstructure_id"][
+        "match"
+    ] == {"curie": "ZFA:0000151"}
+    assert target_rows["anatomicalsite"]["lookups"]["cellularcomponentterm_id"][
+        "match"
+    ] == {"curie": "GO:0005737"}
+    assert annotation["term_projections"]["cellular_component"] == {
+        "curie": "GO:0005737",
+        "name": "cytoplasm",
+    }
+
+    context_candidate = _candidate_from_curator_guidance_fixture(object_index=0)
+    context_payload = GeneExpressionExportAdapter().build_submission_payload(
+        mode=SubmissionMode.EXPORT,
+        target_key=GENE_EXPRESSION_TARGET_KEY,
+        payload_context=_payload_context(context_candidate),
+    )
+    assert context_payload.payload_json is not None
+    warnings = context_payload.payload_json["gene_expression_annotations"][0][
+        "export_diagnostics"
+    ]["warnings"]
+    assert {
+        warning["field_path"]
+        for warning in warnings
+    } == {
+        "condition_relations",
+        "expression_experiment.detection_reagents",
+        "expression_experiment.specimen_alleles",
+        "expression_experiment.specimen_genomic_model",
+    }
 
 
 def test_gene_expression_export_maps_lta_cellular_component_projection():

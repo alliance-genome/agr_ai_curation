@@ -14,8 +14,12 @@ from . import find_repo_root
 from src.lib.agent_studio import runtime_validation
 from src.lib.agent_studio.registry_builder import build_agent_registry
 from src.lib.config import agent_loader, agent_sources, prompt_loader, schema_discovery
+from src.lib.curation_workspace.adapter_registry import build_curation_adapter_registry
+from src.lib.curation_workspace.export_adapters.registry import ExportAdapterRegistry
+from src.lib.domain_packs.loader import load_domain_fixture_pack
 from src.lib.packages.registry import load_package_registry
 from src.lib.packages.tool_registry import load_tool_registry
+from src.schemas.curation_workspace import SubmissionMode
 
 REPO_ROOT = find_repo_root(Path(__file__))
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -269,7 +273,9 @@ def test_core_plus_org_custom_runtime_loads_without_alliance_package(monkeypatch
         "DemoValidationEnvelope",
         "PdfExtractionResultEnvelope",
     }
-    assert schema_discovery.get_schema_for_agent("demo_agent").__name__ == "DemoValidationEnvelope"
+    demo_schema = schema_discovery.get_schema_for_agent("demo_agent")
+    assert demo_schema is not None
+    assert demo_schema.__name__ == "DemoValidationEnvelope"
 
     tool_registry = load_tool_registry(
         packages_dir,
@@ -277,7 +283,9 @@ def test_core_plus_org_custom_runtime_loads_without_alliance_package(monkeypatch
         supported_package_api_version="1.0.0",
     )
     assert set(tool_registry.bindings_by_tool_id) == {"demo_search_tool"}
-    assert tool_registry.get("demo_search_tool").source.package_id == "org.custom"
+    demo_tool_binding = tool_registry.get("demo_search_tool")
+    assert demo_tool_binding is not None
+    assert demo_tool_binding.source.package_id == "org.custom"
 
     registry = build_agent_registry()
     assert "demo_agent_validation" in registry
@@ -290,6 +298,130 @@ def test_core_plus_org_custom_runtime_loads_without_alliance_package(monkeypatch
             *schemas.keys(),
             *tool_registry.bindings_by_tool_id.keys(),
             *registry.keys(),
+        ]
+    )
+
+
+def test_org_custom_domain_pack_walkthrough_registers_runtime_surfaces(monkeypatch, tmp_path):
+    packages_dir = tmp_path / "runtime-packages"
+    _copy_runtime_package(REPO_ROOT / "packages" / "core", packages_dir, "agr.core")
+    org_custom_package = _copy_runtime_package(
+        ORG_CUSTOM_FIXTURE,
+        packages_dir,
+        "org.custom",
+    )
+
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(packages_dir))
+    monkeypatch.setattr(agent_sources, "_find_project_root", lambda: None)
+    monkeypatch.setattr(
+        agent_sources,
+        "get_runtime_config_dir",
+        lambda: tmp_path / "runtime-config",
+    )
+
+    agent_loader.load_agent_definitions(packages_dir, force_reload=True)
+    tool_registry = load_tool_registry(
+        packages_dir,
+        runtime_version="1.5.0",
+        supported_package_api_version="1.0.0",
+    )
+    adapter_registry = build_curation_adapter_registry()
+    domain_pack = adapter_registry.get_domain_pack_by_id("org.custom.demo_record")
+    assert domain_pack is not None
+    assert domain_pack.package_id == "org.custom"
+    assert domain_pack.metadata.metadata["validator_bindings"]["active"][0][
+        "validator_agent"
+    ] == {
+        "package_id": "org.custom",
+        "agent_id": "demo_agent_validation",
+    }
+
+    fixture_pack = load_domain_fixture_pack(
+        org_custom_package
+        / "domain_packs"
+        / "demo_record"
+        / "fixtures"
+        / "smoke.yaml"
+    )
+    envelope = fixture_pack.fixtures[0].envelope
+    validator = adapter_registry.get_domain_envelope_validator_by_id(
+        "org.custom.demo_record"
+    )
+    assert callable(validator)
+    assert validator(envelope) == ()
+
+    materializer = adapter_registry.get_review_row_materializer_for_domain_pack(
+        "org.custom.demo_record"
+    )
+    assert materializer is not None
+    rows = materializer.materialize(envelope, envelope_revision=1)
+    assert [row.object_id for row in rows] == ["demo-record-1"]
+    assert [field.field_path for field in rows[0].summary_fields] == [
+        "record.record_id",
+        "record.title",
+        "review.status",
+    ]
+    assert rows[0].metadata["workspace_fields"][0]["metadata"]["workspace_group"] == {
+        "id": "identity",
+        "label": "Identity",
+        "order": 0,
+        "field_order": 0,
+    }
+
+    export_registry = ExportAdapterRegistry(adapter_registry.export_adapters())
+    export_adapter = export_registry.require("demo")
+    candidate = {
+        "candidate_id": "candidate-demo-record-1",
+        "projection_ref": {
+            "envelope_id": envelope.envelope_id,
+            "object_id": "demo-record-1",
+            "envelope_revision": 1,
+        },
+        "envelope_id": envelope.envelope_id,
+        "envelope_revision": 1,
+        "domain_pack_id": envelope.domain_pack_id,
+        "domain_pack_version": envelope.domain_pack_version,
+        "object_id": "demo-record-1",
+        "object_type": "DemoRecord",
+        "payload": envelope.objects[0].payload,
+    }
+    payload = export_adapter.build_submission_payload(
+        mode=SubmissionMode.EXPORT,
+        target_key="demo.records.archive",
+        payload_context={
+            "session_id": "session-demo-record",
+            "candidate_ids": [candidate["candidate_id"]],
+            "candidate_count": 1,
+            "candidates": [],
+            "domain_envelope_candidates": [candidate],
+            "domain_envelopes": [],
+            "readiness_blockers": [],
+            "warnings": [],
+        },
+    )
+
+    assert payload.payload_json == {
+        "adapter_key": "demo",
+        "mode": "export",
+        "target_key": "demo.records.archive",
+        "domain_pack_id": "org.custom.demo_record",
+        "records": [
+            {
+                "candidate_id": "candidate-demo-record-1",
+                "record_id": "DEMO-0001",
+                "review_status": "accepted",
+                "title": "Neutral external package record",
+            }
+        ],
+    }
+    demo_tool_binding = tool_registry.get("demo_search_tool")
+    assert demo_tool_binding is not None
+    assert demo_tool_binding.source.package_id == "org.custom"
+    _assert_no_alliance_runtime_values(
+        [
+            *adapter_registry.adapter_keys(),
+            domain_pack.pack_id,
+            payload.payload_text or "",
         ]
     )
 

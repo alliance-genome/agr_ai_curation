@@ -1,0 +1,118 @@
+pack_id: org.custom.demo_record
+display_name: Custom Demo Record Domain Pack
+version: 1.0.0
+metadata_api_version: 1.0.0
+description: Minimal non-Alliance domain pack used as a publication walkthrough fixture.
+status: active
+schema_refs:
+  - schema_id: demo-record.schema.json
+    provider: json-schema
+    name: Demo record
+    version: draft-2020-12
+    uri: https://schemas.example.test/demo/record.schema.json
+enum_definitions:
+  - enum_id: DemoReviewStatus
+    display_name: Demo review status
+    values:
+      - value: accepted
+        label: Accepted
+      - value: needs_review
+        label: Needs review
+model_definitions:
+  - model_id: DemoRecordPayload
+    display_name: Demo record payload
+    schema_ref:
+      schema_id: demo-record.schema.json
+      provider: json-schema
+      name: Demo record
+      version: draft-2020-12
+      uri: https://schemas.example.test/demo/record.schema.json
+object_definitions:
+  - object_type: DemoRecord
+    display_name: Demo record
+    model_ref: DemoRecordPayload
+    schema_ref:
+      schema_id: demo-record.schema.json
+      provider: json-schema
+      name: Demo record
+      version: draft-2020-12
+      uri: https://schemas.example.test/demo/record.schema.json
+    metadata:
+      workspace_display:
+        primary_label_field: record.title
+        secondary_label_field: review.status
+        summary_fields:
+          - record.record_id
+          - record.title
+          - review.status
+        groups:
+          - id: identity
+            label: Identity
+            fields:
+              - record.record_id
+              - record.title
+          - id: review
+            label: Review
+            fields:
+              - review.status
+    fields:
+      - field_path: record.record_id
+        field_type: string
+        display_name: Record ID
+        required: true
+        metadata:
+          editable: true
+      - field_path: record.title
+        field_type: string
+        display_name: Title
+        required: true
+        metadata:
+          editable: true
+      - field_path: review.status
+        field_type: enum
+        enum_ref: DemoReviewStatus
+        display_name: Review status
+        metadata:
+          validatable: true
+          validator_binding_id: demo_title_review
+          validator_state: active
+fixture_packs:
+  - fixture_pack_id: smoke
+    display_name: Demo record smoke fixture
+    path: fixtures/smoke.yaml
+    description: One non-Alliance envelope object for package registration walkthrough tests.
+    object_types:
+      - DemoRecord
+metadata:
+  validators:
+    active:
+      - validator_id: demo_title_review
+        display_name: Demo title review
+        description: Synthetic package-scoped validator owned by org.custom.
+    under_development: []
+  validator_bindings:
+    active:
+      - binding_id: demo_title_review
+        display_name: Demo title review
+        validator_agent:
+          package_id: org.custom
+          agent_id: demo_agent_validation
+        applies_to:
+          domain_pack_id: org.custom.demo_record
+          object_types:
+            - DemoRecord
+          field_paths:
+            - review.status
+        input_fields:
+          title:
+            source: payload
+            path: record.title
+          status:
+            source: payload
+            path: review.status
+        expected_result_fields:
+          status: review.status
+        required: false
+        blocking: false
+        allow_opt_out: true
+    under_development: []

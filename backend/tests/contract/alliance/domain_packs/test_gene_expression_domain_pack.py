@@ -44,6 +44,7 @@ from agr_ai_curation_alliance.domain_packs import (  # noqa: E402
     load_alliance_domain_pack_registry,
 )
 from agr_ai_curation_alliance.domain_packs.gene_expression import (  # noqa: E402
+    GENE_EXPRESSION_CURATOR_GUIDANCE_FIXTURE_PACK_ID,
     GENE_EXPRESSION_DOMAIN_PACK_ID,
     GENE_EXPRESSION_FIXTURE_PACK_ID,
     GENE_EXPRESSION_MODEL_ID,
@@ -162,6 +163,16 @@ def _converted_tmem67_envelope():
         produced_by=context["produced_by"],
         produced_at=context["produced_at"],
     )
+
+
+def _load_gene_expression_fixture_pack(fixture_pack_id: str):
+    fixture_ref = load_alliance_domain_pack_registry().get_fixture_pack_ref(
+        GENE_EXPRESSION_DOMAIN_PACK_ID,
+        fixture_pack_id,
+    )
+    assert fixture_ref is not None
+    fixture_path = get_gene_expression_domain_pack_metadata_path().parent / fixture_ref.path
+    return load_domain_fixture_pack(fixture_path)
 
 
 def _converted_tmem67_envelope_with_raw_assay(assay: Mapping[str, Any]):
@@ -410,6 +421,14 @@ def test_gene_expression_domain_pack_is_bundled_with_concrete_metadata():
     assert multi_fixture_ref is not None
     assert multi_fixture_ref.path == "fixtures/tmem67_multi_annotation_pending.yaml"
     assert multi_fixture_ref.object_types == [GENE_EXPRESSION_OBJECT_TYPE]
+
+    curator_fixture_ref = load_alliance_domain_pack_registry().get_fixture_pack_ref(
+        GENE_EXPRESSION_DOMAIN_PACK_ID,
+        GENE_EXPRESSION_CURATOR_GUIDANCE_FIXTURE_PACK_ID,
+    )
+    assert curator_fixture_ref is not None
+    assert curator_fixture_ref.path == "fixtures/curator_guidance_pending.yaml"
+    assert curator_fixture_ref.object_types == [GENE_EXPRESSION_OBJECT_TYPE]
 
 
 def test_gene_expression_object_embeds_required_experiment_and_context_fields():
@@ -1677,6 +1696,139 @@ def test_multi_annotation_fixture_projects_one_review_row_per_expression_stateme
         (
             "evidence-tmem67-neural-tube-1",
             "expression_pattern.where_expressed.anatomical_structure",
+        ),
+    }
+
+
+def test_curator_guidance_fixture_covers_site_routing_and_context_preservation():
+    fixture_pack = _load_gene_expression_fixture_pack(
+        GENE_EXPRESSION_CURATOR_GUIDANCE_FIXTURE_PACK_ID
+    )
+    envelope = fixture_pack.fixtures[0].envelope
+
+    assert fixture_pack.fixture_pack_id == (
+        GENE_EXPRESSION_CURATOR_GUIDANCE_FIXTURE_PACK_ID
+    )
+    assert len(envelope.objects) == 3
+    assert validate_pending_gene_expression_envelope(envelope) == ()
+    _assert_metadata_refs_resolve(envelope)
+
+    payloads = {obj.pending_ref_id: obj.payload for obj in envelope.objects}
+    anatomy_only = payloads["gene-expression-annotation-flcn-pronephric-duct"][
+        "expression_pattern"
+    ]["where_expressed"]
+    cellular_component_only = payloads["gene-expression-annotation-flcn-nucleus"][
+        "expression_pattern"
+    ]["where_expressed"]
+    mixed_negated = payloads[
+        "gene-expression-annotation-flcn-retina-cytoplasm-negated"
+    ]
+
+    assert anatomy_only == {
+        "anatomical_structure": {
+            "curie": "ZFA:0000260",
+            "name": "pronephric duct",
+        },
+        "anatomical_structure_uberon_terms": [
+            {"curie": "UBERON:0001008", "name": "renal system"}
+        ],
+    }
+    assert cellular_component_only == {
+        "cellular_component": {"curie": "GO:0005634", "name": "nucleus"}
+    }
+    assert mixed_negated["negated"] is True
+    assert mixed_negated["uncertain"] is True
+    assert mixed_negated["expression_pattern"]["where_expressed"] == {
+        "anatomical_structure": {"curie": "ZFA:0000151", "name": "retina"},
+        "cellular_component": {"curie": "GO:0005737", "name": "cytoplasm"},
+        "cellular_component_qualifiers": [
+            {"curie": "RO:0002170", "name": "present in"}
+        ],
+    }
+
+    context_payload = payloads[
+        "gene-expression-annotation-flcn-pronephric-duct"
+    ]["expression_experiment"]
+    assert context_payload["detection_reagents"] == [
+        {
+            "name": "flcn riboprobe",
+            "placeholder": True,
+            "source_text": "flcn riboprobe",
+            "unresolved_reason_code": "reagent_lookup_or_export_mapping_unavailable",
+        }
+    ]
+    assert "specimen_genomic_model" in context_payload
+    assert "specimen_alleles" in context_payload
+    assert payloads["gene-expression-annotation-flcn-pronephric-duct"][
+        "condition_relations"
+    ][0]["conditions"][0]["condition_free_text"] == "embryos raised at 28.5 C"
+
+    helper_paths = {
+        selection["field_path"]
+        for selection in envelope.metadata["extraction_metadata"]["provenance"][
+            "helper_selections"
+        ]
+    }
+    assert {
+        "relation.name",
+        "expression_experiment.expression_assay_used",
+        "when_expressed_stage_name",
+        "expression_pattern.when_expressed.developmental_stage_start",
+        "expression_pattern.where_expressed.anatomical_structure",
+        "expression_pattern.where_expressed.cellular_component",
+    }.issubset(helper_paths)
+    assert envelope.metadata["extraction_metadata"]["provenance"][
+        "reference_lookup"
+    ]["source_tool"] == "agr_literature_reference_lookup"
+
+    rows = DomainPackMetadataReviewRowMaterializer(
+        _gene_expression_pack().metadata,
+    ).materialize(envelope, envelope_revision=1)
+    assert [row.object_id for row in rows] == [
+        "gene-expression-annotation-flcn-pronephric-duct",
+        "gene-expression-annotation-flcn-nucleus",
+        "gene-expression-annotation-flcn-retina-cytoplasm-negated",
+    ]
+    assert {row.display_label for row in rows} == {"flcn"}
+    assert [row.validation_state for row in rows] == ["clear", "clear", "clear"]
+
+
+def test_gene_expression_validator_warns_when_expected_optional_context_is_dropped():
+    fixture_pack = _load_gene_expression_fixture_pack(
+        GENE_EXPRESSION_CURATOR_GUIDANCE_FIXTURE_PACK_ID
+    )
+    envelope = fixture_pack.fixtures[0].envelope
+    annotation = envelope.objects[0]
+    payload = copy.deepcopy(annotation.payload)
+    del payload["expression_experiment"]["detection_reagents"]
+    del payload["expression_experiment"]["specimen_genomic_model"]
+    del payload["condition_relations"]
+    changed_annotation = annotation.model_copy(update={"payload": payload})
+    changed_envelope = envelope.model_copy(
+        update={"objects": [changed_annotation, *envelope.objects[1:]]}
+    )
+
+    findings = validate_pending_gene_expression_envelope(changed_envelope)
+
+    assert {
+        (finding.field_ref.field_path, finding.severity, finding.details["blocking"])
+        for finding in findings
+        if finding.code == "alliance.gene_expression.experiment_context_dropped"
+    } == {
+        (
+            "condition_relations",
+            ValidationFindingSeverity.WARNING,
+            False,
+        ),
+        (
+            "expression_experiment.detection_reagents",
+            ValidationFindingSeverity.WARNING,
+            False,
+        ),
+        (
+            "expression_experiment.specimen_genomic_model",
+            ValidationFindingSeverity.WARNING,
+            False,
         ),
     }
 

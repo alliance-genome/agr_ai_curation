@@ -17,6 +17,11 @@ This guide is grounded in the implemented runtime:
 - Export and submission readiness: `backend/src/lib/curation_workspace/session_submission_service.py`
 - Alliance package metadata: `packages/alliance/domain_packs/`
 
+For the release-pinned Gene Expression 0.7.0 flow, including the LinkML commit,
+curator fixtures, validation behavior, export handoff, and non-Alliance
+domain-pack walkthrough, see
+`docs/developer/guides/GENE_EXPRESSION_0_7_0.md`.
+
 ## Source of Truth
 
 For new domain-pack runs:
