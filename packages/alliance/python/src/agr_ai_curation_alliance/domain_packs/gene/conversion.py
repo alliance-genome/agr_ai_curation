@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator, model_validator
 
@@ -108,6 +108,7 @@ class ToolVerifiedGeneMention(BaseModel):
     species: StrictStr | None = None
     confidence: Literal["high", "medium", "low"]
     evidence_record_ids: list[StrictStr] = Field(min_length=1)
+    identity_resolution_notes: list[StrictStr] = Field(default_factory=list)
 
     @field_validator("mention", "primary_external_id", "gene_symbol", "taxon", mode="before")
     @classmethod
@@ -139,6 +140,22 @@ class ToolVerifiedGeneMention(BaseModel):
                 + ", ".join(sorted(duplicates))
             )
         return normalized
+
+    @field_validator("identity_resolution_notes")
+    @classmethod
+    def _validate_identity_resolution_notes(
+        cls,
+        value: list[StrictStr],
+    ) -> list[StrictStr]:
+        normalized_notes: list[str] = []
+        for item in value:
+            normalized = str(item).strip()
+            if not normalized:
+                raise ValueError(
+                    "identity_resolution_notes must not contain empty values"
+                )
+            normalized_notes.append(normalized)
+        return normalized_notes
 
 
 class ToolVerifiedGeneOutput(BaseModel):
@@ -252,7 +269,13 @@ def _object_metadata() -> dict[str, Any]:
 def _payload_for_gene_evidence(
     gene: ToolVerifiedGeneMention,
     evidence: ToolVerifiedGeneEvidenceRecord,
+    *,
+    normalization_notes: Sequence[str] = (),
 ) -> dict[str, Any]:
+    identity_resolution_notes = (
+        list(gene.identity_resolution_notes)
+        or [str(note).strip() for note in normalization_notes if str(note).strip()]
+    )
     payload: dict[str, Any] = {
         "mention": gene.mention,
         "primary_external_id": gene.primary_external_id,
@@ -265,6 +288,8 @@ def _payload_for_gene_evidence(
         "section": evidence.section,
         "chunk_id": evidence.chunk_id,
     }
+    if identity_resolution_notes:
+        payload["identity_resolution_notes"] = identity_resolution_notes
     if gene.species is not None:
         payload["species"] = gene.species
     if evidence.subsection is not None:
@@ -356,7 +381,11 @@ def tool_verified_gene_output_to_pending_envelope(
                     schema_ref=_gene_schema_ref(),
                     definition_state=DefinitionState.STABLE,
                     definition_notes=list(GENE_MENTION_EVIDENCE_DEFINITION_NOTES),
-                    payload=_payload_for_gene_evidence(gene, evidence),
+                    payload=_payload_for_gene_evidence(
+                        gene,
+                        evidence,
+                        normalization_notes=source.normalization_notes,
+                    ),
                     metadata=_object_metadata(),
                 )
             )

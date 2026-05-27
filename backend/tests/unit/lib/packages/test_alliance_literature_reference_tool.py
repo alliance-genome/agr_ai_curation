@@ -112,6 +112,18 @@ def test_default_factory_uses_api_client_db_mode(monkeypatch):
     assert calls == [{"data_source": "db"}]
 
 
+def test_numpy2_elasticsearch_compat_restores_removed_aliases(monkeypatch):
+    import numpy as np
+
+    monkeypatch.delattr(np, "float_", raising=False)
+    monkeypatch.delattr(np, "complex_", raising=False)
+
+    literature_references._ensure_elasticsearch_numpy2_compat()
+
+    assert np.float_ is np.float64
+    assert np.complex_ is np.complex128
+
+
 @pytest.mark.parametrize(
     ("identifier", "curie", "cross_references"),
     [

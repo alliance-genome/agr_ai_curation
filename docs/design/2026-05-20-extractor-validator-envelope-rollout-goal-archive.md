@@ -168,11 +168,20 @@ Default extractor tools:
 - Document search/read tools.
 - Evidence recording tools.
 - Species/taxon context lookup is allowed when needed because the extractor has the paper context and is often best positioned to infer organism context.
+- Narrow domain-pack-declared controlled-field helpers are allowed and expected
+  for controlled vocabulary, ontology, and enumerated selector fields. These
+  helpers must query the configured database/API-backed package source for the
+  specific field instead of letting the extractor use model memory.
 
 Default extractor restrictions:
 
 - No AGR curation entity lookup for validating gene/allele/disease/chemical/ontology IDs.
-- No gene-name, allele-name, ontology-term, disease-term, or chemical-term database searches intended to resolve identity.
+- No broad gene-name, allele-name, ontology-term, disease-term, chemical-term,
+  reagent, or reference database searches intended to resolve final identity.
+- No hardcoded controlled vocabulary or ontology selector values in extractor
+  prompts or converters. If a staged payload needs a controlled value, the
+  extractor must either call the allowed narrow helper for that field or leave
+  the field unresolved with metadata explaining the missing helper/result.
 - Extractor fields that came from the paper or paper-context inference should be named `proposed_*`, `*_hint`, or otherwise clearly non-authoritative.
 
 Default validator tools:
@@ -183,6 +192,19 @@ Default validator tools:
 
 Tool implementation policy:
 
+- Narrow extractor helpers should be field-scoped, not method-scoped. The caller
+  supplies `domain_pack_id`, `object_type`, `field_path`, and optional paper
+  label/provider/taxon context; the domain pack maps that field to an approved
+  package-owned lookup method.
+- For Gene Expression, `relation.name` must be staged from a DB-backed
+  `Expression Relation` option helper rather than prompt memory. Assay/MMO,
+  anatomy, stage, GO cellular component, condition relation, reagent, and
+  specimen/genomic-context selector values need the same rule whenever they are
+  controlled by vocabulary, ontology, or database-backed enumerations.
+- Validator dispatch remains authoritative after extraction. The helper result
+  is selector evidence and provenance; active validators still resolve, reject,
+  materialize, or report ambiguity in field-addressed results.
+
 - Prefer existing Python package/runtime tools before creating new tools.
 - Inventory tools already declared in package `agent.yaml` files, package tool modules, and `agr_ai_curation_runtime` public helpers before adding anything.
 - If an existing package tool already performs the needed lookup, update validator prompts/metadata to use it instead of building a duplicate direct DB helper.
@@ -191,7 +213,12 @@ Tool implementation policy:
 
 ## Live Data Reconnaissance Notes
 
-Use the read-only curation DB tunnel when live Alliance data availability affects a validator design, tool boundary, or bug diagnosis.
+Use the read-only curation DB tunnel when live Alliance data availability affects
+a validator design, extractor controlled-field helper mapping, tool boundary,
+export/materializer target, or bug diagnosis. This is especially important when
+deciding whether a controlled vocabulary, ontology term, reagent, specimen,
+allele, condition, or Gene Expression experiment-context field has a live DB
+target and what table/column/row shape the package-owned helper should query.
 
 Primary helper from a Symphony workspace:
 
@@ -238,6 +265,15 @@ Literature/reference data:
 - Do not open or rely on a direct literature DB tunnel by default.
 - Prefer the API or API-backed package tool path for reference/literature lookup.
 - Existing reference validator tests and prompts already point at `agr_literature_reference_lookup` with methods such as `get_literature_reference` and `search_literature_references`; inspect and reuse that before designing new reference lookup access.
+- Source-reference and PMID materialization should flow through
+  `reference_validation` and `agr_literature_reference_lookup`, not extractor
+  memory, raw Elasticsearch clients, direct SQL, or a literature Postgres
+  tunnel. The package tool wraps `AGRCurationAPIClient(data_source="db")` and
+  returns candidate references, no-match/ambiguity details, and lookup attempts
+  suitable for validator audit.
+- As of 2026-05-26, `agr-curation-api-client==0.10.1` still depends on
+  `elasticsearch<7.14`; keep the package-tool NumPy 2.x compatibility guard in
+  place until the upstream client dependency is modernized.
 - If reference/literature live data must be inspected, document why the existing API/package tool path is insufficient before asking for any new tunnel access.
 
 ### 2026-05-19 LinkML requiredness check

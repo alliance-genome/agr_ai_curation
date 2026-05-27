@@ -36,6 +36,16 @@ class StaleValidationFindingResolution:
     changed: bool
 
 
+def _history_ref_payload(value: Any) -> Any:
+    """Serialize refs before HistoryEvent validation to avoid import-alias drift."""
+
+    if value is None:
+        return None
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    return value
+
+
 def append_validation_findings_to_envelope(
     envelope: DomainEnvelope,
     findings: Iterable[ValidationFinding],
@@ -363,8 +373,8 @@ def _history_event_for_finding(
         actor_type=HistoryActorType.SYSTEM,
         actor_id=actor_id,
         message=f"Validation finding added: {finding.code or finding.severity.value}",
-        object_ref=event_object_ref,
-        field_ref=event_field_ref,
+        object_ref=_history_ref_payload(event_object_ref),
+        field_ref=_history_ref_payload(event_field_ref),
         details=details,
     )
 
@@ -404,8 +414,8 @@ def _history_event_for_resolved_finding(
         actor_type=HistoryActorType.SYSTEM,
         actor_id=actor_id,
         message=f"Validation finding resolved: {finding.code or finding.severity.value}",
-        object_ref=event_object_ref,
-        field_ref=event_field_ref,
+        object_ref=_history_ref_payload(event_object_ref),
+        field_ref=_history_ref_payload(event_field_ref),
         details={
             "finding_id": finding.finding_id,
             "finding_code": finding.code,

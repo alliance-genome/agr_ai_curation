@@ -3003,7 +3003,7 @@ def test_session_serializer_preserves_materialized_validator_findings_and_refs(
     ][0]["canonical_id"] == "AGR:0001"
 
 
-def test_submission_export_reports_stale_domain_envelope_revision_blocker(
+def test_submission_export_reports_stale_explicit_domain_envelope_revision_blocker(
     db_session,
     tmp_path,
     monkeypatch,
@@ -3033,6 +3033,9 @@ def test_submission_export_reports_stale_domain_envelope_revision_blocker(
             session_id=seeded["session_id"],
             mode=SubmissionMode.EXPORT,
             target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+            expected_envelope_revisions={
+                seeded["envelope_id"]: int(seeded["envelope_revision"]),
+            },
         ),
     )
 

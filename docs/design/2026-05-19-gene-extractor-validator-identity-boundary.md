@@ -198,6 +198,58 @@ This allows two validator modes through the same contract:
 
 ## Tool Scoping
 
+### 2026-05-26 controlled-field helper correction
+
+The boundary below must not be read as "extractors may write controlled
+vocabulary or ontology values from model memory." That interpretation is wrong.
+
+The intended boundary is:
+
+- Extractors must not receive broad, open-ended identity lookup tools for final
+  gene, allele, reference, disease, chemical, reagent, or arbitrary ontology
+  normalization.
+- Extractors may and should receive narrow, domain-pack-declared
+  controlled-field helper tools when they need to populate controlled
+  vocabulary, ontology, or other enumerated selector fields in the extraction
+  envelope.
+- For any controlled field value that will appear in the staged payload, the
+  extractor should get the value from a database/API-backed helper or leave the
+  field unresolved. It should not use memorized constants such as
+  `is_expressed_in`, MMO labels, anatomy term CURIEs, GO cellular-component
+  CURIEs, condition-relation values, or data-provider codes unless the value was
+  returned by an allowed narrow helper or came from deterministic package
+  configuration explicitly declared as the source for that field.
+- Helper output remains selector/staging evidence. Active validators and
+  materializers still re-check, resolve, report ambiguity, and write final
+  authoritative materialization fields after extraction.
+
+For Gene Expression, the narrow helper surface should cover at least:
+
+- `relation.name`: query the `Expression Relation` controlled vocabulary and
+  stage the returned relation option, currently `is_expressed_in`, rather than
+  hardcoding it in the prompt or converter.
+- `expression_pattern.where_expressed`: help route and/or resolve paper labels
+  into the correct LinkML-backed site fields, including anatomy terms and GO
+  cellular components.
+- `expression_experiment.expression_assay_used`: query MMO/assay options from
+  the configured ontology source when the paper provides assay text.
+- LinkML-backed experiment context added in the Gene Expression wave, including
+  detection reagent, specimen/genomic-model/allele, and condition-relation
+  selector fields where a controlled vocabulary, ontology, or database-backed
+  entity type is involved.
+
+The helper should be narrow by construction: the request names the
+`domain_pack_id`, `object_type`, and `field_path`, and the implementation maps
+that field to approved package-owned lookup methods. It must not expose raw SQL
+or the full `agr_curation_query` method set to extractors.
+
+When designing or reviewing those field-to-tool mappings, agents should inspect
+the live read-only curation DB through the Symphony tunnel when table shape,
+controlled vocabulary rows, ontology storage, or real row population affects the
+decision. Use focused `SELECT`/`information_schema` queries through
+`scripts/utilities/symphony_curation_db_psql.sh`; never print the generated
+env file, and never turn the tunnel itself into an extractor runtime tool.
+
 The extractor should not receive the broad `agr_curation_query` tool if that
 tool exposes gene lookup methods such as:
 
@@ -212,17 +264,26 @@ boundary.
 
 Preferred implementation options:
 
-1. Add a narrow taxon/provider context tool for extractors.
+1. Add narrow context and controlled-field option tools for extractors.
 
    Example tool names:
 
    - `agr_taxon_context_lookup`
    - `agr_data_provider_lookup`
    - `agr_species_context_lookup`
+   - `get_domain_field_term_options`
+   - `stage_domain_field_selector`
 
    Allowed behavior:
 
    - Map provider abbreviations to taxon IDs.
+   - For a declared `domain_pack_id`/`object_type`/`field_path`, return only the
+     configured controlled vocabulary, ontology, or enumerated database-backed
+     options for that field.
+   - Return enough provenance for downstream validators to audit the selection,
+     such as vocabulary name, term name, CURIE/internal ID when available,
+     provider, ontology type, query text, and lookup attempt metadata.
+   - Refuse fields without an explicit domain-pack helper mapping.
    - Map known organism names or species strings to provider/taxon metadata.
    - Return provider display names, taxon CURIEs, and species labels.
 

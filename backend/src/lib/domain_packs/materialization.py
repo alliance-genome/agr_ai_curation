@@ -193,6 +193,37 @@ class DomainPackMetadataReviewRowMaterializer:
                 display_config=display_config,
             )
 
+            metadata = {
+                "semantic_source": "domain_envelope.objects",
+                "materializer": type(self).__name__,
+                "object_index": object_index,
+                "payload_path": f"objects[{object_index}].payload",
+                "evidence_record_ids": list(
+                    domain_object.evidence_record_ids
+                ),
+                "metadata_refs": [
+                    metadata_ref.model_dump(mode="json")
+                    for metadata_ref in domain_object.metadata_refs
+                ],
+                "workspace_display": dict(display_config),
+                **_unavailable_capabilities_metadata(
+                    _capabilities_for_object(
+                        object_id,
+                        unavailable_capabilities=unavailable_capabilities,
+                    )
+                ),
+            }
+            if workspace_fields:
+                # Only explicit workspace groups should disable the downstream
+                # summary-field fallback. An empty list would mean "there was a
+                # workspace contract and it intentionally has no editable
+                # fields", which is not true for packs/fixtures that provide
+                # summary_fields only.
+                metadata["workspace_fields"] = [
+                    field.model_dump(mode="json")
+                    for field in workspace_fields
+                ]
+
             rows.append(
                 DomainEnvelopeReviewRow(
                     envelope_id=envelope.envelope_id,
@@ -221,30 +252,7 @@ class DomainPackMetadataReviewRowMaterializer:
                     ),
                     object_model_ref=_object_model_ref(domain_object, object_definition),
                     model_field_ref=_model_field_ref(domain_object, object_definition),
-                    metadata={
-                        "semantic_source": "domain_envelope.objects",
-                        "materializer": type(self).__name__,
-                        "object_index": object_index,
-                        "payload_path": f"objects[{object_index}].payload",
-                        "evidence_record_ids": list(
-                            domain_object.evidence_record_ids
-                        ),
-                        "metadata_refs": [
-                            metadata_ref.model_dump(mode="json")
-                            for metadata_ref in domain_object.metadata_refs
-                        ],
-                        "workspace_display": dict(display_config),
-                        "workspace_fields": [
-                            field.model_dump(mode="json")
-                            for field in workspace_fields
-                        ],
-                        **_unavailable_capabilities_metadata(
-                            _capabilities_for_object(
-                                object_id,
-                                unavailable_capabilities=unavailable_capabilities,
-                            )
-                        ),
-                    },
+                    metadata=metadata,
                 )
             )
 

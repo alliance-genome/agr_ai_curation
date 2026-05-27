@@ -1061,11 +1061,11 @@ def _build_domain_envelope_submission_context(
         candidate_id = str(candidate.id)
         envelope_id = str(candidate.envelope_id)
         object_id = str(candidate.object_id)
+        row = envelope_rows.get(envelope_id)
         expected_revision = expected_revisions.get(
             envelope_id,
-            int(candidate.envelope_revision or 0),
+            int(row.revision) if row is not None else int(candidate.envelope_revision or 0),
         )
-        row = envelope_rows.get(envelope_id)
         object_projection_refs = projection_refs.get((envelope_id, object_id), ())
         projection_ref = object_projection_refs[0] if object_projection_refs else {
             "envelope_id": envelope_id,

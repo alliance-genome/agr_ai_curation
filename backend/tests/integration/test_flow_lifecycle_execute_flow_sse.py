@@ -65,6 +65,38 @@ def _sse_events(response) -> list[dict]:
     return events
 
 
+def _mark_fake_streaming_tool_complete(agent, *, output: str = "done") -> None:
+    """Mirror the flow tool wrapper state update when runner calls are mocked.
+
+    The production streaming tool wrapper records completed_steps before the
+    output agent emits CHAT_OUTPUT_READY. These integration tests patch the
+    runner itself, so the wrapper never executes unless we mark the state here.
+    Keep this helper close to the fake streams so future test edits do not
+    accidentally bypass the executor's incomplete-flow guard.
+    """
+    execution_state = getattr(agent, "_flow_execution_state", None)
+    if not isinstance(execution_state, dict):
+        return
+    ordered_tool_names = execution_state.get("ordered_tool_names") or []
+    next_tool_index = int(execution_state.get("next_tool_index") or 0)
+    if next_tool_index >= len(ordered_tool_names):
+        return
+    tool_name = ordered_tool_names[next_tool_index]
+    execution_state.setdefault("completed_steps", []).append(
+        {
+            "step": next_tool_index + 1,
+            "agent_id": "chat_output",
+            "agent_name": "Chat Output Agent",
+            "tool_name": tool_name,
+            "output": output,
+            "output_preview": output,
+            "evidence_records": [],
+            "evidence_count": 0,
+        }
+    )
+    execution_state["next_tool_index"] = next_tool_index + 1
+
+
 @pytest.fixture
 def client(test_db, get_auth_mock, monkeypatch):
     """Create isolated app client with explicit auth + DB dependency overrides."""
@@ -87,7 +119,42 @@ def client(test_db, get_auth_mock, monkeypatch):
         mock_get_auth_dep.return_value = Security(get_auth_mock.get_user)
 
         from main import app
+        from src.lib.config.prompt_loader import load_prompts
+        from src.lib.agent_studio.system_agent_sync import sync_system_agents
+        from src.lib.prompts import cache as prompt_cache
+        from src.models.sql.agent import Agent as UnifiedAgent
+        from src.models.sql.agent import Project
+        from src.models.sql.agent import ProjectMember
+        from src.models.sql.chat_message import ChatMessage
+        from src.models.sql.chat_session import ChatSession
+        from src.models.sql.curation_flow import CurationFlow
+        from src.models.sql.database import Base
         from src.models.sql.database import get_db
+        from src.models.sql.prompts import PromptExecutionLog, PromptTemplate
+        from src.models.sql.user import User
+
+        # Flow execution now resolves every step through the unified agents
+        # table before the runner is invoked. Seed system agents in this
+        # isolated integration DB so the tests keep exercising streaming flow
+        # behavior instead of failing earlier on missing catalog rows.
+        Base.metadata.create_all(
+            bind=test_db.get_bind(),
+            tables=[
+                User.__table__,
+                Project.__table__,
+                ProjectMember.__table__,
+                UnifiedAgent.__table__,
+                CurationFlow.__table__,
+                ChatSession.__table__,
+                ChatMessage.__table__,
+                PromptTemplate.__table__,
+                PromptExecutionLog.__table__,
+            ],
+        )
+        load_prompts(db=test_db, force_reload=True)
+        prompt_cache.initialize(test_db)
+        sync_system_agents(test_db, force_reload=True)
+        test_db.commit()
 
         def override_get_db():
             yield test_db
@@ -130,8 +197,9 @@ def test_flow_lifecycle_create_update_execute_stream_and_stats(client: TestClien
     assert updated["description"] == "integration lifecycle test (updated)"
     assert updated["flow_definition"]["nodes"][1]["data"]["output_key"] == "final_output_updated"
 
-    async def _fake_run_agent_streamed(**_kwargs):
+    async def _fake_run_agent_streamed(**kwargs):
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-it-flow"}}
+        _mark_fake_streaming_tool_complete(kwargs.get("agent"), output="done")
         yield {"type": "CHAT_OUTPUT_READY", "data": {"response": "done"}}
 
     execute_payload = {
@@ -185,10 +253,14 @@ def test_execute_flow_persists_durable_history_and_replays_completed_turn(client
     turn_id = f"turn-{uuid4().hex[:10]}"
     runner_calls = 0
 
-    async def _fake_run_agent_streamed(**_kwargs):
+    async def _fake_run_agent_streamed(**kwargs):
         nonlocal runner_calls
         runner_calls += 1
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-it-flow-replay"}}
+        _mark_fake_streaming_tool_complete(
+            kwargs.get("agent"),
+            output="Selected TP53 for highest evidence confidence.",
+        )
         yield {
             "type": "CHAT_OUTPUT_READY",
             "timestamp": "2026-02-26T00:00:03+00:00",

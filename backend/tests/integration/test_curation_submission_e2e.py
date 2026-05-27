@@ -404,6 +404,30 @@ def _accept_candidate(client: TestClient, *, session_id: str, candidate_id: str)
     return response.json()
 
 
+def _seed_system_agents_for_integration(test_db) -> None:
+    """Seed unified system agents used by package validator dispatch."""
+
+    from src.lib.agent_studio.system_agent_sync import sync_system_agents
+    from src.models.sql.agent import Agent as UnifiedAgent
+    from src.models.sql.agent import Project
+    from src.models.sql.database import Base
+    from src.models.sql.prompts import PromptExecutionLog, PromptTemplate
+    from src.models.sql.user import User
+
+    Base.metadata.create_all(
+        bind=test_db.get_bind(),
+        tables=[
+            User.__table__,
+            Project.__table__,
+            UnifiedAgent.__table__,
+            PromptTemplate.__table__,
+            PromptExecutionLog.__table__,
+        ],
+    )
+    sync_system_agents(test_db, force_reload=True)
+    test_db.commit()
+
+
 @pytest.fixture
 def client(test_db, get_auth_mock, monkeypatch):
     """Create isolated app client with auth and database overrides."""
@@ -431,6 +455,8 @@ def client(test_db, get_auth_mock, monkeypatch):
 
         from main import app
         from src.models.sql.database import get_db
+
+        _seed_system_agents_for_integration(test_db)
 
         def override_get_db():
             yield test_db
@@ -1142,12 +1168,6 @@ def test_alliance_domain_pack_gate_materializes_review_and_export_from_envelopes
         "target_key": gate_case["target_key"],
         "include_payload": True,
     }
-    if case_key != "gene_expression":
-        # Gene-expression export repairs can advance the accepted envelope revision
-        # during preview, so this path verifies the exported current revision instead.
-        preview_request["expected_envelope_revisions"] = {
-            envelope.envelope_id: expected_envelope_revision
-        }
     preview_response = client.post(
         f"/api/curation-workspace/sessions/{session_id}/submission-preview",
         json=preview_request,
@@ -1157,7 +1177,7 @@ def test_alliance_domain_pack_gate_materializes_review_and_export_from_envelopes
     readiness = preview_payload["submission"]["readiness"]
     assert len(readiness) == 1
     assert readiness[0]["candidate_id"] == candidate_id
-    assert readiness[0]["ready"] is gate_case["expected_ready"]
+    assert readiness[0]["ready"] is gate_case["expected_ready"], readiness[0]
 
     blocker_codes = {
         blocker["code"]

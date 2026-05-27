@@ -150,6 +150,17 @@ collected, in original dispatch order.
 ### Guardrails
 
 - The extractor must not validate genes or call broad curation DB lookup tools.
+- The extractor also must not author controlled vocabulary or ontology selector
+  values from memory. If an extraction payload needs a controlled field value,
+  such as Gene Expression `relation.name`, assay/MMO, anatomy, stage, GO
+  cellular component, condition relation, reagent, or specimen context, the
+  runtime should provide a narrow domain-pack field helper that queries the
+  configured database/API-backed source for that field. If no helper exists, the
+  extractor should leave the field unresolved and record the gap.
+- Agents designing those helper mappings should use the read-only Symphony
+  curation DB tunnel for focused schema and row-population checks when live data
+  affects the design. The tunnel is reconnaissance for implementers, not an
+  extractor-facing runtime capability.
 - The supervisor must not decide validator policy.
 - The dispatcher may batch, dedupe, cache, and schedule, but it must not invent
   biological resolutions.
@@ -210,6 +221,11 @@ prefetch path. The extractor would call a narrow staging tool such as
 That tool would only enqueue candidate input; it would not return validation
 answers to the extractor. A validator-owned background worker could begin cheap
 bulk lookups while extraction continues.
+
+This prefetch idea is separate from the required controlled-field helper path.
+Controlled-field helpers are allowed during extraction when the domain pack has
+declared the field and approved lookup source; they return bounded selector
+options for that field, not broad validation answers.
 
 Final dispatch would still be authoritative. A staged candidate would be reused
 only if it matches a final `DomainValidationRequest`; staged candidates that the

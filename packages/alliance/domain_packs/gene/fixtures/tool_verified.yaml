@@ -49,6 +49,8 @@ fixtures:
             gene_symbol: daf-16
             taxon: "NCBITaxon:6239"
             species: Caenorhabditis elegans
+            identity_resolution_notes:
+              - Resolved daf-16 through agr_curation_query get_gene_by_id.
             confidence: high
             evidence_record_id: ev-daf16-1
             verified_quote: DAF-16 translocated to nuclei after heat shock.
