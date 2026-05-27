@@ -1295,10 +1295,12 @@ def _workspace_group_fields(
         group_id = _optional_string(raw_group.get("id"))
         if group_id is None:
             continue
-        group_label = _optional_string(raw_group.get("label")) or _field_label(
-            group_id,
-            None,
-        )
+        group_label = _optional_string(raw_group.get("label"))
+        if group_label is None:
+            raise DomainEnvelopeMaterializationError(
+                "workspace_display.groups"
+                f"[{group_index}].label must be a non-empty string"
+            )
         raw_fields = raw_group.get("fields")
         if not isinstance(raw_fields, list):
             continue

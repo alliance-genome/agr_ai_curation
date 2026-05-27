@@ -343,6 +343,104 @@ def _persist_matching_prep_result(
     return record
 
 
+def test_draft_fields_use_summary_fields_only_when_workspace_metadata_is_absent():
+    review_row = DomainEnvelopeReviewRow(
+        envelope_id="env-review-1",
+        object_id="object-1",
+        envelope_revision=1,
+        domain_pack_id="fixture.pack",
+        domain_pack_version="0.1.0",
+        object_type="GeneAssertion",
+        object_role="curatable_unit",
+        status="pending",
+        validation_state="clear",
+        projection_type="workspace_review_row",
+        projection_key="object-1",
+        display_label="ABC-1",
+        summary_fields=[
+            DomainEnvelopeReviewRowSummaryField(
+                field_path="gene.symbol",
+                label="Gene symbol",
+                value="ABC-1",
+                field_type="string",
+            )
+        ],
+    )
+
+    fields = module._draft_fields_from_review_row(review_row)
+
+    assert [field.field_key for field in fields] == ["gene.symbol"]
+    assert fields[0].group_key == "gene"
+    assert fields[0].group_label == "Gene"
+
+
+def test_draft_fields_do_not_fall_back_to_summary_fields_when_workspace_fields_empty():
+    review_row = DomainEnvelopeReviewRow(
+        envelope_id="env-review-1",
+        object_id="object-1",
+        envelope_revision=1,
+        domain_pack_id="fixture.pack",
+        domain_pack_version="0.1.0",
+        object_type="GeneAssertion",
+        object_role="curatable_unit",
+        status="pending",
+        validation_state="clear",
+        projection_type="workspace_review_row",
+        projection_key="object-1",
+        display_label="ABC-1",
+        metadata={"workspace_fields": []},
+        summary_fields=[
+            DomainEnvelopeReviewRowSummaryField(
+                field_path="gene.symbol",
+                label="Gene symbol",
+                value="ABC-1",
+                field_type="string",
+            )
+        ],
+    )
+
+    assert module._draft_fields_from_review_row(review_row) == []
+
+
+def test_draft_fields_require_workspace_group_metadata_for_workspace_fields():
+    review_row = DomainEnvelopeReviewRow(
+        envelope_id="env-review-1",
+        object_id="object-1",
+        envelope_revision=1,
+        domain_pack_id="fixture.pack",
+        domain_pack_version="0.1.0",
+        object_type="GeneAssertion",
+        object_role="curatable_unit",
+        status="pending",
+        validation_state="clear",
+        projection_type="workspace_review_row",
+        projection_key="object-1",
+        display_label="ABC-1",
+        metadata={
+            "workspace_fields": [
+                {
+                    "field_path": "gene.symbol",
+                    "label": "Gene symbol",
+                    "value": "ABC-1",
+                    "field_type": "string",
+                    "metadata": {"workspace_order": 0},
+                }
+            ]
+        },
+        summary_fields=[
+            DomainEnvelopeReviewRowSummaryField(
+                field_path="gene.symbol",
+                label="Gene symbol",
+                value="ABC-1",
+                field_type="string",
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match="metadata\\.workspace_group"):
+        module._draft_fields_from_review_row(review_row)
+
+
 def _make_request(prep_output: CurationPrepAgentOutput, *, document_id: str, review_session_id: str | None = None):
     return module.PostCurationPipelineRequest(
         prep_output=prep_output,
@@ -865,6 +963,7 @@ def test_execute_post_curation_pipeline_materializes_envelope_rows_without_norma
                                         "order": 0,
                                         "field_order": 0,
                                     },
+                                    "workspace_order": 0,
                                 },
                             },
                             {
@@ -881,6 +980,7 @@ def test_execute_post_curation_pipeline_materializes_envelope_rows_without_norma
                                         "order": 0,
                                         "field_order": 1,
                                     },
+                                    "workspace_order": 1,
                                 },
                             },
                         ],
@@ -958,6 +1058,7 @@ def test_execute_post_curation_pipeline_materializes_envelope_rows_without_norma
                         "order": 0,
                         "field_order": 0,
                     },
+                    "workspace_order": 0,
                 },
             },
             {
@@ -974,6 +1075,7 @@ def test_execute_post_curation_pipeline_materializes_envelope_rows_without_norma
                         "order": 0,
                         "field_order": 1,
                     },
+                    "workspace_order": 1,
                 },
             },
         ],
