@@ -217,6 +217,14 @@ class DomainPackMetadataReviewRowMaterializer:
                         "semantic_source": "domain_envelope.objects",
                         "materializer": type(self).__name__,
                         "object_index": object_index,
+                        "payload_path": f"objects[{object_index}].payload",
+                        "evidence_record_ids": list(
+                            domain_object.evidence_record_ids
+                        ),
+                        "metadata_refs": [
+                            metadata_ref.model_dump(mode="json")
+                            for metadata_ref in domain_object.metadata_refs
+                        ],
                         **_unavailable_capabilities_metadata(
                             _capabilities_for_object(
                                 object_id,

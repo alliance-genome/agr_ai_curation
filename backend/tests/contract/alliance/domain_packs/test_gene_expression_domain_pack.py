@@ -14,8 +14,10 @@ import yaml
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
 from src.lib.domain_packs.loader import load_domain_fixture_pack
 from src.lib.domain_packs.materialization import (
+    DomainPackMetadataReviewRowMaterializer,
     ValidatorResultMaterializationInput,
     materialize_validator_results_into_envelope,
+    project_evidence_anchor_projections,
 )
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
@@ -45,6 +47,7 @@ from agr_ai_curation_alliance.domain_packs.gene_expression import (  # noqa: E40
     GENE_EXPRESSION_DOMAIN_PACK_ID,
     GENE_EXPRESSION_FIXTURE_PACK_ID,
     GENE_EXPRESSION_MODEL_ID,
+    GENE_EXPRESSION_MULTI_FIXTURE_PACK_ID,
     GENE_EXPRESSION_OBJECT_TYPE,
     GENE_EXPRESSION_VALIDATOR_STATES,
     VALID_GENE_EXPRESSION_RELATION_NAMES,
@@ -256,6 +259,17 @@ def test_gene_expression_domain_pack_is_bundled_with_concrete_metadata():
     assert curatable_unit.model_ref == GENE_EXPRESSION_MODEL_ID
     assert curatable_unit.schema_ref.name == GENE_EXPRESSION_OBJECT_TYPE
     assert curatable_unit.definition_state is DefinitionState.STABLE
+    assert curatable_unit.metadata["workspace_display"] == {
+        "primary_label_field": "expression_annotation_subject.gene_symbol",
+        "secondary_label_field": "where_expressed_statement",
+        "summary_fields": [
+            "expression_annotation_subject.gene_symbol",
+            "where_expressed_statement",
+            "when_expressed_stage_name",
+            "relation.name",
+            "expression_experiment.expression_assay_used.name",
+        ],
+    }
 
     validators = metadata.metadata["validators"]
     assert tuple(validators) == GENE_EXPRESSION_VALIDATOR_STATES
@@ -312,6 +326,14 @@ def test_gene_expression_domain_pack_is_bundled_with_concrete_metadata():
     assert fixture_ref is not None
     assert fixture_ref.path == "fixtures/tmem67_pending.yaml"
     assert fixture_ref.object_types == [GENE_EXPRESSION_OBJECT_TYPE]
+
+    multi_fixture_ref = load_alliance_domain_pack_registry().get_fixture_pack_ref(
+        GENE_EXPRESSION_DOMAIN_PACK_ID,
+        GENE_EXPRESSION_MULTI_FIXTURE_PACK_ID,
+    )
+    assert multi_fixture_ref is not None
+    assert multi_fixture_ref.path == "fixtures/tmem67_multi_annotation_pending.yaml"
+    assert multi_fixture_ref.object_types == [GENE_EXPRESSION_OBJECT_TYPE]
 
 
 def test_gene_expression_object_embeds_required_experiment_and_context_fields():
@@ -1407,6 +1429,118 @@ def test_tmem67_fixture_validates_as_pending_gene_expression_annotation():
     observed_keys = set(_iter_mapping_keys(envelope.model_dump(mode="python")))
     assert FORBIDDEN_LEGACY_COLLECTIONS.isdisjoint(observed_keys)
     assert validate_pending_gene_expression_envelope(envelope) == ()
+
+
+def test_multi_annotation_fixture_projects_one_review_row_per_expression_statement():
+    fixture_ref = load_alliance_domain_pack_registry().get_fixture_pack_ref(
+        GENE_EXPRESSION_DOMAIN_PACK_ID,
+        GENE_EXPRESSION_MULTI_FIXTURE_PACK_ID,
+    )
+    assert fixture_ref is not None
+    fixture_path = get_gene_expression_domain_pack_metadata_path().parent / fixture_ref.path
+    fixture_pack = load_domain_fixture_pack(fixture_path)
+    envelope = fixture_pack.fixtures[0].envelope
+
+    annotations = [
+        obj for obj in envelope.objects if obj.object_type == GENE_EXPRESSION_OBJECT_TYPE
+    ]
+    assert [annotation.pending_ref_id for annotation in annotations] == [
+        "gene-expression-annotation-tmem67-metanephros",
+        "gene-expression-annotation-tmem67-neural-tube",
+    ]
+    assert {
+        annotation.payload["expression_annotation_subject"]["primary_external_id"]
+        for annotation in annotations
+    } == {"MGI:1923928"}
+    assert {
+        annotation.payload["where_expressed_statement"]
+        for annotation in annotations
+    } == {"metanephros", "neural tube"}
+    assert all(
+        exclusion["creates_candidate"] is False
+        for exclusion in envelope.metadata["extraction_metadata"]["exclusions"]
+    )
+    _assert_metadata_refs_resolve(envelope)
+    assert validate_pending_gene_expression_envelope(envelope) == ()
+
+    rows = DomainPackMetadataReviewRowMaterializer(
+        _gene_expression_pack().metadata,
+    ).materialize(envelope, envelope_revision=2)
+
+    assert len(rows) == 2
+    assert [row.object_id for row in rows] == [
+        "gene-expression-annotation-tmem67-metanephros",
+        "gene-expression-annotation-tmem67-neural-tube",
+    ]
+    assert {row.object_type for row in rows} == {GENE_EXPRESSION_OBJECT_TYPE}
+    assert {row.object_role for row in rows} == {"curatable_unit"}
+    assert {row.domain_pack_id for row in rows} == {GENE_EXPRESSION_DOMAIN_PACK_ID}
+    assert {row.schema_ref["schema_id"] for row in rows} == {
+        "alliance.linkml.GeneExpressionAnnotation"
+    }
+    assert {row.display_label for row in rows} == {"Tmem67"}
+    assert [row.secondary_label for row in rows] == ["metanephros", "neural tube"]
+    assert [row.validation_state for row in rows] == ["clear", "warning"]
+    assert rows[0].metadata["payload_path"] == "objects[0].payload"
+    assert rows[0].metadata["evidence_record_ids"] == [
+        "evidence-tmem67-metanephros-1"
+    ]
+    assert rows[1].metadata["metadata_refs"] == [
+        {
+            "metadata_path": "extraction_metadata.raw_mentions[1]",
+            "role": "source_mention",
+            "description": None,
+        },
+        {
+            "metadata_path": "extraction_metadata.evidence_records[1]",
+            "role": "verified_evidence",
+            "description": None,
+        },
+        {
+            "metadata_path": "extraction_metadata.ambiguities[0]",
+            "role": "curator_context",
+            "description": None,
+        },
+    ]
+    assert [field.field_path for field in rows[0].summary_fields] == [
+        "expression_annotation_subject.gene_symbol",
+        "where_expressed_statement",
+        "when_expressed_stage_name",
+        "relation.name",
+        "expression_experiment.expression_assay_used.name",
+    ]
+
+    metanephros_evidence = project_evidence_anchor_projections(
+        envelope,
+        envelope_revision=2,
+        object_id="gene-expression-annotation-tmem67-metanephros",
+    )
+    neural_tube_evidence = project_evidence_anchor_projections(
+        envelope,
+        envelope_revision=2,
+        object_id="gene-expression-annotation-tmem67-neural-tube",
+    )
+
+    assert {
+        (projection.evidence_record_id, projection.field_path)
+        for projection in metanephros_evidence
+    } == {
+        ("evidence-tmem67-metanephros-1", "where_expressed_statement"),
+        (
+            "evidence-tmem67-metanephros-1",
+            "expression_pattern.where_expressed.anatomical_structure",
+        ),
+    }
+    assert {
+        (projection.evidence_record_id, projection.field_path)
+        for projection in neural_tube_evidence
+    } == {
+        ("evidence-tmem67-neural-tube-1", "where_expressed_statement"),
+        (
+            "evidence-tmem67-neural-tube-1",
+            "expression_pattern.where_expressed.anatomical_structure",
+        ),
+    }
 
 
 def test_tmem67_fixture_carries_anatomical_site_for_linkml_postcondition():

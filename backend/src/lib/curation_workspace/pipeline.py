@@ -521,6 +521,10 @@ def _prepared_candidate_input_from_review_row(
         "object_role": review_row.object_role,
         "object_status": review_row.status,
         "validation_state": review_row.validation_state,
+        "schema_provider": review_row.schema_provider,
+        "schema_ref": dict(review_row.schema_ref),
+        "object_model_ref": dict(review_row.object_model_ref),
+        "model_field_ref": dict(review_row.model_field_ref),
         "review_row_metadata": dict(review_row.metadata),
         "unavailable_validator_capabilities": (
             list(unavailable_capabilities)

@@ -830,6 +830,24 @@ def test_execute_post_curation_pipeline_materializes_envelope_rows_without_norma
                     projection_key="object-1",
                     display_label="ABC-1",
                     secondary_label="Condition A",
+                    schema_provider="json-schema",
+                    schema_ref={"schema_id": "fixture.schema.json"},
+                    object_model_ref={"provider_refs": {"schema": "fixture"}},
+                    model_field_ref={
+                        "domain_pack_fields": {
+                            "gene.symbol": {"provider_refs": {"slot": "symbol"}}
+                        }
+                    },
+                    metadata={
+                        "payload_path": "objects[0].payload",
+                        "evidence_record_ids": ["evidence-1"],
+                        "metadata_refs": [
+                            {
+                                "metadata_path": "extraction_metadata.evidence_records[0]",
+                                "role": "verified_evidence",
+                            }
+                        ],
+                    },
                     summary_fields=[
                         DomainEnvelopeReviewRowSummaryField(
                             field_path="gene.symbol",
@@ -864,6 +882,28 @@ def test_execute_post_curation_pipeline_materializes_envelope_rows_without_norma
     assert candidate_row.normalized_payload == {}
     assert candidate_row.candidate_metadata["semantic_source"] == "domain_envelope.objects"
     assert candidate_row.candidate_metadata["object_type"] == "GeneAssertion"
+    assert candidate_row.candidate_metadata["schema_provider"] == "json-schema"
+    assert candidate_row.candidate_metadata["schema_ref"] == {
+        "schema_id": "fixture.schema.json"
+    }
+    assert candidate_row.candidate_metadata["object_model_ref"] == {
+        "provider_refs": {"schema": "fixture"}
+    }
+    assert candidate_row.candidate_metadata["model_field_ref"] == {
+        "domain_pack_fields": {
+            "gene.symbol": {"provider_refs": {"slot": "symbol"}}
+        }
+    }
+    assert candidate_row.candidate_metadata["review_row_metadata"] == {
+        "payload_path": "objects[0].payload",
+        "evidence_record_ids": ["evidence-1"],
+        "metadata_refs": [
+            {
+                "metadata_path": "extraction_metadata.evidence_records[0]",
+                "role": "verified_evidence",
+            }
+        ],
+    }
 
     draft_row = db_session.scalars(select(DraftModel)).one()
     assert draft_row.fields[0]["field_key"] == "gene.symbol"
