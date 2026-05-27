@@ -198,7 +198,7 @@ function renderDefaultInput({
     )
   }
 
-  if (field.field_type === 'json') {
+  if (field.field_type === 'json' || field.field_type === 'object' || field.field_type === 'array') {
     return (
       <TextField
         data-testid={`field-input-${field.field_key}`}

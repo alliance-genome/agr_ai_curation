@@ -174,6 +174,14 @@ class DomainPackMetadataReviewRowMaterializer:
                     unavailable_capabilities["by_field"]
                 ),
             )
+            workspace_fields = _workspace_fields(
+                domain_object,
+                object_definition=object_definition,
+                display_config=display_config,
+                unavailable_capabilities_by_field=(
+                    unavailable_capabilities["by_field"]
+                ),
+            )
             display_label = _display_label(
                 domain_object,
                 summary_fields=summary_fields,
@@ -224,6 +232,11 @@ class DomainPackMetadataReviewRowMaterializer:
                         "metadata_refs": [
                             metadata_ref.model_dump(mode="json")
                             for metadata_ref in domain_object.metadata_refs
+                        ],
+                        "workspace_display": dict(display_config),
+                        "workspace_fields": [
+                            field.model_dump(mode="json")
+                            for field in workspace_fields
                         ],
                         **_unavailable_capabilities_metadata(
                             _capabilities_for_object(
@@ -1186,7 +1199,7 @@ def _summary_fields(
             continue
         seen.add(field_path)
         field_definition = field_definitions.get(field_path)
-        metadata = dict(field_definition.metadata) if field_definition is not None else {}
+        metadata = _field_definition_metadata(field_definition)
         metadata.update(
             _unavailable_capabilities_metadata(
                 unavailable_capabilities_by_field.get(
@@ -1210,6 +1223,120 @@ def _summary_fields(
         )
 
     return summary_fields
+
+
+def _workspace_fields(
+    domain_object: CuratableObjectEnvelope,
+    *,
+    object_definition: DomainPackObjectDefinition | None,
+    display_config: Mapping[str, Any],
+    unavailable_capabilities_by_field: Mapping[tuple[str, str], tuple[dict[str, Any], ...]],
+) -> list[DomainEnvelopeReviewRowSummaryField]:
+    field_definitions = {
+        field.field_path: field
+        for field in (object_definition.fields if object_definition is not None else [])
+    }
+    configured_fields = _workspace_group_fields(display_config)
+    if not configured_fields:
+        return []
+
+    workspace_fields: list[DomainEnvelopeReviewRowSummaryField] = []
+    seen: set[str] = set()
+    for order, (field_path, group_metadata) in enumerate(configured_fields):
+        if field_path in seen:
+            continue
+        seen.add(field_path)
+        value = _payload_value(domain_object.payload, field_path)
+        field_definition = field_definitions.get(field_path)
+        metadata = _field_definition_metadata(field_definition)
+        metadata.update(group_metadata)
+        metadata.update(
+            _unavailable_capabilities_metadata(
+                unavailable_capabilities_by_field.get(
+                    (stable_object_id(domain_object), field_path),
+                    (),
+                )
+            )
+        )
+        if value is _MISSING:
+            value = None
+
+        workspace_fields.append(
+            DomainEnvelopeReviewRowSummaryField(
+                field_path=field_path,
+                label=_field_label(field_path, field_definition),
+                value=value,
+                field_type=(
+                    field_definition.field_type.value
+                    if field_definition is not None
+                    else _value_field_type(value)
+                ),
+                metadata={
+                    **metadata,
+                    "workspace_order": order,
+                },
+            )
+        )
+
+    return workspace_fields
+
+
+def _workspace_group_fields(
+    display_config: Mapping[str, Any],
+) -> list[tuple[str, dict[str, Any]]]:
+    raw_groups = display_config.get("groups")
+    if not isinstance(raw_groups, list):
+        return []
+
+    configured_fields: list[tuple[str, dict[str, Any]]] = []
+    for group_index, raw_group in enumerate(raw_groups):
+        if not isinstance(raw_group, Mapping):
+            continue
+        group_id = _optional_string(raw_group.get("id"))
+        if group_id is None:
+            continue
+        group_label = _optional_string(raw_group.get("label")) or _field_label(
+            group_id,
+            None,
+        )
+        raw_fields = raw_group.get("fields")
+        if not isinstance(raw_fields, list):
+            continue
+        for field_index, raw_field_path in enumerate(raw_fields):
+            field_path = _optional_string(raw_field_path)
+            if field_path is None:
+                continue
+            configured_fields.append(
+                (
+                    field_path,
+                    {
+                        "workspace_group": {
+                            "id": group_id,
+                            "label": group_label,
+                            "order": group_index,
+                            "field_order": field_index,
+                        }
+                    },
+                )
+            )
+    return configured_fields
+
+
+def _field_definition_metadata(
+    field_definition: DomainPackFieldDefinition | None,
+) -> dict[str, Any]:
+    if field_definition is None:
+        return {}
+    protected = field_definition.metadata.get("protected") is True
+    editable = field_definition.metadata.get("editable") is True
+    return {
+        **dict(field_definition.metadata),
+        "required": field_definition.required,
+        "editable": editable,
+        "protected": protected,
+        "read_only": protected or not editable,
+        "definition_state": field_definition.definition_state.value,
+    }
 
 
 def _unavailable_validator_capabilities_by_target(

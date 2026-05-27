@@ -102,6 +102,23 @@ describe('FieldRow', () => {
     expect(onChange).toHaveBeenCalledWith(0.42)
   })
 
+  it('renders object and array fields as JSON editors', () => {
+    renderFieldRow({
+      field: createField({
+        field_key: 'context',
+        label: 'Context',
+        field_type: 'array',
+        value: [{ label: 'probe A' }],
+        seed_value: [{ label: 'probe A' }],
+      }),
+      value: [{ label: 'probe A' }],
+    })
+
+    expect(screen.getByLabelText('Context')).toHaveValue(
+      JSON.stringify([{ label: 'probe A' }], null, 2),
+    )
+  })
+
   it('supports adapter-owned custom input renderers', () => {
     const onChange = vi.fn()
 

@@ -400,10 +400,24 @@ def test_metadata_materializer_projects_provider_agnostic_fixture_pack_objects()
         "artifact.accession_id",
         "artifact.title",
         "condition.status",
+    ]
+    workspace_fields = rows[0].metadata["workspace_fields"]
+    assert [field["field_path"] for field in workspace_fields] == [
+        "artifact.accession_id",
+        "artifact.title",
+        "condition.status",
         "curator_review.status",
         "curator_review.measurements",
         "related_artifacts[0].accession_id",
     ]
+    assert workspace_fields[0]["metadata"]["workspace_group"] == {
+        "id": "artifact_identity",
+        "label": "Artifact identity",
+        "order": 0,
+        "field_order": 0,
+    }
+    assert workspace_fields[0]["metadata"]["required"] is True
+    assert workspace_fields[0]["metadata"]["read_only"] is False
 
 
 def test_validator_result_materialization_creates_reference_object_and_finding():

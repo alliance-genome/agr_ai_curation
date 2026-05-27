@@ -847,6 +847,40 @@ def test_execute_post_curation_pipeline_materializes_envelope_rows_without_norma
                                 "role": "verified_evidence",
                             }
                         ],
+                        "workspace_fields": [
+                            {
+                                "field_path": "gene.symbol",
+                                "label": "Gene symbol",
+                                "value": "ABC-1",
+                                "field_type": "string",
+                                "metadata": {
+                                    "required": True,
+                                    "read_only": False,
+                                    "workspace_group": {
+                                        "id": "subject",
+                                        "label": "Subject",
+                                        "order": 0,
+                                        "field_order": 0,
+                                    },
+                                },
+                            },
+                            {
+                                "field_path": "gene.identifier",
+                                "label": "Gene identifier",
+                                "value": None,
+                                "field_type": "string",
+                                "metadata": {
+                                    "required": False,
+                                    "read_only": True,
+                                    "workspace_group": {
+                                        "id": "subject",
+                                        "label": "Subject",
+                                        "order": 0,
+                                        "field_order": 1,
+                                    },
+                                },
+                            },
+                        ],
                     },
                     summary_fields=[
                         DomainEnvelopeReviewRowSummaryField(
@@ -903,11 +937,52 @@ def test_execute_post_curation_pipeline_materializes_envelope_rows_without_norma
                 "role": "verified_evidence",
             }
         ],
+        "workspace_fields": [
+            {
+                "field_path": "gene.symbol",
+                "label": "Gene symbol",
+                "value": "ABC-1",
+                "field_type": "string",
+                "metadata": {
+                    "required": True,
+                    "read_only": False,
+                    "workspace_group": {
+                        "id": "subject",
+                        "label": "Subject",
+                        "order": 0,
+                        "field_order": 0,
+                    },
+                },
+            },
+            {
+                "field_path": "gene.identifier",
+                "label": "Gene identifier",
+                "value": None,
+                "field_type": "string",
+                "metadata": {
+                    "required": False,
+                    "read_only": True,
+                    "workspace_group": {
+                        "id": "subject",
+                        "label": "Subject",
+                        "order": 0,
+                        "field_order": 1,
+                    },
+                },
+            },
+        ],
     }
 
     draft_row = db_session.scalars(select(DraftModel)).one()
     assert draft_row.fields[0]["field_key"] == "gene.symbol"
     assert draft_row.fields[0]["value"] == "ABC-1"
+    assert draft_row.fields[0]["group_key"] == "subject"
+    assert draft_row.fields[0]["group_label"] == "Subject"
+    assert draft_row.fields[0]["required"] is True
+    assert draft_row.fields[0]["read_only"] is False
+    assert draft_row.fields[1]["field_key"] == "gene.identifier"
+    assert draft_row.fields[1]["group_key"] == "subject"
+    assert draft_row.fields[1]["read_only"] is True
     assert draft_row.draft_metadata["projection_ref"] == {
         "envelope_id": "env-review-1",
         "object_id": "object-1",

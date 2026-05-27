@@ -53,6 +53,7 @@ from src.schemas.curation_workspace import (
     CurationValidationSnapshotState,
     CurationValidationSummary,
     DomainEnvelopeReviewRow,
+    DomainEnvelopeReviewRowSummaryField,
     FieldValidationResult,
     FieldValidationStatus,
 )
@@ -579,6 +580,7 @@ def _prepared_candidate_input_from_review_row(
 def _draft_fields_from_review_row(
     review_row: DomainEnvelopeReviewRow,
 ) -> list[PreparedDraftFieldInput]:
+    fields = _workspace_fields_from_review_row(review_row) or list(review_row.summary_fields)
     return [
         PreparedDraftFieldInput(
             field_key=field.field_path,
@@ -586,9 +588,14 @@ def _draft_fields_from_review_row(
             value=field.value,
             seed_value=field.value,
             field_type=field.field_type,
-            group_key=_field_group_key(field.field_path),
-            group_label=_field_group_label(_field_group_key(field.field_path)),
-            order=index,
+            group_key=_workspace_field_group_key(field) or _field_group_key(field.field_path),
+            group_label=(
+                _workspace_field_group_label(field)
+                or _field_group_label(_field_group_key(field.field_path))
+            ),
+            order=_workspace_field_order(field, index),
+            required=_workspace_field_required(field),
+            read_only=_workspace_field_read_only(field),
             metadata={
                 "semantic_source": "domain_envelope.objects",
                 "source_field_path": field.field_path,
@@ -597,8 +604,59 @@ def _draft_fields_from_review_row(
                 "field_metadata": dict(field.metadata),
             },
         )
-        for index, field in enumerate(review_row.summary_fields)
+        for index, field in enumerate(fields)
     ]
+
+
+def _workspace_fields_from_review_row(
+    review_row: DomainEnvelopeReviewRow,
+) -> list[DomainEnvelopeReviewRowSummaryField]:
+    raw_workspace_fields = review_row.metadata.get("workspace_fields")
+    if not isinstance(raw_workspace_fields, list):
+        return []
+
+    fields: list[DomainEnvelopeReviewRowSummaryField] = []
+    for raw_field in raw_workspace_fields:
+        if not isinstance(raw_field, dict):
+            continue
+        fields.append(DomainEnvelopeReviewRowSummaryField.model_validate(raw_field))
+    return fields
+
+
+def _workspace_field_group_key(field: DomainEnvelopeReviewRowSummaryField) -> str | None:
+    workspace_group = field.metadata.get("workspace_group")
+    if not isinstance(workspace_group, dict):
+        return None
+    group_id = workspace_group.get("id")
+    return group_id.strip() if isinstance(group_id, str) and group_id.strip() else None
+
+
+def _workspace_field_group_label(field: DomainEnvelopeReviewRowSummaryField) -> str | None:
+    workspace_group = field.metadata.get("workspace_group")
+    if not isinstance(workspace_group, dict):
+        return None
+    group_label = workspace_group.get("label")
+    return (
+        group_label.strip()
+        if isinstance(group_label, str) and group_label.strip()
+        else None
+    )
+
+
+def _workspace_field_order(
+    field: DomainEnvelopeReviewRowSummaryField,
+    fallback_order: int,
+) -> int:
+    workspace_order = field.metadata.get("workspace_order")
+    return workspace_order if isinstance(workspace_order, int) else fallback_order
+
+
+def _workspace_field_required(field: DomainEnvelopeReviewRowSummaryField) -> bool:
+    return field.metadata.get("required") is True
+
+
+def _workspace_field_read_only(field: DomainEnvelopeReviewRowSummaryField) -> bool:
+    return field.metadata.get("read_only") is True
 
 
 def _validate_prepared_review_rows(

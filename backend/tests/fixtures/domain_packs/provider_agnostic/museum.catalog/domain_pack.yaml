@@ -66,21 +66,53 @@ object_definitions:
       name: Artifact payload
       version: draft-2020-12
       uri: https://schemas.example.test/museum/artifact.schema.json
+    metadata:
+      workspace_display:
+        primary_label_field: artifact.title
+        secondary_label_field: condition.status
+        summary_fields:
+          - artifact.accession_id
+          - artifact.title
+          - condition.status
+        groups:
+          - id: artifact_identity
+            label: Artifact identity
+            fields:
+              - artifact.accession_id
+              - artifact.title
+          - id: condition_review
+            label: Condition review
+            fields:
+              - condition.status
+              - curator_review.status
+              - curator_review.measurements
+          - id: relationships
+            label: Relationships
+            fields:
+              - related_artifacts[0].accession_id
     fields:
       - field_path: artifact.accession_id
         field_type: string
         display_name: Accession ID
         required: true
+        metadata:
+          editable: true
       - field_path: artifact.title
         field_type: string
         display_name: Title
         required: true
+        metadata:
+          editable: true
       - field_path: condition.status
         field_type: enum
         enum_ref: ConditionStatus
+        metadata:
+          editable: true
       - field_path: curator_review.status
         field_type: enum
         enum_ref: ReviewStatus
+        metadata:
+          editable: true
       - field_path: curator_review.measurements
         field_type: object
         model_ref: MeasurementPayload

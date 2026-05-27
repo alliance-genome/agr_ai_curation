@@ -41,8 +41,10 @@ from src.models.sql.database import Base
 from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.user import User
 from src.schemas.curation_workspace import (
+    CurationCandidateDraftUpdateRequest,
     CurationCandidateSource,
     CurationCandidateStatus,
+    CurationDraftFieldChange,
     CurationEnvelopeFieldPatchRequest,
     CurationSessionStatus,
 )
@@ -366,6 +368,49 @@ def test_patch_envelope_field_refreshes_projection_without_legacy_payload(
         HistoryEventKind.FIELD_UPDATED,
         HistoryEventKind.CURATOR_FIELD_PATCH_ACCEPTED,
     ]
+
+
+def test_update_candidate_draft_materializes_envelope_backed_payload(
+    db_session,
+    loaded_pack,
+):
+    session, candidate = _create_session_with_envelope_projection(db_session)
+    draft_id = str(candidate.draft.id)
+
+    response = module.update_candidate_draft(
+        db_session,
+        session.id,
+        candidate.id,
+        CurationCandidateDraftUpdateRequest(
+            session_id=str(session.id),
+            candidate_id=str(candidate.id),
+            draft_id=draft_id,
+            expected_version=1,
+            field_changes=[
+                CurationDraftFieldChange(
+                    field_key="gene.symbol",
+                    value="abc-3",
+                )
+            ],
+            autosave=True,
+        ),
+        {"sub": "curator-1", "email": "curator@example.org"},
+    )
+
+    assert response.candidate.normalized_payload == {}
+    assert response.candidate.projection_ref is not None
+    assert response.candidate.projection_ref.envelope_revision == 2
+    assert response.draft.fields[0].value == "abc-3"
+    assert response.draft.fields[0].seed_value == "abc-3"
+    assert response.draft.fields[0].dirty is False
+    assert response.draft.fields[0].stale_validation is False
+
+    envelope_row = db_session.get(DomainEnvelopeModel, "env-1")
+    assert envelope_row.revision == 2
+    assert envelope_row.envelope_json["objects"][0]["payload"]["gene"]["symbol"] == "abc-3"
+    assert envelope_row.envelope_json["history"][-1]["details"]["reason"] == (
+        "draft_materialization"
+    )
 
 
 def test_patch_envelope_field_rejects_stale_revision_without_checkpoint(
