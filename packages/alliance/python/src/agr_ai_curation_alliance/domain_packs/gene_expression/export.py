@@ -81,6 +81,9 @@ _AUDIT_ONLY_CONTEXT_FIELDS = {
         "0.7.0 curation DB handoff."
     ),
 }
+GENE_EXPRESSION_CONTEXT_NOT_EXPORTED_WARNING_CODE = (
+    "alliance.gene_expression.context_not_exported"
+)
 
 
 @dataclass(frozen=True)
@@ -265,6 +268,20 @@ def gene_expression_export_blockers(
                 message=(
                     "Gene-expression export requires object_type "
                     f"{GENE_EXPRESSION_OBJECT_TYPE}."
+                ),
+            )
+        )
+    if not _mapping(candidate.get("schema_ref")):
+        blockers.append(
+            GeneExpressionExportBlocker(
+                candidate_id=candidate_id,
+                envelope_id=envelope_id,
+                object_id=object_id,
+                field_path="schema_ref",
+                code="alliance.gene_expression.required_field_missing",
+                message=(
+                    "Gene-expression export requires schema_ref metadata for the "
+                    "source envelope object."
                 ),
             )
         )
@@ -480,7 +497,7 @@ def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[st
                 "object_id": candidate["object_id"],
                 "object_type": candidate["object_type"],
                 "model_ref": GENE_EXPRESSION_MODEL_ID,
-                "schema_ref": dict(_mapping(candidate.get("schema_ref"))),
+                "schema_ref": dict(_mapping(candidate["schema_ref"])),
             },
             "source_payload": payload,
             "target_rows": target_rows,
@@ -558,11 +575,12 @@ def _export_warning(
     message: str,
     source_context: Any,
     reason_code: str,
+    code: str = GENE_EXPRESSION_CONTEXT_NOT_EXPORTED_WARNING_CODE,
 ) -> dict[str, Any]:
     return {
         "severity": "warning",
         "status": "audit_only",
-        "code": "alliance.gene_expression.context_not_exported",
+        "code": code,
         "field_path": field_path,
         "message": message,
         "details": {
@@ -574,25 +592,9 @@ def _export_warning(
 
 def _export_warning_messages(payload: Mapping[str, Any]) -> list[str]:
     messages: list[str] = []
-    raw_annotations = payload.get("gene_expression_annotations")
-    if not isinstance(raw_annotations, Sequence) or isinstance(raw_annotations, Mapping):
-        return messages
-    for annotation in raw_annotations:
-        if not isinstance(annotation, Mapping):
-            continue
-        diagnostics = annotation.get("export_diagnostics")
-        if not isinstance(diagnostics, Mapping):
-            continue
-        raw_warnings = diagnostics.get("warnings")
-        if not isinstance(raw_warnings, Sequence) or isinstance(raw_warnings, Mapping):
-            continue
-        for warning in raw_warnings:
-            if not isinstance(warning, Mapping):
-                continue
-            message = warning.get("message")
-            field_path = warning.get("field_path")
-            if isinstance(message, str) and isinstance(field_path, str):
-                messages.append(f"{field_path}: {message}")
+    for annotation in payload["gene_expression_annotations"]:
+        for warning in annotation["export_diagnostics"]["warnings"]:
+            messages.append(f"{warning['field_path']}: {warning['message']}")
     return list(dict.fromkeys(messages))
 
 

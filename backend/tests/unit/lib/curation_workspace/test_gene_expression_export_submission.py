@@ -61,6 +61,21 @@ def _payload_context(candidate: dict) -> dict:
     }
 
 
+def _gene_expression_schema_ref() -> dict[str, str]:
+    return {
+        "class": "GeneExpressionAnnotation",
+        "name": "GeneExpressionAnnotation",
+        "provider": "alliance_linkml",
+        "schema_id": GENE_EXPRESSION_LINKML_SCHEMA_ID,
+        "source_file": "model/schema/expression.yaml",
+        "uri": (
+            "https://github.com/alliance-genome/agr_curation_schema/blob/"
+            "1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/expression.yaml"
+        ),
+        "version": "1b11d0888f19eba4ca72022200bb7d96b30d4a52",
+    }
+
+
 def _candidate_from_fixture() -> dict:
     fixture_pack = load_domain_fixture_pack(TMEM67_FIXTURE_PATH)
     envelope = fixture_pack.fixtures[0].envelope
@@ -163,7 +178,7 @@ def _lta_candidate() -> dict:
         "definition_state": "stable",
         "payload": payload,
         "object": {"evidence_record_ids": ["evidence-lta-extracellular-space-1"]},
-        "schema_ref": {},
+        "schema_ref": _gene_expression_schema_ref(),
         "object_model_ref": {},
         "model_field_ref": {},
         "projection_refs": [],
@@ -282,6 +297,11 @@ def test_gene_expression_export_preserves_specimen_genomic_model_as_warning():
             },
         }
     ]
+    assert payload.warnings == [
+        "expression_experiment.specimen_genomic_model: Specimen genomic model "
+        "export mapping is not approved for the Gene Expression 0.7.0 curation "
+        "DB handoff.",
+    ]
 
 
 def test_gene_expression_export_preserves_unmapped_experiment_context_as_warnings():
@@ -380,6 +400,22 @@ def test_gene_expression_export_blockers_are_object_and_field_addressable():
             "single_reference.reference_id",
             "alliance.gene_expression.required_field_missing",
         ),
+    }
+
+
+def test_gene_expression_export_blocks_missing_schema_ref_metadata():
+    candidate = copy.deepcopy(_candidate_from_fixture())
+    del candidate["schema_ref"]
+
+    blockers = gene_expression_export_blockers(candidate)
+
+    assert (
+        "schema_ref",
+        "alliance.gene_expression.required_field_missing",
+        "Gene-expression export requires schema_ref metadata for the source envelope object.",
+    ) in {
+        (blocker.field_path, blocker.code, blocker.message)
+        for blocker in blockers
     }
 
 

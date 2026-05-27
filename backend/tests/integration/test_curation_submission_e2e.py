@@ -1143,6 +1143,8 @@ def test_alliance_domain_pack_gate_materializes_review_and_export_from_envelopes
         "include_payload": True,
     }
     if case_key != "gene_expression":
+        # Gene-expression export repairs can advance the accepted envelope revision
+        # during preview, so this path verifies the exported current revision instead.
         preview_request["expected_envelope_revisions"] = {
             envelope.envelope_id: expected_envelope_revision
         }
