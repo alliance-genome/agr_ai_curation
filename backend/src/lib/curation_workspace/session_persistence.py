@@ -249,6 +249,8 @@ def _validation_snapshot_row(
         session_id=session_row.id,
         candidate_id=candidate_id,
         adapter_key=snapshot.adapter_key or session_row.adapter_key,
+        envelope_id=snapshot.envelope_id,
+        envelope_revision=snapshot.envelope_revision,
         state=snapshot.state,
         field_results={
             field_key: result.model_dump(mode="json")

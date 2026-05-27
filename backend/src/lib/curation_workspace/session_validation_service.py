@@ -10,6 +10,10 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from src.lib.curation_workspace.adapter_registry import (
+    resolve_curation_domain_envelope_validator_by_id,
+    resolve_curation_domain_pack_by_id,
+)
 from src.lib.curation_workspace.models import (
     CurationCandidate,
     CurationReviewSession as ReviewSessionModel,
@@ -34,6 +38,18 @@ from src.lib.curation_workspace.validation_runtime import (
     field_validation_status,
     increment_validation_count,
 )
+from src.lib.domain_envelopes.persistence import (
+    DomainEnvelopeCheckpointRequest,
+    DomainEnvelopePersistenceError,
+    write_domain_envelope_checkpoint,
+)
+from src.lib.domain_packs.structural_checks import run_domain_envelope_structural_checks
+from src.lib.domain_packs.validation_findings import (
+    append_validation_findings_to_envelope,
+    remove_open_validation_findings_for_scope,
+    resolve_stale_validation_findings_after_refresh,
+)
+from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
 from src.schemas.curation_workspace import (
     CurationCandidateValidationRequest,
     CurationCandidateValidationResponse,
@@ -158,11 +174,18 @@ def _compute_candidate_validation(
     def _existing_result(field: CurationDraftFieldSchema) -> FieldValidationResult | None:
         return latest_results.get(field.field_key) or field.validation_result
 
+    snapshot_matches_projection = (
+        latest_snapshot is not None
+        and latest_snapshot.envelope_id == candidate.envelope_id
+        and latest_snapshot.envelope_revision == candidate.envelope_revision
+    )
+
     if (
         not requested_field_keys
         and not force
         and latest_snapshot is not None
         and latest_snapshot.state == CurationValidationSnapshotState.COMPLETED
+        and snapshot_matches_projection
         and all(
             not field.stale_validation and _existing_result(field) is not None
             for field in draft_fields
@@ -179,10 +202,17 @@ def _compute_candidate_validation(
         latest_snapshot is None
         or latest_snapshot.state != CurationValidationSnapshotState.COMPLETED
     )
-    envelope_results, envelope_warnings = _envelope_validation_results_for_candidate(
+    snapshot_projection_mismatch = latest_snapshot is not None and not snapshot_matches_projection
+    (
+        envelope_results,
+        envelope_warnings,
+        envelope_id,
+        envelope_revision,
+    ) = _envelope_validation_results_for_candidate(
         db,
         candidate,
         draft_fields=draft_fields,
+        validated_at=validated_at,
     )
     warnings.extend(envelope_warnings)
 
@@ -190,6 +220,7 @@ def _compute_candidate_validation(
         existing_result = _existing_result(draft_field)
         field_is_targeted = (
             not requested_field_keys
+            or snapshot_projection_mismatch
             or draft_field.field_key in requested_field_keys
         )
         should_refresh = (
@@ -199,6 +230,7 @@ def _compute_candidate_validation(
                 or draft_field.stale_validation
                 or existing_result is None
                 or snapshot_missing_or_incomplete
+                or snapshot_projection_mismatch
             )
         )
         next_result = (
@@ -247,6 +279,8 @@ def _compute_candidate_validation(
         requested_at=validated_at,
         completed_at=validated_at,
         adapter_key=candidate.adapter_key,
+        envelope_id=envelope_id,
+        envelope_revision=envelope_revision,
     )
 
     return CandidateValidationComputation(
@@ -290,6 +324,7 @@ def _apply_candidate_validation(
     )
     db.add(snapshot_row)
     db.flush()
+    db.refresh(snapshot_row)
     candidate.validation_snapshots.append(snapshot_row)
     return _validation_snapshot(snapshot_row), True
 
@@ -299,13 +334,14 @@ def _envelope_validation_results_for_candidate(
     candidate: CurationCandidate,
     *,
     draft_fields: Sequence[CurationDraftFieldSchema],
-) -> tuple[dict[str, FieldValidationResult] | None, list[str]]:
+    validated_at: datetime,
+) -> tuple[dict[str, FieldValidationResult] | None, list[str], str | None, int | None]:
     if (
         candidate.envelope_id is None
         or candidate.object_id is None
         or candidate.envelope_revision is None
     ):
-        return None, []
+        return None, [], None, None
 
     envelope_row = candidate.domain_envelope
     if envelope_row is None:
@@ -325,15 +361,26 @@ def _envelope_validation_results_for_candidate(
                 for field in draft_fields
             },
             [warning],
+            str(candidate.envelope_id),
+            candidate.envelope_revision,
         )
 
     envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
+    envelope, envelope_revision, dispatch_warnings = _dispatch_workspace_envelope_validation(
+        db,
+        candidate,
+        envelope_row=envelope_row,
+        envelope=envelope,
+        field_paths=[field.field_key for field in draft_fields],
+        validated_at=validated_at,
+    )
     field_results, warnings = domain_envelope_field_validation_results(
         envelope,
-        envelope_revision=envelope_row.revision,
+        envelope_revision=envelope_revision,
         object_id=candidate.object_id,
         field_keys=[field.field_key for field in draft_fields],
     )
+    warnings = [*dispatch_warnings, *warnings]
     if candidate.envelope_revision != envelope_row.revision:
         warnings = [
             *warnings,
@@ -343,7 +390,97 @@ def _envelope_validation_results_for_candidate(
                 f"{candidate.envelope_revision}."
             ),
         ]
-    return field_results, dedupe(warnings)
+    return field_results, dedupe(warnings), envelope.envelope_id, envelope_revision
+
+
+def _dispatch_workspace_envelope_validation(
+    db: Session,
+    candidate: CurationCandidate,
+    *,
+    envelope_row: DomainEnvelopeModel,
+    envelope: DomainEnvelope,
+    field_paths: Sequence[str],
+    validated_at: datetime,
+) -> tuple[DomainEnvelope, int, list[str]]:
+    domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
+    if domain_pack is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                f"Domain pack {envelope.domain_pack_id} is not available for "
+                "workspace candidate validation."
+            ),
+        )
+
+    source_revision = int(envelope_row.revision)
+    refresh_scope = remove_open_validation_findings_for_scope(
+        envelope,
+        object_id=candidate.object_id,
+        field_paths=field_paths,
+    )
+    structural_result = run_domain_envelope_structural_checks(
+        refresh_scope.envelope,
+        domain_pack,
+    )
+    package_validator = resolve_curation_domain_envelope_validator_by_id(
+        envelope.domain_pack_id
+    )
+    package_appended_findings = ()
+    validator_envelope = structural_result.envelope
+    if package_validator is not None:
+        validator_envelope, package_appended_findings = (
+            append_validation_findings_to_envelope(
+                structural_result.envelope,
+                package_validator(structural_result.envelope),
+                actor_id=f"{envelope.domain_pack_id}.domain_envelope_validator",
+            )
+        )
+    dispatch_result = dispatch_active_validator_bindings(
+        validator_envelope,
+        domain_pack,
+        actor_id="workspace_candidate_validation",
+        registry=structural_result.registry,
+        source_envelope_revision=source_revision,
+    )
+    stale_resolution = resolve_stale_validation_findings_after_refresh(
+        original_envelope=envelope,
+        refreshed_envelope=dispatch_result.envelope,
+        removed_findings=refresh_scope.removed_findings,
+        actor_id="workspace_candidate_validation",
+    )
+    appended_findings = (
+        *structural_result.appended_findings,
+        *package_appended_findings,
+        *dispatch_result.appended_findings,
+        *stale_resolution.resolved_findings,
+    )
+    if not appended_findings and not stale_resolution.changed:
+        return stale_resolution.envelope, source_revision, []
+
+    try:
+        checkpoint = write_domain_envelope_checkpoint(
+            db,
+            DomainEnvelopeCheckpointRequest(
+                project_key=envelope_row.project_key,
+                envelope=stale_resolution.envelope,
+                expected_revision=source_revision,
+                document_id=envelope_row.document_id,
+                session_id=envelope_row.session_id,
+                flow_run_id=envelope_row.flow_run_id,
+                object_model_ref_json=dict(envelope_row.object_model_ref_json),
+                model_field_ref_json=dict(envelope_row.model_field_ref_json),
+            ),
+            manage_transaction=False,
+        )
+    except DomainEnvelopePersistenceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+    candidate.envelope_revision = checkpoint.revision
+    candidate.updated_at = validated_at
+    return stale_resolution.envelope, checkpoint.revision, []
 
 
 def _aggregate_session_validation_snapshot(
@@ -398,6 +535,8 @@ def _prepared_validation_snapshot_schema(
         session_id=str(session_id),
         candidate_id=str(candidate_id) if candidate_id is not None else None,
         adapter_key=snapshot.adapter_key,
+        envelope_id=snapshot.envelope_id,
+        envelope_revision=snapshot.envelope_revision,
         state=snapshot.state,
         field_results=snapshot.field_results,
         summary=snapshot.summary,

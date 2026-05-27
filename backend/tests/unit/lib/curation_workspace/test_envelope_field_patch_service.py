@@ -16,6 +16,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from src.lib.curation_workspace import session_mutation_service as module
+from src.lib.curation_workspace import session_validation_service as validation_module
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry,
     CurationCandidate,
@@ -190,6 +191,11 @@ def loaded_pack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> LoadedDomain
     pack = _loaded_pack(tmp_path)
     monkeypatch.setattr(
         module,
+        "resolve_curation_domain_pack_by_id",
+        lambda pack_id: pack if pack_id == pack.pack_id else None,
+    )
+    monkeypatch.setattr(
+        validation_module,
         "resolve_curation_domain_pack_by_id",
         lambda pack_id: pack if pack_id == pack.pack_id else None,
     )

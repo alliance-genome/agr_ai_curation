@@ -241,6 +241,8 @@ def _validation_snapshot(record: ValidationSnapshotModel) -> CurationValidationS
         session_id=str(record.session_id),
         candidate_id=str(record.candidate_id) if record.candidate_id else None,
         adapter_key=record.adapter_key,
+        envelope_id=record.envelope_id,
+        envelope_revision=record.envelope_revision,
         state=record.state,
         field_results={
             field_key: FieldValidationResult.model_validate(result_payload)
