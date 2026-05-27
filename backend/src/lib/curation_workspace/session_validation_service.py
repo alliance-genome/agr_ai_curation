@@ -324,6 +324,7 @@ def _apply_candidate_validation(
     )
     db.add(snapshot_row)
     db.flush()
+    db.refresh(snapshot_row)
     candidate.validation_snapshots.append(snapshot_row)
     return _validation_snapshot(snapshot_row), True
 
@@ -403,11 +404,13 @@ def _dispatch_workspace_envelope_validation(
 ) -> tuple[DomainEnvelope, int, list[str]]:
     domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
     if domain_pack is None:
-        warning = (
-            f"Domain pack {envelope.domain_pack_id} is not available for workspace "
-            "candidate validation."
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                f"Domain pack {envelope.domain_pack_id} is not available for "
+                "workspace candidate validation."
+            ),
         )
-        return envelope, int(envelope_row.revision), [warning]
 
     source_revision = int(envelope_row.revision)
     refresh_scope = remove_open_validation_findings_for_scope(
@@ -464,8 +467,8 @@ def _dispatch_workspace_envelope_validation(
                 document_id=envelope_row.document_id,
                 session_id=envelope_row.session_id,
                 flow_run_id=envelope_row.flow_run_id,
-                object_model_ref_json=dict(envelope_row.object_model_ref_json or {}),
-                model_field_ref_json=dict(envelope_row.model_field_ref_json or {}),
+                object_model_ref_json=dict(envelope_row.object_model_ref_json),
+                model_field_ref_json=dict(envelope_row.model_field_ref_json),
             ),
             manage_transaction=False,
         )

@@ -677,6 +677,11 @@ def _create_domain_envelope_submission_session(
         "_loaded_domain_pack_for_envelope",
         lambda _envelope: loaded_pack,
     )
+    monkeypatch.setattr(
+        validation_module,
+        "resolve_curation_domain_pack_by_id",
+        lambda pack_id: loaded_pack if pack_id == loaded_pack.pack_id else None,
+    )
 
     document = _create_document(db_session)
     now = _now()
@@ -1779,7 +1784,10 @@ def test_validate_candidate_only_refreshes_requested_field_subset(db_session):
     assert response.candidate.validation.stale_field_keys == ["field_b"]
 
 
-def test_validate_candidate_uses_envelope_findings_instead_of_dirty_draft_state(db_session):
+def test_validate_candidate_uses_envelope_findings_instead_of_dirty_draft_state(
+    db_session,
+    monkeypatch,
+):
     document = _create_document(db_session)
     session_row = _create_review_session(
         db_session,
@@ -1896,6 +1904,29 @@ def test_validate_candidate_uses_envelope_findings_instead_of_dirty_draft_state(
         )
     )
     db_session.commit()
+    loaded_pack = SimpleNamespace(pack_id="fixture.pack")
+    monkeypatch.setattr(
+        validation_module,
+        "resolve_curation_domain_pack_by_id",
+        lambda pack_id: loaded_pack if pack_id == "fixture.pack" else None,
+    )
+    monkeypatch.setattr(
+        validation_module,
+        "run_domain_envelope_structural_checks",
+        lambda envelope, _domain_pack: SimpleNamespace(
+            envelope=envelope,
+            registry=SimpleNamespace(domain_pack=loaded_pack),
+            appended_findings=(),
+        ),
+    )
+    monkeypatch.setattr(
+        validation_module,
+        "dispatch_active_validator_bindings",
+        lambda envelope, *_args, **_kwargs: SimpleNamespace(
+            envelope=envelope,
+            appended_findings=(),
+        ),
+    )
 
     response = module.validate_candidate(
         db_session,
@@ -2308,7 +2339,41 @@ def test_curator_corrected_workspace_candidate_validates_against_current_envelop
     ]
 
 
-def test_workspace_validation_keeps_generic_fallback_for_non_envelope_candidates(
+def test_workspace_validation_fails_when_domain_pack_is_unavailable(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={"artifact": {"accession_id": "A-1", "title": "Bronze astrolabe"}},
+    )
+    monkeypatch.setattr(
+        validation_module,
+        "resolve_curation_domain_pack_by_id",
+        lambda _pack_id: None,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        module.validate_candidate(
+            db_session,
+            seeded["candidate_id"],
+            CurationCandidateValidationRequest(
+                session_id=seeded["session_id"],
+                candidate_id=seeded["candidate_id"],
+                force=True,
+            ),
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == (
+        "Domain pack museum.catalog is not available for workspace candidate validation."
+    )
+
+
+def test_workspace_validation_skips_envelope_dispatch_for_non_envelope_candidates(
     db_session,
     monkeypatch,
 ):
@@ -3286,6 +3351,7 @@ def test_submission_export_allows_binding_policy_curator_override(
     tmp_path,
     monkeypatch,
 ):
+    loaded_pack = _loaded_museum_pack(tmp_path, title_binding_allows_opt_out=True)
     seeded = _create_domain_envelope_submission_session(
         db_session,
         tmp_path=tmp_path,
@@ -3300,6 +3366,23 @@ def test_submission_export_allows_binding_policy_curator_override(
                 }
             ]
         },
+    )
+    monkeypatch.setattr(
+        validation_module,
+        "run_domain_envelope_structural_checks",
+        lambda envelope, _domain_pack: SimpleNamespace(
+            envelope=envelope,
+            registry=SimpleNamespace(domain_pack=loaded_pack),
+            appended_findings=(),
+        ),
+    )
+    monkeypatch.setattr(
+        validation_module,
+        "dispatch_active_validator_bindings",
+        lambda envelope, *_args, **_kwargs: SimpleNamespace(
+            envelope=envelope,
+            appended_findings=(),
+        ),
     )
 
     response = module.submission_preview(
@@ -3325,6 +3408,7 @@ def test_submission_export_allows_binding_policy_curator_override_without_reason
     tmp_path,
     monkeypatch,
 ):
+    loaded_pack = _loaded_museum_pack(tmp_path, title_binding_allows_opt_out=True)
     seeded = _create_domain_envelope_submission_session(
         db_session,
         tmp_path=tmp_path,
@@ -3338,6 +3422,23 @@ def test_submission_export_allows_binding_policy_curator_override_without_reason
                 }
             ]
         },
+    )
+    monkeypatch.setattr(
+        validation_module,
+        "run_domain_envelope_structural_checks",
+        lambda envelope, _domain_pack: SimpleNamespace(
+            envelope=envelope,
+            registry=SimpleNamespace(domain_pack=loaded_pack),
+            appended_findings=(),
+        ),
+    )
+    monkeypatch.setattr(
+        validation_module,
+        "dispatch_active_validator_bindings",
+        lambda envelope, *_args, **_kwargs: SimpleNamespace(
+            envelope=envelope,
+            appended_findings=(),
+        ),
     )
 
     response = module.submission_preview(
@@ -3363,6 +3464,30 @@ def test_submission_export_blocks_open_blocking_validation_findings(
     tmp_path,
     monkeypatch,
 ):
+    loaded_pack = _loaded_museum_pack(tmp_path)
+    blocking_finding = ValidationFinding(
+        severity=ValidationFindingSeverity.BLOCKER,
+        message="Title requires external catalog verification.",
+        code="museum.catalog.title_unverified",
+        field_ref=FieldRef(
+            object_ref=ObjectRef(
+                object_id="artifact-1",
+                object_type="MuseumArtifact",
+            ),
+            field_path="artifact.title",
+        ),
+        details={
+            "provider_refs": {
+                "catalog_schema": {"class": "Artifact", "field": "title"}
+            },
+            "validation_metadata": {
+                "validator_binding_id": "museum.title_catalog_check",
+                "binding_state": "active",
+                "required": True,
+                "blocking": True,
+            },
+        },
+    )
     seeded = _create_domain_envelope_submission_session(
         db_session,
         tmp_path=tmp_path,
@@ -3373,31 +3498,22 @@ def test_submission_export_blocks_open_blocking_validation_findings(
                 "title": "Bronze astrolabe",
             },
         },
-        validation_findings=[
-            ValidationFinding(
-                severity=ValidationFindingSeverity.BLOCKER,
-                message="Title requires external catalog verification.",
-                code="museum.catalog.title_unverified",
-                field_ref=FieldRef(
-                    object_ref=ObjectRef(
-                        object_id="artifact-1",
-                        object_type="MuseumArtifact",
-                    ),
-                    field_path="artifact.title",
-                ),
-                details={
-                    "provider_refs": {
-                        "catalog_schema": {"class": "Artifact", "field": "title"}
-                    },
-                    "validation_metadata": {
-                        "validator_binding_id": "museum.title_catalog_check",
-                        "binding_state": "active",
-                        "required": True,
-                        "blocking": True,
-                    },
-                },
-            )
-        ],
+        validation_findings=[blocking_finding],
+    )
+    monkeypatch.setattr(
+        validation_module,
+        "run_domain_envelope_structural_checks",
+        lambda envelope, _domain_pack: SimpleNamespace(
+            envelope=envelope,
+            registry=SimpleNamespace(domain_pack=loaded_pack),
+            appended_findings=(),
+        ),
+    )
+    _patch_workspace_validation_dispatch(
+        monkeypatch,
+        loaded_pack,
+        expected_title="Bronze astrolabe",
+        finding=blocking_finding,
     )
 
     response = module.submission_preview(

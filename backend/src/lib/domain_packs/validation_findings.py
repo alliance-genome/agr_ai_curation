@@ -507,9 +507,7 @@ def _envelope_changed(
     original_envelope: DomainEnvelope,
     updated_envelope: DomainEnvelope,
 ) -> bool:
-    return original_envelope.model_dump(mode="json") != updated_envelope.model_dump(
-        mode="json"
-    )
+    return original_envelope != updated_envelope
 
 
 __all__ = [

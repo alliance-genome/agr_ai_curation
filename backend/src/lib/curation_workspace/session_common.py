@@ -108,8 +108,6 @@ def _latest_snapshot_record(
             or snapshot.requested_at
             or datetime.min.replace(tzinfo=timezone.utc)
         )
-        if timestamp.tzinfo is None:
-            return timestamp.replace(tzinfo=timezone.utc)
         return timestamp
 
     ordered_snapshots = sorted(
