@@ -133,6 +133,91 @@ model_definitions:
             commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
             source_file: model/schema/ontologyTerm.yaml
             class: OntologyTerm
+  - model_id: ReagentSnapshotPayload
+    display_name: Detection reagent snapshot payload
+    description: Embedded detection reagent selector or placeholder for expression assay context.
+    schema_ref:
+      schema_id: alliance.linkml.Reagent
+      provider: alliance_linkml
+      name: Reagent
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/reagent.yaml
+      definition_state: in_development
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/reagent.yaml
+            class: Reagent
+  - model_id: AffectedGenomicModelSnapshotPayload
+    display_name: Specimen genomic model snapshot payload
+    description: Embedded specimen AGM selector or placeholder for expression experiment context.
+    schema_ref:
+      schema_id: alliance.linkml.AffectedGenomicModel
+      provider: alliance_linkml
+      name: AffectedGenomicModel
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/affectedGenomicModel.yaml
+      definition_state: in_development
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/affectedGenomicModel.yaml
+            class: AffectedGenomicModel
+  - model_id: AlleleSnapshotPayload
+    display_name: Specimen allele snapshot payload
+    description: Embedded specimen allele selector or placeholder for expression experiment context.
+    schema_ref:
+      schema_id: alliance.linkml.Allele
+      provider: alliance_linkml
+      name: Allele
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/allele.yaml
+      definition_state: in_development
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/allele.yaml
+            class: Allele
+  - model_id: ConditionRelationPayload
+    display_name: Condition relation payload
+    description: Optional embedded condition relation context for expression experiments.
+    schema_ref:
+      schema_id: alliance.linkml.ConditionRelation
+      provider: alliance_linkml
+      name: ConditionRelation
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/phenotypeAndDiseaseAnnotation.yaml
+      definition_state: in_development
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+            class: ConditionRelation
+  - model_id: ExperimentalConditionPayload
+    display_name: Experimental condition payload
+    description: Optional embedded experimental condition context.
+    schema_ref:
+      schema_id: alliance.linkml.ExperimentalCondition
+      provider: alliance_linkml
+      name: ExperimentalCondition
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/phenotypeAndDiseaseAnnotation.yaml
+      definition_state: in_development
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+            class: ExperimentalCondition
   - model_id: ExpressionPatternPayload
     display_name: Expression pattern payload
     description: Embedded expression pattern context for one annotation.
@@ -225,16 +310,16 @@ object_definitions:
       controlled_field_helper_gaps:
         - field_path: condition_relations[].condition_relation_type
           status: under_development
-          reason: Gene Expression condition context is not an active LinkML/domain-pack payload target in this pack yet; preserve condition text in metadata instead of inventing a relation vocabulary value.
+          reason: Gene Expression condition_relations is LinkML-backed, but condition relation vocabulary materialization is not active for this pack; preserve condition text field-addressedly instead of inventing a relation value.
         - field_path: expression_experiment.detection_reagents
           status: under_development
-          reason: Detection reagent/probe/construct/reporter LinkML payload materialization and package lookup helpers are not active yet; preserve exact paper labels and genotypes in metadata.
+          reason: Detection reagent/probe/construct/reporter is LinkML-backed, but controlled reagent lookup and export join materialization are not active yet; preserve exact paper labels with this field path and use structured placeholders only when evidence supports them.
         - field_path: expression_experiment.specimen_genomic_model
           status: under_development
-          reason: Specimen AGM/genotype helper-backed materialization is not active for Gene Expression extraction yet; preserve specimen context in metadata.
+          reason: Specimen AGM/genotype is LinkML-backed, but helper-backed AGM materialization is not active for Gene Expression extraction yet; preserve specimen context with this field path.
         - field_path: expression_experiment.specimen_alleles
           status: under_development
-          reason: Specimen allele helper-backed materialization is not active for Gene Expression extraction yet; preserve allele/genotype context in metadata.
+          reason: Specimen allele context is LinkML-backed, but helper-backed allele materialization is not active for Gene Expression extraction yet; preserve allele/genotype context with this field path.
     fields:
       - field_path: unique_id
         field_type: string
@@ -593,6 +678,9 @@ object_definitions:
         required: true
         model_ref: OntologyTermSnapshotPayload
         metadata:
+          validatable: true
+          validator_binding_id: expression_assay_ontology_validation
+          validator_state: active
           term_helper:
             field_path: expression_experiment.expression_assay_used
             authority: selector_evidence
@@ -604,6 +692,25 @@ object_definitions:
               package_tool: get_domain_field_term_options
               method: search_ontology_terms
               candidate_authority: selector_evidence
+            configured_mappings:
+              - mapping_id: gene_expression_assay.whole_mount_in_situ_hybridization
+                labels:
+                  - whole-mount in situ hybridization
+                  - whole mount in situ hybridization
+                  - WISH
+                candidate:
+                  curie: MMO:0000658
+                  name: whole mount in situ hybridization assay
+                  ontology_type: MMOTerm
+              - mapping_id: gene_expression_assay.reverse_transcription_pcr
+                labels:
+                  - reverse transcription polymerase chain reaction assay
+                  - reverse transcription polymerase chain reaction
+                  - RT-PCR
+                candidate:
+                  curie: MMO:0000655
+                  name: reverse transcription polymerase chain reaction assay
+                  ontology_type: MMOTerm
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -620,6 +727,9 @@ object_definitions:
         required: true
         metadata:
           editable: true
+          validatable: true
+          validator_binding_id: expression_assay_ontology_validation
+          validator_state: active
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
@@ -636,6 +746,9 @@ object_definitions:
         display_name: Expression assay name
         metadata:
           editable: true
+          validatable: true
+          validator_binding_id: expression_assay_ontology_validation
+          validator_state: active
           source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
@@ -647,6 +760,220 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: name
+      - field_path: expression_experiment.single_reference
+        field_type: object
+        display_name: Experiment evidence reference
+        required: true
+        model_ref: ReferenceSnapshotPayload
+        metadata:
+          validatable: true
+          validator_binding_id: source_reference_validation
+          validator_state: active
+          projection_note: For Gene Expression 0.7.0 this should match single_reference.
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/core.yaml
+              class: GeneExpressionExperiment
+              slot: single_reference
+              range: Reference
+              db_table: geneexpressionexperiment
+              db_column: singlereference_id
+      - field_path: expression_experiment.single_reference.reference_id
+        field_type: integer
+        display_name: Experiment reference ID
+        required: true
+        metadata:
+          editable: true
+          validatable: true
+          validator_binding_id: source_reference_validation
+          validator_state: active
+          source_of_truth: alliance_literature_reference_lookup
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/reference.yaml
+              class: Reference
+              slot: reference_id
+              range: integer
+              db_table: reference
+              db_column: id
+      - field_path: expression_experiment.entity_assayed
+        field_type: object
+        display_name: Entity assayed
+        required: true
+        model_ref: GeneReferenceSnapshotPayload
+        metadata:
+          validatable: true
+          validator_binding_id: subject_gene_validation
+          validator_state: active
+          projection_note: For Gene Expression 0.7.0 this should match expression_annotation_subject.
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/expression.yaml
+              class: GeneExpressionExperiment
+              slot: entity_assayed
+              range: Gene
+              db_table: geneexpressionexperiment
+              db_column: entityassayed_id
+      - field_path: expression_experiment.entity_assayed.primary_external_id
+        field_type: string
+        display_name: Entity assayed gene primary external ID
+        required: true
+        metadata:
+          editable: true
+          validatable: true
+          validator_binding_id: subject_gene_validation
+          validator_state: active
+          source_of_truth: alliance_linkml
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/core.yaml
+              class: Gene
+              slot: primary_external_id
+              range: string
+              db_table: biologicalentity
+              db_column: primaryexternalid
+      - field_path: expression_experiment.entity_assayed.gene_symbol
+        field_type: string
+        display_name: Entity assayed gene symbol
+        required: true
+        metadata:
+          editable: true
+          validatable: true
+          validator_binding_id: subject_gene_validation
+          validator_state: active
+          source_of_truth: alliance_linkml
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/gene.yaml
+              class: Gene
+              slot: gene_symbol
+              range: GeneSymbolSlotAnnotation
+              db_table: slotannotation
+              db_column: displaytext
+      - field_path: expression_experiment.detection_reagents
+        field_type: array
+        display_name: Detection reagents
+        model_ref: ReagentSnapshotPayload
+        definition_state: in_development
+        metadata:
+          validatable: true
+          validator_binding_id: reagent_context_materialization
+          validator_state: under_development
+          definition_state_category: under_development
+          preservation_policy:
+            unresolved_text_metadata_path: extraction_metadata.reagent_context
+            unresolved_reason_code: reagent_lookup_or_export_mapping_unavailable
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/expression.yaml
+              class: ExpressionExperiment
+              slot: detection_reagents
+              range: Reagent
+      - field_path: expression_experiment.detection_reagents[0].placeholder
+        field_type: boolean
+        display_name: Detection reagent placeholder
+        definition_state: in_development
+        metadata:
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/core.yaml
+              class: Reagent
+              slot: placeholder
+              range: boolean
+      - field_path: expression_experiment.specimen_genomic_model
+        field_type: object
+        display_name: Specimen genomic model
+        model_ref: AffectedGenomicModelSnapshotPayload
+        definition_state: in_development
+        metadata:
+          validatable: true
+          validator_binding_id: reagent_context_materialization
+          validator_state: under_development
+          definition_state_category: under_development
+          preservation_policy:
+            unresolved_text_metadata_path: extraction_metadata.specimen_context
+            unresolved_reason_code: specimen_agm_lookup_unavailable
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/core.yaml
+              class: ExpressionExperiment
+              slot: specimen_genomic_model
+              range: AffectedGenomicModel
+              db_table: geneexpressionexperiment
+              db_column: specimengenomicmodel_id
+      - field_path: expression_experiment.specimen_alleles
+        field_type: array
+        display_name: Specimen alleles
+        model_ref: AlleleSnapshotPayload
+        definition_state: in_development
+        metadata:
+          validatable: true
+          validator_binding_id: reagent_context_materialization
+          validator_state: under_development
+          definition_state_category: under_development
+          preservation_policy:
+            unresolved_text_metadata_path: extraction_metadata.specimen_context
+            unresolved_reason_code: specimen_allele_lookup_unavailable
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/expression.yaml
+              class: ExpressionExperiment
+              slot: specimen_alleles
+              range: Allele
+      - field_path: condition_relations
+        field_type: array
+        display_name: Condition relations
+        model_ref: ConditionRelationPayload
+        definition_state: in_development
+        metadata:
+          validatable: true
+          validator_binding_id: reagent_context_materialization
+          validator_state: under_development
+          definition_state_category: under_development
+          preservation_policy:
+            unresolved_text_metadata_path: extraction_metadata.condition_context
+            unresolved_reason_code: condition_relation_helper_unavailable
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ExpressionExperiment
+              slot: condition_relations
+              range: ConditionRelation
+              db_table: geneexpressionannotation_conditionrelation
+      - field_path: condition_relations[0].conditions
+        field_type: array
+        display_name: Experimental conditions
+        model_ref: ExperimentalConditionPayload
+        definition_state: in_development
+        metadata:
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ConditionRelation
+              slot: conditions
+              range: ExperimentalCondition
       - field_path: when_expressed_stage_name
         field_type: string
         display_name: When expressed stage name
@@ -1173,6 +1500,9 @@ metadata:
       - validator_id: expression_stage_ontology_validation
         display_name: Expression stage ontology lookup
         description: Active package binding resolves paper-facing GeneExpressionAnnotation stage labels to authoritative stage ontology terms while preserving original labels in materialization metadata.
+      - validator_id: expression_assay_ontology_validation
+        display_name: Expression assay ontology lookup
+        description: Active package binding resolves paper-facing GeneExpressionAnnotation assay/method labels to authoritative MMO terms while preserving original labels in materialization metadata.
       - validator_id: expression_stage_uberon_slim_validation
         display_name: Stage UBERON slim lookup
         description: Active package binding validates and materializes stage UBERON slim term arrays through ontology lookup evidence.
@@ -1189,12 +1519,9 @@ metadata:
         display_name: GO cellular component qualifier lookup
         description: Active package binding validates and materializes cellular-component qualifier term arrays through GO cellular-component lookup evidence.
     under_development:
-      - validator_id: gene_expression.ontology_term_resolution
-        display_name: Assay ontology term resolution
-        description: Validate embedded MMO assay/method CURIEs against configured Alliance ontology sources after the assay/context split promotes those targets.
       - validator_id: gene_expression.reagent_context_materialization
         display_name: Reagent context materialization
-        description: Preserve reagent, genotype, reporter, and strain context as evidence metadata until explicit LinkML/export materialization targets and validators are active.
+        description: Preserve reagent, genotype, reporter, construct, strain, specimen, allele, and condition context as LinkML-backed pending fields when possible, or field-addressed evidence metadata when helper-backed identifiers/export joins are unavailable.
       - validator_id: gene_expression.live_write_transport
         display_name: Live database write path
         blocked_by: read_only_curation_db
@@ -1365,6 +1692,43 @@ metadata:
           label: when_expressed_stage_name
           curie: expression_pattern.when_expressed.developmental_stage_start.curie
           name: expression_pattern.when_expressed.developmental_stage_start.name
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
+      - binding_id: expression_assay_ontology_validation
+        display_name: Expression assay ontology lookup
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: ontology_term_validation
+        applies_to:
+          domain_pack_id: agr.alliance.gene_expression
+          object_types:
+            - GeneExpressionAnnotation
+          field_paths:
+            - expression_experiment.expression_assay_used
+        input_fields:
+          curie:
+            source: payload
+            path: expression_experiment.expression_assay_used.curie
+            required: false
+          label:
+            source: payload
+            path: expression_experiment.expression_assay_used.name
+            required: false
+          ontology_family:
+            source: literal
+            value: assay
+          ontology_term_type:
+            source: literal
+            value: MMOTerm
+          lookup_method:
+            source: literal
+            value: search_ontology_terms
+        expected_result_fields:
+          curie: expression_experiment.expression_assay_used.curie
+          name: expression_experiment.expression_assay_used.name
         required: true
         blocking: false
         allow_opt_out: true
@@ -1584,26 +1948,18 @@ metadata:
         curator_override:
           allowed: false
     under_development:
-      - binding_id: expression_context_ontology_validation
-        display_name: Assay ontology validation
-        validator_agent:
-          package_id: agr.alliance
-          agent_id: ontology_term_validation
-        state_explanation: Assay/method ontology validation remains metadata-only until the assay/context split promotes per-field selectors and result materialization.
+      - binding_id: reagent_context_materialization
+        display_name: Reagent context materialization
+        state_explanation: Reagent, genotype, reporter, construct, strain, specimen, allele, and condition details have explicit LinkML payload fields where supported, but controlled helper-backed identifiers and export joins remain under development; unresolved text remains field-addressed in metadata.
         applies_to:
           domain_pack_id: agr.alliance.gene_expression
           object_types:
             - GeneExpressionAnnotation
           field_paths:
-            - expression_experiment.expression_assay_used.curie
-            - expression_experiment.expression_assay_used.name
-      - binding_id: reagent_context_materialization
-        display_name: Reagent context materialization
-        state_explanation: Reagent, genotype, reporter, and strain details currently remain in metadata.raw_mentions, metadata.normalization_notes, metadata.ambiguities, or object metadata; no LinkML payload field or validator materialization target is active yet.
-        applies_to:
-          domain_pack_id: agr.alliance.gene_expression
-          object_types:
-            - GeneExpressionAnnotation
+            - expression_experiment.detection_reagents
+            - expression_experiment.specimen_genomic_model
+            - expression_experiment.specimen_alleles
+            - condition_relations
   provider_refs:
     alliance_linkml:
       schema_ref: alliance.linkml
@@ -1616,6 +1972,7 @@ metadata:
       inspected_tables:
         - geneexpressionannotation
         - geneexpressionexperiment
+        - geneexpressionannotation_conditionrelation
         - expressionpattern
         - temporalcontext
         - anatomicalsite

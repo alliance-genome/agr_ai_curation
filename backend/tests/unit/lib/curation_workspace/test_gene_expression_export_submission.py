@@ -115,6 +115,11 @@ def _lta_candidate() -> dict:
         "single_reference": {"reference_id": 419039},
         "expression_experiment": {
             "unique_id": "RGD:3020|AGRKB:101000000400377|MMO:0000640",
+            "single_reference": {"reference_id": 419039},
+            "entity_assayed": {
+                "primary_external_id": "RGD:3020",
+                "gene_symbol": "Lta",
+            },
             "expression_assay_used": {
                 "curie": "MMO:0000640",
                 "name": "expression assay",

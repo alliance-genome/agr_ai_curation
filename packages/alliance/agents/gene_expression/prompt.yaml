@@ -285,7 +285,12 @@ content: |
     `expression_annotation_subject.primary_external_id`,
     `expression_annotation_subject.gene_symbol`, `relation`, `relation.name`,
     `single_reference`, `single_reference.reference_id`, `expression_experiment`,
-    `expression_experiment.unique_id`, `expression_experiment.expression_assay_used`,
+    `expression_experiment.unique_id`, `expression_experiment.single_reference`,
+    `expression_experiment.single_reference.reference_id`,
+    `expression_experiment.entity_assayed`,
+    `expression_experiment.entity_assayed.primary_external_id`,
+    `expression_experiment.entity_assayed.gene_symbol`,
+    `expression_experiment.expression_assay_used`,
     `expression_experiment.expression_assay_used.curie`, `when_expressed_stage_name`,
     `where_expressed_statement`, `expression_pattern`, and
     `expression_pattern.where_expressed`.
@@ -325,6 +330,17 @@ content: |
     helper-backed MMO/assay options or explicit paper-provided identifiers. If no
     helper result is available, preserve the explicit assay label from the paper as
     unresolved metadata rather than inventing a CURIE.
+  - For Gene Expression 0.7.0, set `expression_experiment.single_reference` to
+    the same resolved reference selector as annotation-level `single_reference`,
+    and set `expression_experiment.entity_assayed` to the same gene selector as
+    `expression_annotation_subject`. Validators/materializers own final IDs.
+  - Preserve reagent, genotype, reporter, construct, strain, specimen, allele, and
+    condition context under the explicit LinkML-backed paths when a helper-backed
+    selector or placeholder is available: `expression_experiment.detection_reagents`,
+    `expression_experiment.specimen_genomic_model`,
+    `expression_experiment.specimen_alleles`, and `condition_relations`. When no
+    helper-backed identifier or safe placeholder exists, keep the exact paper text
+    in metadata with the relevant field_path and unresolved reason.
   - Preserve reagent names, genotypes, strain strings, original anatomy/stage labels,
     normalization caveats, raw evidence text, page numbers, and figure references in
     `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.normalization_notes[]`,
@@ -337,11 +353,11 @@ content: |
   </output_contract>
 
   <unresolved_validation>
-  Active validator bindings currently own final relation and data-provider
-  verification for this domain pack. Subject gene, source reference, assay,
-  anatomy, stage, cellular-component, UBERON/GO slim-term, and reagent-context
-  validators remain under development unless the domain-pack metadata explicitly
-  promotes them to active bindings.
+  Active validator bindings currently own final relation, data-provider, subject
+  gene, source reference, assay, anatomy, stage, cellular-component, and
+  UBERON/GO slim-term verification for this domain pack. Reagent, specimen,
+  allele, and condition context validators remain under development unless the
+  domain-pack metadata explicitly promotes them to active bindings.
   When a required value is unresolved, keep the extraction envelope evidence-backed,
   preserve candidate context in `metadata.ambiguities[]`,
   `metadata.normalization_notes[]`, or `metadata.notes[]`, and do not describe

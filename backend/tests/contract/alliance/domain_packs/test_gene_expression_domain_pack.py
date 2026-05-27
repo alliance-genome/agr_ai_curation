@@ -321,6 +321,11 @@ def test_gene_expression_object_embeds_required_experiment_and_context_fields():
         "single_reference.reference_id",
         "expression_experiment",
         "expression_experiment.unique_id",
+        "expression_experiment.single_reference",
+        "expression_experiment.single_reference.reference_id",
+        "expression_experiment.entity_assayed",
+        "expression_experiment.entity_assayed.primary_external_id",
+        "expression_experiment.entity_assayed.gene_symbol",
         "expression_experiment.expression_assay_used",
         "expression_experiment.expression_assay_used.curie",
         "when_expressed_stage_name",
@@ -333,6 +338,48 @@ def test_gene_expression_object_embeds_required_experiment_and_context_fields():
         field for field in curatable_unit.fields if field.field_type is DomainPackFieldType.OBJECT_REF
     ]
     assert object_ref_fields == []
+
+
+def test_gene_expression_exposes_linkml_experiment_context_targets():
+    fields_by_path = {
+        field.field_path: field
+        for field in _gene_expression_pack().metadata.object_definitions[0].fields
+    }
+
+    assert fields_by_path["expression_experiment.detection_reagents"].model_ref == (
+        "ReagentSnapshotPayload"
+    )
+    assert fields_by_path["expression_experiment.detection_reagents"].metadata[
+        "preservation_policy"
+    ] == {
+        "unresolved_text_metadata_path": "extraction_metadata.reagent_context",
+        "unresolved_reason_code": "reagent_lookup_or_export_mapping_unavailable",
+    }
+    assert fields_by_path["expression_experiment.specimen_genomic_model"].model_ref == (
+        "AffectedGenomicModelSnapshotPayload"
+    )
+    assert fields_by_path["expression_experiment.specimen_alleles"].model_ref == (
+        "AlleleSnapshotPayload"
+    )
+    assert fields_by_path["condition_relations"].model_ref == (
+        "ConditionRelationPayload"
+    )
+    assert {
+        path: fields_by_path[path].metadata["provider_refs"]["alliance_linkml"][
+            "range"
+        ]
+        for path in (
+            "expression_experiment.detection_reagents",
+            "expression_experiment.specimen_genomic_model",
+            "expression_experiment.specimen_alleles",
+            "condition_relations",
+        )
+    } == {
+        "expression_experiment.detection_reagents": "Reagent",
+        "expression_experiment.specimen_genomic_model": "AffectedGenomicModel",
+        "expression_experiment.specimen_alleles": "Allele",
+        "condition_relations": "ConditionRelation",
+    }
 
 
 def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
@@ -351,6 +398,7 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
         "expression_anatomical_uberon_slim_validation",
         "expression_cellular_component_qualifier_validation",
         "expression_cellular_component_validation",
+        "expression_assay_ontology_validation",
         "expression_stage_ontology_validation",
         "expression_stage_uberon_slim_validation",
         "relation_vocabulary_validation",
@@ -383,6 +431,15 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
     assert active_bindings["expression_stage_ontology_validation"].field_paths == (
         "when_expressed_stage_name",
     )
+    assert active_bindings["expression_assay_ontology_validation"].field_paths == (
+        "expression_experiment.expression_assay_used",
+    )
+    assert active_bindings[
+        "expression_assay_ontology_validation"
+    ].expected_result_fields == {
+        "curie": "expression_experiment.expression_assay_used.curie",
+        "name": "expression_experiment.expression_assay_used.name",
+    }
     assert active_bindings["expression_stage_ontology_validation"].validator_agent is not None
     assert active_bindings["expression_stage_ontology_validation"].validator_agent.agent_id == (
         "ontology_term_validation"
@@ -425,6 +482,7 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
         "expression_anatomical_uberon_slim_validation",
         "expression_cellular_component_qualifier_validation",
         "expression_cellular_component_validation",
+        "expression_assay_ontology_validation",
         "expression_stage_ontology_validation",
         "expression_stage_uberon_slim_validation",
         "relation_vocabulary_validation",
@@ -437,26 +495,27 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
         for binding in registry.bindings
         if binding.state is ValidationBindingState.UNDER_DEVELOPMENT
     }
-    assert {
-        "expression_context_ontology_validation",
-        "reagent_context_materialization",
-    } <= under_development_binding_ids
+    assert {"reagent_context_materialization"} <= under_development_binding_ids
 
     under_development_validator_ids = {
         entry.validator_id
         for entry in registry.validator_metadata
         if entry.state is ValidationBindingState.UNDER_DEVELOPMENT
     }
-    assert {
-        "gene_expression.ontology_term_resolution",
-        "gene_expression.reagent_context_materialization",
-    } <= under_development_validator_ids
+    assert {"gene_expression.reagent_context_materialization"} <= (
+        under_development_validator_ids
+    )
 
     planned_gap_fields = {
-        "expression_experiment.expression_assay_used.curie",
-        "expression_experiment.expression_assay_used.name",
+        "expression_experiment.detection_reagents",
+        "expression_experiment.specimen_genomic_model",
+        "expression_experiment.specimen_alleles",
+        "condition_relations",
     }
     promoted_materialization_fields = {
+        "expression_experiment.expression_assay_used",
+        "expression_experiment.expression_assay_used.curie",
+        "expression_experiment.expression_assay_used.name",
         "when_expressed_stage_name",
         "expression_pattern.when_expressed.developmental_stage_start",
         "expression_pattern.when_expressed.developmental_stage_start.curie",
@@ -477,6 +536,7 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
         "single_reference.reference_id",
         "single_reference.curie",
         "single_reference.title",
+        "expression_experiment.expression_assay_used",
         "when_expressed_stage_name",
         "expression_pattern.when_expressed.stage_uberon_slim_terms",
         "expression_pattern.where_expressed.anatomical_structure",
@@ -502,12 +562,15 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
     assert promoted_normalization_fields.isdisjoint(under_development_field_paths)
 
     fields_by_path = {field.field_path: field for field in curatable_unit.fields}
-    silently_active_gap_fields = [
-        field_path
+    assert {
+        field_path: fields_by_path[field_path].metadata.get("validator_state")
         for field_path in sorted(planned_gap_fields)
-        if fields_by_path[field_path].metadata.get("validator_state") == "active"
-    ]
-    assert silently_active_gap_fields == []
+    } == {
+        "condition_relations": "under_development",
+        "expression_experiment.detection_reagents": "under_development",
+        "expression_experiment.specimen_alleles": "under_development",
+        "expression_experiment.specimen_genomic_model": "under_development",
+    }
     for field_path in promoted_materialization_fields:
         assert fields_by_path[field_path].metadata["validator_state"] == "active"
 
@@ -617,6 +680,125 @@ def test_gene_expression_context_ontology_requests_are_field_scoped():
             "expression_pattern.where_expressed.cellular_component_qualifiers"
         )
     }
+
+
+def test_gene_expression_assay_materializes_from_validator_result():
+    envelope = _converted_tmem67_envelope()
+    payload = copy.deepcopy(envelope.objects[0].payload)
+    payload["expression_experiment"]["expression_assay_used"] = {
+        "name": "whole-mount in situ hybridization",
+    }
+    envelope = _with_payload(envelope, payload)
+    match = _active_binding_match(envelope, "expression_assay_ontology_validation")
+    request = build_domain_validation_request(match).request
+    assert request is not None
+    assert request.selected_inputs == {
+        "label": "whole-mount in situ hybridization",
+        "ontology_family": "assay",
+        "ontology_term_type": "MMOTerm",
+        "lookup_method": "search_ontology_terms",
+    }
+    assert request.expected_result_fields == {
+        "curie": "expression_experiment.expression_assay_used.curie",
+        "name": "expression_experiment.expression_assay_used.name",
+    }
+
+    result = materialize_validator_results_into_envelope(
+        envelope,
+        _gene_expression_pack().metadata,
+        [
+            ValidatorResultMaterializationInput(
+                match=match,
+                request=request,
+                result=_validator_result(
+                    request,
+                    status="resolved",
+                    resolved_values={
+                        "curie": "MMO:0000658",
+                        "name": "whole mount in situ hybridization assay",
+                    },
+                ),
+            )
+        ],
+    )
+
+    assay = result.envelope.objects[0].payload["expression_experiment"][
+        "expression_assay_used"
+    ]
+    assert assay == {
+        "curie": "MMO:0000658",
+        "name": "whole mount in situ hybridization assay",
+    }
+    patch_event = result.envelope.objects[0].metadata[
+        "validator_resolved_value_materialization"
+    ][0]
+    assert patch_event["original_values"] == {
+        "expression_experiment.expression_assay_used.name": (
+            "whole-mount in situ hybridization"
+        )
+    }
+    resolved_field_ref = result.appended_findings[0].field_ref
+    assert resolved_field_ref is not None
+    assert resolved_field_ref.field_path == "expression_experiment.expression_assay_used"
+
+
+@pytest.mark.parametrize(
+    ("lookup_outcome", "expected_status"),
+    [
+        ("ambiguous", "ambiguous"),
+        ("not_found", "not_found"),
+    ],
+)
+def test_gene_expression_assay_unresolved_outcomes_stay_field_addressed(
+    lookup_outcome: str,
+    expected_status: str,
+):
+    envelope = _converted_tmem67_envelope()
+    match = _active_binding_match(envelope, "expression_assay_ontology_validation")
+    request = build_domain_validation_request(match).request
+    assert request is not None
+
+    result = materialize_validator_results_into_envelope(
+        envelope,
+        _gene_expression_pack().metadata,
+        [
+            ValidatorResultMaterializationInput(
+                match=match,
+                request=request,
+                result=_validator_result(
+                    request,
+                    status="unresolved",
+                    missing_expected_fields=["curie", "name"],
+                    lookup_outcome=lookup_outcome,
+                    candidates=[
+                        {
+                            "value": "MMO:0000658",
+                            "label": "whole mount in situ hybridization assay",
+                            "object_type": "OntologyTerm",
+                        },
+                        {
+                            "value": "MMO:0000642",
+                            "label": "in situ hybridization assay",
+                            "object_type": "OntologyTerm",
+                        },
+                    ]
+                    if lookup_outcome == "ambiguous"
+                    else [],
+                    curator_message="Assay label requires curator review.",
+                ),
+            )
+        ],
+    )
+
+    assert result.materialized_objects == ()
+    assert result.envelope.objects[0].payload == envelope.objects[0].payload
+    finding = result.appended_findings[0]
+    assert finding.code == "domain_pack.validator_unresolved"
+    assert finding.field_ref is not None
+    assert finding.field_ref.field_path == (
+        "expression_experiment.expression_assay_used"
+    )
+    assert finding.details["lookup_attempts"][0]["lookup_status"] == expected_status
 
 
 def test_gene_expression_uberon_slim_metadata_carries_linkml_allowlists():
@@ -1328,6 +1510,34 @@ def test_gene_expression_linkml_validator_reports_invalid_and_ambiguous_assay():
         "expression_experiment.expression_assay_used"
     )
     assert ambiguous_finding.details["candidate_count"] == 2
+
+
+def test_gene_expression_linkml_validator_reports_experiment_projection_mismatch():
+    envelope = _converted_tmem67_envelope()
+    payload = copy.deepcopy(envelope.objects[0].payload)
+    payload["expression_experiment"]["single_reference"]["reference_id"] = 999999
+    payload["expression_experiment"]["entity_assayed"][
+        "primary_external_id"
+    ] = "MGI:9999999"
+
+    findings = validate_pending_gene_expression_envelope(_with_payload(envelope, payload))
+    findings_by_field = {
+        finding.field_ref.field_path: finding
+        for finding in findings
+        if finding.field_ref is not None
+    }
+    assert (
+        findings_by_field[
+            "expression_experiment.single_reference.reference_id"
+        ].code
+        == "alliance.gene_expression.experiment_reference_mismatch"
+    )
+    assert (
+        findings_by_field[
+            "expression_experiment.entity_assayed.primary_external_id"
+        ].code
+        == "alliance.gene_expression.entity_assayed_mismatch"
+    )
 
 
 def test_gene_expression_linkml_validator_reports_missing_expression_context():

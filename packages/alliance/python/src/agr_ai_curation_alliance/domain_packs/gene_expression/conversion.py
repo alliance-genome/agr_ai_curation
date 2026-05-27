@@ -65,6 +65,11 @@ REQUIRED_GENE_EXPRESSION_PAYLOAD_FIELDS = frozenset(
         "single_reference.reference_id",
         "expression_experiment",
         "expression_experiment.unique_id",
+        "expression_experiment.single_reference",
+        "expression_experiment.single_reference.reference_id",
+        "expression_experiment.entity_assayed",
+        "expression_experiment.entity_assayed.primary_external_id",
+        "expression_experiment.entity_assayed.gene_symbol",
         "expression_experiment.expression_assay_used",
         "expression_experiment.expression_assay_used.curie",
         "when_expressed_stage_name",
@@ -80,7 +85,10 @@ FIELD_SPECIFIC_GENE_EXPRESSION_PAYLOAD_FIELDS = frozenset(
         "expression_annotation_subject.gene_symbol",
         "relation.name",
         "single_reference.reference_id",
+        "expression_experiment.single_reference.reference_id",
         "expression_experiment.expression_assay_used.curie",
+        "expression_experiment.entity_assayed.primary_external_id",
+        "expression_experiment.entity_assayed.gene_symbol",
         "when_expressed_stage_name",
         "where_expressed_statement",
         "expression_pattern.where_expressed",
@@ -649,6 +657,7 @@ def _selector_integrity_findings(
 
     findings.extend(_relation_name_findings(expression_object, object_ref))
     findings.extend(_assay_method_findings(expression_object, object_ref))
+    findings.extend(_experiment_projection_findings(expression_object, object_ref))
     findings.extend(_where_expressed_findings(expression_object, object_ref))
     return findings
 
@@ -760,6 +769,57 @@ def _assay_method_findings(
             )
         ]
     return []
+
+
+def _experiment_projection_findings(
+    expression_object: CuratableObjectEnvelope,
+    object_ref: ObjectRef,
+) -> list[ValidationFinding]:
+    findings: list[ValidationFinding] = []
+    equivalent_paths = (
+        (
+            "single_reference.reference_id",
+            "expression_experiment.single_reference.reference_id",
+            "alliance.gene_expression.experiment_reference_mismatch",
+            "GeneExpressionExperiment single_reference must match the annotation single_reference for Gene Expression 0.7.0.",
+        ),
+        (
+            "expression_annotation_subject.primary_external_id",
+            "expression_experiment.entity_assayed.primary_external_id",
+            "alliance.gene_expression.entity_assayed_mismatch",
+            "GeneExpressionExperiment entity_assayed must match expression_annotation_subject for Gene Expression 0.7.0.",
+        ),
+        (
+            "expression_annotation_subject.gene_symbol",
+            "expression_experiment.entity_assayed.gene_symbol",
+            "alliance.gene_expression.entity_assayed_mismatch",
+            "GeneExpressionExperiment entity_assayed must match expression_annotation_subject for Gene Expression 0.7.0.",
+        ),
+    )
+    for source_path, experiment_path, code, message in equivalent_paths:
+        source_value = _payload_value(expression_object.payload, source_path)
+        experiment_value = _payload_value(expression_object.payload, experiment_path)
+        if _value_missing_or_blank(source_value) or _value_missing_or_blank(
+            experiment_value
+        ):
+            continue
+        if source_value == experiment_value:
+            continue
+        findings.append(
+            _validation_finding(
+                object_ref=object_ref,
+                field_path=experiment_path,
+                code=code,
+                message=message,
+                details=_diagnostic_details(
+                    submitted_value=experiment_value,
+                    expected_value=source_value,
+                    equivalent_field_path=source_path,
+                    source_schema=GENE_EXPRESSION_LINKML_SCHEMA_URI,
+                ),
+            )
+        )
+    return findings
 
 
 def _where_expressed_findings(
