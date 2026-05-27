@@ -6,6 +6,8 @@ import copy
 import sys
 from pathlib import Path
 
+import pytest
+
 from src.lib.curation_workspace import adapter_registry as adapter_registry_module
 from src.lib.curation_workspace.export_adapters import (
     build_default_export_adapter_registry,
@@ -25,8 +27,11 @@ if str(ALLIANCE_PYTHON_SRC) not in sys.path:
 from agr_ai_curation_alliance.domain_packs.gene_expression import (  # noqa: E402
     GENE_EXPRESSION_ADAPTER_KEY,
     GENE_EXPRESSION_DOMAIN_PACK_ID,
+    GENE_EXPRESSION_DOMAIN_PACK_VERSION,
+    GENE_EXPRESSION_LINKML_SCHEMA_ID,
     GENE_EXPRESSION_TARGET_KEY,
     GeneExpressionExportAdapter,
+    GeneExpressionExportValidationError,
     GeneExpressionSubmissionAdapter,
     gene_expression_export_blockers,
 )
@@ -53,6 +58,21 @@ def _payload_context(candidate: dict) -> dict:
         "domain_envelopes": [],
         "readiness_blockers": [],
         "warnings": [],
+    }
+
+
+def _gene_expression_schema_ref() -> dict[str, str]:
+    return {
+        "class": "GeneExpressionAnnotation",
+        "name": "GeneExpressionAnnotation",
+        "provider": "alliance_linkml",
+        "schema_id": GENE_EXPRESSION_LINKML_SCHEMA_ID,
+        "source_file": "model/schema/expression.yaml",
+        "uri": (
+            "https://github.com/alliance-genome/agr_curation_schema/blob/"
+            "1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/expression.yaml"
+        ),
+        "version": "1b11d0888f19eba4ca72022200bb7d96b30d4a52",
     }
 
 
@@ -158,7 +178,7 @@ def _lta_candidate() -> dict:
         "definition_state": "stable",
         "payload": payload,
         "object": {"evidence_record_ids": ["evidence-lta-extracellular-space-1"]},
-        "schema_ref": {},
+        "schema_ref": _gene_expression_schema_ref(),
         "object_model_ref": {},
         "model_field_ref": {},
         "projection_refs": [],
@@ -182,6 +202,25 @@ def test_gene_expression_export_maps_tmem67_fixture_to_target_db_shape():
     assert payload.payload_json["linkml"]["commit"] == (
         "1b11d0888f19eba4ca72022200bb7d96b30d4a52"
     )
+    assert payload.payload_json["domain_pack_id"] == GENE_EXPRESSION_DOMAIN_PACK_ID
+    assert payload.payload_json["domain_pack_version"] == (
+        GENE_EXPRESSION_DOMAIN_PACK_VERSION
+    )
+    assert payload.payload_json["schema_ref"] == {
+        "class": "GeneExpressionAnnotation",
+        "name": "GeneExpressionAnnotation",
+        "provider": "alliance_linkml",
+        "schema_id": GENE_EXPRESSION_LINKML_SCHEMA_ID,
+        "source_file": "model/schema/expression.yaml",
+        "uri": (
+            "https://github.com/alliance-genome/agr_curation_schema/blob/"
+            "1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/expression.yaml"
+        ),
+        "version": "1b11d0888f19eba4ca72022200bb7d96b30d4a52",
+    }
+    assert annotation["envelope"]["schema_ref"]["schema_id"] == (
+        GENE_EXPRESSION_LINKML_SCHEMA_ID
+    )
     assert target_rows["geneexpressionannotation"]["columns"]["uniqueid"] == (
         "MMO:0000655|MGI:1923928|AGRKB:101000000232912|TS26|metanephros|EMAPA:17373"
     )
@@ -197,6 +236,15 @@ def test_gene_expression_export_maps_tmem67_fixture_to_target_db_shape():
     assert target_rows["geneexpressionannotation"]["lookups"][
         "expressionassayused_id"
     ]["match"] == {"curie": "MMO:0000655"}
+    assert target_rows["geneexpressionexperiment"]["lookups"]["singlereference_id"][
+        "match"
+    ] == {"id": 203506}
+    assert target_rows["geneexpressionexperiment"]["lookups"]["entityassayed_id"][
+        "match"
+    ] == {"primaryexternalid": "MGI:1923928"}
+    assert target_rows["geneexpressionexperiment"]["lookups"]["expressionassayused_id"][
+        "match"
+    ] == {"curie": "MMO:0000655"}
     assert target_rows["anatomicalsite"]["lookups"]["anatomicalstructure_id"][
         "match"
     ] == {"curie": "EMAPA:17373"}
@@ -208,6 +256,99 @@ def test_gene_expression_export_maps_tmem67_fixture_to_target_db_shape():
     assert target_rows["anatomicalsite"]["relationships"][
         "anatomicalsite_anatomicalstructureuberonterms"
     ] == [{"curie": "UBERON:0001008", "name": "renal system"}]
+    assert annotation["export_diagnostics"]["warnings"] == []
+
+
+def test_gene_expression_export_preserves_specimen_genomic_model_as_warning():
+    candidate = copy.deepcopy(_candidate_from_fixture())
+    candidate["payload"]["expression_experiment"]["specimen_genomic_model"] = {
+        "primary_external_id": "MGI:8308849",
+        "name": "Tmem67 targeted mutant",
+    }
+
+    payload = GeneExpressionExportAdapter().build_submission_payload(
+        mode=SubmissionMode.EXPORT,
+        target_key=GENE_EXPRESSION_TARGET_KEY,
+        payload_context=_payload_context(candidate),
+    )
+
+    assert payload.payload_json is not None
+    annotation = payload.payload_json["gene_expression_annotations"][0]
+    assert "specimengenomicmodel_id" not in annotation["target_rows"][
+        "geneexpressionexperiment"
+    ]["lookups"]
+    warnings = annotation["export_diagnostics"]["warnings"]
+    assert warnings == [
+        {
+            "severity": "warning",
+            "status": "audit_only",
+            "code": "alliance.gene_expression.context_not_exported",
+            "field_path": "expression_experiment.specimen_genomic_model",
+            "message": (
+                "Specimen genomic model export mapping is not approved for the Gene "
+                "Expression 0.7.0 curation DB handoff."
+            ),
+            "details": {
+                "reason_code": "export_mapping_not_approved",
+                "source_context": {
+                    "name": "Tmem67 targeted mutant",
+                    "primary_external_id": "MGI:8308849",
+                },
+            },
+        }
+    ]
+    assert payload.warnings == [
+        "expression_experiment.specimen_genomic_model: Specimen genomic model "
+        "export mapping is not approved for the Gene Expression 0.7.0 curation "
+        "DB handoff.",
+    ]
+
+
+def test_gene_expression_export_preserves_unmapped_experiment_context_as_warnings():
+    candidate = copy.deepcopy(_candidate_from_fixture())
+    candidate["payload"]["expression_experiment"]["detection_reagents"] = [
+        {"name": "Tmem67 RNA probe"}
+    ]
+    candidate["payload"]["expression_experiment"]["specimen_alleles"] = [
+        {"primary_external_id": "MGI:1234567"}
+    ]
+    candidate["payload"]["expression_experiment"]["specimen_genomic_model"] = {
+        "name": "Tmem67 specimen genotype"
+    }
+    candidate["payload"]["condition_relations"] = [
+        {"conditions": [{"condition_free_text": "heat shock"}]}
+    ]
+
+    payload = GeneExpressionExportAdapter().build_submission_payload(
+        mode=SubmissionMode.EXPORT,
+        target_key=GENE_EXPRESSION_TARGET_KEY,
+        payload_context=_payload_context(candidate),
+    )
+
+    assert payload.payload_json is not None
+    warnings = payload.payload_json["gene_expression_annotations"][0][
+        "export_diagnostics"
+    ]["warnings"]
+    assert {
+        (warning["field_path"], warning["details"]["reason_code"])
+        for warning in warnings
+    } == {
+        (
+            "expression_experiment.detection_reagents",
+            "export_mapping_not_approved",
+        ),
+        ("expression_experiment.specimen_alleles", "export_mapping_not_approved"),
+        (
+            "expression_experiment.specimen_genomic_model",
+            "export_mapping_not_approved",
+        ),
+        ("condition_relations", "export_mapping_not_approved"),
+    }
+    assert warnings[0]["status"] == "audit_only"
+    assert "detection_reagents" in candidate["payload"]["expression_experiment"]
+    assert "detection_reagents" not in payload.payload_json[
+        "gene_expression_annotations"
+    ][0]["target_rows"]["geneexpressionexperiment"]["lookups"]
 
 
 def test_gene_expression_export_maps_lta_cellular_component_projection():
@@ -257,6 +398,48 @@ def test_gene_expression_export_blockers_are_object_and_field_addressable():
         (
             "gene-expression-annotation-206552169",
             "single_reference.reference_id",
+            "alliance.gene_expression.required_field_missing",
+        ),
+    }
+
+
+def test_gene_expression_export_blocks_missing_schema_ref_metadata():
+    candidate = copy.deepcopy(_candidate_from_fixture())
+    del candidate["schema_ref"]
+
+    blockers = gene_expression_export_blockers(candidate)
+
+    assert (
+        "schema_ref",
+        "alliance.gene_expression.required_field_missing",
+        "Gene-expression export requires schema_ref metadata for the source envelope object.",
+    ) in {
+        (blocker.field_path, blocker.code, blocker.message)
+        for blocker in blockers
+    }
+
+
+def test_gene_expression_export_raises_final_validation_error_for_missing_required_fields():
+    candidate = copy.deepcopy(_candidate_from_fixture())
+    del candidate["payload"]["expression_experiment"]["expression_assay_used"]
+
+    with pytest.raises(GeneExpressionExportValidationError) as exc:
+        GeneExpressionExportAdapter().build_submission_payload(
+            mode=SubmissionMode.EXPORT,
+            target_key=GENE_EXPRESSION_TARGET_KEY,
+            payload_context=_payload_context(candidate),
+        )
+
+    assert {
+        (blocker.field_path, blocker.code)
+        for blocker in exc.value.blockers
+    } == {
+        (
+            "expression_experiment.expression_assay_used",
+            "alliance.gene_expression.required_field_missing",
+        ),
+        (
+            "expression_experiment.expression_assay_used.curie",
             "alliance.gene_expression.required_field_missing",
         ),
     }

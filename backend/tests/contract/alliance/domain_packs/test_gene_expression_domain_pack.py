@@ -472,6 +472,11 @@ def test_gene_expression_exposes_linkml_experiment_context_targets():
     assert fields_by_path["expression_experiment.specimen_genomic_model"].model_ref == (
         "AffectedGenomicModelSnapshotPayload"
     )
+    specimen_agm_ref = fields_by_path[
+        "expression_experiment.specimen_genomic_model"
+    ].metadata["provider_refs"]["alliance_linkml"]
+    assert "db_table" not in specimen_agm_ref
+    assert "db_column" not in specimen_agm_ref
     assert fields_by_path["expression_experiment.specimen_alleles"].model_ref == (
         "AlleleSnapshotPayload"
     )

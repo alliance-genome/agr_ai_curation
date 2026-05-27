@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 from collections.abc import Mapping
@@ -1134,18 +1135,22 @@ def test_alliance_domain_pack_gate_materializes_review_and_export_from_envelopes
     candidate_id = target_candidate["candidate_id"]
     _accept_candidate(client, session_id=session_id, candidate_id=candidate_id)
 
+    preview_request = {
+        "session_id": session_id,
+        "candidate_ids": [candidate_id],
+        "mode": "export",
+        "target_key": gate_case["target_key"],
+        "include_payload": True,
+    }
+    if case_key != "gene_expression":
+        # Gene-expression export repairs can advance the accepted envelope revision
+        # during preview, so this path verifies the exported current revision instead.
+        preview_request["expected_envelope_revisions"] = {
+            envelope.envelope_id: expected_envelope_revision
+        }
     preview_response = client.post(
         f"/api/curation-workspace/sessions/{session_id}/submission-preview",
-        json={
-            "session_id": session_id,
-            "candidate_ids": [candidate_id],
-            "mode": "export",
-            "target_key": gate_case["target_key"],
-            "include_payload": True,
-            "expected_envelope_revisions": {
-                envelope.envelope_id: expected_envelope_revision
-            },
-        },
+        json=preview_request,
     )
     assert preview_response.status_code == 200, preview_response.text
     preview_payload = preview_response.json()
@@ -1209,7 +1214,7 @@ def test_tmem67_gene_expression_e2e_repairs_exports_and_records_submission_histo
     )
     candidate_id = target_candidate["candidate_id"]
     object_id = target_candidate["projection_ref"]["object_id"]
-    expected_envelope_revision = target_candidate["projection_ref"]["envelope_revision"]
+    initial_envelope_revision = target_candidate["projection_ref"]["envelope_revision"]
     _accept_candidate(client, session_id=session_id, candidate_id=candidate_id)
 
     blocked_preview_response = client.post(
@@ -1220,9 +1225,6 @@ def test_tmem67_gene_expression_e2e_repairs_exports_and_records_submission_histo
             "mode": "direct_submit",
             "target_key": GENE_EXPRESSION_TARGET_KEY,
             "include_payload": True,
-            "expected_envelope_revisions": {
-                envelope_id: expected_envelope_revision
-            },
         },
     )
     assert blocked_preview_response.status_code == 200, blocked_preview_response.text
@@ -1232,6 +1234,11 @@ def test_tmem67_gene_expression_e2e_repairs_exports_and_records_submission_histo
         (blocker["code"], blocker["field_path"])
         for blocker in blocked_readiness["blockers"]
     } >= {("domain_envelope.required_field_missing", "where_expressed_statement")}
+
+    envelope_row = test_db.get(DomainEnvelopeModel, envelope_id)
+    assert envelope_row is not None
+    assert envelope_row.revision >= initial_envelope_revision
+    expected_envelope_revision = envelope_row.revision
 
     repaired_statement = "Tmem67 expression was detected in the metanephros."
     patch_response = client.patch(
@@ -1261,6 +1268,17 @@ def test_tmem67_gene_expression_e2e_repairs_exports_and_records_submission_histo
     assert patch_payload["candidate"]["normalized_payload"] == {}
     assert patch_payload["history_event_ids"]
 
+    poisoned_normalized_payload = {
+        "source_payload": {
+            "where_expressed_statement": "POISONED STALE NORMALIZED PAYLOAD"
+        }
+    }
+    candidate_row = test_db.get(CurationCandidate, UUID(candidate_id))
+    assert candidate_row is not None
+    candidate_row.normalized_payload = poisoned_normalized_payload
+    test_db.add(candidate_row)
+    test_db.commit()
+
     submit_response = client.post(
         f"/api/curation-workspace/sessions/{session_id}/submit",
         json={
@@ -1268,9 +1286,6 @@ def test_tmem67_gene_expression_e2e_repairs_exports_and_records_submission_histo
             "candidate_ids": [candidate_id],
             "mode": "direct_submit",
             "target_key": GENE_EXPRESSION_TARGET_KEY,
-            "expected_envelope_revisions": {
-                envelope_id: repaired_envelope_revision
-            },
         },
     )
     assert submit_response.status_code == 200, submit_response.text
@@ -1278,23 +1293,46 @@ def test_tmem67_gene_expression_e2e_repairs_exports_and_records_submission_histo
     submission = submit_payload["submission"]
     assert submission["status"] == "manual_review_required"
     assert submission["payload"]["candidate_ids"] == [candidate_id]
+    assert "POISONED" not in json.dumps(submission["payload"]["payload_json"])
+    assert submission["payload"]["payload_json"]["domain_pack_id"] == (
+        envelope.domain_pack_id
+    )
+    assert submission["payload"]["payload_json"]["domain_pack_version"] == (
+        envelope.domain_pack_version
+    )
+    assert submission["payload"]["payload_json"]["schema_ref"] == {
+        "class": "GeneExpressionAnnotation",
+        "name": "GeneExpressionAnnotation",
+        "provider": "alliance_linkml",
+        "schema_id": "alliance.linkml.GeneExpressionAnnotation",
+        "source_file": "model/schema/expression.yaml",
+        "uri": (
+            "https://github.com/alliance-genome/agr_curation_schema/blob/"
+            "1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/expression.yaml"
+        ),
+        "version": "1b11d0888f19eba4ca72022200bb7d96b30d4a52",
+    }
     annotation = submission["payload"]["payload_json"]["gene_expression_annotations"][0]
     assert annotation["envelope"]["domain_pack_id"] == envelope.domain_pack_id
     assert annotation["envelope"]["domain_pack_version"] == envelope.domain_pack_version
     assert annotation["envelope"]["envelope_id"] == envelope_id
-    assert annotation["envelope"]["envelope_revision"] == repaired_envelope_revision
+    exported_envelope_revision = annotation["envelope"]["envelope_revision"]
+    assert exported_envelope_revision >= repaired_envelope_revision
     assert annotation["envelope"]["model_ref"] == GENE_EXPRESSION_MODEL_ID
     assert annotation["envelope"]["object_id"] == object_id
     assert annotation["envelope"]["object_type"] == GENE_EXPRESSION_OBJECT_TYPE
+    assert annotation["envelope"]["schema_ref"]["schema_id"] == (
+        "alliance.linkml.GeneExpressionAnnotation"
+    )
     assert annotation["source_payload"]["where_expressed_statement"] == repaired_statement
     assert submission["submission_state"]["write_mode"] == "read_only_handoff"
     assert submission["submission_state"]["envelope_revisions"] == [
-        {"envelope_id": envelope_id, "envelope_revision": repaired_envelope_revision}
+        {"envelope_id": envelope_id, "envelope_revision": exported_envelope_revision}
     ]
 
     envelope_row = test_db.get(DomainEnvelopeModel, envelope_id)
     assert envelope_row is not None
-    assert envelope_row.revision == repaired_envelope_revision
+    assert envelope_row.revision == exported_envelope_revision
     persisted_object = next(
         item
         for item in envelope_row.envelope_json["objects"]
@@ -1304,8 +1342,8 @@ def test_tmem67_gene_expression_e2e_repairs_exports_and_records_submission_histo
 
     candidate_row = test_db.get(CurationCandidate, UUID(candidate_id))
     assert candidate_row is not None
-    assert candidate_row.envelope_revision == repaired_envelope_revision
-    assert candidate_row.normalized_payload == {}
+    assert candidate_row.envelope_revision == exported_envelope_revision
+    assert candidate_row.normalized_payload == poisoned_normalized_payload
 
     history_event_types = [
         row.event_type.value

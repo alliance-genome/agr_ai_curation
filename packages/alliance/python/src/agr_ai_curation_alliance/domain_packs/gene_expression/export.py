@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from src.lib.curation_workspace.export_adapters.base import (
     DeterministicExportAdapter,
@@ -26,7 +27,10 @@ from ._payload_terms import (
 )
 from .constants import (
     GENE_EXPRESSION_DOMAIN_PACK_ID,
+    GENE_EXPRESSION_DOMAIN_PACK_VERSION,
+    GENE_EXPRESSION_LINKML_SCHEMA_ID,
     GENE_EXPRESSION_LINKML_SCHEMA_NAME,
+    GENE_EXPRESSION_LINKML_SCHEMA_URI,
     GENE_EXPRESSION_MODEL_ID,
     GENE_EXPRESSION_OBJECT_TYPE,
 )
@@ -58,6 +62,28 @@ ANATOMICAL_SITE_REQUIRED_COLUMNS = {
     "anatomicalsubstructureuberontermother": False,
     "cellularcomponentother": False,
 }
+GENE_EXPRESSION_LINKML_SCHEMA_SOURCE_FILE = "model/schema/expression.yaml"
+_AUDIT_ONLY_CONTEXT_FIELDS = {
+    "expression_experiment.detection_reagents": (
+        "Detection reagent export mapping is not approved for the Gene Expression "
+        "0.7.0 curation DB handoff."
+    ),
+    "expression_experiment.specimen_alleles": (
+        "Specimen allele export mapping is not approved for the Gene Expression "
+        "0.7.0 curation DB handoff."
+    ),
+    "expression_experiment.specimen_genomic_model": (
+        "Specimen genomic model export mapping is not approved for the Gene "
+        "Expression 0.7.0 curation DB handoff."
+    ),
+    "condition_relations": (
+        "Condition relation export mapping is not approved for the Gene Expression "
+        "0.7.0 curation DB handoff."
+    ),
+}
+GENE_EXPRESSION_CONTEXT_NOT_EXPORTED_WARNING_CODE = (
+    "alliance.gene_expression.context_not_exported"
+)
 
 
 @dataclass(frozen=True)
@@ -128,6 +154,7 @@ class GeneExpressionExportAdapter(DeterministicExportAdapter):
                 f"{self.adapter_key}-{export_context.session_id}-"
                 "gene-expression-curation-db.json"
             ),
+            warnings=tuple(_export_warning_messages(payload_json)),
         )
 
     def domain_envelope_readiness_blockers(
@@ -180,6 +207,7 @@ def build_gene_expression_export_payload(
     payload: dict[str, Any] = {
         "schema_version": GENE_EXPRESSION_EXPORT_SCHEMA_VERSION,
         "bundle_type": "alliance_gene_expression_curation_db_export",
+        "payload_status": "ready",
         "adapter_key": adapter_key,
         "mode": mode.value,
         "target_key": target_key,
@@ -187,9 +215,13 @@ def build_gene_expression_export_payload(
         "candidate_ids": list(export_context.candidate_ids),
         "candidate_count": export_context.candidate_count,
         "domain_pack_id": GENE_EXPRESSION_DOMAIN_PACK_ID,
+        "domain_pack_version": GENE_EXPRESSION_DOMAIN_PACK_VERSION,
+        "schema_ref": _linkml_schema_ref(),
         "linkml": {
             "provider": ALLIANCE_LINKML_PROVIDER_KEY,
             "commit": ALLIANCE_LINKML_COMMIT,
+            "source_file": GENE_EXPRESSION_LINKML_SCHEMA_SOURCE_FILE,
+            "schema_id": GENE_EXPRESSION_LINKML_SCHEMA_ID,
             "root_class": GENE_EXPRESSION_LINKML_SCHEMA_NAME,
             "classes": list(GENE_EXPRESSION_LINKML_CLASSES),
         },
@@ -236,6 +268,20 @@ def gene_expression_export_blockers(
                 message=(
                     "Gene-expression export requires object_type "
                     f"{GENE_EXPRESSION_OBJECT_TYPE}."
+                ),
+            )
+        )
+    if not _mapping(candidate.get("schema_ref")):
+        blockers.append(
+            GeneExpressionExportBlocker(
+                candidate_id=candidate_id,
+                envelope_id=envelope_id,
+                object_id=object_id,
+                field_path="schema_ref",
+                code="alliance.gene_expression.required_field_missing",
+                message=(
+                    "Gene-expression export requires schema_ref metadata for the "
+                    "source envelope object."
                 ),
             )
         )
@@ -290,6 +336,7 @@ def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[st
     assay = _mapping(expression_experiment["expression_assay_used"])
     experiment_reference = _mapping(expression_experiment["single_reference"])
     entity_assayed = _mapping(expression_experiment["entity_assayed"])
+    export_warnings = _audit_only_context_warnings(payload)
 
     temporal_target = {
         "table": "temporalcontext",
@@ -450,6 +497,7 @@ def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[st
                 "object_id": candidate["object_id"],
                 "object_type": candidate["object_type"],
                 "model_ref": GENE_EXPRESSION_MODEL_ID,
+                "schema_ref": dict(_mapping(candidate["schema_ref"])),
             },
             "source_payload": payload,
             "target_rows": target_rows,
@@ -485,8 +533,69 @@ def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[st
                     ),
                 }
             ),
+            "export_diagnostics": {
+                "warnings": export_warnings,
+            },
         }
     )
+
+
+def _linkml_schema_ref() -> dict[str, Any]:
+    return {
+        "schema_id": GENE_EXPRESSION_LINKML_SCHEMA_ID,
+        "provider": ALLIANCE_LINKML_PROVIDER_KEY,
+        "name": GENE_EXPRESSION_LINKML_SCHEMA_NAME,
+        "version": ALLIANCE_LINKML_COMMIT,
+        "uri": GENE_EXPRESSION_LINKML_SCHEMA_URI,
+        "source_file": GENE_EXPRESSION_LINKML_SCHEMA_SOURCE_FILE,
+        "class": GENE_EXPRESSION_OBJECT_TYPE,
+    }
+
+
+def _audit_only_context_warnings(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    for field_path, message in _AUDIT_ONLY_CONTEXT_FIELDS.items():
+        value = _payload_value(payload, field_path)
+        if _value_missing_or_blank(value):
+            continue
+        warnings.append(
+            _export_warning(
+                field_path=field_path,
+                message=message,
+                source_context=value,
+                reason_code="export_mapping_not_approved",
+            )
+        )
+    return warnings
+
+
+def _export_warning(
+    *,
+    field_path: str,
+    message: str,
+    source_context: Any,
+    reason_code: str,
+    code: str = GENE_EXPRESSION_CONTEXT_NOT_EXPORTED_WARNING_CODE,
+) -> dict[str, Any]:
+    return {
+        "severity": "warning",
+        "status": "audit_only",
+        "code": code,
+        "field_path": field_path,
+        "message": message,
+        "details": {
+            "reason_code": reason_code,
+            "source_context": source_context,
+        },
+    }
+
+
+def _export_warning_messages(payload: Mapping[str, Any]) -> list[str]:
+    messages: list[str] = []
+    for annotation in payload["gene_expression_annotations"]:
+        for warning in annotation["export_diagnostics"]["warnings"]:
+            messages.append(f"{warning['field_path']}: {warning['message']}")
+    return list(dict.fromkeys(messages))
 
 
 def _term_lookup(value: Any) -> dict[str, Any] | None:

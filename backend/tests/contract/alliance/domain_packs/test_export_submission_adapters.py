@@ -16,6 +16,7 @@ from src.lib.curation_workspace.export_adapters import (
 from src.lib.curation_workspace.submission_adapters import (
     build_default_submission_adapter_registry,
 )
+from src.lib.domain_packs.loader import load_domain_fixture_pack
 from src.schemas.curation_workspace import CurationSubmissionStatus, SubmissionMode
 
 
@@ -36,6 +37,13 @@ from agr_ai_curation_alliance.domain_packs.disease import (  # noqa: E402
     DiseaseAnnotationSubmissionBlockerAdapter,
     build_disease_annotation_export_payload,
 )
+from agr_ai_curation_alliance.domain_packs.gene_expression import (  # noqa: E402
+    GENE_EXPRESSION_ADAPTER_KEY,
+    GENE_EXPRESSION_DOMAIN_PACK_ID,
+    GENE_EXPRESSION_TARGET_KEY,
+    GeneExpressionExportAdapter,
+    GeneExpressionSubmissionAdapter,
+)
 from agr_ai_curation_alliance.domain_packs.phenotype import (  # noqa: E402
     PHENOTYPE_EXPORT_TARGET_ID,
     PhenotypeAnnotationExportAdapter,
@@ -52,6 +60,15 @@ FIXTURE_PATH = (
     / "domain_packs"
     / "export_submission"
     / "projection_fixtures.yaml"
+)
+GENE_EXPRESSION_FIXTURE_PATH = (
+    REPO_ROOT
+    / "packages"
+    / "alliance"
+    / "domain_packs"
+    / "gene_expression"
+    / "fixtures"
+    / "tmem67_pending.yaml"
 )
 
 
@@ -72,6 +89,47 @@ def _payload_context(candidate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _gene_expression_fixture_candidate() -> dict[str, Any]:
+    fixture_pack = load_domain_fixture_pack(GENE_EXPRESSION_FIXTURE_PATH)
+    envelope = fixture_pack.fixtures[0].envelope
+    annotation = envelope.objects[0]
+    object_id = annotation.pending_ref_id or annotation.object_id
+    assert object_id is not None
+    return {
+        "candidate_id": "candidate-tmem67-contract",
+        "adapter_key": GENE_EXPRESSION_ADAPTER_KEY,
+        "display_label": "Tmem67 expression",
+        "secondary_label": "metanephros",
+        "semantic_source": "domain_envelope.objects",
+        "projection_ref": {
+            "envelope_id": envelope.envelope_id,
+            "object_id": object_id,
+            "envelope_revision": 1,
+        },
+        "envelope_id": envelope.envelope_id,
+        "envelope_revision": 1,
+        "domain_pack_id": envelope.domain_pack_id,
+        "domain_pack_version": envelope.domain_pack_version,
+        "object_id": object_id,
+        "object_type": annotation.object_type,
+        "object_role": annotation.object_role,
+        "object_status": annotation.status.value,
+        "definition_state": annotation.definition_state.value,
+        "payload": annotation.payload,
+        "object": annotation.model_dump(mode="json"),
+        "schema_ref": (
+            annotation.schema_ref.model_dump(mode="json")
+            if annotation.schema_ref is not None
+            else {}
+        ),
+        "object_model_ref": {},
+        "model_field_ref": {},
+        "projection_refs": [],
+        "provider_refs": {},
+        "metadata": {"semantic_source": "domain_envelope.objects"},
+    }
+
+
 def test_alliance_default_registries_expose_domain_export_and_submission_adapters():
     export_registry = build_default_export_adapter_registry()
     submission_registry = build_default_submission_adapter_registry()
@@ -89,6 +147,10 @@ def test_alliance_default_registries_expose_domain_export_and_submission_adapter
         ChemicalConditionExportAdapter,
     )
     assert isinstance(
+        export_registry.require(GENE_EXPRESSION_ADAPTER_KEY),
+        GeneExpressionExportAdapter,
+    )
+    assert isinstance(
         submission_registry.require(DISEASE_EXPORT_TARGET_ID),
         DiseaseAnnotationSubmissionBlockerAdapter,
     )
@@ -100,6 +162,53 @@ def test_alliance_default_registries_expose_domain_export_and_submission_adapter
         submission_registry.require(CHEMICAL_CONDITION_EXPORT_TARGET_ID),
         ChemicalConditionSubmissionBlockerAdapter,
     )
+    assert isinstance(
+        submission_registry.require(GENE_EXPRESSION_TARGET_KEY),
+        GeneExpressionSubmissionAdapter,
+    )
+
+
+def test_gene_expression_export_adapter_projects_fixture_to_schema_pinned_target_payload():
+    candidate = _gene_expression_fixture_candidate()
+    adapter = GeneExpressionExportAdapter()
+
+    submission_payload = adapter.build_submission_payload(
+        mode=SubmissionMode.EXPORT,
+        target_key=GENE_EXPRESSION_TARGET_KEY,
+        payload_context=_payload_context(candidate),
+    )
+
+    payload = submission_payload.payload_json
+    assert payload is not None
+    assert payload["payload_status"] == "ready"
+    assert payload["domain_pack_id"] == GENE_EXPRESSION_DOMAIN_PACK_ID
+    assert payload["schema_ref"] == {
+        "class": "GeneExpressionAnnotation",
+        "name": "GeneExpressionAnnotation",
+        "provider": "alliance_linkml",
+        "schema_id": "alliance.linkml.GeneExpressionAnnotation",
+        "source_file": "model/schema/expression.yaml",
+        "uri": (
+            "https://github.com/alliance-genome/agr_curation_schema/blob/"
+            "1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/expression.yaml"
+        ),
+        "version": "1b11d0888f19eba4ca72022200bb7d96b30d4a52",
+    }
+    annotation = payload["gene_expression_annotations"][0]
+    assert annotation["source_payload"]["relation"] == {"name": "is_expressed_in"}
+    assert annotation["target_rows"]["geneexpressionannotation"]["lookups"][
+        "evidenceitem_id"
+    ]["match"] == {"id": 203506}
+    assert annotation["target_rows"]["geneexpressionexperiment"]["lookups"][
+        "singlereference_id"
+    ]["match"] == {"id": 203506}
+    assert annotation["target_rows"]["geneexpressionexperiment"]["lookups"][
+        "entityassayed_id"
+    ]["match"] == {"primaryexternalid": "MGI:1923928"}
+    assert annotation["term_projections"]["anatomical_structure"] == {
+        "curie": "EMAPA:17373",
+        "name": "metanephros",
+    }
 
 
 def test_disease_export_adapter_projects_complete_envelope_to_target_payload():
