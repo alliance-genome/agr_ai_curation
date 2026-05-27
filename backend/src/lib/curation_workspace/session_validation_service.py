@@ -10,7 +10,10 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
+from src.lib.curation_workspace.adapter_registry import (
+    resolve_curation_domain_envelope_validator_by_id,
+    resolve_curation_domain_pack_by_id,
+)
 from src.lib.curation_workspace.models import (
     CurationCandidate,
     CurationReviewSession as ReviewSessionModel,
@@ -40,6 +43,8 @@ from src.lib.domain_envelopes.persistence import (
     DomainEnvelopePersistenceError,
     write_domain_envelope_checkpoint,
 )
+from src.lib.domain_packs.structural_checks import run_domain_envelope_structural_checks
+from src.lib.domain_packs.validation_findings import append_validation_findings_to_envelope
 from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
 from src.schemas.curation_workspace import (
     CurationCandidateValidationRequest,
@@ -389,13 +394,36 @@ def _dispatch_workspace_envelope_validation(
         return envelope, int(envelope_row.revision), [warning]
 
     source_revision = int(envelope_row.revision)
-    dispatch_result = dispatch_active_validator_bindings(
+    structural_result = run_domain_envelope_structural_checks(
         envelope,
         domain_pack,
+    )
+    package_validator = resolve_curation_domain_envelope_validator_by_id(
+        envelope.domain_pack_id
+    )
+    package_appended_findings = ()
+    validator_envelope = structural_result.envelope
+    if package_validator is not None:
+        validator_envelope, package_appended_findings = (
+            append_validation_findings_to_envelope(
+                structural_result.envelope,
+                package_validator(structural_result.envelope),
+                actor_id=f"{envelope.domain_pack_id}.domain_envelope_validator",
+            )
+        )
+    dispatch_result = dispatch_active_validator_bindings(
+        validator_envelope,
+        domain_pack,
         actor_id="workspace_candidate_validation",
+        registry=structural_result.registry,
         source_envelope_revision=source_revision,
     )
-    if not dispatch_result.appended_findings:
+    appended_findings = (
+        *structural_result.appended_findings,
+        *package_appended_findings,
+        *dispatch_result.appended_findings,
+    )
+    if not appended_findings:
         return dispatch_result.envelope, source_revision, []
 
     try:

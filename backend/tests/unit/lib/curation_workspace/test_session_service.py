@@ -2029,6 +2029,74 @@ def test_workspace_validation_dispatches_domain_pack_and_records_envelope_revisi
     assert response.candidate.projection_ref.envelope_revision == 2
 
 
+def test_workspace_validation_runs_package_domain_envelope_validator_before_bindings(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    loaded_pack = _loaded_museum_pack(tmp_path, title_binding_allows_opt_out=True)
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={"artifact": {"accession_id": "A-1", "title": "Bronze astrolabe"}},
+        title_binding_allows_opt_out=True,
+    )
+    package_finding = _workspace_validation_finding(
+        status=ValidationFindingStatus.OPEN,
+        severity=ValidationFindingSeverity.BLOCKER,
+        code="fixture.package_validator_missing_selector",
+        message="Package validator requires a curated selector.",
+        failure_classification="blocking_missing_required",
+    )
+    monkeypatch.setattr(
+        validation_module,
+        "resolve_curation_domain_pack_by_id",
+        lambda pack_id: loaded_pack if pack_id == loaded_pack.pack_id else None,
+    )
+    monkeypatch.setattr(
+        validation_module,
+        "resolve_curation_domain_envelope_validator_by_id",
+        lambda pack_id: (
+            (lambda _envelope: [package_finding])
+            if pack_id == loaded_pack.pack_id
+            else None
+        ),
+    )
+
+    def _dispatch(envelope, domain_pack, **kwargs):
+        assert domain_pack is loaded_pack
+        assert kwargs["source_envelope_revision"] == 1
+        assert kwargs["registry"].domain_pack.pack_id == loaded_pack.pack_id
+        assert [finding.code for finding in envelope.validation_findings] == [
+            "fixture.package_validator_missing_selector"
+        ]
+        return SimpleNamespace(envelope=envelope, appended_findings=())
+
+    monkeypatch.setattr(
+        validation_module,
+        "dispatch_active_validator_bindings",
+        _dispatch,
+    )
+
+    response = module.validate_candidate(
+        db_session,
+        seeded["candidate_id"],
+        CurationCandidateValidationRequest(
+            session_id=seeded["session_id"],
+            candidate_id=seeded["candidate_id"],
+            force=True,
+        ),
+    )
+
+    field_result = response.validation_snapshot.field_results["artifact.title"]
+    assert field_result.status is FieldValidationStatus.CONFLICT
+    assert field_result.warnings == ["Package validator requires a curated selector."]
+    assert response.validation_snapshot.envelope_revision == 2
+    assert response.candidate.projection_ref is not None
+    assert response.candidate.projection_ref.envelope_revision == 2
+
+
 def test_workspace_validation_blocker_prevents_export_readiness(
     db_session,
     tmp_path,
