@@ -92,9 +92,10 @@ Implementation:
 - Add conservative `pytest-xdist` support to the existing backend unit runner.
 - Default local/script execution to serial unless a worker count is explicitly
   provided through an argument or environment variable.
-- Set CI to use `2` workers with `--dist loadscope` first. Avoid `-n auto` until
-  we have flake evidence, because GitHub runners are small and this suite has
-  shared config/domain-pack fixtures.
+- Set CI to use an explicit worker count with `--dist loadscope`. The first
+  green trial used `2` workers; the next public-repo standard-runner trial uses
+  `4` workers to match the documented Ubuntu runner CPU count while still
+  avoiding unbounded `-n auto`.
 - Add `--durations=25`, JUnit output, and step summary timing in the same pass.
 
 Why this precedes sharding:
