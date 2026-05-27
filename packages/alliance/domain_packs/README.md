@@ -32,3 +32,8 @@ unless policy allows a curator override.
 When adding or changing Alliance packs, update the matching contract tests under
 `backend/tests/contract/alliance/domain_packs/` and fixture examples under
 `backend/tests/fixtures/domain_packs/` or the pack's `fixtures/` directory.
+
+The Gene Expression 0.7.0 release contract is documented in
+`docs/developer/guides/GENE_EXPRESSION_0_7_0.md`. It records the pinned
+`agr_curation_schema` commit, curator-guidance fixtures, validation/export
+behavior, known limitations, and the tested non-Alliance domain-pack pattern.

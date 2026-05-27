@@ -1539,6 +1539,16 @@ fixture_packs:
     definition_state: stable
     definition_notes:
       - Two retained expression statements share the same gene and reference but differ by expression site, stage, evidence, and metadata refs.
+  - fixture_pack_id: curator_guidance_pending
+    display_name: Curator guidance gene expression fixtures
+    path: fixtures/curator_guidance_pending.yaml
+    description: Release-oriented fixtures covering ZFIN flcn multi-site statements, anatomy-only, cellular-component-only, mixed site routing, negated expression, and optional experiment context preservation.
+    object_types:
+      - GeneExpressionAnnotation
+    definition_state: stable
+    definition_notes:
+      - Optional reagent, specimen, allele, and condition context remains LinkML-backed pending payload or field-addressed metadata; it is not silently dropped just because it is non-export-blocking in 0.7.0.
+      - Helper selections in fixture metadata document controlled-field provenance for relation, assay, stage, anatomy, and GO cellular-component selectors.
 metadata:
   object_role_key: object_role
   curatable_unit_object_type: GeneExpressionAnnotation

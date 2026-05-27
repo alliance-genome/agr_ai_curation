@@ -1,0 +1,382 @@
+fixture_pack_id: curator_guidance_pending
+domain_pack_id: agr.alliance.gene_expression
+fixtures_api_version: 1.0.0
+display_name: Curator guidance gene expression fixtures
+description: Release-oriented pending envelopes for concrete Gene Expression curator guidance cases.
+fixtures:
+  - name: flcn_zfin_site_routing_and_context_pending
+    description: Three retained flcn GeneExpressionAnnotation objects cover anatomy-only, cellular-component-only, mixed site routing, negated expression, and optional context preservation.
+    envelope:
+      envelope_id: gene-expression-flcn-zfin-curator-guidance
+      domain_pack_id: agr.alliance.gene_expression
+      domain_pack_version: 0.1.0
+      status: extracted
+      schema_ref:
+        schema_id: alliance.linkml.GeneExpressionAnnotation
+        provider: alliance_linkml
+        name: GeneExpressionAnnotation
+        version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+        uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/expression.yaml
+      objects:
+        - object_type: GeneExpressionAnnotation
+          object_role: curatable_unit
+          pending_ref_id: gene-expression-annotation-flcn-pronephric-duct
+          model_ref: GeneExpressionAnnotationPayload
+          status: pending
+          definition_state: stable
+          schema_ref:
+            schema_id: alliance.linkml.GeneExpressionAnnotation
+            provider: alliance_linkml
+            name: GeneExpressionAnnotation
+            version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/expression.yaml
+          payload:
+            unique_id: MMO:0000642|ZFIN:ZDB-GENE-050417-357|AGRKB:101000000900001|ZFS:0000029|pronephric duct|ZFA:0000260
+            date_created: "2026-05-27T00:00:00Z"
+            internal: false
+            obsolete: false
+            data_provider:
+              abbreviation: ZFIN
+            expression_annotation_subject:
+              primary_external_id: ZFIN:ZDB-GENE-050417-357
+              gene_symbol: flcn
+            relation:
+              name: is_expressed_in
+            single_reference:
+              reference_id: 555001
+              curie: AGRKB:101000000900001
+              pmid: PMID:00000001
+              title: Curator guidance fixture for zebrafish flcn expression
+            expression_experiment:
+              unique_id: ZFIN:ZDB-GENE-050417-357|AGRKB:101000000900001|MMO:0000642
+              single_reference:
+                reference_id: 555001
+                curie: AGRKB:101000000900001
+                title: Curator guidance fixture for zebrafish flcn expression
+              entity_assayed:
+                primary_external_id: ZFIN:ZDB-GENE-050417-357
+                gene_symbol: flcn
+              expression_assay_used:
+                curie: MMO:0000642
+                name: whole mount in situ hybridization assay
+              detection_reagents:
+                - name: flcn riboprobe
+                  placeholder: true
+                  source_text: flcn riboprobe
+                  unresolved_reason_code: reagent_lookup_or_export_mapping_unavailable
+              specimen_genomic_model:
+                name: wild-type AB strain embryos
+                placeholder: true
+                source_text: wild-type AB strain embryos at 24 hpf
+                unresolved_reason_code: specimen_agm_lookup_unavailable
+              specimen_alleles:
+                - allele_symbol: flcn unknown allele context
+                  placeholder: true
+                  source_text: flcn mutant embryos
+                  unresolved_reason_code: specimen_allele_lookup_unavailable
+            condition_relations:
+              - conditions:
+                  - condition_free_text: embryos raised at 28.5 C
+                source_text: embryos raised at 28.5 C
+                unresolved_reason_code: condition_relation_helper_unavailable
+            when_expressed_stage_name: ZFS:0000029
+            where_expressed_statement: pronephric duct
+            expression_pattern:
+              when_expressed:
+                developmental_stage_start:
+                  curie: ZFS:0000029
+                  name: Prim-5
+                stage_uberon_slim_terms:
+                  - curie: UBERON:0000068
+                    name: embryo stage
+              where_expressed:
+                anatomical_structure:
+                  curie: ZFA:0000260
+                  name: pronephric duct
+                anatomical_structure_uberon_terms:
+                  - curie: UBERON:0001008
+                    name: renal system
+          evidence_record_ids:
+            - evidence-flcn-pronephric-duct-1
+          metadata_refs:
+            - metadata_path: extraction_metadata.raw_mentions[0]
+              role: source_mention
+            - metadata_path: extraction_metadata.evidence_records[0]
+              role: verified_evidence
+            - metadata_path: extraction_metadata.reagent_context[0]
+              role: reagent_context
+            - metadata_path: extraction_metadata.specimen_context[0]
+              role: specimen_context
+            - metadata_path: extraction_metadata.condition_context[0]
+              role: condition_context
+          metadata:
+            expected_context_payload_paths:
+              - field_path: expression_experiment.detection_reagents
+                source_metadata_path: extraction_metadata.reagent_context[0]
+                reason_code: reagent_lookup_or_export_mapping_unavailable
+              - field_path: expression_experiment.specimen_genomic_model
+                source_metadata_path: extraction_metadata.specimen_context[0]
+                reason_code: specimen_agm_lookup_unavailable
+              - field_path: expression_experiment.specimen_alleles
+                source_metadata_path: extraction_metadata.specimen_context[0]
+                reason_code: specimen_allele_lookup_unavailable
+              - field_path: condition_relations
+                source_metadata_path: extraction_metadata.condition_context[0]
+                reason_code: condition_relation_helper_unavailable
+        - object_type: GeneExpressionAnnotation
+          object_role: curatable_unit
+          pending_ref_id: gene-expression-annotation-flcn-nucleus
+          model_ref: GeneExpressionAnnotationPayload
+          status: pending
+          definition_state: stable
+          schema_ref:
+            schema_id: alliance.linkml.GeneExpressionAnnotation
+            provider: alliance_linkml
+            name: GeneExpressionAnnotation
+            version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/expression.yaml
+          payload:
+            unique_id: MMO:0000642|ZFIN:ZDB-GENE-050417-357|AGRKB:101000000900001|ZFS:0000030|nucleus|GO:0005634
+            date_created: "2026-05-27T00:00:00Z"
+            internal: false
+            obsolete: false
+            data_provider:
+              abbreviation: ZFIN
+            expression_annotation_subject:
+              primary_external_id: ZFIN:ZDB-GENE-050417-357
+              gene_symbol: flcn
+            relation:
+              name: is_expressed_in
+            single_reference:
+              reference_id: 555001
+              curie: AGRKB:101000000900001
+            expression_experiment:
+              unique_id: ZFIN:ZDB-GENE-050417-357|AGRKB:101000000900001|MMO:0000642
+              single_reference:
+                reference_id: 555001
+                curie: AGRKB:101000000900001
+              entity_assayed:
+                primary_external_id: ZFIN:ZDB-GENE-050417-357
+                gene_symbol: flcn
+              expression_assay_used:
+                curie: MMO:0000642
+                name: whole mount in situ hybridization assay
+            when_expressed_stage_name: ZFS:0000030
+            where_expressed_statement: nucleus
+            expression_pattern:
+              when_expressed:
+                developmental_stage_start:
+                  curie: ZFS:0000030
+                  name: Prim-15
+              where_expressed:
+                cellular_component:
+                  curie: GO:0005634
+                  name: nucleus
+          evidence_record_ids:
+            - evidence-flcn-nucleus-1
+          metadata_refs:
+            - metadata_path: extraction_metadata.raw_mentions[1]
+              role: source_mention
+            - metadata_path: extraction_metadata.evidence_records[1]
+              role: verified_evidence
+        - object_type: GeneExpressionAnnotation
+          object_role: curatable_unit
+          pending_ref_id: gene-expression-annotation-flcn-retina-cytoplasm-negated
+          model_ref: GeneExpressionAnnotationPayload
+          status: pending
+          definition_state: stable
+          schema_ref:
+            schema_id: alliance.linkml.GeneExpressionAnnotation
+            provider: alliance_linkml
+            name: GeneExpressionAnnotation
+            version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/expression.yaml
+          payload:
+            unique_id: MMO:0000642|ZFIN:ZDB-GENE-050417-357|AGRKB:101000000900001|ZFS:0000030|retina cytoplasm|ZFA:0000151|GO:0005737
+            date_created: "2026-05-27T00:00:00Z"
+            internal: false
+            obsolete: false
+            negated: true
+            uncertain: true
+            data_provider:
+              abbreviation: ZFIN
+            expression_annotation_subject:
+              primary_external_id: ZFIN:ZDB-GENE-050417-357
+              gene_symbol: flcn
+            relation:
+              name: is_expressed_in
+            single_reference:
+              reference_id: 555001
+              curie: AGRKB:101000000900001
+            expression_experiment:
+              unique_id: ZFIN:ZDB-GENE-050417-357|AGRKB:101000000900001|MMO:0000642
+              single_reference:
+                reference_id: 555001
+                curie: AGRKB:101000000900001
+              entity_assayed:
+                primary_external_id: ZFIN:ZDB-GENE-050417-357
+                gene_symbol: flcn
+              expression_assay_used:
+                curie: MMO:0000642
+                name: whole mount in situ hybridization assay
+            when_expressed_stage_name: ZFS:0000030
+            where_expressed_statement: retina cytoplasm
+            expression_pattern:
+              when_expressed:
+                developmental_stage_start:
+                  curie: ZFS:0000030
+                  name: Prim-15
+              where_expressed:
+                anatomical_structure:
+                  curie: ZFA:0000151
+                  name: retina
+                cellular_component:
+                  curie: GO:0005737
+                  name: cytoplasm
+                cellular_component_qualifiers:
+                  - curie: RO:0002170
+                    name: present in
+          evidence_record_ids:
+            - evidence-flcn-retina-cytoplasm-negated-1
+          metadata_refs:
+            - metadata_path: extraction_metadata.raw_mentions[2]
+              role: source_mention
+            - metadata_path: extraction_metadata.evidence_records[2]
+              role: verified_evidence
+            - metadata_path: extraction_metadata.ambiguities[0]
+              role: curator_context
+      validation_findings:
+        - severity: info
+          status: resolved
+          code: gene_expression.fixture_curator_guidance
+          message: Curator guidance fixture preserves multi-site flcn expression statements and optional context.
+      history:
+        - event_type: created
+          timestamp: "2026-05-27T00:00:00Z"
+          actor_type: system
+          message: Loaded Gene Expression curator guidance fixture.
+      metadata:
+        semantic_source: domain_envelope.objects
+        legacy_semantic_lists: []
+        extraction_summary: Retained three flcn expression annotations and preserved optional experiment context as LinkML-backed pending fields.
+        extraction_metadata:
+          raw_mentions:
+            - mention: flcn expression in the pronephric duct at Prim-5 with a flcn riboprobe
+              entity_type: gene_expression
+              evidence_record_ids:
+                - evidence-flcn-pronephric-duct-1
+            - mention: flcn signal observed in nuclei at Prim-15
+              entity_type: gene_expression
+              evidence_record_ids:
+                - evidence-flcn-nucleus-1
+            - mention: no flcn cytoplasmic signal was observed in retina cells at Prim-15
+              entity_type: gene_expression
+              negated: true
+              evidence_record_ids:
+                - evidence-flcn-retina-cytoplasm-negated-1
+          evidence_records:
+            - evidence_record_id: evidence-flcn-pronephric-duct-1
+              entity: flcn
+              verified_quote: flcn riboprobe signal was detected in the pronephric duct of wild-type AB embryos at Prim-5.
+              page: 3
+              section: Results
+              subsection: Expression analysis
+              chunk_id: chunk-flcn-pronephric
+              field_paths:
+                - where_expressed_statement
+                - expression_pattern.where_expressed.anatomical_structure
+                - expression_experiment.detection_reagents
+            - evidence_record_id: evidence-flcn-nucleus-1
+              entity: flcn
+              verified_quote: Nuclear flcn signal was observed in embryonic cells at Prim-15.
+              page: 4
+              section: Results
+              subsection: Subcellular expression
+              chunk_id: chunk-flcn-nucleus
+              field_paths:
+                - where_expressed_statement
+                - expression_pattern.where_expressed.cellular_component
+            - evidence_record_id: evidence-flcn-retina-cytoplasm-negated-1
+              entity: flcn
+              verified_quote: No flcn cytoplasmic signal was detected in retina cells at Prim-15.
+              page: 5
+              section: Results
+              subsection: Negative expression observations
+              chunk_id: chunk-flcn-retina
+              field_paths:
+                - negated
+                - where_expressed_statement
+                - expression_pattern.where_expressed.anatomical_structure
+                - expression_pattern.where_expressed.cellular_component
+          reagent_context:
+            - source_text: flcn riboprobe
+              payload_field_path: expression_experiment.detection_reagents
+              unresolved_reason_code: reagent_lookup_or_export_mapping_unavailable
+          specimen_context:
+            - source_text: wild-type AB strain embryos; flcn mutant embryos
+              payload_field_paths:
+                - expression_experiment.specimen_genomic_model
+                - expression_experiment.specimen_alleles
+              unresolved_reason_code: specimen_agm_or_allele_lookup_unavailable
+          condition_context:
+            - source_text: embryos raised at 28.5 C
+              payload_field_path: condition_relations
+              unresolved_reason_code: condition_relation_helper_unavailable
+          exclusions:
+            - mention: flcn rescue construct restored pronephric morphology
+              reason_code: rescue_experiment_not_expression
+              creates_candidate: false
+              evidence_record_ids: []
+          ambiguities:
+            - mention: retinal cell cytoplasm
+              why_ambiguous: The statement is negative and combines an anatomical site with a GO cellular component.
+              recommended_followup: Curator should confirm whether the negated mixed-site annotation should be exported.
+              evidence_record_ids:
+                - evidence-flcn-retina-cytoplasm-negated-1
+          provenance:
+            source_fixture: curator_guidance_pending
+            linkml_commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            reference_lookup:
+              source_tool: agr_literature_reference_lookup
+              lookup_inputs:
+                pmid: PMID:00000001
+                title: Curator guidance fixture for zebrafish flcn expression
+              resolved_reference:
+                reference_id: 555001
+                curie: AGRKB:101000000900001
+            helper_selections:
+              - field_path: relation.name
+                selected_value: is_expressed_in
+                source_tool: get_domain_field_term_options
+                lookup_status: resolved
+              - field_path: expression_experiment.expression_assay_used
+                selected_value: MMO:0000642
+                source_tool: get_domain_field_term_options
+                lookup_status: resolved
+              - field_path: when_expressed_stage_name
+                selected_value: ZFS:0000029
+                source_tool: get_domain_field_term_options
+                lookup_status: resolved
+              - field_path: expression_pattern.when_expressed.developmental_stage_start
+                selected_value: ZFS:0000030
+                source_tool: get_domain_field_term_options
+                lookup_status: resolved
+              - field_path: expression_pattern.where_expressed.anatomical_structure
+                selected_value: ZFA:0000260
+                source_tool: get_domain_field_term_options
+                lookup_status: resolved
+              - field_path: expression_pattern.where_expressed.cellular_component
+                selected_value: GO:0005634
+                source_tool: get_domain_field_term_options
+                lookup_status: resolved
+              - field_path: expression_pattern.where_expressed.cellular_component
+                selected_value: GO:0005737
+                source_tool: get_domain_field_term_options
+                lookup_status: resolved
+        run_summary:
+          candidate_count: 5
+          kept_count: 3
+          excluded_count: 1
+          ambiguous_count: 1
+          warnings:
+            - Optional reagent, specimen, and condition context is non-export-blocking but remains preserved.

@@ -988,6 +988,49 @@ def _metadata_ref_findings(
     ]
 
 
+def _context_preservation_findings(
+    expression_object: CuratableObjectEnvelope,
+    object_ref: ObjectRef,
+) -> list[ValidationFinding]:
+    """Warn when optional LinkML-backed context expected by extraction is absent."""
+
+    expectations = expression_object.metadata.get("expected_context_payload_paths")
+    if not isinstance(expectations, list):
+        return []
+
+    findings: list[ValidationFinding] = []
+    for expectation in expectations:
+        if not isinstance(expectation, Mapping):
+            continue
+        field_path = expectation.get("field_path")
+        if not isinstance(field_path, str) or not field_path.strip():
+            continue
+        normalized_path = field_path.strip()
+        if not _payload_value_missing_or_blank(expression_object.payload, normalized_path):
+            continue
+        findings.append(
+            _validation_finding(
+                object_ref=object_ref,
+                field_path=normalized_path,
+                severity=ValidationFindingSeverity.WARNING,
+                code="alliance.gene_expression.experiment_context_dropped",
+                message=(
+                    "GeneExpressionAnnotation extracted optional experiment "
+                    f"context for {normalized_path}, but the LinkML-backed "
+                    "payload field is missing."
+                ),
+                details=_diagnostic_details(
+                    blocking=False,
+                    classification="context_preservation_required",
+                    expected_context_field=normalized_path,
+                    source_metadata_path=expectation.get("source_metadata_path"),
+                    reason_code=expectation.get("reason_code"),
+                ),
+            )
+        )
+    return findings
+
+
 def validate_pending_gene_expression_envelope(
     envelope: DomainEnvelope,
 ) -> tuple[ValidationFinding, ...]:
@@ -1100,6 +1143,12 @@ def validate_pending_gene_expression_envelope(
         findings.extend(
             _metadata_ref_findings(
                 envelope=envelope,
+                expression_object=expression_object,
+                object_ref=object_ref,
+            )
+        )
+        findings.extend(
+            _context_preservation_findings(
                 expression_object=expression_object,
                 object_ref=object_ref,
             )

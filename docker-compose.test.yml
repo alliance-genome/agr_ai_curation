@@ -167,6 +167,7 @@ services:
       - ./docker-compose.production.yml:/workspace/docker-compose.production.yml:ro
       - ./promtail-config.yml:/workspace/promtail-config.yml:ro
       - ./scripts/install:/workspace/scripts/install:ro
+      - ./scripts/testing:/app/scripts/testing:ro
     environment:
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-postgres}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}

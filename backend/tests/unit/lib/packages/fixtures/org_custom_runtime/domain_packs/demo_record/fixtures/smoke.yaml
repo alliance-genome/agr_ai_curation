@@ -1,0 +1,57 @@
+fixture_pack_id: smoke
+domain_pack_id: org.custom.demo_record
+fixtures_api_version: 1.0.0
+display_name: Demo record smoke fixture
+description: Minimal non-Alliance domain envelope for package registration walkthrough tests.
+fixtures:
+  - name: accepted_demo_record
+    description: One DemoRecord object with a JSON Schema ref and package-owned review layout.
+    envelope:
+      envelope_id: demo-record-envelope-1
+      domain_pack_id: org.custom.demo_record
+      domain_pack_version: 1.0.0
+      schema_ref:
+        schema_id: demo-record.schema.json
+        provider: json-schema
+        name: Demo record
+        version: draft-2020-12
+        uri: https://schemas.example.test/demo/record.schema.json
+      objects:
+        - object_type: DemoRecord
+          pending_ref_id: demo-record-1
+          model_ref: DemoRecordPayload
+          schema_ref:
+            schema_id: demo-record.schema.json
+            provider: json-schema
+            name: Demo record
+            version: draft-2020-12
+            uri: https://schemas.example.test/demo/record.schema.json
+          payload:
+            record:
+              record_id: DEMO-0001
+              title: Neutral external package record
+            review:
+              status: accepted
+          evidence_record_ids:
+            - evidence-demo-record-1
+      validation_findings:
+        - severity: info
+          status: resolved
+          code: org.custom.demo_record.loaded
+          message: Demo record fixture loaded from a non-Alliance package.
+          field_ref:
+            object_ref:
+              pending_ref_id: demo-record-1
+              object_type: DemoRecord
+            field_path: review.status
+      history:
+        - event_type: created
+          timestamp: "2026-05-27T00:00:00Z"
+          actor_type: system
+          message: Loaded org.custom demo record fixture.
+      metadata:
+        semantic_source: domain_envelope.objects
+        extraction_metadata:
+          evidence_records:
+            - evidence_record_id: evidence-demo-record-1
+              verified_quote: The neutral external package record was accepted.
