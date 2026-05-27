@@ -90,7 +90,7 @@ jobs:
             -e EMBEDDING_TOKEN_SAFETY_MARGIN=500 \
             -e CONTENT_PREVIEW_CHARS=1600 \
             -e WEAVIATE_BATCH_REQUESTS_PER_MINUTE=5000 \
-            -e BACKEND_UNIT_TEST_WORKERS=4 \
+            -e BACKEND_UNIT_TEST_WORKERS=2 \
             -e BACKEND_UNIT_TEST_DURATIONS=25 \
             -e BACKEND_UNIT_JUNIT_XML=file_outputs/ci/backend-unit-junit.xml \
             -e BACKEND_UNIT_SUMMARY_FILE=file_outputs/ci/backend-unit-summary.md \

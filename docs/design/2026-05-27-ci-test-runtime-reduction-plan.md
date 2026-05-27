@@ -93,9 +93,10 @@ Implementation:
 - Default local/script execution to serial unless a worker count is explicitly
   provided through an argument or environment variable.
 - Set CI to use an explicit worker count with `--dist loadscope`. The first
-  green trial used `2` workers; the next public-repo standard-runner trial uses
-  `4` workers to match the documented Ubuntu runner CPU count while still
-  avoiding unbounded `-n auto`.
+  green trial used `2` workers. A public-repo standard-runner trial with `4`
+  workers passed, but was slightly slower (`5m47s` job / `4m29s` pytest versus
+  `5m27s` job / `4m26s` pytest), so keep CI at `2` workers unless later suite
+  shape changes make the extra workers useful.
 - Add `--durations=25`, JUnit output, and step summary timing in the same pass.
 
 Why this precedes sharding:
