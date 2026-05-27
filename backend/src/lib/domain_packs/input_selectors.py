@@ -147,10 +147,7 @@ def build_domain_validation_request(
 
 
 def _selector_payload(selector: DomainPackInputSelector) -> dict[str, Any]:
-    payload = selector.model_dump(mode="json", exclude_none=True)
-    if not selector.context_only:
-        payload.pop("context_only", None)
-    return payload
+    return selector.model_dump(mode="json", exclude_none=True)
 
 
 def _resolve_selector(
