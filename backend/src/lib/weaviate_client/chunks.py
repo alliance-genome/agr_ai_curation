@@ -377,8 +377,6 @@ async def get_chunk_neighbor_ids(
     if not isinstance(chunk_index, int):
         raise TypeError("chunk_index must be an int or None")
 
-    normalized_index = chunk_index
-
     connection = get_connection()
     if not connection:
         raise RuntimeError("No Weaviate connection established")
@@ -407,8 +405,8 @@ async def get_chunk_neighbor_ids(
 
     def _fetch() -> Dict[str, str | None]:
         return {
-            "previous_chunk_id": _fetch_chunk_id_at_index(normalized_index - 1),
-            "next_chunk_id": _fetch_chunk_id_at_index(normalized_index + 1),
+            "previous_chunk_id": _fetch_chunk_id_at_index(chunk_index - 1),
+            "next_chunk_id": _fetch_chunk_id_at_index(chunk_index + 1),
         }
 
     if _run_sync_in_package_tool_subprocess():
