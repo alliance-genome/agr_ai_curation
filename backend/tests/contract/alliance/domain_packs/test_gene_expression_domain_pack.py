@@ -1604,6 +1604,38 @@ def test_multi_annotation_fixture_projects_one_review_row_per_expression_stateme
     }
     assert workspace_fields[0]["metadata"]["required"] is True
     assert workspace_fields[0]["metadata"]["read_only"] is False
+    assert workspace_fields[0]["metadata"]["materializes_to_field_paths"] == [
+        "expression_experiment.entity_assayed.primary_external_id"
+    ]
+    experiment_entity_field = next(
+        field
+        for field in workspace_fields
+        if field["field_path"]
+        == "expression_experiment.entity_assayed.primary_external_id"
+    )
+    assert experiment_entity_field["metadata"]["read_only"] is True
+    assert (
+        experiment_entity_field["metadata"]["derived_from_field_path"]
+        == "expression_annotation_subject.primary_external_id"
+    )
+    reference_field = next(
+        field
+        for field in workspace_fields
+        if field["field_path"] == "single_reference.reference_id"
+    )
+    assert reference_field["metadata"]["materializes_to_field_paths"] == [
+        "expression_experiment.single_reference.reference_id"
+    ]
+    experiment_reference_field = next(
+        field
+        for field in workspace_fields
+        if field["field_path"] == "expression_experiment.single_reference.reference_id"
+    )
+    assert experiment_reference_field["metadata"]["read_only"] is True
+    assert (
+        experiment_reference_field["metadata"]["derived_from_field_path"]
+        == "single_reference.reference_id"
+    )
     data_provider_field = next(
         field
         for field in workspace_fields

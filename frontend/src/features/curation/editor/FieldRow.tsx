@@ -230,7 +230,9 @@ function renderDefaultInput({
     )
   }
 
-  if (field.field_type === 'number') {
+  if (field.field_type === 'number' || field.field_type === 'integer') {
+    const integerField = field.field_type === 'integer'
+
     return (
       <TextField
         data-testid={`field-input-${field.field_key}`}
@@ -239,8 +241,8 @@ function renderDefaultInput({
         id={inputId}
         inputProps={{
           'aria-label': ariaLabel,
-          inputMode: 'decimal',
-          step: 'any',
+          inputMode: integerField ? 'numeric' : 'decimal',
+          step: integerField ? 1 : 'any',
         }}
         onChange={(event) => {
           const nextValue = event.target.value
@@ -251,7 +253,17 @@ function renderDefaultInput({
           }
 
           const parsedValue = Number(nextValue)
-          onChange(Number.isFinite(parsedValue) ? parsedValue : nextValue)
+          if (!Number.isFinite(parsedValue)) {
+            onChange(nextValue)
+            return
+          }
+
+          if (integerField && !Number.isInteger(parsedValue)) {
+            onChange(nextValue)
+            return
+          }
+
+          onChange(parsedValue)
         }}
         placeholder={placeholder}
         size="small"

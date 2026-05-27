@@ -856,6 +856,9 @@ def test_execute_post_curation_pipeline_materializes_envelope_rows_without_norma
                                 "metadata": {
                                     "required": True,
                                     "read_only": False,
+                                    "materializes_to_field_paths": [
+                                        "experiment.entity_assayed.symbol"
+                                    ],
                                     "workspace_group": {
                                         "id": "subject",
                                         "label": "Subject",
@@ -946,6 +949,9 @@ def test_execute_post_curation_pipeline_materializes_envelope_rows_without_norma
                 "metadata": {
                     "required": True,
                     "read_only": False,
+                    "materializes_to_field_paths": [
+                        "experiment.entity_assayed.symbol"
+                    ],
                     "workspace_group": {
                         "id": "subject",
                         "label": "Subject",
@@ -980,6 +986,9 @@ def test_execute_post_curation_pipeline_materializes_envelope_rows_without_norma
     assert draft_row.fields[0]["group_label"] == "Subject"
     assert draft_row.fields[0]["required"] is True
     assert draft_row.fields[0]["read_only"] is False
+    assert draft_row.fields[0]["metadata"]["materializes_to_field_paths"] == [
+        "experiment.entity_assayed.symbol"
+    ]
     assert draft_row.fields[1]["field_key"] == "gene.identifier"
     assert draft_row.fields[1]["group_key"] == "subject"
     assert draft_row.fields[1]["read_only"] is True

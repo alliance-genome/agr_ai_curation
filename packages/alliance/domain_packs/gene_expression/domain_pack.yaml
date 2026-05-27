@@ -518,6 +518,8 @@ object_definitions:
         required: true
         metadata:
           editable: true
+          materializes_to_field_paths:
+            - expression_experiment.entity_assayed.primary_external_id
           validatable: true
           validator_binding_id: subject_gene_validation
           validator_state: active
@@ -540,6 +542,8 @@ object_definitions:
           - Flattened from the Gene.gene_symbol slot annotation display text for pending envelope review.
         metadata:
           editable: true
+          materializes_to_field_paths:
+            - expression_experiment.entity_assayed.gene_symbol
           validatable: true
           validator_binding_id: subject_gene_validation
           validator_state: active
@@ -622,6 +626,8 @@ object_definitions:
         required: true
         metadata:
           editable: true
+          materializes_to_field_paths:
+            - expression_experiment.single_reference.reference_id
           validatable: true
           validator_binding_id: source_reference_validation
           validator_state: active
@@ -848,11 +854,12 @@ object_definitions:
         display_name: Experiment reference ID
         required: true
         metadata:
-          editable: true
+          derived_from_field_path: single_reference.reference_id
+          projection_role: derived_read_only
           validatable: true
           validator_binding_id: source_reference_validation
           validator_state: active
-          source_of_truth: alliance_literature_reference_lookup
+          source_of_truth: single_reference.reference_id
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -888,11 +895,12 @@ object_definitions:
         display_name: Entity assayed gene primary external ID
         required: true
         metadata:
-          editable: true
+          derived_from_field_path: expression_annotation_subject.primary_external_id
+          projection_role: derived_read_only
           validatable: true
           validator_binding_id: subject_gene_validation
           validator_state: active
-          source_of_truth: alliance_linkml
+          source_of_truth: expression_annotation_subject.primary_external_id
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -908,11 +916,12 @@ object_definitions:
         display_name: Entity assayed gene symbol
         required: true
         metadata:
-          editable: true
+          derived_from_field_path: expression_annotation_subject.gene_symbol
+          projection_role: derived_read_only
           validatable: true
           validator_binding_id: subject_gene_validation
           validator_state: active
-          source_of_truth: alliance_linkml
+          source_of_truth: expression_annotation_subject.gene_symbol
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml

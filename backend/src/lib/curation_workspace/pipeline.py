@@ -581,31 +581,40 @@ def _draft_fields_from_review_row(
     review_row: DomainEnvelopeReviewRow,
 ) -> list[PreparedDraftFieldInput]:
     fields = _workspace_fields_from_review_row(review_row) or list(review_row.summary_fields)
-    return [
-        PreparedDraftFieldInput(
-            field_key=field.field_path,
-            label=field.label,
-            value=field.value,
-            seed_value=field.value,
-            field_type=field.field_type,
-            group_key=_workspace_field_group_key(field) or _field_group_key(field.field_path),
-            group_label=(
-                _workspace_field_group_label(field)
-                or _field_group_label(_field_group_key(field.field_path))
-            ),
-            order=_workspace_field_order(field, index),
-            required=_workspace_field_required(field),
-            read_only=_workspace_field_read_only(field),
-            metadata={
-                "semantic_source": "domain_envelope.objects",
-                "source_field_path": field.field_path,
-                "projection_type": review_row.projection_type,
-                "projection_key": review_row.projection_key,
-                "field_metadata": dict(field.metadata),
-            },
+    prepared_fields: list[PreparedDraftFieldInput] = []
+    for index, workspace_field in enumerate(fields):
+        metadata = {
+            "semantic_source": "domain_envelope.objects",
+            "source_field_path": workspace_field.field_path,
+            "projection_type": review_row.projection_type,
+            "projection_key": review_row.projection_key,
+            "field_metadata": dict(workspace_field.metadata),
+        }
+        materializes_to = _workspace_field_materializes_to_paths(workspace_field)
+        if materializes_to:
+            metadata["materializes_to_field_paths"] = list(materializes_to)
+
+        prepared_fields.append(
+            PreparedDraftFieldInput(
+                field_key=workspace_field.field_path,
+                label=workspace_field.label,
+                value=workspace_field.value,
+                seed_value=workspace_field.value,
+                field_type=workspace_field.field_type,
+                group_key=_workspace_field_group_key(workspace_field)
+                or _field_group_key(workspace_field.field_path),
+                group_label=(
+                    _workspace_field_group_label(workspace_field)
+                    or _field_group_label(_field_group_key(workspace_field.field_path))
+                ),
+                order=_workspace_field_order(workspace_field, index),
+                required=_workspace_field_required(workspace_field),
+                read_only=_workspace_field_read_only(workspace_field),
+                metadata=metadata,
+            )
         )
-        for index, field in enumerate(fields)
-    ]
+
+    return prepared_fields
 
 
 def _workspace_fields_from_review_row(
@@ -657,6 +666,19 @@ def _workspace_field_required(field: DomainEnvelopeReviewRowSummaryField) -> boo
 
 def _workspace_field_read_only(field: DomainEnvelopeReviewRowSummaryField) -> bool:
     return field.metadata.get("read_only") is True
+
+
+def _workspace_field_materializes_to_paths(
+    field: DomainEnvelopeReviewRowSummaryField,
+) -> tuple[str, ...]:
+    raw_paths = field.metadata.get("materializes_to_field_paths")
+    if not isinstance(raw_paths, list):
+        return ()
+    return tuple(
+        path.strip()
+        for path in raw_paths
+        if isinstance(path, str) and path.strip()
+    )
 
 
 def _validate_prepared_review_rows(

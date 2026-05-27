@@ -689,6 +689,7 @@ def _materialize_candidate_draft_changes_into_envelope(
     for field_key in changed_field_keys:
         draft_field = field_by_key[field_key]
         field_path = _draft_field_projection_paths(draft_field)[0]
+        materialized_value = _draft_field_materialized_value(draft_field)
         current_object = _envelope_object_by_stable_id(working_envelope, object_id)
         if current_object is None:
             raise HTTPException(
@@ -705,7 +706,7 @@ def _materialize_candidate_draft_changes_into_envelope(
                 object_id=object_id,
                 field_path=field_path,
                 before=None if before is _MISSING else before,
-                value=copy.deepcopy(draft_field.value),
+                value=copy.deepcopy(materialized_value),
                 operation=EnvelopeFieldPatchOperation.REPLACE,
                 reason="draft_materialization",
             ),
@@ -724,6 +725,21 @@ def _materialize_candidate_draft_changes_into_envelope(
             )
         working_envelope = patch_result.envelope
         materialized_field_paths.append(field_path)
+        for projected_field_path in _draft_field_materializes_to_paths(draft_field):
+            if projected_field_path == field_path:
+                continue
+            _ensure_domain_pack_declares_field_path(
+                domain_pack,
+                object_type=domain_object.object_type,
+                field_path=projected_field_path,
+            )
+            working_envelope = _replace_envelope_object_payload_value(
+                working_envelope,
+                object_id=object_id,
+                field_path=projected_field_path,
+                value=copy.deepcopy(materialized_value),
+            )
+            materialized_field_paths.append(projected_field_path)
 
     checkpoint_revision = _checkpoint_patch_result(
         db,
@@ -1467,6 +1483,163 @@ def _draft_field_projection_paths(
         if bracket_path not in expanded:
             expanded.append(bracket_path)
     return tuple(expanded)
+
+
+def _draft_field_materializes_to_paths(
+    draft_field: CurationDraftFieldSchema,
+) -> tuple[str, ...]:
+    raw_paths = draft_field.metadata.get("materializes_to_field_paths")
+    if not isinstance(raw_paths, list):
+        return ()
+    return tuple(
+        path.strip()
+        for path in raw_paths
+        if isinstance(path, str) and path.strip()
+    )
+
+
+def _draft_field_materialized_value(draft_field: CurationDraftFieldSchema) -> Any:
+    value = copy.deepcopy(draft_field.value)
+    field_type = (draft_field.field_type or "").strip().lower()
+    if field_type == "integer":
+        return _coerce_integer_draft_value(draft_field.field_key, value)
+    return value
+
+
+def _coerce_integer_draft_value(field_key: str, value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Draft field {field_key} must be an integer",
+        )
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if value.is_integer():
+            return int(value)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Draft field {field_key} must be an integer",
+        )
+    if isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return None
+        try:
+            return int(normalized, 10)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Draft field {field_key} must be an integer",
+            ) from exc
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail=f"Draft field {field_key} must be an integer",
+    )
+
+
+def _ensure_domain_pack_declares_field_path(
+    domain_pack: Any,
+    *,
+    object_type: str,
+    field_path: str,
+) -> None:
+    for object_definition in domain_pack.metadata.object_definitions:
+        if object_definition.object_type != object_type:
+            continue
+        if any(field.field_path == field_path for field in object_definition.fields):
+            return
+        break
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail=(
+            f"Materialized draft projection field_path '{field_path}' is not "
+            f"declared for object_type '{object_type}'"
+        ),
+    )
+
+
+def _replace_envelope_object_payload_value(
+    envelope: DomainEnvelope,
+    *,
+    object_id: str,
+    field_path: str,
+    value: Any,
+) -> DomainEnvelope:
+    object_index = None
+    domain_object = None
+    for index, candidate_object in enumerate(envelope.objects):
+        if object_id in {
+            value
+            for value in (candidate_object.object_id, candidate_object.pending_ref_id)
+            if value is not None
+        }:
+            object_index = index
+            domain_object = candidate_object
+            break
+    if domain_object is None or object_index is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Draft materialization target disappeared from the envelope",
+        )
+
+    payload = copy.deepcopy(domain_object.payload)
+    try:
+        _set_payload_value(payload, field_path, value)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    updated_objects = list(envelope.objects)
+    updated_objects[object_index] = domain_object.model_copy(
+        update={"payload": payload}
+    )
+    return envelope.model_copy(update={"objects": updated_objects})
+
+
+def _set_payload_value(payload: dict[str, Any], field_path: str, value: Any) -> None:
+    parts = parse_field_path(field_path)
+    current: Any = payload
+    for index, part in enumerate(parts[:-1]):
+        next_part = parts[index + 1]
+        if isinstance(part, str):
+            if not isinstance(current, dict):
+                raise ValueError(f"Cannot set '{field_path}' through non-object parent")
+            if part not in current or current[part] is None:
+                current[part] = [] if isinstance(next_part, int) else {}
+            current = current[part]
+            continue
+        if not isinstance(current, list) or isinstance(
+            current, (str, bytes, bytearray)
+        ):
+            raise ValueError(f"Cannot set '{field_path}' through non-array parent")
+        if part == len(current):
+            current.append([] if isinstance(next_part, int) else {})
+        if part >= len(current):
+            raise ValueError(
+                f"Cannot set '{field_path}' because a list index is missing"
+            )
+        current = current[part]
+
+    final_part = parts[-1]
+    if isinstance(final_part, str):
+        if not isinstance(current, dict):
+            raise ValueError(f"Cannot set '{field_path}' on non-object parent")
+        current[final_part] = value
+        return
+
+    if not isinstance(current, list) or isinstance(current, (str, bytes, bytearray)):
+        raise ValueError(f"Cannot set '{field_path}' on non-array parent")
+    if final_part == len(current):
+        current.append(value)
+        return
+    if final_part >= len(current):
+        raise ValueError(f"Cannot set '{field_path}' because a list index is missing")
+    current[final_part] = value
 
 
 def _dot_numeric_path_to_brackets(path: str) -> str:
