@@ -7,14 +7,28 @@ IGNORE_FILE="${SCRIPT_DIR}/.ci-ignore-paths"
 DOMAIN_ENVELOPE_RELEASE_PATH_FILE="${SCRIPT_DIR}/.domain-envelope-release-test-paths"
 SUITE="all"
 VALIDATE_ONLY=0
+UNIT_TEST_WORKERS="${BACKEND_UNIT_TEST_WORKERS:-0}"
+UNIT_TEST_DURATIONS="${BACKEND_UNIT_TEST_DURATIONS:-25}"
+UNIT_TEST_JUNIT_XML="${BACKEND_UNIT_JUNIT_XML:-file_outputs/ci/backend-unit-junit.xml}"
+UNIT_TEST_SUMMARY_FILE="${BACKEND_UNIT_SUMMARY_FILE:-file_outputs/ci/backend-unit-summary.md}"
 
 usage() {
   cat <<'USAGE'
-Usage: run_ci_unit_tests.sh [--validate-only] [--suite SUITE]
+Usage: run_ci_unit_tests.sh [--validate-only] [--suite SUITE] [--workers N] [--durations N] [--junitxml PATH]
 
 Suites:
   all                       Full unit suite with CI ignore paths and coverage.
   domain-envelope-release   Offline 0.7.0 domain-envelope release-gate unit slice.
+
+Options:
+  --workers N               Run the full unit suite with pytest-xdist workers.
+                            Use 0 for serial execution. Defaults to
+                            BACKEND_UNIT_TEST_WORKERS or 0.
+  --durations N             Report the slowest N tests. Defaults to
+                            BACKEND_UNIT_TEST_DURATIONS or 25.
+  --junitxml PATH           Write JUnit timing/report XML for the full suite.
+                            Defaults to BACKEND_UNIT_JUNIT_XML or
+                            file_outputs/ci/backend-unit-junit.xml.
 USAGE
 }
 
@@ -32,6 +46,30 @@ while (($#)); do
       SUITE="${1#--suite=}"
       shift
       ;;
+    --workers)
+      UNIT_TEST_WORKERS="${2:?--workers requires a value}"
+      shift 2
+      ;;
+    --workers=*)
+      UNIT_TEST_WORKERS="${1#--workers=}"
+      shift
+      ;;
+    --durations)
+      UNIT_TEST_DURATIONS="${2:?--durations requires a value}"
+      shift 2
+      ;;
+    --durations=*)
+      UNIT_TEST_DURATIONS="${1#--durations=}"
+      shift
+      ;;
+    --junitxml)
+      UNIT_TEST_JUNIT_XML="${2:?--junitxml requires a value}"
+      shift 2
+      ;;
+    --junitxml=*)
+      UNIT_TEST_JUNIT_XML="${1#--junitxml=}"
+      shift
+      ;;
     --help|-h)
       usage
       exit 0
@@ -43,6 +81,20 @@ while (($#)); do
       ;;
   esac
 done
+
+case "${UNIT_TEST_WORKERS}" in
+  ''|*[!0-9]*)
+    echo "--workers must be a non-negative integer, got: ${UNIT_TEST_WORKERS}" >&2
+    exit 2
+    ;;
+esac
+
+case "${UNIT_TEST_DURATIONS}" in
+  ''|*[!0-9]*)
+    echo "--durations must be a non-negative integer, got: ${UNIT_TEST_DURATIONS}" >&2
+    exit 2
+    ;;
+esac
 
 load_path_file() {
   local path_file="$1"
@@ -93,17 +145,48 @@ case "${SUITE}" in
     fi
 
     cd "${BACKEND_DIR}"
-    python -m pytest \
-      tests/unit/ \
-      -v \
-      --tb=short \
-      --strict-markers \
-      --cov=src \
-      --cov-report=term-missing \
-      --cov-report=html \
-      --cov-report=xml:coverage.xml \
-      --cov-fail-under=50 \
+    mkdir -p "$(dirname "${UNIT_TEST_JUNIT_XML}")" "$(dirname "${UNIT_TEST_SUMMARY_FILE}")"
+
+    pytest_args=(
+      tests/unit/
+      -v
+      --tb=short
+      --strict-markers
+      "--durations=${UNIT_TEST_DURATIONS}"
+      "--junitxml=${UNIT_TEST_JUNIT_XML}"
+      --cov=src
+      --cov-report=term-missing
+      --cov-report=html
+      --cov-report=xml:coverage.xml
+      --cov-fail-under=50
       "${ignore_args[@]}"
+    )
+
+    if ((UNIT_TEST_WORKERS > 0)); then
+      pytest_args+=(-n "${UNIT_TEST_WORKERS}" --dist loadscope)
+    fi
+
+    start_seconds="${SECONDS}"
+    set +e
+    python -m pytest "${pytest_args[@]}"
+    pytest_status="$?"
+    set -e
+    duration_seconds="$((SECONDS - start_seconds))"
+
+    {
+      echo "### Backend unit pytest"
+      echo ""
+      echo "- Suite: \`${SUITE}\`"
+      echo "- Workers: \`${UNIT_TEST_WORKERS}\`"
+      echo "- Distribution: \`$([[ "${UNIT_TEST_WORKERS}" == "0" ]] && echo serial || echo loadscope)\`"
+      echo "- Duration: \`${duration_seconds}s\`"
+      echo "- Exit status: \`${pytest_status}\`"
+      echo "- Slow-test report: \`--durations=${UNIT_TEST_DURATIONS}\`"
+      echo "- JUnit report: \`${UNIT_TEST_JUNIT_XML}\`"
+      echo ""
+    } >> "${UNIT_TEST_SUMMARY_FILE}"
+
+    exit "${pytest_status}"
     ;;
   domain-envelope-release)
     domain_envelope_paths=()

@@ -65,7 +65,9 @@ jobs:
 
       - name: Run unit tests
         run: |
-          mkdir -p backend/htmlcov
+          mkdir -p backend/htmlcov backend/file_outputs/ci
+          start_seconds="${SECONDS}"
+          set +e
           docker run --rm \
             -v "${{ github.workspace }}/backend:/app/backend" \
             -v "${{ github.workspace }}/alliance_agents:/app/alliance_agents" \
@@ -88,8 +90,26 @@ jobs:
             -e EMBEDDING_TOKEN_SAFETY_MARGIN=500 \
             -e CONTENT_PREVIEW_CHARS=1600 \
             -e WEAVIATE_BATCH_REQUESTS_PER_MINUTE=5000 \
+            -e BACKEND_UNIT_TEST_WORKERS=2 \
+            -e BACKEND_UNIT_TEST_DURATIONS=25 \
+            -e BACKEND_UNIT_JUNIT_XML=file_outputs/ci/backend-unit-junit.xml \
+            -e BACKEND_UNIT_SUMMARY_FILE=file_outputs/ci/backend-unit-summary.md \
             ai-curation-unit-tests:latest \
             bash /app/backend/tests/unit/run_ci_unit_tests.sh
+          test_status="$?"
+          set -e
+          duration_seconds="$((SECONDS - start_seconds))"
+          {
+            echo "### Backend unit container"
+            echo ""
+            echo "- Docker run plus pytest duration: \`${duration_seconds}s\`"
+            echo "- Exit status: \`${test_status}\`"
+            echo ""
+            if [[ -f backend/file_outputs/ci/backend-unit-summary.md ]]; then
+              cat backend/file_outputs/ci/backend-unit-summary.md
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "${test_status}"
 
       - name: Upload backend coverage artifacts
         if: always()
@@ -100,6 +120,8 @@ jobs:
             backend/.coverage
             backend/coverage.xml
             backend/htmlcov
+            backend/file_outputs/ci/backend-unit-junit.xml
+            backend/file_outputs/ci/backend-unit-summary.md
 
       - name: Test Summary
         if: always()

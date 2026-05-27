@@ -32,6 +32,7 @@ RUN pip install --no-cache-dir \
     pytest-asyncio \
     pytest-cov \
     pytest-mock \
+    pytest-xdist==3.8.0 \
     httpx
 
 # Copy source code and tests

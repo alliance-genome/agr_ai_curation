@@ -58,7 +58,7 @@ async def test_get_trace_context_for_explorer_success(monkeypatch):
     ]
 
     class _FakeLangfuse:
-        def __init__(self):
+        def __init__(self, **_kwargs):
             self.api = SimpleNamespace(
                 trace=SimpleNamespace(get=lambda _trace_id: trace),
                 observations=SimpleNamespace(get_many=lambda **_kwargs: SimpleNamespace(data=observations)),
@@ -234,7 +234,7 @@ async def test_get_trace_context_for_explorer_import_error(monkeypatch):
 @pytest.mark.asyncio
 async def test_get_trace_context_for_explorer_init_error(monkeypatch):
     class _BrokenLangfuse:
-        def __init__(self):
+        def __init__(self, **_kwargs):
             raise RuntimeError("cannot init")
 
     monkeypatch.setitem(sys.modules, "langfuse", SimpleNamespace(Langfuse=_BrokenLangfuse))
@@ -245,7 +245,7 @@ async def test_get_trace_context_for_explorer_init_error(monkeypatch):
 @pytest.mark.asyncio
 async def test_get_trace_context_for_explorer_trace_not_found(monkeypatch):
     class _FakeLangfuse:
-        def __init__(self):
+        def __init__(self, **_kwargs):
             self.api = SimpleNamespace(
                 trace=SimpleNamespace(get=lambda _trace_id: None),
                 observations=SimpleNamespace(get_many=lambda **_kwargs: SimpleNamespace(data=[])),
@@ -259,7 +259,7 @@ async def test_get_trace_context_for_explorer_trace_not_found(monkeypatch):
 @pytest.mark.asyncio
 async def test_get_trace_context_for_explorer_wraps_unexpected_errors(monkeypatch):
     class _FakeLangfuse:
-        def __init__(self):
+        def __init__(self, **_kwargs):
             self.api = SimpleNamespace(
                 trace=SimpleNamespace(get=lambda _trace_id: SimpleNamespace(session_id="s", timestamp=datetime.utcnow())),
                 observations=SimpleNamespace(get_many=lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("boom"))),
