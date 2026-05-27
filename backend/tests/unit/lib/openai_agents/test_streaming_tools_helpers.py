@@ -48,15 +48,20 @@ def _reset_streaming_state():
 
 @pytest.fixture(scope="module")
 def _repo_package_curation_registry():
+    # The repo package registry is intentionally shared: rebuilding it costs
+    # about 1.5s, while these dispatch tests vary metadata/env around a stable
+    # package set rather than mutating the package registry itself.
     original_packages_dir = os.environ.get("AGR_RUNTIME_PACKAGES_DIR")
     os.environ["AGR_RUNTIME_PACKAGES_DIR"] = str(REPO_PACKAGES_DIR)
     adapter_registry.load_curation_adapter_registry.cache_clear()
-    yield
-    adapter_registry.load_curation_adapter_registry.cache_clear()
-    if original_packages_dir is None:
-        os.environ.pop("AGR_RUNTIME_PACKAGES_DIR", None)
-    else:
-        os.environ["AGR_RUNTIME_PACKAGES_DIR"] = original_packages_dir
+    try:
+        yield
+    finally:
+        adapter_registry.load_curation_adapter_registry.cache_clear()
+        if original_packages_dir is None:
+            os.environ.pop("AGR_RUNTIME_PACKAGES_DIR", None)
+        else:
+            os.environ["AGR_RUNTIME_PACKAGES_DIR"] = original_packages_dir
 
 
 def test_extract_model_identifier_handles_string_and_object():

@@ -135,6 +135,15 @@ Local follow-up profiling on 2026-05-27 found two immediate lessons:
   notifier retry tests were paying real `1s + 2s` backoff waits in several
   cases; after mocking `time.sleep`, that file dropped from about `3.8s` to
   `0.8s` elapsed in the same Docker image.
+- Package-runner tests should avoid recreating venvs unless the test mutates
+  package inputs. The demo package tests intentionally keep per-test runtime
+  roots because they edit fixture package files. The Alliance package binding
+  tests do not mutate the package manifest or requirements, so they can share a
+  module-scoped isolated venv while still varying fake runtime roots through
+  per-test `monkeypatch` environment variables. That reduced
+  `test_package_runner.py` from about `56s` to about `41s` without removing the
+  subprocess isolation check, and brought the no-coverage full unit suite with
+  `-n 2 --dist loadscope` down to about `63s` locally.
 
 ### Phase 0: Add Timing Visibility
 

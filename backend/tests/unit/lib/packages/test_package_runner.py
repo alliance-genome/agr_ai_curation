@@ -56,6 +56,22 @@ def _clear_runtime_path_env(monkeypatch):
         monkeypatch.delenv(variable, raising=False)
 
 
+@pytest.fixture(scope="module")
+def _shared_alliance_runner(tmp_path_factory):
+    # The Alliance binding tests vary per-test fake runtimes via monkeypatch,
+    # but they do not mutate the Alliance package manifest or requirements.
+    # Reusing this venv avoids paying python -m venv for every binding test.
+    registry = load_tool_registry(
+        REPO_ROOT / "packages",
+        runtime_version="1.5.0",
+        supported_package_api_version="1.0.0",
+    )
+    env_manager = _IsolatedInterpreterEnvironmentManager(
+        tmp_path_factory.mktemp("alliance_package_runner") / "isolated_runner"
+    )
+    return PackageToolRunner(tool_registry=registry, env_manager=env_manager), env_manager
+
+
 def test_package_runner_executes_static_callable(monkeypatch, tmp_path):
     runner = _build_runner(monkeypatch, tmp_path)
 
@@ -533,11 +549,15 @@ print(
     assert "missing-groups.yaml" in (payload["load_error"] or "")
 
 
-def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(monkeypatch, tmp_path):
+def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(
+    monkeypatch,
+    tmp_path,
+    _shared_alliance_runner,
+):
     fake_backend_root = _write_fake_weaviate_backend(tmp_path)
     monkeypatch.setenv("PYTHONPATH", str(fake_backend_root))
 
-    runner, env_manager = _build_alliance_runner(tmp_path)
+    runner, env_manager = _shared_alliance_runner
 
     search_result = runner.execute_tool(
         "search_document",
@@ -602,6 +622,7 @@ def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(monkeyp
 def test_package_runner_executes_alliance_file_output_binding_in_isolation(
     monkeypatch,
     tmp_path,
+    _shared_alliance_runner,
 ):
     fake_backend_root = _write_fake_file_output_backend(tmp_path)
     monkeypatch.setenv("PYTHONPATH", str(fake_backend_root))
@@ -609,7 +630,7 @@ def test_package_runner_executes_alliance_file_output_binding_in_isolation(
     monkeypatch.setenv("FAKE_SESSION_ID", "session-42")
     monkeypatch.setenv("FAKE_USER_ID", "user-24")
 
-    runner, env_manager = _build_alliance_runner(tmp_path)
+    runner, env_manager = _shared_alliance_runner
 
     result = runner.execute_tool(
         "save_csv_file",
@@ -645,13 +666,14 @@ def test_package_runner_executes_alliance_file_output_binding_in_isolation(
 def test_package_runner_executes_alliance_agr_curation_binding_in_isolation(
     monkeypatch,
     tmp_path,
+    _shared_alliance_runner,
 ):
     runtime_root = _write_fake_agr_runtime(tmp_path)
     fake_dependency_root = _write_fake_agr_curation_api_dependency(tmp_path)
     monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
     monkeypatch.setenv("PYTHONPATH", str(fake_dependency_root))
 
-    runner, env_manager = _build_alliance_runner(tmp_path)
+    runner, env_manager = _shared_alliance_runner
 
     result = runner.execute_tool(
         "agr_curation_query",
@@ -684,13 +706,14 @@ def test_package_runner_executes_alliance_agr_curation_binding_in_isolation(
 def test_package_runner_alliance_agr_bulk_contract_reports_no_matches(
     monkeypatch,
     tmp_path,
+    _shared_alliance_runner,
 ):
     runtime_root = _write_fake_agr_runtime(tmp_path)
     fake_dependency_root = _write_fake_agr_curation_api_dependency(tmp_path)
     monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
     monkeypatch.setenv("PYTHONPATH", str(fake_dependency_root))
 
-    runner, env_manager = _build_alliance_runner(tmp_path)
+    runner, env_manager = _shared_alliance_runner
 
     result = runner.execute_tool(
         "agr_curation_query",
@@ -723,13 +746,14 @@ def test_package_runner_alliance_agr_bulk_contract_reports_no_matches(
 def test_package_runner_alliance_agr_data_provider_helper_in_isolation(
     monkeypatch,
     tmp_path,
+    _shared_alliance_runner,
 ):
     runtime_root = _write_fake_agr_runtime(tmp_path)
     fake_dependency_root = _write_fake_agr_curation_api_dependency(tmp_path)
     monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
     monkeypatch.setenv("PYTHONPATH", str(fake_dependency_root))
 
-    runner, env_manager = _build_alliance_runner(tmp_path)
+    runner, env_manager = _shared_alliance_runner
 
     result = runner.execute_tool(
         "agr_curation_query",
@@ -771,13 +795,14 @@ def test_package_runner_alliance_agr_data_provider_helper_in_isolation(
 def test_package_runner_alliance_agr_ontology_helpers_in_isolation(
     monkeypatch,
     tmp_path,
+    _shared_alliance_runner,
 ):
     runtime_root = _write_fake_agr_runtime(tmp_path)
     fake_dependency_root = _write_fake_agr_curation_api_dependency(tmp_path)
     monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
     monkeypatch.setenv("PYTHONPATH", str(fake_dependency_root))
 
-    runner, env_manager = _build_alliance_runner(tmp_path)
+    runner, env_manager = _shared_alliance_runner
 
     get_result = runner.execute_tool(
         "agr_curation_query",
@@ -828,11 +853,12 @@ def test_package_runner_alliance_agr_ontology_helpers_in_isolation(
 def test_package_runner_alliance_literature_reference_tool_in_isolation(
     monkeypatch,
     tmp_path,
+    _shared_alliance_runner,
 ):
     fake_dependency_root = _write_fake_agr_curation_api_dependency(tmp_path)
     monkeypatch.setenv("PYTHONPATH", str(fake_dependency_root))
 
-    runner, env_manager = _build_alliance_runner(tmp_path)
+    runner, env_manager = _shared_alliance_runner
 
     result = runner.execute_tool(
         "agr_literature_reference_lookup",
@@ -854,13 +880,14 @@ def test_package_runner_alliance_literature_reference_tool_in_isolation(
 def test_package_runner_alliance_agr_entity_helpers_in_isolation(
     monkeypatch,
     tmp_path,
+    _shared_alliance_runner,
 ):
     runtime_root = _write_fake_agr_runtime(tmp_path)
     fake_dependency_root = _write_fake_agr_curation_api_dependency(tmp_path)
     monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
     monkeypatch.setenv("PYTHONPATH", str(fake_dependency_root))
 
-    runner, env_manager = _build_alliance_runner(tmp_path)
+    runner, env_manager = _shared_alliance_runner
 
     names_result = runner.execute_tool(
         "agr_curation_query",
@@ -981,18 +1008,6 @@ def _build_runner(monkeypatch, tmp_path: Path) -> PackageToolRunner:
     package_dir = _stage_fixture_package(tmp_path)
     monkeypatch.setenv("AGR_RUNTIME_ROOT", str(tmp_path / "runtime"))
     return _build_runner_from_packages_dir(package_dir.parent)
-
-
-def _build_alliance_runner(
-    tmp_path: Path,
-) -> tuple[PackageToolRunner, "_IsolatedInterpreterEnvironmentManager"]:
-    registry = load_tool_registry(
-        REPO_ROOT / "packages",
-        runtime_version="1.5.0",
-        supported_package_api_version="1.0.0",
-    )
-    env_manager = _IsolatedInterpreterEnvironmentManager(tmp_path / "isolated_runner")
-    return PackageToolRunner(tool_registry=registry, env_manager=env_manager), env_manager
 
 
 def _build_runner_from_packages_dir(packages_dir: Path) -> PackageToolRunner:

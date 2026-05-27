@@ -15,6 +15,8 @@ from src.schemas.curation_workspace import (
 
 @pytest.fixture(autouse=True, scope="module")
 def _reset_adapter_registry():
+    # Package-backed registry construction costs about 1.5s. These tests do not
+    # mutate registry inputs, so clear once per module instead of once per test.
     adapter_registry_module.load_curation_adapter_registry.cache_clear()
     yield
     adapter_registry_module.load_curation_adapter_registry.cache_clear()
