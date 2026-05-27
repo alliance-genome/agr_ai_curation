@@ -1030,7 +1030,10 @@ async def test_chat_domain_envelope_dispatch_covers_launchable_active_validator_
     )
     assert (
         dispatch_complete["details"]["matchedBindingCount"]
-        == dispatch_complete["details"]["validatorResultCount"]
+        >= dispatch_complete["details"]["validatorResultCount"]
+    )
+    assert dispatch_complete["details"]["validatorResultCount"] >= len(
+        captured_requests
     )
 
 

@@ -49,6 +49,20 @@ class _SelectorProblem:
 
 
 _OPTIONAL_INPUT_MISSING = object()
+_CONTEXT_ONLY_INPUT_NAMES = frozenset(
+    {
+        "data_provider",
+        "data_provider_hint",
+        "evidence_quote",
+        "evidence_record_id",
+        "source_chunk_id",
+        "source_document_id",
+        "source_section",
+        "taxon_hint",
+        "taxon_id",
+        "verified_quote",
+    }
+)
 
 
 def build_domain_validation_request(
@@ -66,7 +80,10 @@ def build_domain_validation_request(
 
     for input_name, selector in binding.input_fields.items():
         selectors[input_name] = selector.model_dump(mode="json", exclude_none=True)
-        if selector.source != "literal":
+        if (
+            selector.source != "literal"
+            and input_name not in _CONTEXT_ONLY_INPUT_NAMES
+        ):
             declared_non_literal_inputs = True
         value, problem = _resolve_selector(match, input_name, selector)
         if problem is not None:
@@ -76,7 +93,10 @@ def build_domain_validation_request(
             if selector.source != "literal":
                 missing_optional_non_literal_inputs = True
             continue
-        if selector.source != "literal":
+        if (
+            selector.source != "literal"
+            and input_name not in _CONTEXT_ONLY_INPUT_NAMES
+        ):
             selected_non_literal_inputs = True
         selected_inputs[input_name] = value
 
