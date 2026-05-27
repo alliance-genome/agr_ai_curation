@@ -490,11 +490,14 @@ def _rerank_chunks_with_bedrock(
 
 
 def _text_for_rerank(chunk: Dict[str, Any]) -> str:
+    # Rerank against full source chunk text only. content_preview is intentionally
+    # excluded: previews are display metadata and may omit the evidence-bearing
+    # sentence that the extractor must later select via read_chunk spans. Prefer
+    # canonical full-text fields even if an older caller supplied _rerank_text.
     rerank_text = (
-        chunk.get("_rerank_text")
-        or chunk.get("content_preview")
-        or chunk.get("text")
+        chunk.get("text")
         or chunk.get("content")
+        or chunk.get("_rerank_text")
         or ""
     )
     return str(rerank_text)

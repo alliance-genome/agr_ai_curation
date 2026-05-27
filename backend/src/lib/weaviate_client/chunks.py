@@ -590,20 +590,23 @@ async def hybrid_search_chunks(
                     if chunk_uuid:
                         metadata_dict.setdefault("chunk_id", chunk_uuid)
 
+                    full_content = obj.properties.get("content") if obj.properties else None
+                    content_preview = (
+                        obj.properties.get("contentPreview") if obj.properties else None
+                    )
+
                     chunk = {
                         "id": chunk_uuid,
                         # ✅ CRITICAL: Use 'text' to match chat.py
-                        "text": obj.properties.get("content") if obj.properties else None,
-                        "content_preview": (
-                            obj.properties.get("contentPreview") if obj.properties else None
-                        ),
+                        "text": full_content,
+                        "content_preview": content_preview,
                         "metadata": metadata_dict,
                         "score": obj.metadata.score if obj.metadata else 0.0,
-                        "_rerank_text": (
-                            obj.properties.get("contentPreview")
-                            or obj.properties.get("content")
-                            or ""
-                        ),
+                        # Reranking must see the full chunk, not contentPreview.
+                        # Evidence-bearing sentences often occur after the preview,
+                        # so preview-only reranking can demote the exact chunk before
+                        # the agent has a chance to call read_chunk/select spans.
+                        "_rerank_text": full_content or "",
                     }
 
                     # Include vector only if needed for MMR

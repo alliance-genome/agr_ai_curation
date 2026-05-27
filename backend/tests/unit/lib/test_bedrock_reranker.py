@@ -174,6 +174,35 @@ def test_effective_rerank_provider_preserves_configured_bedrock_provider(monkeyp
     assert bedrock_reranker.get_effective_rerank_provider() == "bedrock_cohere"
 
 
+def test_text_for_rerank_uses_full_text_not_content_preview():
+    chunk = {
+        "content_preview": "Preview stops before the evidence.",
+        "text": "Preview stops before the evidence. Later sentence contains the curatable evidence.",
+    }
+
+    assert (
+        bedrock_reranker._text_for_rerank(chunk)
+        == "Preview stops before the evidence. Later sentence contains the curatable evidence."
+    )
+
+
+def test_text_for_rerank_prefers_full_text_over_internal_rerank_text():
+    chunk = {
+        "_rerank_text": "Preview-like internal text.",
+        "text": "Full chunk text with evidence that appears later.",
+    }
+
+    assert bedrock_reranker._text_for_rerank(chunk) == (
+        "Full chunk text with evidence that appears later."
+    )
+
+
+def test_text_for_rerank_does_not_fall_back_to_content_preview():
+    chunk = {"content_preview": "Preview-only text is not enough for reranking."}
+
+    assert bedrock_reranker._text_for_rerank(chunk) == ""
+
+
 def test_rerank_chunks_raises_when_bedrock_profile_is_missing(monkeypatch):
     class _Session:
         def __init__(self, profile_name=None, region_name=None):

@@ -156,6 +156,8 @@ async def test_hybrid_search_chunks_applies_backend_reranking(monkeypatch):
         assert query == "gene expression in developing retina"
         assert top_n == 2
         assert rows[0]["content_preview"] == "Preview one"
+        assert rows[0]["_rerank_text"] == "Chunk one content"
+        assert rows[1]["_rerank_text"] == "Chunk two content"
         return list(reversed(rows))
 
     monkeypatch.setattr(chunks, "get_effective_rerank_provider", lambda: "bedrock_cohere")
