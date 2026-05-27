@@ -3926,6 +3926,144 @@ def test_waive_validation_finding_records_audit_action(
     )
 
 
+def test_validate_candidate_reruns_after_waiver_advances_envelope_revision(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    loaded_pack = _loaded_museum_pack(
+        tmp_path,
+        allow_title_override=True,
+        title_binding_allows_opt_out=True,
+    )
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={
+            "artifact": {
+                "accession_id": "A-1",
+                "title": "Bronze astrolabe",
+            }
+        },
+        validation_findings=[
+            ValidationFinding(
+                finding_id="finding-title",
+                severity=ValidationFindingSeverity.BLOCKER,
+                message="Title requires external catalog verification.",
+                code="museum.catalog.title_unverified",
+                field_ref=FieldRef(
+                    object_ref=ObjectRef(
+                        object_id="artifact-1",
+                        object_type="MuseumArtifact",
+                    ),
+                    field_path="artifact.title",
+                ),
+                details={
+                    "validation_metadata": {
+                        "validator_binding_id": "museum.title_catalog_check",
+                        "binding_state": "active",
+                        "validator_agent": {
+                            "package_id": "museum.catalog",
+                            "agent_id": "title_catalog_validator",
+                        },
+                        "curator_override": {"allowed": True},
+                    },
+                    "validation_request": {
+                        "request_id": "validation-run-1",
+                        "validator_binding_id": "museum.title_catalog_check",
+                        "selected_inputs": {"title": "Bronze astrolabe"},
+                    },
+                },
+            )
+        ],
+        allow_title_override=True,
+        title_binding_allows_opt_out=True,
+    )
+    now = _now()
+    stale_result = FieldValidationResult(
+        status=FieldValidationStatus.CONFLICT,
+        resolver="domain_envelope_validation_findings",
+        warnings=["Title requires external catalog verification."],
+    )
+    db_session.add(
+        ValidationSnapshotModel(
+            id=uuid4(),
+            scope=CurationValidationScope.CANDIDATE,
+            session_id=UUID(seeded["session_id"]),
+            candidate_id=UUID(seeded["candidate_id"]),
+            adapter_key=REFERENCE_ADAPTER_KEY,
+            envelope_id=seeded["envelope_id"],
+            envelope_revision=1,
+            state=CurationValidationSnapshotState.COMPLETED,
+            field_results={
+                "artifact.title": stale_result.model_dump(mode="json"),
+            },
+            summary={
+                "state": "completed",
+                "counts": {
+                    "validated": 0,
+                    "ambiguous": 0,
+                    "not_found": 0,
+                    "invalid_format": 0,
+                    "conflict": 1,
+                    "skipped": 0,
+                    "overridden": 0,
+                },
+                "warnings": ["Title requires external catalog verification."],
+                "stale_field_keys": [],
+                "last_validated_at": now.isoformat(),
+            },
+            warnings=["Title requires external catalog verification."],
+            requested_at=now,
+            completed_at=now,
+        )
+    )
+    db_session.commit()
+
+    waiver_response = module.waive_validation_finding(
+        db_session,
+        seeded["session_id"],
+        CurationValidationFindingWaiveRequest(
+            session_id=seeded["session_id"],
+            envelope_id=seeded["envelope_id"],
+            expected_revision=1,
+            finding_id="finding-title",
+        ),
+        {"sub": "curator-42", "email": "curator@example.org"},
+    )
+    corrected_finding = _workspace_validation_finding(
+        status=ValidationFindingStatus.RESOLVED,
+        severity=ValidationFindingSeverity.INFO,
+        code="domain_pack.validator_resolved",
+        message="Title validated after waiver.",
+    )
+    _patch_workspace_validation_dispatch(
+        monkeypatch,
+        loaded_pack,
+        expected_title="Bronze astrolabe",
+        finding=corrected_finding,
+        expected_source_revision=waiver_response.envelope_revision,
+    )
+
+    response = module.validate_candidate(
+        db_session,
+        seeded["candidate_id"],
+        CurationCandidateValidationRequest(
+            session_id=seeded["session_id"],
+            candidate_id=seeded["candidate_id"],
+            force=False,
+        ),
+    )
+
+    assert response.validation_snapshot.envelope_revision == 3
+    assert response.candidate.projection_ref is not None
+    assert response.candidate.projection_ref.envelope_revision == 3
+    assert response.validation_snapshot.field_results[
+        "artifact.title"
+    ].status is FieldValidationStatus.OVERRIDDEN
+
+
 def test_waive_validation_finding_rejects_alias_policy(
     db_session,
     tmp_path,

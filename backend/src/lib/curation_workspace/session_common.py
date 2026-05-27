@@ -102,11 +102,19 @@ def _latest_snapshot_record(
     if not snapshots:
         return None
 
+    def _snapshot_timestamp(snapshot: ValidationSnapshotModel) -> datetime:
+        timestamp = (
+            snapshot.completed_at
+            or snapshot.requested_at
+            or datetime.min.replace(tzinfo=timezone.utc)
+        )
+        if timestamp.tzinfo is None:
+            return timestamp.replace(tzinfo=timezone.utc)
+        return timestamp
+
     ordered_snapshots = sorted(
         snapshots,
-        key=lambda snapshot: snapshot.completed_at
-        or snapshot.requested_at
-        or datetime.min.replace(tzinfo=timezone.utc),
+        key=_snapshot_timestamp,
     )
     return ordered_snapshots[-1]
 

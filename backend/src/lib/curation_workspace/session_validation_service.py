@@ -174,11 +174,18 @@ def _compute_candidate_validation(
     def _existing_result(field: CurationDraftFieldSchema) -> FieldValidationResult | None:
         return latest_results.get(field.field_key) or field.validation_result
 
+    snapshot_matches_projection = (
+        latest_snapshot is not None
+        and latest_snapshot.envelope_id == candidate.envelope_id
+        and latest_snapshot.envelope_revision == candidate.envelope_revision
+    )
+
     if (
         not requested_field_keys
         and not force
         and latest_snapshot is not None
         and latest_snapshot.state == CurationValidationSnapshotState.COMPLETED
+        and snapshot_matches_projection
         and all(
             not field.stale_validation and _existing_result(field) is not None
             for field in draft_fields
@@ -195,6 +202,7 @@ def _compute_candidate_validation(
         latest_snapshot is None
         or latest_snapshot.state != CurationValidationSnapshotState.COMPLETED
     )
+    snapshot_projection_mismatch = latest_snapshot is not None and not snapshot_matches_projection
     (
         envelope_results,
         envelope_warnings,
@@ -212,6 +220,7 @@ def _compute_candidate_validation(
         existing_result = _existing_result(draft_field)
         field_is_targeted = (
             not requested_field_keys
+            or snapshot_projection_mismatch
             or draft_field.field_key in requested_field_keys
         )
         should_refresh = (
@@ -221,6 +230,7 @@ def _compute_candidate_validation(
                 or draft_field.stale_validation
                 or existing_result is None
                 or snapshot_missing_or_incomplete
+                or snapshot_projection_mismatch
             )
         )
         next_result = (
