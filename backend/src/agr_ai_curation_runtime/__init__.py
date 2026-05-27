@@ -10,6 +10,8 @@ from .file_outputs import (
 )
 from .record_evidence import create_record_evidence_tool
 from .weaviate_chunks import (
+    get_chunk_by_id,
+    get_chunk_neighbor_ids,
     get_chunks_by_parent_section,
     get_chunks_by_subsection,
     get_document_sections,
@@ -26,6 +28,8 @@ __all__ = [
     "get_current_file_output_context",
     "persist_file_output",
     "create_record_evidence_tool",
+    "get_chunk_by_id",
+    "get_chunk_neighbor_ids",
     "get_chunks_by_parent_section",
     "get_chunks_by_subsection",
     "get_document_sections",

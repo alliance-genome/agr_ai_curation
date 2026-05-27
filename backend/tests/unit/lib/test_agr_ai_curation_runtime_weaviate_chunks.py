@@ -18,6 +18,14 @@ async def test_public_runtime_weaviate_helpers_delegate(monkeypatch):
         captured["get_document_sections"] = kwargs
         return [{"title": "Methods"}]
 
+    async def _fake_get_chunk_by_id(**kwargs):
+        captured["get_chunk_by_id"] = kwargs
+        return {"id": "chunk-1"}
+
+    async def _fake_get_chunk_neighbor_ids(**kwargs):
+        captured["get_chunk_neighbor_ids"] = kwargs
+        return {"previous_chunk_id": "chunk-0", "next_chunk_id": "chunk-2"}
+
     async def _fake_get_chunks_by_parent_section(**kwargs):
         captured["get_chunks_by_parent_section"] = kwargs
         return [{"id": "parent-hit"}]
@@ -32,6 +40,8 @@ async def test_public_runtime_weaviate_helpers_delegate(monkeypatch):
         lambda: SimpleNamespace(
             hybrid_search_chunks=_fake_hybrid_search_chunks,
             get_document_sections=_fake_get_document_sections,
+            get_chunk_by_id=_fake_get_chunk_by_id,
+            get_chunk_neighbor_ids=_fake_get_chunk_neighbor_ids,
             get_chunks_by_parent_section=_fake_get_chunks_by_parent_section,
             get_chunks_by_subsection=_fake_get_chunks_by_subsection,
         ),
@@ -46,6 +56,16 @@ async def test_public_runtime_weaviate_helpers_delegate(monkeypatch):
         document_id="doc-1",
         user_id="user-1",
     ) == [{"title": "Methods"}]
+    assert await runtime_weaviate_chunks.get_chunk_by_id(
+        chunk_id="chunk-1",
+        user_id="user-1",
+        document_id="doc-1",
+    ) == {"id": "chunk-1"}
+    assert await runtime_weaviate_chunks.get_chunk_neighbor_ids(
+        document_id="doc-1",
+        user_id="user-1",
+        chunk_index=1,
+    ) == {"previous_chunk_id": "chunk-0", "next_chunk_id": "chunk-2"}
     assert await runtime_weaviate_chunks.get_chunks_by_parent_section(
         document_id="doc-1",
         parent_section="Methods",
@@ -67,6 +87,16 @@ async def test_public_runtime_weaviate_helpers_delegate(monkeypatch):
         "get_document_sections": {
             "document_id": "doc-1",
             "user_id": "user-1",
+        },
+        "get_chunk_by_id": {
+            "chunk_id": "chunk-1",
+            "user_id": "user-1",
+            "document_id": "doc-1",
+        },
+        "get_chunk_neighbor_ids": {
+            "document_id": "doc-1",
+            "user_id": "user-1",
+            "chunk_index": 1,
         },
         "get_chunks_by_parent_section": {
             "document_id": "doc-1",

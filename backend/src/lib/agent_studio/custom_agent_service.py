@@ -19,7 +19,7 @@ from src.models.sql.database import SessionLocal
 
 
 CUSTOM_AGENT_PREFIX = "ca_"
-_DOCUMENT_TOOL_IDS = {"search_document", "read_section", "read_subsection"}
+_DOCUMENT_TOOL_IDS = {"search_document", "read_chunk", "read_section", "read_subsection"}
 _SYSTEM_MANAGED_INHERITED_TOOL_IDS = {"get_agent_contract", "record_evidence"}
 LOCKED_PROMPT_MARKERS = (
     "Platform Runtime Contract",

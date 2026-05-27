@@ -23,7 +23,9 @@ logger = logging.getLogger(__name__)
 
 
 _AUTO_ATTACHED_EXTRACTION_TOOL_IDS = ("record_evidence",)
-_DOCUMENT_EXTRACTION_TOOL_IDS = frozenset({"search_document", "read_section", "read_subsection"})
+_DOCUMENT_EXTRACTION_TOOL_IDS = frozenset(
+    {"search_document", "read_chunk", "read_section", "read_subsection"}
+)
 
 
 def _load_prompt_content_from_source(source: AgentConfigSource | None) -> Optional[str]:

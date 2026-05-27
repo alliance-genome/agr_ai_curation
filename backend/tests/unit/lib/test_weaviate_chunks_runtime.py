@@ -426,6 +426,46 @@ async def test_get_chunk_by_id_runs_inline_in_package_tool_subprocess(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_get_chunk_neighbor_ids_fetches_adjacent_chunk_ids(monkeypatch):
+    _sync_to_thread(monkeypatch)
+
+    chunk_collection = MagicMock()
+    chunk_collection.query.fetch_objects.side_effect = [
+        SimpleNamespace(objects=[SimpleNamespace(uuid="chunk-prev")]),
+        SimpleNamespace(objects=[SimpleNamespace(uuid="chunk-next")]),
+    ]
+    connection = _connection_with_client(MagicMock())
+
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), \
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, MagicMock())):
+        result = await chunks.get_chunk_neighbor_ids(
+            document_id="doc-1",
+            user_id="user-1",
+            chunk_index=5,
+        )
+
+    assert result == {
+        "previous_chunk_id": "chunk-prev",
+        "next_chunk_id": "chunk-next",
+    }
+    assert chunk_collection.query.fetch_objects.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_get_chunk_neighbor_ids_returns_empty_when_index_missing():
+    result = await chunks.get_chunk_neighbor_ids(
+        document_id="doc-1",
+        user_id="user-1",
+        chunk_index=None,
+    )
+
+    assert result == {
+        "previous_chunk_id": None,
+        "next_chunk_id": None,
+    }
+
+
+@pytest.mark.asyncio
 async def test_hybrid_search_retry_adapter_branches(monkeypatch):
     _sync_to_thread(monkeypatch)
 

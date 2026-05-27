@@ -581,6 +581,35 @@ def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(
     }
     _assert_isolated_python(env_manager)
 
+    chunk_result = runner.execute_tool(
+        "read_chunk",
+        kwargs={"chunk_id": "chunk-search-1"},
+        context={"document_id": "doc-42", "user_id": "user-9"},
+    )
+
+    assert chunk_result.ok is True
+    assert chunk_result.result["summary"] == (
+        "Read chunk 'chunk-search-1' from page 7. "
+        "Select evidence_spans[].span_id for record_evidence."
+    )
+    assert chunk_result.result["chunk"]["chunk_id"] == "chunk-search-1"
+    assert chunk_result.result["chunk"]["chunk_index"] == 4
+    assert chunk_result.result["chunk"]["chunk_number"] == 5
+    assert chunk_result.result["chunk"]["previous_chunk_id"] == "chunk-search-0"
+    assert chunk_result.result["chunk"]["next_chunk_id"] == "chunk-search-2"
+    assert chunk_result.result["chunk"]["content"] == (
+        "Wingless expression expanded in the mutant tissue. "
+        "This sentence is exact evidence."
+    )
+    assert [span["text"] for span in chunk_result.result["chunk"]["evidence_spans"]] == [
+        "Wingless expression expanded in the mutant tissue.",
+        "This sentence is exact evidence.",
+    ]
+    assert chunk_result.result["chunk"]["evidence_spans"][0]["span_id"].startswith(
+        "chunk-search-1:s0000:c0000-c0050:"
+    )
+    assert "evidence_spans" not in search_result.result["hits"][0]
+
     section_result = runner.execute_tool(
         "read_section",
         kwargs={"section_name": "Methods"},
@@ -617,6 +646,7 @@ def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(
             "doc_items": [{"id": "bbox-1"}, {"id": "bbox-2"}],
         },
     }
+    assert "evidence_spans" not in section_result.result["section"]["source_chunks"][0]
 
 
 def test_package_runner_executes_alliance_file_output_binding_in_isolation(
@@ -1138,6 +1168,28 @@ def _write_fake_weaviate_backend(tmp_path: Path) -> Path:
 
 async def get_document_sections(*_args, **_kwargs):
     return [{\"title\": \"Methods\", \"page_number\": 3, \"chunk_count\": 2}]
+
+
+async def get_chunk_by_id(*, chunk_id, document_id, user_id, **_kwargs):
+    assert document_id == \"doc-42\"
+    assert user_id == \"user-9\"
+    return {
+        \"id\": chunk_id,
+        \"text\": \"Wingless expression expanded in the mutant tissue. This sentence is exact evidence.\",
+        \"chunk_index\": 4,
+        \"page_number\": 7,
+        \"section_title\": \"Results\",
+        \"subsection\": \"Expression\",
+        \"doc_items\": [{\"id\": \"bbox-read\"}],
+        \"metadata\": {\"document_id\": document_id},
+    }
+
+
+async def get_chunk_neighbor_ids(*, document_id, user_id, chunk_index, **_kwargs):
+    assert document_id == \"doc-42\"
+    assert user_id == \"user-9\"
+    assert chunk_index == 4
+    return {\"previous_chunk_id\": \"chunk-search-0\", \"next_chunk_id\": \"chunk-search-2\"}
 
 
 async def get_chunks_by_parent_section(*, document_id, parent_section, user_id, **_kwargs):

@@ -654,6 +654,14 @@ tools:
       - user_id
     description: Search chunks within a scoped document
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
+  - tool_id: read_chunk
+    binding_kind: context_factory
+    callable_factory: agr_ai_curation_alliance.tools.documents:create_read_chunk_tool
+    required_context:
+      - document_id
+      - user_id
+    description: Read one scoped document chunk with deterministic evidence spans
+    source_file: python/src/agr_ai_curation_alliance/tools/documents.py
   - tool_id: read_section
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_read_section_tool

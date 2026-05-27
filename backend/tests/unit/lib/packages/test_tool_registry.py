@@ -453,6 +453,7 @@ def test_repo_shipped_tool_bindings_are_loaded_from_alliance_package():
         "agr_literature_reference_lookup": ("static", (), "agr.alliance"),
         "agr_curation_query": ("static", (), "agr.alliance"),
         "search_document": ("context_factory", ("document_id", "user_id"), "agr.alliance"),
+        "read_chunk": ("context_factory", ("document_id", "user_id"), "agr.alliance"),
         "read_section": ("context_factory", ("document_id", "user_id"), "agr.alliance"),
         "read_subsection": ("context_factory", ("document_id", "user_id"), "agr.alliance"),
         "record_evidence": ("context_factory", ("document_id", "user_id"), "agr.alliance"),

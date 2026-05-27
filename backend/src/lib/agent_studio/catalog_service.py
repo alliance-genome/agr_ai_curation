@@ -248,6 +248,25 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "methods": None,  # Single-method tool
         "agent_methods": None,
     },
+    "read_chunk": {
+        "name": "Read Chunk",
+        "description": "Read one PDF chunk and return deterministic exact-text evidence spans.",
+        "category": "PDF Extraction",
+        "source_file": "backend/src/lib/openai_agents/tools/weaviate_search.py",
+        "documentation": {
+            "summary": "Retrieves full raw chunk text, neighboring chunk IDs, and selectable evidence span IDs.",
+            "parameters": [
+                {
+                    "name": "chunk_id",
+                    "type": "string",
+                    "required": True,
+                    "description": "Chunk identifier returned by search_document hits or section source chunks.",
+                },
+            ],
+        },
+        "methods": None,
+        "agent_methods": None,
+    },
     "read_section": {
         "name": "Read Section",
         "description": "Read the full text of a specific document section.",
@@ -1244,7 +1263,7 @@ def resolve_tools(tool_ids: List[str], execution_context: ToolExecutionContext) 
     return resolved_tools
 
 
-_DOCUMENT_TOOL_IDS = {"search_document", "read_section", "read_subsection"}
+_DOCUMENT_TOOL_IDS = {"search_document", "read_chunk", "read_section", "read_subsection"}
 _FORMATTER_TOOL_IDS = {"save_csv_file", "save_tsv_file", "save_json_file"}
 
 

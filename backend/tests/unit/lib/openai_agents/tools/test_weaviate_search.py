@@ -82,6 +82,7 @@ async def test_search_tool_maps_hits_and_truncates_content(monkeypatch):
     assert result.hits[1].chunk_id == "chunk-2"
     assert result.hits[1].page_number == 8
     assert result.hits[1].doc_items == [{"id": "bbox-2"}]
+    assert not hasattr(result.hits[0], "evidence_spans")
 
 
 @pytest.mark.asyncio
@@ -94,6 +95,84 @@ async def test_search_tool_returns_error_summary_on_exception(monkeypatch):
     result = await tool(query="q")
     assert "Error searching document" in result.summary
     assert result.hits == []
+
+
+@pytest.mark.asyncio
+async def test_read_chunk_tool_returns_raw_content_neighbors_and_deterministic_spans(monkeypatch):
+    text = "Alpha sentence. Beta sentence supports evidence."
+
+    async def _fake_get_chunk_by_id(**kwargs):
+        assert kwargs == {
+            "chunk_id": "chunk-2",
+            "user_id": "user-1",
+            "document_id": "doc-12345678",
+        }
+        return {
+            "id": "chunk-2",
+            "text": text,
+            "chunk_index": 1,
+            "page_number": 9,
+            "section_title": "Results",
+            "subsection": "Expression",
+            "doc_items": [{"id": "bbox-1"}],
+        }
+
+    async def _fake_get_chunk_neighbor_ids(**kwargs):
+        assert kwargs == {
+            "document_id": "doc-12345678",
+            "user_id": "user-1",
+            "chunk_index": 1,
+        }
+        return {
+            "previous_chunk_id": "chunk-1",
+            "next_chunk_id": "chunk-3",
+        }
+
+    tracker = _Tracker()
+    monkeypatch.setattr(weaviate_search, "get_chunk_by_id", _fake_get_chunk_by_id)
+    monkeypatch.setattr(weaviate_search, "get_chunk_neighbor_ids", _fake_get_chunk_neighbor_ids)
+    tool = weaviate_search.create_read_chunk_tool("doc-12345678", "user-1", tracker=tracker)
+
+    first = await tool("chunk-2")
+    second = await tool("chunk-2")
+
+    assert first.chunk is not None
+    assert first.chunk.chunk_id == "chunk-2"
+    assert first.chunk.chunk_index == 1
+    assert first.chunk.chunk_number == 2
+    assert first.chunk.previous_chunk_id == "chunk-1"
+    assert first.chunk.next_chunk_id == "chunk-3"
+    assert first.chunk.page_number == 9
+    assert first.chunk.section_title == "Results"
+    assert first.chunk.subsection == "Expression"
+    assert first.chunk.content == text
+    assert first.chunk.doc_items == [{"id": "bbox-1"}]
+    assert [span.span_id for span in first.chunk.evidence_spans] == [
+        span.span_id for span in second.chunk.evidence_spans
+    ]
+    assert [span.text for span in first.chunk.evidence_spans] == [
+        "Alpha sentence.",
+        "Beta sentence supports evidence.",
+    ]
+    assert first.chunk.evidence_spans[1].text == text[
+        first.chunk.evidence_spans[1].char_start:first.chunk.evidence_spans[1].char_end
+    ]
+    assert first.chunk.evidence_spans[1].span_id.startswith("chunk-2:s0001:")
+    assert tracker.calls == ["read_chunk", "read_chunk"]
+
+
+@pytest.mark.asyncio
+async def test_read_chunk_tool_handles_missing_chunk(monkeypatch):
+    async def _fake_get_chunk_by_id(**_kwargs):
+        return None
+
+    monkeypatch.setattr(weaviate_search, "get_chunk_by_id", _fake_get_chunk_by_id)
+    tool = weaviate_search.create_read_chunk_tool("doc-12345678", "user-1")
+
+    result = await tool("missing-chunk")
+
+    assert "No chunk found" in result.summary
+    assert result.chunk is None
 
 
 @pytest.mark.asyncio
@@ -153,6 +232,7 @@ async def test_read_section_tool_combines_content_pages_and_doc_items(monkeypatc
         "chunk-methods-2",
     ]
     assert result.section.source_chunks[0].subsection == "Animals"
+    assert not hasattr(result.section.source_chunks[0], "evidence_spans")
     assert result.section.doc_items == [{"id": "bbox-1"}, {"id": "bbox-2"}]
 
 
@@ -200,6 +280,7 @@ async def test_read_subsection_tool_no_content_and_success(monkeypatch):
     assert success_result.subsection.page_numbers == [9, 10]
     assert success_result.subsection.content == "Line one\n\nLine two"
     assert success_result.subsection.doc_items == [{"id": "bbox-1"}]
+    assert not hasattr(success_result.subsection, "evidence_spans")
 
 
 @pytest.mark.asyncio

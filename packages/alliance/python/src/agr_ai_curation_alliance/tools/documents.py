@@ -9,6 +9,7 @@ from agr_ai_curation_runtime.record_evidence import (
 )
 
 from .weaviate_search import (
+    create_read_chunk_tool as _create_read_chunk_tool,
     create_read_section_tool as _create_read_section_tool,
     create_read_subsection_tool as _create_read_subsection_tool,
     create_search_tool as _create_search_tool,
@@ -25,6 +26,14 @@ def _require_context_value(context: dict[str, Any], key: str) -> str:
 def create_search_document_tool(context: dict[str, Any]):
     """Create the package-exported search_document tool."""
     return _create_search_tool(
+        document_id=_require_context_value(context, "document_id"),
+        user_id=_require_context_value(context, "user_id"),
+    )
+
+
+def create_read_chunk_tool(context: dict[str, Any]):
+    """Create the package-exported read_chunk tool."""
+    return _create_read_chunk_tool(
         document_id=_require_context_value(context, "document_id"),
         user_id=_require_context_value(context, "user_id"),
     )
@@ -55,6 +64,7 @@ def create_record_evidence_tool(context: dict[str, Any]):
 
 
 __all__ = [
+    "create_read_chunk_tool",
     "create_read_section_tool",
     "create_read_subsection_tool",
     "create_record_evidence_tool",

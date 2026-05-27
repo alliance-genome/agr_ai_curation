@@ -9,6 +9,7 @@ SHIPPED_TOOLS_PACKAGE_EXPORTS = (
     "chebi_api_call",
     "create_curation_db_sql_tool",
     "create_record_evidence_tool",
+    "create_read_chunk_tool",
     "create_read_section_tool",
     "create_read_subsection_tool",
     "create_search_document_tool",
