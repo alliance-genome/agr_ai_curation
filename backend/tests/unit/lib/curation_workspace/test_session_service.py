@@ -22,6 +22,7 @@ from src.lib.curation_adapters.reference import REFERENCE_ADAPTER_KEY
 from src.lib.curation_workspace.export_adapters import DEFAULT_JSON_BUNDLE_TARGET_KEY
 from src.lib.curation_workspace import session_queries as query_module
 from src.lib.curation_workspace import session_serializers as serializer_module
+from src.lib.curation_workspace import session_mutation_service as mutation_module
 from src.lib.curation_workspace.submission_adapters import NoOpSubmissionAdapter
 from src.lib.curation_workspace import session_service as module
 from src.lib.curation_workspace import session_submission_service as submission_module
@@ -54,6 +55,8 @@ from src.schemas.curation_workspace import (
     CurationCandidateDecisionRequest,
     CurationCandidateSource,
     CurationCandidateStatus,
+    CurationEnvelopeFieldPatchOperation,
+    CurationEnvelopeFieldPatchRequest,
     CurationEvidenceSource,
     CurationExtractionSourceKind,
     CurationFlowRunListRequest,
@@ -569,6 +572,7 @@ def _museum_pack_text(
 ) -> str:
     title_metadata = (
         """
+          editable: true
           curator_override:
             allowed: true"""
         if allow_title_override
@@ -1963,6 +1967,7 @@ def _patch_workspace_validation_dispatch(
     *,
     expected_title: str | None,
     finding: ValidationFinding | None,
+    expected_source_revision: int = 1,
 ) -> None:
     monkeypatch.setattr(
         validation_module,
@@ -1972,14 +1977,19 @@ def _patch_workspace_validation_dispatch(
 
     def _dispatch(envelope, domain_pack, **kwargs):
         assert domain_pack is loaded_pack
-        assert kwargs["source_envelope_revision"] == 1
+        assert kwargs["source_envelope_revision"] == expected_source_revision
         if expected_title is not None:
             assert envelope.objects[0].payload["artifact"]["title"] == expected_title
         if finding is None:
             return SimpleNamespace(envelope=envelope, appended_findings=())
+        updated_envelope, appended_findings = append_validation_findings_to_envelope(
+            envelope,
+            [finding],
+            actor_id="test_workspace_validation_dispatch",
+        )
         return SimpleNamespace(
-            envelope=envelope.model_copy(update={"validation_findings": [finding]}),
-            appended_findings=(finding,),
+            envelope=updated_envelope,
+            appended_findings=appended_findings,
         )
 
     monkeypatch.setattr(validation_module, "dispatch_active_validator_bindings", _dispatch)
@@ -1990,7 +2000,11 @@ def test_workspace_validation_dispatches_domain_pack_and_records_envelope_revisi
     tmp_path,
     monkeypatch,
 ):
-    loaded_pack = _loaded_museum_pack(tmp_path, title_binding_allows_opt_out=True)
+    loaded_pack = _loaded_museum_pack(
+        tmp_path,
+        allow_title_override=True,
+        title_binding_allows_opt_out=True,
+    )
     seeded = _create_domain_envelope_submission_session(
         db_session,
         tmp_path=tmp_path,
@@ -2139,6 +2153,7 @@ def test_workspace_validation_blocker_prevents_export_readiness(
     assert "Required title is missing." in readiness.blocking_reasons
     assert [(blocker.field_path, blocker.code) for blocker in readiness.blockers] == [
         ("artifact.title", "domain_envelope.required_field_missing"),
+        ("artifact.title", "domain_pack.required_field_missing"),
         ("artifact.title", "fixture.required_field_missing"),
     ]
 
@@ -2190,15 +2205,70 @@ def test_curator_corrected_workspace_candidate_validates_against_current_envelop
     tmp_path,
     monkeypatch,
 ):
-    loaded_pack = _loaded_museum_pack(tmp_path, title_binding_allows_opt_out=True)
+    loaded_pack = _loaded_museum_pack(
+        tmp_path,
+        allow_title_override=True,
+        title_binding_allows_opt_out=True,
+    )
+    monkeypatch.setattr(
+        mutation_module,
+        "resolve_curation_domain_pack_by_id",
+        lambda pack_id: loaded_pack if pack_id == loaded_pack.pack_id else None,
+    )
     seeded = _create_domain_envelope_submission_session(
         db_session,
         tmp_path=tmp_path,
         monkeypatch=monkeypatch,
-        payload={"artifact": {"accession_id": "A-1", "title": "Corrected title"}},
+        payload={"artifact": {"accession_id": "A-1", "title": "Unknown status"}},
+        allow_title_override=True,
         title_binding_allows_opt_out=True,
     )
-    finding = _workspace_validation_finding(
+    invalid_finding = _workspace_validation_finding(
+        status=ValidationFindingStatus.OPEN,
+        severity=ValidationFindingSeverity.ERROR,
+        code="fixture.invalid_controlled_value",
+        message="Controlled value is not allowed.",
+        failure_classification="conflict",
+    )
+    _patch_workspace_validation_dispatch(
+        monkeypatch,
+        loaded_pack,
+        expected_title="Unknown status",
+        finding=invalid_finding,
+    )
+
+    invalid_response = module.validate_candidate(
+        db_session,
+        seeded["candidate_id"],
+        CurationCandidateValidationRequest(
+            session_id=seeded["session_id"],
+            candidate_id=seeded["candidate_id"],
+            force=True,
+        ),
+    )
+
+    assert invalid_response.validation_snapshot.field_results[
+        "artifact.title"
+    ].status is FieldValidationStatus.CONFLICT
+
+    patch_response = module.patch_envelope_field(
+        db_session,
+        seeded["session_id"],
+        CurationEnvelopeFieldPatchRequest(
+            session_id=seeded["session_id"],
+            envelope_id=seeded["envelope_id"],
+            expected_revision=2,
+            object_id="artifact-1",
+            field_path="artifact.title",
+            operation=CurationEnvelopeFieldPatchOperation.REPLACE,
+            before="Unknown status",
+            value="Corrected title",
+            reason="Curator selected a controlled title.",
+        ),
+        {"sub": "curator-42", "email": "curator@example.org"},
+    )
+
+    corrected_finding = _workspace_validation_finding(
         status=ValidationFindingStatus.RESOLVED,
         severity=ValidationFindingSeverity.INFO,
         code="domain_pack.validator_resolved",
@@ -2208,7 +2278,8 @@ def test_curator_corrected_workspace_candidate_validates_against_current_envelop
         monkeypatch,
         loaded_pack,
         expected_title="Corrected title",
-        finding=finding,
+        finding=corrected_finding,
+        expected_source_revision=patch_response.envelope_revision,
     )
 
     response = module.validate_candidate(
@@ -2224,6 +2295,17 @@ def test_curator_corrected_workspace_candidate_validates_against_current_envelop
     assert response.validation_snapshot.field_results[
         "artifact.title"
     ].status is FieldValidationStatus.VALIDATED
+    envelope_row = db_session.get(DomainEnvelopeModel, seeded["envelope_id"])
+    stored_envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
+    assert [
+        (finding.code, finding.status)
+        for finding in stored_envelope.validation_findings
+        if finding.code
+        in {"fixture.invalid_controlled_value", "domain_pack.validator_resolved"}
+    ] == [
+        ("domain_pack.validator_resolved", ValidationFindingStatus.RESOLVED),
+        ("fixture.invalid_controlled_value", ValidationFindingStatus.RESOLVED),
+    ]
 
 
 def test_workspace_validation_keeps_generic_fallback_for_non_envelope_candidates(

@@ -44,7 +44,11 @@ from src.lib.domain_envelopes.persistence import (
     write_domain_envelope_checkpoint,
 )
 from src.lib.domain_packs.structural_checks import run_domain_envelope_structural_checks
-from src.lib.domain_packs.validation_findings import append_validation_findings_to_envelope
+from src.lib.domain_packs.validation_findings import (
+    append_validation_findings_to_envelope,
+    remove_open_validation_findings_for_scope,
+    resolve_stale_validation_findings_after_refresh,
+)
 from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
 from src.schemas.curation_workspace import (
     CurationCandidateValidationRequest,
@@ -356,6 +360,7 @@ def _envelope_validation_results_for_candidate(
         candidate,
         envelope_row=envelope_row,
         envelope=envelope,
+        field_paths=[field.field_key for field in draft_fields],
         validated_at=validated_at,
     )
     field_results, warnings = domain_envelope_field_validation_results(
@@ -383,6 +388,7 @@ def _dispatch_workspace_envelope_validation(
     *,
     envelope_row: DomainEnvelopeModel,
     envelope: DomainEnvelope,
+    field_paths: Sequence[str],
     validated_at: datetime,
 ) -> tuple[DomainEnvelope, int, list[str]]:
     domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
@@ -394,8 +400,13 @@ def _dispatch_workspace_envelope_validation(
         return envelope, int(envelope_row.revision), [warning]
 
     source_revision = int(envelope_row.revision)
-    structural_result = run_domain_envelope_structural_checks(
+    refresh_scope = remove_open_validation_findings_for_scope(
         envelope,
+        object_id=candidate.object_id,
+        field_paths=field_paths,
+    )
+    structural_result = run_domain_envelope_structural_checks(
+        refresh_scope.envelope,
         domain_pack,
     )
     package_validator = resolve_curation_domain_envelope_validator_by_id(
@@ -418,20 +429,27 @@ def _dispatch_workspace_envelope_validation(
         registry=structural_result.registry,
         source_envelope_revision=source_revision,
     )
+    stale_resolution = resolve_stale_validation_findings_after_refresh(
+        original_envelope=envelope,
+        refreshed_envelope=dispatch_result.envelope,
+        removed_findings=refresh_scope.removed_findings,
+        actor_id="workspace_candidate_validation",
+    )
     appended_findings = (
         *structural_result.appended_findings,
         *package_appended_findings,
         *dispatch_result.appended_findings,
+        *stale_resolution.resolved_findings,
     )
-    if not appended_findings:
-        return dispatch_result.envelope, source_revision, []
+    if not appended_findings and not stale_resolution.changed:
+        return stale_resolution.envelope, source_revision, []
 
     try:
         checkpoint = write_domain_envelope_checkpoint(
             db,
             DomainEnvelopeCheckpointRequest(
                 project_key=envelope_row.project_key,
-                envelope=dispatch_result.envelope,
+                envelope=stale_resolution.envelope,
                 expected_revision=source_revision,
                 document_id=envelope_row.document_id,
                 session_id=envelope_row.session_id,
@@ -449,7 +467,7 @@ def _dispatch_workspace_envelope_validation(
 
     candidate.envelope_revision = checkpoint.revision
     candidate.updated_at = validated_at
-    return dispatch_result.envelope, checkpoint.revision, []
+    return stale_resolution.envelope, checkpoint.revision, []
 
 
 def _aggregate_session_validation_snapshot(
