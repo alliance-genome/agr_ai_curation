@@ -161,6 +161,22 @@ def _converted_tmem67_envelope():
     )
 
 
+def _converted_tmem67_envelope_with_raw_assay(assay: Mapping[str, Any]):
+    raw_fixture = yaml.safe_load(
+        GENE_EXPRESSION_OUTPUT_FIXTURE_PATH.read_text(encoding="utf-8")
+    )
+    payload = raw_fixture["output"]["curatable_objects"][0]["payload"]
+    payload["expression_experiment"]["expression_assay_used"] = dict(assay)
+    context = raw_fixture["envelope_context"]
+    return gene_expression_extraction_output_to_pending_envelope(
+        raw_fixture["output"],
+        envelope_id=context["envelope_id"],
+        document_id=context["document_id"],
+        produced_by=context["produced_by"],
+        produced_at=context["produced_at"],
+    )
+
+
 def _with_payload(envelope: Any, payload: Mapping[str, Any]):
     annotation = envelope.objects[0].model_copy(update={"payload": dict(payload)})
     return envelope.model_copy(update={"objects": [annotation]})
@@ -740,6 +756,59 @@ def test_gene_expression_assay_materializes_from_validator_result():
     resolved_field_ref = result.appended_findings[0].field_ref
     assert resolved_field_ref is not None
     assert resolved_field_ref.field_path == "expression_experiment.expression_assay_used"
+
+
+def test_gene_expression_conversion_preserves_no_match_assay_label_for_validation():
+    envelope = _converted_tmem67_envelope_with_raw_assay(
+        {"name": "paper-only colorimetric staining assay"}
+    )
+
+    assay = envelope.objects[0].payload["expression_experiment"][
+        "expression_assay_used"
+    ]
+    assert assay == {"name": "paper-only colorimetric staining assay"}
+    finding = _finding_by_code(
+        validate_pending_gene_expression_envelope(envelope),
+        "alliance.gene_expression.assay_method_missing",
+    )
+    assert finding.field_ref.field_path == (
+        "expression_experiment.expression_assay_used.curie"
+    )
+    assert finding.details["expected_selector"] == "MMO assay/method CURIE"
+
+    match = _active_binding_match(envelope, "expression_assay_ontology_validation")
+    request = build_domain_validation_request(match).request
+    assert request is not None
+    assert request.selected_inputs["label"] == "paper-only colorimetric staining assay"
+
+
+def test_gene_expression_conversion_preserves_ambiguous_assay_candidates_for_validation():
+    envelope = _converted_tmem67_envelope_with_raw_assay(
+        {
+            "candidates": [
+                {"curie": "MMO:0000655", "name": "RT-PCR"},
+                {"curie": "MMO:0000642", "name": "in situ hybridization"},
+            ]
+        }
+    )
+
+    assay = envelope.objects[0].payload["expression_experiment"][
+        "expression_assay_used"
+    ]
+    assert assay == {
+        "candidates": [
+            {"curie": "MMO:0000655", "name": "RT-PCR"},
+            {"curie": "MMO:0000642", "name": "in situ hybridization"},
+        ]
+    }
+    finding = _finding_by_code(
+        validate_pending_gene_expression_envelope(envelope),
+        "alliance.gene_expression.assay_method_ambiguous",
+    )
+    assert finding.field_ref.field_path == (
+        "expression_experiment.expression_assay_used"
+    )
+    assert finding.details["candidate_count"] == 2
 
 
 @pytest.mark.parametrize(

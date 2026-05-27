@@ -78,6 +78,11 @@ REQUIRED_GENE_EXPRESSION_PAYLOAD_FIELDS = frozenset(
         "expression_pattern.where_expressed",
     }
 )
+MATERIALIZER_RESOLVABLE_EXTRACTION_FIELDS = frozenset(
+    {
+        "expression_experiment.expression_assay_used.curie",
+    }
+)
 FIELD_SPECIFIC_GENE_EXPRESSION_PAYLOAD_FIELDS = frozenset(
     {
         "data_provider.abbreviation",
@@ -283,6 +288,7 @@ def validate_gene_expression_extraction_objects(
         missing_payload_fields = sorted(
             field_path
             for field_path in REQUIRED_GENE_EXPRESSION_PAYLOAD_FIELDS
+            if field_path not in MATERIALIZER_RESOLVABLE_EXTRACTION_FIELDS
             if _payload_value_missing_or_blank(obj.payload, field_path)
         )
         if missing_payload_fields:
