@@ -7,6 +7,10 @@ from pathlib import Path
 import pytest
 
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
+from src.lib.domain_packs.loader import (
+    load_domain_fixture_pack,
+    load_domain_pack_metadata,
+)
 from src.lib.domain_packs.materialization import (
     REVIEW_ROW_PROJECTION_TYPE,
     DomainEnvelopeMaterializationError,
@@ -40,6 +44,14 @@ from src.schemas.domain_pack_metadata import (
 
 
 pytestmark = pytest.mark.provider_agnostic_domain_pack
+
+PROVIDER_AGNOSTIC_PACK_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "fixtures"
+    / "domain_packs"
+    / "provider_agnostic"
+    / "museum.catalog"
+)
 
 
 def _metadata() -> DomainPackMetadata:
@@ -355,9 +367,43 @@ def test_metadata_materializer_regenerates_review_rows_from_envelope_objects():
         }
     ]
     assert row.metadata["semantic_source"] == "domain_envelope.objects"
+    assert row.metadata["payload_path"] == "objects[0].payload"
+    assert row.metadata["evidence_record_ids"] == []
+    assert row.metadata["metadata_refs"] == []
     assert row.metadata["unavailable_validator_capabilities"] == (
         row.summary_fields[0].metadata["unavailable_validator_capabilities"]
     )
+
+
+def test_metadata_materializer_projects_provider_agnostic_fixture_pack_objects():
+    metadata = load_domain_pack_metadata(PROVIDER_AGNOSTIC_PACK_PATH / "domain_pack.yaml")
+    fixture_pack = load_domain_fixture_pack(
+        PROVIDER_AGNOSTIC_PACK_PATH / "fixtures" / "smoke.yaml"
+    )
+    envelope = fixture_pack.fixtures[0].envelope
+
+    rows = DomainPackMetadataReviewRowMaterializer(metadata).materialize(
+        envelope,
+        envelope_revision=1,
+    )
+
+    assert [row.object_id for row in rows] == ["artifact-1", "action-1"]
+    assert [row.object_type for row in rows] == [
+        "MuseumArtifact",
+        "ConservationAction",
+    ]
+    assert {row.domain_pack_id for row in rows} == {"museum.catalog"}
+    assert {row.schema_provider for row in rows} == {"json-schema"}
+    assert rows[0].schema_ref["schema_id"] == "artifact.schema.json"
+    assert rows[0].metadata["payload_path"] == "objects[0].payload"
+    assert [field.field_path for field in rows[0].summary_fields] == [
+        "artifact.accession_id",
+        "artifact.title",
+        "condition.status",
+        "curator_review.status",
+        "curator_review.measurements",
+        "related_artifacts[0].accession_id",
+    ]
 
 
 def test_validator_result_materialization_creates_reference_object_and_finding():
@@ -398,6 +444,7 @@ def test_validator_result_materialization_creates_reference_object_and_finding()
     finding = result.appended_findings[0]
     assert finding.status is ValidationFindingStatus.RESOLVED
     assert finding.code == "domain_pack.validator_resolved"
+    assert finding.field_ref is not None
     assert finding.field_ref.field_path == "mention.text"
     assert finding.details["validation_request"]["input_selectors"]["mention"] == {
         "source": "payload",

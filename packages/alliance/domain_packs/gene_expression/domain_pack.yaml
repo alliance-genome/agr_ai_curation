@@ -307,6 +307,15 @@ object_definitions:
             gene_primary_external_id: RGD:1586167
             gene_symbol: Tmem67
             data_provider: RGD
+      workspace_display:
+        primary_label_field: expression_annotation_subject.gene_symbol
+        secondary_label_field: where_expressed_statement
+        summary_fields:
+          - expression_annotation_subject.gene_symbol
+          - where_expressed_statement
+          - when_expressed_stage_name
+          - relation.name
+          - expression_experiment.expression_assay_used.name
       controlled_field_helper_gaps:
         - field_path: condition_relations[].condition_relation_type
           status: under_development
@@ -1460,6 +1469,15 @@ fixture_packs:
     definition_state: stable
     definition_notes:
       - Fixture values mirror grounded tmem67 curation DB shape while preserving extractor-side metadata.
+  - fixture_pack_id: tmem67_multi_annotation_pending
+    display_name: tmem67 multi-annotation pending gene expression fixtures
+    path: fixtures/tmem67_multi_annotation_pending.yaml
+    description: Focused same-gene multi-expression fixture proving one GeneExpressionAnnotation review row per retained expression statement.
+    object_types:
+      - GeneExpressionAnnotation
+    definition_state: stable
+    definition_notes:
+      - Two retained expression statements share the same gene and reference but differ by expression site, stage, evidence, and metadata refs.
 metadata:
   object_role_key: object_role
   curatable_unit_object_type: GeneExpressionAnnotation
