@@ -10,6 +10,8 @@ from src.schemas.domain_validator import (
     DomainValidatorResultBase,
 )
 
+from .value_presence import missing_resolved_value
+
 
 @dataclass(frozen=True)
 class ValidatorResultPolicyViolation:
@@ -39,7 +41,7 @@ def allowed_term_policy_violations(
     violations: list[ValidatorResultPolicyViolation] = []
     for field_name in request.expected_result_fields:
         resolved_value = result.resolved_values.get(field_name)
-        if _missing_value(resolved_value):
+        if missing_resolved_value(resolved_value):
             continue
 
         values = resolved_value if isinstance(resolved_value, list) else [resolved_value]
@@ -118,10 +120,6 @@ def _normalize_string(value: str | None) -> str | None:
         return None
     text = " ".join(value.strip().casefold().split())
     return text or None
-
-
-def _missing_value(value: Any) -> bool:
-    return value is None or value == "" or value == [] or value == {}
 
 
 __all__ = [

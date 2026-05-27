@@ -192,31 +192,37 @@ def test_phenotype_pack_declares_roles_and_validator_bindings():
             "source": "payload",
             "path": "ontology_lookup_hint.data_provider",
             "required": False,
+            "context_only": True,
         },
         "taxon_id": {
             "source": "payload",
             "path": "ontology_lookup_hint.taxon_id",
             "required": False,
+            "context_only": True,
         },
         "evidence_record_id": {
             "source": "payload",
             "path": "ontology_lookup_hint.evidence_record_id",
             "required": False,
+            "context_only": True,
         },
         "evidence_quote": {
             "source": "evidence_record",
             "path": "verified_quote",
             "required": False,
+            "context_only": True,
         },
         "source_chunk_id": {
             "source": "evidence_record",
             "path": "chunk_id",
             "required": False,
+            "context_only": True,
         },
         "source_section": {
             "source": "evidence_record",
             "path": "section",
             "required": False,
+            "context_only": True,
         },
         "ontology_family": {
             "source": "literal",

@@ -45,6 +45,7 @@ from .validator_result_classification import (
     validator_failure_classification,
 )
 from .validator_result_policies import allowed_term_policy_violations
+from .value_presence import missing_resolved_value
 from .validation_findings import append_validation_findings_to_envelope
 
 
@@ -1241,7 +1242,7 @@ def _enforce_expected_result_fields(
     missing_fields = [
         field_name
         for field_name in request.expected_result_fields
-        if _missing_resolved_value(result.resolved_values.get(field_name))
+        if missing_resolved_value(result.resolved_values.get(field_name))
     ]
     invalid_array_fields = _invalid_array_resolved_fields(result, request=request)
     policy_violations = allowed_term_policy_violations(result, request=request)
@@ -1290,7 +1291,7 @@ def _invalid_array_resolved_fields(
             continue
 
         resolved_value = result.resolved_values.get(field_name)
-        if _missing_resolved_value(resolved_value):
+        if missing_resolved_value(resolved_value):
             continue
         if not isinstance(resolved_value, list):
             invalid_fields.append(field_name)
@@ -1298,14 +1299,10 @@ def _invalid_array_resolved_fields(
         if len(resolved_value) != len(selected_value):
             invalid_fields.append(field_name)
             continue
-        if any(_missing_resolved_value(item) for item in resolved_value):
+        if any(missing_resolved_value(item) for item in resolved_value):
             invalid_fields.append(field_name)
 
     return invalid_fields
-
-
-def _missing_resolved_value(value: Any) -> bool:
-    return value is None or value == "" or value == [] or value == {}
 
 
 def _unresolved_result_for_dispatch_problem(

@@ -1275,6 +1275,7 @@ metadata:
             source: payload
             path: data_provider.abbreviation
             required: false
+            context_only: true
         expected_result_fields:
           primary_external_id: expression_annotation_subject.primary_external_id
           gene_symbol: expression_annotation_subject.gene_symbol
@@ -1324,6 +1325,7 @@ metadata:
             source: envelope_metadata
             path: document_id
             required: false
+            context_only: true
         expected_result_fields:
           reference_id: single_reference.reference_id
           curie: single_reference.curie
@@ -1352,6 +1354,7 @@ metadata:
             source: payload
             path: data_provider.abbreviation
             required: false
+            context_only: true
           ontology_family:
             source: literal
             value: life_stage
@@ -1433,6 +1436,7 @@ metadata:
             source: payload
             path: data_provider.abbreviation
             required: false
+            context_only: true
           ontology_family:
             source: literal
             value: anatomy

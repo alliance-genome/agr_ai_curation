@@ -47,6 +47,8 @@ object_definitions:
         field_type: array
       - field_path: data_provider
         field_type: string
+      - field_path: organism_id
+        field_type: string
       - field_path: ref
         field_type: object_ref
         object_type_ref: RefObject
@@ -307,21 +309,22 @@ def test_optional_context_only_selectors_do_not_launch_request(tmp_path: Path):
             source: payload
             path: value
             required: false
-          data_provider:
+          organism_id:
             source: payload
-            path: data_provider
+            path: organism_id
             required: false
+            context_only: true
           ontology_term_type:
             source: literal
             value: DOTerm
 """,
-        _assertion_envelope(payload={"data_provider": "provider-a"}),
+        _assertion_envelope(payload={"organism_id": "NCBITaxon:6239"}),
     )
 
     assert result.findings == ()
     assert result.request is None
     assert result.selected_inputs == {
-        "data_provider": "provider-a",
+        "organism_id": "NCBITaxon:6239",
         "ontology_term_type": "DOTerm",
     }
 

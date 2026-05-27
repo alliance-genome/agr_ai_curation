@@ -49,20 +49,6 @@ class _SelectorProblem:
 
 
 _OPTIONAL_INPUT_MISSING = object()
-_CONTEXT_ONLY_INPUT_NAMES = frozenset(
-    {
-        "data_provider",
-        "data_provider_hint",
-        "evidence_quote",
-        "evidence_record_id",
-        "source_chunk_id",
-        "source_document_id",
-        "source_section",
-        "taxon_hint",
-        "taxon_id",
-        "verified_quote",
-    }
-)
 
 
 def build_domain_validation_request(
@@ -79,24 +65,18 @@ def build_domain_validation_request(
     missing_optional_non_literal_inputs = False
 
     for input_name, selector in binding.input_fields.items():
-        selectors[input_name] = selector.model_dump(mode="json", exclude_none=True)
-        if (
-            selector.source != "literal"
-            and input_name not in _CONTEXT_ONLY_INPUT_NAMES
-        ):
+        selectors[input_name] = _selector_payload(selector)
+        if selector.source != "literal" and not selector.context_only:
             declared_non_literal_inputs = True
         value, problem = _resolve_selector(match, input_name, selector)
         if problem is not None:
             problems.append(problem)
             continue
         if value is _OPTIONAL_INPUT_MISSING:
-            if selector.source != "literal":
+            if selector.source != "literal" and not selector.context_only:
                 missing_optional_non_literal_inputs = True
             continue
-        if (
-            selector.source != "literal"
-            and input_name not in _CONTEXT_ONLY_INPUT_NAMES
-        ):
+        if selector.source != "literal" and not selector.context_only:
             selected_non_literal_inputs = True
         selected_inputs[input_name] = value
 
@@ -164,6 +144,13 @@ def build_domain_validation_request(
         input_selectors=selectors,
         evidence=_evidence_records_for_target(match),
     )
+
+
+def _selector_payload(selector: DomainPackInputSelector) -> dict[str, Any]:
+    payload = selector.model_dump(mode="json", exclude_none=True)
+    if not selector.context_only:
+        payload.pop("context_only", None)
+    return payload
 
 
 def _resolve_selector(

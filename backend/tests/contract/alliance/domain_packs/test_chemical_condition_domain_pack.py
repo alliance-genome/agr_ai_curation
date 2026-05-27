@@ -301,6 +301,7 @@ def test_chemical_condition_pack_declares_roles_and_validator_bindings():
         "source": "evidence_record",
         "path": "verified_quote",
         "required": False,
+        "context_only": True,
     }
     assert "experimental_condition_validation" not in active_binding_ids
     assert "chemical_condition.chebi_curie_format" not in active_binding_ids

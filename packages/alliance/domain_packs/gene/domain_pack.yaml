@@ -128,10 +128,12 @@ object_definitions:
                 source: payload
                 path: taxon_hint
                 required: false
+                context_only: true
               data_provider_hint:
                 source: payload
                 path: data_provider_hint
                 required: false
+                context_only: true
               species:
                 source: payload
                 path: species
@@ -140,6 +142,7 @@ object_definitions:
                 source: payload
                 path: verified_quote
                 required: false
+                context_only: true
               identity_resolution_notes:
                 source: payload
                 path: identity_resolution_notes

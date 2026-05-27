@@ -536,6 +536,7 @@ def test_gene_expression_context_ontology_requests_are_field_scoped():
         "ontology_family": "life_stage",
         "lookup_method": "search_life_stage_terms",
     }
+    assert stage_request.input_selectors["data_provider"]["context_only"] is True
     assert stage_request.expected_result_fields == {
         "label": "when_expressed_stage_name",
         "curie": "expression_pattern.when_expressed.developmental_stage_start.curie",
@@ -558,6 +559,7 @@ def test_gene_expression_context_ontology_requests_are_field_scoped():
         "ontology_family": "anatomy",
         "lookup_method": "search_anatomy_terms",
     }
+    assert anatomy_request.input_selectors["data_provider"]["context_only"] is True
 
     stage_uberon_match = _active_binding_match(
         envelope,

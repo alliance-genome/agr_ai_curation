@@ -161,15 +161,34 @@ class DomainPackInputSelector(DomainPackMetadataBaseModel):
     """Deterministic selector for one validator input value."""
 
     _ALLOWED_FIELDS_BY_SOURCE: ClassVar[dict[str, set[str]]] = {
-        "payload": {"source", "path", "required", "allow_multiple"},
-        "envelope_metadata": {"source", "path", "required", "allow_multiple"},
-        "object_metadata": {"source", "path", "required", "allow_multiple"},
+        "payload": {
+            "source",
+            "path",
+            "required",
+            "allow_multiple",
+            "context_only",
+        },
+        "envelope_metadata": {
+            "source",
+            "path",
+            "required",
+            "allow_multiple",
+            "context_only",
+        },
+        "object_metadata": {
+            "source",
+            "path",
+            "required",
+            "allow_multiple",
+            "context_only",
+        },
         "evidence_record": {
             "source",
             "path",
             "record_id",
             "required",
             "allow_multiple",
+            "context_only",
         },
         "object_ref": {
             "source",
@@ -178,8 +197,15 @@ class DomainPackInputSelector(DomainPackMetadataBaseModel):
             "object_type",
             "required",
             "allow_multiple",
+            "context_only",
         },
-        "literal": {"source", "value", "required", "allow_multiple"},
+        "literal": {
+            "source",
+            "value",
+            "required",
+            "allow_multiple",
+            "context_only",
+        },
     }
 
     source: Literal[
@@ -197,6 +223,7 @@ class DomainPackInputSelector(DomainPackMetadataBaseModel):
     value: Any = None
     required: bool = True
     allow_multiple: Optional[bool] = None
+    context_only: bool = Field(default=False, exclude_if=lambda value: value is False)
 
     @field_validator("path", "field_path")
     @classmethod

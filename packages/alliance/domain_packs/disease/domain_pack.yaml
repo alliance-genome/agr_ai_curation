@@ -1038,6 +1038,7 @@ metadata:
             source: evidence_record
             path: verified_quote
             required: false
+            context_only: true
         expected_result_fields:
           condition_id: ExperimentalCondition.condition_id
           normalized_components: ExperimentalCondition.components
@@ -1114,6 +1115,7 @@ metadata:
             source: envelope_metadata
             path: document_id
             required: false
+            context_only: true
         expected_result_fields:
           reference_id: single_reference.reference_id
           curie: single_reference.curie

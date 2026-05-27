@@ -666,9 +666,11 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     assert phenotype_term_binding.input_fields["data_provider"].path == (
         "ontology_lookup_hint.data_provider"
     )
+    assert phenotype_term_binding.input_fields["data_provider"].context_only is True
     assert phenotype_term_binding.input_fields["taxon_id"].path == (
         "ontology_lookup_hint.taxon_id"
     )
+    assert phenotype_term_binding.input_fields["taxon_id"].context_only is True
     assert (
         phenotype_term_binding.input_fields["provider_taxon_ontology_mappings"]
         .value[0]["ontology_term_type"]
