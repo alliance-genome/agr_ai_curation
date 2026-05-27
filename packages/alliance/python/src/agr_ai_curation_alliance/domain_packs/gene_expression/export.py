@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from src.lib.curation_workspace.export_adapters.base import (
     DeterministicExportAdapter,
@@ -26,7 +27,10 @@ from ._payload_terms import (
 )
 from .constants import (
     GENE_EXPRESSION_DOMAIN_PACK_ID,
+    GENE_EXPRESSION_DOMAIN_PACK_VERSION,
+    GENE_EXPRESSION_LINKML_SCHEMA_ID,
     GENE_EXPRESSION_LINKML_SCHEMA_NAME,
+    GENE_EXPRESSION_LINKML_SCHEMA_URI,
     GENE_EXPRESSION_MODEL_ID,
     GENE_EXPRESSION_OBJECT_TYPE,
 )
@@ -57,6 +61,21 @@ ANATOMICAL_SITE_REQUIRED_COLUMNS = {
     "anatomicalstructureuberontermother": False,
     "anatomicalsubstructureuberontermother": False,
     "cellularcomponentother": False,
+}
+GENE_EXPRESSION_LINKML_SCHEMA_SOURCE_FILE = "model/schema/expression.yaml"
+_AUDIT_ONLY_CONTEXT_FIELDS = {
+    "expression_experiment.detection_reagents": (
+        "Detection reagent export mapping is not approved for the Gene Expression "
+        "0.7.0 curation DB handoff."
+    ),
+    "expression_experiment.specimen_alleles": (
+        "Specimen allele export mapping is not approved for the Gene Expression "
+        "0.7.0 curation DB handoff."
+    ),
+    "condition_relations": (
+        "Condition relation export mapping is not approved for the Gene Expression "
+        "0.7.0 curation DB handoff."
+    ),
 }
 
 
@@ -128,6 +147,7 @@ class GeneExpressionExportAdapter(DeterministicExportAdapter):
                 f"{self.adapter_key}-{export_context.session_id}-"
                 "gene-expression-curation-db.json"
             ),
+            warnings=tuple(_export_warning_messages(payload_json)),
         )
 
     def domain_envelope_readiness_blockers(
@@ -180,6 +200,7 @@ def build_gene_expression_export_payload(
     payload: dict[str, Any] = {
         "schema_version": GENE_EXPRESSION_EXPORT_SCHEMA_VERSION,
         "bundle_type": "alliance_gene_expression_curation_db_export",
+        "payload_status": "ready",
         "adapter_key": adapter_key,
         "mode": mode.value,
         "target_key": target_key,
@@ -187,9 +208,13 @@ def build_gene_expression_export_payload(
         "candidate_ids": list(export_context.candidate_ids),
         "candidate_count": export_context.candidate_count,
         "domain_pack_id": GENE_EXPRESSION_DOMAIN_PACK_ID,
+        "domain_pack_version": GENE_EXPRESSION_DOMAIN_PACK_VERSION,
+        "schema_ref": _linkml_schema_ref(),
         "linkml": {
             "provider": ALLIANCE_LINKML_PROVIDER_KEY,
             "commit": ALLIANCE_LINKML_COMMIT,
+            "source_file": GENE_EXPRESSION_LINKML_SCHEMA_SOURCE_FILE,
+            "schema_id": GENE_EXPRESSION_LINKML_SCHEMA_ID,
             "root_class": GENE_EXPRESSION_LINKML_SCHEMA_NAME,
             "classes": list(GENE_EXPRESSION_LINKML_CLASSES),
         },
@@ -290,6 +315,30 @@ def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[st
     assay = _mapping(expression_experiment["expression_assay_used"])
     experiment_reference = _mapping(expression_experiment["single_reference"])
     entity_assayed = _mapping(expression_experiment["entity_assayed"])
+    specimen_genomic_model = _mapping(
+        expression_experiment.get("specimen_genomic_model")
+    )
+    specimen_genomic_model_lookup = _specimen_genomic_model_lookup(
+        specimen_genomic_model
+    )
+    export_warnings = _audit_only_context_warnings(payload)
+    if (
+        specimen_genomic_model
+        and specimen_genomic_model_lookup is None
+        and not _is_placeholder_context(specimen_genomic_model)
+    ):
+        export_warnings.append(
+            _export_warning(
+                field_path="expression_experiment.specimen_genomic_model",
+                message=(
+                    "Specimen genomic model context is present but does not include "
+                    "a supported primary_external_id or curie selector for "
+                    "geneexpressionexperiment.specimengenomicmodel_id."
+                ),
+                source_context=specimen_genomic_model,
+                reason_code="specimen_agm_export_selector_missing",
+            )
+        )
 
     temporal_target = {
         "table": "temporalcontext",
@@ -410,6 +459,7 @@ def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[st
                         "table": "organization",
                         "match": {"abbreviation": data_provider["abbreviation"]},
                     },
+                    "specimengenomicmodel_id": specimen_genomic_model_lookup,
                 }
             ),
         },
@@ -450,6 +500,7 @@ def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[st
                 "object_id": candidate["object_id"],
                 "object_type": candidate["object_type"],
                 "model_ref": GENE_EXPRESSION_MODEL_ID,
+                "schema_ref": dict(_mapping(candidate.get("schema_ref"))),
             },
             "source_payload": payload,
             "target_rows": target_rows,
@@ -485,8 +536,114 @@ def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[st
                     ),
                 }
             ),
+            "export_diagnostics": {
+                "warnings": export_warnings,
+            },
         }
     )
+
+
+def _linkml_schema_ref() -> dict[str, Any]:
+    return {
+        "schema_id": GENE_EXPRESSION_LINKML_SCHEMA_ID,
+        "provider": ALLIANCE_LINKML_PROVIDER_KEY,
+        "name": GENE_EXPRESSION_LINKML_SCHEMA_NAME,
+        "version": ALLIANCE_LINKML_COMMIT,
+        "uri": GENE_EXPRESSION_LINKML_SCHEMA_URI,
+        "source_file": GENE_EXPRESSION_LINKML_SCHEMA_SOURCE_FILE,
+        "class": GENE_EXPRESSION_OBJECT_TYPE,
+    }
+
+
+def _audit_only_context_warnings(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    for field_path, message in _AUDIT_ONLY_CONTEXT_FIELDS.items():
+        value = _payload_value(payload, field_path)
+        if _value_missing_or_blank(value):
+            continue
+        warnings.append(
+            _export_warning(
+                field_path=field_path,
+                message=message,
+                source_context=value,
+                reason_code="export_mapping_not_approved",
+            )
+        )
+    return warnings
+
+
+def _export_warning(
+    *,
+    field_path: str,
+    message: str,
+    source_context: Any,
+    reason_code: str,
+) -> dict[str, Any]:
+    return {
+        "severity": "warning",
+        "status": "audit_only",
+        "code": "alliance.gene_expression.context_not_exported",
+        "field_path": field_path,
+        "message": message,
+        "details": {
+            "reason_code": reason_code,
+            "source_context": source_context,
+        },
+    }
+
+
+def _specimen_genomic_model_lookup(value: Mapping[str, Any]) -> dict[str, Any] | None:
+    if not value or _is_placeholder_context(value):
+        return None
+    primary_external_id = _optional_string(value.get("primary_external_id"))
+    curie = _optional_string(value.get("curie"))
+    if primary_external_id is None and curie is None:
+        return None
+    match = (
+        {"primaryexternalid": primary_external_id}
+        if primary_external_id is not None
+        else {"curie": curie}
+    )
+    return {
+        "table": "affectedgenomicmodel",
+        "match": match,
+        "projection": _drop_empty(
+            {
+                "primary_external_id": primary_external_id,
+                "curie": curie,
+                "name": value.get("name"),
+                "mod_internal_id": value.get("mod_internal_id"),
+            }
+        ),
+    }
+
+
+def _is_placeholder_context(value: Mapping[str, Any]) -> bool:
+    return value.get("placeholder") is True
+
+
+def _export_warning_messages(payload: Mapping[str, Any]) -> list[str]:
+    messages: list[str] = []
+    raw_annotations = payload.get("gene_expression_annotations")
+    if not isinstance(raw_annotations, Sequence) or isinstance(raw_annotations, Mapping):
+        return messages
+    for annotation in raw_annotations:
+        if not isinstance(annotation, Mapping):
+            continue
+        diagnostics = annotation.get("export_diagnostics")
+        if not isinstance(diagnostics, Mapping):
+            continue
+        raw_warnings = diagnostics.get("warnings")
+        if not isinstance(raw_warnings, Sequence) or isinstance(raw_warnings, Mapping):
+            continue
+        for warning in raw_warnings:
+            if not isinstance(warning, Mapping):
+                continue
+            message = warning.get("message")
+            field_path = warning.get("field_path")
+            if isinstance(message, str) and isinstance(field_path, str):
+                messages.append(f"{field_path}: {message}")
+    return list(dict.fromkeys(messages))
 
 
 def _term_lookup(value: Any) -> dict[str, Any] | None:
