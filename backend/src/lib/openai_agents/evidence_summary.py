@@ -58,6 +58,15 @@ def _normalize_optional_text(value: Any) -> Optional[str]:
     return text or None
 
 
+def evidence_record_status(record_dict: Dict[str, Any]) -> str:
+    """Return the normalized active-run evidence workspace status."""
+
+    status = _normalize_optional_text(
+        record_dict.get("workspace_status") or record_dict.get("status")
+    )
+    return status.lower() if status else "active"
+
+
 def _normalize_unique_string_list(value: Any) -> Optional[List[str]]:
     if not isinstance(value, list):
         return None
@@ -196,10 +205,7 @@ def _normalize_evidence_record(
         )
         return None
 
-    status = str(
-        record_dict.get("workspace_status") or record_dict.get("status") or ""
-    ).strip().lower()
-    if status == "discarded":
+    if evidence_record_status(record_dict) == "discarded":
         return None
 
     entity_source = record_dict.get("entity")

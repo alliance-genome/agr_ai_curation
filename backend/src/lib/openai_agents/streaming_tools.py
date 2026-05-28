@@ -2133,7 +2133,6 @@ async def run_specialist_with_events(
     phase_timings_ms: Dict[str, int] = {}
     tool_calls: List[SpecialistToolCall] = []
     live_evidence_records: List[Dict[str, Any]] = []
-    evidence_workspace_token = set_active_evidence_records(live_evidence_records)
     pending_tool_calls: "deque[Dict[str, Any]]" = deque()
 
     # Track consecutive calls for batching nudge
@@ -2244,6 +2243,7 @@ async def run_specialist_with_events(
     stream_recovered_final_output = ""
 
     stream_consume_started_at = time.monotonic()
+    evidence_workspace_token = set_active_evidence_records(live_evidence_records)
     try:
         async for event in result.stream_events():
             total_event_count += 1
@@ -2711,6 +2711,8 @@ async def run_specialist_with_events(
         if not stream_recovered_final_output:
             # Re-raise to propagate unrecoverable stream errors.
             raise
+    finally:
+        reset_active_evidence_records(evidence_workspace_token)
 
     stream_duration = datetime.now(timezone.utc) - start_time
     stream_duration_ms = int(stream_duration.total_seconds() * 1000)
@@ -3321,5 +3323,4 @@ async def run_specialist_with_events(
             )
             final_output += nudge
 
-    reset_active_evidence_records(evidence_workspace_token)
     return final_output

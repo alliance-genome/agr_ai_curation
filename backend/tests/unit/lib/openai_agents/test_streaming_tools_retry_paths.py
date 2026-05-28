@@ -7,6 +7,7 @@ import pytest
 from pydantic import BaseModel
 
 from src.lib.openai_agents import streaming_tools
+from src.lib.openai_agents.tools import evidence_workspace
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
 
@@ -45,10 +46,12 @@ class _FailingStreamRunResult(_FakeRunResult):
 
 @pytest.fixture(autouse=True)
 def _reset_streaming_state():
+    evidence_workspace.set_active_evidence_records(None)
     streaming_tools.reset_consecutive_call_tracker()
     streaming_tools.clear_collected_events()
     streaming_tools.set_live_event_list(None)
     yield
+    evidence_workspace.set_active_evidence_records(None)
     streaming_tools.reset_consecutive_call_tracker()
     streaming_tools.clear_collected_events()
     streaming_tools.set_live_event_list(None)
@@ -232,6 +235,43 @@ async def test_run_specialist_does_not_recover_non_domain_stream_errors(monkeypa
             max_turns=3,
             tool_name=None,
         )
+
+
+@pytest.mark.asyncio
+async def test_run_specialist_resets_evidence_workspace_after_stream_error(monkeypatch):
+    class _WorkspaceInspectingRunResult(_FakeRunResult):
+        async def stream_events(self):
+            assert evidence_workspace._workspace_records() == []
+            yield SimpleNamespace(type="noop")
+            raise RuntimeError("stream exploded")
+
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _WorkspaceInspectingRunResult(),
+    )
+
+    agent = SimpleNamespace(
+        name="Structured Specialist",
+        tools=[],
+        output_type=_Envelope,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    with pytest.raises(RuntimeError, match="stream exploded"):
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="extract structured output",
+            specialist_name="Structured Specialist",
+            max_turns=3,
+            tool_name=None,
+        )
+
+    with pytest.raises(RuntimeError, match="No active evidence workspace"):
+        evidence_workspace._workspace_records()
 
 
 @pytest.mark.asyncio

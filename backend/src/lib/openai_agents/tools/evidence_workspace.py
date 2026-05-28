@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from agents import function_tool
 
+from ..evidence_summary import evidence_record_status
+
 if TYPE_CHECKING:
     from ..guardrails import ToolCallTracker
 
@@ -51,13 +53,8 @@ def _optional_string(value: Any) -> str | None:
     return text or None
 
 
-def _record_status(record: dict[str, Any]) -> str:
-    status = _optional_string(record.get("workspace_status") or record.get("status"))
-    return status.lower() if status else "active"
-
-
 def _is_discarded(record: dict[str, Any]) -> bool:
-    return _record_status(record) == "discarded"
+    return evidence_record_status(record) == "discarded"
 
 
 def _matches_document(record: dict[str, Any], document_id: str) -> bool:
@@ -218,7 +215,7 @@ def _find_record(
 def _record_summary(record: dict[str, Any]) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "evidence_record_id": record.get("evidence_record_id"),
-        "status": _record_status(record),
+        "status": evidence_record_status(record),
         "entity": record.get("entity"),
         "verified_quote": record.get("verified_quote"),
         "page": record.get("page"),
