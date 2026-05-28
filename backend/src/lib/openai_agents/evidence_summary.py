@@ -53,6 +53,134 @@ def _coerce_evidence_record_dict(value: Any) -> Optional[Dict[str, Any]]:
     return coerce_tool_event_dict(value)
 
 
+def _normalize_optional_text(value: Any) -> Optional[str]:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _normalize_unique_string_list(value: Any) -> Optional[List[str]]:
+    if not isinstance(value, list):
+        return None
+
+    normalized_values: List[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        normalized = item.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        normalized_values.append(normalized)
+    return normalized_values or None
+
+
+def _normalize_non_negative_int(value: Any) -> Optional[int]:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _normalize_positive_int(value: Any) -> Optional[int]:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
+
+
+def _text_hash_from_span_id(span_id: Any) -> Optional[str]:
+    text = _normalize_optional_text(span_id)
+    if not text:
+        return None
+    candidate = text.rsplit(":", 1)[-1]
+    if len(candidate) == 8 and all(char in "0123456789abcdef" for char in candidate):
+        return candidate
+    return None
+
+
+def _normalize_source_fragment(value: Any) -> Optional[Dict[str, Any]]:
+    fragment_dict = _coerce_evidence_record_dict(value)
+    if not isinstance(fragment_dict, dict):
+        return None
+
+    fragment: Dict[str, Any] = {}
+    for key in (
+        "span_id",
+        "chunk_id",
+        "document_id",
+        "text",
+        "section",
+        "subsection",
+        "figure_reference",
+        "span_type",
+        "spanizer_version",
+    ):
+        normalized = _normalize_optional_text(fragment_dict.get(key))
+        if normalized:
+            fragment[key] = normalized
+
+    text_hash = _normalize_optional_text(fragment_dict.get("text_hash")) or _text_hash_from_span_id(
+        fragment.get("span_id")
+    )
+    if text_hash:
+        fragment["text_hash"] = text_hash
+
+    for key in ("char_start", "char_end", "span_index"):
+        normalized_int = _normalize_non_negative_int(fragment_dict.get(key))
+        if normalized_int is not None:
+            fragment[key] = normalized_int
+
+    page = _normalize_positive_int(fragment_dict.get("page"))
+    if page is not None:
+        fragment["page"] = page
+
+    for key in ("anchor", "bbox"):
+        value = fragment_dict.get(key)
+        if isinstance(value, dict):
+            fragment[key] = dict(value)
+
+    bounding_boxes = fragment_dict.get("bounding_boxes")
+    if isinstance(bounding_boxes, list):
+        normalized_boxes = [dict(item) for item in bounding_boxes if isinstance(item, dict)]
+        if normalized_boxes:
+            fragment["bounding_boxes"] = normalized_boxes
+
+    return fragment or None
+
+
+def _normalize_source_fragments(value: Any) -> Optional[List[Dict[str, Any]]]:
+    if not isinstance(value, list):
+        return None
+
+    fragments = [
+        fragment
+        for item in value
+        for fragment in [_normalize_source_fragment(item)]
+        if fragment is not None
+    ]
+    return fragments or None
+
+
+def _copy_span_provenance_fields(
+    evidence_record: Dict[str, Any],
+    record_dict: Dict[str, Any],
+) -> None:
+    document_id = _normalize_optional_text(record_dict.get("document_id"))
+    if document_id:
+        evidence_record["document_id"] = document_id
+
+    chunk_ids = _normalize_unique_string_list(record_dict.get("chunk_ids"))
+    if chunk_ids:
+        evidence_record["chunk_ids"] = chunk_ids
+
+    source_span_ids = _normalize_unique_string_list(record_dict.get("source_span_ids"))
+    if source_span_ids:
+        evidence_record["source_span_ids"] = source_span_ids
+
+    source_fragments = _normalize_source_fragments(record_dict.get("source_fragments"))
+    if source_fragments:
+        evidence_record["source_fragments"] = source_fragments
+
+
 def _normalize_evidence_record(
     value: Any,
     *,
@@ -122,6 +250,8 @@ def _normalize_evidence_record(
     if figure_reference:
         evidence_record["figure_reference"] = figure_reference
 
+    _copy_span_provenance_fields(evidence_record, record_dict)
+
     evidence_record["evidence_record_id"] = build_evidence_record_id(
         record_dict.get("evidence_record_id"),
         evidence_record=evidence_record,
@@ -153,6 +283,7 @@ def build_evidence_record_id(
             str(evidence_record.get("chunk_id") or "").strip(),
             str(evidence_record.get("subsection") or "").strip(),
             str(evidence_record.get("figure_reference") or "").strip(),
+            [str(value).strip() for value in evidence_record.get("source_span_ids") or []],
         ],
         ensure_ascii=True,
         separators=(",", ":"),
@@ -301,6 +432,7 @@ def _evidence_record_key(record: Dict[str, Any]) -> tuple[Any, ...]:
         record.get("chunk_id"),
         record.get("subsection"),
         record.get("figure_reference"),
+        tuple(record.get("source_span_ids") or ()),
     )
 
 
@@ -613,6 +745,8 @@ def build_record_evidence_summary_record(
     figure_reference = str(output_payload.get("figure_reference") or "").strip()
     if figure_reference:
         evidence_record["figure_reference"] = figure_reference
+
+    _copy_span_provenance_fields(evidence_record, output_payload)
 
     evidence_record["evidence_record_id"] = build_evidence_record_id(
         output_payload.get("evidence_record_id"),

@@ -166,16 +166,20 @@ async def test_record_evidence_copies_exact_span_text_and_tracks_call(monkeypatc
         "status": "verified",
         "entity": "wg",
         "span_ids": [span_ids[1]],
+        "source_span_ids": [span_ids[1]],
         "verified_quote": "This sentence is exact evidence.",
+        "document_id": "doc-12345678",
         "chunk_id": chunk_id,
         "chunk_ids": [chunk_id],
         "source_fragments": [
             {
                 "span_id": span_ids[1],
                 "chunk_id": chunk_id,
+                "document_id": "doc-12345678",
                 "text": "This sentence is exact evidence.",
                 "char_start": 51,
                 "char_end": 83,
+                "text_hash": span_ids[1].rsplit(":", 1)[1],
                 "span_index": 1,
                 "span_type": "sentence",
                 "spanizer_version": "pdf_sentence_v1",
@@ -200,6 +204,7 @@ async def test_record_evidence_copies_exact_span_text_and_tracks_call(monkeypatc
                 "chunk_id": chunk_id,
                 "subsection": "Expression assays",
                 "figure_reference": None,
+                "source_span_ids": [span_ids[1]],
             }
         ),
     }
@@ -281,13 +286,19 @@ async def test_record_evidence_multi_span_call_creates_one_conjoined_record(monk
 
     assert result["status"] == "verified"
     assert result["span_ids"] == [span_ids[0], span_ids[1]]
+    assert result["source_span_ids"] == [span_ids[0], span_ids[1]]
+    assert result["document_id"] == "doc-123"
     assert result["verified_quote"] == (
         "First exact support sentence.\n\nSecond exact support sentence."
     )
     assert result["chunk_ids"] == [chunk_id]
     assert len(result["source_fragments"]) == 2
     assert result["source_fragments"][0]["text"] == "First exact support sentence."
+    assert result["source_fragments"][0]["document_id"] == "doc-123"
+    assert result["source_fragments"][0]["text_hash"] == span_ids[0].rsplit(":", 1)[1]
     assert result["source_fragments"][1]["text"] == "Second exact support sentence."
+    assert result["source_fragments"][1]["document_id"] == "doc-123"
+    assert result["source_fragments"][1]["text_hash"] == span_ids[1].rsplit(":", 1)[1]
     assert result["evidence_record_id"] == build_evidence_record_id(
         evidence_record={
             "entity": "wg",
@@ -297,6 +308,7 @@ async def test_record_evidence_multi_span_call_creates_one_conjoined_record(monk
             "chunk_id": chunk_id,
             "subsection": "Expression assays",
             "figure_reference": None,
+            "source_span_ids": [span_ids[0], span_ids[1]],
         }
     )
 

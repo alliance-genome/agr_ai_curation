@@ -7,7 +7,7 @@ This module contains foundational types used across all schema models:
 - StructuredMessageEnvelope: Base class for all envelope schemas
 """
 
-from typing import List, Optional
+from typing import Any, List, Optional
 from enum import Enum
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 
@@ -89,6 +89,55 @@ class ExclusionReasonCode(str, Enum):
     ASSAY_REAGENT_ONLY = "assay_reagent_only"
 
 
+class EvidenceSourceFragment(BaseModel):
+    """Exact source fragment selected by a backend-owned evidence span."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    span_id: Optional[str] = Field(default=None, description="Backend-generated source span identifier")
+    chunk_id: Optional[str] = Field(default=None, description="Source chunk identifier containing this fragment")
+    document_id: Optional[str] = Field(default=None, description="Source document identifier containing this fragment")
+    text: Optional[str] = Field(default=None, description="Exact source text for this fragment")
+    char_start: Optional[int] = Field(default=None, ge=0, description="0-based start offset in the source chunk")
+    char_end: Optional[int] = Field(default=None, ge=0, description="0-based exclusive end offset in the source chunk")
+    text_hash: Optional[str] = Field(default=None, description="Source-text hash encoded in the span identifier")
+    page: Optional[int] = Field(default=None, ge=1, description="1-based page number if known")
+    section: Optional[str] = Field(default=None, description="Document section containing this fragment")
+    subsection: Optional[str] = Field(default=None, description="Subsection heading containing this fragment")
+    figure_reference: Optional[str] = Field(default=None, description="Figure or table locator literal, if available")
+    span_index: Optional[int] = Field(default=None, ge=0, description="Span index within the source chunk")
+    span_type: Optional[str] = Field(default=None, description="Span segmentation type")
+    spanizer_version: Optional[str] = Field(default=None, description="Spanizer version that generated the span")
+    anchor: Optional[dict[str, Any]] = Field(default=None, description="Optional source anchor payload for viewer navigation")
+    bbox: Optional[dict[str, Any]] = Field(default=None, description="Optional bounding box payload for viewer highlighting")
+    bounding_boxes: Optional[list[dict[str, Any]]] = Field(
+        default=None,
+        description="Optional bounding boxes for multi-box viewer highlighting",
+    )
+
+    @field_validator(
+        "span_id",
+        "chunk_id",
+        "document_id",
+        "text",
+        "text_hash",
+        "section",
+        "subsection",
+        "figure_reference",
+        "span_type",
+        "spanizer_version",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_optional_fragment_strings(cls, value: object) -> object:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("must be a string")
+        normalized = value.strip()
+        return normalized or None
+
+
 class EvidenceRecord(BaseModel):
     """Verified evidence record used to support keep/exclude decisions."""
 
@@ -101,6 +150,13 @@ class EvidenceRecord(BaseModel):
     section: Optional[str] = Field(default=None, description="Document section containing the evidence")
     subsection: Optional[str] = Field(default=None, description="Subsection heading, if available")
     chunk_id: Optional[str] = Field(default=None, description="Source chunk identifier returned by the evidence tool, if available")
+    chunk_ids: Optional[List[str]] = Field(default=None, description="All source chunk identifiers for conjoined multi-span evidence")
+    document_id: Optional[str] = Field(default=None, description="Source document identifier returned by the evidence tool, if available")
+    source_span_ids: Optional[List[str]] = Field(default=None, description="Backend-generated span IDs selected by record_evidence")
+    source_fragments: Optional[List[EvidenceSourceFragment]] = Field(
+        default=None,
+        description="Exact source fragments selected by record_evidence span IDs",
+    )
     figure_reference: Optional[str] = Field(default=None, description="Figure or table locator literal, if available")
 
     @field_validator("page", mode="before")
@@ -119,6 +175,7 @@ class EvidenceRecord(BaseModel):
         "section",
         "subsection",
         "chunk_id",
+        "document_id",
         "figure_reference",
         mode="before",
     )
@@ -130,6 +187,25 @@ class EvidenceRecord(BaseModel):
             raise ValueError("must be a string")
         normalized = value.strip()
         return normalized or None
+
+    @field_validator("chunk_ids", "source_span_ids", mode="before")
+    @classmethod
+    def _normalize_optional_string_lists(cls, value: object) -> object:
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            raise ValueError("must be a list")
+        normalized_values: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            if not isinstance(item, str):
+                raise ValueError("must contain only strings")
+            normalized = item.strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            normalized_values.append(normalized)
+        return normalized_values or None
 
 
 class MentionCandidate(BaseModel):

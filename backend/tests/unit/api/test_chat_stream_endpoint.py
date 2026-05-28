@@ -719,7 +719,33 @@ def test_chat_stream_endpoint_persists_internal_extraction_result_without_stream
 
 
 def test_chat_stream_endpoint_emits_evidence_summary_after_record_evidence(monkeypatch):
-    expected_record = _expected_evidence_record()
+    span_id = "abc123:s0000:c0000-c0055:1234abcd"
+    expected_record = {
+        "entity": "crumb",
+        "verified_quote": "Crumb is essential for maintaining epithelial polarity.",
+        "page": 4,
+        "section": "Results",
+        "subsection": "Gene Expression Analysis",
+        "chunk_id": "abc123",
+        "document_id": "doc-123",
+        "source_span_ids": [span_id],
+        "source_fragments": [
+            {
+                "span_id": span_id,
+                "chunk_id": "abc123",
+                "document_id": "doc-123",
+                "text": "Crumb is essential for maintaining epithelial polarity.",
+                "char_start": 0,
+                "char_end": 55,
+                "text_hash": "1234abcd",
+                "page": 4,
+                "section": "Results",
+                "subsection": "Gene Expression Analysis",
+            }
+        ],
+        "figure_reference": "Figure 2A",
+    }
+    expected_record["evidence_record_id"] = build_evidence_record_id(evidence_record=expected_record)
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
 
@@ -758,16 +784,20 @@ def test_chat_stream_endpoint_emits_evidence_summary_after_record_evidence(monke
             "internal": {
                 "tool_input": {
                     "entity": "crumb",
-                    "chunk_id": "abc123",
-                    "claimed_quote": "Crumb is essential for maintaining epithelial polarity.",
+                    "span_ids": [span_id],
                 },
                 "tool_output": json.dumps(
                     {
                         "status": "verified",
+                        "document_id": "doc-123",
+                        "span_ids": [span_id],
+                        "source_span_ids": [span_id],
+                        "chunk_id": "abc123",
                         "verified_quote": "Crumb is essential for maintaining epithelial polarity.",
                         "page": 4,
                         "section": "Results",
                         "subsection": "Gene Expression Analysis",
+                        "source_fragments": expected_record["source_fragments"],
                         "figure_reference": "Figure 2A",
                     }
                 ),
