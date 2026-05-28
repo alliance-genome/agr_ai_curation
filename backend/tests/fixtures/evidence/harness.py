@@ -57,9 +57,10 @@ def build_verified_evidence_record(tool_case: dict[str, Any]) -> dict[str, Any]:
         "section": tool_result["section"],
     }
 
-    source_span_ids = tool_result.get("source_span_ids") or tool_input.get("span_ids")
-    if source_span_ids:
-        record["source_span_ids"] = list(source_span_ids)
+    source_span_ids = tool_result.get("source_span_ids")
+    if not isinstance(source_span_ids, list):
+        raise ValueError("Verified tool cases must include result source_span_ids.")
+    record["source_span_ids"] = list(source_span_ids)
 
     subsection = tool_result.get("subsection")
     if subsection:

@@ -228,6 +228,12 @@ def test_evidence_fixtures_use_span_id_tool_inputs():
                 missing.append(f"{label}: span_ids")
             expected_tool_result = tool_case.get("expected_tool_result")
             assert isinstance(expected_tool_result, dict), f"{label} has no expected_tool_result mapping"
+            result_span_ids = expected_tool_result.get("source_span_ids")
+            if str(expected_tool_result.get("status") or "").strip().lower() == "verified":
+                if not isinstance(result_span_ids, list) or not all(
+                    isinstance(item, str) for item in result_span_ids
+                ):
+                    missing.append(f"{label}: expected_tool_result.source_span_ids")
             _assert_no_stale_phrases(
                 f"{label} expected_tool_result",
                 " ".join(str(value) for value in expected_tool_result.values()),

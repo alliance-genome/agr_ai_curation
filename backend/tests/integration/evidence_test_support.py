@@ -346,14 +346,17 @@ def make_fixture_runner(evidence_fixture: dict[str, object]):
             if source_span_ids:
                 tool_output["source_span_ids"] = source_span_ids
 
+            tool_input = {
+                "entity": evidence_record["entity"],
+            }
+            if source_span_ids:
+                tool_input["span_ids"] = source_span_ids
+
             yield {
                 "type": "TOOL_COMPLETE",
                 "details": {"toolName": "record_evidence"},
                 "internal": {
-                    "tool_input": {
-                        "entity": evidence_record["entity"],
-                        "span_ids": source_span_ids,
-                    },
+                    "tool_input": tool_input,
                     "tool_output": json.dumps(tool_output),
                 },
             }

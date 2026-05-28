@@ -608,9 +608,11 @@ def _verified_evidence_record(
         "page": tool_result.get("page"),
         "section": tool_result.get("section"),
     }
-    source_span_ids = tool_result.get("source_span_ids") or tool_input.get("span_ids")
-    if isinstance(source_span_ids, Sequence) and not isinstance(source_span_ids, (str, bytes)):
-        record["source_span_ids"] = list(source_span_ids)
+    source_span_ids = _required_sequence(
+        tool_result.get("source_span_ids"),
+        "tool_cases[].expected_tool_result.source_span_ids",
+    )
+    record["source_span_ids"] = list(source_span_ids)
     for optional_key in ("subsection", "figure_reference"):
         optional_value = _optional_string(
             tool_result.get(optional_key),
