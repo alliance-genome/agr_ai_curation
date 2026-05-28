@@ -398,7 +398,9 @@ async def get_chunk_neighbor_ids(
                 include_vector=False,
                 return_properties=["chunkIndex"],
             )
-            objects = getattr(response, "objects", []) or []
+            objects = response.objects
+            if objects is None:
+                raise TypeError("Weaviate neighbor query response.objects is required")
             if not objects:
                 return None
             return _weaviate_object_uuid(objects[0])

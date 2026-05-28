@@ -83,6 +83,32 @@ def _coerce_chunk_index(value: Any) -> Optional[int]:
     return int(value)
 
 
+def _read_chunk_metadata(chunk_id: str, raw_metadata: Any) -> dict:
+    if raw_metadata is None:
+        return {}
+    if isinstance(raw_metadata, str):
+        try:
+            parsed = json.loads(raw_metadata)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Chunk '{chunk_id}' has malformed JSON metadata") from exc
+        if not isinstance(parsed, dict):
+            raise TypeError(f"Chunk '{chunk_id}' metadata JSON must decode to an object")
+        return parsed
+    if not isinstance(raw_metadata, dict):
+        raise TypeError(f"Chunk '{chunk_id}' metadata must be an object or JSON object string")
+    return raw_metadata
+
+
+def _read_actual_chunk_id(requested_chunk_id: str, chunk: dict) -> str:
+    raw_chunk_id = chunk.get("id")
+    actual_chunk_id = str(raw_chunk_id or "").strip()
+    if not actual_chunk_id:
+        raise ValueError(
+            f"Chunk lookup for '{requested_chunk_id}' returned no concrete backend chunk id"
+        )
+    return actual_chunk_id
+
+
 def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCallTracker"] = None):
     """
     Create a search tool bound to a specific document and user.
@@ -203,11 +229,9 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
         if not isinstance(content, str):
             raise ValueError(f"Chunk '{chunk_id}' is missing exact raw text content")
 
-        metadata = chunk.get("metadata", {}) or {}
-        if not isinstance(metadata, dict):
-            metadata = {}
+        metadata = _read_chunk_metadata(chunk_id, chunk.get("metadata"))
 
-        actual_chunk_id = str(chunk.get("id") or chunk_id)
+        actual_chunk_id = _read_actual_chunk_id(chunk_id, chunk)
         chunk_index = _coerce_chunk_index(chunk.get("chunk_index"))
         if chunk_index is None:
             chunk_index = _coerce_chunk_index(metadata.get("chunk_index"))

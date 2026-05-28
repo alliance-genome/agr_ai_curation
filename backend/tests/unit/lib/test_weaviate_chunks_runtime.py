@@ -452,6 +452,24 @@ async def test_get_chunk_neighbor_ids_fetches_adjacent_chunk_ids(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_chunk_neighbor_ids_requires_weaviate_objects_response(monkeypatch):
+    _sync_to_thread(monkeypatch)
+
+    chunk_collection = MagicMock()
+    chunk_collection.query.fetch_objects.return_value = SimpleNamespace()
+    connection = _connection_with_client(MagicMock())
+
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), \
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, MagicMock())):
+        with pytest.raises(AttributeError, match="objects"):
+            await chunks.get_chunk_neighbor_ids(
+                document_id="doc-1",
+                user_id="user-1",
+                chunk_index=5,
+            )
+
+
+@pytest.mark.asyncio
 async def test_get_chunk_neighbor_ids_returns_empty_when_index_missing():
     result = await chunks.get_chunk_neighbor_ids(
         document_id="doc-1",

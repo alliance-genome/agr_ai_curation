@@ -162,6 +162,72 @@ async def test_read_chunk_tool_returns_raw_content_neighbors_and_deterministic_s
 
 
 @pytest.mark.asyncio
+async def test_read_chunk_tool_parses_json_metadata_for_locator_fields(monkeypatch):
+    async def _fake_get_chunk_by_id(**_kwargs):
+        return {
+            "id": "chunk-2",
+            "text": "Exact raw chunk text.",
+            "metadata": (
+                '{"chunk_index": 6, "page_number": 11, '
+                '"sectionTitle": "Discussion", "subsection": "Expression"}'
+            ),
+        }
+
+    async def _fake_get_chunk_neighbor_ids(**kwargs):
+        assert kwargs["chunk_index"] == 6
+        return {
+            "previous_chunk_id": "chunk-1",
+            "next_chunk_id": "chunk-3",
+        }
+
+    monkeypatch.setattr(weaviate_search, "get_chunk_by_id", _fake_get_chunk_by_id)
+    monkeypatch.setattr(weaviate_search, "get_chunk_neighbor_ids", _fake_get_chunk_neighbor_ids)
+    tool = weaviate_search.create_read_chunk_tool("doc-12345678", "user-1")
+
+    result = await tool("chunk-2")
+
+    assert result.chunk is not None
+    assert result.chunk.chunk_index == 6
+    assert result.chunk.chunk_number == 7
+    assert result.chunk.page_number == 11
+    assert result.chunk.section_title == "Discussion"
+    assert result.chunk.subsection == "Expression"
+    assert result.chunk.previous_chunk_id == "chunk-1"
+    assert result.chunk.next_chunk_id == "chunk-3"
+
+
+@pytest.mark.asyncio
+async def test_read_chunk_tool_raises_when_metadata_is_not_object(monkeypatch):
+    async def _fake_get_chunk_by_id(**_kwargs):
+        return {
+            "id": "chunk-2",
+            "text": "Exact raw chunk text.",
+            "metadata": ["not", "metadata"],
+        }
+
+    monkeypatch.setattr(weaviate_search, "get_chunk_by_id", _fake_get_chunk_by_id)
+    tool = weaviate_search.create_read_chunk_tool("doc-12345678", "user-1")
+
+    with pytest.raises(TypeError, match="metadata must be an object"):
+        await tool("chunk-2")
+
+
+@pytest.mark.asyncio
+async def test_read_chunk_tool_raises_when_backend_chunk_id_missing(monkeypatch):
+    async def _fake_get_chunk_by_id(**_kwargs):
+        return {
+            "text": "Exact raw chunk text.",
+            "chunk_index": 1,
+        }
+
+    monkeypatch.setattr(weaviate_search, "get_chunk_by_id", _fake_get_chunk_by_id)
+    tool = weaviate_search.create_read_chunk_tool("doc-12345678", "user-1")
+
+    with pytest.raises(ValueError, match="returned no concrete backend chunk id"):
+        await tool("chunk-2")
+
+
+@pytest.mark.asyncio
 async def test_read_chunk_tool_handles_missing_chunk(monkeypatch):
     async def _fake_get_chunk_by_id(**_kwargs):
         return None
