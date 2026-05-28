@@ -86,6 +86,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/openai_agents/tools/test_alliance_agr_lookup_helpers.py"),
     Path("backend/tests/unit/lib/openai_agents/tools/test_backend_tool_surface_project_agnostic.py"),
     Path("backend/tests/unit/lib/openai_agents/tools/test_search_helpers.py"),
+    Path("backend/tests/unit/lib/openai_agents/tools/test_span_evidence_gene_expression_regression.py"),
     Path("backend/tests/unit/lib/openai_agents/agents/test_supervisor_agent_runtime.py"),
     Path("backend/tests/unit/lib/openai_agents/test_evidence_summary.py"),
     Path("backend/tests/unit/lib/openai_agents/test_runner_streamed_paths.py"),

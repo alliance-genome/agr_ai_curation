@@ -118,6 +118,58 @@ def _record_summary(
     return record
 
 
+async def _record_pat_unc_tln_expression_evidence(document_id: str) -> dict[str, Any]:
+    read_tool = weaviate_search.create_read_chunk_tool(document_id, "user-1")
+    record_tool = record_evidence.create_record_evidence_tool(document_id, "user-1")
+
+    expression_read = await read_tool("sandbox-pat-unc-tln-expression")
+    assert expression_read.chunk is not None
+    expression_span = next(
+        span
+        for span in expression_read.chunk.evidence_spans
+        if "PAT-3, UNC-112, and TLN-1 reporters" in span.text
+    )
+    active_result = await record_tool(
+        entity="PAT-3/UNC-112/TLN-1 expression",
+        span_ids=[expression_span.span_id],
+    )
+    return _record_summary(
+        entity="PAT-3/UNC-112/TLN-1 expression",
+        span_ids=[expression_span.span_id],
+        tool_output=active_result,
+    )
+
+
+def _gene_expression_payload(evidence_record_id: str) -> dict[str, Any]:
+    return {
+        "curatable_objects": [
+            {
+                "object_type": "GeneExpressionAnnotation",
+                "object_role": "curatable_unit",
+                "pending_ref_id": "expression-pat-unc-tln-plm",
+                "payload": {
+                    "data_provider": {"abbreviation": "WB"},
+                    "expression_annotation_subject": {
+                        "primary_external_id": "WBGene00003975",
+                        "gene_symbol": "pat-3",
+                    },
+                    "relation": {"name": "is_expressed_in"},
+                    "single_reference": {"pmid": "PMID:000000"},
+                    "expression_pattern": {
+                        "where_expressed": {
+                            "anatomical_structure": {
+                                "name": "PLM mechanosensory neurons"
+                            }
+                        }
+                    },
+                },
+                "evidence_record_ids": [evidence_record_id],
+            }
+        ],
+        "run_summary": {"kept_count": 1},
+    }
+
+
 def _alliance_gene_expression_pack() -> LoadedDomainPack:
     repo_root = Path(__file__).resolve().parents[6]
     pack_path = repo_root / "packages" / "alliance" / "domain_packs" / "gene_expression"
@@ -263,7 +315,7 @@ async def test_tln_rpm_colocalization_records_figure_title_and_result_summary_sp
 
 
 @pytest.mark.asyncio
-async def test_span_evidence_workspace_finalize_and_validator_dispatch_flow(
+async def test_span_evidence_workspace_lists_discards_replaces_and_finalizes_active_evidence(
     monkeypatch: pytest.MonkeyPatch,
     sandbox_fixture: dict[str, Any],
     sandbox_chunks: dict[str, dict[str, Any]],
@@ -312,22 +364,7 @@ async def test_span_evidence_workspace_finalize_and_validator_dispatch_flow(
         )
         assert discarded["record"]["status"] == "discarded"
 
-        expression_read = await read_tool("sandbox-pat-unc-tln-expression")
-        assert expression_read.chunk is not None
-        expression_span = next(
-            span
-            for span in expression_read.chunk.evidence_spans
-            if "PAT-3, UNC-112, and TLN-1 reporters" in span.text
-        )
-        active_result = await record_tool(
-            entity="PAT-3/UNC-112/TLN-1 expression",
-            span_ids=[expression_span.span_id],
-        )
-        active_record = _record_summary(
-            entity="PAT-3/UNC-112/TLN-1 expression",
-            span_ids=[expression_span.span_id],
-            tool_output=active_result,
-        )
+        active_record = await _record_pat_unc_tln_expression_evidence(document_id)
         workspace_records.append(active_record)
 
         await attach_tool(
@@ -344,35 +381,8 @@ async def test_span_evidence_workspace_finalize_and_validator_dispatch_flow(
         )
         assert with_discarded["count"] == 2
 
-        payload = {
-            "curatable_objects": [
-                {
-                    "object_type": "GeneExpressionAnnotation",
-                    "object_role": "curatable_unit",
-                    "pending_ref_id": "expression-pat-unc-tln-plm",
-                    "payload": {
-                        "data_provider": {"abbreviation": "WB"},
-                        "expression_annotation_subject": {
-                            "primary_external_id": "WBGene00003975",
-                            "gene_symbol": "pat-3",
-                        },
-                        "relation": {"name": "is_expressed_in"},
-                        "single_reference": {"pmid": "PMID:000000"},
-                        "expression_pattern": {
-                            "where_expressed": {
-                                "anatomical_structure": {
-                                    "name": "PLM mechanosensory neurons"
-                                }
-                            }
-                        },
-                    },
-                    "evidence_record_ids": [active_record["evidence_record_id"]],
-                }
-            ],
-            "run_summary": {"kept_count": 1},
-        }
         canonical = canonicalize_structured_result_payload(
-            payload,
+            _gene_expression_payload(active_record["evidence_record_id"]),
             preferred_evidence_records=workspace_records,
         )
 
@@ -385,70 +395,86 @@ async def test_span_evidence_workspace_finalize_and_validator_dispatch_flow(
         assert retained_records[0]["source_span_ids"] == active_record["source_span_ids"]
         assert retained_records[0]["pending_ref_id"] == "expression-pat-unc-tln-plm"
         assert "discard_reason" not in retained_records[0]
-
-        envelope = DomainEnvelope(
-            envelope_id="span-gene-expression-regression",
-            domain_pack_id="agr.alliance.gene_expression",
-            objects=[
-                CuratableObjectEnvelope(**canonical["curatable_objects"][0])
-            ],
-            metadata={"evidence_records": retained_records},
-        )
-        captured_requests = []
-
-        def _validator_runner(request, *, binding):
-            captured_requests.append(request)
-            resolved_values = {
-                field_name: (
-                    request.selected_inputs.get(field_name)
-                    or request.selected_inputs.get("gene_id")
-                    or request.selected_inputs.get("pmid")
-                    or f"resolved-{field_name}"
-                )
-                for field_name in request.expected_result_fields
-            }
-            return {
-                "status": "resolved",
-                "request_id": request.request_id,
-                "validator_binding_id": request.validator_binding_id,
-                "validator_agent": request.validator_agent.model_dump(mode="json"),
-                "target": request.target.model_dump(mode="json"),
-                "resolved_values": resolved_values,
-                "resolved_objects": [
-                    {
-                        "object_type": "ValidatorResolvedValue",
-                        "canonical_id": request.request_id,
-                        "payload": resolved_values,
-                    }
-                ],
-                "missing_expected_fields": [],
-                "candidates": [],
-                "lookup_attempts": [
-                    {
-                        "provider": "fixture_lookup",
-                        "method": "span_evidence_regression",
-                        "query": request.selected_inputs,
-                        "result_count": 1,
-                        "outcome": "success",
-                    }
-                ],
-                "curator_message": None,
-                "explanation": "Fixture validator result.",
-            }
-
-        dispatch_result = dispatch_active_validator_bindings(
-            envelope,
-            _alliance_gene_expression_pack(),
-            runner=_validator_runner,
-            max_parallel_validators=1,
-        )
-
-        assert captured_requests
-        assert all(
-            request.target.object_type == "GeneExpressionAnnotation"
-            for request in captured_requests
-        )
-        assert all(request.evidence for request in captured_requests)
-        assert dispatch_result.validator_results
     finally:
         evidence_workspace.reset_active_evidence_records(token)
+
+
+@pytest.mark.asyncio
+async def test_active_validator_dispatch_receives_span_evidence_candidate_objects(
+    monkeypatch: pytest.MonkeyPatch,
+    sandbox_fixture: dict[str, Any],
+    sandbox_chunks: dict[str, dict[str, Any]],
+):
+    document_id = sandbox_fixture["document_id"]
+    _install_chunk_tools(monkeypatch, sandbox_chunks)
+    active_record = await _record_pat_unc_tln_expression_evidence(document_id)
+    canonical = canonicalize_structured_result_payload(
+        _gene_expression_payload(active_record["evidence_record_id"]),
+        preferred_evidence_records=[active_record],
+    )
+    retained_records = canonical["metadata"]["evidence_records"]
+
+    envelope = DomainEnvelope(
+        envelope_id="span-gene-expression-regression",
+        domain_pack_id="agr.alliance.gene_expression",
+        objects=[
+            CuratableObjectEnvelope(**canonical["curatable_objects"][0])
+        ],
+        metadata={"evidence_records": retained_records},
+    )
+    captured_requests = []
+
+    def _validator_runner(request, *, binding):
+        captured_requests.append(request)
+        resolved_values = {
+            field_name: (
+                request.selected_inputs.get(field_name)
+                or request.selected_inputs.get("gene_id")
+                or request.selected_inputs.get("pmid")
+                or f"resolved-{field_name}"
+            )
+            for field_name in request.expected_result_fields
+        }
+        return {
+            "status": "resolved",
+            "request_id": request.request_id,
+            "validator_binding_id": request.validator_binding_id,
+            "validator_agent": request.validator_agent.model_dump(mode="json"),
+            "target": request.target.model_dump(mode="json"),
+            "resolved_values": resolved_values,
+            "resolved_objects": [
+                {
+                    "object_type": "ValidatorResolvedValue",
+                    "canonical_id": request.request_id,
+                    "payload": resolved_values,
+                }
+            ],
+            "missing_expected_fields": [],
+            "candidates": [],
+            "lookup_attempts": [
+                {
+                    "provider": "fixture_lookup",
+                    "method": "span_evidence_regression",
+                    "query": request.selected_inputs,
+                    "result_count": 1,
+                    "outcome": "success",
+                }
+            ],
+            "curator_message": None,
+            "explanation": "Fixture validator result.",
+        }
+
+    dispatch_result = dispatch_active_validator_bindings(
+        envelope,
+        _alliance_gene_expression_pack(),
+        runner=_validator_runner,
+        max_parallel_validators=1,
+    )
+
+    assert captured_requests
+    assert all(
+        request.target.object_type == "GeneExpressionAnnotation"
+        for request in captured_requests
+    )
+    assert all(request.evidence for request in captured_requests)
+    assert dispatch_result.validator_results
