@@ -33,6 +33,9 @@ override ("group"). Backend-owned core/generated layers and inherited base promp
 are read-only context and must not be copied into updated_prompt.
 This tool does NOT auto-apply or auto-save changes.
 The UI will show the proposal and require explicit curator approval before applying.
+Before proposing edits about PDF evidence extraction, inspect current prompt and
+tool schemas so the update preserves span-id evidence recording instead of
+legacy quote-generation guidance.
 """,
     "input_schema": {
         "type": "object",
@@ -107,7 +110,8 @@ REFRESH_WORKSHOP_PROMPT_TOOL = {
 Use this before commenting on the current Agent Workshop prompt text, especially
 after the curator saves manual edits or asks whether a typo, schema issue, or
 prompt-quality concern is fixed. Treat older chat history and version snapshots
-as historical after this tool returns.
+as historical after this tool returns. Pair this with get_tool_inventory and
+get_tool_details before advising on document/evidence tool instructions.
 """,
     "input_schema": {
         "type": "object",

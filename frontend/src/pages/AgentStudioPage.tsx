@@ -385,6 +385,7 @@ function AgentStudioPage() {
 REQUIRED: Call these tools first:
 1. get_current_flow() - get flow definition with task_instructions and custom_instructions
 2. get_available_agents() - get agent categories and output_agents list
+3. get_prompt(), get_tool_inventory(), and get_tool_details() as needed before judging custom instructions, document tools, PDF evidence behavior, or validator/domain-pack claims
 
 CRITICAL ERRORS (must fail verification):
 - task_input node has EMPTY task_instructions (this is required content)
@@ -424,6 +425,9 @@ OUTPUT:
 1. What this agent does and when it's used
 2. Its capabilities and limitations
 3. How its prompts are structured
+4. Its current attached tool schemas and any PDF evidence workflow expectations
+
+Please inspect get_prompt, get_tool_inventory, and get_tool_details before giving authoritative prompt/tool guidance.
 
 Agent ID: ${agentId}`
 

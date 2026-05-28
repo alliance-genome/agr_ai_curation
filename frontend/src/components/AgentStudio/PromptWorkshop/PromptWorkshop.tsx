@@ -1365,7 +1365,7 @@ function PromptWorkshop({
     const targetName = selectedCustomAgent?.name || selectedTemplate?.name || parentAgent?.agent_name || 'this agent draft'
     const targetId = selectedCustomAgent?.agent_id || parentAgentId || 'unknown'
     const groupPart = selectedGroupId ? `Selected Group: ${selectedGroupId}` : 'Selected Group: none'
-    const message = `Discuss my Agent Workshop draft for "${targetName}".\n\nPlease help with:\n1. Prompt quality and clarity issues\n2. Risky or ambiguous instructions\n3. Concrete edits to improve behavior\n4. Suggested flow-based validation tests\n\nAgent ID: ${targetId}\n${groupPart}\n\n[Request ID: ${Date.now()}]`
+    const message = `Discuss my Agent Workshop draft for "${targetName}".\n\nPlease refresh the current draft and inspect current prompt/tool schemas before giving authoritative advice.\n\nPlease help with:\n1. Prompt quality and clarity issues\n2. Risky or ambiguous instructions\n3. Concrete edits to improve behavior\n4. Suggested flow-based validation tests\n5. Whether any PDF evidence instructions preserve search_document, read_chunk span IDs, and record_evidence(span_ids)\n\nAgent ID: ${targetId}\n${groupPart}\n\n[Request ID: ${Date.now()}]`
 
     onVerifyRequest?.(message)
   }
@@ -1393,7 +1393,7 @@ function PromptWorkshop({
     const targetName = selectedCustomAgent?.name || name.trim() || selectedTemplate?.name || parentAgent?.agent_name || 'this agent draft'
     const targetId = selectedCustomAgent?.agent_id || parentAgentId || 'unknown'
     const groupPart = selectedGroupId ? `Selected Group: ${selectedGroupId}` : 'Selected Group: none'
-    const message = `Help me improve the SYSTEM PROMPT for "${targetName}".\n\nPlease:\n1. Identify unclear, conflicting, or risky instructions.\n2. Propose concrete edits focused on behavior and extraction quality.\n3. Explain why each suggested edit helps.\n4. Keep changes minimal unless a full rewrite is truly needed.\n\nAgent ID: ${targetId}\n${groupPart}\n\n[Request ID: ${Date.now()}]`
+    const message = `Help me improve the SYSTEM PROMPT for "${targetName}".\n\nPlease refresh the current draft and inspect current prompt/tool schemas before proposing edits.\n\nPlease:\n1. Identify unclear, conflicting, or risky instructions.\n2. Propose concrete edits focused on behavior and extraction quality.\n3. Explain why each suggested edit helps.\n4. Keep changes minimal unless a full rewrite is truly needed.\n5. Preserve span-backed PDF evidence guidance when document tools are attached: search_document for candidates, read_chunk for span IDs, and record_evidence(span_ids) for retained evidence.\n\nAgent ID: ${targetId}\n${groupPart}\n\n[Request ID: ${Date.now()}]`
 
     onVerifyRequest?.(message)
     setStatus('Opened system-prompt discussion with Claude')
