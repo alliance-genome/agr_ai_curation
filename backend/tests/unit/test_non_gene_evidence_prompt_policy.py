@@ -96,7 +96,9 @@ def test_non_gene_extractor_prompts_include_record_evidence_domain_guidance(
     assert "Strong quote examples:" in content
     assert "Weak quote examples:" in content
     assert "curatable_objects[]" in content
-    assert "verified record_evidence results" in content
+    assert "`read_chunk.evidence_spans[].span_id` values" in content
+    assert "`record_evidence` with `span_ids`" in content
+    assert "active-run evidence workspace" in content
     assert "evidence_record_ids" in content
     assert re.search(
         r"Do not emit top-level legacy semantic lists:\s+`items\[\]`,\s+`annotations\[\]`,\s+"

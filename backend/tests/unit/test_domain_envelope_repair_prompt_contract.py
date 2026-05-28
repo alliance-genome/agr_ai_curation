@@ -33,9 +33,16 @@ EXTRACTOR_OUTPUT_SCHEMAS = {
 
 EXTRACTION_SAFE_TOOLS = {
     "search_document",
+    "read_chunk",
     "read_section",
     "read_subsection",
     "record_evidence",
+    "list_recorded_evidence",
+    "get_recorded_evidence",
+    "attach_evidence_to_object",
+    "detach_evidence_from_object",
+    "discard_recorded_evidence",
+    "update_recorded_evidence_metadata",
     "get_agent_contract",
     "agr_species_context_lookup",
     "get_domain_field_term_options",
