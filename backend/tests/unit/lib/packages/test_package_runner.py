@@ -620,7 +620,8 @@ def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(
     assert section_result.result == {
         "summary": (
             "Read 2 chunks from 'Materials and Methods'. "
-            "Use section.source_chunks[].chunk_id with record_evidence."
+            "Use section.source_chunks[].chunk_id with read_chunk, then pass selected "
+            "evidence_spans[].span_id values to record_evidence."
         ),
         "section": {
             "section_title": "Materials and Methods",

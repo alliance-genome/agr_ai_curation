@@ -117,20 +117,20 @@ def _tool_output_summary(tool_name: str, output: Any) -> Optional[Dict[str, Any]
     summary_fields = (
         "status",
         "entity",
+        "span_ids",
         "chunk_id",
-        "claimed_quote",
+        "chunk_ids",
         "verified_quote",
         "evidence_record_id",
         "page",
         "section",
         "subsection",
         "figure_reference",
+        "failed_span_id",
+        "failed_span_index",
+        "failed_span_error",
         "message",
         "retry_instructions",
-        "unverified_attempts",
-        "max_unverified_attempts",
-        "retry_exhausted",
-        "terminal",
     )
     summary: Dict[str, Any] = {}
     for field_name in summary_fields:
@@ -211,19 +211,26 @@ def _pop_matching_pending_tool_call(
     output_payload = coerce_tool_event_dict(getattr(output_item, "output", None))
     if isinstance(output_payload, dict):
         output_entity = str(output_payload.get("entity") or "").strip()
-        output_chunk_id = str(output_payload.get("chunk_id") or "").strip()
-        output_claimed_quote = str(output_payload.get("claimed_quote") or "").strip()
-        if output_entity and output_chunk_id and output_claimed_quote:
+        output_span_ids = [
+            str(span_id or "").strip()
+            for span_id in output_payload.get("span_ids", [])
+            if str(span_id or "").strip()
+        ]
+        if output_entity and output_span_ids:
             for candidate_tool in list(pending_tool_calls):
                 if str(candidate_tool.get("tool_name") or "").strip() != "record_evidence":
                     continue
                 candidate_args = candidate_tool.get("tool_args")
                 if not isinstance(candidate_args, dict):
                     continue
+                candidate_span_ids = [
+                    str(span_id or "").strip()
+                    for span_id in candidate_args.get("span_ids", [])
+                    if str(span_id or "").strip()
+                ]
                 if (
                     str(candidate_args.get("entity") or "").strip() == output_entity
-                    and str(candidate_args.get("chunk_id") or "").strip() == output_chunk_id
-                    and str(candidate_args.get("claimed_quote") or "").strip() == output_claimed_quote
+                    and candidate_span_ids == output_span_ids
                 ):
                     pending_tool_calls.remove(candidate_tool)
                     return candidate_tool

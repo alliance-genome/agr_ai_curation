@@ -429,7 +429,8 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
             return SectionReadResult(
                 summary=(
                     f"Read {len(chunks)} chunks from '{actual_section_title}'. "
-                    "Use section.source_chunks[].chunk_id with record_evidence."
+                    "Use section.source_chunks[].chunk_id with read_chunk, then pass selected "
+                    "evidence_spans[].span_id values to record_evidence."
                 ),
                 section=SectionContent(
                     section_title=actual_section_title,
