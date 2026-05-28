@@ -226,11 +226,11 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     # PDF Document Search Tools
     "search_document": {
         "name": "Search Document",
-        "description": "Discovery search over uploaded PDF chunks using hybrid, lexical, or lexical-fallback retrieval.",
+        "description": "Discovery search over uploaded PDF chunks using hybrid, lexical, or hybrid-lexical-first retrieval.",
         "category": "PDF Extraction",
         "source_file": "backend/src/lib/openai_agents/tools/weaviate_search.py",
         "documentation": {
-            "summary": "Finds relevant chunks in the uploaded PDF. Use returned chunk_id values with read_chunk for final evidence span selection. Use lexical-heavy modes for exact biomedical symbols, identifiers, strains, alleles, probes, reagents, genotype handles, PMIDs/DOIs, and other controlled tokens; keep auto/hybrid for broad conceptual searches.",
+            "summary": "Finds relevant chunks in the uploaded PDF. Use returned chunk_id values with read_chunk for final evidence span selection. Use lexical-heavy modes for exact-match terms and controlled identifiers; keep auto/hybrid for broad conceptual searches.",
             "parameters": [
                 {
                     "name": "query",

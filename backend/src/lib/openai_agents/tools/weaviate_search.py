@@ -152,9 +152,8 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
 
         Use returned chunk_id values with read_chunk for final evidence selection.
         Do not use search snippets as retained evidence.
-        Use search_mode='lexical' for exact biomedical symbols, IDs, strains,
-        alleles, probes, reagents, genotype handles, PMIDs/DOIs, and controlled
-        tokens; use search_mode='hybrid_lexical_first' when broad hybrid search
+        Use search_mode='lexical' for exact tokens, identifiers, and controlled
+        terms; use search_mode='hybrid_lexical_first' when broad hybrid search
         should retry with lexical-heavy matching if needed. The default 'auto'
         preserves hybrid search for broad conceptual queries.
 
@@ -180,7 +179,7 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
         )
 
         try:
-            # Exact biomedical tokens need explicit lexical-heavy retrieval modes;
+            # Exact tokens and identifiers need explicit lexical-heavy retrieval modes;
             # reranking/MMR must still run on full chunk content, not previews.
             strategy = _strategy_for_search_mode(search_mode)
             chunks = await hybrid_search_chunks(
@@ -374,7 +373,7 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
         """Survey ALL content from a specific section of the document.
 
         Use this tool when you need to read an ENTIRE section at once, especially for:
-        - Extracting complete lists (e.g., all strains in Methods)
+        - Extracting complete lists (e.g., all named entities in Methods)
         - Getting full tables or figures
         - Reading complete methodology details
         - Any case where you need comprehensive section content

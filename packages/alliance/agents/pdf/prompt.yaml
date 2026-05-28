@@ -111,8 +111,8 @@ content: |
   - Use natural-language queries for broad or conceptual searches to leverage semantic
     similarity across paraphrases and synonyms; keep the default/auto mode for these.
   - Use `search_mode="lexical"` for exact biomedical tokens and identifiers, and
-    `search_mode="hybrid_lexical_first"` when a broad query also needs lexical-heavy
-    fallback behavior.
+    `search_mode="hybrid_lexical_first"` when a broad query should retry with
+    lexical-heavy matching if needed.
   - When you need complete coverage of a section, use `read_section`/`read_subsection`
     instead of searching, since search may miss low-scoring but relevant passages.
   - Use `section_keywords` when you want to focus on a particular section without reading
