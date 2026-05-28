@@ -340,7 +340,7 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
     assert captured_assembly["group_id"] == ["WB"]
     assert "CTX" in captured_assembly["runtime_context"]
     assert runtime_text.startswith('You are helping the user with the document: "Paper A"')
-    assert "Call `record_evidence` once for each distinct evidence quote you intend to keep." in runtime_text
+    assert "Call `record_evidence` once for each distinct evidence unit you intend to keep." in runtime_text
 
     runtime_text_with_evidence = catalog_service._build_runtime_instructions(
         db_agent=db_agent,
@@ -353,8 +353,8 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
         },
         canonical_tool_ids=["search_document", "record_evidence"],
     ).render()
-    assert "Use multiple evidence records when one quote alone does not fully support" in runtime_text_with_evidence
-    assert "Each claimed quote should be a single contiguous excerpt." in runtime_text_with_evidence
+    assert "Use multiple evidence records when one evidence unit alone does not fully support" in runtime_text_with_evidence
+    assert "do not pass claimed_quote" in runtime_text_with_evidence
 
     formatter_runtime_text = catalog_service._build_runtime_instructions(
         db_agent=db_agent,

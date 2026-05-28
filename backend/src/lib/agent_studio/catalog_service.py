@@ -62,17 +62,14 @@ _HOST_RUNTIME_SRC_DIR = Path(__file__).resolve().parents[2]
 _HOST_RUNTIME_ROOT_DIR = _HOST_RUNTIME_SRC_DIR.parent
 _RECORD_EVIDENCE_RUNTIME_NOTE = (
     "EVIDENCE VERIFICATION RULES:\n"
-    "- Call `record_evidence` once for each distinct evidence quote you intend to keep.\n"
-    "- Use multiple evidence records when one quote alone does not fully support the retained item or claim.\n"
-    "- Prefer complementary quotes when different passages establish different parts of the support (for example identity, condition, effect, or scope).\n"
-    "- Each claimed quote should be a single contiguous excerpt. A short multi-sentence passage is fine when that is the tightest support, but do not stitch together disconnected text.\n"
-    "- Pass the entity label, the exact `chunk_id` from prior `search_document` hits "
-    "or `read_section` source_chunks, and exact source text copied from that chunk.\n"
-    "- `record_evidence` is strict source-provenance verification: omitted, inserted, "
-    "changed, paraphrased, or normalized quote text returns `not_found`.\n"
-    "- If the tool returns `not_found`, inspect the returned chunk preview or retry "
-    "instructions, use `search_document` to get a chunk_id from tool results when requested, "
-    "and drop the evidence if it still does not verify.\n"
+    "- Call `read_chunk(chunk_id)` before recording evidence and select backend-generated "
+    "`evidence_spans[].span_id` values.\n"
+    "- Call `record_evidence` once for each distinct evidence unit you intend to keep.\n"
+    "- Use multiple evidence records when one evidence unit alone does not fully support the retained item or claim.\n"
+    "- Prefer complementary evidence records when different passages establish different parts of the support (for example identity, condition, effect, or scope).\n"
+    "- Pass the entity label and `span_ids`; do not pass claimed_quote, verified_quote, or replacement quote text.\n"
+    "- `record_evidence` resolves span IDs against exact source text and copies the backend-owned slices into `verified_quote`.\n"
+    "- If the tool returns `not_found`, call `read_chunk` again for current span IDs or drop the evidence.\n"
     "- Only persist evidence records that came back `verified`.\n"
 )
 _INLINE_PACKAGE_TOOL_IDS = frozenset({
@@ -313,11 +310,11 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     },
     "record_evidence": {
         "name": "Record Evidence",
-        "description": "Verify one contiguous exact source quote against a specific PDF chunk before persisting evidence.",
+        "description": "Record exact PDF evidence selected by backend-generated read_chunk span IDs.",
         "category": "PDF Extraction",
         "source_file": "backend/src/lib/openai_agents/tools/record_evidence.py",
         "documentation": {
-            "summary": "Checks whether the claimed quote is an exact substring of a known chunk and returns that verbatim source quote plus locator metadata when it is. Use separate calls for multiple complementary quotes when one quote is not enough.",
+            "summary": "Resolves selected evidence_spans[].span_id values against exact chunk text and returns copied source text plus locator metadata. Use one call for one evidence unit; multiple selected spans are stored as conjoined source fragments.",
             "parameters": [
                 {
                     "name": "entity",
@@ -326,19 +323,10 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                     "description": "Entity label associated with this evidence record.",
                 },
                 {
-                    "name": "chunk_id",
-                    "type": "string",
+                    "name": "span_ids",
+                    "type": "array[string]",
                     "required": True,
-                    "description": (
-                        "Chunk identifier returned by search_document hits or read_section "
-                        "source_chunks. Do not pass section names, generated labels, or placeholders."
-                    ),
-                },
-                {
-                    "name": "claimed_quote",
-                    "type": "string",
-                    "required": True,
-                    "description": "One contiguous quote copied exactly from the target chunk. It may be one sentence or a short multi-sentence passage when that is the strongest support.",
+                    "description": "One or more span IDs copied from read_chunk(...).chunk.evidence_spans[].span_id.",
                 },
             ],
         },

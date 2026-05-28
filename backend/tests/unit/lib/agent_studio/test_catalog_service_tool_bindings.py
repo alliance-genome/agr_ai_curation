@@ -658,12 +658,12 @@ async def test_resolve_package_tool_falls_back_when_thread_creation_is_unavailab
         ),
     )
 
-    result = await resolved.on_invoke_tool(None, '{"entity":"crb","chunk_id":"chunk-1","claimed_quote":"quoted text"}')
+    result = await resolved.on_invoke_tool(None, '{"entity":"crb","span_ids":["chunk-1:s0000:c0000-c0011:abc12345"]}')
 
     assert result == {
         "status": "verified",
         "tool_name": "record_evidence",
-        "input": '{"entity":"crb","chunk_id":"chunk-1","claimed_quote":"quoted text"}',
+        "input": '{"entity":"crb","span_ids":["chunk-1:s0000:c0000-c0011:abc12345"]}',
     }
     assert calls == [("track", "record_evidence")]
 

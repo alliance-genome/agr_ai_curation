@@ -34,14 +34,6 @@ def load_evidence_fixture(name: str = DEFAULT_FIXTURE_NAME) -> dict[str, Any]:
         return json.load(fixture_file)
 
 
-def chunk_map(fixture: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    return {
-        str(chunk["id"]): copy.deepcopy(chunk)
-        for chunk in fixture.get("chunks", [])
-        if isinstance(chunk, dict) and chunk.get("id")
-    }
-
-
 def tool_case_map(fixture: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {
         str(case["case_id"]): copy.deepcopy(case)

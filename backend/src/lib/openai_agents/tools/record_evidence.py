@@ -1,18 +1,20 @@
-"""Evidence-verification tool for document extraction agents."""
+"""Span-backed evidence-recording tool for document extraction agents."""
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 import re
 from dataclasses import dataclass
-from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Any, Optional
-from uuid import UUID
 
 from agents import function_tool
 
+from src.lib.openai_agents.evidence_spans import (
+    EvidenceSpan,
+    EvidenceSpanResolutionError,
+    parse_evidence_span_id,
+    resolve_evidence_span_id,
+)
 from src.lib.openai_agents.evidence_summary import build_evidence_record_id
 from src.lib.weaviate_client.chunks import get_chunk_by_id
 
@@ -30,590 +32,53 @@ _TABLE_REFERENCE_PATTERN = re.compile(
     r"\b(?:Table\.?\s*\d+[A-Za-z0-9-]*)\b",
     re.IGNORECASE,
 )
-_NOT_FOUND_MESSAGE = (
-    "Exact quote not found in this chunk. Retry with exact text copied from the chunk "
-    "or drop this evidence."
-)
-_RETRY_EXHAUSTED_MESSAGE = (
-    "Exact quote not found in this chunk after repeated attempts for this entity and chunk. "
-    "Stop retrying this evidence; re-search for a better chunk or drop it."
-)
-_INVALID_CHUNK_LOAD_MESSAGE = (
-    "Chunk could not be loaded. Retry with a chunk_id returned by search_document "
-    "or read_section source_chunks, or drop this evidence."
-)
-_MISSING_CHUNK_MESSAGE = (
-    "Chunk not found in the active document. Retry with a chunk_id returned by search_document "
-    "or read_section source_chunks, or drop this evidence."
-)
 _PREVIEW_CHARS = 300
-_MAX_UNVERIFIED_ATTEMPTS_PER_ENTITY_CHUNK = 3
-_LEGACY_SYMBOLIC_CHUNK_ID_PATTERN = re.compile(r"^chunk-", re.IGNORECASE)
-_TRAILING_SECTION_INDEX_PATTERN = re.compile(r"(?:[_\s-]+(?:chunk)?\d+)$", re.IGNORECASE)
-_SENTENCE_BOUNDARY_PATTERN = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(\[])")
-_ABBREVIATION_END_PATTERN = re.compile(
-    r"\b(?:no|dr|mr|mrs|ms|prof|fig|ref|refs?|eq|eqs|vs)\.$",
-    re.IGNORECASE,
+_SPAN_RETRY_INSTRUCTIONS = (
+    "Call read_chunk for the source chunk again and select current "
+    "evidence_spans[].span_id values. Do not provide quote text."
 )
-_IDENTITY_TOKEN_PATTERN = re.compile(
-    r"\b(?:[A-Za-z]+[A-Za-z0-9]*[-/][A-Za-z0-9+_.:/-]+|"
-    r"[A-Za-z]*\d[A-Za-z0-9+_.:/-]*|"
-    r"[A-Za-z]+[A-Z][A-Za-z0-9]*)\b"
-)
-_WORD_TOKEN_PATTERN = re.compile(r"\b[A-Za-z0-9]+\b")
-_SOURCE_TRAILING_PUNCTUATION = ".,;:!?)]}"
-_FUZZY_CANDIDATE_LIMIT = 5
-_FUZZY_REVIEW_CANDIDATE_LIMIT = 3
-_FUZZY_MIN_SCORE = 0.78
-_MIN_CLAIM_TOKEN_COVERAGE = 0.78
-_EVIDENCE_CONFIRMATION_MODEL_ENV = "EVIDENCE_CONFIRMATION_MODEL"
-_EVIDENCE_CONFIRMATION_ENABLED_ENV = "EVIDENCE_CONFIRMATION_ENABLED"
-_EVIDENCE_CONFIRMATION_TIMEOUT_ENV = "EVIDENCE_CONFIRMATION_TIMEOUT_SECONDS"
-_DEFAULT_EVIDENCE_CONFIRMATION_MODEL = "gpt-5.4-nano"
-_DEFAULT_EVIDENCE_CONFIRMATION_TIMEOUT_SECONDS = 8.0
 
 
 @dataclass(frozen=True)
-class _QuoteMatch:
-    raw_start: int
-    raw_end: int
-
-
-@dataclass(frozen=True)
-class _FuzzyQuoteCandidate:
-    text: str
-    raw_start: int
-    raw_end: int
-    score: float
-
-
-def _find_verified_quote(claimed_quote: str, chunk_text: str) -> tuple[str | None, _QuoteMatch | None]:
-    """Return a verified quote only when the stripped claim is exact source text."""
-    source_quote = claimed_quote.strip()
-    if not source_quote:
-        return None, None
-
-    # Exact source text is the trusted fast path. Bounded fuzzy confirmation is
-    # handled separately so nearby spans cannot be silently blessed here.
-    raw_start = chunk_text.find(source_quote)
-    if raw_start < 0:
-        return None, None
-
-    raw_end = raw_start + len(source_quote)
-    return chunk_text[raw_start:raw_end], _QuoteMatch(raw_start=raw_start, raw_end=raw_end)
-
-
-def _normalize_for_similarity(value: str) -> str:
-    return re.sub(r"\s+", " ", value).strip().casefold()
-
-
-def _is_token_char(value: str) -> bool:
-    return value.isalnum() or value == "_"
-
-
-def _expand_match_to_source_boundaries(text: str, start: int, end: int) -> tuple[int, int]:
-    bounded_start = max(0, min(start, len(text)))
-    bounded_end = max(bounded_start, min(end, len(text)))
-
-    while (
-        bounded_start > 0
-        and bounded_start < len(text)
-        and _is_token_char(text[bounded_start - 1])
-        and _is_token_char(text[bounded_start])
-    ):
-        bounded_start -= 1
-
-    nearby_prefix_start = max(0, bounded_start - 80)
-    nearby_prefix = text[nearby_prefix_start:bounded_start]
-    sentence_boundaries = list(_SENTENCE_BOUNDARY_PATTERN.finditer(nearby_prefix))
-    if sentence_boundaries:
-        sentence_start = nearby_prefix_start + sentence_boundaries[-1].end()
-        if bounded_start - sentence_start <= 40:
-            bounded_start = sentence_start
-    elif bounded_start <= 40:
-        bounded_start = 0
-
-    while (
-        bounded_end > 0
-        and bounded_end < len(text)
-        and _is_token_char(text[bounded_end - 1])
-        and _is_token_char(text[bounded_end])
-    ):
-        bounded_end += 1
-
-    while bounded_end < len(text) and text[bounded_end] in _SOURCE_TRAILING_PUNCTUATION:
-        bounded_end += 1
-
-    return bounded_start, bounded_end
-
-
-def _iter_sentence_spans(chunk_text: str) -> list[tuple[int, int]]:
-    text = chunk_text.strip()
-    if not text:
-        return []
-
-    offset = chunk_text.find(text)
-    spans: list[tuple[int, int]] = []
-    start = offset
-    for boundary in _SENTENCE_BOUNDARY_PATTERN.finditer(text):
-        end = offset + boundary.start()
-        if _ABBREVIATION_END_PATTERN.search(chunk_text[start:end].rstrip()):
-            continue
-        if end > start:
-            spans.append((start, end))
-        start = offset + boundary.end()
-
-    final_end = offset + len(text)
-    if final_end > start:
-        spans.append((start, final_end))
-
-    return spans or [(0, len(chunk_text))]
-
-
-def _sentence_spans_overlapping(
-    sentence_spans: list[tuple[int, int]],
-    start: int,
-    end: int,
-) -> list[tuple[int, int]]:
-    overlaps: list[tuple[int, int]] = []
-    for span_start, span_end in sentence_spans:
-        if span_start < end and start < span_end:
-            overlaps.append((span_start, span_end))
-    return overlaps
-
-
-def _rapidfuzz_partial_alignment(claimed_quote: str, chunk_text: str) -> tuple[float, int, int] | None:
-    try:
-        from rapidfuzz import fuzz
-
-        claimed_for_alignment = claimed_quote.lower()
-        chunk_for_alignment = chunk_text.lower()
-        if len(claimed_for_alignment) != len(claimed_quote) or len(chunk_for_alignment) != len(chunk_text):
-            claimed_for_alignment = claimed_quote
-            chunk_for_alignment = chunk_text
-        alignment = fuzz.partial_ratio_alignment(
-            claimed_for_alignment,
-            chunk_for_alignment,
-        )
-    except Exception:
-        return None
-
-    score = float(alignment.score) / 100.0
-    start = int(alignment.dest_start)
-    end = int(alignment.dest_end)
-    if end <= start:
-        return None
-    return score, start, end
-
-
-def _rapidfuzz_partial_score(claimed_quote: str, candidate_text: str) -> float | None:
-    try:
-        from rapidfuzz import fuzz
-
-        return float(fuzz.partial_ratio(claimed_quote.lower(), candidate_text.lower())) / 100.0
-    except Exception:
-        return None
-
-
-def _candidate_similarity_score(claimed_quote: str, candidate_text: str) -> float:
-    rapidfuzz_score = _rapidfuzz_partial_score(claimed_quote, candidate_text)
-    if rapidfuzz_score is not None:
-        return rapidfuzz_score
-
-    return SequenceMatcher(
-        None,
-        _normalize_for_similarity(claimed_quote),
-        _normalize_for_similarity(candidate_text),
-    ).ratio()
-
-
-def _identity_tokens(value: str) -> set[str]:
-    return {
-        token.casefold()
-        for token in _IDENTITY_TOKEN_PATTERN.findall(str(value or ""))
-        if token.strip()
-    }
-
-
-def _entity_identity_tokens(entity: str) -> set[str]:
-    tokens = [
-        token.casefold()
-        for token in _WORD_TOKEN_PATTERN.findall(str(entity or ""))
-        if token.strip()
-    ]
-    if tokens and len(tokens) <= 3 and ":" not in str(entity or ""):
-        return set(tokens)
-    return _identity_tokens(entity)
-
-
-def _required_identity_tokens(*, entity: str, claimed_quote: str) -> set[str]:
-    return _entity_identity_tokens(entity) | _identity_tokens(claimed_quote)
-
-
-def _identity_tokens_preserved(*, entity: str, claimed_quote: str, candidate_text: str) -> bool:
-    required_tokens = _required_identity_tokens(
-        entity=entity,
-        claimed_quote=claimed_quote,
-    )
-    if not required_tokens:
-        return False
-
-    candidate_tokens = set(
-        token.casefold()
-        for token in _WORD_TOKEN_PATTERN.findall(str(candidate_text or ""))
-        if token.strip()
-    ) | _identity_tokens(candidate_text)
-    return required_tokens <= candidate_tokens
-
-
-def _candidate_satisfies_required_identity(
-    *,
-    entity: str,
-    claimed_quote: str,
-    candidate_text: str,
-) -> bool:
-    required_tokens = _required_identity_tokens(
-        entity=entity,
-        claimed_quote=claimed_quote,
-    )
-    if not required_tokens:
-        return True
-    candidate_tokens = set(
-        token.casefold()
-        for token in _WORD_TOKEN_PATTERN.findall(str(candidate_text or ""))
-        if token.strip()
-    ) | _identity_tokens(candidate_text)
-    return required_tokens <= candidate_tokens
-
-
-def _claim_token_coverage(claimed_quote: str, candidate_text: str) -> float:
-    claimed_tokens = [
-        token.casefold()
-        for token in _WORD_TOKEN_PATTERN.findall(str(claimed_quote or ""))
-        if token.strip()
-    ]
-    if not claimed_tokens:
-        return 0.0
-
-    remaining_candidate_tokens: dict[str, int] = {}
-    for token in _WORD_TOKEN_PATTERN.findall(str(candidate_text or "")):
-        normalized = token.casefold()
-        if not normalized:
-            continue
-        remaining_candidate_tokens[normalized] = remaining_candidate_tokens.get(normalized, 0) + 1
-
-    matched = 0
-    for token in claimed_tokens:
-        count = remaining_candidate_tokens.get(token, 0)
-        if count <= 0:
-            continue
-        matched += 1
-        remaining_candidate_tokens[token] = count - 1
-
-    return matched / len(claimed_tokens)
-
-
-def _candidate_satisfies_claim_coverage(*, claimed_quote: str, candidate_text: str) -> bool:
-    return _claim_token_coverage(claimed_quote, candidate_text) >= _MIN_CLAIM_TOKEN_COVERAGE
-
-
-def _rank_fuzzy_candidates_for_review(
-    *,
-    entity: str,
-    claimed_quote: str,
-    candidates: list[_FuzzyQuoteCandidate],
-) -> list[_FuzzyQuoteCandidate]:
-    return sorted(
-        candidates,
-        key=lambda candidate: (
-            candidate.score,
-            -len(candidate.text),
-        ),
-        reverse=True,
-    )
-
-
-def _fuzzy_quote_candidates(claimed_quote: str, chunk_text: str) -> list[_FuzzyQuoteCandidate]:
-    normalized_claim = _normalize_for_similarity(claimed_quote)
-    if not normalized_claim:
-        return []
-
-    sentence_spans = _iter_sentence_spans(chunk_text)
-    candidate_spans: list[tuple[int, int]] = []
-
-    alignment = _rapidfuzz_partial_alignment(claimed_quote, chunk_text)
-    if alignment is not None:
-        alignment_score, alignment_start, alignment_end = alignment
-        if alignment_score >= _FUZZY_MIN_SCORE:
-            expanded_start, expanded_end = _expand_match_to_source_boundaries(
-                chunk_text,
-                alignment_start,
-                alignment_end,
-            )
-            candidate_spans.append((expanded_start, expanded_end))
-
-            overlapping_sentence_spans = _sentence_spans_overlapping(
-                sentence_spans,
-                alignment_start,
-                alignment_end,
-            )
-            candidate_spans.extend(overlapping_sentence_spans)
-
-    for index, (start, end) in enumerate(sentence_spans):
-        candidate_spans.append((start, end))
-        if index + 1 < len(sentence_spans):
-            candidate_spans.append((start, sentence_spans[index + 1][1]))
-
-    seen: set[tuple[int, int]] = set()
-    candidates: list[_FuzzyQuoteCandidate] = []
-    for start, end in candidate_spans:
-        if (start, end) in seen:
-            continue
-        seen.add((start, end))
-
-        candidate_text = chunk_text[start:end].strip()
-        if not candidate_text:
-            continue
-
-        score = _candidate_similarity_score(claimed_quote, candidate_text)
-        if score < _FUZZY_MIN_SCORE:
-            continue
-
-        candidates.append(_FuzzyQuoteCandidate(
-            text=candidate_text,
-            raw_start=start,
-            raw_end=end,
-            score=score,
-        ))
-
-    candidates.sort(key=lambda candidate: (candidate.score, -len(candidate.text)), reverse=True)
-    return candidates[:_FUZZY_CANDIDATE_LIMIT]
-
-
-def _evidence_confirmation_enabled() -> bool:
-    raw = os.getenv(_EVIDENCE_CONFIRMATION_ENABLED_ENV, "true").strip().lower()
-    return raw not in {"0", "false", "no", "off"}
-
-
-def _openai_key_allows_evidence_confirmation() -> bool:
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    return bool(api_key) and not api_key.startswith("test-")
-
-
-def _evidence_confirmation_timeout_seconds() -> float:
-    raw = os.getenv(
-        _EVIDENCE_CONFIRMATION_TIMEOUT_ENV,
-        str(_DEFAULT_EVIDENCE_CONFIRMATION_TIMEOUT_SECONDS),
-    ).strip()
-    try:
-        timeout = float(raw)
-    except ValueError:
-        return _DEFAULT_EVIDENCE_CONFIRMATION_TIMEOUT_SECONDS
-    return timeout if timeout > 0 else _DEFAULT_EVIDENCE_CONFIRMATION_TIMEOUT_SECONDS
-
-
-def _accepted_candidate_index(payload: dict[str, Any], *, candidate_count: int) -> int | None:
-    decision = str(payload.get("decision") or "").strip().lower()
-    selected_index = payload.get("selected_index")
-    if decision != "accept" or not isinstance(selected_index, int) or isinstance(selected_index, bool):
-        return None
-    if selected_index < 0 or selected_index >= candidate_count:
-        return None
-    return selected_index
-
-
-async def _confirm_fuzzy_evidence_with_llm(
-    *,
-    entity: str,
-    claimed_quote: str,
-    candidates: list[_FuzzyQuoteCandidate],
-) -> int | None:
-    """Return the accepted candidate index, or None when the arbiter rejects/abstains."""
-
-    if not candidates or not _evidence_confirmation_enabled() or not _openai_key_allows_evidence_confirmation():
-        return None
-
-    try:
-        from openai import AsyncOpenAI
-
-        model = os.getenv(
-            _EVIDENCE_CONFIRMATION_MODEL_ENV,
-            _DEFAULT_EVIDENCE_CONFIRMATION_MODEL,
-        ).strip() or _DEFAULT_EVIDENCE_CONFIRMATION_MODEL
-        client = AsyncOpenAI(timeout=_evidence_confirmation_timeout_seconds())
-
-        candidate_payload = [
-            {
-                "index": index,
-                "score": round(candidate.score, 4),
-                "text": candidate.text,
-            }
-            for index, candidate in enumerate(candidates[:_FUZZY_REVIEW_CANDIDATE_LIMIT])
-        ]
-        completion_kwargs: dict[str, Any] = {
-            "model": model,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are deciding whether one raw PDF text span is a safe source-backed "
-                        "match for a claimed evidence quote.\n\n"
-                        "The claimed quote was produced by another AI system while reading a "
-                        "scientific paper. It may be a cleaned-up or lightly paraphrased copy of "
-                        "the paper text. The candidate spans are raw text snippets retrieved from "
-                        "our indexed PDF database using fuzzy matching. If you accept a candidate, "
-                        "our software will store that candidate text as the verified evidence "
-                        "quote for downstream curation review.\n\n"
-                        "Your job is not to demand exact wording. Your job is to decide whether "
-                        "the candidate faithfully supports the same scientific evidence as the "
-                        "claimed quote and is close enough to be a reasonable fuzzy-match source "
-                        "for that quote.\n\n"
-                        "Accept a candidate when it preserves the important claim-bearing "
-                        "details. These details can include, but are not limited to, biological "
-                        "entities, identifiers, alleles or genotypes, measurements, experimental "
-                        "conditions, species, direction or magnitude of an effect, and other "
-                        "details needed to keep the scientific meaning intact.\n\n"
-                        "PDF extraction artifacts are expected. Do not reject solely because of "
-                        "citation markers, line breaks, typography differences, math or "
-                        "superscript markup, page headers, clipped first or last characters, "
-                        "punctuation changes, or small amounts of surrounding context.\n\n"
-                        "Extra surrounding words or an adjacent sentence fragment are acceptable "
-                        "if the candidate still clearly supports the claimed quote and does not "
-                        "add a conflicting, unsupported, or misleading claim. Prefer the shortest "
-                        "acceptable candidate, but do not reject a good candidate only because it "
-                        "includes harmless surrounding context.\n\n"
-                        "Reject a candidate when it changes, drops, or invents a detail needed to "
-                        "support the claim; changes the scientific meaning; rewrites an "
-                        "identifier, genotype, measurement, condition, species, or other "
-                        "important detail; or is merely related text rather than evidence for the "
-                        "same claim.\n\n"
-                        "Return only JSON. For an accepted candidate, use "
-                        "{\"decision\":\"accept\",\"selected_index\":0,\"reason\":\"one concise "
-                        "sentence explaining the main reason\"}. For reject or ambiguous, use "
-                        "selected_index:null."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "entity": entity,
-                            "claimed_quote": claimed_quote,
-                            "candidates": candidate_payload,
-                        },
-                        ensure_ascii=True,
-                    ),
-                },
-            ],
-            "response_format": {"type": "json_object"},
+class _ResolvedSpanFragment:
+    span: EvidenceSpan
+    chunk: dict[str, Any]
+    chunk_id: str
+    page: int | None
+    section: str | None
+    subsection: str | None
+    figure_reference: str | None
+
+    def to_source_fragment(self) -> dict[str, Any]:
+        fragment: dict[str, Any] = {
+            "span_id": self.span.span_id,
+            "chunk_id": self.chunk_id,
+            "text": self.span.text,
+            "char_start": self.span.char_start,
+            "char_end": self.span.char_end,
+            "span_index": self.span.span_index,
+            "span_type": self.span.span_type,
+            "spanizer_version": self.span.spanizer_version,
         }
-        if not model.startswith("gpt-5"):
-            completion_kwargs["temperature"] = 0
-
-        response = await client.chat.completions.create(**completion_kwargs)
-        content = response.choices[0].message.content
-        payload = json.loads(content or "{}")
-        decision = str(payload.get("decision") or "").strip().lower()
-        selected_index = payload.get("selected_index")
-        reason = _preview_for_log(payload.get("reason"), limit=180)
-        logger.info(
-            "record_evidence LLM confirmation decision=%s selected_index=%r reason=%r model=%s",
-            decision,
-            selected_index,
-            reason,
-            model,
-        )
-        return _accepted_candidate_index(
-            payload,
-            candidate_count=min(len(candidates), _FUZZY_REVIEW_CANDIDATE_LIMIT),
-        )
-    except Exception as exc:
-        logger.warning("record_evidence LLM confirmation failed: %s: %s", type(exc).__name__, exc)
-        return None
+        if self.page is not None:
+            fragment["page"] = self.page
+        if self.section:
+            fragment["section"] = self.section
+        if self.subsection:
+            fragment["subsection"] = self.subsection
+        if self.figure_reference:
+            fragment["figure_reference"] = self.figure_reference
+        return fragment
 
 
-async def _find_fuzzy_verified_quote(
-    *,
-    entity: str,
-    claimed_quote: str,
-    chunk_text: str,
-) -> tuple[str | None, _QuoteMatch | None, list[_FuzzyQuoteCandidate]]:
-    candidates = _fuzzy_quote_candidates(claimed_quote, chunk_text)
-    if not candidates:
-        return None, None, []
-    candidates = _rank_fuzzy_candidates_for_review(
-        entity=entity,
-        claimed_quote=claimed_quote,
-        candidates=candidates,
-    )
-
-    best = candidates[0]
-    second_score = candidates[1].score if len(candidates) > 1 else 0.0
-    margin = best.score - second_score
-    claim_coverage = _claim_token_coverage(claimed_quote, best.text)
-
-    logger.info(
-        "record_evidence fuzzy candidates entity=%r best_score=%.4f second_score=%.4f "
-        "margin=%.4f claim_coverage=%.4f candidate_count=%d",
-        entity,
-        best.score,
-        second_score,
-        margin,
-        claim_coverage,
-        len(candidates),
-    )
-
-    selected_index = await _confirm_fuzzy_evidence_with_llm(
-        entity=entity,
-        claimed_quote=claimed_quote,
-        candidates=candidates,
-    )
-    if selected_index is None:
-        return None, _QuoteMatch(raw_start=best.raw_start, raw_end=best.raw_end), candidates
-
-    selected = candidates[selected_index]
-    if not _candidate_satisfies_claim_coverage(
-        claimed_quote=claimed_quote,
-        candidate_text=selected.text,
-    ):
-        logger.warning(
-            "record_evidence rejected LLM-accepted fuzzy candidate because claim coverage was too low "
-            "entity=%r selected_index=%d score=%.4f coverage=%.4f",
-            entity,
-            selected_index,
-            selected.score,
-            _claim_token_coverage(claimed_quote, selected.text),
-        )
-        return None, _QuoteMatch(raw_start=best.raw_start, raw_end=best.raw_end), candidates
-
-    logger.info(
-        "record_evidence accepted fuzzy candidate after LLM confirmation index=%d score=%.4f",
-        selected_index,
-        selected.score,
-    )
-    return selected.text, _QuoteMatch(raw_start=selected.raw_start, raw_end=selected.raw_end), candidates
-
-
-def _build_preview(chunk_text: str, match: _QuoteMatch | None = None) -> str:
+def _build_preview(chunk_text: str) -> str:
     stripped_text = chunk_text.strip()
     if len(stripped_text) <= _PREVIEW_CHARS:
         return stripped_text
 
-    if match is None:
-        preview = stripped_text[:_PREVIEW_CHARS].rstrip()
-        if len(preview) < len(stripped_text):
-            preview = preview.rstrip(" ,;:") + "..."
-        return preview
-
-    center = (match.raw_start + match.raw_end) // 2
-    start = max(0, center - (_PREVIEW_CHARS // 2))
-    end = min(len(chunk_text), start + _PREVIEW_CHARS)
-    start = max(0, end - _PREVIEW_CHARS)
-    preview = chunk_text[start:end].strip()
-    if start > 0:
-        preview = "..." + preview.lstrip()
-    if end < len(chunk_text):
-        preview = preview.rstrip() + "..."
+    preview = stripped_text[:_PREVIEW_CHARS].rstrip()
+    if len(preview) < len(stripped_text):
+        preview = preview.rstrip(" ,;:") + "..."
     return preview
 
 
@@ -625,8 +90,13 @@ def _first_non_empty(*values: Any) -> str | None:
     return None
 
 
+def _metadata_dict(chunk: dict[str, Any]) -> dict[str, Any]:
+    metadata = chunk.get("metadata")
+    return metadata if isinstance(metadata, dict) else {}
+
+
 def _resolve_chunk_section(chunk: dict[str, Any]) -> str | None:
-    metadata = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
+    metadata = _metadata_dict(chunk)
     return _first_non_empty(
         chunk.get("parent_section"),
         chunk.get("section_title"),
@@ -638,7 +108,7 @@ def _resolve_chunk_section(chunk: dict[str, Any]) -> str | None:
 
 
 def _resolve_chunk_subsection(chunk: dict[str, Any]) -> str | None:
-    metadata = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
+    metadata = _metadata_dict(chunk)
     return _first_non_empty(
         chunk.get("subsection"),
         metadata.get("subsection"),
@@ -667,42 +137,8 @@ def _resolve_doc_item_page(item: dict[str, Any]) -> int | None:
     )
 
 
-def _resolve_chunk_text(chunk: dict[str, Any]) -> str:
-    return str(chunk.get("text") or chunk.get("content") or chunk.get("content_preview") or "").strip()
-
-
-def _is_uuid_like(value: str) -> bool:
-    try:
-        UUID(str(value))
-    except (TypeError, ValueError):
-        return False
-    return True
-
-
-def _normalize_section_label(value: Any) -> str:
-    label = str(value or "").strip()
-    label = _TRAILING_SECTION_INDEX_PATTERN.sub("", label)
-    label = label.replace("_", " ")
-    label = re.sub(r"[^a-z0-9]+", " ", label.lower())
-    return re.sub(r"\s+", " ", label).strip()
-
-
-def _section_label_from_chunk_id(chunk_id: str) -> str | None:
-    raw_label = str(chunk_id or "").strip()
-    if not raw_label or _is_uuid_like(raw_label):
-        return None
-    if _LEGACY_SYMBOLIC_CHUNK_ID_PATTERN.match(raw_label):
-        return None
-
-    normalized_label = _normalize_section_label(raw_label)
-    if not normalized_label:
-        return None
-
-    return _TRAILING_SECTION_INDEX_PATTERN.sub("", raw_label).replace("_", " ").strip()
-
-
 def _resolve_chunk_page(chunk: dict[str, Any]) -> int | None:
-    metadata = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
+    metadata = _metadata_dict(chunk)
     page = (
         _coerce_positive_int(chunk.get("page_number"))
         or _coerce_positive_int(metadata.get("page_number"))
@@ -731,8 +167,13 @@ def _resolve_chunk_page(chunk: dict[str, Any]) -> int | None:
     return doc_item_pages[0]
 
 
+def _resolve_exact_chunk_text(chunk: dict[str, Any]) -> str | None:
+    text = chunk.get("text")
+    return text if isinstance(text, str) else None
+
+
 def _extract_figure_reference(chunk: dict[str, Any], chunk_text: str) -> str | None:
-    metadata = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
+    metadata = _metadata_dict(chunk)
     candidates: list[str | None] = [
         _first_non_empty(
             metadata.get("figure_reference"),
@@ -758,82 +199,11 @@ def _extract_figure_reference(chunk: dict[str, Any], chunk_text: str) -> str | N
         seen.add(normalized_key)
         unique_candidates.append(normalized)
 
-    # If a chunk clearly contains multiple figure/table references, we deliberately
-    # avoid choosing one to prevent sending ambiguous evidence anchors downstream.
+    # If a chunk clearly contains multiple figure/table references, avoid choosing
+    # one so downstream anchors do not inherit ambiguous provenance.
     if len(unique_candidates) == 1:
         return unique_candidates[0]
     return None
-
-
-def _build_not_found_result(
-    chunk_text: str,
-    *,
-    entity: str,
-    chunk_id: str,
-    claimed_quote: str,
-    page: int | None,
-    section: str | None,
-    subsection: str | None,
-    best_match: _QuoteMatch | None = None,
-    message: str = _NOT_FOUND_MESSAGE,
-    extra_fields: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "status": "not_found",
-        "entity": entity,
-        "chunk_id": chunk_id,
-        "claimed_quote": claimed_quote,
-        "chunk_content_preview": _build_preview(chunk_text, best_match),
-        "message": message,
-        "retry_instructions": (
-            "Use an exact contiguous substring copied from this chunk, retry with another "
-            "chunk_id returned by search_document/read_section, or drop this evidence."
-        ),
-    }
-    if page is not None:
-        payload["page"] = page
-    if section:
-        payload["section"] = section
-    if subsection:
-        payload["subsection"] = subsection
-    if extra_fields:
-        payload.update(extra_fields)
-    return payload
-
-
-def _build_section_label_retry_fields(chunk_id: str, claimed_quote: str) -> dict[str, Any]:
-    return {
-        "invalid_chunk_id": chunk_id,
-        "invalid_chunk_id_reason": "not_a_tool_returned_chunk_id",
-        "retry_tool": "search_document",
-        "retry_query": claimed_quote[:240],
-        "retry_instructions": (
-            "Call search_document with the evidence quote or entity, then pass the returned "
-            "hit.chunk_id to record_evidence. If you already used read_section, pass a value from "
-            "section.source_chunks[].chunk_id. Only keep evidence after record_evidence returns verified."
-        ),
-    }
-
-
-def _section_label_not_found_message(chunk_id: str) -> str:
-    return (
-        f"chunk_id '{chunk_id}' is not a chunk identifier returned by the document tools. "
-        "record_evidence requires a chunk_id from search_document hits or read_section "
-        "source_chunks. Retry with search_document using the evidence quote or entity and "
-        "pass the returned hit.chunk_id, use section.source_chunks[].chunk_id from read_section, "
-        "or drop this evidence."
-    )
-
-
-def _retry_key(entity: str, chunk_id: str) -> tuple[str, str]:
-    return (entity.casefold(), chunk_id)
-
-
-def _preview_for_log(value: Any, *, limit: int = 180) -> str:
-    text = str(value or "").strip().replace("\n", "\\n")
-    if len(text) <= limit:
-        return text
-    return text[:limit].rstrip() + "..."
 
 
 def _optional_output_string(value: Any) -> str | None:
@@ -877,6 +247,94 @@ def _merge_extra_fields(*field_groups: dict[str, Any]) -> dict[str, Any] | None:
     return merged or None
 
 
+def _normalize_span_ids(span_ids: Any) -> tuple[list[str], dict[str, Any] | None]:
+    if not isinstance(span_ids, list):
+        return [], {
+            "failed_span_id": None,
+            "failed_span_error": "span_ids must be a non-empty list of span ID strings",
+        }
+
+    normalized_span_ids: list[str] = []
+    for index, span_id in enumerate(span_ids):
+        if not isinstance(span_id, str):
+            return [], {
+                "failed_span_id": None,
+                "failed_span_index": index,
+                "failed_span_error": "span_ids must contain only strings",
+            }
+        normalized = span_id.strip()
+        if not normalized:
+            return [], {
+                "failed_span_id": span_id,
+                "failed_span_index": index,
+                "failed_span_error": "span_ids must not contain blank values",
+            }
+        normalized_span_ids.append(normalized)
+
+    if not normalized_span_ids:
+        return [], {
+            "failed_span_id": None,
+            "failed_span_error": "span_ids must contain at least one span ID",
+        }
+    return normalized_span_ids, None
+
+
+def _build_span_resolution_error_result(
+    *,
+    entity: str,
+    span_ids: list[str],
+    failed_span_id: str | None,
+    failed_span_error: str,
+    failed_span_index: int | None = None,
+    chunk_id: str | None = None,
+    chunk_text: str | None = None,
+    extra_fields: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    error: dict[str, Any] = {
+        "span_id": failed_span_id,
+        "message": failed_span_error,
+    }
+    if failed_span_index is not None:
+        error["span_index"] = failed_span_index
+    if chunk_id:
+        error["chunk_id"] = chunk_id
+
+    payload: dict[str, Any] = {
+        "status": "not_found",
+        "entity": entity,
+        "span_ids": span_ids,
+        "failed_span_id": failed_span_id,
+        "failed_span_error": failed_span_error,
+        "span_resolution_errors": [error],
+        "message": (
+            f"Evidence span could not be resolved: {failed_span_error}. "
+            "The evidence record was not created."
+        ),
+        "retry_instructions": _SPAN_RETRY_INSTRUCTIONS,
+    }
+    if failed_span_index is not None:
+        payload["failed_span_index"] = failed_span_index
+    if chunk_id:
+        payload["chunk_id"] = chunk_id
+    if chunk_text:
+        payload["chunk_content_preview"] = _build_preview(chunk_text)
+    if extra_fields:
+        payload.update(extra_fields)
+    return payload
+
+
+def _unique_non_empty(values: list[str | None]) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = str(value or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(normalized)
+    return unique
+
+
 def _log_record_evidence_result(
     result: dict[str, Any],
     *,
@@ -885,8 +343,8 @@ def _log_record_evidence_result(
 ) -> dict[str, Any]:
     logger.info(
         "record_evidence result status=%s method=%s entity=%r chunk_id=%s document=%s "
-        "evidence_record_id=%s page=%r section=%r terminal=%r retry_exhausted=%r "
-        "message=%r claimed_quote_preview=%r verified_quote_preview=%r chunk_preview=%r",
+        "evidence_record_id=%s page=%r section=%r message=%r span_ids=%r "
+        "verified_quote_preview=%r chunk_preview=%r",
         result.get("status"),
         verification_method,
         result.get("entity"),
@@ -895,14 +353,19 @@ def _log_record_evidence_result(
         result.get("evidence_record_id"),
         result.get("page"),
         result.get("section"),
-        result.get("terminal"),
-        result.get("retry_exhausted"),
         result.get("message"),
-        _preview_for_log(result.get("claimed_quote")),
+        result.get("span_ids"),
         _preview_for_log(result.get("verified_quote")),
         _preview_for_log(result.get("chunk_content_preview")),
     )
     return result
+
+
+def _preview_for_log(value: Any, *, limit: int = 180) -> str:
+    text = str(value or "").strip().replace("\n", "\\n")
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
 
 
 def create_record_evidence_tool(
@@ -911,26 +374,23 @@ def create_record_evidence_tool(
     tracker: Optional["ToolCallTracker"] = None,
 ):
     """Create a record_evidence tool bound to one document and user."""
-    unverified_attempts_by_entity_chunk: dict[tuple[str, str], int] = {}
 
     @function_tool
     async def record_evidence(
         entity: str,
-        chunk_id: str,
-        claimed_quote: str,
+        span_ids: list[str],
         object_id: str | None = None,
         pending_ref_id: str | None = None,
         field_path: str | None = None,
         object_type: str | None = None,
         validation_finding_id: str | None = None,
     ) -> dict[str, Any]:
-        """Verify exact source-corpus text against a specific Weaviate chunk."""
+        """Record exact source-corpus evidence selected by read_chunk span IDs."""
         if tracker:
             tracker.record_call("record_evidence")
 
         normalized_entity = str(entity or "").strip()
-        normalized_chunk_id = str(chunk_id or "").strip()
-        normalized_claimed_quote = str(claimed_quote or "").strip()
+        normalized_span_ids, span_ids_error = _normalize_span_ids(span_ids)
         envelope_target_fields = _build_envelope_target_fields(
             object_id=object_id,
             pending_ref_id=pending_ref_id,
@@ -939,193 +399,198 @@ def create_record_evidence_tool(
             validation_finding_id=validation_finding_id,
         )
 
+        if span_ids_error is not None:
+            return _log_record_evidence_result(
+                _build_span_resolution_error_result(
+                    entity=normalized_entity,
+                    span_ids=normalized_span_ids,
+                    extra_fields=envelope_target_fields,
+                    **span_ids_error,
+                ),
+                document_id=document_id,
+                verification_method="invalid_span_ids",
+            )
+
         logger.info(
-            "Verifying evidence for entity '%s' in chunk %s for document %s",
+            "Resolving evidence spans for entity '%s' for document %s",
             normalized_entity,
-            normalized_chunk_id,
             document_id[:8],
         )
 
-        section_label = _section_label_from_chunk_id(normalized_chunk_id)
-        if section_label:
-            return _log_record_evidence_result(
-                _build_not_found_result(
-                    "",
-                    entity=normalized_entity,
-                    chunk_id=normalized_chunk_id,
-                    claimed_quote=normalized_claimed_quote,
-                    page=None,
-                    section=section_label,
-                    subsection=None,
-                    message=_section_label_not_found_message(normalized_chunk_id),
-                    extra_fields=_merge_extra_fields(
-                        envelope_target_fields,
-                        _build_section_label_retry_fields(
-                            normalized_chunk_id,
-                            normalized_claimed_quote,
-                        ),
+        chunk_ids_by_span_id: dict[str, str] = {}
+        for index, span_id in enumerate(normalized_span_ids):
+            try:
+                parsed = parse_evidence_span_id(span_id)
+            except (TypeError, EvidenceSpanResolutionError) as exc:
+                return _log_record_evidence_result(
+                    _build_span_resolution_error_result(
+                        entity=normalized_entity,
+                        span_ids=normalized_span_ids,
+                        failed_span_id=span_id,
+                        failed_span_index=index,
+                        failed_span_error=f"{exc}. Call read_chunk again for current span IDs.",
+                        extra_fields=envelope_target_fields,
                     ),
-                ),
-                document_id=document_id,
-                verification_method="invalid_chunk_id",
-            )
-        else:
+                    document_id=document_id,
+                    verification_method="invalid_span_id",
+                )
+            chunk_ids_by_span_id[span_id] = parsed.chunk_id
+
+        chunks_by_id: dict[str, dict[str, Any]] = {}
+        for chunk_id in dict.fromkeys(chunk_ids_by_span_id.values()):
             try:
                 chunk = await get_chunk_by_id(
-                    chunk_id=normalized_chunk_id,
+                    chunk_id=chunk_id,
                     user_id=user_id,
                     document_id=document_id,
                 )
             except Exception as exc:
                 logger.error("Failed to load chunk %s for record_evidence: %s", chunk_id, exc, exc_info=True)
                 return _log_record_evidence_result(
-                    _build_not_found_result(
-                        "",
+                    _build_span_resolution_error_result(
                         entity=normalized_entity,
-                        chunk_id=normalized_chunk_id,
-                        claimed_quote=normalized_claimed_quote,
-                        page=None,
-                        section=None,
-                        subsection=None,
-                        message=_INVALID_CHUNK_LOAD_MESSAGE,
+                        span_ids=normalized_span_ids,
+                        failed_span_id=next(
+                            span_id
+                            for span_id, span_chunk_id in chunk_ids_by_span_id.items()
+                            if span_chunk_id == chunk_id
+                        ),
+                        failed_span_error="Chunk could not be loaded for this span ID",
+                        chunk_id=chunk_id,
                         extra_fields=envelope_target_fields,
                     ),
                     document_id=document_id,
                     verification_method="chunk_load_error",
                 )
 
-        if chunk is None:
-            return _log_record_evidence_result(
-                _build_not_found_result(
-                    "",
-                    entity=normalized_entity,
-                    chunk_id=normalized_chunk_id,
-                    claimed_quote=normalized_claimed_quote,
-                    page=None,
-                    section=None,
-                    subsection=None,
-                    message=_MISSING_CHUNK_MESSAGE,
-                    extra_fields=envelope_target_fields,
-                ),
-                document_id=document_id,
-                verification_method="missing_chunk",
-            )
-
-        chunk_text = _resolve_chunk_text(chunk)
-        page = _resolve_chunk_page(chunk)
-        section = _resolve_chunk_section(chunk)
-        subsection = _resolve_chunk_subsection(chunk)
-
-        if not chunk_text:
-            return _log_record_evidence_result(
-                _build_not_found_result(
-                    "",
-                    entity=normalized_entity,
-                    chunk_id=normalized_chunk_id,
-                    claimed_quote=normalized_claimed_quote,
-                    page=page,
-                    section=section,
-                    subsection=subsection,
-                    message="This chunk has no text content. Drop this evidence or retry with another chunk.",
-                    extra_fields=envelope_target_fields,
-                ),
-                document_id=document_id,
-                verification_method="empty_chunk",
-            )
-
-        verified_quote, best_match = _find_verified_quote(normalized_claimed_quote, chunk_text)
-        verification_method = "exact"
-        if verified_quote is None:
-            verified_quote, best_match, fuzzy_candidates = await _find_fuzzy_verified_quote(
-                entity=normalized_entity,
-                claimed_quote=normalized_claimed_quote,
-                chunk_text=chunk_text,
-            )
-            if verified_quote is not None:
-                verification_method = "fuzzy_confirmed"
-            elif fuzzy_candidates:
-                logger.info(
-                    "record_evidence rejected fuzzy candidates entity=%r best_score=%.4f candidate_count=%d",
-                    normalized_entity,
-                    fuzzy_candidates[0].score,
-                    len(fuzzy_candidates),
+            if chunk is None:
+                return _log_record_evidence_result(
+                    _build_span_resolution_error_result(
+                        entity=normalized_entity,
+                        span_ids=normalized_span_ids,
+                        failed_span_id=next(
+                            span_id
+                            for span_id, span_chunk_id in chunk_ids_by_span_id.items()
+                            if span_chunk_id == chunk_id
+                        ),
+                        failed_span_error=(
+                            "Chunk referenced by this span ID was not found in the active document"
+                        ),
+                        chunk_id=chunk_id,
+                        extra_fields=envelope_target_fields,
+                    ),
+                    document_id=document_id,
+                    verification_method="missing_chunk",
                 )
 
-        if verified_quote is None:
-            attempt_key = _retry_key(normalized_entity, normalized_chunk_id)
-            attempt_count = unverified_attempts_by_entity_chunk.get(attempt_key, 0) + 1
-            unverified_attempts_by_entity_chunk[attempt_key] = attempt_count
-            retry_exhausted = attempt_count >= _MAX_UNVERIFIED_ATTEMPTS_PER_ENTITY_CHUNK
-            return _log_record_evidence_result(
-                _build_not_found_result(
-                    chunk_text,
-                    entity=normalized_entity,
-                    chunk_id=normalized_chunk_id,
-                    claimed_quote=normalized_claimed_quote,
+            chunks_by_id[chunk_id] = chunk
+
+        fragments: list[_ResolvedSpanFragment] = []
+        for index, span_id in enumerate(normalized_span_ids):
+            chunk_id = chunk_ids_by_span_id[span_id]
+            chunk = chunks_by_id[chunk_id]
+            chunk_text = _resolve_exact_chunk_text(chunk)
+            if chunk_text is None:
+                return _log_record_evidence_result(
+                    _build_span_resolution_error_result(
+                        entity=normalized_entity,
+                        span_ids=normalized_span_ids,
+                        failed_span_id=span_id,
+                        failed_span_index=index,
+                        failed_span_error=(
+                            "Chunk referenced by this span ID has no exact raw text content"
+                        ),
+                        chunk_id=chunk_id,
+                        extra_fields=envelope_target_fields,
+                    ),
+                    document_id=document_id,
+                    verification_method="missing_chunk_text",
+                )
+
+            page = _resolve_chunk_page(chunk)
+            section = _resolve_chunk_section(chunk)
+            subsection = _resolve_chunk_subsection(chunk)
+            try:
+                span = resolve_evidence_span_id(
+                    span_id=span_id,
+                    chunk_text=chunk_text,
+                    expected_chunk_id=chunk_id,
+                    page_number=page,
+                    section_title=section,
+                )
+            except EvidenceSpanResolutionError as exc:
+                return _log_record_evidence_result(
+                    _build_span_resolution_error_result(
+                        entity=normalized_entity,
+                        span_ids=normalized_span_ids,
+                        failed_span_id=span_id,
+                        failed_span_index=index,
+                        failed_span_error=f"{exc}. Call read_chunk again for current span IDs.",
+                        chunk_id=chunk_id,
+                        chunk_text=chunk_text,
+                        extra_fields=envelope_target_fields,
+                    ),
+                    document_id=document_id,
+                    verification_method="stale_span_id",
+                )
+
+            fragments.append(
+                _ResolvedSpanFragment(
+                    span=span,
+                    chunk=chunk,
+                    chunk_id=chunk_id,
                     page=page,
                     section=section,
                     subsection=subsection,
-                    best_match=best_match,
-                    message=_RETRY_EXHAUSTED_MESSAGE if retry_exhausted else _NOT_FOUND_MESSAGE,
-                    extra_fields=_merge_extra_fields(
-                        envelope_target_fields,
-                        {
-                            "unverified_attempts": attempt_count,
-                            "max_unverified_attempts": _MAX_UNVERIFIED_ATTEMPTS_PER_ENTITY_CHUNK,
-                            "retry_exhausted": retry_exhausted,
-                            "terminal": retry_exhausted,
-                            "retry_instructions": (
-                                "Stop retrying this entity/chunk pair; use search_document or read_section "
-                                "to find exact source text in a better chunk, or drop this evidence."
-                            )
-                            if retry_exhausted
-                            else (
-                                "Retry with an exact contiguous substring copied from this chunk, "
-                                "or re-search/drop the evidence if the chunk does not contain the claim."
-                            ),
-                        },
-                    ),
-                ),
-                document_id=document_id,
-                verification_method="not_found",
+                    figure_reference=_extract_figure_reference(chunk, chunk_text),
+                )
             )
 
-        unverified_attempts_by_entity_chunk.pop(_retry_key(normalized_entity, normalized_chunk_id), None)
+        verified_quote = "\n\n".join(fragment.span.text for fragment in fragments)
+        first_fragment = fragments[0]
+        chunk_ids = _unique_non_empty([fragment.chunk_id for fragment in fragments])
+        figure_references = _unique_non_empty(
+            [fragment.figure_reference for fragment in fragments]
+        )
+
         payload: dict[str, Any] = {
             "status": "verified",
             "entity": normalized_entity,
-            "chunk_id": normalized_chunk_id,
-            "claimed_quote": normalized_claimed_quote,
+            "span_ids": normalized_span_ids,
             "verified_quote": verified_quote,
+            "chunk_id": first_fragment.chunk_id,
+            "chunk_ids": chunk_ids,
+            "source_fragments": [
+                fragment.to_source_fragment()
+                for fragment in fragments
+            ],
         }
         payload.update(envelope_target_fields)
-        if page is not None:
-            payload["page"] = page
-        if section:
-            payload["section"] = section
-        if subsection:
-            payload["subsection"] = subsection
-
-        figure_reference = _extract_figure_reference(chunk, chunk_text)
-        if figure_reference:
-            payload["figure_reference"] = figure_reference
+        if first_fragment.page is not None:
+            payload["page"] = first_fragment.page
+        if first_fragment.section:
+            payload["section"] = first_fragment.section
+        if first_fragment.subsection:
+            payload["subsection"] = first_fragment.subsection
+        if len(figure_references) == 1:
+            payload["figure_reference"] = figure_references[0]
 
         payload["evidence_record_id"] = build_evidence_record_id(
             evidence_record={
                 "entity": normalized_entity,
                 "verified_quote": verified_quote,
-                "page": page,
-                "section": section,
-                "chunk_id": normalized_chunk_id,
-                "subsection": subsection,
-                "figure_reference": figure_reference,
+                "page": first_fragment.page,
+                "section": first_fragment.section,
+                "chunk_id": first_fragment.chunk_id,
+                "subsection": first_fragment.subsection,
+                "figure_reference": payload.get("figure_reference"),
             }
         )
 
         return _log_record_evidence_result(
             payload,
             document_id=document_id,
-            verification_method=verification_method,
+            verification_method="span_ids",
         )
 
     return record_evidence
