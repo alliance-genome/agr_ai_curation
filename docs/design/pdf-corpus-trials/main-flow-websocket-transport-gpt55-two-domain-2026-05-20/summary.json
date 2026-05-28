@@ -3846,7 +3846,7 @@
                   },
                   "durationMs": 1452,
                   "name": "record_evidence",
-                  "outputPreview": "{'status': 'verified', 'entity': 'Nfa-g', 'chunk_id': '56609f28-0af2-8406-d875-a3afa2ac7ad7', 'span_ids': 'in Nfa-g mutants, rst F6 -lacZ was expanded to all pigment cells surrounding cone cells'...",
+                  "outputPreview": "{'status': 'verified', 'entity': 'Nfa-g', 'chunk_id': '56609f28-0af2-8406-d875-a3afa2ac7ad7', 'span_ids': ['read_chunk-selected-span-id']...",
                   "outputSummary": {
                     "chunk_id": "56609f28-0af2-8406-d875-a3afa2ac7ad7",
                     "span_ids": ["read_chunk-selected-span-id"],
@@ -4532,7 +4532,7 @@
                 },
                 "durationMs": 1452,
                 "name": "record_evidence",
-                "outputPreview": "{'status': 'verified', 'entity': 'Nfa-g', 'chunk_id': '56609f28-0af2-8406-d875-a3afa2ac7ad7', 'span_ids': 'in Nfa-g mutants, rst F6 -lacZ was expanded to all pigment cells surrounding cone cells'...",
+                "outputPreview": "{'status': 'verified', 'entity': 'Nfa-g', 'chunk_id': '56609f28-0af2-8406-d875-a3afa2ac7ad7', 'span_ids': ['read_chunk-selected-span-id']...",
                 "outputSummary": {
                   "chunk_id": "56609f28-0af2-8406-d875-a3afa2ac7ad7",
                   "span_ids": ["read_chunk-selected-span-id"],

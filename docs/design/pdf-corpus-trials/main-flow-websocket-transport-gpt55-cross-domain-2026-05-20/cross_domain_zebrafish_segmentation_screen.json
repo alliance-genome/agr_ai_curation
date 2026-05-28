@@ -3747,7 +3747,7 @@
               },
               "durationMs": 146,
               "name": "record_evidence",
-              "outputPreview": "{'status': 'verified', 'entity': 'SB225002 treatment', 'chunk_id': '0c5d62b4-c456-f241-9c76-6e26812760aa', 'span_ids': '3 \u03bcM SB225002 treatment from tailbud (tb), myotome boundary defects of the ...",
+              "outputPreview": "{'status': 'verified', 'entity': 'SB225002 treatment', 'chunk_id': '0c5d62b4-c456-f241-9c76-6e26812760aa', 'span_ids': ['read_chunk-selected-span-id']...",
               "outputSummary": {
                 "chunk_id": "0c5d62b4-c456-f241-9c76-6e26812760aa",
                 "span_ids": ["read_chunk-selected-span-id"],
@@ -4114,7 +4114,7 @@
               },
               "durationMs": 279,
               "name": "record_evidence",
-              "outputPreview": "{'status': 'verified', 'entity': 'mid-trunk myotome boundary defects', 'chunk_id': '0c5d62b4-c456-f241-9c76-6e26812760aa', 'span_ids': '3 \u03bcM SB225002 treatment from tailbud (tb), myotome boundary...",
+              "outputPreview": "{'status': 'verified', 'entity': 'mid-trunk myotome boundary defects', 'chunk_id': '0c5d62b4-c456-f241-9c76-6e26812760aa', 'span_ids': ['read_chunk-selected-span-id']...",
               "outputSummary": {
                 "chunk_id": "0c5d62b4-c456-f241-9c76-6e26812760aa",
                 "span_ids": ["read_chunk-selected-span-id"],
@@ -4421,7 +4421,7 @@
               },
               "durationMs": 1740,
               "name": "record_evidence",
-              "outputPreview": "{'status': 'verified', 'entity': 'her1', 'chunk_id': 'd566a2d5-1d72-2d33-d68d-09b9f668b5c0', 'span_ids': 'We identified seven small molecules that cause direct segmentation phenotypes only in the...",
+              "outputPreview": "{'status': 'verified', 'entity': 'her1', 'chunk_id': 'd566a2d5-1d72-2d33-d68d-09b9f668b5c0', 'span_ids': ['read_chunk-selected-span-id']...",
               "outputSummary": {
                 "chunk_id": "d566a2d5-1d72-2d33-d68d-09b9f668b5c0",
                 "span_ids": ["read_chunk-selected-span-id"],
@@ -5781,7 +5781,7 @@
             },
             "durationMs": 146,
             "name": "record_evidence",
-            "outputPreview": "{'status': 'verified', 'entity': 'SB225002 treatment', 'chunk_id': '0c5d62b4-c456-f241-9c76-6e26812760aa', 'span_ids': '3 \u03bcM SB225002 treatment from tailbud (tb), myotome boundary defects of the ...",
+            "outputPreview": "{'status': 'verified', 'entity': 'SB225002 treatment', 'chunk_id': '0c5d62b4-c456-f241-9c76-6e26812760aa', 'span_ids': ['read_chunk-selected-span-id']...",
             "outputSummary": {
               "chunk_id": "0c5d62b4-c456-f241-9c76-6e26812760aa",
               "span_ids": ["read_chunk-selected-span-id"],
@@ -5881,7 +5881,7 @@
             },
             "durationMs": 279,
             "name": "record_evidence",
-            "outputPreview": "{'status': 'verified', 'entity': 'mid-trunk myotome boundary defects', 'chunk_id': '0c5d62b4-c456-f241-9c76-6e26812760aa', 'span_ids': '3 \u03bcM SB225002 treatment from tailbud (tb), myotome boundary...",
+            "outputPreview": "{'status': 'verified', 'entity': 'mid-trunk myotome boundary defects', 'chunk_id': '0c5d62b4-c456-f241-9c76-6e26812760aa', 'span_ids': ['read_chunk-selected-span-id']...",
             "outputSummary": {
               "chunk_id": "0c5d62b4-c456-f241-9c76-6e26812760aa",
               "span_ids": ["read_chunk-selected-span-id"],
@@ -5980,7 +5980,7 @@
             },
             "durationMs": 1740,
             "name": "record_evidence",
-            "outputPreview": "{'status': 'verified', 'entity': 'her1', 'chunk_id': 'd566a2d5-1d72-2d33-d68d-09b9f668b5c0', 'span_ids': 'We identified seven small molecules that cause direct segmentation phenotypes only in the...",
+            "outputPreview": "{'status': 'verified', 'entity': 'her1', 'chunk_id': 'd566a2d5-1d72-2d33-d68d-09b9f668b5c0', 'span_ids': ['read_chunk-selected-span-id']...",
             "outputSummary": {
               "chunk_id": "d566a2d5-1d72-2d33-d68d-09b9f668b5c0",
               "span_ids": ["read_chunk-selected-span-id"],

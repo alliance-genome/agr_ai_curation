@@ -1,5 +1,6 @@
 """Regression checks for span-backed record_evidence wording."""
 
+import re
 from pathlib import Path
 
 import yaml
@@ -23,6 +24,8 @@ EXTRACTOR_PROMPT_PATHS = [
 
 EVIDENCE_FIXTURE_DIR = REPO_ROOT / "backend/tests/fixtures/evidence"
 PDF_CORPUS_TRIAL_DIR = REPO_ROOT / "docs/design/pdf-corpus-trials"
+
+STRING_SPAN_IDS_RE = re.compile(r"""['"]span_ids['"]\s*:\s*['"]""")
 
 STALE_RECORD_EVIDENCE_PHRASES = [
     "claimed_quote",
@@ -244,5 +247,8 @@ def test_pdf_corpus_trial_examples_do_not_teach_quote_submission():
             content,
             stale_hits,
         )
+        for match in STRING_SPAN_IDS_RE.finditer(content):
+            line = content.count("\n", 0, match.start()) + 1
+            stale_hits.append(f"{path.relative_to(REPO_ROOT)}:{line}: string span_ids example")
 
     assert stale_hits == []

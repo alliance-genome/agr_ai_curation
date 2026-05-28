@@ -2741,7 +2741,7 @@
                   },
                   "durationMs": 1948,
                   "name": "record_evidence",
-                  "outputPreview": "{'status': 'verified', 'entity': 'Baboon', 'chunk_id': 'a75b5acb-fed6-f3ff-1020-6312eb63c76f', 'span_ids': 'removing or overexpressing Babo-b significantly reduced (16%) and increased (65%) pale ...",
+                  "outputPreview": "{'status': 'verified', 'entity': 'Baboon', 'chunk_id': 'a75b5acb-fed6-f3ff-1020-6312eb63c76f', 'span_ids': ['read_chunk-selected-span-id']...",
                   "outputSummary": {
                     "chunk_id": "a75b5acb-fed6-f3ff-1020-6312eb63c76f",
                     "span_ids": ["read_chunk-selected-span-id"],
@@ -2768,7 +2768,7 @@
                   },
                   "durationMs": 1895,
                   "name": "record_evidence",
-                  "outputPreview": "{'status': 'verified', 'entity': 'dSmad2', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'span_ids': 'removing dSmad2 resulted in a sharp decrease in pale R8 subtypes (15%).', 'verified_quo...",
+                  "outputPreview": "{'status': 'verified', 'entity': 'dSmad2', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'span_ids': ['read_chunk-selected-span-id'], 'verified_quo...",
                   "outputSummary": {
                     "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
                     "span_ids": ["read_chunk-selected-span-id"],
@@ -2794,7 +2794,7 @@
                   },
                   "durationMs": 1779,
                   "name": "record_evidence",
-                  "outputPreview": "{'status': 'verified', 'entity': 'Mad', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'span_ids': 'Removing mad with RNAi also resulted in a decrease of pale R8 subtypes (4%).', 'verified_q...",
+                  "outputPreview": "{'status': 'verified', 'entity': 'Mad', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'span_ids': ['read_chunk-selected-span-id'], 'verified_q...",
                   "outputSummary": {
                     "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
                     "span_ids": ["read_chunk-selected-span-id"],
@@ -2820,7 +2820,7 @@
                   },
                   "durationMs": 1779,
                   "name": "record_evidence",
-                  "outputPreview": "{'status': 'not_found', 'entity': 'Warts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'span_ids': 'Removing wts increased pale R8 subtypes to almost 100%.', 'chunk_content_preview': 'Rem...",
+                  "outputPreview": "{'status': 'not_found', 'entity': 'Warts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'span_ids': ['read_chunk-selected-span-id'], 'chunk_content_preview': 'Rem...",
                   "outputSummary": {
                     "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
                     "span_ids": ["read_chunk-selected-span-id"],
@@ -2850,7 +2850,7 @@
                   },
                   "durationMs": 1171,
                   "name": "record_evidence",
-                  "outputPreview": "{'status': 'not_found', 'entity': 'Warts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'span_ids': 'Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when re...",
+                  "outputPreview": "{'status': 'not_found', 'entity': 'Warts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'span_ids': ['read_chunk-selected-span-id']...",
                   "outputSummary": {
                     "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
                     "span_ids": ["read_chunk-selected-span-id"],
@@ -2880,7 +2880,7 @@
                   },
                   "durationMs": 1272,
                   "name": "record_evidence",
-                  "outputPreview": "{'status': 'not_found', 'entity': 'Warts', 'chunk_id': '6c1d6b4a-076c-0264-f27a-9d0c64195a8d', 'span_ids': 'Removing wts (lGMR-Gal4 > UAS-Dcr2; UAS-WtsRNAi) (100/0/0) (n = 8) led to total loss of...",
+                  "outputPreview": "{'status': 'not_found', 'entity': 'Warts', 'chunk_id': '6c1d6b4a-076c-0264-f27a-9d0c64195a8d', 'span_ids': ['read_chunk-selected-span-id']...",
                   "outputSummary": {
                     "chunk_id": "6c1d6b4a-076c-0264-f27a-9d0c64195a8d",
                     "span_ids": ["read_chunk-selected-span-id"],
@@ -2910,7 +2910,7 @@
                   },
                   "durationMs": 2201,
                   "name": "record_evidence",
-                  "outputPreview": "{'status': 'not_found', 'entity': 'Warts', 'chunk_id': '6c1d6b4a-076c-0264-f27a-9d0c64195a8d', 'span_ids': 'Removing wts (lGMR-Gal4 > UAS-Dcr2; UAS-WtsRNAi) (100/0/0) (n = 8) led to total loss of...",
+                  "outputPreview": "{'status': 'not_found', 'entity': 'Warts', 'chunk_id': '6c1d6b4a-076c-0264-f27a-9d0c64195a8d', 'span_ids': ['read_chunk-selected-span-id']...",
                   "outputSummary": {
                     "chunk_id": "6c1d6b4a-076c-0264-f27a-9d0c64195a8d",
                     "span_ids": ["read_chunk-selected-span-id"],
@@ -4135,7 +4135,7 @@
                 },
                 "durationMs": 1948,
                 "name": "record_evidence",
-                "outputPreview": "{'status': 'verified', 'entity': 'Baboon', 'chunk_id': 'a75b5acb-fed6-f3ff-1020-6312eb63c76f', 'span_ids': 'removing or overexpressing Babo-b significantly reduced (16%) and increased (65%) pale ...",
+                "outputPreview": "{'status': 'verified', 'entity': 'Baboon', 'chunk_id': 'a75b5acb-fed6-f3ff-1020-6312eb63c76f', 'span_ids': ['read_chunk-selected-span-id']...",
                 "outputSummary": {
                   "chunk_id": "a75b5acb-fed6-f3ff-1020-6312eb63c76f",
                   "span_ids": ["read_chunk-selected-span-id"],
@@ -4162,7 +4162,7 @@
                 },
                 "durationMs": 1895,
                 "name": "record_evidence",
-                "outputPreview": "{'status': 'verified', 'entity': 'dSmad2', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'span_ids': 'removing dSmad2 resulted in a sharp decrease in pale R8 subtypes (15%).', 'verified_quo...",
+                "outputPreview": "{'status': 'verified', 'entity': 'dSmad2', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'span_ids': ['read_chunk-selected-span-id'], 'verified_quo...",
                 "outputSummary": {
                   "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
                   "span_ids": ["read_chunk-selected-span-id"],
@@ -4188,7 +4188,7 @@
                 },
                 "durationMs": 1779,
                 "name": "record_evidence",
-                "outputPreview": "{'status': 'verified', 'entity': 'Mad', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'span_ids': 'Removing mad with RNAi also resulted in a decrease of pale R8 subtypes (4%).', 'verified_q...",
+                "outputPreview": "{'status': 'verified', 'entity': 'Mad', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'span_ids': ['read_chunk-selected-span-id'], 'verified_q...",
                 "outputSummary": {
                   "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
                   "span_ids": ["read_chunk-selected-span-id"],
@@ -4214,7 +4214,7 @@
                 },
                 "durationMs": 1779,
                 "name": "record_evidence",
-                "outputPreview": "{'status': 'not_found', 'entity': 'Warts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'span_ids': 'Removing wts increased pale R8 subtypes to almost 100%.', 'chunk_content_preview': 'Rem...",
+                "outputPreview": "{'status': 'not_found', 'entity': 'Warts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'span_ids': ['read_chunk-selected-span-id'], 'chunk_content_preview': 'Rem...",
                 "outputSummary": {
                   "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
                   "span_ids": ["read_chunk-selected-span-id"],
@@ -4244,7 +4244,7 @@
                 },
                 "durationMs": 1171,
                 "name": "record_evidence",
-                "outputPreview": "{'status': 'not_found', 'entity': 'Warts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'span_ids': 'Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when re...",
+                "outputPreview": "{'status': 'not_found', 'entity': 'Warts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'span_ids': ['read_chunk-selected-span-id']...",
                 "outputSummary": {
                   "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
                   "span_ids": ["read_chunk-selected-span-id"],
@@ -4274,7 +4274,7 @@
                 },
                 "durationMs": 1272,
                 "name": "record_evidence",
-                "outputPreview": "{'status': 'not_found', 'entity': 'Warts', 'chunk_id': '6c1d6b4a-076c-0264-f27a-9d0c64195a8d', 'span_ids': 'Removing wts (lGMR-Gal4 > UAS-Dcr2; UAS-WtsRNAi) (100/0/0) (n = 8) led to total loss of...",
+                "outputPreview": "{'status': 'not_found', 'entity': 'Warts', 'chunk_id': '6c1d6b4a-076c-0264-f27a-9d0c64195a8d', 'span_ids': ['read_chunk-selected-span-id']...",
                 "outputSummary": {
                   "chunk_id": "6c1d6b4a-076c-0264-f27a-9d0c64195a8d",
                   "span_ids": ["read_chunk-selected-span-id"],
@@ -4304,7 +4304,7 @@
                 },
                 "durationMs": 2201,
                 "name": "record_evidence",
-                "outputPreview": "{'status': 'not_found', 'entity': 'Warts', 'chunk_id': '6c1d6b4a-076c-0264-f27a-9d0c64195a8d', 'span_ids': 'Removing wts (lGMR-Gal4 > UAS-Dcr2; UAS-WtsRNAi) (100/0/0) (n = 8) led to total loss of...",
+                "outputPreview": "{'status': 'not_found', 'entity': 'Warts', 'chunk_id': '6c1d6b4a-076c-0264-f27a-9d0c64195a8d', 'span_ids': ['read_chunk-selected-span-id']...",
                 "outputSummary": {
                   "chunk_id": "6c1d6b4a-076c-0264-f27a-9d0c64195a8d",
                   "span_ids": ["read_chunk-selected-span-id"],

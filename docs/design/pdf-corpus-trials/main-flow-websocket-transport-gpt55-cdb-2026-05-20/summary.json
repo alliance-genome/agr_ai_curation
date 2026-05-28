@@ -2666,7 +2666,7 @@
                   },
                   "durationMs": 1664,
                   "name": "record_evidence",
-                  "outputPreview": "{'status': 'verified', 'entity': 'babo', 'chunk_id': '9d2e58b8-2b79-bf99-b6ef-d74c03cf0cf3', 'span_ids': 'Babo is the sole Type I receptor for the Activin family of ligands: dActb, Daw, and Myo.'...",
+                  "outputPreview": "{'status': 'verified', 'entity': 'babo', 'chunk_id': '9d2e58b8-2b79-bf99-b6ef-d74c03cf0cf3', 'span_ids': ['read_chunk-selected-span-id']...",
                   "outputSummary": {
                     "chunk_id": "9d2e58b8-2b79-bf99-b6ef-d74c03cf0cf3",
                     "span_ids": ["read_chunk-selected-span-id"],
@@ -2692,7 +2692,7 @@
                   },
                   "durationMs": 1663,
                   "name": "record_evidence",
-                  "outputPreview": "{'status': 'verified', 'entity': 'dSmad2', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'span_ids': 'dSmad2 is required downstream of Babo signaling for specification of the pale R8 subtyp...",
+                  "outputPreview": "{'status': 'verified', 'entity': 'dSmad2', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'span_ids': ['read_chunk-selected-span-id']...",
                   "outputSummary": {
                     "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
                     "span_ids": ["read_chunk-selected-span-id"],
@@ -2718,7 +2718,7 @@
                   },
                   "durationMs": 1496,
                   "name": "record_evidence",
-                  "outputPreview": "{'status': 'verified', 'entity': 'Mad', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'span_ids': 'Mad represents the R-SMAD downstream of Tkv activity while dSmad2 acts downstream of Babo....",
+                  "outputPreview": "{'status': 'verified', 'entity': 'Mad', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'span_ids': ['read_chunk-selected-span-id']...",
                   "outputSummary": {
                     "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
                     "span_ids": ["read_chunk-selected-span-id"],
@@ -2744,7 +2744,7 @@
                   },
                   "durationMs": 1495,
                   "name": "record_evidence",
-                  "outputPreview": "{'status': 'not_found', 'entity': 'wts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'span_ids': 'Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when remo...",
+                  "outputPreview": "{'status': 'not_found', 'entity': 'wts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'span_ids': ['read_chunk-selected-span-id']...",
                   "outputSummary": {
                     "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
                     "span_ids": ["read_chunk-selected-span-id"],
@@ -2774,7 +2774,7 @@
                   },
                   "durationMs": 1628,
                   "name": "record_evidence",
-                  "outputPreview": "{'status': 'verified', 'entity': 'wts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'span_ids': 'Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when remov...",
+                  "outputPreview": "{'status': 'verified', 'entity': 'wts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'span_ids': ['read_chunk-selected-span-id']...",
                   "outputSummary": {
                     "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
                     "span_ids": ["read_chunk-selected-span-id"],
@@ -3967,7 +3967,7 @@
                 },
                 "durationMs": 1664,
                 "name": "record_evidence",
-                "outputPreview": "{'status': 'verified', 'entity': 'babo', 'chunk_id': '9d2e58b8-2b79-bf99-b6ef-d74c03cf0cf3', 'span_ids': 'Babo is the sole Type I receptor for the Activin family of ligands: dActb, Daw, and Myo.'...",
+                "outputPreview": "{'status': 'verified', 'entity': 'babo', 'chunk_id': '9d2e58b8-2b79-bf99-b6ef-d74c03cf0cf3', 'span_ids': ['read_chunk-selected-span-id']...",
                 "outputSummary": {
                   "chunk_id": "9d2e58b8-2b79-bf99-b6ef-d74c03cf0cf3",
                   "span_ids": ["read_chunk-selected-span-id"],
@@ -3993,7 +3993,7 @@
                 },
                 "durationMs": 1663,
                 "name": "record_evidence",
-                "outputPreview": "{'status': 'verified', 'entity': 'dSmad2', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'span_ids': 'dSmad2 is required downstream of Babo signaling for specification of the pale R8 subtyp...",
+                "outputPreview": "{'status': 'verified', 'entity': 'dSmad2', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'span_ids': ['read_chunk-selected-span-id']...",
                 "outputSummary": {
                   "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
                   "span_ids": ["read_chunk-selected-span-id"],
@@ -4019,7 +4019,7 @@
                 },
                 "durationMs": 1496,
                 "name": "record_evidence",
-                "outputPreview": "{'status': 'verified', 'entity': 'Mad', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'span_ids': 'Mad represents the R-SMAD downstream of Tkv activity while dSmad2 acts downstream of Babo....",
+                "outputPreview": "{'status': 'verified', 'entity': 'Mad', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'span_ids': ['read_chunk-selected-span-id']...",
                 "outputSummary": {
                   "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
                   "span_ids": ["read_chunk-selected-span-id"],
@@ -4045,7 +4045,7 @@
                 },
                 "durationMs": 1495,
                 "name": "record_evidence",
-                "outputPreview": "{'status': 'not_found', 'entity': 'wts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'span_ids': 'Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when remo...",
+                "outputPreview": "{'status': 'not_found', 'entity': 'wts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'span_ids': ['read_chunk-selected-span-id']...",
                 "outputSummary": {
                   "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
                   "span_ids": ["read_chunk-selected-span-id"],
@@ -4075,7 +4075,7 @@
                 },
                 "durationMs": 1628,
                 "name": "record_evidence",
-                "outputPreview": "{'status': 'verified', 'entity': 'wts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'span_ids': 'Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when remov...",
+                "outputPreview": "{'status': 'verified', 'entity': 'wts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'span_ids': ['read_chunk-selected-span-id']...",
                 "outputSummary": {
                   "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
                   "span_ids": ["read_chunk-selected-span-id"],
