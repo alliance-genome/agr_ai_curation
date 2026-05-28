@@ -65,15 +65,16 @@ _RECORD_EVIDENCE_RUNTIME_NOTE = (
     "- Call `read_chunk(chunk_id)` before recording evidence and select backend-generated "
     "`evidence_spans[].span_id` values.\n"
     "- Call `record_evidence` once for each distinct evidence unit you intend to keep.\n"
+    "- Multiple `span_ids` in one `record_evidence` call produce one evidence record; use separate records for truly disjoint evidence units.\n"
     "- Use multiple evidence records when one evidence unit alone does not fully support the retained item or claim.\n"
-    "- Prefer complementary evidence records when different passages establish different parts of the support (for example identity, condition, effect, or scope).\n"
-    "- Pass the entity label and `span_ids`; do not pass claimed_quote, verified_quote, or replacement quote text.\n"
+    "- Pass the entity label and `span_ids`; do not write source evidence text yourself.\n"
     "- `record_evidence` resolves span IDs against exact source text and copies the backend-owned slices into `verified_quote`.\n"
     "- If the tool returns `not_found`, call `read_chunk` again for current span IDs or drop the evidence.\n"
     "- Only persist evidence records that came back `verified`.\n"
-    "- Use `list_recorded_evidence` and `get_recorded_evidence` to review the active-run evidence workspace before final output.\n"
-    "- Use `attach_evidence_to_object`, `detach_evidence_from_object`, and `update_recorded_evidence_metadata` to connect evidence to objects, pending refs, or field paths.\n"
+    "- Before final output, use `list_recorded_evidence` and `get_recorded_evidence` to review the active-run evidence workspace.\n"
+    "- Use `attach_evidence_to_object`, `detach_evidence_from_object`, and `update_recorded_evidence_metadata` to make evidence support the intended objects, pending refs, or field paths.\n"
     "- Use `discard_recorded_evidence` for wrong or weak evidence; discarded evidence is retained for audit but omitted from final output by default.\n"
+    "- Source quote, source span IDs, source fragments, chunk IDs, page, and section provenance are immutable after recording.\n"
 )
 _INLINE_PACKAGE_TOOL_IDS = frozenset({
     "attach_evidence_to_object",
@@ -225,11 +226,11 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     # PDF Document Search Tools
     "search_document": {
         "name": "Search Document",
-        "description": "Search uploaded PDF documents using hybrid semantic and keyword search.",
+        "description": "Discovery search over uploaded PDF chunks using hybrid semantic and keyword search.",
         "category": "PDF Extraction",
         "source_file": "backend/src/lib/openai_agents/tools/weaviate_search.py",
         "documentation": {
-            "summary": "Finds relevant passages in the uploaded PDF using vector similarity search combined with keyword matching.",
+            "summary": "Finds relevant chunks in the uploaded PDF. Use returned chunk_id values with read_chunk for final evidence span selection.",
             "parameters": [
                 {
                     "name": "query",
@@ -256,11 +257,11 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     },
     "read_chunk": {
         "name": "Read Chunk",
-        "description": "Read one PDF chunk and return deterministic exact-text evidence spans.",
+        "description": "Read one PDF chunk and return selectable evidence_spans[].span_id values.",
         "category": "PDF Extraction",
         "source_file": "backend/src/lib/openai_agents/tools/weaviate_search.py",
         "documentation": {
-            "summary": "Retrieves full raw chunk text, neighboring chunk IDs, and selectable evidence span IDs.",
+            "summary": "Retrieves full raw chunk text, neighboring chunk IDs, and selectable evidence span IDs for record_evidence.",
             "parameters": [
                 {
                     "name": "chunk_id",
@@ -275,11 +276,11 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     },
     "read_section": {
         "name": "Read Section",
-        "description": "Read the full text of a specific document section.",
+        "description": "Survey the full text of a specific document section.",
         "category": "PDF Extraction",
         "source_file": "backend/src/lib/openai_agents/tools/weaviate_search.py",
         "documentation": {
-            "summary": "Retrieves the complete text content of a named section from the PDF.",
+            "summary": "Retrieves complete section text for discovery and context. Use source_chunks[].chunk_id with read_chunk for final evidence selection.",
             "parameters": [
                 {
                     "name": "section_name",
@@ -294,11 +295,11 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     },
     "read_subsection": {
         "name": "Read Subsection",
-        "description": "Read the full text of a specific subsection within a section.",
+        "description": "Survey the full text of a specific subsection within a section.",
         "category": "PDF Extraction",
         "source_file": "backend/src/lib/openai_agents/tools/weaviate_search.py",
         "documentation": {
-            "summary": "Retrieves content from a specific subsection (e.g., 'Strain construction' within Methods).",
+            "summary": "Retrieves subsection content for discovery and context. Use read_chunk on relevant chunks for final evidence selection.",
             "parameters": [
                 {
                     "name": "section_name",
@@ -319,11 +320,11 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     },
     "record_evidence": {
         "name": "Record Evidence",
-        "description": "Record exact PDF evidence selected by backend-generated read_chunk span IDs.",
+        "description": "Create verified PDF evidence from backend-generated read_chunk span_ids.",
         "category": "PDF Extraction",
         "source_file": "backend/src/lib/openai_agents/tools/record_evidence.py",
         "documentation": {
-            "summary": "Resolves selected evidence_spans[].span_id values against exact chunk text and returns copied source text plus locator metadata. Use one call for one evidence unit; multiple selected spans are stored as conjoined source fragments.",
+            "summary": "Resolves selected evidence_spans[].span_id values against exact chunk text and returns backend-copied verified_quote plus locator metadata. Use one call for one evidence unit; multiple selected spans are stored as conjoined source fragments.",
             "parameters": [
                 {
                     "name": "entity",
@@ -344,11 +345,11 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     },
     "list_recorded_evidence": {
         "name": "List Recorded Evidence",
-        "description": "List active-run evidence records for the current document.",
+        "description": "Review queued active-run evidence records before final output.",
         "category": "PDF Extraction",
         "source_file": "backend/src/lib/openai_agents/tools/evidence_workspace.py",
         "documentation": {
-            "summary": "Returns queued evidence records from the active run evidence workspace. Discarded records are excluded unless include_discarded is true.",
+            "summary": "Returns queued evidence records from the active-run evidence workspace so the agent can confirm the final support set. Discarded records are excluded unless include_discarded is true.",
             "parameters": [
                 {"name": "include_discarded", "type": "boolean", "required": False, "description": "Include records previously marked discarded."},
                 {"name": "object_id", "type": "string", "required": False, "description": "Filter to evidence attached to this object ID."},
@@ -360,11 +361,11 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     },
     "get_recorded_evidence": {
         "name": "Get Recorded Evidence",
-        "description": "Fetch one active-run evidence record by ID.",
+        "description": "Fetch one active-run evidence record by ID for detailed review.",
         "category": "PDF Extraction",
         "source_file": "backend/src/lib/openai_agents/tools/evidence_workspace.py",
         "documentation": {
-            "summary": "Returns full details for one evidence record in the active run workspace.",
+            "summary": "Returns full details for one evidence record in the active-run workspace for detailed review.",
             "parameters": [
                 {"name": "evidence_record_id", "type": "string", "required": True, "description": "Evidence record ID returned by record_evidence or list_recorded_evidence."},
             ],
@@ -374,7 +375,7 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     },
     "attach_evidence_to_object": {
         "name": "Attach Evidence To Object",
-        "description": "Attach active-run evidence to a curatable object or pending ref.",
+        "description": "Attach active-run evidence to the intended curatable object or pending ref.",
         "category": "PDF Extraction",
         "source_file": "backend/src/lib/openai_agents/tools/evidence_workspace.py",
         "documentation": {
@@ -391,7 +392,7 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     },
     "detach_evidence_from_object": {
         "name": "Detach Evidence From Object",
-        "description": "Detach active-run evidence from a curatable object or pending ref.",
+        "description": "Detach active-run evidence from a wrong curatable object or pending ref.",
         "category": "PDF Extraction",
         "source_file": "backend/src/lib/openai_agents/tools/evidence_workspace.py",
         "documentation": {
@@ -408,7 +409,7 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     },
     "discard_recorded_evidence": {
         "name": "Discard Recorded Evidence",
-        "description": "Mark wrong or weak active-run evidence as discarded.",
+        "description": "Discard wrong or weak active-run evidence without deleting audit history.",
         "category": "PDF Extraction",
         "source_file": "backend/src/lib/openai_agents/tools/evidence_workspace.py",
         "documentation": {
@@ -423,7 +424,7 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     },
     "update_recorded_evidence_metadata": {
         "name": "Update Evidence Metadata",
-        "description": "Update editable active-run evidence metadata.",
+        "description": "Update only editable active-run evidence metadata.",
         "category": "PDF Extraction",
         "source_file": "backend/src/lib/openai_agents/tools/evidence_workspace.py",
         "documentation": {

@@ -127,9 +127,10 @@ content: |
     readiness context; do not treat it as a validator result status.
   - If the field is defined but the available paper/database evidence cannot resolve
     it, leave the finding open and explain what curator evidence or action is needed.
-  - `record_evidence` verifies only exact contiguous source text copied from that
-    chunk; omitted, inserted, changed, paraphrased, or normalized quote text
-    returns `not_found`.
+  - Retained extraction evidence must come from backend-owned PDF spans: specialists
+    should call `read_chunk`, select `evidence_spans[].span_id` values, then call
+    `record_evidence(span_ids=[...])`. The backend copies exact source text into
+    `verified_quote`; source quote and provenance fields remain immutable after recording.
 
   ## CURATION PREP CHECKPOINT
   If the curator wants to prepare findings for the curation workspace, first ask exactly:
