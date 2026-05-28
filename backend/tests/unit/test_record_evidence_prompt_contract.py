@@ -11,6 +11,16 @@ from src.lib.prompts import assembly
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PILOT_PROMPT_PATH = REPO_ROOT / "packages/alliance/agents/gene_expression/prompt.yaml"
 
+EXTRACTOR_PROMPT_PATHS = [
+    REPO_ROOT / "packages/alliance/agents/allele_extractor/prompt.yaml",
+    REPO_ROOT / "packages/alliance/agents/chemical_extractor/prompt.yaml",
+    REPO_ROOT / "packages/alliance/agents/disease_extractor/prompt.yaml",
+    REPO_ROOT / "packages/alliance/agents/gene_expression/prompt.yaml",
+    REPO_ROOT / "packages/alliance/agents/gene_extractor/prompt.yaml",
+    REPO_ROOT / "packages/alliance/agents/pdf/prompt.yaml",
+    REPO_ROOT / "packages/alliance/agents/phenotype_extractor/prompt.yaml",
+]
+
 STALE_RECORD_EVIDENCE_PHRASES = [
     "claimed_quote",
     "verbatim or lightly trimmed",
@@ -41,17 +51,21 @@ def _tool_policy_description(path: Path, tool_id: str) -> str:
     return description
 
 
-def _pilot_effective_prompt_content() -> str:
-    agent_yaml = PILOT_PROMPT_PATH.with_name("agent.yaml")
+def _effective_prompt_content(prompt_path: Path) -> str:
+    agent_yaml = prompt_path.with_name("agent.yaml")
     data = yaml.safe_load(agent_yaml.read_text(encoding="utf-8"))
     assert isinstance(data, dict), f"{agent_yaml.relative_to(REPO_ROOT)} did not parse as YAML mapping"
     agent_id = str(data["agent_id"])
     return "\n\n".join(
         [
             assembly.build_agent_core_prompt(agent_id).render(),
-            _runtime_prompt_content(PILOT_PROMPT_PATH),
+            _runtime_prompt_content(prompt_path),
         ]
     )
+
+
+def _pilot_effective_prompt_content() -> str:
+    return _effective_prompt_content(PILOT_PROMPT_PATH)
 
 
 def _assert_no_stale_phrases(label: str, content: str, stale_hits: list[str]) -> None:
@@ -67,6 +81,34 @@ def test_gene_expression_prompt_contract_has_no_legacy_quote_recording_language(
     _assert_no_stale_phrases("gene_expression effective prompt", content, stale_hits)
 
     assert stale_hits == []
+
+
+def test_extractor_prompts_have_no_legacy_quote_recording_language():
+    stale_hits: list[str] = []
+    for path in EXTRACTOR_PROMPT_PATHS:
+        _assert_no_stale_phrases(
+            f"{path.relative_to(REPO_ROOT)} effective prompt",
+            _effective_prompt_content(path),
+            stale_hits,
+        )
+
+    assert stale_hits == []
+
+
+def test_extractor_prompts_state_span_evidence_workflow():
+    missing: list[str] = []
+    for path in EXTRACTOR_PROMPT_PATHS:
+        content = " ".join(_effective_prompt_content(path).lower().split())
+        label = str(path.relative_to(REPO_ROOT))
+        for fragment in [
+            "read_chunk.evidence_spans[].span_id",
+            "record_evidence(span_ids=[...])",
+            "truly disjoint evidence",
+        ]:
+            if fragment.lower() not in content:
+                missing.append(f"{label}: {fragment}")
+
+    assert missing == []
 
 
 def test_gene_expression_prompt_contract_states_span_workspace_workflow():

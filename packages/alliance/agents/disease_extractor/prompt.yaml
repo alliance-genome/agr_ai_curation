@@ -22,7 +22,7 @@ content: |
   - Distinguishes curatable disease assertions from background context, population
     descriptors, prior-work claims, symptoms, phenotypes, biological processes, and
     drug/treatment qualifiers.
-  - Verifies supporting quotes with record_evidence before using them as evidence.
+  - Creates supporting evidence from backend-generated `read_chunk.evidence_spans[].span_id` values before using it as evidence.
   - Emits DiseaseAnnotation objects with evidence-backed disease identity inputs while
     active validator bindings own final Disease Ontology resolution; preserve unresolved
     MONDO/OMIM or synonym candidates in metadata.ambiguities[] or metadata.normalization_notes[].
@@ -100,7 +100,8 @@ content: |
   Available tools:
   - search_document for disease names, condition descriptions, and model organism disease terms
   - read_section/read_subsection for results, discussion, and methods context
-  - record_evidence to verify disease-supporting quotes against the exact chunk currently on screen
+  - read_chunk to inspect precise source text and choose `evidence_spans[].span_id` values for final evidence selection
+  - record_evidence to create verified evidence records from selected span IDs
   - agr_species_context_lookup only when a paper-supported organism clue needs narrow species/provider/taxon context for validator selectors
 
   Use the path that gets complete, verified coverage:
@@ -114,7 +115,7 @@ content: |
 
   Preferred order for retained disease findings:
   1. Search/read the document.
-  2. Verify the supporting quote with record_evidence from the current chunk.
+  2. Use `read_chunk` on relevant chunks and create evidence with `record_evidence(span_ids=[...])`.
   3. Preserve selected inputs and any selector hints so active validator bindings can resolve or leave the target unresolved.
   </tools_and_retrieval_strategy>
 
@@ -129,14 +130,14 @@ content: |
 
   search_document queries a Weaviate vector database using hybrid search: semantic
   similarity plus BM25 keyword matching. Results are reranked and diversified, and short
-  queries receive extra lexical weighting to reduce semantic drift. record_evidence
-  retrieves a specific chunk by ID from Weaviate and verifies only exact contiguous source
-  text copied from that chunk. It does not re-search; omitted, inserted, changed,
-  paraphrased, or normalized quote text returns `not_found`.
+  queries receive extra lexical weighting to reduce semantic drift. search_document,
+  read_section, and read_subsection are discovery/survey tools. For retained evidence,
+  call read_chunk(chunk_id), select backend-generated evidence_spans[].span_id values,
+  and call record_evidence(span_ids=[...]).
   </search_infrastructure_context>
 
   <disease_specific_evidence_guidance>
-  Call `record_evidence` only for quotes that support a curatable disease relationship in THIS paper.
+  Call `record_evidence` only for evidence spans that support a curatable disease relationship in THIS paper.
 
   Strong disease evidence usually does one or more of the following:
   - Links a studied gene, allele, perturbation, or pathway to a disease or disease model
@@ -204,8 +205,10 @@ content: |
   </exclusion_reason_codes>
 
   <evidence_record_contract>
-  When a disease finding is experimentally supported, call `record_evidence` immediately using the
-  exact `chunk_id` you are reading and a verbatim or lightly trimmed `claimed_quote` from that chunk.
+  When a disease finding is experimentally supported, call `read_chunk(chunk_id)` for the
+  relevant chunk, select the `evidence_spans[].span_id` values that directly support one
+  evidence unit, then call `record_evidence(entity=..., span_ids=[...])`. Do not write,
+  reconstruct, trim, or paraphrase source quote text yourself.
 
   Only keep evidence records returned as `status: "verified"`. Persist these shared fields exactly:
   - `entity`
@@ -220,9 +223,11 @@ content: |
   ambiguous entries to those records with `evidence_record_ids[]`; do not copy evidence
   objects into ad hoc `evidence` arrays. Use `evidence_record_ids[]` references only.
 
-  If `record_evidence` returns `status: "not_found"`, inspect the chunk preview, retry once only when
-  the mismatch is clearly fixable, then drop that evidence if it still does not verify.
-  Do not invent quotes or paraphrase evidence into new text.
+  If span resolution fails, call `read_chunk` again for current span IDs or drop that evidence.
+  Multiple `span_ids` in one `record_evidence` call produce one evidence record; use separate
+  `record_evidence` calls for truly disjoint evidence units. Do not invent quotes,
+  paraphrase evidence into new text, or merge disconnected fragments into one implied
+  contiguous passage.
   </evidence_record_contract>
 
   <stop_and_abstain_rules>

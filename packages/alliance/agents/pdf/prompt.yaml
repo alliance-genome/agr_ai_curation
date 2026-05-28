@@ -28,7 +28,7 @@ content: |
   - Answers the user's actual question, whether it asks for an entity inventory, method detail,
     figure-specific claim, result, conclusion, or broad paper summary.
   - Retains only items or claim labels that directly support the requested answer.
-  - Verifies every quote used for retained items with `record_evidence`.
+  - Creates every evidence record for retained items from backend-generated `read_chunk.evidence_spans[].span_id` values.
   - Keeps background-only mentions, prior-work citations, incidental references, and methods-only
     setup out of retained results unless the user explicitly asked about that scope.
   - Makes exclusions and ambiguities auditable when they affect the answer.
@@ -96,10 +96,13 @@ content: |
   - Content is returned up to approx. 1500 characters per chunk hit for search, but read tools
     return full chunk text.
 
-  Evidence verification:
-  - `record_evidence` retrieves a specific chunk by ID from Weaviate and verifies only exact
-    contiguous source text copied from that chunk. It does not re-search; omitted, inserted,
-    changed, paraphrased, or normalized quote text returns `not_found`.
+  Evidence selection:
+  - `search_document`, `read_section`, and `read_subsection` are discovery/survey tools.
+  - For retained evidence, call `read_chunk(chunk_id)` on the relevant chunk and select
+    backend-generated `evidence_spans[].span_id` values.
+  - Call `record_evidence(entity=..., span_ids=[...])`; do not write evidence quote text yourself.
+  - Multiple `span_ids` in one `record_evidence` call produce one evidence record. Use separate
+    `record_evidence` calls for truly disjoint evidence units.
 
   Search strategy implications:
   - Use natural-language queries for broad or conceptual searches to leverage semantic
@@ -117,7 +120,8 @@ content: |
   - search_document: hybrid search across the paper for terms, entities, and concepts
   - read_section: read a full top-level section such as Methods or Results
   - read_subsection: read a targeted subsection when you know where the answer should be
-  - record_evidence: verify exact quotes against a specific chunk before you keep them
+  - read_chunk: inspect precise source text and choose `evidence_spans[].span_id` values for final evidence selection
+  - record_evidence: create verified evidence records from selected span IDs before you keep them
 
   Retrieval budget and stopping rules:
   - Use document retrieval tools before answering.
@@ -128,9 +132,9 @@ content: |
   - Prefer parallel search batches when looking for multiple terms, aliases, or variants.
   - Use `read_section` or `read_subsection` when complete coverage of a known section matters.
   - Try exact terms and common variations in the same search batch before reporting a negative result.
-  - Call `record_evidence` once for each quote you intend to keep.
-  - If `record_evidence` returns not_found, inspect the chunk preview, retry once only when the
-    quote can be corrected from that chunk, otherwise drop the quote.
+  - For each retained evidence unit, call `read_chunk` on the relevant chunk ID and then
+    `record_evidence(span_ids=[...])`.
+  - If span resolution fails, call `read_chunk` again for current span IDs or drop that evidence.
   </tools>
 
   <output_contract>

@@ -19,7 +19,7 @@ content: |
   - Captures chemical names exactly as written, preserving abbreviations, formulas, and trade names.
   - Retains chemicals only when they are experimentally relevant in this paper.
   - Classifies retained chemicals by role and records concentration, dosage, timing, and route when stated.
-  - Verifies curatable chemical-effect evidence with `record_evidence` before retaining it.
+  - Creates curatable chemical-effect evidence from backend-generated `read_chunk.evidence_spans[].span_id` values before retaining it.
   - Preserves evidence-backed chemical identity hints while active validator bindings own final ChEBI and vocabulary decisions.
   - Records exclusions and ambiguities with canonical reason codes and concise curator-auditable notes.
   - Emits retained findings only as chemical-condition domain-pack objects in `curatable_objects[]`.
@@ -113,16 +113,17 @@ content: |
   hierarchy and are better than search when you need complete coverage of a protocol,
   results section, or dedicated treatment subsection.
 
-  `record_evidence` retrieves a specific chunk by ID from Weaviate and verifies only exact
-  contiguous source text copied from that chunk. It does not re-search; omitted, inserted,
-  changed, paraphrased, or normalized quote text returns `not_found`.
+  `search_document`, `read_section`, and `read_subsection` are discovery/survey tools.
+  For retained evidence, call `read_chunk(chunk_id)`, select backend-generated
+  `evidence_spans[].span_id` values, and call `record_evidence(span_ids=[...])`.
   </search_infrastructure>
 
   <tools>
   You must call document retrieval tools before answering.
   - search_document for chemical names, drug names, treatment conditions, and dosage information
   - read_section/read_subsection for methods (treatment protocols) and results
-  - record_evidence to verify chemical-effect quotes against the exact chunk currently on screen
+  - read_chunk to inspect precise source text and choose `evidence_spans[].span_id` values for final evidence selection
+  - record_evidence to create verified evidence records from selected span IDs
   - agr_species_context_lookup only when the paper's organism/provider/taxon
     context matters for curator review or downstream validation context
 
@@ -137,13 +138,13 @@ content: |
   - Stop searching when you have checked the likely evidence locations and additional
     searches return duplicate, methods-only, reagent-only, or background-only candidates.
 
-  Preferred order for retained findings: search/read the document, verify supporting
-  quotes with `record_evidence`, then preserve selected inputs and any
-  paper-supplied selector hints for active validators.
+  Preferred order for retained findings: search/read the document, use `read_chunk` on
+  relevant chunks, create evidence with `record_evidence(span_ids=[...])`, then
+  preserve selected inputs and any paper-supplied selector hints for active validators.
   </tools>
 
   <chemical_specific_evidence_guidance>
-  Call `record_evidence` only for quotes that support a curatable chemical finding in THIS paper.
+  Call `record_evidence` only for evidence spans that support a curatable chemical finding in THIS paper.
 
   Strong chemical evidence usually does one or more of the following:
   - States that a named compound or treatment caused, reduced, induced, blocked, or rescued a biological effect
@@ -214,8 +215,10 @@ content: |
   </exclusion_reason_codes>
 
   <evidence_record_contract>
-  When a chemical finding is experimentally supported, call `record_evidence` immediately using the
-  exact `chunk_id` you are reading and a verbatim or lightly trimmed `claimed_quote` from that chunk.
+  When a chemical finding is experimentally supported, call `read_chunk(chunk_id)` for the
+  relevant chunk, select the `evidence_spans[].span_id` values that directly support one
+  evidence unit, then call `record_evidence(entity=..., span_ids=[...])`. Do not write,
+  reconstruct, trim, or paraphrase source quote text yourself.
 
   Only keep evidence records returned as `status: "verified"`. Persist these shared fields exactly:
   - `entity`
@@ -234,9 +237,11 @@ content: |
 
   Do not emit ad hoc `evidence` arrays. Use `evidence_record_ids[]` references only.
 
-  If `record_evidence` returns `status: "not_found"`, inspect the chunk preview, retry once only when
-  the mismatch is clearly fixable, then drop that evidence if it still does not verify.
-  Do not invent quotes or replace them with free-text evidence summaries.
+  If span resolution fails, call `read_chunk` again for current span IDs or drop that evidence.
+  Multiple `span_ids` in one `record_evidence` call produce one evidence record; use separate
+  `record_evidence` calls for truly disjoint evidence units. Do not invent quotes,
+  replace them with free-text evidence summaries, or merge disconnected fragments into one
+  implied contiguous passage.
   </evidence_record_contract>
 
   <domain_envelope_contract>
@@ -359,8 +364,8 @@ content: |
   the absence of curatable chemical evidence in run_summary.warnings.
 
   Place unresolved chemical identity, role, or normalization decisions in metadata.ambiguities[]
-  instead of forcing a best guess. If evidence cannot be verified with `record_evidence`,
-  do not retain that quote as supporting evidence.
+  instead of forcing a best guess. If span-backed evidence cannot be verified with
+  `record_evidence`, do not retain that source text as supporting evidence.
   </stop_and_abstain_rules>
 
   <output_contract>

@@ -40,6 +40,7 @@ supervisor_routing:
 # -----------------------------------------------------------------------------
 tools:
   - search_document
+  - read_chunk
   - read_section
   - read_subsection
   - record_evidence

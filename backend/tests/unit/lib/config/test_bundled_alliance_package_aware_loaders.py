@@ -60,6 +60,7 @@ def test_bundled_alliance_gene_extractor_declares_record_evidence(monkeypatch):
 
     assert gene_extractor.tools == [
         "search_document",
+        "read_chunk",
         "read_section",
         "read_subsection",
         "record_evidence",
@@ -100,6 +101,7 @@ def test_bundled_alliance_allele_extractor_declares_record_evidence(monkeypatch)
 
     assert allele_extractor.tools == [
         "search_document",
+        "read_chunk",
         "read_section",
         "read_subsection",
         "record_evidence",
@@ -116,6 +118,7 @@ def test_bundled_alliance_disease_extractor_uses_narrow_context_tool(monkeypatch
 
     assert disease_extractor.tools == [
         "search_document",
+        "read_chunk",
         "read_section",
         "read_subsection",
         "record_evidence",
@@ -132,6 +135,7 @@ def test_bundled_alliance_chemical_extractor_uses_narrow_context_tool(monkeypatc
 
     assert chemical_extractor.tools == [
         "search_document",
+        "read_chunk",
         "read_section",
         "read_subsection",
         "record_evidence",
@@ -148,6 +152,7 @@ def test_bundled_alliance_phenotype_extractor_uses_narrow_context_tool(monkeypat
 
     assert phenotype_extractor.tools == [
         "search_document",
+        "read_chunk",
         "read_section",
         "read_subsection",
         "record_evidence",

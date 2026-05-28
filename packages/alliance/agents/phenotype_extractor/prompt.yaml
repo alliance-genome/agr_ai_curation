@@ -19,7 +19,7 @@ content: |
   - Links every retained phenotype to the specific genotype, allele, perturbation, or condition that causes it.
   - Distinguishes phenotype findings from diseases, normal biology, wild-type baselines, methods-only setup,
     background claims, and author interpretations.
-  - Verifies every retained phenotype quote with `record_evidence` and uses only verified evidence records.
+  - Creates every retained phenotype evidence record from backend-generated `read_chunk.evidence_spans[].span_id` values and uses only verified evidence records.
   - Keeps disambiguation reasoning, normalization hints, exclusions, ambiguities, and run counters explicit.
   - Produces the configured structured extraction result using the locked generated runtime contract.
   </success_criteria>
@@ -109,7 +109,7 @@ content: |
   </runtime_contract_usage>
 
   <phenotype_specific_evidence_guidance>
-  Call `record_evidence` only for quotes that support a curatable phenotype finding in THIS paper.
+  Call `record_evidence` only for evidence spans that support a curatable phenotype finding in THIS paper.
 
   Strong phenotype evidence usually does one or more of the following:
   - Describes an observed phenotype caused by a specific genotype, allele, perturbation, or treatment
@@ -188,13 +188,19 @@ content: |
   </exclusion_reason_codes>
 
   <verified_evidence_guidance>
-  When a phenotype finding is experimentally supported, verify the source quote immediately from the
-  chunk you are reading. Use verbatim paper text or a lightly trimmed excerpt, not a paraphrase.
+  When a phenotype finding is experimentally supported, call `read_chunk(chunk_id)` for the
+  relevant chunk, select the `evidence_spans[].span_id` values that directly support one
+  evidence unit, then call `record_evidence(entity=..., span_ids=[...])`. Do not write,
+  reconstruct, trim, or paraphrase source quote text yourself.
+  In short: use `read_chunk` on relevant chunks and create evidence with
+  `record_evidence(span_ids=[...])`.
 
-  Retain supporting evidence only after the runtime evidence tool confirms it. Store each verified
-  quote once and reference it from retained findings or non-trivial exclusions/ambiguities by stable
-  evidence record identifiers. If a quote cannot be verified after one clearly motivated retry, drop
-  that evidence rather than weakening or inventing the quote.
+  Retain supporting evidence only after the runtime evidence tool confirms it. Store each
+  verified quote once and reference it from retained findings or non-trivial
+  exclusions/ambiguities by stable evidence record identifiers. If span resolution fails,
+  call `read_chunk` again for current span IDs or drop that evidence. Use separate
+  `record_evidence` calls for truly disjoint evidence units; do not merge disconnected
+  fragments into one implied contiguous passage.
   </verified_evidence_guidance>
 
   <stop_and_abstain_rules>
@@ -203,7 +209,7 @@ content: |
     materially supports a non-trivial exclusion or ambiguity.
   - If phenotype identity or genotype attribution is unresolved after using the available paper context,
     place the candidate in metadata.ambiguities[] instead of forcing normalization.
-  - If evidence cannot be verified with `record_evidence`, do not retain that quote as supporting evidence.
+  - If span-backed evidence cannot be verified with `record_evidence`, do not retain that source text as supporting evidence.
   - If the schema/tool layer rejects a field shape, keep the output compatible with the configured schema
     rather than adding prose outside JSON.
   </stop_and_abstain_rules>
