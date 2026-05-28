@@ -21,19 +21,35 @@ The direct AI Curation-to-PDFX path should be removed from product behavior. PDF
 
 ## Recommendation
 
-Do a single replacement release that removes local direct-PDFX ingestion and makes every document import Literature-backed.
+Do a single replacement release that removes local direct-PDFX ingestion and makes every document import provider-backed. The Alliance deployment's required provider is ABC Literature.
 
 Cutover requirements:
 
-1. Add a backend `LiteratureClient` plus fake-service and contract tests.
-2. Replace the upload intake choreography with a Literature-first import service.
+1. Add a backend `DocumentSourceProvider` interface, an ABC Literature adapter, plus fake-provider and adapter contract tests.
+2. Replace the upload intake choreography with a provider-first import service.
 3. Add SQL provenance columns and mirror the most important provenance into Weaviate document metadata.
 4. Add markdown ingestion that reuses chunking, hierarchy, embedding, and storage without calling PDFX.
-5. Add search/select, identifier import, MD5 lookup, Literature upload, Literature conversion polling, and converted Markdown download in the same release.
+5. Add search/select, identifier import, MD5 lookup, provider upload, provider conversion polling, and converted Markdown download in the same release.
 6. Replace the Documents page upload UX with a paper discovery/import work surface plus an upload path that either resolves through Literature or blocks for missing reference context.
 7. Remove curator-facing and backend product paths that submit PDFs directly from AI Curation to PDFX.
 
 Do not require any breaking PDFX API changes for this migration. The Literature service already provides the conversion lifecycle API that AI Curation should consume.
+
+## Organization-Agnostic Boundary
+
+This migration must preserve the same boundary used by the rest of the project: shared runtime code stays organization-agnostic, while Alliance-specific contracts live in package/config-owned adapters.
+
+Cutover shape:
+
+- Core document ingestion should depend on a configured `DocumentSourceProvider` interface, not directly on ABC Literature classes or MOD-specific assumptions.
+- The Alliance deployment should configure exactly one required provider for this cutover: `abc_literature`.
+- `abc_literature` is the provider adapter that knows ABC endpoint names, `referencefile` semantics, MOD MCA/curie fields, TEI policies, and `converted_merged_main` selection.
+- Shared SQL/API/Weaviate models should use provider-neutral field names such as provider key, provider reference ID, provider source file ID, provider converted artifact ID, external IDs, and source payload path.
+- Group/MOD context should come from deployment config and authenticated group mapping, not hardcoded `FB`, `WB`, `MGI`, `SGD`, `ZFIN`, `RGD`, or `HGNC` literals in core code.
+- If a user belongs to more than one group and upload/reference creation needs source ownership context, the UI must make that context explicit.
+- Generic tests should use a fake non-Alliance document-source provider fixture. Alliance tests should cover the `abc_literature` adapter and real ABC response shapes.
+
+This is not an alternate-path system. The cutover still requires one configured document-source provider. The point is that the required provider is selected by deployment/package config rather than baked into core runtime behavior.
 
 ## Evidence Gathered
 
@@ -243,7 +259,7 @@ Relevant referencefile endpoints:
 
 Important upload response gap:
 
-`POST /reference/referencefile/file_upload/` currently returns only the string `success`. The CRUD layer computes the MD5 and may create or reuse a `referencefile`, but the router does not return `referencefile_id`, MD5, or created/reused status. AI Curation therefore cannot populate `source_pdf_referencefile_id` directly from the upload response.
+`POST /reference/referencefile/file_upload/` currently returns only the string `success`. The CRUD layer computes the MD5 and may create or reuse a `referencefile`, but the router does not return `referencefile_id`, MD5, or created/reused status. AI Curation therefore cannot populate `source_provider_source_file_id` directly from the upload response.
 
 Required handling:
 
@@ -477,7 +493,7 @@ Current fields:
 - `hierarchy_metadata`
 - `user_id`
 
-The model does not have source system, ABC reference curie, referencefile IDs, PMID, DOI, MD5 provenance, or viewer capability flags.
+The model does not have provider key, provider reference IDs, provider artifact IDs, external IDs, MD5 provenance, or viewer capability flags.
 
 ### Weaviate document metadata
 
@@ -495,7 +511,7 @@ Current fields:
 - `document_type`
 - `last_processed_stage`
 
-The Weaviate metadata should receive a small provenance mirror so search results and document lists can identify Literature-sourced documents without always joining SQL.
+The Weaviate metadata should receive a small provenance mirror so search results and document lists can identify provider-sourced documents without always joining SQL.
 
 ### Frontend upload/document flow
 
@@ -522,7 +538,7 @@ Current Documents page:
 
 Frontend impact:
 
-The Documents page and PDF viewer drag/drop upload should both use the same Literature-aware backend in the cutover release. The old local-only upload implementation should be replaced, not kept as a second behavior.
+The Documents page and PDF viewer drag/drop upload should both use the same document-source-aware backend in the cutover release. The old local-only upload implementation should be replaced, not kept as a second behavior.
 
 ## Proposed Target Architecture
 
@@ -530,10 +546,11 @@ The Documents page and PDF viewer drag/drop upload should both use the same Lite
 
 Add these backend pieces:
 
-1. `LiteratureClient`
-   - Typed async wrapper around ABC Literature REST.
+1. `DocumentSourceProvider` interface plus `ABCLiteratureClient` adapter
+   - Provider-neutral interface for search, identifier resolution, MD5 lookup, source-file upload, conversion polling, converted text download, and source artifact download.
+   - Typed async wrapper around ABC Literature REST for the Alliance adapter.
    - Handles base URL, auth, timeouts, token caching, retries, and structured errors.
-   - Methods:
+   - ABC adapter methods:
      - `lookup_external_curie(curie)`
      - `lookup_cross_reference(curie_or_id)`
      - `search_references(query, query_fields, filters, pagination)`
@@ -545,9 +562,9 @@ Add these backend pieces:
      - `download_referencefile(referencefile_id)`
      - `upload_referencefile(...)`
 
-2. `LiteratureImportService`
+2. `DocumentSourceImportService`
    - Owns AI Curation import workflow.
-   - Resolves identifiers and references.
+   - Resolves identifiers and references through the configured provider.
    - Selects canonical converted Markdown.
    - Starts and polls conversion.
    - Downloads converted Markdown.
@@ -578,48 +595,49 @@ Required endpoints:
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /api/weaviate/documents/import/literature/search` | Search ABC Literature references for the import picker. |
-| `POST /api/weaviate/documents/import/literature` | Import one or more identifiers/reference curies. |
-| `POST /api/weaviate/documents/import/literature/upload` | Upload a PDF using Literature-first MD5/file_upload flow. |
-| `GET /api/weaviate/documents/import/literature/{job_id}` | Direct import-job detail if generalized document job endpoints are not enough. |
-| `GET /api/weaviate/documents/literature/lookup` | Preflight lookup for UI validation/preview. |
-| `GET /api/weaviate/documents/literature/health` | Auth/config/connectivity health for admin diagnostics. |
+| `POST /api/weaviate/documents/import/source/search` | Search the configured document-source provider for the import picker. |
+| `POST /api/weaviate/documents/import/source` | Import one or more identifiers/provider reference IDs. |
+| `POST /api/weaviate/documents/import/source/upload` | Upload a PDF using provider-first MD5/upload flow. |
+| `GET /api/weaviate/documents/import/source/{job_id}` | Direct import-job detail if generalized document job endpoints are not enough. |
+| `GET /api/weaviate/documents/source/lookup` | Preflight lookup for UI validation/preview. |
+| `GET /api/weaviate/documents/source/health` | Auth/config/connectivity health for admin diagnostics. |
 
 Removed upload route:
 
-- Replace product usage of `POST /api/weaviate/documents/upload` with `POST /api/weaviate/documents/import/literature/upload`.
+- Replace product usage of `POST /api/weaviate/documents/upload` with `POST /api/weaviate/documents/import/source/upload`.
 - Delete the previous route in the same release.
-- Do not keep a route alias that can bypass the Literature import service.
+- Do not keep a route alias that can bypass the document-source import service.
 
 Job/status migration note:
 
-The current AI Curation pipeline is not stage-name agnostic everywhere. `ProcessingStage` is a fixed enum, and durable PDF job status values are constrained to the existing terminal/running states. The new Literature stages in this document are product-level names, not a statement that the current DB/API can already store those literal values.
+The current AI Curation pipeline is not stage-name agnostic everywhere. `ProcessingStage` is a fixed enum, and durable PDF job status values are constrained to the existing terminal/running states. The new document-source stages in this document are product-level names, not a statement that the current DB/API can already store those literal values.
 
 Required job migration:
 
 - Durable `status` values can remain broad (`pending`, `running`, `completed`, `failed`, `cancelled`) if they are renamed/generalized away from PDF-specific meaning.
-- Literature-specific stages such as `literature_lookup`, `literature_conversion`, and `literature_download` must be added to the stage schema, frontend mapping, SSE/polling contracts, and tests in the same release.
+- Provider-neutral stages such as `document_source_lookup`, `document_source_conversion`, and `document_source_download` must be added to the stage schema, frontend mapping, SSE/polling contracts, and tests in the same release.
 - Do not add `timeout` as a durable job status unless the SQL/API enum permits it. Represent timeout as `failed` with a retryable timeout error or migrate the status contract explicitly.
 
 ### Configuration
 
-Add environment variables:
+Add document-source configuration:
 
-- `LITERATURE_API_BASE_URL`
-- `LITERATURE_AUTH_MODE`
-- `LITERATURE_BEARER_TOKEN`
-- `LITERATURE_COGNITO_TOKEN_URL`
-- `LITERATURE_COGNITO_CLIENT_ID`
-- `LITERATURE_COGNITO_CLIENT_SECRET`
-- `LITERATURE_COGNITO_SCOPE`
-- `LITERATURE_REQUEST_TIMEOUT_SECONDS`
-- `LITERATURE_CONVERSION_POLL_INTERVAL_SECONDS`
-- `LITERATURE_CONVERSION_TIMEOUT_SECONDS`
-- `LITERATURE_IMPORT_BATCH_LIMIT`
-- `LITERATURE_IMPORT_ALLOW_CREATE_REFERENCE`
-- `LITERATURE_IMPORT_DEFAULT_MOD_MCA`
-- `LITERATURE_IMPORT_DEFAULT_MOD_CURIE`
-- `LITERATURE_IMPORT_OVERWRITE_TEI_MD`
+- `DOCUMENT_SOURCE_PROVIDER`: required; `abc_literature` for the Alliance cutover.
+- `DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS`
+- `DOCUMENT_SOURCE_CONVERSION_POLL_INTERVAL_SECONDS`
+- `DOCUMENT_SOURCE_CONVERSION_TIMEOUT_SECONDS`
+- `DOCUMENT_SOURCE_IMPORT_BATCH_LIMIT`
+- Provider-specific ABC Literature settings under package/deployment config:
+  - `ABC_LITERATURE_API_BASE_URL`
+  - `ABC_LITERATURE_AUTH_MODE`
+  - `ABC_LITERATURE_BEARER_TOKEN`
+  - `ABC_LITERATURE_COGNITO_TOKEN_URL`
+  - `ABC_LITERATURE_COGNITO_CLIENT_ID`
+  - `ABC_LITERATURE_COGNITO_CLIENT_SECRET`
+  - `ABC_LITERATURE_COGNITO_SCOPE`
+  - `ABC_LITERATURE_ALLOW_CREATE_REFERENCE`
+  - `ABC_LITERATURE_OVERWRITE_TEI_MD`
+  - group-context mapping for default `mod_mca` and `mod_curie`
 
 The auth mode should mirror the existing PDF extraction auth pattern:
 
@@ -636,8 +654,9 @@ Startup/health validation should say:
 
 Required configuration policy:
 
-- Literature configuration is required for document import. If it is missing, document import endpoints should fail startup/readiness or return an admin-facing configuration error.
-- Do not add a direct-PDFX escape hatch for missing Literature credentials.
+- A document-source provider configuration is required for document import. If it is missing, document import endpoints should fail startup/readiness or return an admin-facing configuration error.
+- For the Alliance deployment, ABC Literature credentials and group-context mapping are required.
+- Do not add a direct-PDFX escape hatch for missing provider credentials.
 
 Health check guardrail:
 
@@ -645,17 +664,15 @@ Do not call `conversion_request` from routine startup or health endpoints. Despi
 
 ### Provenance schema
 
-Add nullable columns to `pdf_documents`:
+Add provider-neutral nullable columns to `pdf_documents`:
 
-- `source_system`: `abc_literature`
-- `source_reference_curie`
-- `source_reference_id`
-- `source_referencefile_id`
-- `source_converted_referencefile_id`
-- `source_pdf_referencefile_id`
-- `source_pmid`
-- `source_pmcid`
-- `source_doi`
+- `source_provider`: configured provider key, e.g. `abc_literature`
+- `source_provider_reference_id`
+- `source_provider_reference_curie`
+- `source_provider_source_file_id`
+- `source_provider_converted_artifact_id`
+- `source_provider_pdf_artifact_id`
+- `source_external_ids`: compact JSON object for PMID, PMCID, DOI, and other provider-supported IDs
 - `source_md5`
 - `source_file_class`
 - `source_file_extension`
@@ -664,7 +681,15 @@ Add nullable columns to `pdf_documents`:
 - `source_imported_at`
 - `source_payload_path`
 - `source_markdown_path`
-- `viewer_mode`: e.g. `literature_pdf_proxy`, `text_only`
+- `viewer_mode`: e.g. `provider_pdf_proxy`, `text_only`
+
+ABC Literature adapter mapping:
+
+- ABC reference curie -> `source_provider_reference_curie`
+- ABC numeric/reference ID -> `source_provider_reference_id`
+- ABC `referencefile_id` for the source PDF -> `source_provider_source_file_id`
+- ABC `referencefile_id` for converted Markdown -> `source_provider_converted_artifact_id`
+- PMID/PMCID/DOI -> `source_external_ids`
 
 Existing PDF-shaped contracts that must be handled in Workstream 2:
 
@@ -673,28 +698,28 @@ Existing PDF-shaped contracts that must be handled in Workstream 2:
 - `backend/src/lib/weaviate_client/documents.py` creates Weaviate documents through a PDF-shaped `PDFDocument` model.
 - `backend/src/api/pdf_viewer.py` and download routes assume local PDF files under upload storage.
 
-Workstream 2 must update these contracts before text-only Literature imports are enabled. This is not polish.
+Workstream 2 must update these contracts before text-only provider imports are enabled. This is not polish.
 
 Repurpose existing fields:
 
-- `file_path`: nullable or points to a locally cached Literature PDF/Markdown artifact, not a direct-PDFX upload source.
+- `file_path`: nullable or points to a locally cached provider PDF/Markdown artifact, not a direct-PDFX upload source.
 - `pdfx_json_path`: stop writing and stop reading in active import code. The migration may leave this as a nullable historical column, but new imports must not write direct PDFX metadata here.
 - `processed_json_path`: still useful for converted Markdown processed elements.
 
-For Literature imports with no local PDF:
+For provider imports with no local PDF:
 
 - Make `file_path`, `file_hash`, `file_size`, and `page_count` nullable or redefine them around the actual cached artifact in the migration. Do not create placeholder PDF values.
-- Store downloaded Markdown as a first-class source artifact and set `document_type=abc_literature_markdown`.
+- Store downloaded Markdown as a first-class source artifact and set `document_type=external_converted_markdown`.
 - Update PDF viewer/download contracts so `viewer_mode=text_only` documents return a clear "PDF unavailable" response instead of a broken local-file path.
 
 Weaviate document metadata mirror:
 
-- `source_system`
-- `source_reference_curie`
-- `source_referencefile_id`
-- `source_converted_referencefile_id`
-- `source_pmid`
-- `source_doi`
+- `source_provider`
+- `source_provider_reference_curie`
+- `source_provider_reference_id`
+- `source_provider_source_file_id`
+- `source_provider_converted_artifact_id`
+- `source_external_ids`
 - `source_md5`
 - `viewer_mode`
 
@@ -747,7 +772,7 @@ Steps:
    - `GET /reference/referencefile/download_file/{converted_referencefile_id}`.
 
 7. Create or reuse AI Curation document.
-   - Deduplicate by `(user_id, source_system, source_reference_curie, source_converted_referencefile_id)`.
+   - Deduplicate by `(user_id, source_provider, source_provider_reference_curie, source_provider_converted_artifact_id)`.
    - Also deduplicate by `source_md5` when known.
 
 8. Ingest Markdown.
@@ -768,7 +793,7 @@ Inputs:
 
 Steps:
 
-1. AI Curation calls `POST /search/references/` through `LiteratureClient.search_references(...)`.
+1. AI Curation calls `POST /search/references/` through the configured provider adapter.
 2. UI shows returned `hits` with title, authors, date, citation, curie, cross-references, and highlights.
 3. User selects one or more references.
 4. AI Curation imports selected papers by `curie` using Flow A from the file-list/conversion step onward.
@@ -863,15 +888,15 @@ Map Literature conversion status to AI Curation job stages:
 
 | Literature state | AI Curation stage | Progress | Message |
 | --- | --- | --- | --- |
-| lookup starting | `literature_lookup` | 5 | Looking up paper in ABC Literature |
-| reference found | `literature_lookup` | 15 | Found ABC Literature reference |
-| MD5 matched | `literature_lookup` | 20 | Found matching file in ABC Literature |
-| upload to Literature | `literature_upload` | 25 | Saving PDF in ABC Literature |
-| `running` | `literature_conversion` | 30 to 55 | ABC Literature is converting this paper |
-| per-file pending | `literature_conversion` | 35 | Waiting for PDFX conversion |
-| per-file success | `literature_conversion` | 50 | Converted Markdown is available |
-| `converted` | `literature_download` | 60 | Downloading converted Markdown |
-| `failed` with main converted | `literature_download` plus warning | 60 | Main text converted; some files failed |
+| lookup starting | `document_source_lookup` | 5 | Looking up paper in ABC Literature |
+| reference found | `document_source_lookup` | 15 | Found ABC Literature reference |
+| MD5 matched | `document_source_lookup` | 20 | Found matching file in ABC Literature |
+| upload to Literature | `document_source_upload` | 25 | Saving PDF in ABC Literature |
+| `running` | `document_source_conversion` | 30 to 55 | ABC Literature is converting this paper |
+| per-file pending | `document_source_conversion` | 35 | Waiting for PDFX conversion |
+| per-file success | `document_source_conversion` | 50 | Converted Markdown is available |
+| `converted` | `document_source_download` | 60 | Downloading converted Markdown |
+| `failed` with main converted | `document_source_download` plus warning | 60 | Main text converted; some files failed |
 | `failed` with no main converted | `failed` | 100 | ABC Literature conversion failed |
 | `no_sources` | `failed` | 100 | ABC Literature has no convertible source |
 | markdown parsed | `chunking` | 65 | Preparing document chunks |
@@ -926,7 +951,7 @@ Cutover viewer behavior:
 
 - For identifier import, ingest converted Markdown.
 - Set `viewer_mode=text_only` when AI Curation does not cache/proxy the source PDF.
-- Set `viewer_mode=literature_pdf_proxy` when AI Curation does cache or proxy the source PDF through Literature.
+- Set `viewer_mode=provider_pdf_proxy` when AI Curation does cache or proxy the source PDF through the configured provider.
 - Evidence search and extraction should work from text chunks.
 - PDF coordinate highlighting should be disabled or clearly unavailable for text-only imports.
 - Download dialog should offer processed JSON and provenance, not a fake local PDF.
@@ -934,9 +959,9 @@ Cutover viewer behavior:
 For user-uploaded PDFs:
 
 - Treat local uploaded bytes as transient until Literature accepts or matches the file.
-- If the source PDF is cached for viewing, record it as a Literature-backed cached artifact and use `viewer_mode=literature_pdf_proxy`.
+- If the source PDF is cached for viewing, record it as a provider-backed cached artifact and use `viewer_mode=provider_pdf_proxy`.
 - Store ABC provenance for both MD5 matches and uploads saved to Literature.
-- Image/figure manifests and page/text coordinate mapping are cutover scope only if the required Literature/PDFX sidecar data is available and tested; otherwise the UI must make those affordances unavailable for Literature-backed documents.
+- Image/figure manifests and page/text coordinate mapping are cutover scope only if the required provider/PDFX sidecar data is available and tested; otherwise the UI must make those affordances unavailable for provider-backed documents.
 
 ## Frontend Design
 
@@ -947,11 +972,11 @@ Replace the Documents upload affordance with a paper discovery/import control:
 - Search mode lets curators type title, author, citation text, year/date filters, PMID/PMCID/DOI/cross-reference, or ABC curie.
 - Search results come from ABC Literature `POST /search/references/`.
 - Identifier mode accepts comma-separated identifiers.
-- Supports up to `LITERATURE_IMPORT_BATCH_LIMIT` identifiers, default 10.
+- Supports up to `DOCUMENT_SOURCE_IMPORT_BATCH_LIMIT` identifiers, default 10.
 - Shows one row per requested paper:
   - Identifier
-  - ABC reference curie
-  - PMID/DOI when known
+  - Provider reference ID/curie
+  - PMID/DOI or other external IDs when known
   - State
   - Message
   - Result document link
@@ -991,7 +1016,7 @@ Update document list/details/download dialog to show:
 - ABC reference curie.
 - PMID/DOI if available.
 - Source file ID and converted file ID where useful.
-- Viewer availability: PDF available, Literature PDF, or text only.
+- Viewer availability: PDF available through provider, or text only.
 
 The UI should not surface raw implementation terms like "conversion_request" to curators.
 
@@ -1075,7 +1100,7 @@ Exit criteria:
 - We know whether PMCID/DOI can be supported in the cutover UI.
 - We know whether `download_file` returns `application/octet-stream`, `text/markdown`, or only blob bytes.
 
-### Workstream 1: Literature Client And Import Service
+### Workstream 1: Document Source Client And Import Service
 
 Goal:
 
@@ -1083,10 +1108,11 @@ Create the backend integration boundary and make it the only document-ingestion 
 
 Files likely touched:
 
-- New `backend/src/lib/literature/client.py`
-- New `backend/src/lib/literature/models.py`
-- New `backend/src/lib/literature/errors.py`
-- New `backend/src/lib/documents/literature_import_service.py`
+- New `backend/src/lib/document_sources/provider.py`
+- New `backend/src/lib/document_sources/abc_literature/client.py`
+- New `backend/src/lib/document_sources/abc_literature/models.py`
+- New `backend/src/lib/document_sources/abc_literature/errors.py`
+- New `backend/src/lib/documents/document_source_import_service.py`
 - `backend/src/api/documents.py` or new `backend/src/api/document_imports.py`
 - `backend/src/api/admin/connections.py` or a new health endpoint
 - Tests under `backend/tests/unit/lib/literature/`
@@ -1098,7 +1124,7 @@ Work:
 - Parse response schemas into typed models or typed dictionaries.
 - Preserve raw payload for diagnostics without logging secrets.
 - Implement reference search, identifier resolution, MD5 lookup, file-list retrieval, conversion polling, download, upload, and post-upload reconciliation.
-- Delete the `/documents/upload` ingestion route and update clients to call the Literature import/upload endpoints.
+- Delete the `/documents/upload` ingestion route and update clients to call the document-source import/upload endpoints.
 - Remove any product path that submits uploaded PDFs directly to PDFX.
 - Add fake-service tests from KANBAN-1242.
 
@@ -1111,7 +1137,7 @@ Exit criteria:
 
 Goal:
 
-Persist ABC Literature source details and make text/Markdown-backed documents first-class records.
+Persist external document-source details and make text/Markdown-backed documents first-class records.
 
 Files likely touched:
 
@@ -1125,15 +1151,15 @@ Files likely touched:
 
 Work:
 
-- Add Literature provenance columns.
-- Relax or redefine PDF-only constraints so `abc_literature_markdown` documents do not need fake PDF metadata.
+- Add provider-neutral provenance columns.
+- Relax or redefine PDF-only constraints so `external_converted_markdown` documents do not need fake PDF metadata.
 - Store downloaded Markdown as a first-class artifact.
-- Keep local cached Literature PDFs only when we intentionally fetch/proxy/cache the source PDF from Literature.
+- Keep local cached provider PDFs only when we intentionally fetch/proxy/cache the source PDF from the configured provider.
 - Update document creation models.
-- Update viewer/download behavior so `viewer_mode=text_only` and `viewer_mode=literature_pdf_proxy` are explicit.
+- Update viewer/download behavior so `viewer_mode=text_only` and `viewer_mode=provider_pdf_proxy` are explicit.
 - Add indexes:
-  - `(user_id, source_system, source_reference_curie)`
-  - `(user_id, source_system, source_converted_referencefile_id)`
+  - `(user_id, source_provider, source_provider_reference_curie)`
+  - `(user_id, source_provider, source_provider_converted_artifact_id)`
   - `(source_md5)`
 - Mirror small provenance fields into Weaviate document metadata.
 - Migrate or tolerate pre-cutover rows without making them an active import path.
@@ -1171,7 +1197,7 @@ Exit criteria:
 
 - Unit tests ingest sample ABC Markdown into chunks without PDFX.
 - Invalid ABC Markdown fails with a specific import error.
-- Existing extraction/evidence tools can search and read chunks from Literature-backed documents.
+- Existing extraction/evidence tools can search and read chunks from provider-backed documents.
 
 ### Workstream 4: Job, Status, And Progress Replacement
 
@@ -1193,7 +1219,7 @@ Files likely touched:
 Work:
 
 - Generalize PDF job models/endpoints or add document import job models.
-- Add stages for `literature_search`, `literature_lookup`, `literature_upload`, `literature_conversion`, `literature_download`, `markdown_validation`, `chunking`, `embedding`, `storing`.
+- Add stages for `document_source_search`, `document_source_lookup`, `document_source_upload`, `document_source_conversion`, `document_source_download`, `markdown_validation`, `chunking`, `embedding`, `storing`.
 - Keep broad durable statuses if desired (`pending`, `running`, `completed`, `failed`, `cancelled`), but remove PDF-specific assumptions.
 - Map Literature `per_file_progress` and `per_mod_status` into job details.
 - Treat local cancellation as "stop AI Curation polling"; do not claim it stops Literature/PDFX work unless Literature adds a cancel endpoint.
@@ -1207,7 +1233,7 @@ Exit criteria:
 
 Goal:
 
-Replace Documents page and PDF viewer upload UX with a Literature-backed import work surface.
+Replace Documents page and PDF viewer upload UX with a document-source-backed import work surface.
 
 Files likely touched:
 
@@ -1245,7 +1271,7 @@ Ship the replacement as the only document ingestion behavior.
 Work:
 
 - Update curator and developer docs.
-- Update environment documentation to mark Literature config as required for document import.
+- Update environment documentation to mark document-source config as required for document import.
 - Add dashboard/logging around import outcomes.
 - Confirm ABC Literature/Blue Team are comfortable with search and conversion traffic.
 - Remove stale direct-PDFX upload tests or rewrite them around Literature behavior.
@@ -1260,7 +1286,7 @@ Exit criteria:
 
 Backend unit tests:
 
-- Literature client:
+- Document-source provider interface and ABC Literature adapter:
   - lookup success/failure
   - MD5 match no/multiple/exact matches
   - conversion statuses
@@ -1268,7 +1294,7 @@ Backend unit tests:
   - upload metadata
   - auth/token caching
   - timeout/retryable errors
-- Literature import service:
+- Document-source import service:
   - already converted
   - running then converted
   - failed no main
@@ -1285,9 +1311,9 @@ Backend unit tests:
 Backend contract tests:
 
 - Import endpoint request/response.
-- Progress/status endpoint for Literature stages.
+- Progress/status endpoint for document-source stages.
 - Document list/detail includes provenance.
-- Download info behaves correctly for text-only Literature imports.
+- Download info behaves correctly for text-only provider imports.
 
 Frontend tests:
 
@@ -1311,14 +1337,14 @@ Do not make live PDFX conversion a default PR test. Keep it manual or stage-smok
 
 Backend logs should include structured fields:
 
-- `operation`: `literature_lookup`, `literature_md5_lookup`, `literature_conversion_poll`, `literature_download`, `literature_import`
+- `operation`: `document_source_lookup`, `document_source_md5_lookup`, `document_source_conversion_poll`, `document_source_download`, `document_source_import`
 - `document_id`
 - `job_id`
 - `user_id` or safe internal user key
 - `identifier`
-- `reference_curie`
-- `source_referencefile_id`
-- `converted_referencefile_id`
+- `provider_reference_id` or `provider_reference_curie`
+- `source_provider_source_file_id`
+- `source_provider_converted_artifact_id`
 - `conversion_status`
 - `duration_ms`
 - `retry_count`
@@ -1334,9 +1360,9 @@ Do not log:
 
 Useful metrics:
 
-- imports by Literature path (`search_select`, `identifier`, `md5_match`, `literature_upload`)
+- imports by document-source path (`search_select`, `identifier`, `md5_match`, `provider_upload`)
 - conversion statuses
-- Literature API latency
+- document-source provider API latency
 - import duration
 - MD5 exact/multiple/no match counts
 - duplicate imports avoided
@@ -1378,7 +1404,7 @@ Identifier import may have converted Markdown without a local PDF. Existing AI C
 Cutover decision:
 
 - Text-only mode is required for imported papers where no source PDF is cached locally.
-- Literature PDF proxy or source-PDF cache is required for records where the UI offers PDF viewing.
+- Provider PDF proxy or source-PDF cache is required for records where the UI offers PDF viewing.
 - The UI must not show a broken local PDF viewer for text-only documents.
 
 ### SQL constraints
