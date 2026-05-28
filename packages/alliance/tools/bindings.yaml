@@ -652,7 +652,7 @@ tools:
     required_context:
       - document_id
       - user_id
-    description: Search chunks within a scoped document
+    description: Discovery search over scoped document chunks; use read_chunk on returned chunk IDs for final evidence span selection
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
   - tool_id: read_chunk
     binding_kind: context_factory
@@ -660,7 +660,7 @@ tools:
     required_context:
       - document_id
       - user_id
-    description: Read one scoped document chunk with deterministic evidence spans
+    description: Read one scoped document chunk with selectable evidence_spans[].span_id values for record_evidence
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
   - tool_id: read_section
     binding_kind: context_factory
@@ -668,7 +668,7 @@ tools:
     required_context:
       - document_id
       - user_id
-    description: Read all content from a named document section
+    description: Survey all content from a named document section; use read_chunk for final evidence span selection
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
   - tool_id: read_subsection
     binding_kind: context_factory
@@ -676,7 +676,7 @@ tools:
     required_context:
       - document_id
       - user_id
-    description: Read all content from a named document subsection
+    description: Survey all content from a named document subsection; use read_chunk for final evidence span selection
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
   - tool_id: record_evidence
     binding_kind: context_factory
@@ -684,7 +684,7 @@ tools:
     required_context:
       - document_id
       - user_id
-    description: Record backend-owned evidence from read_chunk span IDs and preserve exact source fragments with optional envelope target refs
+    description: Create verified evidence from read_chunk span_ids and preserve exact source fragments with optional envelope target refs
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
   - tool_id: list_recorded_evidence
     binding_kind: context_factory
@@ -692,7 +692,7 @@ tools:
     required_context:
       - document_id
       - user_id
-    description: List active-run evidence records, excluding discarded records by default
+    description: Review queued active-run evidence records before final output, excluding discarded records by default
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
   - tool_id: get_recorded_evidence
     binding_kind: context_factory
@@ -700,7 +700,7 @@ tools:
     required_context:
       - document_id
       - user_id
-    description: Fetch one active-run evidence record by evidence_record_id
+    description: Fetch one active-run evidence record by evidence_record_id for detailed review before finalization
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
   - tool_id: attach_evidence_to_object
     binding_kind: context_factory
@@ -708,7 +708,7 @@ tools:
     required_context:
       - document_id
       - user_id
-    description: Attach active-run evidence to a curatable object or pending ref
+    description: Attach active-run evidence to the intended curatable object or pending ref without changing source quote or provenance
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
   - tool_id: detach_evidence_from_object
     binding_kind: context_factory
@@ -716,7 +716,7 @@ tools:
     required_context:
       - document_id
       - user_id
-    description: Detach active-run evidence from a curatable object or pending ref
+    description: Detach active-run evidence from a wrong curatable object or pending ref without changing source quote or provenance
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
   - tool_id: discard_recorded_evidence
     binding_kind: context_factory
@@ -724,7 +724,7 @@ tools:
     required_context:
       - document_id
       - user_id
-    description: Mark active-run evidence as discarded without deleting audit history
+    description: Mark wrong or weak active-run evidence as discarded without deleting source quote, provenance, or audit history
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
   - tool_id: update_recorded_evidence_metadata
     binding_kind: context_factory
@@ -732,7 +732,7 @@ tools:
     required_context:
       - document_id
       - user_id
-    description: Update editable active-run evidence metadata without changing quote or provenance fields
+    description: Update only editable active-run evidence metadata without changing immutable source quote or provenance fields
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
   - tool_id: curation_db_sql
     binding_kind: context_factory

@@ -1,7 +1,7 @@
 tool_policies:
   search_document:
     display_name: Search Document
-    description: Semantic search over the active document.
+    description: Discovery search over the active document; use read_chunk on returned chunk IDs for final evidence span selection.
     category: Document
     curator_visible: true
     allow_attach: true
@@ -10,7 +10,7 @@ tool_policies:
 
   read_chunk:
     display_name: Read Chunk
-    description: Read one active-document chunk with deterministic exact evidence spans.
+    description: Read one active-document chunk with selectable evidence_spans[].span_id values for record_evidence.
     category: Document
     curator_visible: true
     allow_attach: true
@@ -19,7 +19,7 @@ tool_policies:
 
   read_section:
     display_name: Read Section
-    description: Read a specific section from the active document.
+    description: Survey a specific section from the active document; use read_chunk for final evidence span selection.
     category: Document
     curator_visible: true
     allow_attach: true
@@ -28,7 +28,7 @@ tool_policies:
 
   read_subsection:
     display_name: Read Subsection
-    description: Read a specific subsection from the active document.
+    description: Survey a specific subsection from the active document; use read_chunk for final evidence span selection.
     category: Document
     curator_visible: true
     allow_attach: true
@@ -37,7 +37,7 @@ tool_policies:
 
   record_evidence:
     display_name: Record Evidence
-    description: Record backend-owned evidence from read_chunk span IDs, preserving exact source text and span provenance with optional envelope target refs.
+    description: Create verified evidence from read_chunk span_ids, preserving exact source text and span provenance with optional envelope target refs.
     category: Document
     curator_visible: false
     allow_attach: false
@@ -46,7 +46,7 @@ tool_policies:
 
   list_recorded_evidence:
     display_name: List Recorded Evidence
-    description: List active-run evidence records for the current document, excluding discarded evidence by default.
+    description: Review queued active-run evidence records before final output, excluding discarded evidence by default.
     category: Document
     curator_visible: false
     allow_attach: false
@@ -55,7 +55,7 @@ tool_policies:
 
   get_recorded_evidence:
     display_name: Get Recorded Evidence
-    description: Fetch one active-run evidence record for detailed review.
+    description: Fetch one active-run evidence record for detailed review before finalization.
     category: Document
     curator_visible: false
     allow_attach: false
@@ -64,7 +64,7 @@ tool_policies:
 
   attach_evidence_to_object:
     display_name: Attach Evidence To Object
-    description: Attach active-run evidence to a curatable object or pending reference.
+    description: Attach active-run evidence to the intended curatable object or pending reference without changing source quote or provenance.
     category: Document
     curator_visible: false
     allow_attach: false
@@ -73,7 +73,7 @@ tool_policies:
 
   detach_evidence_from_object:
     display_name: Detach Evidence From Object
-    description: Detach active-run evidence from a curatable object or pending reference.
+    description: Detach active-run evidence from a wrong curatable object or pending reference without changing source quote or provenance.
     category: Document
     curator_visible: false
     allow_attach: false
@@ -82,7 +82,7 @@ tool_policies:
 
   discard_recorded_evidence:
     display_name: Discard Recorded Evidence
-    description: Mark wrong or weak active-run evidence as discarded without deleting it.
+    description: Mark wrong or weak active-run evidence as discarded without deleting source quote, provenance, or audit history.
     category: Document
     curator_visible: false
     allow_attach: false
@@ -91,7 +91,7 @@ tool_policies:
 
   update_recorded_evidence_metadata:
     display_name: Update Evidence Metadata
-    description: Update editable active-run evidence metadata while preserving source quote and provenance fields.
+    description: Update only editable active-run evidence metadata while preserving immutable source quote and provenance fields.
     category: Document
     curator_visible: false
     allow_attach: false

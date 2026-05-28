@@ -16,7 +16,8 @@ content: |
   A successful extraction has:
   - Document retrieval performed before answering.
   - Each retained annotation supported by an experiment in THIS paper.
-  - Each retained evidence quote verified with `record_evidence` against the exact chunk currently on screen.
+  - Each retained evidence record created from backend-generated `read_chunk.evidence_spans[].span_id` values.
+  - Active-run evidence reviewed before final output, with retained evidence attached to the intended curatable object.
   - Validator-bound fields carry evidence-backed selector inputs only; active validator bindings own final relation and data-provider verification.
   - Distinct expression patterns represented as separate annotations.
   - Non-curatable candidates preserved in `metadata.exclusions[]` with canonical reason_code values.
@@ -102,14 +103,16 @@ content: |
   - "A GFP reporter was used to visualize the neurons."
 
   When a retained expression finding is supported:
-  - Call `record_evidence` immediately using the exact `chunk_id` from the search/read result you are looking at.
-  - Pass a verbatim or lightly trimmed `claimed_quote` from that chunk, not a paraphrase.
+  - Call `read_chunk(chunk_id)` for the relevant chunk from search, section, or subsection survey context.
+  - Select the backend-generated `evidence_spans[].span_id` values that directly support one evidence unit.
+  - Call `record_evidence(entity=..., span_ids=[...])`; do not write evidence quote text yourself.
   - If the tool returns `status: "verified"`, use the verified result as the source of truth for
     `metadata.evidence_records[]`, `curatable_objects[].evidence_record_ids`,
     and `curatable_objects[].metadata_refs`.
-  - If the tool returns `status: "not_found"`, inspect the chunk preview, retry once only when the
-    mismatch is clearly fixable, then drop that evidence if it still does not verify.
-  - Do not invent quotes. Only persist evidence returned by the tool as verified.
+  - If span resolution fails, call `read_chunk` again for current span IDs or drop that evidence.
+  - Multiple `span_ids` in one `record_evidence` call produce one evidence record; use separate
+    `record_evidence` calls for truly disjoint evidence units.
+  - Do not invent quotes or merge disconnected fragments into one implied contiguous passage.
   </evidence_rules>
 
   <rescue_and_marker_exclusions>
@@ -148,8 +151,13 @@ content: |
 
   Available tools:
   - search_document for gene symbols, expression statements, and exclusion cues
-  - read_section/read_subsection for methods/results context and evidence extraction
-  - record_evidence to verify expression-supporting quotes against the exact chunk currently on screen
+  - read_section/read_subsection as discovery and survey tools for methods/results context
+  - read_chunk to inspect precise source text and choose `evidence_spans[].span_id` values for final evidence selection
+  - record_evidence to create verified evidence records from selected span IDs
+  - list_recorded_evidence/get_recorded_evidence to review queued active-run evidence before final output
+  - attach_evidence_to_object/detach_evidence_from_object to make each retained evidence record support the intended object or pending reference
+  - discard_recorded_evidence to remove wrong or weak evidence from the final support set without deleting audit history
+  - update_recorded_evidence_metadata to edit only agent-owned metadata such as entity, field_path, or agent_note
   - agr_species_context_lookup only when a paper-supported organism clue needs narrow species/provider/taxon context for validator selectors
   - get_domain_field_term_options for domain-pack-declared controlled vocabulary and ontology selector options, including relation, assay, stage, anatomy, and GO cellular-component fields
 
@@ -164,9 +172,10 @@ content: |
 
   Preferred order for retained expression findings:
   1. Search/read the document.
-  2. Verify the supporting quote with `record_evidence` from the current chunk.
+  2. Use `read_chunk` on relevant chunks and create evidence with `record_evidence(span_ids=[...])`.
   3. Call `get_domain_field_term_options` for each controlled selector you will stage: `relation.name`, assay/method, stage, and each retained expression site phrase.
   4. Assemble GeneExpressionAnnotation curatable objects from verified evidence and preserve selected helper inputs for active validators.
+  5. Call `list_recorded_evidence` before final output, fetch details if needed, then attach the intended evidence IDs to each retained object and detach or discard evidence that should not support the final object set.
   </tools_and_retrieval>
 
   <active_validator_binding_policy>
@@ -216,10 +225,13 @@ content: |
   - Content is returned up to ~1500 characters per chunk hit for search, but read tools
     return full chunk text.
 
-  Evidence verification:
-  - `record_evidence` retrieves a specific chunk by ID from Weaviate and verifies only exact
-    contiguous source text copied from that chunk. It does not re-search; omitted, inserted,
-    changed, paraphrased, or normalized quote text returns `not_found`.
+  Evidence selection:
+  - `search_document`, `read_section`, and `read_subsection` are discovery/survey tools.
+  - For retained evidence, call `read_chunk(chunk_id)` and select `evidence_spans[].span_id`
+    values. `record_evidence` accepts `span_ids` and the backend copies exact source text
+    into `verified_quote`.
+  - After evidence is recorded, source quote and provenance fields are immutable. Use the
+    active-run evidence workspace only to attach, detach, discard, or update editable metadata.
 
   Search strategy implications:
   - Expression findings are often described with varied language ("expressed in", "detected in",
@@ -256,6 +268,14 @@ content: |
   `curatable_objects[].evidence_record_ids` and `curatable_objects[].metadata_refs`. These
   details must come from a verified `record_evidence` result, not from a paraphrase or
   reconstructed summary.
+
+  Final evidence review:
+  - Before returning JSON, call `list_recorded_evidence` for the active document.
+  - Keep only intended active evidence records in `metadata.evidence_records[]`.
+  - Attach each retained evidence record to the intended `object_id` or `pending_ref_id`.
+  - Detach records from the wrong object, discard wrong or weak evidence, and update only
+    editable metadata fields. Never edit source quote text, source span IDs, chunk IDs,
+    page/section provenance, or source fragments.
   </evidence_record_contract>
 
   <output_contract>

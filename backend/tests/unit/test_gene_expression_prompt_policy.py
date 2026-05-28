@@ -57,9 +57,16 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
 
     assert agent_data["tools"] == [
         "search_document",
+        "read_chunk",
         "read_section",
         "read_subsection",
         "record_evidence",
+        "list_recorded_evidence",
+        "get_recorded_evidence",
+        "attach_evidence_to_object",
+        "detach_evidence_from_object",
+        "discard_recorded_evidence",
+        "update_recorded_evidence_metadata",
         "get_agent_contract",
         "agr_species_context_lookup",
         "get_domain_field_term_options",
@@ -78,7 +85,20 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
     assert "object_type` - always `GeneExpressionAnnotation" in content
     assert "metadata.evidence_records[]" in content
     assert "Do not place `evidence_text`" in content
+    assert "read_chunk(chunk_id)" in content
+    assert "`evidence_spans[].span_id`" in content
+    assert "record_evidence(entity=..., span_ids=[...])" in content
+    assert "list_recorded_evidence" in content
+    assert "get_recorded_evidence" in content
+    assert "attach_evidence_to_object" in content
+    assert "detach_evidence_from_object" in content
+    assert "discard_recorded_evidence" in content
+    assert "update_recorded_evidence_metadata" in content
+    assert "source quote and provenance fields are immutable" in content
+    assert "Multiple `span_ids` in one `record_evidence` call produce one evidence record" in content
     assert "payload.evidence_text" not in content
+    assert "claimed_quote" not in content
+    assert "verbatim or lightly trimmed" not in content
     assert "anatomy_label" not in content
     assert "life_stage_label" not in content
     assert "go_cc_label" not in content

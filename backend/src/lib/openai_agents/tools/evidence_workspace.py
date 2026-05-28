@@ -283,7 +283,16 @@ def create_list_recorded_evidence_tool(
         object_id: str | None = None,
         pending_ref_id: str | None = None,
     ) -> dict[str, Any]:
-        """List active-run evidence records, optionally filtered by object or pending ref."""
+        """Review queued active-run evidence before final output.
+
+        Discarded records are excluded by default. Use this to confirm the active
+        evidence set matches final curatable objects before returning structured output.
+
+        Args:
+            include_discarded: Include evidence previously marked discarded.
+            object_id: Filter to evidence attached to this stable curatable object ID.
+            pending_ref_id: Filter to evidence attached to this pending reference ID.
+        """
 
         _track(tracker, "list_recorded_evidence")
         requested = _normalize_target(object_id=object_id, pending_ref_id=pending_ref_id)
@@ -319,7 +328,11 @@ def create_get_recorded_evidence_tool(
 
     @function_tool
     async def get_recorded_evidence(evidence_record_id: str) -> dict[str, Any]:
-        """Fetch one active-run evidence record by evidence_record_id."""
+        """Fetch one active-run evidence record for detailed review.
+
+        Args:
+            evidence_record_id: Evidence record ID returned by record_evidence or list_recorded_evidence.
+        """
 
         _track(tracker, "get_recorded_evidence")
         record = _find_record(evidence_record_id, document_id=document_id)
@@ -347,7 +360,17 @@ def create_attach_evidence_to_object_tool(
         pending_ref_id: str | None = None,
         field_path: str | None = None,
     ) -> dict[str, Any]:
-        """Attach one evidence record to an intended object or pending ref."""
+        """Attach active evidence to the intended object or pending ref.
+
+        This changes only workspace attachment metadata; source quote text and
+        provenance remain immutable.
+
+        Args:
+            evidence_record_id: Evidence record ID to attach.
+            object_id: Stable curatable object ID to support.
+            pending_ref_id: Pending object/reference ID to support.
+            field_path: Optional domain payload field path supported by this evidence.
+        """
 
         _track(tracker, "attach_evidence_to_object")
         record = _find_record(evidence_record_id, document_id=document_id)
@@ -397,7 +420,17 @@ def create_detach_evidence_from_object_tool(
         pending_ref_id: str | None = None,
         field_path: str | None = None,
     ) -> dict[str, Any]:
-        """Detach one evidence record from an object or pending ref."""
+        """Detach evidence from a wrong object, pending ref, or field path.
+
+        This removes only workspace attachment metadata; source quote text and
+        provenance remain immutable.
+
+        Args:
+            evidence_record_id: Evidence record ID to detach.
+            object_id: Stable curatable object ID to detach from.
+            pending_ref_id: Pending object/reference ID to detach from.
+            field_path: Optional domain payload field path attachment to remove.
+        """
 
         _track(tracker, "detach_evidence_from_object")
         record = _find_record(evidence_record_id, document_id=document_id)
@@ -441,7 +474,15 @@ def create_discard_recorded_evidence_tool(
         evidence_record_id: str,
         reason: str,
     ) -> dict[str, Any]:
-        """Discard one active-run evidence record while retaining audit history."""
+        """Discard wrong or weak evidence while retaining audit history.
+
+        Discarding removes evidence from the final active support set by default
+        without deleting source quote or provenance.
+
+        Args:
+            evidence_record_id: Evidence record ID to discard.
+            reason: Short reason this evidence should not support final objects.
+        """
 
         _track(tracker, "discard_recorded_evidence")
         record = _find_record(evidence_record_id, document_id=document_id)
@@ -478,7 +519,18 @@ def create_update_recorded_evidence_metadata_tool(
         field_path: str | None = None,
         agent_note: str | None = None,
     ) -> dict[str, Any]:
-        """Update editable evidence metadata without changing source quote/provenance."""
+        """Update only editable agent-owned evidence metadata.
+
+        Editable fields are entity, field_path, and agent_note. Source quote,
+        source span IDs, source fragments, chunk IDs, page, and section provenance
+        remain immutable.
+
+        Args:
+            evidence_record_id: Evidence record ID to update.
+            entity: Updated entity label for this evidence.
+            field_path: Domain payload field path supported by this evidence.
+            agent_note: Agent-authored note about how this evidence should be used.
+        """
 
         _track(tracker, "update_recorded_evidence_metadata")
         record = _find_record(evidence_record_id, document_id=document_id)

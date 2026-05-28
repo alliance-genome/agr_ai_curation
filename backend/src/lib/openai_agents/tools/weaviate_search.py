@@ -128,7 +128,16 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
         limit: int = 5,
         section_keywords: Optional[List[str]] = None
     ) -> ChunkSearchResult:
-        """Search the loaded PDF document for relevant content."""
+        """Discovery tool: search the loaded PDF for relevant chunks.
+
+        Use returned chunk_id values with read_chunk for final evidence selection.
+        Do not use search snippets as retained evidence.
+
+        Args:
+            query: Search terms or natural-language retrieval query.
+            limit: Maximum number of chunks to return, capped at 10.
+            section_keywords: Optional section filters such as Methods or Results.
+        """
         # Record tool call if tracker is provided
         if tracker:
             tracker.record_call("search_document")
@@ -205,7 +214,14 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
 
     @function_tool
     async def read_chunk(chunk_id: str) -> ChunkReadResult:
-        """Read one PDF chunk and return deterministic evidence spans."""
+        """Read one PDF chunk and return selectable evidence_spans.
+
+        For retained evidence, choose evidence_spans[].span_id values and pass
+        them to record_evidence(span_ids=[...]). Do not write evidence quote text.
+
+        Args:
+            chunk_id: Chunk identifier returned by search_document or section source chunks.
+        """
         if tracker:
             tracker.record_call("read_chunk")
 
@@ -325,13 +341,15 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
 
     @function_tool
     async def read_section(section_name: str) -> SectionReadResult:
-        """Read ALL content from a specific section of the document.
+        """Survey ALL content from a specific section of the document.
 
         Use this tool when you need to read an ENTIRE section at once, especially for:
         - Extracting complete lists (e.g., all strains in Methods)
         - Getting full tables or figures
         - Reading complete methodology details
         - Any case where you need comprehensive section content
+        Use section.source_chunks[].chunk_id with read_chunk for final evidence
+        selection; read_section content is survey context, not retained evidence.
 
         Args:
             section_name: The section title to read (e.g., "Materials and Methods", "Results")
@@ -479,10 +497,12 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
 
     @function_tool
     async def read_subsection(parent_section: str, subsection: str) -> SubsectionReadResult:
-        """Read content from a SPECIFIC SUBSECTION within a parent section.
+        """Survey content from a SPECIFIC SUBSECTION within a parent section.
 
         Use this for precise reading when you know the exact subsection you need.
         This respects the LLM-resolved document hierarchy for accurate boundaries.
+        For retained evidence, call read_chunk on relevant chunks and select
+        evidence_spans[].span_id values before record_evidence.
 
         Examples:
             - read_subsection("Methods", "Fly Strains")
@@ -546,7 +566,10 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
             )
 
             return SubsectionReadResult(
-                summary=f"Read {len(chunks)} chunks from '{parent_section} > {subsection}'",
+                summary=(
+                    f"Read {len(chunks)} chunks from '{parent_section} > {subsection}'. "
+                    "Use read_chunk on relevant chunk IDs for final evidence span selection."
+                ),
                 subsection=SubsectionContent(
                     parent_section=parent_section,
                     subsection=subsection,

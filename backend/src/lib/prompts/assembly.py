@@ -43,10 +43,11 @@ schema, tool, audit, or safety requirements.
 
 TOOL_POLICY_SUMMARIES = {
     "record_evidence": (
-        "- Evidence policy: retained paper quotes must be backed by verified "
-        "record_evidence results from the active document; record_evidence verifies "
-        "only exact contiguous source text copied from that chunk, and omitted, "
-        "inserted, changed, paraphrased, or normalized quote text returns `not_found`."
+        "- Evidence policy: retained PDF evidence must come from "
+        "`read_chunk.evidence_spans[].span_id` values. Use `record_evidence` with "
+        "`span_ids`; the backend copies exact source text into `verified_quote` and "
+        "preserves source span provenance. Before final output, review the active-run "
+        "evidence workspace and keep only intended active evidence records."
     ),
     "get_agent_contract": (
         "- Detailed field, tool, schema, validator, and ontology facts are served "

@@ -35,7 +35,7 @@ _TABLE_REFERENCE_PATTERN = re.compile(
 _PREVIEW_CHARS = 300
 _SPAN_RETRY_INSTRUCTIONS = (
     "Call read_chunk for the source chunk again and select current "
-    "evidence_spans[].span_id values. Do not provide quote text."
+    "evidence_spans[].span_id values. Do not provide model-authored source text."
 )
 
 
@@ -389,7 +389,22 @@ def create_record_evidence_tool(
         object_type: str | None = None,
         validation_finding_id: str | None = None,
     ) -> dict[str, Any]:
-        """Record exact source-corpus evidence selected by read_chunk span IDs."""
+        """Create verified evidence from read_chunk evidence span IDs.
+
+        The backend resolves span_ids, copies exact source text into
+        verified_quote, and preserves span provenance. Multiple span_ids in one
+        call form one evidence unit and one evidence record; use separate calls
+        for truly disjoint support.
+
+        Args:
+            entity: Entity or object label this evidence supports.
+            span_ids: Non-empty list copied from read_chunk(...).chunk.evidence_spans[].span_id.
+            object_id: Optional stable curatable object ID to attach this evidence to.
+            pending_ref_id: Optional pending object/reference ID to attach this evidence to.
+            field_path: Optional domain payload field path supported by this evidence.
+            object_type: Optional curatable object type.
+            validation_finding_id: Optional validation finding this evidence addresses.
+        """
         if tracker:
             tracker.record_call("record_evidence")
 
