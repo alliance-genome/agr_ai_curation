@@ -106,6 +106,37 @@ async def test_attach_and_detach_evidence_to_object_or_pending_ref(workspace_rec
 
 
 @pytest.mark.asyncio
+async def test_detach_removes_field_path_for_only_detached_target(workspace_records):
+    attach_tool = evidence_workspace.create_attach_evidence_to_object_tool("doc-1", "user-1")
+    detach_tool = evidence_workspace.create_detach_evidence_from_object_tool("doc-1", "user-1")
+    update_tool = evidence_workspace.create_update_recorded_evidence_metadata_tool(
+        "doc-1",
+        "user-1",
+    )
+
+    await attach_tool("ev-active", pending_ref_id="obj-a", field_path="field.a")
+    await attach_tool("ev-active", pending_ref_id="obj-b", field_path="field.b")
+
+    detached = await detach_tool("ev-active", pending_ref_id="obj-a")
+
+    assert detached["record"]["envelope_targets"] == [
+        {"pending_ref_id": "obj-b", "field_path": "field.b"}
+    ]
+    assert workspace_records[0]["field_path"] == "field.b"
+    assert workspace_records[0]["field_paths"] == ["field.b"]
+
+    await update_tool("ev-active", field_path="agent.selected_field")
+    await attach_tool("ev-active", pending_ref_id="obj-a", field_path="field.a")
+    detached_after_metadata_update = await detach_tool("ev-active", pending_ref_id="obj-a")
+
+    assert detached_after_metadata_update["record"]["envelope_targets"] == [
+        {"pending_ref_id": "obj-b", "field_path": "field.b"}
+    ]
+    assert workspace_records[0]["field_path"] == "agent.selected_field"
+    assert workspace_records[0]["field_paths"] == ["agent.selected_field", "field.b"]
+
+
+@pytest.mark.asyncio
 async def test_discard_recorded_evidence_is_status_change_not_delete(workspace_records):
     discard_tool = evidence_workspace.create_discard_recorded_evidence_tool("doc-1", "user-1")
     list_tool = evidence_workspace.create_list_recorded_evidence_tool("doc-1", "user-1")

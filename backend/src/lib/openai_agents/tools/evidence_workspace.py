@@ -98,6 +98,8 @@ def _record_targets(record: dict[str, Any]) -> list[dict[str, str]]:
                 )
                 if target and target not in targets:
                     targets.append(target)
+    if targets:
+        return targets
 
     raw_target = record.get("envelope_target")
     if isinstance(raw_target, dict):
@@ -108,6 +110,8 @@ def _record_targets(record: dict[str, Any]) -> list[dict[str, str]]:
         )
         if target and target not in targets:
             targets.append(target)
+    if targets:
+        return targets
 
     target = _normalize_target(
         object_id=record.get("object_id"),
@@ -119,7 +123,40 @@ def _record_targets(record: dict[str, Any]) -> list[dict[str, str]]:
     return targets
 
 
-def _sync_target_fields(record: dict[str, Any], targets: list[dict[str, str]]) -> None:
+def _target_field_paths(targets: list[dict[str, str]]) -> list[str]:
+    field_paths: list[str] = []
+    seen: set[str] = set()
+    for target in targets:
+        field_path = target.get("field_path")
+        if field_path and field_path not in seen:
+            seen.add(field_path)
+            field_paths.append(field_path)
+    return field_paths
+
+
+def _agent_metadata_field_paths(
+    record: dict[str, Any],
+    previous_targets: list[dict[str, str]],
+) -> list[str]:
+    previous_target_paths = set(_target_field_paths(previous_targets))
+    metadata_paths: list[str] = []
+    for value in [record.get("field_path"), *(record.get("field_paths") or [])]:
+        field_path = _optional_string(value)
+        if (
+            field_path
+            and field_path not in previous_target_paths
+            and field_path not in metadata_paths
+        ):
+            metadata_paths.append(field_path)
+    return metadata_paths
+
+
+def _sync_target_fields(
+    record: dict[str, Any],
+    targets: list[dict[str, str]],
+    *,
+    metadata_field_paths: list[str] | None = None,
+) -> None:
     for key in ("object_id", "pending_ref_id", "object_ref", "envelope_target"):
         record.pop(key, None)
 
@@ -141,15 +178,10 @@ def _sync_target_fields(record: dict[str, Any], targets: list[dict[str, str]]) -
 
     field_paths = []
     seen = set()
-    for target in targets:
-        field_path = target.get("field_path")
+    for field_path in [*(metadata_field_paths or []), *_target_field_paths(targets)]:
         if field_path and field_path not in seen:
             seen.add(field_path)
             field_paths.append(field_path)
-    existing_field_path = _optional_string(record.get("field_path"))
-    if existing_field_path and existing_field_path not in seen:
-        field_paths.append(existing_field_path)
-        seen.add(existing_field_path)
 
     if field_paths:
         record["field_path"] = field_paths[0]
@@ -338,10 +370,16 @@ def create_attach_evidence_to_object_tool(
                 "message": "Provide object_id or pending_ref_id, optionally with field_path.",
             }
 
-        targets = _record_targets(record)
+        previous_targets = _record_targets(record)
+        metadata_field_paths = _agent_metadata_field_paths(record, previous_targets)
+        targets = list(previous_targets)
         if target not in targets:
             targets.append(target)
-        _sync_target_fields(record, targets)
+        _sync_target_fields(
+            record,
+            targets,
+            metadata_field_paths=metadata_field_paths,
+        )
         record["updated_at"] = _now_iso()
         return _success(record, action="attach")
 
@@ -376,12 +414,18 @@ def create_detach_evidence_from_object_tool(
             pending_ref_id=pending_ref_id,
             field_path=field_path,
         )
+        previous_targets = _record_targets(record)
+        metadata_field_paths = _agent_metadata_field_paths(record, previous_targets)
         targets = [
             target
-            for target in _record_targets(record)
+            for target in previous_targets
             if not _target_matches(target, requested)
         ]
-        _sync_target_fields(record, targets)
+        _sync_target_fields(
+            record,
+            targets,
+            metadata_field_paths=metadata_field_paths,
+        )
         record["updated_at"] = _now_iso()
         return _success(record, action="detach")
 
