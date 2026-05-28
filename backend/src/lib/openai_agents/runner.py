@@ -73,6 +73,10 @@ from .evidence_summary import (
     structured_result_missing_evidence_record_refs,
     structured_result_requires_evidence,
 )
+from .tools.evidence_workspace import (
+    reset_active_evidence_records,
+    set_active_evidence_records,
+)
 from .streaming_tools import (
     get_collected_events,
     clear_collected_events,
@@ -670,6 +674,7 @@ async def _run_agent_with_tracing(
         extra={"trace_id": trace_id, "user_id": user_id},
     )
     evidence_records: List[Dict[str, Any]] = []
+    evidence_workspace_token = set_active_evidence_records(evidence_records)
     evidence_summary_tool_names: List[str] = []
 
     # max_turns from config gives agents more time to think and process complex queries
@@ -789,7 +794,7 @@ async def _run_agent_with_tracing(
             # Handle live events (specialist internal tools)
             if event_source == "live":
                 if event.get("type") == "evidence_summary":
-                    evidence_records = _merge_evidence_records(
+                    evidence_records[:] = _merge_evidence_records(
                         evidence_records,
                         event.get("evidence_records"),
                     )
@@ -946,7 +951,7 @@ async def _run_agent_with_tracing(
                             tool_output=output,
                         )
                         if evidence_record is not None:
-                            evidence_records = _merge_evidence_records(
+                            evidence_records[:] = _merge_evidence_records(
                                 evidence_records,
                                 [evidence_record],
                             )
@@ -962,7 +967,7 @@ async def _run_agent_with_tracing(
                             )
                             for specialist_event in specialist_events:
                                 if specialist_event.get("type") == "evidence_summary":
-                                    evidence_records = _merge_evidence_records(
+                                    evidence_records[:] = _merge_evidence_records(
                                         evidence_records,
                                         specialist_event.get("evidence_records"),
                                     )
@@ -1134,6 +1139,7 @@ async def _run_agent_with_tracing(
     finally:
         # Clear the live event list reference
         set_live_event_list(None)
+        reset_active_evidence_records(evidence_workspace_token)
 
     # Get final output if not captured from streaming
     if hasattr(result, "final_output"):
@@ -1208,7 +1214,7 @@ async def _run_agent_with_tracing(
             return
 
         if structured_evidence_records:
-            evidence_records = _merge_evidence_records(
+            evidence_records[:] = _merge_evidence_records(
                 evidence_records,
                 structured_evidence_records,
             )

@@ -41,6 +41,10 @@ from .evidence_summary import (
     structured_result_missing_evidence_record_refs,
     structured_result_requires_evidence,
 )
+from .tools.evidence_workspace import (
+    reset_active_evidence_records,
+    set_active_evidence_records,
+)
 from .event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 from .tool_call_policy import (
     DOCUMENT_REQUIRED_TOOL_NAMES,
@@ -2129,6 +2133,7 @@ async def run_specialist_with_events(
     phase_timings_ms: Dict[str, int] = {}
     tool_calls: List[SpecialistToolCall] = []
     live_evidence_records: List[Dict[str, Any]] = []
+    evidence_workspace_token = set_active_evidence_records(live_evidence_records)
     pending_tool_calls: "deque[Dict[str, Any]]" = deque()
 
     # Track consecutive calls for batching nudge
@@ -3316,4 +3321,5 @@ async def run_specialist_with_events(
             )
             final_output += nudge
 
+    reset_active_evidence_records(evidence_workspace_token)
     return final_output
