@@ -333,6 +333,26 @@ export interface CurationDraft {
   metadata: Record<string, unknown>
 }
 
+export interface EvidenceSourceFragment {
+  span_id?: string | null
+  chunk_id?: string | null
+  document_id?: string | null
+  text?: string | null
+  char_start?: number | null
+  char_end?: number | null
+  text_hash?: string | null
+  page?: number | null
+  section?: string | null
+  subsection?: string | null
+  figure_reference?: string | null
+  span_index?: number | null
+  span_type?: string | null
+  spanizer_version?: string | null
+  anchor?: Record<string, unknown> | null
+  bbox?: Record<string, unknown> | null
+  bounding_boxes?: Record<string, unknown>[] | null
+}
+
 export interface EvidenceRecord {
   entity: string
   verified_quote: string
@@ -340,6 +360,10 @@ export interface EvidenceRecord {
   section: string
   subsection?: string
   chunk_id: string
+  chunk_ids?: string[]
+  document_id?: string
+  source_span_ids?: string[]
+  source_fragments?: EvidenceSourceFragment[]
   figure_reference?: string
 }
 

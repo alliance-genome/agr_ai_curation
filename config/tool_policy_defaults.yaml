@@ -37,7 +37,7 @@ tool_policies:
 
   record_evidence:
     display_name: Record Evidence
-    description: Verify exact source text against a specific chunk before evidence is persisted, with optional envelope target refs.
+    description: Record backend-owned evidence from read_chunk span IDs, preserving exact source text and span provenance with optional envelope target refs.
     category: Document
     curator_visible: false
     allow_attach: false

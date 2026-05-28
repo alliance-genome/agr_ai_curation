@@ -5,8 +5,11 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from src.lib.openai_agents.models import GeneExtractionResultEnvelope
-from src.schemas.models.base import EvidenceRecord
+from src.lib.openai_agents.models import (
+    GeneExtractionResultEnvelope,
+    PdfEvidenceSourceFragment,
+)
+from src.schemas.models.base import EvidenceRecord, EvidenceSourceFragment
 
 
 def _tool_evidence_payload() -> dict[str, object]:
@@ -32,6 +35,10 @@ def test_evidence_record_defaults_optional_fields_to_none_when_quote_present():
     assert evidence.section is None
     assert evidence.subsection is None
     assert evidence.chunk_id is None
+    assert evidence.chunk_ids is None
+    assert evidence.document_id is None
+    assert evidence.source_span_ids is None
+    assert evidence.source_fragments is None
     assert evidence.figure_reference is None
 
 
@@ -81,14 +88,16 @@ def test_runtime_gene_extraction_envelope_round_trips_verified_evidence_json():
         }
     )
 
-    dumped = envelope.model_dump(mode="json")
-    round_tripped = GeneExtractionResultEnvelope.model_validate_json(envelope.model_dump_json())
+    dumped = envelope.model_dump(mode="json", exclude_none=True)
+    round_tripped = GeneExtractionResultEnvelope.model_validate_json(
+        envelope.model_dump_json(exclude_none=True)
+    )
 
     assert dumped["curatable_objects"][0]["evidence_record_ids"] == [
         evidence_payload["evidence_record_id"]
     ]
     assert dumped["metadata"]["evidence_records"][0] == evidence_payload
-    assert round_tripped.model_dump(mode="json") == dumped
+    assert round_tripped.model_dump(mode="json", exclude_none=True) == dumped
 
 
 def test_runtime_gene_extraction_envelope_accepts_partial_metadata_evidence():
@@ -114,10 +123,52 @@ def test_runtime_gene_extraction_envelope_accepts_partial_metadata_evidence():
 def test_evidence_record_schema_serialization_preserves_all_fields():
     evidence_payload = _tool_evidence_payload()
 
-    encoded = EvidenceRecord(**evidence_payload).model_dump_json()
+    encoded = EvidenceRecord(**evidence_payload).model_dump_json(exclude_none=True)
     decoded = json.loads(encoded)
 
     assert decoded == evidence_payload
+
+
+def test_evidence_record_schema_preserves_span_provenance_fields():
+    evidence_payload = {
+        **_tool_evidence_payload(),
+        "document_id": "doc-123",
+        "chunk_ids": ["abc123", "def456", "abc123"],
+        "source_span_ids": ["abc123:s0001:c0000-c0020:1234abcd"],
+        "source_fragments": [
+            {
+                "span_id": "abc123:s0001:c0000-c0020:1234abcd",
+                "chunk_id": "abc123",
+                "document_id": "doc-123",
+                "text": "Exact source sentence.",
+                "char_start": 0,
+                "char_end": 22,
+                "text_hash": "1234abcd",
+                "page": 4,
+                "section": "Results",
+                "subsection": "Gene Expression Analysis",
+                "span_index": 1,
+                "span_type": "sentence",
+                "spanizer_version": "pdf_sentence_v1",
+                "anchor": {"anchor_kind": "sentence"},
+                "bbox": {"x": 1, "y": 2, "width": 3, "height": 4},
+                "bounding_boxes": [{"x": 1, "y": 2, "width": 3, "height": 4}],
+            }
+        ],
+    }
+
+    decoded = EvidenceRecord(**evidence_payload).model_dump(mode="json", exclude_none=True)
+
+    assert decoded == {
+        **evidence_payload,
+        "chunk_ids": ["abc123", "def456"],
+    }
+
+
+def test_pdf_and_validated_source_fragment_fields_stay_in_sync():
+    assert set(PdfEvidenceSourceFragment.model_fields) == set(
+        EvidenceSourceFragment.model_fields
+    )
 
 
 @pytest.mark.parametrize("page", [0, -1])

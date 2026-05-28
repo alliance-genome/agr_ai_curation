@@ -44,18 +44,22 @@ class _ResolvedSpanFragment:
     span: EvidenceSpan
     chunk: dict[str, Any]
     chunk_id: str
+    document_id: str
     page: int | None
     section: str | None
     subsection: str | None
     figure_reference: str | None
 
     def to_source_fragment(self) -> dict[str, Any]:
+        parsed_span = parse_evidence_span_id(self.span.span_id)
         fragment: dict[str, Any] = {
             "span_id": self.span.span_id,
             "chunk_id": self.chunk_id,
+            "document_id": self.document_id,
             "text": self.span.text,
             "char_start": self.span.char_start,
             "char_end": self.span.char_end,
+            "text_hash": parsed_span.text_hash,
             "span_index": self.span.span_index,
             "span_type": self.span.span_type,
             "spanizer_version": self.span.spanizer_version,
@@ -539,6 +543,7 @@ def create_record_evidence_tool(
                     span=span,
                     chunk=chunk,
                     chunk_id=chunk_id,
+                    document_id=document_id,
                     page=page,
                     section=section,
                     subsection=subsection,
@@ -557,7 +562,9 @@ def create_record_evidence_tool(
             "status": "verified",
             "entity": normalized_entity,
             "span_ids": normalized_span_ids,
+            "source_span_ids": normalized_span_ids,
             "verified_quote": verified_quote,
+            "document_id": document_id,
             "chunk_id": first_fragment.chunk_id,
             "chunk_ids": chunk_ids,
             "source_fragments": [
@@ -584,6 +591,7 @@ def create_record_evidence_tool(
                 "chunk_id": first_fragment.chunk_id,
                 "subsection": first_fragment.subsection,
                 "figure_reference": payload.get("figure_reference"),
+                "source_span_ids": normalized_span_ids,
             }
         )
 

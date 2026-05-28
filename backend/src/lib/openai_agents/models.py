@@ -3,7 +3,7 @@ Shared Pydantic models for OpenAI Agents structured outputs.
 """
 
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 from pydantic import BaseModel, Field, StrictStr
 from src.schemas.curation_prep import CurationPrepAgentOutput  # noqa: F401 - re-exported here for runtime schema discovery.
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
@@ -62,6 +62,28 @@ class Answer(BaseModel):
 # Generic PDF Extraction Structured Output Models
 # ============================================================================
 
+class PdfEvidenceSourceFragment(BaseModel):
+    """Exact source fragment selected by record_evidence span IDs."""
+
+    span_id: Optional[str] = Field(None, description="Backend-generated evidence span ID")
+    chunk_id: Optional[str] = Field(None, description="Source chunk identifier")
+    document_id: Optional[str] = Field(None, description="Source document identifier")
+    text: Optional[str] = Field(None, description="Exact source text for this fragment")
+    char_start: Optional[int] = Field(None, ge=0, description="0-based start offset in the chunk")
+    char_end: Optional[int] = Field(None, ge=0, description="0-based exclusive end offset in the chunk")
+    text_hash: Optional[str] = Field(None, description="Source-text hash encoded in the span ID")
+    page: Optional[int] = Field(None, ge=1, description="1-based page number containing the fragment")
+    section: Optional[str] = Field(None, description="Document section containing the fragment")
+    subsection: Optional[str] = Field(None, description="Subsection containing the fragment")
+    figure_reference: Optional[str] = Field(None, description="Figure or table locator, if available")
+    span_index: Optional[int] = Field(None, ge=0, description="Span index within the source chunk")
+    span_type: Optional[str] = Field(None, description="Span segmentation type")
+    spanizer_version: Optional[str] = Field(None, description="Spanizer version that generated the span")
+    anchor: Optional[dict[str, Any]] = Field(None, description="Optional source anchor payload")
+    bbox: Optional[dict[str, Any]] = Field(None, description="Optional bounding box payload")
+    bounding_boxes: Optional[list[dict[str, Any]]] = Field(None, description="Optional bounding boxes")
+
+
 class PdfEvidenceRecord(BaseModel):
     """Verified evidence record for generic document extraction."""
 
@@ -88,7 +110,23 @@ class PdfEvidenceRecord(BaseModel):
     )
     chunk_id: str = Field(
         ...,
-        description="Document chunk identifier used to verify the quote"
+        description="Primary source chunk identifier used for the evidence record"
+    )
+    chunk_ids: Optional[List[str]] = Field(
+        None,
+        description="All source chunk identifiers for conjoined multi-span evidence"
+    )
+    document_id: Optional[str] = Field(
+        None,
+        description="Source document identifier for the evidence record"
+    )
+    source_span_ids: Optional[List[str]] = Field(
+        None,
+        description="Backend-generated span IDs selected by record_evidence"
+    )
+    source_fragments: Optional[List[PdfEvidenceSourceFragment]] = Field(
+        None,
+        description="Exact source fragments selected by record_evidence span IDs"
     )
     subsection: Optional[str] = Field(
         None,

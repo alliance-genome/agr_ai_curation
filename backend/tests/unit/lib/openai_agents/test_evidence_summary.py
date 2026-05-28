@@ -341,6 +341,68 @@ def test_record_evidence_summary_uses_resolved_output_chunk_id():
     assert record["chunk_id"] == resolved_chunk_id
 
 
+def test_record_evidence_summary_preserves_span_provenance():
+    span_ids = [
+        "chunk-1:s0000:c0000-c0028:aaaabbbb",
+        "chunk-2:s0001:c0100-c0142:ccccdddd",
+    ]
+
+    record = build_record_evidence_summary_record(
+        tool_name="record_evidence",
+        tool_input={"entity": "PAT-3 expression"},
+        tool_output={
+            "status": "verified",
+            "document_id": "doc-expression",
+            "span_ids": span_ids,
+            "source_span_ids": span_ids,
+            "chunk_id": "chunk-1",
+            "chunk_ids": ["chunk-1", "chunk-2"],
+            "verified_quote": "First exact sentence.\n\nSecond exact sentence.",
+            "page": 9,
+            "section": "Results",
+            "source_fragments": [
+                {
+                    "span_id": span_ids[0],
+                    "chunk_id": "chunk-1",
+                    "document_id": "doc-expression",
+                    "text": "First exact sentence.",
+                    "char_start": 0,
+                    "char_end": 21,
+                    "text_hash": "aaaabbbb",
+                    "page": 9,
+                    "section": "Results",
+                    "subsection": "Expression",
+                    "anchor": {"anchor_kind": "sentence"},
+                    "bbox": {"x": 1, "y": 2, "width": 3, "height": 4},
+                },
+                {
+                    "span_id": span_ids[1],
+                    "chunk_id": "chunk-2",
+                    "document_id": "doc-expression",
+                    "text": "Second exact sentence.",
+                    "char_start": 100,
+                    "char_end": 122,
+                    "page": 9,
+                    "section": "Results",
+                    "bounding_boxes": [{"x": 5, "y": 6, "width": 7, "height": 8}],
+                },
+            ],
+        },
+    )
+
+    assert record is not None
+    assert record["document_id"] == "doc-expression"
+    assert record["source_span_ids"] == span_ids
+    assert record["chunk_ids"] == ["chunk-1", "chunk-2"]
+    assert record["source_fragments"][0]["text_hash"] == "aaaabbbb"
+    assert record["source_fragments"][0]["anchor"] == {"anchor_kind": "sentence"}
+    assert record["source_fragments"][0]["bbox"] == {"x": 1, "y": 2, "width": 3, "height": 4}
+    assert record["source_fragments"][1]["text_hash"] == "ccccdddd"
+    assert record["source_fragments"][1]["bounding_boxes"] == [
+        {"x": 5, "y": 6, "width": 7, "height": 8}
+    ]
+
+
 def test_record_evidence_summary_ignores_terminal_unverified_retry_result():
     record = build_record_evidence_summary_record(
         tool_name="record_evidence",
@@ -359,6 +421,73 @@ def test_record_evidence_summary_ignores_terminal_unverified_retry_result():
     )
 
     assert record is None
+
+
+def test_canonicalize_preserves_conjoined_multi_span_record_and_prunes_discarded():
+    active_record = {
+        **_record(
+            entity="PAT-3 expression in mechanosensory neurons",
+            quote="First exact sentence.\n\nSecond exact sentence.",
+            chunk_id="chunk-1",
+            page=9,
+            section="Results",
+        ),
+        "evidence_record_id": "evidence-active",
+        "document_id": "doc-expression",
+        "chunk_ids": ["chunk-1", "chunk-2"],
+        "source_span_ids": [
+            "chunk-1:s0000:c0000-c0021:aaaabbbb",
+            "chunk-2:s0001:c0100-c0122:ccccdddd",
+        ],
+        "source_fragments": [
+            {
+                "span_id": "chunk-1:s0000:c0000-c0021:aaaabbbb",
+                "chunk_id": "chunk-1",
+                "document_id": "doc-expression",
+                "text": "First exact sentence.",
+                "char_start": 0,
+                "char_end": 21,
+                "text_hash": "aaaabbbb",
+                "page": 9,
+                "section": "Results",
+            },
+            {
+                "span_id": "chunk-2:s0001:c0100-c0122:ccccdddd",
+                "chunk_id": "chunk-2",
+                "document_id": "doc-expression",
+                "text": "Second exact sentence.",
+                "char_start": 100,
+                "char_end": 122,
+                "text_hash": "ccccdddd",
+                "page": 9,
+                "section": "Results",
+            },
+        ],
+    }
+    discarded_record = {
+        **_record(entity="discarded finding"),
+        "evidence_record_id": "evidence-discarded",
+        "source_span_ids": ["chunk-3:s0000:c0000-c0021:eeeeffff"],
+    }
+    payload = {
+        "curatable_objects": [
+            {
+                "object_type": "gene_expression",
+                "pending_ref_id": "expression-pat-3",
+                "payload": {"gene": {"symbol": "pat-3"}},
+                "evidence_record_ids": ["evidence-active"],
+            }
+        ],
+        "metadata": {"evidence_records": [active_record, discarded_record]},
+        "run_summary": {"kept_count": 1},
+    }
+
+    canonical = canonicalize_structured_result_payload(payload)
+
+    assert canonical["curatable_objects"][0]["evidence_record_ids"] == ["evidence-active"]
+    assert canonical["metadata"]["evidence_records"] == [active_record]
+    assert canonical["metadata"]["evidence_records"][0]["source_span_ids"] == active_record["source_span_ids"]
+    assert len(canonical["metadata"]["evidence_records"][0]["source_fragments"]) == 2
 
 
 def test_extract_evidence_records_from_domain_envelope_extraction_metadata():
