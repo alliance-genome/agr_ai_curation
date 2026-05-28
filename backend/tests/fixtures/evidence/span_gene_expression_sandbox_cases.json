@@ -1,0 +1,33 @@
+{
+  "fixture_id": "span_gene_expression_sandbox_cases",
+  "document_id": "sandbox-gene-expression-evidence",
+  "chunks": [
+    {
+      "case_id": "pat_unc_tln_expression",
+      "chunk_id": "sandbox-pat-unc-tln-expression",
+      "chunk_index": 12,
+      "page_number": 8,
+      "section_title": "Results",
+      "subsection": "Expression and localization",
+      "text": "Reporter controls marked the mechanosensory neuron processes. PAT-3, UNC-112, and TLN-1 reporters were detected in the PLM mechanosensory neurons and their ventral branches. These observations identify integrin adhesion components expressed in the touch receptor neurons."
+    },
+    {
+      "case_id": "tln_rpm_colocalization",
+      "chunk_id": "sandbox-tln-rpm-colocalization",
+      "chunk_index": 18,
+      "page_number": 10,
+      "section_title": "Figure 6. TLN-1 and RPM-1 colocalize in mechanosensory neurons",
+      "subsection": "Results summary",
+      "text": "Figure 6. TLN-1 and RPM-1 colocalize in mechanosensory neurons. TLN-1::GFP overlapped with RPM-1 puncta at presynaptic regions in the PLM mechanosensory neurons."
+    },
+    {
+      "case_id": "weak_marker_context",
+      "chunk_id": "sandbox-weak-marker-context",
+      "chunk_index": 19,
+      "page_number": 10,
+      "section_title": "Methods",
+      "subsection": "Reporter strains",
+      "text": "The animals carried integrated fluorescent reporters to mark mechanosensory neuron morphology. This methods-only marker context does not establish a new gene expression annotation."
+    }
+  ]
+}
