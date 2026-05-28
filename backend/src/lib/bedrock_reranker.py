@@ -9,13 +9,30 @@ import time
 from typing import Any, Dict, List, Sequence
 from urllib import error, request
 
-import boto3
-from botocore.exceptions import (
-    BotoCoreError,
-    NoCredentialsError,
-    PartialCredentialsError,
-    ProfileNotFound,
-)
+try:  # pragma: no cover - exercised when package-runner env omits AWS deps
+    import boto3
+except ImportError:  # pragma: no cover
+    boto3 = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - exercised when package-runner env omits AWS deps
+    from botocore.exceptions import (
+        BotoCoreError,
+        NoCredentialsError,
+        PartialCredentialsError,
+        ProfileNotFound,
+    )
+except ImportError:  # pragma: no cover
+    class BotoCoreError(Exception):
+        pass
+
+    class NoCredentialsError(Exception):
+        pass
+
+    class PartialCredentialsError(Exception):
+        pass
+
+    class ProfileNotFound(Exception):
+        pass
 
 from src.lib.aws_env import without_blank_aws_profile_env_vars
 
@@ -81,6 +98,13 @@ def get_bedrock_reranker_status(*, check_credentials: bool = True) -> Dict[str, 
         status["reason"] = "BEDROCK_RERANK_MODEL_ARN is required for bedrock_cohere"
         return status
 
+    if boto3 is None:
+        status["is_healthy"] = False
+        status["reason"] = (
+            "boto3/botocore are required for Bedrock reranking but are not installed"
+        )
+        return status
+
     try:
         with without_blank_aws_profile_env_vars():
             session = _bedrock_session(region)
@@ -143,6 +167,11 @@ def _get_bedrock_rerank_model_arn() -> str:
 
 
 def _bedrock_session(region: str):
+    if boto3 is None:
+        raise RuntimeError(
+            "boto3/botocore are required for Bedrock reranking but are not installed"
+        )
+
     aws_profile = os.getenv("AWS_PROFILE", "").strip()
     if aws_profile:
         return boto3.Session(profile_name=aws_profile, region_name=region)

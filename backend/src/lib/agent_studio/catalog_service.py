@@ -84,6 +84,7 @@ _INLINE_PACKAGE_TOOL_IDS = frozenset({
     "list_recorded_evidence",
     "get_agent_contract",
     "record_evidence",
+    "read_chunk",
     "search_document",
     "read_section",
     "read_subsection",

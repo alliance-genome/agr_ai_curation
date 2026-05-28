@@ -125,6 +125,16 @@ def test_bedrock_status_ignores_blank_aws_profile_env(monkeypatch):
     assert os.environ["AWS_DEFAULT_PROFILE"] == " "
 
 
+def test_bedrock_status_reports_missing_boto3_dependency(monkeypatch):
+    monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
+    monkeypatch.setattr(bedrock_reranker, "boto3", None)
+
+    status = bedrock_reranker.get_bedrock_reranker_status(check_credentials=False)
+
+    assert status["is_healthy"] is False
+    assert "boto3/botocore are required" in status["reason"]
+
+
 def test_bedrock_status_reports_missing_profile(monkeypatch):
     class _Session:
         def __init__(self, profile_name=None, region_name=None):

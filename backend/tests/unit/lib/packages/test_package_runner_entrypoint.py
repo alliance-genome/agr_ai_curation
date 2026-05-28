@@ -76,3 +76,15 @@ def test_apply_backend_request_context_ignores_blank_values(monkeypatch):
     )
 
     assert calls == [("clear_context", None)]
+
+
+def test_build_tool_context_includes_sdk_error_handler_fields():
+    context = package_runner_entrypoint._build_tool_context(
+        "read_chunk",
+        {"chunk_id": "chunk-1"},
+    )
+
+    assert context.tool_name == "read_chunk"
+    assert context.tool_call_id == "package-runner-read_chunk"
+    assert context.tool_arguments == '{"chunk_id": "chunk-1"}'
+    assert context.run_config is None

@@ -182,7 +182,7 @@ def _execute_tool_target(target: Any, request) -> Any:
             payload = {}
 
         result = target.on_invoke_tool(
-            SimpleNamespace(tool_name=request.tool_id),
+            _build_tool_context(request.tool_id, payload),
             json.dumps(payload),
         )
     else:
@@ -193,6 +193,29 @@ def _execute_tool_target(target: Any, request) -> Any:
     if inspect.isawaitable(result):
         return asyncio.run(result)
     return result
+
+
+def _build_tool_context(tool_id: str, payload: Any) -> Any:
+    """Build the minimum OpenAI Agents SDK tool context for subprocess calls."""
+
+    tool_arguments = json.dumps(payload)
+    try:
+        tool_context_module = importlib.import_module("agents.tool_context")
+        tool_context_cls = getattr(tool_context_module, "ToolContext")
+        return tool_context_cls(
+            context=None,
+            tool_name=tool_id,
+            tool_call_id=f"package-runner-{tool_id}",
+            tool_arguments=tool_arguments,
+            run_config=None,
+        )
+    except Exception:
+        return SimpleNamespace(
+            tool_name=tool_id,
+            tool_call_id=f"package-runner-{tool_id}",
+            tool_arguments=tool_arguments,
+            run_config=None,
+        )
 
 
 def _normalize_result(value: Any) -> Any:

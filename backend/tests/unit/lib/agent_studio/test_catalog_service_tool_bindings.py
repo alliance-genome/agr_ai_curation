@@ -707,7 +707,20 @@ async def test_resolve_package_tool_falls_back_when_thread_creation_is_unavailab
 
 
 @pytest.mark.asyncio
-async def test_resolve_package_tool_executes_document_tools_inline(monkeypatch):
+@pytest.mark.parametrize(
+    "tool_id,input_payload",
+    [
+        ("search_document", '{"query":"genes"}'),
+        ("read_chunk", '{"chunk_id":"chunk-1"}'),
+        ("read_section", '{"section_title":"Results"}'),
+        ("read_subsection", '{"section_title":"Results","subsection":"Expression"}'),
+    ],
+)
+async def test_resolve_package_tool_executes_document_tools_inline(
+    monkeypatch,
+    tool_id,
+    input_payload,
+):
     calls = []
 
     class _Tracker:
@@ -721,12 +734,9 @@ async def test_resolve_package_tool_executes_document_tools_inline(monkeypatch):
             "input": input_str,
         }
 
-    fake_tool = _FakeFunctionTool(
-        name="search_document",
-        on_invoke_tool=_inline_on_invoke,
-    )
+    fake_tool = _FakeFunctionTool(name=tool_id, on_invoke_tool=_inline_on_invoke)
     binding = SimpleNamespace(
-        tool_id="search_document",
+        tool_id=tool_id,
         required_context=("document_id", "user_id"),
     )
 
@@ -748,7 +758,7 @@ async def test_resolve_package_tool_executes_document_tools_inline(monkeypatch):
     monkeypatch.setattr(asyncio, "to_thread", _explode_to_thread)
 
     resolved = catalog_service._resolve_package_tool(
-        "search_document",
+        tool_id,
         catalog_service.ToolExecutionContext(
             document_id="doc-1",
             user_id="user-1",
@@ -756,13 +766,13 @@ async def test_resolve_package_tool_executes_document_tools_inline(monkeypatch):
         ),
     )
 
-    result = await resolved.on_invoke_tool(None, '{"query":"genes"}')
+    result = await resolved.on_invoke_tool(None, input_payload)
 
     assert result == {
         "summary": "Found 1 chunks",
-        "input": '{"query":"genes"}',
+        "input": input_payload,
     }
     assert calls == [
-        ("track", "search_document"),
-        ("invoke", '{"query":"genes"}'),
+        ("track", tool_id),
+        ("invoke", input_payload),
     ]
