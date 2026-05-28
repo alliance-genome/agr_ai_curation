@@ -120,11 +120,11 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
         ],
     },
     "pdf_extraction": {
-        "summary": "Extracts text, tables, and structured data from scientific papers using hybrid search.",
+        "summary": "Extracts text, tables, and structured data from scientific papers using hybrid and lexical document search modes.",
         "capabilities": [
             {
                 "name": "Full-text search",
-                "description": "Find specific content within the PDF using semantic and keyword search",
+                "description": "Find specific content within the PDF using semantic, keyword, or exact-token lexical search",
                 "example_query": "Find all mentions of insulin signaling pathway",
                 "example_result": "Returns relevant passages with page numbers",
             },
@@ -486,7 +486,7 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
         "data_sources": [
             {
                 "name": "PDF Document Search (Weaviate)",
-                "description": "Hybrid semantic and keyword search over uploaded PDF documents. Supports searching by query terms, filtering by section, and reading full sections or subsections.",
+                "description": "Hybrid semantic/keyword plus lexical-heavy search modes over uploaded PDF documents. Supports searching by query terms, filtering by section, and reading full sections or subsections.",
                 "species_supported": None,  # Document-based, not species-specific
                 "data_types": ["PDF text chunks", "Section content", "Subsection content"],
             },
@@ -536,7 +536,7 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
         "data_sources": [
             {
                 "name": "PDF Document Search (Weaviate)",
-                "description": "Hybrid semantic and keyword search over uploaded PDF documents",
+                "description": "Hybrid semantic/keyword plus lexical-heavy search modes over uploaded PDF documents",
                 "species_supported": None,
                 "data_types": ["PDF text chunks", "Section content", "Subsection content"],
             },
@@ -585,7 +585,7 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
         "data_sources": [
             {
                 "name": "PDF Document Search (Weaviate)",
-                "description": "Hybrid semantic and keyword search over uploaded PDF documents",
+                "description": "Hybrid semantic/keyword plus lexical-heavy search modes over uploaded PDF documents",
                 "species_supported": None,
                 "data_types": ["PDF text chunks", "Section content", "Subsection content"],
             },
@@ -634,7 +634,7 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
         "data_sources": [
             {
                 "name": "PDF Document Search (Weaviate)",
-                "description": "Hybrid semantic and keyword search over uploaded PDF documents",
+                "description": "Hybrid semantic/keyword plus lexical-heavy search modes over uploaded PDF documents",
                 "species_supported": None,
                 "data_types": ["PDF text chunks", "Section content", "Subsection content"],
             },
@@ -683,7 +683,7 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
         "data_sources": [
             {
                 "name": "PDF Document Search (Weaviate)",
-                "description": "Hybrid semantic and keyword search over uploaded PDF documents",
+                "description": "Hybrid semantic/keyword plus lexical-heavy search modes over uploaded PDF documents",
                 "species_supported": None,
                 "data_types": ["PDF text chunks", "Section content", "Subsection content"],
             },
@@ -733,7 +733,7 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
         "data_sources": [
             {
                 "name": "PDF Document Search (Weaviate)",
-                "description": "Hybrid semantic and keyword search over uploaded PDF documents",
+                "description": "Hybrid semantic/keyword plus lexical-heavy search modes over uploaded PDF documents",
                 "species_supported": None,
                 "data_types": ["PDF text chunks", "Section content", "Subsection content", "Figure legends"],
             },

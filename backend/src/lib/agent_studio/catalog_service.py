@@ -226,11 +226,11 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     # PDF Document Search Tools
     "search_document": {
         "name": "Search Document",
-        "description": "Discovery search over uploaded PDF chunks using hybrid semantic and keyword search.",
+        "description": "Discovery search over uploaded PDF chunks using hybrid, lexical, or hybrid-lexical-first retrieval.",
         "category": "PDF Extraction",
         "source_file": "backend/src/lib/openai_agents/tools/weaviate_search.py",
         "documentation": {
-            "summary": "Finds relevant chunks in the uploaded PDF. Use returned chunk_id values with read_chunk for final evidence span selection.",
+            "summary": "Finds relevant chunks in the uploaded PDF. Use returned chunk_id values with read_chunk for final evidence span selection. Use lexical-heavy modes for exact-match terms and controlled identifiers; keep auto/hybrid for broad conceptual searches.",
             "parameters": [
                 {
                     "name": "query",
@@ -249,6 +249,13 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                     "type": "array",
                     "required": False,
                     "description": "Filter to specific sections (e.g., ['Methods', 'Results']).",
+                },
+                {
+                    "name": "search_mode",
+                    "type": "enum",
+                    "required": False,
+                    "description": "Retrieval mode: auto (default, maps to hybrid), hybrid, lexical, or hybrid_lexical_first. Use lexical for exact symbols/IDs and hybrid_lexical_first when normal hybrid search should retry with lexical-heavy matching if needed.",
+                    "enum": ["auto", "hybrid", "lexical", "hybrid_lexical_first"],
                 },
             ],
         },

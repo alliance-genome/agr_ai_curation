@@ -77,10 +77,13 @@ content: |
     so section and subsection boundaries are semantic, not positional.
 
   Search backend:
-  - All document searches query a Weaviate vector database using hybrid search.
-  - `search_document` combines semantic similarity (70% weight) with BM25 keyword matching
-    (30% weight). This means natural-language queries find conceptually related passages,
-    while exact terms also get keyword matches.
+  - `search_document` queries a Weaviate vector database. The default
+    `search_mode="auto"` preserves hybrid search, combining semantic similarity with
+    BM25 keyword matching so natural-language queries find conceptually related passages.
+  - Pass `search_mode="lexical"` for exact symbols, IDs, strains, alleles, probes,
+    reagents, genotype handles, PMIDs/DOIs, and other controlled tokens. Pass
+    `search_mode="hybrid_lexical_first"` when normal hybrid search should retry with
+    lexical-heavy matching if needed.
   - Results are reranked by a cross-encoder and then diversified via MMR (Maximal Marginal
     Relevance), so the top hits balance relevance with breadth of coverage.
   - For short queries (<=3 tokens), the system automatically boosts lexical/keyword matching
@@ -106,9 +109,10 @@ content: |
 
   Search strategy implications:
   - Use natural-language queries for broad or conceptual searches to leverage semantic
-    similarity across paraphrases and synonyms.
-  - Use short, exact terms when looking for specific entities; the system automatically
-    boosts keyword matching for these.
+    similarity across paraphrases and synonyms; keep the default/auto mode for these.
+  - Use `search_mode="lexical"` for exact biomedical tokens and identifiers, and
+    `search_mode="hybrid_lexical_first"` when a broad query should retry with
+    lexical-heavy matching if needed.
   - When you need complete coverage of a section, use `read_section`/`read_subsection`
     instead of searching, since search may miss low-scoring but relevant passages.
   - Use `section_keywords` when you want to focus on a particular section without reading
@@ -117,7 +121,7 @@ content: |
 
   <tools>
   Use these tools:
-  - search_document: hybrid search across the paper for terms, entities, and concepts
+  - search_document: document search across the paper; use default/auto for concepts and lexical-heavy modes for exact controlled tokens
   - read_section: read a full top-level section such as Methods or Results
   - read_subsection: read a targeted subsection when you know where the answer should be
   - read_chunk: inspect precise source text and choose `evidence_spans[].span_id` values for final evidence selection

@@ -610,6 +610,26 @@ def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(
     )
     assert "evidence_spans" not in search_result.result["hits"][0]
 
+    lexical_result = runner.execute_tool(
+        "search_document",
+        kwargs={"query": "strategy-check", "search_mode": "lexical"},
+        context={"document_id": "doc-42", "user_id": "user-9"},
+    )
+
+    assert lexical_result.ok is True
+    assert lexical_result.result["hits"][0]["section_title"] == "lexical"
+    assert lexical_result.result["hits"][0]["content"] == "strategy=lexical"
+
+    auto_result = runner.execute_tool(
+        "search_document",
+        kwargs={"query": "strategy-check", "search_mode": "auto"},
+        context={"document_id": "doc-42", "user_id": "user-9"},
+    )
+
+    assert auto_result.ok is True
+    assert auto_result.result["hits"][0]["section_title"] == "hybrid"
+    assert auto_result.result["hits"][0]["content"] == "strategy=hybrid"
+
     section_result = runner.execute_tool(
         "read_section",
         kwargs={"section_name": "Methods"},
@@ -1145,14 +1165,16 @@ def _write_fake_weaviate_backend(tmp_path: Path) -> Path:
 
     (package_root / "chunks.py").write_text(
         """async def hybrid_search_chunks(*, document_id, query, user_id, limit=10, section_keywords=None, apply_mmr=True, strategy=\"hybrid\", **_kwargs):
+    section_title = strategy if query == \"strategy-check\" else \"Results\"
+    text = f\"strategy={strategy}\" if query == \"strategy-check\" else \"Wingless expression expanded in the mutant tissue.\"
     return [
         {
             \"id\": \"chunk-search-1\",
             \"score\": 0.91,
-            \"text\": \"Wingless expression expanded in the mutant tissue.\",
+            \"text\": text,
             \"metadata\": {
                 \"chunk_id\": \"stale-metadata-search-id\",
-                \"section_title\": \"Results\",
+                \"section_title\": section_title,
                 \"page_number\": 7,
                 \"doc_items\": [{\"id\": \"bbox-search\"}],
                 \"document_id\": document_id,

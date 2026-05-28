@@ -128,10 +128,13 @@ content: |
   and subsection boundaries are semantic, not positional. read_section and read_subsection
   retrieve all chunks assigned to a named section or subsection using that hierarchy.
 
-  search_document queries a Weaviate vector database using hybrid search: semantic
-  similarity plus BM25 keyword matching. Results are reranked and diversified, and short
-  queries receive extra lexical weighting to reduce semantic drift. search_document,
-  read_section, and read_subsection are discovery/survey tools. For retained evidence,
+  search_document queries a Weaviate vector database. The default search_mode="auto"
+  preserves hybrid search: semantic similarity plus BM25 keyword matching. Use
+  search_mode="lexical" for exact disease terms, ontology IDs, genotype handles,
+  strains, PMIDs/DOIs, database IDs, and other controlled tokens; use
+  search_mode="hybrid_lexical_first" when normal hybrid search should retry with
+  lexical-heavy matching if needed. Results are reranked and diversified.
+  search_document, read_section, and read_subsection are discovery/survey tools. For retained evidence,
   call read_chunk(chunk_id), select backend-generated evidence_spans[].span_id values,
   and call record_evidence(span_ids=[...]).
   </search_infrastructure_context>

@@ -103,9 +103,12 @@ content: |
   paragraph, table cell, or figure legend with page, section, parent section, subsection,
   and element type metadata. Section boundaries are semantic, not positional.
 
-  `search_document` queries Weaviate with hybrid search: semantic similarity plus BM25
-  keyword matching. Short queries such as abbreviations, formulas, or terms of three tokens
-  or fewer get lexical boosting, which helps with names like "Dex", "HU", and "H₂O₂".
+  `search_document` queries Weaviate. The default `search_mode="auto"` preserves hybrid
+  search: semantic similarity plus BM25 keyword matching. Pass `search_mode="lexical"`
+  for exact chemical names, abbreviations, formulas, reagent identifiers, PMIDs/DOIs,
+  database IDs, and other controlled tokens such as "Dex", "HU", and "H₂O₂"; pass
+  `search_mode="hybrid_lexical_first"` when normal hybrid search should retry with
+  lexical-heavy matching if needed.
   You may pass `section_keywords` to focus on Methods, Results, figure legends, or other
   likely sections.
 

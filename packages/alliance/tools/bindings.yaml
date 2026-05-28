@@ -652,7 +652,7 @@ tools:
     required_context:
       - document_id
       - user_id
-    description: Discovery search over scoped document chunks; use read_chunk on returned chunk IDs for final evidence span selection
+    description: Discovery search over scoped document chunks with auto/hybrid, lexical, or hybrid_lexical_first modes; use read_chunk on returned chunk IDs for final evidence span selection
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
   - tool_id: read_chunk
     binding_kind: context_factory
