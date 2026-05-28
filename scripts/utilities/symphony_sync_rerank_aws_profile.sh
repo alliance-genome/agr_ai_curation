@@ -72,12 +72,12 @@ fi
 echo "Syncing Bedrock rerank AWS profile files into ${vm_name}:${dest_dir}"
 
 incus --project "${project}" exec "${vm_name}" -- sudo --login --user ctabone bash -lc \
-  "mkdir -p '${dest_dir}' && chmod 700 '${dest_dir}'"
+  "mkdir -p '${dest_dir}' && chmod 711 '${dest_dir}'"
 
 incus --project "${project}" file push "${credentials_file}" "${vm_name}${dest_dir}/credentials"
 incus --project "${project}" file push "${config_file}" "${vm_name}${dest_dir}/config"
 
 incus --project "${project}" exec "${vm_name}" -- sudo --login --user ctabone bash -lc \
-  "chmod 700 '${dest_dir}' && chmod 600 '${dest_dir}/credentials' '${dest_dir}/config'"
+  "chmod 711 '${dest_dir}' && chmod 644 '${dest_dir}/credentials' '${dest_dir}/config'"
 
-echo "Synced credentials and config with restricted permissions."
+echo "Synced credentials and config with Docker-readable VM permissions."
