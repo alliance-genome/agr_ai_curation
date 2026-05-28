@@ -51,11 +51,16 @@ def build_verified_evidence_record(tool_case: dict[str, Any]) -> dict[str, Any]:
     record = {
         "evidence_record_id": tool_result.get("evidence_record_id") or tool_case["case_id"],
         "entity": tool_input["entity"],
-        "chunk_id": tool_input["chunk_id"],
+        "chunk_id": tool_result["chunk_id"],
         "verified_quote": tool_result["verified_quote"],
         "page": tool_result["page"],
         "section": tool_result["section"],
     }
+
+    source_span_ids = tool_result.get("source_span_ids")
+    if not isinstance(source_span_ids, list):
+        raise ValueError("Verified tool cases must include result source_span_ids.")
+    record["source_span_ids"] = list(source_span_ids)
 
     subsection = tool_result.get("subsection")
     if subsection:

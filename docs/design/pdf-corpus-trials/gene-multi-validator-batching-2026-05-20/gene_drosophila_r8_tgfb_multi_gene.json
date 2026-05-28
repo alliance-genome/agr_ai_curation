@@ -90,7 +90,7 @@
                 "output_key": "trial_instructions",
                 "prompt_version": null,
                 "step_goal": null,
-                "task_instructions": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one exact supporting quote per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
+                "task_instructions": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one span-backed evidence unit per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
                 "validation_attachments": [],
                 "validation_groups": []
               },
@@ -106,14 +106,14 @@
                 "agent_description": null,
                 "agent_display_name": "Gene Extractor",
                 "agent_id": "gene_extractor",
-                "custom_input": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one exact supporting quote per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
+                "custom_input": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one span-backed evidence unit per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
                 "custom_instructions": null,
                 "include_evidence": null,
                 "input_source": "custom",
                 "output_filename_template": null,
                 "output_key": "gene_extractor_output",
                 "prompt_version": null,
-                "step_goal": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one exact supporting quote per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
+                "step_goal": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one span-backed evidence unit per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
                 "task_instructions": null,
                 "validation_attachments": [
                   {
@@ -777,7 +777,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "a75b5acb-fed6-f3ff-1020-6312eb63c76f",
-            "claimed_quote": "removing or overexpressing Babo-b significantly reduced (16%) and increased (65%) pale fate, respectively.",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "Baboon",
             "field_path": null,
             "object_id": null,
@@ -799,7 +799,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-            "claimed_quote": "removing dSmad2 resulted in a sharp decrease in pale R8 subtypes (15%).",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "dSmad2",
             "field_path": null,
             "object_id": null,
@@ -821,7 +821,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-            "claimed_quote": "removing mad with RNAi also resulted in a decrease of pale R8 subtypes (4%).",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "Mad",
             "field_path": null,
             "object_id": null,
@@ -843,7 +843,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-            "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100%.",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "Warts",
             "field_path": null,
             "object_id": null,
@@ -917,7 +917,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-            "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when removing either dSmad2 (WtsRNAi + dSmad2 RNAi) or mad* (WtsRNAi + MadRNAi).",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "Warts",
             "field_path": null,
             "object_id": null,
@@ -952,7 +952,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "6c1d6b4a-076c-0264-f27a-9d0c64195a8d",
-            "claimed_quote": "Removing wts (lGMR-Gal4 > UAS-Dcr2; UAS-WtsRNAi) led to total loss of yellow subtype.",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "Warts",
             "field_path": null,
             "object_id": null,
@@ -987,7 +987,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "6c1d6b4a-076c-0264-f27a-9d0c64195a8d",
-            "claimed_quote": "Removing wts (lGMR-Gal4 > UAS-Dcr2; UAS-WtsRNAi) (100/0/0) (n = 8) led to total loss of yellow subtype.",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "Warts",
             "field_path": null,
             "object_id": null,
@@ -1022,7 +1022,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-            "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when removing either dSmad2 (WtsRNAi + dSmad2 RNAi) or mad* (WtsRNAi + MadRNAi) (Figure 4M\u2013N,T).",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "Warts",
             "field_path": null,
             "object_id": null,
@@ -1359,7 +1359,7 @@
             {
               "args": {
                 "chunk_id": "a75b5acb-fed6-f3ff-1020-6312eb63c76f",
-                "claimed_quote": "removing or overexpressing Babo-b significantly reduced (16%) and increased (65%) pale fate, respectively.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Baboon",
                 "field_path": null,
                 "object_id": null,
@@ -1373,7 +1373,7 @@
             {
               "args": {
                 "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-                "claimed_quote": "removing dSmad2 resulted in a sharp decrease in pale R8 subtypes (15%).",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "dSmad2",
                 "field_path": null,
                 "object_id": null,
@@ -1387,7 +1387,7 @@
             {
               "args": {
                 "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-                "claimed_quote": "removing mad with RNAi also resulted in a decrease of pale R8 subtypes (4%).",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Mad",
                 "field_path": null,
                 "object_id": null,
@@ -1401,7 +1401,7 @@
             {
               "args": {
                 "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-                "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100%.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Warts",
                 "field_path": null,
                 "object_id": null,
@@ -1415,7 +1415,7 @@
             {
               "args": {
                 "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-                "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when removing either dSmad2 (WtsRNAi + dSmad2 RNAi) or mad* (WtsRNAi + MadRNAi).",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Warts",
                 "field_path": null,
                 "object_id": null,
@@ -1429,7 +1429,7 @@
             {
               "args": {
                 "chunk_id": "6c1d6b4a-076c-0264-f27a-9d0c64195a8d",
-                "claimed_quote": "Removing wts (lGMR-Gal4 > UAS-Dcr2; UAS-WtsRNAi) led to total loss of yellow subtype.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Warts",
                 "field_path": null,
                 "object_id": null,
@@ -1443,7 +1443,7 @@
             {
               "args": {
                 "chunk_id": "6c1d6b4a-076c-0264-f27a-9d0c64195a8d",
-                "claimed_quote": "Removing wts (lGMR-Gal4 > UAS-Dcr2; UAS-WtsRNAi) (100/0/0) (n = 8) led to total loss of yellow subtype.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Warts",
                 "field_path": null,
                 "object_id": null,
@@ -1457,7 +1457,7 @@
             {
               "args": {
                 "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-                "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when removing either dSmad2 (WtsRNAi + dSmad2 RNAi) or mad* (WtsRNAi + MadRNAi) (Figure 4M\u2013N,T).",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Warts",
                 "field_path": null,
                 "object_id": null,
@@ -1483,7 +1483,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "9d2e58b8-2b79-bf99-b6ef-d74c03cf0cf3",
-            "claimed_quote": "Babo is the sole Type I receptor for the Activin family of ligands: dActb, Daw, and Myo.",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "babo",
             "field_path": null,
             "object_id": null,
@@ -1505,7 +1505,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-            "claimed_quote": "dSmad2 is required downstream of Babo signaling for specification of the pale R8 subtype.",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "dSmad2",
             "field_path": null,
             "object_id": null,
@@ -1527,7 +1527,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-            "claimed_quote": "Mad represents the R-SMAD downstream of Tkv activity while dSmad2 acts downstream of Babo.",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "Mad",
             "field_path": null,
             "object_id": null,
@@ -1549,7 +1549,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-            "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when removing either dSmad2 or mad.",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "wts",
             "field_path": null,
             "object_id": null,
@@ -1623,7 +1623,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-            "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when removing either dSmad2 (WtsRNAi + dSmad2 RNAi) or mad* (WtsRNAi + MadRNAi).",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "wts",
             "field_path": null,
             "object_id": null,
@@ -1993,7 +1993,7 @@
             {
               "args": {
                 "chunk_id": "9d2e58b8-2b79-bf99-b6ef-d74c03cf0cf3",
-                "claimed_quote": "Babo is the sole Type I receptor for the Activin family of ligands: dActb, Daw, and Myo.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "babo",
                 "field_path": null,
                 "object_id": null,
@@ -2007,7 +2007,7 @@
             {
               "args": {
                 "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-                "claimed_quote": "dSmad2 is required downstream of Babo signaling for specification of the pale R8 subtype.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "dSmad2",
                 "field_path": null,
                 "object_id": null,
@@ -2021,7 +2021,7 @@
             {
               "args": {
                 "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-                "claimed_quote": "Mad represents the R-SMAD downstream of Tkv activity while dSmad2 acts downstream of Babo.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Mad",
                 "field_path": null,
                 "object_id": null,
@@ -2035,7 +2035,7 @@
             {
               "args": {
                 "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-                "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when removing either dSmad2 or mad.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "wts",
                 "field_path": null,
                 "object_id": null,
@@ -2049,7 +2049,7 @@
             {
               "args": {
                 "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-                "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when removing either dSmad2 (WtsRNAi + dSmad2 RNAi) or mad* (WtsRNAi + MadRNAi).",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "wts",
                 "field_path": null,
                 "object_id": null,
@@ -2529,7 +2529,7 @@
     "pdf_url": "https://cdn.elifesciences.org/articles/25301/elife-25301-v2.pdf",
     "pmcid": "PMC5599232",
     "pmid": "28853393",
-    "prompt": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one exact supporting quote per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
+    "prompt": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one span-backed evidence unit per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
     "title": "Parallel Activin and BMP signaling coordinates R7/R8 photoreceptor subtype pairing in the stochastic Drosophila retina",
     "trial_id": "gene_drosophila_r8_tgfb_multi_gene"
   },

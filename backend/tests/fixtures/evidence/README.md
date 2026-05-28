@@ -6,7 +6,7 @@ Each fixture file is a reusable paper-level test case for the tool-based evidenc
 
 - `fixture_id`: Stable fixture identifier.
 - `paper`: Human-readable metadata used when seeding integration tests.
-- `chunks`: Known Weaviate chunk payloads keyed by `id` and shaped like the `record_evidence` tool input source.
+- `chunks`: Known Weaviate chunk payloads keyed by `id` and shaped like the `read_chunk` source.
 - `tool_cases`: Individual `record_evidence` calls with `tool_input` and `expected_tool_result`.
 - `extraction`: Structured extraction fixture data that references tool cases by `evidence_case_ids`.
 - `expected_candidates`: Downstream prep/workspace expectations after evidence gating.
@@ -21,19 +21,19 @@ Each tool case defines one `record_evidence` invocation:
   "case_id": "verified_exact",
   "tool_input": {
     "entity": "crumb",
-    "chunk_id": "chunk-1",
-    "claimed_quote": "Quoted paper text."
+    "span_ids": ["chunk-1:s0001:c0000-c0018:abcd1234"]
   },
   "expected_tool_result": {
     "status": "verified",
     "verified_quote": "Quoted paper text.",
+    "chunk_id": "chunk-1",
     "page": 4,
     "section": "Results"
   }
 }
 ```
 
-Use `status: "verified"` only when `claimed_quote.strip()` is an exact substring of the chunk text. Use `status: "not_found"` for changed, omitted, inserted, paraphrased, or bad-chunk evidence.
+Use `status: "verified"` only when every selected span resolves against the current chunk text. Use `status: "not_found"` for stale span IDs, missing chunks, or otherwise unresolved span-backed evidence.
 
 ## `extraction`
 

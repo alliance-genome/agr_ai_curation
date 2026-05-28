@@ -36,8 +36,9 @@
       "case_id": "verified_exact",
       "tool_input": {
         "entity": "Andersen-Tawil syndrome",
-        "chunk_id": "chunk-disease-model",
-        "claimed_quote": "loss of kcnj2 produced a ventricular arrhythmia phenotype, establishing this zebrafish line as a model of Andersen-Tawil syndrome."
+        "span_ids": [
+          "chunk-disease-model:s0001:c0011-c0141:1584003d"
+        ]
       },
       "expected_tool_result": {
         "status": "verified",
@@ -45,57 +46,68 @@
         "page": 4,
         "section": "Results",
         "subsection": "Disease model",
-        "figure_reference": "Figure 4A"
+        "figure_reference": "Figure 4A",
+        "chunk_id": "chunk-disease-model",
+        "evidence_record_id": "verified_exact",
+        "source_span_ids": [
+          "chunk-disease-model:s0001:c0011-c0141:1584003d"
+        ]
       }
     },
     {
       "case_id": "verified_supporting",
       "tool_input": {
         "entity": "Andersen-Tawil syndrome",
-        "chunk_id": "chunk-disease-cohort",
-        "claimed_quote": "Patients with KCNJ2 variants in our cohort showed features consistent with Andersen-Tawil syndrome."
+        "span_ids": [
+          "chunk-disease-cohort:s0001:c0000-c0099:998a994e"
+        ]
       },
       "expected_tool_result": {
         "status": "verified",
         "verified_quote": "Patients with KCNJ2 variants in our cohort showed features consistent with Andersen-Tawil syndrome.",
         "page": 5,
         "section": "Results",
-        "subsection": "Clinical correlation"
+        "subsection": "Clinical correlation",
+        "chunk_id": "chunk-disease-cohort",
+        "evidence_record_id": "verified_supporting",
+        "source_span_ids": [
+          "chunk-disease-cohort:s0001:c0000-c0099:998a994e"
+        ]
       }
     },
     {
-      "case_id": "not_found_absent_quote",
+      "case_id": "not_found_absent_span",
       "tool_input": {
         "entity": "Andersen-Tawil syndrome",
-        "chunk_id": "chunk-disease-background",
-        "claimed_quote": "Patients with KCNJ2 variants in our cohort showed features consistent with Andersen-Tawil syndrome."
+        "span_ids": [
+          "chunk-disease-background:s0001:c0000-c0064:c8983d8b"
+        ]
       },
       "expected_tool_result": {
         "status": "not_found",
         "page": 2,
         "section": "Introduction",
         "subsection": "Background",
-        "message": "Exact quote not found in this chunk. Retry with exact text copied from the chunk or drop this evidence.",
+        "message": "Selected span ID could not be resolved from the current chunk. Call read_chunk for current evidence_spans, choose valid span_ids, or drop this evidence.",
         "chunk_content_preview": "Andersen-Tawil syndrome has been linked to KCNJ2 in previous studies.",
-        "retry_instructions": "Retry with an exact contiguous substring copied from this chunk, or re-search/drop the evidence if the chunk does not contain the claim.",
-        "unverified_attempts": 1,
-        "max_unverified_attempts": 3,
-        "retry_exhausted": false,
-        "terminal": false
+        "retry_instructions": "Call read_chunk on the current supporting chunk and retry with current span_ids, or drop this evidence.",
+        "chunk_id": "chunk-disease-background"
       }
     },
     {
       "case_id": "not_found_wrong_chunk_id",
       "tool_input": {
         "entity": "Andersen-Tawil syndrome",
-        "chunk_id": "chunk-disease-missing",
-        "claimed_quote": "loss of kcnj2 produced a ventricular arrhythmia phenotype, establishing this zebrafish line as a model of Andersen-Tawil syndrome."
+        "span_ids": [
+          "chunk-disease-missing:s0001:c0000-c0064:0e7da3da"
+        ]
       },
       "expected_tool_result": {
         "status": "not_found",
         "chunk_content_preview": "",
-        "message": "Chunk not found in the active document. Retry with a chunk_id returned by search_document or read_section source_chunks, or drop this evidence.",
-        "retry_instructions": "Use an exact contiguous substring copied from this chunk, retry with another chunk_id returned by search_document/read_section, or drop this evidence."
+        "message": "Selected span ID references a chunk that is not available in the active document. Re-run discovery/read_chunk and choose current span_ids, or drop this evidence.",
+        "retry_instructions": "Use search_document or read_section to find the current chunk, call read_chunk, and retry with current span_ids, or drop this evidence.",
+        "chunk_id": "chunk-disease-missing"
       }
     }
   ],

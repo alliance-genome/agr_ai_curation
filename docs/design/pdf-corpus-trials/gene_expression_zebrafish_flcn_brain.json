@@ -83,7 +83,7 @@
                 "output_key": "trial_instructions",
                 "prompt_version": null,
                 "step_goal": null,
-                "task_instructions": "Read the loaded paper and extract exactly one gene-expression observation candidate: zebrafish flcn expression during embryonic development, preferably brain, retina, hatching gland, or fin-bud context if supported. Preserve anatomy/stage/taxon hints and one record_evidence verified quote. Use the explicit zebrafish organism context as the ZFIN data-provider selector, but do not resolve anatomy, stage, gene, or provider database IDs in the extractor.",
+                "task_instructions": "Read the loaded paper and extract exactly one gene-expression observation candidate: zebrafish flcn expression during embryonic development, preferably brain, retina, hatching gland, or fin-bud context if supported. Preserve anatomy/stage/taxon hints and one record_evidence span-backed evidence record. Use the explicit zebrafish organism context as the ZFIN data-provider selector, but do not resolve anatomy, stage, gene, or provider database IDs in the extractor.",
                 "validation_attachments": [],
                 "validation_groups": []
               },
@@ -99,14 +99,14 @@
                 "agent_description": null,
                 "agent_display_name": "Gene Expression",
                 "agent_id": "gene_expression",
-                "custom_input": "Read the loaded paper and extract exactly one gene-expression observation candidate: zebrafish flcn expression during embryonic development, preferably brain, retina, hatching gland, or fin-bud context if supported. Preserve anatomy/stage/taxon hints and one record_evidence verified quote. Use the explicit zebrafish organism context as the ZFIN data-provider selector, but do not resolve anatomy, stage, gene, or provider database IDs in the extractor.",
+                "custom_input": "Read the loaded paper and extract exactly one gene-expression observation candidate: zebrafish flcn expression during embryonic development, preferably brain, retina, hatching gland, or fin-bud context if supported. Preserve anatomy/stage/taxon hints and one record_evidence span-backed evidence record. Use the explicit zebrafish organism context as the ZFIN data-provider selector, but do not resolve anatomy, stage, gene, or provider database IDs in the extractor.",
                 "custom_instructions": null,
                 "include_evidence": null,
                 "input_source": "custom",
                 "output_filename_template": null,
                 "output_key": "gene_expression_output",
                 "prompt_version": null,
-                "step_goal": "Read the loaded paper and extract exactly one gene-expression observation candidate: zebrafish flcn expression during embryonic development, preferably brain, retina, hatching gland, or fin-bud context if supported. Preserve anatomy/stage/taxon hints and one record_evidence verified quote. Use the explicit zebrafish organism context as the ZFIN data-provider selector, but do not resolve anatomy, stage, gene, or provider database IDs in the extractor.",
+                "step_goal": "Read the loaded paper and extract exactly one gene-expression observation candidate: zebrafish flcn expression during embryonic development, preferably brain, retina, hatching gland, or fin-bud context if supported. Preserve anatomy/stage/taxon hints and one record_evidence span-backed evidence record. Use the explicit zebrafish organism context as the ZFIN data-provider selector, but do not resolve anatomy, stage, gene, or provider database IDs in the extractor.",
                 "task_instructions": null,
                 "validation_attachments": [
                   {
@@ -1719,7 +1719,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "4ff2f4fd-6d4c-8cde-5a39-68b2fca838d6",
-            "claimed_quote": "At Prim-5 stage there is increased expression in the myotome border/somatic furrow, eye, hatching gland (Fig. 1f arrow HG), fin bud (Fig. 1f arrow FB) tectum (Fig. 1g arrow T) and telencephalon (Fig.1g arrow TC). At long-pec stage pronounced expression is detected in a thin layer of cells in the posterior tectum (Fig. 1h arrow, i and j) and the fin (Fig. 1h).",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "zebrafish flcn expression",
             "field_path": null,
             "object_id": null,
@@ -1754,7 +1754,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "4ff2f4fd-6d4c-8cde-5a39-68b2fca838d6",
-            "claimed_quote": "At Prim-5 stage there is increased expression in the myotome border/somatic furrow, eye, hatching gland, fin bud, tectum and telencephalon. At long-pec stage pronounced expression is detected in a thin layer of cells in the posterior tectum and the fin.",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "zebrafish flcn expression",
             "field_path": null,
             "object_id": null,
@@ -1789,7 +1789,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "4ff2f4fd-6d4c-8cde-5a39-68b2fca838d6",
-            "claimed_quote": "At Prim-5 stage there is increased expression in the myotome border/somatic furrow, eye, hatching gland, fin bud, tectum and telencephalon.",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "zebrafish flcn expression",
             "field_path": null,
             "object_id": null,
@@ -1824,7 +1824,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "4ff2f4fd-6d4c-8cde-5a39-68b2fca838d6",
-            "claimed_quote": "At Prim-5 stage there is increased expression in the myotome border/somatic furrow, eye, hatching gland (Fig. 1f arrow HG), fin bud (Fig. 1f arrow FB) tectum (Fig. 1g arrow T) and telencephalon (Fig.1g arrow TC).",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "zebrafish flcn expression",
             "field_path": null,
             "object_id": null,
@@ -1859,7 +1859,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "3b503440-419b-56b6-441d-b9d324ca17d9",
-            "claimed_quote": "f Prim-10 stage embryo showing low level expression in the whole embryo with more pronounced expression in the forebrain and hindbrain areas, hatching gland (HG, arrow) and the fin bud (FB, arrow).",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "zebrafish flcn expression",
             "field_path": null,
             "object_id": null,
@@ -1987,7 +1987,7 @@
             {
               "args": {
                 "chunk_id": "4ff2f4fd-6d4c-8cde-5a39-68b2fca838d6",
-                "claimed_quote": "At Prim-5 stage there is increased expression in the myotome border/somatic furrow, eye, hatching gland (Fig. 1f arrow HG), fin bud (Fig. 1f arrow FB) tectum (Fig. 1g arrow T) and telencephalon (Fig.1g arrow TC). At long-pec stage pronounced expression is detected in a thin layer of cells in the posterior tectum (Fig. 1h arrow, i and j) and the fin (Fig. 1h).",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "zebrafish flcn expression",
                 "field_path": null,
                 "object_id": null,
@@ -2001,7 +2001,7 @@
             {
               "args": {
                 "chunk_id": "4ff2f4fd-6d4c-8cde-5a39-68b2fca838d6",
-                "claimed_quote": "At Prim-5 stage there is increased expression in the myotome border/somatic furrow, eye, hatching gland, fin bud, tectum and telencephalon. At long-pec stage pronounced expression is detected in a thin layer of cells in the posterior tectum and the fin.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "zebrafish flcn expression",
                 "field_path": null,
                 "object_id": null,
@@ -2015,7 +2015,7 @@
             {
               "args": {
                 "chunk_id": "4ff2f4fd-6d4c-8cde-5a39-68b2fca838d6",
-                "claimed_quote": "At Prim-5 stage there is increased expression in the myotome border/somatic furrow, eye, hatching gland, fin bud, tectum and telencephalon.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "zebrafish flcn expression",
                 "field_path": null,
                 "object_id": null,
@@ -2036,7 +2036,7 @@
             {
               "args": {
                 "chunk_id": "4ff2f4fd-6d4c-8cde-5a39-68b2fca838d6",
-                "claimed_quote": "At Prim-5 stage there is increased expression in the myotome border/somatic furrow, eye, hatching gland (Fig. 1f arrow HG), fin bud (Fig. 1f arrow FB) tectum (Fig. 1g arrow T) and telencephalon (Fig.1g arrow TC).",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "zebrafish flcn expression",
                 "field_path": null,
                 "object_id": null,
@@ -2050,7 +2050,7 @@
             {
               "args": {
                 "chunk_id": "3b503440-419b-56b6-441d-b9d324ca17d9",
-                "claimed_quote": "f Prim-10 stage embryo showing low level expression in the whole embryo with more pronounced expression in the forebrain and hindbrain areas, hatching gland (HG, arrow) and the fin bud (FB, arrow).",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "zebrafish flcn expression",
                 "field_path": null,
                 "object_id": null,
@@ -2400,7 +2400,7 @@
     "pdf_url": "https://bmcdevbiol.biomedcentral.com/counter/pdf/10.1186/s12861-016-0119-8.pdf",
     "pmcid": "PMC4939010",
     "pmid": "27391801",
-    "prompt": "Read the loaded paper and extract exactly one gene-expression observation candidate: zebrafish flcn expression during embryonic development, preferably brain, retina, hatching gland, or fin-bud context if supported. Preserve anatomy/stage/taxon hints and one record_evidence verified quote. Use the explicit zebrafish organism context as the ZFIN data-provider selector, but do not resolve anatomy, stage, gene, or provider database IDs in the extractor.",
+    "prompt": "Read the loaded paper and extract exactly one gene-expression observation candidate: zebrafish flcn expression during embryonic development, preferably brain, retina, hatching gland, or fin-bud context if supported. Preserve anatomy/stage/taxon hints and one record_evidence span-backed evidence record. Use the explicit zebrafish organism context as the ZFIN data-provider selector, but do not resolve anatomy, stage, gene, or provider database IDs in the extractor.",
     "title": "Expression and knockdown of zebrafish folliculin suggests requirement for embryonic brain morphogenesis",
     "trial_id": "gene_expression_zebrafish_flcn_brain"
   },

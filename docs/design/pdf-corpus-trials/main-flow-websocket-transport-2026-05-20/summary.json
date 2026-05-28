@@ -423,7 +423,7 @@
                 "output_key": "trial_instructions",
                 "prompt_version": null,
                 "step_goal": null,
-                "task_instructions": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one exact supporting quote per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
+                "task_instructions": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one span-backed evidence unit per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
                 "validation_attachments": [],
                 "validation_groups": []
               },
@@ -439,14 +439,14 @@
                 "agent_description": null,
                 "agent_display_name": "Gene Extractor",
                 "agent_id": "gene_extractor",
-                "custom_input": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one exact supporting quote per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
+                "custom_input": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one span-backed evidence unit per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
                 "custom_instructions": null,
                 "include_evidence": null,
                 "input_source": "custom",
                 "output_filename_template": null,
                 "output_key": "gene_extractor_output",
                 "prompt_version": null,
-                "step_goal": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one exact supporting quote per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
+                "step_goal": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one span-backed evidence unit per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
                 "task_instructions": null,
                 "validation_attachments": [
                   {
@@ -703,7 +703,7 @@
                     "output_key": "trial_instructions",
                     "prompt_version": null,
                     "step_goal": null,
-                    "task_instructions": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one exact supporting quote per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
+                    "task_instructions": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one span-backed evidence unit per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
                     "validation_attachments": [],
                     "validation_groups": []
                   },
@@ -719,14 +719,14 @@
                     "agent_description": null,
                     "agent_display_name": "Gene Extractor",
                     "agent_id": "gene_extractor",
-                    "custom_input": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one exact supporting quote per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
+                    "custom_input": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one span-backed evidence unit per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
                     "custom_instructions": null,
                     "include_evidence": null,
                     "input_source": "custom",
                     "output_filename_template": null,
                     "output_key": "gene_extractor_output",
                     "prompt_version": null,
-                    "step_goal": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one exact supporting quote per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
+                    "step_goal": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one span-backed evidence unit per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
                     "task_instructions": null,
                     "validation_attachments": [
                       {
@@ -952,7 +952,7 @@
         "pdf_url": "https://cdn.elifesciences.org/articles/25301/elife-25301-v2.pdf",
         "pmcid": "PMC5599232",
         "pmid": "28853393",
-        "prompt": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one exact supporting quote per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
+        "prompt": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one span-backed evidence unit per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
         "title": "Parallel Activin and BMP signaling coordinates R7/R8 photoreceptor subtype pairing in the stochastic Drosophila retina",
         "trial_id": "gene_drosophila_r8_tgfb_multi_gene"
       },

@@ -83,7 +83,7 @@
                 "output_key": "trial_instructions",
                 "prompt_version": null,
                 "step_goal": null,
-                "task_instructions": "Read the loaded paper and extract exactly one phenotype assertion candidate: the reduced brood size phenotype reported for C. elegans mus-81(tm1937) mutants. Preserve subject, phenotype statement, organism hints, and one record_evidence verified quote. Do not resolve phenotype ontology IDs in the extractor.",
+                "task_instructions": "Read the loaded paper and extract exactly one phenotype assertion candidate: the reduced brood size phenotype reported for C. elegans mus-81(tm1937) mutants. Preserve subject, phenotype statement, organism hints, and one record_evidence span-backed evidence record. Do not resolve phenotype ontology IDs in the extractor.",
                 "validation_attachments": [],
                 "validation_groups": []
               },
@@ -99,14 +99,14 @@
                 "agent_description": null,
                 "agent_display_name": "Phenotype Extractor",
                 "agent_id": "phenotype_extractor",
-                "custom_input": "Read the loaded paper and extract exactly one phenotype assertion candidate: the reduced brood size phenotype reported for C. elegans mus-81(tm1937) mutants. Preserve subject, phenotype statement, organism hints, and one record_evidence verified quote. Do not resolve phenotype ontology IDs in the extractor.",
+                "custom_input": "Read the loaded paper and extract exactly one phenotype assertion candidate: the reduced brood size phenotype reported for C. elegans mus-81(tm1937) mutants. Preserve subject, phenotype statement, organism hints, and one record_evidence span-backed evidence record. Do not resolve phenotype ontology IDs in the extractor.",
                 "custom_instructions": null,
                 "include_evidence": null,
                 "input_source": "custom",
                 "output_filename_template": null,
                 "output_key": "phenotype_extractor_output",
                 "prompt_version": null,
-                "step_goal": "Read the loaded paper and extract exactly one phenotype assertion candidate: the reduced brood size phenotype reported for C. elegans mus-81(tm1937) mutants. Preserve subject, phenotype statement, organism hints, and one record_evidence verified quote. Do not resolve phenotype ontology IDs in the extractor.",
+                "step_goal": "Read the loaded paper and extract exactly one phenotype assertion candidate: the reduced brood size phenotype reported for C. elegans mus-81(tm1937) mutants. Preserve subject, phenotype statement, organism hints, and one record_evidence span-backed evidence record. Do not resolve phenotype ontology IDs in the extractor.",
                 "task_instructions": null,
                 "validation_attachments": [
                   {
@@ -1182,7 +1182,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "2c8ed461-32e4-d1ac-7bff-fcdd80861a89",
-            "claimed_quote": "mus-81 mutants had reduced brood sizes (142+/219, approximately 50% of wild type, Student's t-test p,0.005)",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "reduced brood size in mus-81(tm1937) mutants",
             "field_path": null,
             "object_id": null,
@@ -1268,7 +1268,7 @@
             {
               "args": {
                 "chunk_id": "2c8ed461-32e4-d1ac-7bff-fcdd80861a89",
-                "claimed_quote": "mus-81 mutants had reduced brood sizes (142+/219, approximately 50% of wild type, Student's t-test p,0.005)",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "reduced brood size in mus-81(tm1937) mutants",
                 "field_path": null,
                 "object_id": null,
@@ -1666,7 +1666,7 @@
     "pdf_url": "https://journals.plos.org/plosgenetics/article/file?id=10.1371/journal.pgen.1003582&type=printable",
     "pmcid": "PMC3715453",
     "pmid": "23874212",
-    "prompt": "Read the loaded paper and extract exactly one phenotype assertion candidate: the reduced brood size phenotype reported for C. elegans mus-81(tm1937) mutants. Preserve subject, phenotype statement, organism hints, and one record_evidence verified quote. Do not resolve phenotype ontology IDs in the extractor.",
+    "prompt": "Read the loaded paper and extract exactly one phenotype assertion candidate: the reduced brood size phenotype reported for C. elegans mus-81(tm1937) mutants. Preserve subject, phenotype statement, organism hints, and one record_evidence span-backed evidence record. Do not resolve phenotype ontology IDs in the extractor.",
     "title": "Joint Molecule Resolution Requires the Redundant Activities of MUS-81 and XPF-1 during Caenorhabditis elegans Meiosis",
     "trial_id": "phenotype_celegans_mus81_reduced_brood"
   },

@@ -24,7 +24,7 @@
     },
     {
       "id": "chunk-shotgun-mention",
-      "text": "Shotgun localized to adherens junctions but the manuscript did not report a verified polarity phenotype quote.",
+      "text": "Shotgun localized to adherens junctions but the manuscript did not report a verified polarity phenotype result.",
       "page_number": 6,
       "parent_section": "Discussion",
       "subsection": "Comparative notes",
@@ -36,8 +36,9 @@
       "case_id": "verified_exact",
       "tool_input": {
         "entity": "crumb",
-        "chunk_id": "chunk-crumb-exact",
-        "claimed_quote": "Crumb is essential for maintaining epithelial polarity in the embryo."
+        "span_ids": [
+          "chunk-crumb-exact:s0001:c0011-c0080:27f02400"
+        ]
       },
       "expected_tool_result": {
         "status": "verified",
@@ -45,63 +46,66 @@
         "page": 4,
         "section": "Results",
         "subsection": "Apical polarity",
-        "figure_reference": "Figure 2A"
+        "figure_reference": "Figure 2A",
+        "chunk_id": "chunk-crumb-exact",
+        "evidence_record_id": "verified_exact",
+        "source_span_ids": [
+          "chunk-crumb-exact:s0001:c0011-c0080:27f02400"
+        ]
       }
     },
     {
-      "case_id": "not_found_changed_quote",
+      "case_id": "not_found_changed_span",
       "tool_input": {
         "entity": "crumb",
-        "chunk_id": "chunk-crumb-changed-quote",
-        "claimed_quote": "Crb is required for epithelial polarity during embryogenesis."
+        "span_ids": [
+          "chunk-crumb-changed-quote:s0001:c0000-c0061:0db5b518"
+        ]
       },
       "expected_tool_result": {
         "status": "not_found",
         "page": 5,
         "section": "Results",
         "subsection": "Embryonic localization",
-        "message": "Exact quote not found in this chunk. Retry with exact text copied from the chunk or drop this evidence.",
+        "message": "Selected span ID could not be resolved from the current chunk. Call read_chunk for current evidence_spans, choose valid span_ids, or drop this evidence.",
         "chunk_content_preview": "Crb is required for epithelial polarity during early embryogenesis and localizes to the apical membrane.",
-        "retry_instructions": "Retry with an exact contiguous substring copied from this chunk, or re-search/drop the evidence if the chunk does not contain the claim.",
-        "unverified_attempts": 1,
-        "max_unverified_attempts": 3,
-        "retry_exhausted": false,
-        "terminal": false
+        "retry_instructions": "Call read_chunk on the current supporting chunk and retry with current span_ids, or drop this evidence.",
+        "chunk_id": "chunk-crumb-changed-quote"
       }
     },
     {
-      "case_id": "not_found_absent_quote",
+      "case_id": "not_found_absent_span",
       "tool_input": {
         "entity": "crumb",
-        "chunk_id": "chunk-shotgun-mention",
-        "claimed_quote": "Crumb is essential for maintaining epithelial polarity in the embryo."
+        "span_ids": [
+          "chunk-shotgun-mention:s0001:c0000-c0064:5017efbb"
+        ]
       },
       "expected_tool_result": {
         "status": "not_found",
         "page": 6,
         "section": "Discussion",
         "subsection": "Comparative notes",
-        "message": "Exact quote not found in this chunk. Retry with exact text copied from the chunk or drop this evidence.",
-        "chunk_content_preview": "Shotgun localized to adherens junctions but the manuscript did not report a verified polarity phenotype quote.",
-        "retry_instructions": "Retry with an exact contiguous substring copied from this chunk, or re-search/drop the evidence if the chunk does not contain the claim.",
-        "unverified_attempts": 1,
-        "max_unverified_attempts": 3,
-        "retry_exhausted": false,
-        "terminal": false
+        "message": "Selected span ID could not be resolved from the current chunk. Call read_chunk for current evidence_spans, choose valid span_ids, or drop this evidence.",
+        "chunk_content_preview": "Shotgun localized to adherens junctions but the manuscript did not report a verified polarity phenotype result.",
+        "retry_instructions": "Call read_chunk on the current supporting chunk and retry with current span_ids, or drop this evidence.",
+        "chunk_id": "chunk-shotgun-mention"
       }
     },
     {
       "case_id": "not_found_wrong_chunk_id",
       "tool_input": {
         "entity": "crumb",
-        "chunk_id": "chunk-missing",
-        "claimed_quote": "Crumb is essential for maintaining epithelial polarity in the embryo."
+        "span_ids": [
+          "chunk-missing:s0001:c0000-c0064:cadf39a2"
+        ]
       },
       "expected_tool_result": {
         "status": "not_found",
         "chunk_content_preview": "",
-        "message": "Chunk not found in the active document. Retry with a chunk_id returned by search_document or read_section source_chunks, or drop this evidence.",
-        "retry_instructions": "Use an exact contiguous substring copied from this chunk, retry with another chunk_id returned by search_document/read_section, or drop this evidence."
+        "message": "Selected span ID references a chunk that is not available in the active document. Re-run discovery/read_chunk and choose current span_ids, or drop this evidence.",
+        "retry_instructions": "Use search_document or read_section to find the current chunk, call read_chunk, and retry with current span_ids, or drop this evidence.",
+        "chunk_id": "chunk-missing"
       }
     }
   ],

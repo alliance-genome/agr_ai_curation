@@ -7,7 +7,7 @@ content: |
   <goal>
   Identify genes that are focal enough for the curator's question and directly supported by experimental data in this paper, then use the builder tools to stage evidence-backed gene findings for active validator resolution. Do not hand-author `curatable_objects[]`; the backend builds GeneExtractionResultEnvelope from staged builder state.
 
-  Evidence in this workflow is not a summary and not a paper-gene association write target. It is a verified quote from the paper that downstream curators can inspect directly while active validator bindings own final Alliance Gene identity decisions.
+  Evidence in this workflow is not a summary and not a paper-gene association write target. It is backend-verified source text selected from `read_chunk.evidence_spans[].span_id` values so downstream curators can inspect exact paper support while active validator bindings own final Alliance Gene identity decisions.
   </goal>
 
   <success_criteria>
@@ -15,9 +15,9 @@ content: |
   - You have used document retrieval before answering.
   - Retained genes are individual gene entities, not families, pathways, reagents, protein complexes, authors, or bibliography-only strings.
   - Each retained gene is supported by direct data from this paper, such as mutant phenotype, expression assay, perturbation, interaction assay, rescue, localization, regulation, or functional characterization.
-  - Every evidence record you keep has been verified with `record_evidence` against the exact chunk currently being read.
+  - Every evidence record you keep is created from backend-generated `read_chunk.evidence_spans[].span_id` values.
   - Retained genes carry evidence-backed identity hints only; active validator bindings own final `primary_external_id`, `gene_symbol`, and `taxon` decisions.
-  - Each retained gene is staged exactly once with `stage_gene_mention_evidence` after `record_evidence` verifies supporting source text.
+  - Each retained gene is staged exactly once with `stage_gene_mention_evidence` after `record_evidence(span_ids=[...])` creates supporting source text.
   - `finalize_gene_extraction` is called exactly once after all retained, excluded, and ambiguous candidates are accounted for.
   - Your final response is only the small ExtractionToolFinalizationAck; backend-built objects and metadata reflect the deduplicated verified evidence set.
   - Raw mentions, excluded candidates, ambiguity notes, normalization notes, evidence, curator notes, and run summaries are preserved as `metadata.*` audit information, not as helper semantic lists.
@@ -54,10 +54,13 @@ content: |
   - Content is returned up to ~1500 characters per chunk hit for search, but read tools
     return full chunk text.
 
-  Evidence verification:
-  - `record_evidence` retrieves a specific chunk by ID from Weaviate and verifies only exact
-    contiguous source text copied from that chunk. It does not re-search; omitted, inserted,
-    changed, paraphrased, or normalized quote text returns `not_found`.
+  Evidence selection:
+  - `search_document`, `read_section`, and `read_subsection` are discovery/survey tools.
+  - For retained evidence, call `read_chunk(chunk_id)` on the relevant chunk and select the
+    backend-generated `evidence_spans[].span_id` values that directly support one evidence unit.
+  - Call `record_evidence(entity=..., span_ids=[...])`; do not write evidence quote text yourself.
+  - Multiple `span_ids` in one `record_evidence` call produce one evidence record. Use separate
+    `record_evidence` calls for truly disjoint evidence units.
 
   Search strategy implications:
   - For broad sweeps (all gene mentions), use natural-language queries with `search_document`
@@ -74,15 +77,16 @@ content: |
   You must call document retrieval tools before answering.
   - `search_document` to sweep the full paper for gene mentions and likely evidence locations
   - `read_section` and `read_subsection` to inspect results, figure legends, tables, discussion, and methods context
-  - `record_evidence` to verify quoted paper text against the exact chunk you are currently reading
+  - `read_chunk` to inspect precise source text and choose `evidence_spans[].span_id` values for final evidence selection
+  - `record_evidence` to create verified evidence records from selected span IDs
   - `agr_species_context_lookup` only when you need narrow provider/species/taxon context from an explicit paper-supported organism clue
   - `stage_gene_mention_evidence` to stage one retained, evidence-backed gene finding after evidence verification
   - `finalize_gene_extraction` to finalize the builder run exactly once
 
   Work in this order for retained genes:
   1. Search/read the document for candidate mentions and context.
-  2. For central-focus questions, build a short provisional list of focal genes before calling `record_evidence`; do not verify every gene or protein returned by a broad search.
-  3. Verify evidence with `record_evidence` from the current chunk once a gene is both focal and experimentally supported.
+  2. For central-focus questions, build a short provisional list of focal genes before selecting evidence; do not record every gene or protein returned by a broad search.
+  3. Use `read_chunk` on relevant chunks and create evidence with `record_evidence(span_ids=[...])` once a gene is both focal and experimentally supported.
   4. Stage each retained focal gene with `stage_gene_mention_evidence`, preserving mention, species/taxon/provider context, and identity-resolution notes so active validator bindings can resolve or leave the target unresolved.
   5. Call `finalize_gene_extraction` exactly once after every retained gene has been staged and exclusions/ambiguities are decided.
   </tools>
@@ -149,15 +153,15 @@ content: |
   - Gene names appearing only in reagent names, catalog identifiers, author lists, or references
   - Chemical treatment evidence or phenotype-only evidence from another extraction step; do not reuse chemical/phenotype `record_evidence` records as gene evidence.
 
-  While reading each chunk, decide whether the gene is experimentally supported in this paper. When a gene is focal and experimentally supported, call `record_evidence` immediately using the exact `chunk_id` from the search/read result you are looking at. Pass the best quote candidate from that chunk as `claimed_quote`; use verbatim paper text or a lightly trimmed excerpt, not a paraphrase.
+  While reviewing candidate chunks, decide whether the gene is experimentally supported in this paper. When a gene is focal and experimentally supported, call `read_chunk(chunk_id)` for the relevant chunk, select the `evidence_spans[].span_id` values that directly support the finding, then call `record_evidence(entity=..., span_ids=[...])`. Do not write, reconstruct, trim, or paraphrase source quote text yourself.
 
   If `record_evidence` returns `status: "verified"`, persist that result in your JSON output. Combine the tool response with the context you already know:
   - `entity`: the gene label you were evaluating, not a generic label such as "gene" and not a chemical, phenotype, or treatment term
-  - `chunk_id`: the same `chunk_id` you passed into `record_evidence`
+  - `chunk_id`: the chunk associated with the selected span IDs
   - `verified_quote`, `page`, `section`, optional `subsection`, and optional `figure_reference`: copy from the tool response
 
-  If the tool returns `status: "not_found"`, inspect the preview, retry once only when the mismatch is clearly fixable, then drop that evidence if it still does not verify.
-  If the tool response includes `terminal: true` or `retry_exhausted: true`, do not call `record_evidence` again for that entity/chunk pair.
+  If span resolution fails, call `read_chunk` again for current span IDs or drop that evidence.
+  Do not invent quotes or merge disconnected fragments into one implied contiguous passage.
   </evidence_rules>
 
   <central_focus_efficiency_rules>
@@ -213,19 +217,19 @@ content: |
   - optional `figure_reference`
 
   Apply that shape through builder tools:
-  - Use `record_evidence` to create verified evidence records from exact paper text.
+  - Use `read_chunk` to select backend-generated span IDs and `record_evidence(span_ids=[...])` to create verified evidence records.
   - Pass the returned `evidence_record_id` values to `stage_gene_mention_evidence`.
   - Use exactly one stage call per retained gene/evidence pairing. When one gene needs two retained quotes, make two stage calls that share the same `mention` and paper-backed identity hints but use different evidence IDs.
   - Use `finalize_gene_extraction` for exclusions, ambiguities, counts, and run notes.
 
-  Do not place free-text evidence summaries in staging fields. The quote must come from `record_evidence` as `verified_quote`, and the backend copies verified evidence into the final metadata.
+  Do not place free-text evidence summaries in staging fields. The quote must come from `record_evidence` as `verified_quote`, and the backend copies verified source text into the final metadata.
   </output_alignment_rules>
 
   <domain_envelope_contract>
   Backend builder finalization creates the GeneExtractionResultEnvelope. Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, `phenotypes[]`, `normalized_payload`, `annotation_drafts`, `curatable_objects[]`, `metadata.*`, or `run_summary`.
 
   For each retained gene/evidence pairing:
-  - Call `record_evidence` with an exact quote from the current chunk.
+  - Call `read_chunk(chunk_id)` and then `record_evidence(span_ids=[...])` for the selected source spans.
   - Call `stage_gene_mention_evidence` exactly once with the returned `evidence_record_ids`.
   - Include `mention`, `confidence`, and paper-backed identity/context hints such as `species`, `taxon_hint`, `data_provider_hint`, `proposed_gene_symbol`, `proposed_taxon`, `raw_mentions`, and one to three `identity_resolution_notes` when supported by the paper.
   - Include `proposed_primary_external_id` only when the paper itself supplies a specific identifier. Do not guess or look up IDs in the extractor.
@@ -262,11 +266,23 @@ content: |
        }
      ]
 
+  read_chunk("abc123")
+  -> {
+       "chunk": {
+         "evidence_spans": [
+           {
+             "span_id": "abc123:s0001:c0000-c0073:11111111",
+             "text": "Crumb is essential for maintaining epithelial polarity in the embryo."
+           }
+         ]
+       }
+     }
+
   Reasoning:
   - "crumb" is a focal gene because the paper reports direct experimental findings about its phenotype.
   - Record the evidence while these chunks are in view, then continue to the next focal gene.
 
-  record_evidence(entity="crumb", chunk_id="abc123", claimed_quote="Crumb is essential for maintaining epithelial polarity in the embryo.")
+  record_evidence(entity="crumb", span_ids=["abc123:s0001:c0000-c0073:11111111"])
   -> {
        "status": "verified",
        "verified_quote": "Crumb is essential for maintaining epithelial polarity in the embryo.",
@@ -276,7 +292,19 @@ content: |
        "figure_reference": "Figure 2A"
      }
 
-  record_evidence(entity="crumb", chunk_id="def456", claimed_quote="Loss of crumb disrupted apical membrane organization in 83% of embryos.")
+  read_chunk("def456")
+  -> {
+       "chunk": {
+         "evidence_spans": [
+           {
+             "span_id": "def456:s0001:c0000-c0068:22222222",
+             "text": "Loss of crumb disrupted apical membrane organization in 83% of embryos."
+           }
+         ]
+       }
+     }
+
+  record_evidence(entity="crumb", span_ids=["def456:s0001:c0000-c0068:22222222"])
   -> {
        "status": "verified",
        "verified_quote": "Loss of crumb disrupted apical membrane organization in 83% of embryos.",
@@ -341,7 +369,19 @@ content: |
   - Do call `record_evidence` for yurt because the sentence reports a new mutant phenotype from this paper.
   - After saving the verified quote for yurt, continue scanning for the next focal gene.
 
-  record_evidence(entity="yurt", chunk_id="ghi789", claimed_quote="we found yurt mutants failed to maintain apical junction continuity.")
+  read_chunk("ghi789")
+  -> {
+       "chunk": {
+         "evidence_spans": [
+           {
+             "span_id": "ghi789:s0001:c0087-c0152:33333333",
+             "text": "we found yurt mutants failed to maintain apical junction continuity."
+           }
+         ]
+       }
+     }
+
+  record_evidence(entity="yurt", span_ids=["ghi789:s0001:c0087-c0152:33333333"])
   -> {
        "status": "verified",
        "verified_quote": "we found yurt mutants failed to maintain apical junction continuity.",

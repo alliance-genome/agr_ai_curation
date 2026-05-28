@@ -460,7 +460,7 @@ def validate_pending_allele_envelope(
 
 
 def _legacy_keys_in_envelope(envelope: DomainEnvelope) -> set[str]:
-    return _FORBIDDEN_LEGACY_COLLECTIONS.intersection(envelope.metadata)
+    return set(_FORBIDDEN_LEGACY_COLLECTIONS.intersection(envelope.metadata))
 
 
 def _iter_allele_items(extraction: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
@@ -603,11 +603,16 @@ def _verified_evidence_record(
             "tool_cases[].expected_tool_result.evidence_record_id",
         ),
         "entity": tool_input.get("entity"),
-        "chunk_id": tool_input.get("chunk_id"),
+        "chunk_id": tool_result.get("chunk_id"),
         "verified_quote": tool_result.get("verified_quote"),
         "page": tool_result.get("page"),
         "section": tool_result.get("section"),
     }
+    source_span_ids = _required_sequence(
+        tool_result.get("source_span_ids"),
+        "tool_cases[].expected_tool_result.source_span_ids",
+    )
+    record["source_span_ids"] = list(source_span_ids)
     for optional_key in ("subsection", "figure_reference"):
         optional_value = _optional_string(
             tool_result.get(optional_key),

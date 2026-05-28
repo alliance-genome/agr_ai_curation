@@ -296,6 +296,7 @@ def test_disease_extractor_prompt_agent_and_group_rules_name_domain_contract():
 
     assert agent_data["tools"] == [
         "search_document",
+        "read_chunk",
         "read_section",
         "read_subsection",
         "record_evidence",

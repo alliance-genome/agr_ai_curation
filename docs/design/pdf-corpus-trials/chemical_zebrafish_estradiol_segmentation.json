@@ -83,7 +83,7 @@
                 "output_key": "trial_instructions",
                 "prompt_version": null,
                 "step_goal": null,
-                "task_instructions": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: estradiol treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context and one record_evidence verified quote. Do not resolve ChEBI or condition ontology IDs in the extractor.",
+                "task_instructions": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: estradiol treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context and one record_evidence span-backed evidence record. Do not resolve ChEBI or condition ontology IDs in the extractor.",
                 "validation_attachments": [],
                 "validation_groups": []
               },
@@ -99,14 +99,14 @@
                 "agent_description": null,
                 "agent_display_name": "Chemical Extractor",
                 "agent_id": "chemical_extractor",
-                "custom_input": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: estradiol treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context and one record_evidence verified quote. Do not resolve ChEBI or condition ontology IDs in the extractor.",
+                "custom_input": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: estradiol treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context and one record_evidence span-backed evidence record. Do not resolve ChEBI or condition ontology IDs in the extractor.",
                 "custom_instructions": null,
                 "include_evidence": null,
                 "input_source": "custom",
                 "output_filename_template": null,
                 "output_key": "chemical_extractor_output",
                 "prompt_version": null,
-                "step_goal": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: estradiol treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context and one record_evidence verified quote. Do not resolve ChEBI or condition ontology IDs in the extractor.",
+                "step_goal": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: estradiol treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context and one record_evidence span-backed evidence record. Do not resolve ChEBI or condition ontology IDs in the extractor.",
                 "task_instructions": null,
                 "validation_attachments": [
                   {
@@ -1856,7 +1856,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "84778956-43c4-98a3-d5e2-30a68a06428b",
-            "claimed_quote": "Standard long-term small molecule treatment with 50 \u03bcM estradiol caused strong developmental defects with rudimentary head and axis in wild type embryos (arrowheads). Pulse experiments of 50 \u03bcM estradiol from 10 hpf for four hours showed recovered head and axis structures (arrowheads) and specific myotome boundary disruptions of up to 13 segments (bracket).",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "estradiol",
             "field_path": null,
             "object_id": null,
@@ -2286,7 +2286,7 @@
             {
               "args": {
                 "chunk_id": "84778956-43c4-98a3-d5e2-30a68a06428b",
-                "claimed_quote": "Standard long-term small molecule treatment with 50 \u03bcM estradiol caused strong developmental defects with rudimentary head and axis in wild type embryos (arrowheads). Pulse experiments of 50 \u03bcM estradiol from 10 hpf for four hours showed recovered head and axis structures (arrowheads) and specific myotome boundary disruptions of up to 13 segments (bracket).",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "estradiol",
                 "field_path": null,
                 "object_id": null,
@@ -2695,7 +2695,7 @@
     "pdf_url": "https://www.nature.com/articles/s41467-017-01469-5.pdf",
     "pmcid": "PMC5711842",
     "pmid": "29196643",
-    "prompt": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: estradiol treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context and one record_evidence verified quote. Do not resolve ChEBI or condition ontology IDs in the extractor.",
+    "prompt": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: estradiol treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context and one record_evidence span-backed evidence record. Do not resolve ChEBI or condition ontology IDs in the extractor.",
     "title": "Small molecule screen in embryonic zebrafish using modular variations to target segmentation",
     "trial_id": "chemical_zebrafish_estradiol_segmentation"
   },

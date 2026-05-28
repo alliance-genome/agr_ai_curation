@@ -90,7 +90,7 @@
                 "output_key": "trial_instructions",
                 "prompt_version": null,
                 "step_goal": null,
-                "task_instructions": "Read the loaded paper and extract exactly one allele or variant candidate: the Drosophila Notch facet-glossy allele, written as Nfa-g, N^{fa-g}, or similar. Preserve the paper notation, genotype/phenotype context, organism hints, and one record_evidence verified quote. Do not resolve allele IDs in the extractor.",
+                "task_instructions": "Read the loaded paper and extract exactly one allele or variant candidate: the Drosophila Notch facet-glossy allele, written as Nfa-g, N^{fa-g}, or similar. Preserve the paper notation, genotype/phenotype context, organism hints, and one record_evidence span-backed evidence record. Do not resolve allele IDs in the extractor.",
                 "validation_attachments": [],
                 "validation_groups": []
               },
@@ -106,14 +106,14 @@
                 "agent_description": null,
                 "agent_display_name": "Allele Extractor",
                 "agent_id": "allele_extractor",
-                "custom_input": "Read the loaded paper and extract exactly one allele or variant candidate: the Drosophila Notch facet-glossy allele, written as Nfa-g, N^{fa-g}, or similar. Preserve the paper notation, genotype/phenotype context, organism hints, and one record_evidence verified quote. Do not resolve allele IDs in the extractor.",
+                "custom_input": "Read the loaded paper and extract exactly one allele or variant candidate: the Drosophila Notch facet-glossy allele, written as Nfa-g, N^{fa-g}, or similar. Preserve the paper notation, genotype/phenotype context, organism hints, and one record_evidence span-backed evidence record. Do not resolve allele IDs in the extractor.",
                 "custom_instructions": null,
                 "include_evidence": null,
                 "input_source": "custom",
                 "output_filename_template": null,
                 "output_key": "allele_extractor_output",
                 "prompt_version": null,
-                "step_goal": "Read the loaded paper and extract exactly one allele or variant candidate: the Drosophila Notch facet-glossy allele, written as Nfa-g, N^{fa-g}, or similar. Preserve the paper notation, genotype/phenotype context, organism hints, and one record_evidence verified quote. Do not resolve allele IDs in the extractor.",
+                "step_goal": "Read the loaded paper and extract exactly one allele or variant candidate: the Drosophila Notch facet-glossy allele, written as Nfa-g, N^{fa-g}, or similar. Preserve the paper notation, genotype/phenotype context, organism hints, and one record_evidence span-backed evidence record. Do not resolve allele IDs in the extractor.",
                 "task_instructions": null,
                 "validation_attachments": [
                   {
@@ -1052,7 +1052,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "56609f28-0af2-8406-d875-a3afa2ac7ad7",
-            "claimed_quote": "in Nfa-g mutants, rst F6 -lacZ was expanded to all pigment cells surrounding cone cells",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "Nfa-g",
             "field_path": null,
             "object_id": null,
@@ -1268,7 +1268,7 @@
             {
               "args": {
                 "chunk_id": "56609f28-0af2-8406-d875-a3afa2ac7ad7",
-                "claimed_quote": "in Nfa-g mutants, rst F6 -lacZ was expanded to all pigment cells surrounding cone cells",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Nfa-g",
                 "field_path": null,
                 "object_id": null,
@@ -1278,10 +1278,10 @@
               },
               "durationMs": 1452,
               "name": "record_evidence",
-              "outputPreview": "{'status': 'verified', 'entity': 'Nfa-g', 'chunk_id': '56609f28-0af2-8406-d875-a3afa2ac7ad7', 'claimed_quote': 'in Nfa-g mutants, rst F6 -lacZ was expanded to all pigment cells surrounding cone cells'...",
+              "outputPreview": "{'status': 'verified', 'entity': 'Nfa-g', 'chunk_id': '56609f28-0af2-8406-d875-a3afa2ac7ad7', 'span_ids': ['read_chunk-selected-span-id']...",
               "outputSummary": {
                 "chunk_id": "56609f28-0af2-8406-d875-a3afa2ac7ad7",
-                "claimed_quote": "in Nfa-g mutants, rst F6 -lacZ was expanded to all pigment cells surrounding cone cells",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Nfa-g",
                 "evidence_record_id": "evidence-5eb96287a2cb458b",
                 "page": 1,
@@ -1696,7 +1696,7 @@
       "record_evidence_attempts": [
         {
           "chunk_id": "56609f28-0af2-8406-d875-a3afa2ac7ad7",
-          "claimed_quote": "in Nfa-g mutants, rst F6 -lacZ was expanded to all pigment cells surrounding cone cells",
+          "span_ids": ["read_chunk-selected-span-id"],
           "durationMs": 1452,
           "entity": "Nfa-g",
           "live_verified": true,
@@ -1719,7 +1719,7 @@
           "tool_message": null,
           "tool_output_summary": {
             "chunk_id": "56609f28-0af2-8406-d875-a3afa2ac7ad7",
-            "claimed_quote": "in Nfa-g mutants, rst F6 -lacZ was expanded to all pigment cells surrounding cone cells",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "Nfa-g",
             "evidence_record_id": "evidence-5eb96287a2cb458b",
             "page": 1,
@@ -1954,7 +1954,7 @@
           {
             "args": {
               "chunk_id": "56609f28-0af2-8406-d875-a3afa2ac7ad7",
-              "claimed_quote": "in Nfa-g mutants, rst F6 -lacZ was expanded to all pigment cells surrounding cone cells",
+              "span_ids": ["read_chunk-selected-span-id"],
               "entity": "Nfa-g",
               "field_path": null,
               "object_id": null,
@@ -1964,10 +1964,10 @@
             },
             "durationMs": 1452,
             "name": "record_evidence",
-            "outputPreview": "{'status': 'verified', 'entity': 'Nfa-g', 'chunk_id': '56609f28-0af2-8406-d875-a3afa2ac7ad7', 'claimed_quote': 'in Nfa-g mutants, rst F6 -lacZ was expanded to all pigment cells surrounding cone cells'...",
+            "outputPreview": "{'status': 'verified', 'entity': 'Nfa-g', 'chunk_id': '56609f28-0af2-8406-d875-a3afa2ac7ad7', 'span_ids': ['read_chunk-selected-span-id']...",
             "outputSummary": {
               "chunk_id": "56609f28-0af2-8406-d875-a3afa2ac7ad7",
-              "claimed_quote": "in Nfa-g mutants, rst F6 -lacZ was expanded to all pigment cells surrounding cone cells",
+              "span_ids": ["read_chunk-selected-span-id"],
               "entity": "Nfa-g",
               "evidence_record_id": "evidence-5eb96287a2cb458b",
               "page": 1,
@@ -2061,7 +2061,7 @@
     "pdf_url": "https://journals.plos.org/plosgenetics/article/file?id=10.1371/journal.pgen.1004087&type=printable",
     "pmcid": "PMC3886913",
     "pmid": "24415930",
-    "prompt": "Read the loaded paper and extract exactly one allele or variant candidate: the Drosophila Notch facet-glossy allele, written as Nfa-g, N^{fa-g}, or similar. Preserve the paper notation, genotype/phenotype context, organism hints, and one record_evidence verified quote. Do not resolve allele IDs in the extractor.",
+    "prompt": "Read the loaded paper and extract exactly one allele or variant candidate: the Drosophila Notch facet-glossy allele, written as Nfa-g, N^{fa-g}, or similar. Preserve the paper notation, genotype/phenotype context, organism hints, and one record_evidence span-backed evidence record. Do not resolve allele IDs in the extractor.",
     "title": "Notch Controls Cell Adhesion in the Drosophila Eye",
     "trial_id": "allele_drosophila_notch_facet_glossy"
   },
