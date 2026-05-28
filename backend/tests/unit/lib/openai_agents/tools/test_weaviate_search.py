@@ -104,7 +104,7 @@ async def test_search_tool_rejects_invalid_search_mode(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_search_tool_maps_hits_and_truncates_content(monkeypatch):
+async def test_search_tool_maps_hits_and_returns_full_content(monkeypatch):
     long_text = "A" * 1800
 
     async def _fake_hybrid(**_kwargs):
@@ -138,7 +138,7 @@ async def test_search_tool_maps_hits_and_truncates_content(monkeypatch):
     assert result.hits[0].section_title == "Results"
     assert result.hits[0].page_number == 5
     assert result.hits[0].score == 0.91
-    assert result.hits[0].content.endswith("... [truncated]")
+    assert result.hits[0].content == long_text
     assert result.hits[0].doc_items == [{"id": "bbox-1"}]
     assert result.hits[1].section_title == "Discussion"
     assert result.hits[1].chunk_id == "chunk-2"
@@ -392,6 +392,9 @@ async def test_read_section_tool_combines_content_pages_and_doc_items(monkeypatc
         "chunk-methods-2",
     ]
     assert result.section.source_chunks[0].subsection == "Animals"
+    assert result.section.source_chunks[0].content == "Paragraph one"
+    assert result.section.source_chunks[1].content == "Paragraph two"
+    assert not hasattr(result.section.source_chunks[0], "content_preview")
     assert not hasattr(result.section.source_chunks[0], "evidence_spans")
     assert result.section.doc_items == [{"id": "bbox-1"}, {"id": "bbox-2"}]
 
@@ -428,8 +431,24 @@ async def test_read_subsection_tool_no_content_and_success(monkeypatch):
 
     async def _chunks(**_kwargs):
         return [
-            {"text": "Line one", "page_number": 9, "doc_items": [{"id": "bbox-1"}]},
-            {"text": "Line two", "page_number": 10, "doc_items": []},
+            {
+                "id": "chunk-subsection-1",
+                "text": "Line one",
+                "page_number": 9,
+                "section_title": "Methods",
+                "subsection": "Fly Strains",
+                "doc_items": [{"id": "bbox-1"}],
+            },
+            {
+                "id": "chunk-subsection-2",
+                "content": "Line two",
+                "metadata": {
+                    "pageNumber": 10,
+                    "sectionTitle": "Methods",
+                    "subsection": "Fly Strains",
+                },
+                "doc_items": [],
+            },
         ]
 
     monkeypatch.setattr(weaviate_search, "get_chunks_by_subsection", _chunks)
@@ -439,6 +458,15 @@ async def test_read_subsection_tool_no_content_and_success(monkeypatch):
     assert success_result.subsection.subsection == "Fly Strains"
     assert success_result.subsection.page_numbers == [9, 10]
     assert success_result.subsection.content == "Line one\n\nLine two"
+    assert success_result.subsection.source_chunks is not None
+    assert [source.chunk_id for source in success_result.subsection.source_chunks] == [
+        "chunk-subsection-1",
+        "chunk-subsection-2",
+    ]
+    assert success_result.subsection.source_chunks[0].content == "Line one"
+    assert success_result.subsection.source_chunks[1].content == "Line two"
+    assert not hasattr(success_result.subsection.source_chunks[0], "content_preview")
+    assert not hasattr(success_result.subsection.source_chunks[0], "evidence_spans")
     assert success_result.subsection.doc_items == [{"id": "bbox-1"}]
     assert not hasattr(success_result.subsection, "evidence_spans")
 

@@ -422,7 +422,7 @@ async def hybrid_search_chunks(
     query: str,
     user_id: str,                   # T038: Required for tenant scoping (FR-011, FR-014)
     limit: int = 10,                # V5: Final results after all processing
-    initial_limit: int = 50,        # V5: Candidates for reranker
+    initial_limit: int = 25,        # V5: Candidates for reranker
     alpha: float = 0.7,             # V5: 70% vector, 30% keyword
     apply_reranking: bool = True,
     apply_mmr: bool = True,
@@ -448,9 +448,9 @@ async def hybrid_search_chunks(
 
     Flow:
     1. Weaviate embeds query server-side (no manual vectors)
-    2. Hybrid search gets 50 candidates
+    2. Hybrid search gets 25 candidates
     3. Reranker scores them (if enabled)
-    4. MMR diversifies top 20 → final 10 (if enabled)
+    4. MMR diversifies candidate pool → final limit (if enabled)
 
     Raises:
         ValueError: If user_id is None (required for tenant scoping)
@@ -472,11 +472,11 @@ async def hybrid_search_chunks(
     norm_query = query.strip()
     short_token = len(norm_query.split()) <= 3 or len(norm_query) < 15
     if short_token:
-        # push lexical by default for short/symbol-like inputs
-        logger.info("Detected short/symbol-like query; enabling BM25 boost and disabling MMR/rerank")
+        # Push lexical matching for short/symbol-like inputs, but keep rerank
+        # and MMR available. Evidence search needs recall plus final ranking,
+        # including for terse biomedical symbols and IDs.
+        logger.info("Detected short/symbol-like query; enabling BM25 boost while preserving rerank/MMR")
         use_bm25_boost = True
-        apply_reranking = False
-        apply_mmr = False
 
     def _search(alpha_override: Optional[float] = None,
                 rerank_override: Optional[bool] = None,
@@ -563,8 +563,12 @@ async def hybrid_search_chunks(
                         explain_score=explain_scores  # Gated by env
                     ),
                     "include_vector": apply_mmr,  # Only if needed for MMR
-                    "auto_limit": 2  # Use autocut to find natural result groupings (2 jumps)
                 }
+                logger.info(
+                    "V5: AutoCut disabled for evidence recall; requesting initial_limit=%s final_limit=%s",
+                    initial_limit,
+                    limit,
+                )
 
                 # BM25 operator for acronyms (requires Weaviate 1.31+)
                 if use_bm25_boost:
@@ -608,7 +612,12 @@ async def hybrid_search_chunks(
                 response = collection.query.hybrid(**query_params)
 
                 # V5: Log retrieval results
-                logger.info("V5: Retrieved %s chunks from Weaviate", len(response.objects))
+                logger.info(
+                    "V5: Retrieved %s candidate chunks from Weaviate (requested_initial_limit=%s, final_limit=%s)",
+                    len(response.objects),
+                    initial_limit,
+                    limit,
+                )
 
                 # Process results with correct format
                 chunks = []
@@ -682,7 +691,16 @@ async def hybrid_search_chunks(
                         effective_rerank_provider,
                         len(chunks),
                     )
+                    rerank_start = time.monotonic()
+                    pre_rerank_count = len(chunks)
                     chunks = rerank_chunks(query, chunks, top_n=len(chunks))
+                    logger.info(
+                        "V5: Rerank stage complete provider=%s candidates=%s returned=%s duration_ms=%.1f",
+                        effective_rerank_provider,
+                        pre_rerank_count,
+                        len(chunks),
+                        (time.monotonic() - rerank_start) * 1000,
+                    )
                 else:
                     for chunk in chunks:
                         chunk.pop("_rerank_text", None)
@@ -703,7 +721,11 @@ async def hybrid_search_chunks(
                         top_k=limit,
                         vector_field="_vector"  # Tell MMR where vectors are
                     )
-                    logger.info("V5: MMR reduced %s chunks to %s diverse results", pre_mmr_count, len(chunks))
+                    logger.info(
+                        "V5: MMR reduced %s chunks to %s diverse results",
+                        pre_mmr_count,
+                        len(chunks),
+                    )
                     # Clean up vectors after MMR
                     for chunk in chunks:
                         chunk.pop("_vector", None)
@@ -748,29 +770,29 @@ async def hybrid_search_chunks_retry_adapter(
 ) -> List[Dict[str, Any]]:
     """
     Retry wrapper to avoid false negatives:
-    - If strategy == 'lexical': force alpha=0.0, no rerank/MMR
+    - If strategy == 'lexical': force alpha=0.0 while preserving rerank/MMR
     - If strategy == 'hybrid_lexical_first': try with given alpha, then alpha=0.0, then alpha=0.3
     - If short_token: automatically apply the lexical-first sequence
     """
     # normalize strategy
     strategy = strategy or "hybrid"
 
-    async def run(alpha_override=None, rerank=False, mmr=False):
+    async def run(alpha_override=None, rerank=None, mmr=None):
         return await asyncio.to_thread(search_fn, alpha_override, rerank, mmr)
 
     # For short tokens, treat as hybrid_lexical_first regardless of requested strategy
     effective_strategy = "hybrid_lexical_first" if short_token and strategy == "hybrid" else strategy
 
     if effective_strategy == "lexical":
-        results = await run(alpha_override=0.0, rerank=False, mmr=False)
+        results = await run(alpha_override=0.0)
         return results
 
     if effective_strategy == "hybrid_lexical_first":
         results = await run(alpha_override=None, rerank=None, mmr=None)
         if not results:
-            results = await run(alpha_override=0.0, rerank=False, mmr=False)
+            results = await run(alpha_override=0.0)
         if not results:
-            results = await run(alpha_override=0.3, rerank=False, mmr=False)
+            results = await run(alpha_override=0.3)
         return results
 
     # default: original behavior

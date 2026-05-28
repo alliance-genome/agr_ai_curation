@@ -109,6 +109,8 @@ async def test_hybrid_search_chunks_runs_full_path_with_mmr(monkeypatch):
     assert "_vector" not in results[0]
     assert results[0]["metadata"]["doc_items"] == [{"id": "bbox-1"}]
     assert results[1]["metadata"]["chunk_id"] == "u2"
+    query_kwargs = chunk_collection.query.hybrid.call_args.kwargs
+    assert "auto_limit" not in query_kwargs
 
 
 @pytest.mark.asyncio
@@ -172,13 +174,14 @@ async def test_hybrid_search_chunks_applies_backend_reranking(monkeypatch):
             query="gene expression in developing retina",
             user_id="user-1",
             limit=2,
-            initial_limit=2,
             apply_reranking=True,
             apply_mmr=False,
         )
 
     assert [chunk["id"] for chunk in results] == ["u2", "u1"]
     assert "rerank" not in chunk_collection.query.hybrid.call_args.kwargs
+    assert "auto_limit" not in chunk_collection.query.hybrid.call_args.kwargs
+    assert chunk_collection.query.hybrid.call_args.kwargs["limit"] == 25
     assert "_rerank_text" not in results[0]
 
 

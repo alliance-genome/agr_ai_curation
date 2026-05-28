@@ -524,14 +524,14 @@ async def test_hybrid_search_retry_adapter_branches(monkeypatch):
     # lexical mode
     lexical = await chunks.hybrid_search_chunks_retry_adapter(_search, strategy="lexical", short_token=False)
     assert lexical == []
-    assert calls[0] == (0.0, False, False)
+    assert calls[0] == (0.0, None, None)
 
     # hybrid lexical-first retries through both fallback attempts
     fallback = await chunks.hybrid_search_chunks_retry_adapter(_search, strategy="hybrid_lexical_first", short_token=False)
     assert fallback == [{"id": "chunk-1"}]
     assert calls[1] == (None, None, None)
-    assert calls[2] == (0.0, False, False)
-    assert calls[3] == (0.3, False, False)
+    assert calls[2] == (0.0, None, None)
+    assert calls[3] == (0.3, None, None)
 
     # short token should force lexical-first sequence even when strategy is hybrid
     calls.clear()

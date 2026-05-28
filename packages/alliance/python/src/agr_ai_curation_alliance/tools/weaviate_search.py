@@ -198,7 +198,7 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
 
             hits: List[ChunkHit] = []
             for chunk in chunks:
-                metadata = chunk.get("metadata", {}) or {}
+                metadata = _best_effort_metadata(chunk)
                 section = metadata.get("section_title") or metadata.get("sectionTitle") or "Unknown Section"
                 page = metadata.get("page_number") or metadata.get("pageNumber")
                 score = chunk.get("score", 0.0)
@@ -206,10 +206,6 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
 
                 # Get doc_items for PDF highlighting (contains bounding boxes)
                 doc_items = metadata.get("doc_items") or chunk.get("doc_items") or []
-
-                max_content_length = 1500
-                if len(content) > max_content_length:
-                    content = content[:max_content_length] + "... [truncated]"
 
                 hits.append(
                     ChunkHit(
@@ -332,7 +328,9 @@ class SectionChunkSource(BaseModel):
     page_number: Optional[int] = None
     section_title: Optional[str] = None
     subsection: Optional[str] = None
-    content_preview: str
+    # Keep full source text here. Preview-only chunk text invites agents to copy
+    # incomplete evidence instead of calling read_chunk for span IDs.
+    content: str
 
 
 class SectionContent(BaseModel):
@@ -349,11 +347,16 @@ class SectionReadResult(BaseModel):
     section: Optional[SectionContent]
 
 
-def _content_preview(text: str, *, max_chars: int = 300) -> str:
-    stripped = text.strip()
-    if len(stripped) <= max_chars:
-        return stripped
-    return stripped[:max_chars].rstrip(" ,;:") + "..."
+def _best_effort_metadata(chunk: dict) -> dict:
+    metadata = chunk.get("metadata", {}) or {}
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    if not isinstance(metadata, dict):
+        return {}
+    return metadata
 
 
 def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["ToolCallTracker"] = None):
@@ -424,25 +427,24 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
                 if text:
                     content_parts.append(text)
 
-                # page_number is at top level, not in metadata
-                page = chunk.get("page_number") or chunk.get("pageNumber")
+                metadata = _best_effort_metadata(chunk)
+                page = (
+                    chunk.get("page_number")
+                    or chunk.get("pageNumber")
+                    or metadata.get("page_number")
+                    or metadata.get("pageNumber")
+                )
                 if page:
                     page_numbers.add(page)
 
-                # section_title is at top level
                 if not actual_section_title:
-                    actual_section_title = chunk.get("section_title") or chunk.get("sectionTitle") or section_name
-
-                # Collect doc_items for PDF highlighting
-                metadata = chunk.get("metadata", {}) or {}
-                # Handle case where metadata is JSON string from Weaviate
-                if isinstance(metadata, str):
-                    try:
-                        metadata = json.loads(metadata)
-                    except (json.JSONDecodeError, TypeError):
-                        metadata = {}
-                elif not isinstance(metadata, dict):
-                    metadata = {}
+                    actual_section_title = (
+                        chunk.get("section_title")
+                        or chunk.get("sectionTitle")
+                        or metadata.get("section_title")
+                        or metadata.get("sectionTitle")
+                        or section_name
+                    )
 
                 chunk_id = resolve_chunk_identifier(chunk, metadata)
                 if chunk_id and text:
@@ -452,9 +454,13 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
                             page_number=page,
                             section_title=chunk.get("section_title")
                             or chunk.get("sectionTitle")
+                            or metadata.get("section_title")
+                            or metadata.get("sectionTitle")
                             or actual_section_title,
-                            subsection=chunk.get("subsection"),
-                            content_preview=_content_preview(text),
+                            subsection=chunk.get("subsection")
+                            or metadata.get("subsection")
+                            or metadata.get("subSection"),
+                            content=text,
                         )
                     )
 
@@ -464,23 +470,24 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
 
             full_content = "\n\n".join(content_parts)
             sorted_pages = sorted(page_numbers) if page_numbers else []
+            resolved_section_title = actual_section_title or section_name
 
             logger.info(
                 "Read %s chunks from section '%s', pages %s, %s doc_items",
                 len(chunks),
-                actual_section_title,
+                resolved_section_title,
                 sorted_pages,
                 len(all_doc_items),
             )
 
             return SectionReadResult(
                 summary=(
-                    f"Read {len(chunks)} chunks from '{actual_section_title}'. "
+                    f"Read {len(chunks)} chunks from '{resolved_section_title}'. "
                     "Use section.source_chunks[].chunk_id with read_chunk, then pass selected "
                     "evidence_spans[].span_id values to record_evidence."
                 ),
                 section=SectionContent(
-                    section_title=actual_section_title,
+                    section_title=resolved_section_title,
                     page_numbers=sorted_pages,
                     content=full_content,
                     chunk_count=len(chunks),
@@ -509,6 +516,7 @@ class SubsectionContent(BaseModel):
     page_numbers: List[int]
     content: str
     chunk_count: int
+    source_chunks: Optional[List[SectionChunkSource]] = None
     doc_items: Optional[List[dict]] = None
 
 
@@ -570,17 +578,43 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
             content_parts = []
             page_numbers = set()
             all_doc_items = []
+            source_chunks: List[SectionChunkSource] = []
 
             for chunk in chunks:
-                text = chunk.get("text") or ""
+                text = chunk.get("text") or chunk.get("content") or ""
                 if text:
                     content_parts.append(text)
 
-                page = chunk.get("page_number")
+                metadata = _best_effort_metadata(chunk)
+                page = (
+                    chunk.get("page_number")
+                    or chunk.get("pageNumber")
+                    or metadata.get("page_number")
+                    or metadata.get("pageNumber")
+                )
                 if page:
                     page_numbers.add(page)
 
-                doc_items = chunk.get("doc_items") or []
+                chunk_id = resolve_chunk_identifier(chunk, metadata)
+                if chunk_id and text:
+                    source_chunks.append(
+                        SectionChunkSource(
+                            chunk_id=chunk_id,
+                            page_number=page,
+                            section_title=chunk.get("section_title")
+                            or chunk.get("sectionTitle")
+                            or metadata.get("section_title")
+                            or metadata.get("sectionTitle")
+                            or parent_section,
+                            subsection=chunk.get("subsection")
+                            or metadata.get("subsection")
+                            or metadata.get("subSection")
+                            or subsection,
+                            content=text,
+                        )
+                    )
+
+                doc_items = metadata.get("doc_items") or chunk.get("doc_items") or []
                 if doc_items:
                     all_doc_items.extend(doc_items)
 
@@ -597,7 +631,7 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
             return SubsectionReadResult(
                 summary=(
                     f"Read {len(chunks)} chunks from '{parent_section} > {subsection}'. "
-                    "Use read_chunk on relevant chunk IDs for final evidence span selection."
+                    "Use subsection.source_chunks[].chunk_id with read_chunk for final evidence span selection."
                 ),
                 subsection=SubsectionContent(
                     parent_section=parent_section,
@@ -605,6 +639,7 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
                     page_numbers=sorted_pages,
                     content=full_content,
                     chunk_count=len(chunks),
+                    source_chunks=source_chunks if source_chunks else None,
                     doc_items=all_doc_items if all_doc_items else None,
                 )
             )
