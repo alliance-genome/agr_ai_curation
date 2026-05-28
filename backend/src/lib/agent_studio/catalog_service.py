@@ -71,13 +71,22 @@ _RECORD_EVIDENCE_RUNTIME_NOTE = (
     "- `record_evidence` resolves span IDs against exact source text and copies the backend-owned slices into `verified_quote`.\n"
     "- If the tool returns `not_found`, call `read_chunk` again for current span IDs or drop the evidence.\n"
     "- Only persist evidence records that came back `verified`.\n"
+    "- Use `list_recorded_evidence` and `get_recorded_evidence` to review the active-run evidence workspace before final output.\n"
+    "- Use `attach_evidence_to_object`, `detach_evidence_from_object`, and `update_recorded_evidence_metadata` to connect evidence to objects, pending refs, or field paths.\n"
+    "- Use `discard_recorded_evidence` for wrong or weak evidence; discarded evidence is retained for audit but omitted from final output by default.\n"
 )
 _INLINE_PACKAGE_TOOL_IDS = frozenset({
+    "attach_evidence_to_object",
+    "detach_evidence_from_object",
+    "discard_recorded_evidence",
+    "get_recorded_evidence",
+    "list_recorded_evidence",
     "get_agent_contract",
     "record_evidence",
     "search_document",
     "read_section",
     "read_subsection",
+    "update_recorded_evidence_metadata",
 })
 
 
@@ -328,6 +337,102 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                     "required": True,
                     "description": "One or more span IDs copied from read_chunk(...).chunk.evidence_spans[].span_id.",
                 },
+            ],
+        },
+        "methods": None,
+        "agent_methods": None,
+    },
+    "list_recorded_evidence": {
+        "name": "List Recorded Evidence",
+        "description": "List active-run evidence records for the current document.",
+        "category": "PDF Extraction",
+        "source_file": "backend/src/lib/openai_agents/tools/evidence_workspace.py",
+        "documentation": {
+            "summary": "Returns queued evidence records from the active run evidence workspace. Discarded records are excluded unless include_discarded is true.",
+            "parameters": [
+                {"name": "include_discarded", "type": "boolean", "required": False, "description": "Include records previously marked discarded."},
+                {"name": "object_id", "type": "string", "required": False, "description": "Filter to evidence attached to this object ID."},
+                {"name": "pending_ref_id", "type": "string", "required": False, "description": "Filter to evidence attached to this pending reference ID."},
+            ],
+        },
+        "methods": None,
+        "agent_methods": None,
+    },
+    "get_recorded_evidence": {
+        "name": "Get Recorded Evidence",
+        "description": "Fetch one active-run evidence record by ID.",
+        "category": "PDF Extraction",
+        "source_file": "backend/src/lib/openai_agents/tools/evidence_workspace.py",
+        "documentation": {
+            "summary": "Returns full details for one evidence record in the active run workspace.",
+            "parameters": [
+                {"name": "evidence_record_id", "type": "string", "required": True, "description": "Evidence record ID returned by record_evidence or list_recorded_evidence."},
+            ],
+        },
+        "methods": None,
+        "agent_methods": None,
+    },
+    "attach_evidence_to_object": {
+        "name": "Attach Evidence To Object",
+        "description": "Attach active-run evidence to a curatable object or pending ref.",
+        "category": "PDF Extraction",
+        "source_file": "backend/src/lib/openai_agents/tools/evidence_workspace.py",
+        "documentation": {
+            "summary": "Adds object, pending-ref, and optional field-path metadata to an active evidence record without changing source quote or provenance.",
+            "parameters": [
+                {"name": "evidence_record_id", "type": "string", "required": True, "description": "Evidence record ID to attach."},
+                {"name": "object_id", "type": "string", "required": False, "description": "Stable object ID to attach evidence to."},
+                {"name": "pending_ref_id", "type": "string", "required": False, "description": "Pending object/reference ID to attach evidence to."},
+                {"name": "field_path", "type": "string", "required": False, "description": "Field path supported by this evidence."},
+            ],
+        },
+        "methods": None,
+        "agent_methods": None,
+    },
+    "detach_evidence_from_object": {
+        "name": "Detach Evidence From Object",
+        "description": "Detach active-run evidence from a curatable object or pending ref.",
+        "category": "PDF Extraction",
+        "source_file": "backend/src/lib/openai_agents/tools/evidence_workspace.py",
+        "documentation": {
+            "summary": "Removes matching object, pending-ref, or field-path attachment metadata from an active evidence record.",
+            "parameters": [
+                {"name": "evidence_record_id", "type": "string", "required": True, "description": "Evidence record ID to detach."},
+                {"name": "object_id", "type": "string", "required": False, "description": "Stable object ID to detach."},
+                {"name": "pending_ref_id", "type": "string", "required": False, "description": "Pending object/reference ID to detach."},
+                {"name": "field_path", "type": "string", "required": False, "description": "Field path attachment to detach."},
+            ],
+        },
+        "methods": None,
+        "agent_methods": None,
+    },
+    "discard_recorded_evidence": {
+        "name": "Discard Recorded Evidence",
+        "description": "Mark wrong or weak active-run evidence as discarded.",
+        "category": "PDF Extraction",
+        "source_file": "backend/src/lib/openai_agents/tools/evidence_workspace.py",
+        "documentation": {
+            "summary": "Marks evidence discarded without deleting it. Discarded records remain available for audit and are omitted from final output by default.",
+            "parameters": [
+                {"name": "evidence_record_id", "type": "string", "required": True, "description": "Evidence record ID to discard."},
+                {"name": "reason", "type": "string", "required": True, "description": "Short reason the evidence should not be retained."},
+            ],
+        },
+        "methods": None,
+        "agent_methods": None,
+    },
+    "update_recorded_evidence_metadata": {
+        "name": "Update Evidence Metadata",
+        "description": "Update editable active-run evidence metadata.",
+        "category": "PDF Extraction",
+        "source_file": "backend/src/lib/openai_agents/tools/evidence_workspace.py",
+        "documentation": {
+            "summary": "Updates agent-owned metadata such as entity, field_path, and agent_note. Source quote and provenance fields are immutable.",
+            "parameters": [
+                {"name": "evidence_record_id", "type": "string", "required": True, "description": "Evidence record ID to update."},
+                {"name": "entity", "type": "string", "required": False, "description": "Updated entity label for the evidence."},
+                {"name": "field_path", "type": "string", "required": False, "description": "Field path supported by this evidence."},
+                {"name": "agent_note", "type": "string", "required": False, "description": "Agent-authored note about how this evidence should be used."},
             ],
         },
         "methods": None,

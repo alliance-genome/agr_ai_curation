@@ -344,7 +344,16 @@ def test_sync_auto_attaches_record_evidence_to_structured_document_extraction_ag
     result = module.sync_system_agents(db, force_reload=True)
 
     assert result["inserted"] == 1
-    assert db.added[0].tool_ids == [*base_tools, "record_evidence"]
+    assert db.added[0].tool_ids == [
+        *base_tools,
+        "record_evidence",
+        "list_recorded_evidence",
+        "get_recorded_evidence",
+        "attach_evidence_to_object",
+        "detach_evidence_from_object",
+        "discard_recorded_evidence",
+        "update_recorded_evidence_metadata",
+    ]
 
 
 def test_sync_does_not_auto_attach_record_evidence_to_unstructured_pdf_agent(monkeypatch):

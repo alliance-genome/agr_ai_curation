@@ -20,7 +20,16 @@ from src.models.sql.database import SessionLocal
 
 CUSTOM_AGENT_PREFIX = "ca_"
 _DOCUMENT_TOOL_IDS = {"search_document", "read_chunk", "read_section", "read_subsection"}
-_SYSTEM_MANAGED_INHERITED_TOOL_IDS = {"get_agent_contract", "record_evidence"}
+_SYSTEM_MANAGED_INHERITED_TOOL_IDS = {
+    "get_agent_contract",
+    "record_evidence",
+    "list_recorded_evidence",
+    "get_recorded_evidence",
+    "attach_evidence_to_object",
+    "detach_evidence_from_object",
+    "discard_recorded_evidence",
+    "update_recorded_evidence_metadata",
+}
 LOCKED_PROMPT_MARKERS = (
     "Platform Runtime Contract",
     "backend-owned instructions",

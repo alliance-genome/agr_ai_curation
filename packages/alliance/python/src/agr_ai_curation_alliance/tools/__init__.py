@@ -13,12 +13,36 @@ _LAZY_EXPORTS = {
     ),
     "alliance_api_call": (".rest", "alliance_api_call"),
     "chebi_api_call": (".rest", "chebi_api_call"),
+    "create_attach_evidence_to_object_tool": (
+        ".documents",
+        "create_attach_evidence_to_object_tool",
+    ),
     "create_curation_db_sql_tool": (".sql", "create_curation_db_sql_tool"),
+    "create_detach_evidence_from_object_tool": (
+        ".documents",
+        "create_detach_evidence_from_object_tool",
+    ),
+    "create_discard_recorded_evidence_tool": (
+        ".documents",
+        "create_discard_recorded_evidence_tool",
+    ),
+    "create_get_recorded_evidence_tool": (
+        ".documents",
+        "create_get_recorded_evidence_tool",
+    ),
+    "create_list_recorded_evidence_tool": (
+        ".documents",
+        "create_list_recorded_evidence_tool",
+    ),
     "create_record_evidence_tool": (".documents", "create_record_evidence_tool"),
     "create_read_chunk_tool": (".documents", "create_read_chunk_tool"),
     "create_read_section_tool": (".documents", "create_read_section_tool"),
     "create_read_subsection_tool": (".documents", "create_read_subsection_tool"),
     "create_search_document_tool": (".documents", "create_search_document_tool"),
+    "create_update_recorded_evidence_metadata_tool": (
+        ".documents",
+        "create_update_recorded_evidence_metadata_tool",
+    ),
     "get_domain_field_term_options": (
         ".agr_curation",
         "get_domain_field_term_options",

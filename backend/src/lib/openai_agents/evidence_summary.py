@@ -58,6 +58,15 @@ def _normalize_optional_text(value: Any) -> Optional[str]:
     return text or None
 
 
+def evidence_record_status(record_dict: Dict[str, Any]) -> str:
+    """Return the normalized active-run evidence workspace status."""
+
+    status = _normalize_optional_text(
+        record_dict.get("workspace_status") or record_dict.get("status")
+    )
+    return status.lower() if status else "active"
+
+
 def _normalize_unique_string_list(value: Any) -> Optional[List[str]]:
     if not isinstance(value, list):
         return None
@@ -196,6 +205,9 @@ def _normalize_evidence_record(
         )
         return None
 
+    if evidence_record_status(record_dict) == "discarded":
+        return None
+
     entity_source = record_dict.get("entity")
     if entity_source in (None, ""):
         entity_source = entity_fallback
@@ -251,6 +263,7 @@ def _normalize_evidence_record(
         evidence_record["figure_reference"] = figure_reference
 
     _copy_span_provenance_fields(evidence_record, record_dict)
+    _copy_workspace_metadata_fields(evidence_record, record_dict)
 
     evidence_record["evidence_record_id"] = build_evidence_record_id(
         record_dict.get("evidence_record_id"),
@@ -258,6 +271,41 @@ def _normalize_evidence_record(
     )
 
     return evidence_record
+
+
+def _copy_workspace_metadata_fields(
+    evidence_record: Dict[str, Any],
+    record_dict: Dict[str, Any],
+) -> None:
+    for key in ("object_id", "pending_ref_id", "field_path", "agent_note"):
+        normalized = _normalize_optional_text(record_dict.get(key))
+        if normalized:
+            evidence_record[key] = normalized
+
+    object_ref = record_dict.get("object_ref")
+    if isinstance(object_ref, dict):
+        normalized_object_ref = {
+            key: normalized
+            for key in ("object_id", "pending_ref_id")
+            for normalized in [_normalize_optional_text(object_ref.get(key))]
+            if normalized
+        }
+        if normalized_object_ref:
+            evidence_record["object_ref"] = normalized_object_ref
+
+    envelope_target = record_dict.get("envelope_target")
+    if isinstance(envelope_target, dict):
+        for key in ("object_id", "pending_ref_id", "field_path"):
+            if key not in evidence_record:
+                normalized = _normalize_optional_text(envelope_target.get(key))
+                if normalized:
+                    evidence_record[key] = normalized
+
+    field_paths = _normalize_unique_string_list(record_dict.get("field_paths"))
+    if field_paths:
+        evidence_record["field_paths"] = field_paths
+    elif evidence_record.get("field_path"):
+        evidence_record["field_paths"] = [evidence_record["field_path"]]
 
 
 def build_evidence_record_id(
@@ -747,6 +795,7 @@ def build_record_evidence_summary_record(
         evidence_record["figure_reference"] = figure_reference
 
     _copy_span_provenance_fields(evidence_record, output_payload)
+    _copy_workspace_metadata_fields(evidence_record, output_payload)
 
     evidence_record["evidence_record_id"] = build_evidence_record_id(
         output_payload.get("evidence_record_id"),
@@ -1004,10 +1053,9 @@ def canonicalize_structured_result_payload(
         canonical_payload["evidence_records"] = registry.records()
     elif registry.records():
         metadata = canonical_payload.get("metadata")
-        if isinstance(metadata, dict):
-            metadata = dict(metadata)
-            metadata["evidence_records"] = registry.records()
-            canonical_payload["metadata"] = metadata
+        metadata = dict(metadata) if isinstance(metadata, dict) else {}
+        metadata["evidence_records"] = registry.records()
+        canonical_payload["metadata"] = metadata
 
     return _prune_unreferenced_evidence_records(canonical_payload)
 

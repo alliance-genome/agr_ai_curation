@@ -41,6 +41,10 @@ from .evidence_summary import (
     structured_result_missing_evidence_record_refs,
     structured_result_requires_evidence,
 )
+from .tools.evidence_workspace import (
+    reset_active_evidence_records,
+    set_active_evidence_records,
+)
 from .event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 from .tool_call_policy import (
     DOCUMENT_REQUIRED_TOOL_NAMES,
@@ -2239,6 +2243,7 @@ async def run_specialist_with_events(
     stream_recovered_final_output = ""
 
     stream_consume_started_at = time.monotonic()
+    evidence_workspace_token = set_active_evidence_records(live_evidence_records)
     try:
         async for event in result.stream_events():
             total_event_count += 1
@@ -2706,6 +2711,8 @@ async def run_specialist_with_events(
         if not stream_recovered_final_output:
             # Re-raise to propagate unrecoverable stream errors.
             raise
+    finally:
+        reset_active_evidence_records(evidence_workspace_token)
 
     stream_duration = datetime.now(timezone.utc) - start_time
     stream_duration_ms = int(stream_duration.total_seconds() * 1000)

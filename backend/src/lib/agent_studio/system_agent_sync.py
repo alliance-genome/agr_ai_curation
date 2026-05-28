@@ -22,7 +22,15 @@ from src.models.sql.prompts import PromptTemplate
 logger = logging.getLogger(__name__)
 
 
-_AUTO_ATTACHED_EXTRACTION_TOOL_IDS = ("record_evidence",)
+_AUTO_ATTACHED_EXTRACTION_TOOL_IDS = (
+    "record_evidence",
+    "list_recorded_evidence",
+    "get_recorded_evidence",
+    "attach_evidence_to_object",
+    "detach_evidence_from_object",
+    "discard_recorded_evidence",
+    "update_recorded_evidence_metadata",
+)
 _DOCUMENT_EXTRACTION_TOOL_IDS = frozenset(
     {"search_document", "read_chunk", "read_section", "read_subsection"}
 )

@@ -7,6 +7,14 @@ from typing import Any
 from agr_ai_curation_runtime.record_evidence import (
     create_record_evidence_tool as _create_record_evidence_tool,
 )
+from agr_ai_curation_runtime.evidence_workspace import (
+    create_attach_evidence_to_object_tool as _create_attach_evidence_to_object_tool,
+    create_detach_evidence_from_object_tool as _create_detach_evidence_from_object_tool,
+    create_discard_recorded_evidence_tool as _create_discard_recorded_evidence_tool,
+    create_get_recorded_evidence_tool as _create_get_recorded_evidence_tool,
+    create_list_recorded_evidence_tool as _create_list_recorded_evidence_tool,
+    create_update_recorded_evidence_metadata_tool as _create_update_recorded_evidence_metadata_tool,
+)
 
 from .weaviate_search import (
     create_read_chunk_tool as _create_read_chunk_tool,
@@ -63,10 +71,64 @@ def create_record_evidence_tool(context: dict[str, Any]):
     )
 
 
+def create_list_recorded_evidence_tool(context: dict[str, Any]):
+    """Create the package-exported list_recorded_evidence tool."""
+    return _create_list_recorded_evidence_tool(
+        document_id=_require_context_value(context, "document_id"),
+        user_id=_require_context_value(context, "user_id"),
+    )
+
+
+def create_get_recorded_evidence_tool(context: dict[str, Any]):
+    """Create the package-exported get_recorded_evidence tool."""
+    return _create_get_recorded_evidence_tool(
+        document_id=_require_context_value(context, "document_id"),
+        user_id=_require_context_value(context, "user_id"),
+    )
+
+
+def create_attach_evidence_to_object_tool(context: dict[str, Any]):
+    """Create the package-exported attach_evidence_to_object tool."""
+    return _create_attach_evidence_to_object_tool(
+        document_id=_require_context_value(context, "document_id"),
+        user_id=_require_context_value(context, "user_id"),
+    )
+
+
+def create_detach_evidence_from_object_tool(context: dict[str, Any]):
+    """Create the package-exported detach_evidence_from_object tool."""
+    return _create_detach_evidence_from_object_tool(
+        document_id=_require_context_value(context, "document_id"),
+        user_id=_require_context_value(context, "user_id"),
+    )
+
+
+def create_discard_recorded_evidence_tool(context: dict[str, Any]):
+    """Create the package-exported discard_recorded_evidence tool."""
+    return _create_discard_recorded_evidence_tool(
+        document_id=_require_context_value(context, "document_id"),
+        user_id=_require_context_value(context, "user_id"),
+    )
+
+
+def create_update_recorded_evidence_metadata_tool(context: dict[str, Any]):
+    """Create the package-exported update_recorded_evidence_metadata tool."""
+    return _create_update_recorded_evidence_metadata_tool(
+        document_id=_require_context_value(context, "document_id"),
+        user_id=_require_context_value(context, "user_id"),
+    )
+
+
 __all__ = [
+    "create_attach_evidence_to_object_tool",
+    "create_detach_evidence_from_object_tool",
+    "create_discard_recorded_evidence_tool",
+    "create_get_recorded_evidence_tool",
+    "create_list_recorded_evidence_tool",
     "create_read_chunk_tool",
     "create_read_section_tool",
     "create_read_subsection_tool",
     "create_record_evidence_tool",
     "create_search_document_tool",
+    "create_update_recorded_evidence_metadata_tool",
 ]
