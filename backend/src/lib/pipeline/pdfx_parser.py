@@ -323,6 +323,7 @@ class PDFXParser:
         status_endpoint = f"{self.service_url}/api/v1/extract/{process_id}"
         deadline = time.monotonic() + self.timeout_seconds
         latest_status = "pending"
+        last_logged_signature = ""
 
         while True:
             if cancel_requested_callback and await cancel_requested_callback():
@@ -370,6 +371,25 @@ class PDFXParser:
                 if not status:
                     raise PDFParsingError("PDF extraction status payload missing 'status'")
                 latest_status = status
+
+                progress = payload.get("progress") if isinstance(payload.get("progress"), dict) else {}
+                progress_stage = str(progress.get("stage", "")).strip()
+                progress_percent = progress.get("percent")
+                state = str(payload.get("state", "")).strip()
+                payload_message = str(payload.get("message", "")).strip()
+                signature = f"{status}|{state}|{progress_stage}|{progress_percent}|{payload_message}"
+                if signature != last_logged_signature:
+                    logger.info(
+                        "PDFX status process_id=%s status=%s state=%s progress_stage=%s "
+                        "progress_percent=%s message=%s",
+                        process_id,
+                        status,
+                        state or "-",
+                        progress_stage or "-",
+                        progress_percent if progress_percent is not None else "-",
+                        payload_message or "-",
+                    )
+                    last_logged_signature = signature
 
                 if progress_callback:
                     message = _build_progress_message(payload)
@@ -482,6 +502,8 @@ class PDFXParser:
 def _build_progress_message(payload: Dict[str, Any]) -> str:
     """Build curator-facing progress message from extraction status payload."""
     status = str(payload.get("status", "")).strip().lower()
+    state = str(payload.get("state", "")).strip().lower()
+    payload_message = str(payload.get("message", "")).strip()
     progress = payload.get("progress")
     if isinstance(progress, dict):
         stage_display = str(progress.get("stage_display", "")).strip()
@@ -496,8 +518,14 @@ def _build_progress_message(payload: Dict[str, Any]) -> str:
                 return f"PDF extraction: {stage_name} ({int(percent)}%)"
             return f"PDF extraction: {stage_name}"
 
+    if payload_message and status in {"queued", "pending", "warming", "warming_up"}:
+        return f"PDF extraction: {payload_message}"
     if status in {"queued", "pending"}:
+        if state in {"ready", "busy"}:
+            return "PDF extraction queued; waiting for PDFX worker..."
         return "PDF extraction queued..."
+    if status in {"warming", "warming_up"}:
+        return "PDF extraction service is starting..."
     if status in {"started", "progress", "running"}:
         return "Extracting PDF content..."
     if status in {"complete", "succeeded", "success"}:

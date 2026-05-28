@@ -137,6 +137,26 @@ def test_build_progress_message_prefers_stage_display():
     assert message == "PDF extraction: Merging extraction outputs (80%)"
 
 
+def test_build_progress_message_surfaces_pdfx_queue_message():
+    message = _build_progress_message(
+        {
+            "status": "queued",
+            "state": "ready",
+            "message": "PDFX worker is already processing another job. This job is queued.",
+        }
+    )
+
+    assert message == (
+        "PDF extraction: PDFX worker is already processing another job. This job is queued."
+    )
+
+
+def test_build_progress_message_uses_ready_queue_fallback():
+    message = _build_progress_message({"status": "pending", "state": "busy"})
+
+    assert message == "PDF extraction queued; waiting for PDFX worker..."
+
+
 @pytest.mark.asyncio
 async def test_build_auth_headers_static_bearer(parser_env, monkeypatch):
     monkeypatch.setenv("PDF_EXTRACTION_AUTH_MODE", "static_bearer")
