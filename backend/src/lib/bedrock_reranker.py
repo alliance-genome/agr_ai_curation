@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+from contextlib import contextmanager
 from typing import Any, Dict, List, Sequence
 from urllib import error, request
 
@@ -45,6 +46,11 @@ DEFAULT_BEDROCK_RERANK_MODEL_ARN = (
 MAX_BEDROCK_RERANK_SOURCES = 100
 _DEFAULT_LOCAL_TRANSFORMERS_URL = "http://reranker-transformers:8080"
 LOCAL_TRANSFORMERS_TIMEOUT_SECONDS = 5
+RERANK_AWS_ENV_OVERRIDES = {
+    "RERANK_AWS_PROFILE": "AWS_PROFILE",
+    "RERANK_AWS_SHARED_CREDENTIALS_FILE": "AWS_SHARED_CREDENTIALS_FILE",
+    "RERANK_AWS_CONFIG_FILE": "AWS_CONFIG_FILE",
+}
 
 
 def get_rerank_provider() -> str:
@@ -60,6 +66,7 @@ def get_effective_rerank_provider() -> str:
 def get_bedrock_reranker_status(*, check_credentials: bool = True) -> Dict[str, Any]:
     """Return sanitized readiness details for the Bedrock reranker provider."""
     provider = get_rerank_provider()
+    rerank_aws_profile = os.getenv("RERANK_AWS_PROFILE")
     aws_profile = os.getenv("AWS_PROFILE")
     aws_default_profile = os.getenv("AWS_DEFAULT_PROFILE")
     model_arn = _get_bedrock_rerank_model_arn()
@@ -68,6 +75,9 @@ def get_bedrock_reranker_status(*, check_credentials: bool = True) -> Dict[str, 
         "provider": provider,
         "region": None,
         "model_arn_configured": bool(model_arn),
+        "rerank_aws_profile_configured": bool(
+            rerank_aws_profile and rerank_aws_profile.strip()
+        ),
         "aws_profile_configured": bool(aws_profile and aws_profile.strip()),
         "aws_default_profile_configured": bool(
             aws_default_profile and aws_default_profile.strip()
@@ -106,14 +116,14 @@ def get_bedrock_reranker_status(*, check_credentials: bool = True) -> Dict[str, 
         return status
 
     try:
-        with without_blank_aws_profile_env_vars():
+        with _with_rerank_aws_env():
             session = _bedrock_session(region)
             if check_credentials and session.get_credentials() is None:
                 status["is_healthy"] = False
                 status["reason"] = (
                     "AWS credentials were not found for Bedrock reranking; "
                     "configure an IAM role, environment credentials, or a valid "
-                    "AWS_PROFILE, or set RERANK_PROVIDER=none"
+                    "RERANK_AWS_PROFILE/AWS_PROFILE, or set RERANK_PROVIDER=none"
                 )
                 return status
     except ProfileNotFound as exc:
@@ -166,13 +176,45 @@ def _get_bedrock_rerank_model_arn() -> str:
     ).strip()
 
 
+def _get_rerank_aws_profile() -> str:
+    rerank_profile = os.getenv("RERANK_AWS_PROFILE", "").strip()
+    if rerank_profile:
+        return rerank_profile
+    return os.getenv("AWS_PROFILE", "").strip()
+
+
+@contextmanager
+def _with_rerank_aws_env():
+    """Apply rerank-only AWS env overrides while constructing Bedrock clients."""
+    saved_values: Dict[str, str | None] = {}
+    for source_key, target_key in RERANK_AWS_ENV_OVERRIDES.items():
+        source_value = os.getenv(source_key)
+        if source_value is None:
+            continue
+        saved_values[target_key] = os.environ.get(target_key)
+        if source_value.strip():
+            os.environ[target_key] = source_value
+        else:
+            os.environ.pop(target_key, None)
+
+    try:
+        with without_blank_aws_profile_env_vars():
+            yield
+    finally:
+        for target_key, original_value in saved_values.items():
+            if original_value is None:
+                os.environ.pop(target_key, None)
+            else:
+                os.environ[target_key] = original_value
+
+
 def _bedrock_session(region: str):
     if boto3 is None:
         raise RuntimeError(
             "boto3/botocore are required for Bedrock reranking but are not installed"
         )
 
-    aws_profile = os.getenv("AWS_PROFILE", "").strip()
+    aws_profile = _get_rerank_aws_profile()
     if aws_profile:
         return boto3.Session(profile_name=aws_profile, region_name=region)
     return boto3.Session(region_name=region)
@@ -180,7 +222,7 @@ def _bedrock_session(region: str):
 
 def _bedrock_agent_runtime_client():
     region = _get_aws_region()
-    with without_blank_aws_profile_env_vars():
+    with _with_rerank_aws_env():
         session = _bedrock_session(region)
         return session.client("bedrock-agent-runtime", region_name=region)
 

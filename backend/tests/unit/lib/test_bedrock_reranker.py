@@ -56,6 +56,7 @@ def test_rerank_chunks_uses_profile_and_reorders_results(monkeypatch):
 
     monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
     monkeypatch.setenv("AWS_PROFILE", "ctabone")
+    monkeypatch.setenv("RERANK_AWS_PROFILE", "ai-curation-rerank-local")
     monkeypatch.setenv("AWS_REGION", "us-east-1")
     monkeypatch.setattr(bedrock_reranker.boto3, "Session", _Session)
 
@@ -83,7 +84,7 @@ def test_rerank_chunks_uses_profile_and_reorders_results(monkeypatch):
     assert ranked[0]["metadata"]["retrieval_score"] == 0.55
     assert ranked[0]["metadata"]["rerank_score"] == 0.91
     assert "_rerank_text" not in ranked[0]
-    assert captured["profile_name"] == "ctabone"
+    assert captured["profile_name"] == "ai-curation-rerank-local"
     assert captured["service_name"] == "bedrock-agent-runtime"
     assert (
         captured["kwargs"]["rerankingConfiguration"]["bedrockRerankingConfiguration"][
@@ -95,6 +96,47 @@ def test_rerank_chunks_uses_profile_and_reorders_results(monkeypatch):
         captured["kwargs"]["sources"][0]["inlineDocumentSource"]["textDocument"]["text"]
         == "Methods section text"
     )
+
+
+def test_rerank_aws_env_overrides_are_scoped_to_bedrock_session(monkeypatch):
+    captured = {}
+
+    class _Session:
+        def __init__(self, profile_name=None, region_name=None):
+            captured["profile_name"] = profile_name
+            captured["region_name"] = region_name
+            captured["aws_profile"] = os.environ.get("AWS_PROFILE")
+            captured["credentials_file"] = os.environ.get("AWS_SHARED_CREDENTIALS_FILE")
+            captured["config_file"] = os.environ.get("AWS_CONFIG_FILE")
+
+    monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
+    monkeypatch.setenv("AWS_PROFILE", "ctabone")
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", "/home/ctabone/.aws/credentials")
+    monkeypatch.setenv("AWS_CONFIG_FILE", "/home/ctabone/.aws/config")
+    monkeypatch.setenv("RERANK_AWS_PROFILE", "ai-curation-rerank-local")
+    monkeypatch.setenv(
+        "RERANK_AWS_SHARED_CREDENTIALS_FILE",
+        "/runtime/secrets/aws-rerank/credentials",
+    )
+    monkeypatch.setenv(
+        "RERANK_AWS_CONFIG_FILE",
+        "/runtime/secrets/aws-rerank/config",
+    )
+    monkeypatch.setattr(bedrock_reranker.boto3, "Session", _Session)
+
+    status = bedrock_reranker.get_bedrock_reranker_status(check_credentials=False)
+
+    assert status["is_healthy"] is True
+    assert captured == {
+        "profile_name": "ai-curation-rerank-local",
+        "region_name": "us-east-1",
+        "aws_profile": "ai-curation-rerank-local",
+        "credentials_file": "/runtime/secrets/aws-rerank/credentials",
+        "config_file": "/runtime/secrets/aws-rerank/config",
+    }
+    assert os.environ["AWS_PROFILE"] == "ctabone"
+    assert os.environ["AWS_SHARED_CREDENTIALS_FILE"] == "/home/ctabone/.aws/credentials"
+    assert os.environ["AWS_CONFIG_FILE"] == "/home/ctabone/.aws/config"
 
 
 def test_bedrock_status_ignores_blank_aws_profile_env(monkeypatch):
