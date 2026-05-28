@@ -31,6 +31,7 @@ BUILTIN_SPECIALIST_DISPLAY_NAMES: Dict[str, str] = {
 
 INTERNAL_TOOL_DISPLAY_NAMES: Dict[str, str] = {
     "search_document": "Search Document",
+    "read_chunk": "Read Chunk",
     "read_section": "Read Section",
     "read_subsection": "Read Subsection",
     "record_evidence": "Record Evidence",

@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 DOCUMENT_REQUIRED_TOOL_NAMES = frozenset(
-    {"search_document", "read_section", "read_subsection"}
+    {"search_document", "read_chunk", "read_section", "read_subsection"}
 )
 
 

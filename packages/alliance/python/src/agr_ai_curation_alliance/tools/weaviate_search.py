@@ -9,14 +9,19 @@ This module provides tools for:
 
 import json
 import logging
-from typing import Optional, List, TYPE_CHECKING
+from typing import Optional, List, TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 from agents import function_tool
+from agr_ai_curation_runtime.evidence_spans import (
+    EVIDENCE_SPANIZER_VERSION,
+    build_evidence_spans,
+)
 from agr_ai_curation_runtime.chunk_identity import resolve_chunk_identifier
 from agr_ai_curation_runtime.weaviate_chunks import (
     hybrid_search_chunks,
-    get_document_sections,
+    get_chunk_by_id,
+    get_chunk_neighbor_ids,
     get_chunks_by_parent_section,  # Uses LLM-resolved parentSection for accurate boundaries
     get_chunks_by_subsection,
 )
@@ -39,6 +44,69 @@ class ChunkHit(BaseModel):
 class ChunkSearchResult(BaseModel):
     summary: str
     hits: List[ChunkHit]
+
+
+class EvidenceSpanResult(BaseModel):
+    span_id: str
+    span_index: int
+    span_type: str
+    text: str
+    char_start: int
+    char_end: int
+    page_number: Optional[int] = None
+    section_title: Optional[str] = None
+    spanizer_version: str = EVIDENCE_SPANIZER_VERSION
+
+
+class ChunkReadContent(BaseModel):
+    chunk_id: str
+    chunk_index: Optional[int] = None
+    chunk_number: Optional[int] = None
+    previous_chunk_id: Optional[str] = None
+    next_chunk_id: Optional[str] = None
+    page_number: Optional[int] = None
+    section_title: Optional[str] = None
+    subsection: Optional[str] = None
+    content: str
+    evidence_spans: List[EvidenceSpanResult]
+    doc_items: Optional[List[dict]] = None
+
+
+class ChunkReadResult(BaseModel):
+    summary: str
+    chunk: Optional[ChunkReadContent]
+
+
+def _coerce_chunk_index(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    return int(value)
+
+
+def _read_chunk_metadata(chunk_id: str, raw_metadata: Any) -> dict:
+    if raw_metadata is None:
+        return {}
+    if isinstance(raw_metadata, str):
+        try:
+            parsed = json.loads(raw_metadata)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Chunk '{chunk_id}' has malformed JSON metadata") from exc
+        if not isinstance(parsed, dict):
+            raise TypeError(f"Chunk '{chunk_id}' metadata JSON must decode to an object")
+        return parsed
+    if not isinstance(raw_metadata, dict):
+        raise TypeError(f"Chunk '{chunk_id}' metadata must be an object or JSON object string")
+    return raw_metadata
+
+
+def _read_actual_chunk_id(requested_chunk_id: str, chunk: dict) -> str:
+    raw_chunk_id = chunk.get("id")
+    actual_chunk_id = str(raw_chunk_id or "").strip()
+    if not actual_chunk_id:
+        raise ValueError(
+            f"Chunk lookup for '{requested_chunk_id}' returned no concrete backend chunk id"
+        )
+    return actual_chunk_id
 
 
 def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCallTracker"] = None):
@@ -124,6 +192,93 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
             return ChunkSearchResult(summary=f"Error searching document: {str(e)}", hits=[])
 
     return search_document
+
+
+def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["ToolCallTracker"] = None):
+    """
+    Create a read_chunk tool bound to a specific document and user.
+
+    Returns a function_tool that retrieves raw chunk content plus deterministic
+    exact-text evidence spans for extraction evidence selection.
+    """
+
+    @function_tool
+    async def read_chunk(chunk_id: str) -> ChunkReadResult:
+        """Read one PDF chunk and return deterministic evidence spans."""
+        if tracker:
+            tracker.record_call("read_chunk")
+
+        logger.info(
+            "Reading chunk '%s' from document %s...",
+            chunk_id,
+            document_id[:8],
+        )
+
+        chunk = await get_chunk_by_id(
+            chunk_id=chunk_id,
+            user_id=user_id,
+            document_id=document_id,
+        )
+        if not chunk:
+            return ChunkReadResult(
+                summary=f"No chunk found for chunk_id '{chunk_id}'.",
+                chunk=None,
+            )
+
+        content = chunk.get("text")
+        if not isinstance(content, str):
+            raise ValueError(f"Chunk '{chunk_id}' is missing exact raw text content")
+
+        metadata = _read_chunk_metadata(chunk_id, chunk.get("metadata"))
+
+        actual_chunk_id = _read_actual_chunk_id(chunk_id, chunk)
+        chunk_index = _coerce_chunk_index(chunk.get("chunk_index"))
+        if chunk_index is None:
+            chunk_index = _coerce_chunk_index(metadata.get("chunk_index"))
+        page_number = chunk.get("page_number") or metadata.get("page_number")
+        section_title = (
+            chunk.get("section_title")
+            or metadata.get("section_title")
+            or metadata.get("sectionTitle")
+        )
+
+        neighbor_ids = await get_chunk_neighbor_ids(
+            document_id=document_id,
+            user_id=user_id,
+            chunk_index=chunk_index,
+        )
+        spans = [
+            EvidenceSpanResult(**span.to_dict())
+            for span in build_evidence_spans(
+                chunk_id=actual_chunk_id,
+                chunk_text=content,
+                page_number=page_number,
+                section_title=section_title,
+            )
+        ]
+
+        page_text = f" from page {page_number}" if page_number else ""
+        return ChunkReadResult(
+            summary=(
+                f"Read chunk '{actual_chunk_id}'{page_text}. "
+                "Select evidence_spans[].span_id for record_evidence."
+            ),
+            chunk=ChunkReadContent(
+                chunk_id=actual_chunk_id,
+                chunk_index=chunk_index,
+                chunk_number=chunk_index + 1 if chunk_index is not None else None,
+                previous_chunk_id=neighbor_ids.get("previous_chunk_id"),
+                next_chunk_id=neighbor_ids.get("next_chunk_id"),
+                page_number=page_number,
+                section_title=section_title,
+                subsection=chunk.get("subsection") or metadata.get("subsection"),
+                content=content,
+                evidence_spans=spans,
+                doc_items=chunk.get("doc_items") or metadata.get("doc_items") or None,
+            ),
+        )
+
+    return read_chunk
 
 
 class SectionChunkSource(BaseModel):

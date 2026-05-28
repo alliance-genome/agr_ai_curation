@@ -112,6 +112,7 @@ def test_required_tool_names_prefers_document_tools_over_package_required_tools(
 
     assert _required_tool_names_for_agent(agent) == {
         "search_document",
+        "read_chunk",
         "read_section",
         "read_subsection",
     }

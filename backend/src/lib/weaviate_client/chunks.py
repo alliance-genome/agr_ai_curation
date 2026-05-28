@@ -360,6 +360,63 @@ async def get_chunk_by_id(
         raise
 
 
+async def get_chunk_neighbor_ids(
+    *,
+    document_id: str,
+    user_id: str,
+    chunk_index: int | None,
+) -> Dict[str, str | None]:
+    """Fetch adjacent tenant-scoped chunk IDs by chunk index."""
+
+    if not document_id:
+        raise ValueError("document_id is required for tenant-scoped chunk navigation")
+    if not user_id:
+        raise ValueError("user_id is required for tenant-scoped chunk navigation")
+    if chunk_index is None:
+        return {"previous_chunk_id": None, "next_chunk_id": None}
+    if not isinstance(chunk_index, int):
+        raise TypeError("chunk_index must be an int or None")
+
+    connection = get_connection()
+    if not connection:
+        raise RuntimeError("No Weaviate connection established")
+
+    def _fetch_chunk_id_at_index(index: int) -> str | None:
+        if index < 0:
+            return None
+
+        with connection.session() as client:
+            from ..weaviate_helpers import get_user_collections
+
+            chunk_collection, _ = get_user_collections(client, user_id)
+            response = chunk_collection.query.fetch_objects(
+                filters=(
+                    Filter.by_property("documentId").equal(document_id)
+                    & Filter.by_property("chunkIndex").equal(index)
+                ),
+                limit=1,
+                include_vector=False,
+                return_properties=["chunkIndex"],
+            )
+            objects = response.objects
+            if objects is None:
+                raise TypeError("Weaviate neighbor query response.objects is required")
+            if not objects:
+                return None
+            return _weaviate_object_uuid(objects[0])
+
+    def _fetch() -> Dict[str, str | None]:
+        return {
+            "previous_chunk_id": _fetch_chunk_id_at_index(chunk_index - 1),
+            "next_chunk_id": _fetch_chunk_id_at_index(chunk_index + 1),
+        }
+
+    if _run_sync_in_package_tool_subprocess():
+        return _fetch()
+
+    return await asyncio.to_thread(_fetch)
+
+
 async def hybrid_search_chunks(
     document_id: str,
     query: str,
