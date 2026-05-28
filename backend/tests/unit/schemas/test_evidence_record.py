@@ -5,8 +5,11 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from src.lib.openai_agents.models import GeneExtractionResultEnvelope
-from src.schemas.models.base import EvidenceRecord
+from src.lib.openai_agents.models import (
+    GeneExtractionResultEnvelope,
+    PdfEvidenceSourceFragment,
+)
+from src.schemas.models.base import EvidenceRecord, EvidenceSourceFragment
 
 
 def _tool_evidence_payload() -> dict[str, object]:
@@ -160,6 +163,12 @@ def test_evidence_record_schema_preserves_span_provenance_fields():
         **evidence_payload,
         "chunk_ids": ["abc123", "def456"],
     }
+
+
+def test_pdf_and_validated_source_fragment_fields_stay_in_sync():
+    assert set(PdfEvidenceSourceFragment.model_fields) == set(
+        EvidenceSourceFragment.model_fields
+    )
 
 
 @pytest.mark.parametrize("page", [0, -1])
