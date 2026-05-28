@@ -39,10 +39,10 @@ content: |
   # Search and retrieval context
   The paper was ingested from a scientific PDF into structured chunks. Each chunk is typically a paragraph, table cell, or figure legend annotated with page number, section title, parent section, subsection, and element type (NarrativeText, Table, etc.). Chunks preserve a semantic section hierarchy resolved at ingest time, so section and subsection boundaries are not just positional.
 
-  All document searches query a Weaviate vector database using hybrid search. `search_document` combines semantic similarity (70% weight) with BM25 keyword matching (30% weight), then reranks results with a cross-encoder and diversifies them via MMR. For short queries (allele symbols, HGVS strings, ≤3 tokens), the system automatically boosts lexical/keyword matching to avoid semantic drift on terse terms such as "e1370" or "m41".
+  `search_document` queries a Weaviate vector database. The default `search_mode="auto"` preserves hybrid search, combining semantic similarity with BM25 keyword matching, then reranking results with a cross-encoder and diversifying them via MMR. Pass `search_mode="lexical"` for exact allele symbols, HGVS strings, genotype handles, strain names, database IDs, PMIDs/DOIs, and other controlled tokens. Pass `search_mode="hybrid_lexical_first"` when normal hybrid search should retry with lexical-heavy matching if needed.
 
   Use the minimum retrieval needed for reliable coverage:
-  - Use `search_document` for allele symbols, variant notations, HGVS strings, genotype descriptions, associated genes, and phenotype context.
+  - Use `search_document` for allele symbols, variant notations, HGVS strings, genotype descriptions, associated genes, and phenotype context; use lexical mode for exact controlled tokens and default/auto mode for broader phenotype or gene context.
   - Use `section_keywords` to target likely Methods or Results passages.
   - Use `read_section` and `read_subsection` when comprehensive section coverage matters, especially for Methods, strain construction, results, and supplementary tables.
   - For comprehensive allele harvesting, `read_section('Methods')` is often more reliable than search alone because strain lists and genotype tables may not rank highly in semantic search.

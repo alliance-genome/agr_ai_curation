@@ -45,6 +45,12 @@ content: |
        figure/table references, and common synonym phrases.
      - Search Results, figure legends, tables, phenotype-focused subsections, and Methods context when it
        links an entity to a reported result.
+     - Use default `search_document` behavior for broad phenotype concepts and descriptions. Pass
+       `search_mode="lexical"` for exact phenotype labels, genotype handles, allele names, strain names,
+       reagent identifiers, PMIDs/DOIs, database IDs, and other controlled tokens. Pass
+       `search_mode="hybrid_lexical_first"` when normal hybrid search should retry with lexical-heavy
+       matching if needed.
+     - Use `section_keywords` to focus likely Results, figure legend, table, or Methods passages.
      - Capture each phenotype description exactly as written.
      - Note the genotype, allele, experimental condition, organism, life stage, sex, comparison, and conditional
        context when stated.

@@ -18,6 +18,23 @@ def identity_function_tool(monkeypatch):
     monkeypatch.setattr(weaviate_search, "function_tool", lambda fn: fn)
 
 
+def test_search_tool_schema_exposes_search_mode_enum(monkeypatch):
+    from agents import function_tool
+
+    monkeypatch.setattr(weaviate_search, "function_tool", function_tool)
+
+    tool = weaviate_search.create_search_tool("doc-12345678", "user-1")
+    search_mode_schema = tool.params_json_schema["properties"]["search_mode"]
+
+    assert search_mode_schema["default"] == "auto"
+    assert search_mode_schema["enum"] == [
+        "auto",
+        "hybrid",
+        "lexical",
+        "hybrid_lexical_first",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_search_tool_clamps_limit_and_handles_no_hits(monkeypatch):
     captured = {}
@@ -38,7 +55,52 @@ async def test_search_tool_clamps_limit_and_handles_no_hits(monkeypatch):
     assert captured["section_keywords"] == ["Methods"]
     assert captured["document_id"] == "doc-12345678"
     assert captured["user_id"] == "user-1"
+    assert captured["strategy"] == "hybrid"
     assert tracker.calls == ["search_document"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kwargs", "expected_strategy"),
+    [
+        ({}, "hybrid"),
+        ({"search_mode": "auto"}, "hybrid"),
+        ({"search_mode": "hybrid"}, "hybrid"),
+        ({"search_mode": "lexical"}, "lexical"),
+        ({"search_mode": "hybrid_lexical_first"}, "hybrid_lexical_first"),
+    ],
+)
+async def test_search_tool_forwards_search_mode_to_strategy(
+    monkeypatch, kwargs, expected_strategy
+):
+    captured = {}
+
+    async def _fake_hybrid(**hybrid_kwargs):
+        captured.update(hybrid_kwargs)
+        return []
+
+    monkeypatch.setattr(weaviate_search, "hybrid_search_chunks", _fake_hybrid)
+    tool = weaviate_search.create_search_tool("doc-12345678", "user-1")
+
+    result = await tool(query="wg", **kwargs)
+
+    assert result.summary == "No relevant content found."
+    assert captured["strategy"] == expected_strategy
+
+
+@pytest.mark.asyncio
+async def test_search_tool_rejects_invalid_search_mode(monkeypatch):
+    async def _fake_hybrid(**_kwargs):
+        raise AssertionError("invalid search_mode must not call Weaviate")
+
+    monkeypatch.setattr(weaviate_search, "hybrid_search_chunks", _fake_hybrid)
+    tool = weaviate_search.create_search_tool("doc-12345678", "user-1")
+
+    result = await tool(query="wg", search_mode="semantic")
+
+    assert "Unsupported search_mode 'semantic'" in result.summary
+    assert "auto, hybrid, lexical, hybrid_lexical_first" in result.summary
+    assert result.hits == []
 
 
 @pytest.mark.asyncio

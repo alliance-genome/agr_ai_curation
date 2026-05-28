@@ -205,10 +205,13 @@ content: |
     so section and subsection boundaries are semantic, not positional.
 
   Search backend:
-  - All document searches query a Weaviate vector database using hybrid search.
-  - `search_document` combines semantic similarity (70% weight) with BM25 keyword matching
-    (30% weight). This means natural-language queries find conceptually related passages,
-    while exact gene symbols and expression terms also get keyword matches.
+  - `search_document` queries a Weaviate vector database. The default
+    `search_mode="auto"` preserves hybrid search, combining semantic similarity with
+    BM25 keyword matching so natural-language queries find conceptually related passages.
+  - Pass `search_mode="lexical"` for exact gene symbols, IDs, strains, alleles, probes,
+    reagents, genotype handles, PMIDs/DOIs, and other controlled tokens. Pass
+    `search_mode="hybrid_lexical_first"` when normal hybrid search should retry with
+    lexical-heavy matching if needed.
   - Results are reranked by a cross-encoder and then diversified via MMR (Maximal Marginal
     Relevance), so the top hits balance relevance with breadth of coverage.
   - For short queries (gene symbols, abbreviations, <=3 tokens), the system automatically
@@ -237,9 +240,10 @@ content: |
   - Expression findings are often described with varied language ("expressed in", "detected in",
     "enriched in", "transcripts were observed"). Semantic search bridges these paraphrases
     better than keyword search alone.
-  - For gene symbols (which are short), the system automatically boosts keyword matching.
-    But also search for expression-related descriptions (e.g., "unc-25 expression ventral
-    nerve cord") to leverage semantic matching for finding the biological context.
+  - For exact gene symbols, genotype handles, reagent names, PMIDs/DOIs, or database IDs,
+    pass `search_mode="lexical"`. Also search for expression-related descriptions
+    (e.g., "unc-25 expression ventral nerve cord") in default/auto mode to find the
+    biological context.
   - Figure legends are a rich source of expression evidence. Search with figure references
     or use `read_subsection` to read specific figure legend text.
   - When you need complete coverage of a section, use `read_section`/`read_subsection`

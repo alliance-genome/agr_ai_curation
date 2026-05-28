@@ -124,6 +124,24 @@ def test_build_tool_execution_context_uses_env_database_url(monkeypatch):
     assert context.database_url == "postgresql://example/db"
 
 
+def test_curated_search_document_documents_search_mode_parameter():
+    parameters = {
+        parameter["name"]: parameter
+        for parameter in catalog_service.CURATED_TOOL_REGISTRY["search_document"][
+            "documentation"
+        ]["parameters"]
+    }
+
+    assert parameters["search_mode"]["enum"] == [
+        "auto",
+        "hybrid",
+        "lexical",
+        "hybrid_lexical_first",
+    ]
+    assert parameters["search_mode"]["required"] is False
+    assert "exact symbols/IDs" in parameters["search_mode"]["description"]
+
+
 def test_required_context_for_tool_ids_includes_document_requirements(monkeypatch):
     monkeypatch.setattr(
         catalog_service,

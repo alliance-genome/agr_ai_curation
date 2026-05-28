@@ -9,7 +9,7 @@ This module provides tools for:
 
 import json
 import logging
-from typing import Optional, List, TYPE_CHECKING, Any
+from typing import Optional, List, TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
 from agents import function_tool
@@ -31,6 +31,25 @@ if TYPE_CHECKING:
     from ..guardrails import ToolCallTracker
 
 logger = logging.getLogger(__name__)
+
+SearchMode = Literal["auto", "hybrid", "lexical", "hybrid_lexical_first"]
+
+_SEARCH_MODE_TO_STRATEGY: dict[str, str] = {
+    "auto": "hybrid",
+    "hybrid": "hybrid",
+    "lexical": "lexical",
+    "hybrid_lexical_first": "hybrid_lexical_first",
+}
+
+
+def _strategy_for_search_mode(search_mode: str) -> str:
+    try:
+        return _SEARCH_MODE_TO_STRATEGY[search_mode]
+    except KeyError as exc:
+        allowed = ", ".join(_SEARCH_MODE_TO_STRATEGY)
+        raise ValueError(
+            f"Unsupported search_mode '{search_mode}'. Allowed values: {allowed}."
+        ) from exc
 
 
 class ChunkHit(BaseModel):
@@ -126,17 +145,24 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
     async def search_document(
         query: str,
         limit: int = 5,
-        section_keywords: Optional[List[str]] = None
+        section_keywords: Optional[List[str]] = None,
+        search_mode: SearchMode = "auto",
     ) -> ChunkSearchResult:
         """Discovery tool: search the loaded PDF for relevant chunks.
 
         Use returned chunk_id values with read_chunk for final evidence selection.
         Do not use search snippets as retained evidence.
+        Use search_mode='lexical' for exact biomedical symbols, IDs, strains,
+        alleles, probes, reagents, genotype handles, PMIDs/DOIs, and controlled
+        tokens; use search_mode='hybrid_lexical_first' when broad hybrid search
+        should retry with lexical-heavy matching if needed. The default 'auto'
+        preserves hybrid search for broad conceptual queries.
 
         Args:
             query: Search terms or natural-language retrieval query.
             limit: Maximum number of chunks to return, capped at 10.
             section_keywords: Optional section filters such as Methods or Results.
+            search_mode: Retrieval mode: auto, hybrid, lexical, or hybrid_lexical_first.
         """
         # Record tool call if tracker is provided
         if tracker:
@@ -145,14 +171,18 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
         limit = min(max(1, limit), 10)
 
         logger.info(
-            "Searching document %s... query='%s...', limit=%s, sections=%s",
+            "Searching document %s... query='%s...', limit=%s, sections=%s, mode=%s",
             document_id[:8],
             query[:50],
             limit,
             section_keywords,
+            search_mode,
         )
 
         try:
+            # Exact biomedical tokens need explicit lexical-heavy retrieval modes;
+            # reranking/MMR must still run on full chunk content, not previews.
+            strategy = _strategy_for_search_mode(search_mode)
             chunks = await hybrid_search_chunks(
                 document_id=document_id,
                 query=query,
@@ -160,7 +190,7 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
                 limit=limit,
                 section_keywords=section_keywords,
                 apply_mmr=True,
-                strategy="hybrid"
+                strategy=strategy,
             )
 
             if not chunks:

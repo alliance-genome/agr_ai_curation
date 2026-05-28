@@ -1,7 +1,7 @@
 tool_policies:
   search_document:
     display_name: Search Document
-    description: Discovery search over the active document; use read_chunk on returned chunk IDs for final evidence span selection.
+    description: Discovery search over the active document with auto/hybrid, lexical, or hybrid_lexical_first modes; use read_chunk on returned chunk IDs for final evidence span selection.
     category: Document
     curator_visible: true
     allow_attach: true
