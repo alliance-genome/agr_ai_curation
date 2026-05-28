@@ -123,7 +123,14 @@ def build_package_diagnostic_tools_prompt() -> str:
             line += f" Methods: {method_names}."
         lines.append(line)
 
-    return "\n".join(lines) if lines else "- No package diagnostic tools are currently installed."
+        hint = str(diagnostic_metadata.get("hint") or "").strip()
+        if hint:
+            lines.append(f"- {hint}")
+
+    if not lines:
+        return "- No package diagnostic tools are currently installed."
+
+    return "\n".join(lines)
 
 
 def format_conversation_context(messages: Optional[List[dict]]) -> Optional[str]:
@@ -566,17 +573,22 @@ Use this workshop context to give concrete prompt-engineering feedback, especial
 2. what to test next in flow execution (and when to compare with the template-source prompt),
 3. how group rules may interact with the current draft.
 4. proactively identify concrete prompt improvements during normal conversation and suggest them.
-5. before making any draft update call, ask for permission in plain language (e.g., "Want me to apply this as a targeted edit?").
-6. after clear approval, call `update_workshop_prompt_draft`:
+5. before giving authoritative advice about current prompt/tool behavior, inspect current surfaces:
+   - use `refresh_workshop_prompt` before judging the current editable draft,
+   - use `get_prompt` for the effective template/source prompt when it is not already in context,
+   - use `get_tool_inventory` and `get_tool_details` for attached runtime tool schemas.
+6. for PDF evidence extraction prompts, preserve the span workflow: `search_document` finds candidate chunks, `read_chunk` exposes deterministic `evidence_spans[].span_id`, and `record_evidence(span_ids=[...])` creates backend-copied evidence. Do not propose instructions that ask agents to generate quote strings, fuzzy-repair quotes, or confirm claims with a separate LLM.
+7. before making any draft update call, ask for permission in plain language (e.g., "Want me to apply this as a targeted edit?").
+8. after clear approval, call `update_workshop_prompt_draft`:
    - set `target_prompt="main"` for editable curator-overlay behavior changes,
    - set `target_prompt="group"` for editable group-specific override wording/rules and include `target_group_id`,
    - full rewrite: `apply_mode="replace"` and provide `updated_prompt`,
    - small scoped tweaks: `apply_mode="targeted_edit"` and provide `edits`.
    - never copy locked core/generated/base prompt contracts into `updated_prompt`.
-7. when the curator is in Agent Workshop, do NOT call flow-only tools (`get_current_flow`, `get_available_agents`, `get_flow_templates`, `create_flow`, `validate_flow`) unless they explicitly switch to Flows.
-8. after a curator applies a prompt update, verify the current `<workshop_prompt_draft>` contains the intended change and provide a quick quality review.
-8a. before reviewing or commenting on current prompt text, use `refresh_workshop_prompt`; after it returns, treat conversation history and older versions as historical only and never report text as present unless it appears in the refreshed `current_prompt`.
-9. when proposing or applying prompt edits, use this distilled OpenAI-style prompt playbook:
+9. when the curator is in Agent Workshop, do NOT call flow-only tools (`get_current_flow`, `get_available_agents`, `get_flow_templates`, `create_flow`, `validate_flow`) unless they explicitly switch to Flows.
+10. after a curator applies a prompt update, verify the current `<workshop_prompt_draft>` contains the intended change and provide a quick quality review.
+11. before reviewing or commenting on current prompt text, use `refresh_workshop_prompt`; after it returns, treat conversation history and older versions as historical only and never report text as present unless it appears in the refreshed `current_prompt`.
+12. when proposing or applying prompt edits, use this distilled OpenAI-style prompt playbook:
    - put core instructions first, then separate context/examples with clear delimiters (`###` sections or triple quotes),
    - make directions specific and measurable (length, format, required fields, decision rules),
    - prefer explicit output schemas and short examples over vague prose,
@@ -584,8 +596,8 @@ Use this workshop context to give concrete prompt-engineering feedback, especial
    - avoid "don't do X" alone; add the preferred behavior ("do Y instead"),
    - start with minimal/targeted edits first; escalate to larger rewrites only when needed,
    - for extraction/factual behavior, prioritize deterministic wording over creative language.
-10. in reviews, explicitly check whether the updated prompt follows the playbook above and call out any misses.
-11. choose the right target for edits:
+13. in reviews, explicitly check whether the updated prompt follows the playbook above and call out any misses.
+14. choose the right target for edits:
    - use main prompt updates for overlay guidance that should apply across all groups,
    - use group prompt updates only for organism/group-specific exceptions or conventions.
 
@@ -677,7 +689,7 @@ This tool returns:
 - Clean markdown representation
 - `domain_envelope_analysis` for envelope-producing nodes, domain packs, object definitions, and validation schedules
 
-**NEVER** reference flow structure, automatic validation choices, or domain-envelope-producing nodes without calling this tool first. If the returned domain-pack or validator metadata is not enough for the curator's question, call `get_domain_pack_validation_plan`.
+**NEVER** reference flow structure, automatic validation choices, domain-envelope-producing nodes, or PDF evidence/tool contracts without calling the relevant inspection tools first. If the returned domain-pack or validator metadata is not enough for the curator's question, call `get_domain_pack_validation_plan`. Use `get_prompt`, `get_tool_inventory`, and `get_tool_details` before judging agent custom instructions, attached document tools, or PDF evidence schemas.
 </critical_instruction>
 
 <responsibilities>
@@ -705,6 +717,7 @@ This tool returns:
 
 **CRITICAL for item 4:** You MUST actually call `get_prompt` for each agent with custom instructions to perform the comparison. Do NOT skip this step or guess based on agent name alone.
 **CRITICAL for items 7-9:** Use `get_current_flow` and, when needed, `get_domain_pack_validation_plan`; do NOT infer validator behavior from agent names or legacy candidate/prep outputs.
+**CRITICAL for PDF evidence flows:** Use `get_tool_inventory` and `get_tool_details` for the relevant extraction agent before recommending document-tool prompt changes. Preserve the `search_document` -> `read_chunk` -> `record_evidence(span_ids=[...])` workflow and the active-run evidence workspace tools; do not suggest quote-generation or fuzzy quote repair instructions.
 </validation_checklist>
 
 <flow_design_guidance>

@@ -569,6 +569,92 @@ class TestAgentWorkshopSystemPrompt:
         assert "artifact_lookup" in system_prompt
         assert "{{PACKAGE_DIAGNOSTIC_TOOLS}}" not in system_prompt
 
+    def test_package_diagnostic_prompt_uses_metadata_owned_hints(self, monkeypatch):
+        from src.lib.agent_studio import catalog_service, prompt_builder
+
+        monkeypatch.setattr(
+            catalog_service,
+            "get_tool_registry",
+            lambda: {
+                "artifact_lookup": {
+                    "agent_studio": {
+                        "prompt_description": "Lookup artifacts in the museum catalog.",
+                        "diagnostic": {"enabled": True},
+                    },
+                },
+                "span_catalog": {
+                    "agent_studio": {
+                        "prompt_description": "Inspect runtime span evidence tools.",
+                        "diagnostic": {
+                            "enabled": True,
+                            "hint": (
+                                "For PDF evidence and document-tool advice, inspect the live "
+                                "runtime catalog with `get_tool_inventory` and `get_tool_details` "
+                                "instead of relying on remembered tool schemas."
+                            ),
+                        },
+                    },
+                },
+            },
+        )
+
+        prompt = prompt_builder.build_package_diagnostic_tools_prompt()
+
+        assert "Lookup artifacts in the museum catalog." in prompt
+        assert "Inspect runtime span evidence tools." in prompt
+        assert "For PDF evidence and document-tool advice" in prompt
+
+    def test_package_diagnostic_prompt_stays_generic_without_metadata_hints(self, monkeypatch):
+        from src.lib.agent_studio import catalog_service, prompt_builder
+
+        monkeypatch.setattr(
+            catalog_service,
+            "get_tool_registry",
+            lambda: {
+                "artifact_lookup": {
+                    "agent_studio": {
+                        "prompt_description": "Lookup artifacts in the museum catalog.",
+                        "diagnostic": {"enabled": True},
+                    },
+                },
+            },
+        )
+
+        prompt = prompt_builder.build_package_diagnostic_tools_prompt()
+
+        assert "Lookup artifacts in the museum catalog." in prompt
+        assert "For PDF evidence and document-tool advice" not in prompt
+
+    def test_workshop_opus_prompt_requires_live_tool_inspection_for_pdf_evidence(self, monkeypatch):
+        from src.lib.agent_studio import prompt_builder
+        from src.lib.agent_studio.models import AgentWorkshopContext, ChatContext
+
+        monkeypatch.setattr(
+            prompt_builder,
+            "build_package_diagnostic_tools_prompt",
+            lambda: "- No package diagnostic tools are currently installed.",
+        )
+
+        system_prompt = prompt_builder.build_opus_system_prompt(
+            context=ChatContext(
+                active_tab="agent_workshop",
+                agent_workshop=AgentWorkshopContext(
+                    template_source="gene_expression",
+                    prompt_draft="## Evidence\nUse document tools.",
+                    draft_tool_ids=["search_document", "read_chunk", "record_evidence"],
+                ),
+            ),
+            load_template=lambda: "{{PACKAGE_DIAGNOSTIC_TOOLS}}\n{{USER_GREETING}}",
+            list_model_definitions=lambda: [],
+            get_prompt_catalog=lambda: None,
+            prepare_trace_context=lambda _trace_id: None,
+        )
+
+        assert "use `refresh_workshop_prompt` before judging" in system_prompt
+        assert "use `get_tool_inventory` and `get_tool_details`" in system_prompt
+        assert "`record_evidence(span_ids=[...])` creates backend-copied evidence" in system_prompt
+        assert "Do not propose instructions that ask agents to generate quote strings" in system_prompt
+
     def test_get_all_opus_tools_includes_workshop_prompt_update_tool(self):
         from src.api import agent_studio as api_module
         from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext

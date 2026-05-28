@@ -898,6 +898,23 @@ describe('PromptWorkshop', () => {
     expect(onVerifyRequest.mock.calls[0][0]).toContain('Help me choose the best model settings')
   }, 15000)
 
+  it('opens a draft discussion request with live prompt and tool inspection guidance', async () => {
+    const onVerifyRequest = vi.fn()
+
+    render(<PromptWorkshop catalog={buildCatalog()} onVerifyRequest={onVerifyRequest} />)
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchModelOptions).toHaveBeenCalled()
+    })
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Discuss with Claude' }))
+
+    expect(onVerifyRequest).toHaveBeenCalledTimes(1)
+    expect(onVerifyRequest.mock.calls[0][0]).toContain('inspect current prompt/tool schemas')
+    expect(onVerifyRequest.mock.calls[0][0]).toContain('read_chunk span IDs')
+    expect(onVerifyRequest.mock.calls[0][0]).toContain('record_evidence(span_ids)')
+  }, 15000)
+
   it('opens a system-prompt discussion request with Claude', async () => {
     const onVerifyRequest = vi.fn()
 
@@ -911,6 +928,8 @@ describe('PromptWorkshop', () => {
 
     expect(onVerifyRequest).toHaveBeenCalledTimes(1)
     expect(onVerifyRequest.mock.calls[0][0]).toContain('Help me improve the SYSTEM PROMPT')
+    expect(onVerifyRequest.mock.calls[0][0]).toContain('inspect current prompt/tool schemas')
+    expect(onVerifyRequest.mock.calls[0][0]).toContain('record_evidence(span_ids)')
   })
 
   it('applies incoming group prompt updates from Opus approval into group overrides', async () => {

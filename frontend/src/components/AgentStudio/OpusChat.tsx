@@ -1044,6 +1044,7 @@ function OpusChat({
 REQUIRED: Call these tools first:
 1. get_current_flow() - returns flow definition with validation_warnings and has_critical_issues flag
 2. get_available_agents() - get agent categories and output_agents list
+3. get_prompt(), get_tool_inventory(), and get_tool_details() as needed before judging custom instructions, document tools, or PDF evidence behavior
 
 IMPORTANT: Check get_current_flow() response for:
 - has_critical_issues: true/false - if TRUE, verification MUST FAIL
@@ -1078,7 +1079,7 @@ OUTPUT:
 
   // Agent Workshop suggestions (shown when on agent_workshop tab)
   const workshopQuickActions = [
-    { label: 'Critique this draft', prompt: 'Please critique my current Agent Workshop draft and suggest concrete edits.' },
+    { label: 'Critique this draft', prompt: 'Please refresh and critique my current Agent Workshop draft, inspect attached tool schemas if tool behavior matters, and suggest concrete edits.' },
     { label: 'Plan flow tests', prompt: 'Given my draft, what 3 flow-based validation tests should I run next, including one compare-with-template case?' },
     { label: 'Improve structure', prompt: 'Can you help me restructure this draft prompt so instructions and output expectations are clearer?' },
   ]

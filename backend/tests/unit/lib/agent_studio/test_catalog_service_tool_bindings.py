@@ -142,6 +142,26 @@ def test_curated_search_document_documents_search_mode_parameter():
     assert "exact symbols/IDs" in parameters["search_mode"]["description"]
 
 
+def test_curated_pdf_evidence_tools_document_span_contract():
+    record_parameters = {
+        parameter["name"]: parameter
+        for parameter in catalog_service.CURATED_TOOL_REGISTRY["record_evidence"][
+            "documentation"
+        ]["parameters"]
+    }
+    read_chunk_summary = catalog_service.CURATED_TOOL_REGISTRY["read_chunk"][
+        "documentation"
+    ]["summary"]
+    workspace_summary = catalog_service.CURATED_TOOL_REGISTRY[
+        "update_recorded_evidence_metadata"
+    ]["documentation"]["summary"]
+
+    assert "evidence span IDs" in read_chunk_summary
+    assert "span_ids" in record_parameters
+    assert "claimed_quote" not in record_parameters
+    assert "source quote and provenance fields are immutable" in workspace_summary.lower()
+
+
 def test_required_context_for_tool_ids_includes_document_requirements(monkeypatch):
     monkeypatch.setattr(
         catalog_service,

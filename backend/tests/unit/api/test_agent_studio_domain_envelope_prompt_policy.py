@@ -194,6 +194,20 @@ def test_agent_studio_system_prompt_grounded_in_domain_envelope_tools():
     assert "what a specialist, extractor, or validator can do" in prompt
 
 
+def test_agent_studio_system_prompt_grounded_in_pdf_evidence_span_tools():
+    prompt = _read_repo_text("backend/src/api/agent_studio_system_prompt.md")
+
+    assert "PDF evidence is span-backed" in prompt
+    assert "Do not tell curators or prompt authors that extraction agents should invent" in prompt
+    assert "`search_document` for candidate chunks" in prompt
+    assert "`read_chunk` for exact chunk text plus deterministic `evidence_spans[].span_id`" in prompt
+    assert "`record_evidence(span_ids=[...])`" in prompt
+    assert "`search_document.search_mode` supports `auto`, `hybrid`, `lexical`, and `hybrid_lexical_first`" in prompt
+    assert "Prefer lexical-heavy modes for exact biomedical symbols" in prompt
+    assert "Active-run evidence workspace tools" in prompt
+    assert "Do not recommend fuzzy quote repair" in prompt
+
+
 def test_agent_studio_system_prompt_canonical_and_packaged_copies_match():
     canonical_path = REPO_ROOT / "alliance_config" / "agent_studio_system_prompt.md"
     if not canonical_path.exists():
