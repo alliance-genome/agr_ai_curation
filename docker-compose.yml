@@ -212,10 +212,9 @@ services:
       - SNS_TOPIC_ARN=${SNS_TOPIC_ARN:-}
       - SNS_REGION=${SNS_REGION:-us-east-1}
       - AWS_REGION=${AWS_REGION:-us-east-1}
-      - AWS_ACCESS_KEY_ID
-      - AWS_SECRET_ACCESS_KEY
-      - AWS_SESSION_TOKEN
       - AWS_PROFILE
+      - AWS_SHARED_CREDENTIALS_FILE=${AWS_SHARED_CREDENTIALS_FILE:-/runtime/secrets/aws-rerank/credentials}
+      - AWS_CONFIG_FILE=${AWS_CONFIG_FILE:-/runtime/secrets/aws-rerank/config}
       - RERANK_PROVIDER=${RERANK_PROVIDER:-none}
       - BEDROCK_RERANK_MODEL_ARN=${BEDROCK_RERANK_MODEL_ARN:-arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0}
       - FEEDBACK_USE_SNS=${FEEDBACK_USE_SNS:-false}
@@ -265,6 +264,7 @@ services:
       - ./scripts/install:/workspace/scripts/install:ro
       - ./packages:/runtime/packages:ro
       - ./config:/runtime/config:ro
+      - ${AWS_CREDENTIALS_MOUNT_DIR:-./.empty_aws_credentials}:/runtime/secrets/aws-rerank:ro
       - ./pdf_storage:/app/pdf_storage
       - ./file_outputs:/app/file_outputs
       - ./backend/config:/app/backend/config
