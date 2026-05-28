@@ -21,6 +21,9 @@ EXTRACTOR_PROMPT_PATHS = [
     REPO_ROOT / "packages/alliance/agents/phenotype_extractor/prompt.yaml",
 ]
 
+EVIDENCE_FIXTURE_DIR = REPO_ROOT / "backend/tests/fixtures/evidence"
+PDF_CORPUS_TRIAL_DIR = REPO_ROOT / "docs/design/pdf-corpus-trials"
+
 STALE_RECORD_EVIDENCE_PHRASES = [
     "claimed_quote",
     "verbatim or lightly trimmed",
@@ -196,3 +199,50 @@ def test_agent_studio_catalog_tool_inventory_exposes_span_workspace_contract():
 
     assert stale_hits == []
     assert missing == []
+
+
+def test_evidence_fixtures_use_span_id_tool_inputs():
+    stale_hits: list[str] = []
+    missing: list[str] = []
+
+    for path in sorted(EVIDENCE_FIXTURE_DIR.glob("tool_verified_*_paper.json")):
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert isinstance(data, dict), f"{path.relative_to(REPO_ROOT)} did not parse as a mapping"
+        for index, tool_case in enumerate(data.get("tool_cases", [])):
+            label = f"{path.relative_to(REPO_ROOT)} tool_cases[{index}]"
+            assert isinstance(tool_case, dict), f"{label} is not a mapping"
+            case_id = str(tool_case.get("case_id") or "")
+            if "quote" in case_id.lower():
+                stale_hits.append(f"{label}: case_id={case_id}")
+            tool_input = tool_case.get("tool_input")
+            assert isinstance(tool_input, dict), f"{label} has no tool_input mapping"
+            if "claimed_quote" in tool_input:
+                stale_hits.append(f"{label}: claimed_quote")
+            if "chunk_id" in tool_input:
+                stale_hits.append(f"{label}: chunk_id")
+            span_ids = tool_input.get("span_ids")
+            if not isinstance(span_ids, list) or not all(isinstance(item, str) for item in span_ids):
+                missing.append(f"{label}: span_ids")
+            expected_tool_result = tool_case.get("expected_tool_result")
+            assert isinstance(expected_tool_result, dict), f"{label} has no expected_tool_result mapping"
+            _assert_no_stale_phrases(
+                f"{label} expected_tool_result",
+                " ".join(str(value) for value in expected_tool_result.values()),
+                stale_hits,
+            )
+
+    assert stale_hits == []
+    assert missing == []
+
+
+def test_pdf_corpus_trial_examples_do_not_teach_quote_submission():
+    stale_hits: list[str] = []
+    for path in sorted(PDF_CORPUS_TRIAL_DIR.rglob("*.json")):
+        content = path.read_text(encoding="utf-8")
+        _assert_no_stale_phrases(
+            str(path.relative_to(REPO_ROOT)),
+            content,
+            stale_hits,
+        )
+
+    assert stale_hits == []

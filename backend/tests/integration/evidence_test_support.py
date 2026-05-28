@@ -320,6 +320,7 @@ def configure_chat_stream_mocks(
 
 def make_fixture_runner(evidence_fixture: dict[str, object]):
     extraction = evidence_fixture["extraction"]
+    assert isinstance(extraction, dict)
     expected_sse_records = build_expected_sse_records(evidence_fixture)
     extraction_payload = build_domain_envelope_extraction_payload(evidence_fixture)
 
@@ -341,6 +342,9 @@ def make_fixture_runner(evidence_fixture: dict[str, object]):
             evidence_record_id = evidence_record.get("evidence_record_id")
             if evidence_record_id:
                 tool_output["evidence_record_id"] = evidence_record_id
+            source_span_ids = evidence_record.get("source_span_ids")
+            if source_span_ids:
+                tool_output["source_span_ids"] = source_span_ids
 
             yield {
                 "type": "TOOL_COMPLETE",
@@ -348,8 +352,7 @@ def make_fixture_runner(evidence_fixture: dict[str, object]):
                 "internal": {
                     "tool_input": {
                         "entity": evidence_record["entity"],
-                        "chunk_id": evidence_record["chunk_id"],
-                        "claimed_quote": evidence_record["verified_quote"],
+                        "span_ids": source_span_ids,
                     },
                     "tool_output": json.dumps(tool_output),
                 },

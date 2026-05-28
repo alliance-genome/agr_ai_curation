@@ -83,7 +83,7 @@
                 "output_key": "trial_instructions",
                 "prompt_version": null,
                 "step_goal": null,
-                "task_instructions": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one exact supporting quote, include organism/species hints, and do not extract other genes.",
+                "task_instructions": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one span-backed evidence unit, include organism/species hints, and do not extract other genes.",
                 "validation_attachments": [],
                 "validation_groups": []
               },
@@ -99,14 +99,14 @@
                 "agent_description": null,
                 "agent_display_name": "Gene Extractor",
                 "agent_id": "gene_extractor",
-                "custom_input": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one exact supporting quote, include organism/species hints, and do not extract other genes.",
+                "custom_input": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one span-backed evidence unit, include organism/species hints, and do not extract other genes.",
                 "custom_instructions": null,
                 "include_evidence": null,
                 "input_source": "custom",
                 "output_filename_template": null,
                 "output_key": "gene_extractor_output",
                 "prompt_version": null,
-                "step_goal": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one exact supporting quote, include organism/species hints, and do not extract other genes.",
+                "step_goal": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one span-backed evidence unit, include organism/species hints, and do not extract other genes.",
                 "task_instructions": null,
                 "validation_attachments": [
                   {
@@ -657,7 +657,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "9dffdcf3-1488-16e3-161f-e5993a117229",
-            "claimed_quote": "Crumbs regulates R8 cell fate through its FERM-binding motif. Confocal microscope images of adult D. melanogaster retinas stained with anti-GFP (grey), anti-Rh5 (magenta) and anti-Rh6 (green) antibodies. GFP-negative clones harboured the following alleles: crb 11A22 (A), FRT82B (negative control) (B) or crb \u0394 FBM. HA (C).",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "Crumbs",
             "field_path": null,
             "object_id": null,
@@ -692,7 +692,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "9dffdcf3-1488-16e3-161f-e5993a117229",
-            "claimed_quote": "Crumbs regulates R8 cell fate through its FERM-binding motif. Confocal microscope images of adult D. melanogaster retinas stained with anti-GFP (grey), anti-Rh5 (magenta) and anti-Rh6 (green) antibodies.",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "Crumbs",
             "field_path": null,
             "object_id": null,
@@ -788,7 +788,7 @@
             {
               "args": {
                 "chunk_id": "9dffdcf3-1488-16e3-161f-e5993a117229",
-                "claimed_quote": "Crumbs regulates R8 cell fate through its FERM-binding motif. Confocal microscope images of adult D. melanogaster retinas stained with anti-GFP (grey), anti-Rh5 (magenta) and anti-Rh6 (green) antibodies. GFP-negative clones harboured the following alleles: crb 11A22 (A), FRT82B (negative control) (B) or crb \u0394 FBM. HA (C).",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Crumbs",
                 "field_path": null,
                 "object_id": null,
@@ -802,7 +802,7 @@
             {
               "args": {
                 "chunk_id": "9dffdcf3-1488-16e3-161f-e5993a117229",
-                "claimed_quote": "Crumbs regulates R8 cell fate through its FERM-binding motif. Confocal microscope images of adult D. melanogaster retinas stained with anti-GFP (grey), anti-Rh5 (magenta) and anti-Rh6 (green) antibodies.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Crumbs",
                 "field_path": null,
                 "object_id": null,
@@ -1206,7 +1206,7 @@
     "pdf_url": "https://journals.plos.org/plosgenetics/article/file?id=10.1371/journal.pgen.1009146&type=printable",
     "pmcid": "PMC8211197",
     "pmid": "34097697",
-    "prompt": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one exact supporting quote, include organism/species hints, and do not extract other genes.",
+    "prompt": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one span-backed evidence unit, include organism/species hints, and do not extract other genes.",
     "title": "Crumbs and the apical spectrin cytoskeleton regulate R8 cell fate in the Drosophila eye",
     "trial_id": "gene_drosophila_crb_rhabdomere"
   },

@@ -83,7 +83,7 @@
                 "output_key": "trial_instructions",
                 "prompt_version": null,
                 "step_goal": null,
-                "task_instructions": "Read the loaded paper and extract exactly one disease assertion candidate: the Pkd1 mouse model of autosomal dominant polycystic kidney disease. Preserve disease mention, model organism/subject context, role, and one record_evidence verified quote. Do not perform disease ontology lookup in the extractor.",
+                "task_instructions": "Read the loaded paper and extract exactly one disease assertion candidate: the Pkd1 mouse model of autosomal dominant polycystic kidney disease. Preserve disease mention, model organism/subject context, role, and one record_evidence span-backed evidence record. Do not perform disease ontology lookup in the extractor.",
                 "validation_attachments": [],
                 "validation_groups": []
               },
@@ -99,14 +99,14 @@
                 "agent_description": null,
                 "agent_display_name": "Disease Extractor",
                 "agent_id": "disease_extractor",
-                "custom_input": "Read the loaded paper and extract exactly one disease assertion candidate: the Pkd1 mouse model of autosomal dominant polycystic kidney disease. Preserve disease mention, model organism/subject context, role, and one record_evidence verified quote. Do not perform disease ontology lookup in the extractor.",
+                "custom_input": "Read the loaded paper and extract exactly one disease assertion candidate: the Pkd1 mouse model of autosomal dominant polycystic kidney disease. Preserve disease mention, model organism/subject context, role, and one record_evidence span-backed evidence record. Do not perform disease ontology lookup in the extractor.",
                 "custom_instructions": null,
                 "include_evidence": null,
                 "input_source": "custom",
                 "output_filename_template": null,
                 "output_key": "disease_extractor_output",
                 "prompt_version": null,
-                "step_goal": "Read the loaded paper and extract exactly one disease assertion candidate: the Pkd1 mouse model of autosomal dominant polycystic kidney disease. Preserve disease mention, model organism/subject context, role, and one record_evidence verified quote. Do not perform disease ontology lookup in the extractor.",
+                "step_goal": "Read the loaded paper and extract exactly one disease assertion candidate: the Pkd1 mouse model of autosomal dominant polycystic kidney disease. Preserve disease mention, model organism/subject context, role, and one record_evidence span-backed evidence record. Do not perform disease ontology lookup in the extractor.",
                 "task_instructions": null,
                 "validation_attachments": [
                   {
@@ -1707,7 +1707,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "2e87e71d-5347-72d6-57a3-872c8c15c306",
-            "claimed_quote": "A total of 70 kidneys [36 Pkd1 cko/cko ;tamoxifen-cre positive (mutant) and 34 Pkd1 cko/cko ;tamoxifen-cre negative (control)] in which Pkd1 knockout was induced between P5 and P9 were harvested between P11 and P24 and analyzed using gene expression arrays. This set includes mutant kidneys with variable degrees of cystic transformation.",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "Pkd1 mouse model of autosomal dominant polycystic kidney disease",
             "field_path": null,
             "object_id": null,
@@ -1910,7 +1910,7 @@
             {
               "args": {
                 "chunk_id": "2e87e71d-5347-72d6-57a3-872c8c15c306",
-                "claimed_quote": "A total of 70 kidneys [36 Pkd1 cko/cko ;tamoxifen-cre positive (mutant) and 34 Pkd1 cko/cko ;tamoxifen-cre negative (control)] in which Pkd1 knockout was induced between P5 and P9 were harvested between P11 and P24 and analyzed using gene expression arrays. This set includes mutant kidneys with variable degrees of cystic transformation.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Pkd1 mouse model of autosomal dominant polycystic kidney disease",
                 "field_path": null,
                 "object_id": null,
@@ -2291,7 +2291,7 @@
     "pdf_url": "https://journals.plos.org/plosgenetics/article/file?id=10.1371/journal.pgen.1003053&type=printable",
     "pmcid": "PMC3516559",
     "pmid": "23209420",
-    "prompt": "Read the loaded paper and extract exactly one disease assertion candidate: the Pkd1 mouse model of autosomal dominant polycystic kidney disease. Preserve disease mention, model organism/subject context, role, and one record_evidence verified quote. Do not perform disease ontology lookup in the extractor.",
+    "prompt": "Read the loaded paper and extract exactly one disease assertion candidate: the Pkd1 mouse model of autosomal dominant polycystic kidney disease. Preserve disease mention, model organism/subject context, role, and one record_evidence span-backed evidence record. Do not perform disease ontology lookup in the extractor.",
     "title": "Network Analysis of a Pkd1-Mouse Model of Autosomal Dominant Polycystic Kidney Disease Identifies HNF4alpha as a Disease Modifier",
     "trial_id": "disease_mouse_pkd1_adpkd"
   },

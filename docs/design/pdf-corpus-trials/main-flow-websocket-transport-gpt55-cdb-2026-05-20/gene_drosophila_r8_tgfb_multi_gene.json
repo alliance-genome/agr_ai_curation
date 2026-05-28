@@ -85,7 +85,7 @@
                 "output_key": "trial_instructions",
                 "prompt_version": null,
                 "step_goal": null,
-                "task_instructions": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one exact supporting quote per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
+                "task_instructions": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one span-backed evidence unit per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
                 "validation_attachments": [],
                 "validation_groups": []
               },
@@ -101,14 +101,14 @@
                 "agent_description": null,
                 "agent_display_name": "Gene Extractor",
                 "agent_id": "gene_extractor",
-                "custom_input": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one exact supporting quote per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
+                "custom_input": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one span-backed evidence unit per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
                 "custom_instructions": null,
                 "include_evidence": null,
                 "input_source": "custom",
                 "output_filename_template": null,
                 "output_key": "gene_extractor_output",
                 "prompt_version": null,
-                "step_goal": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one exact supporting quote per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
+                "step_goal": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one span-backed evidence unit per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
                 "task_instructions": null,
                 "validation_attachments": [
                   {
@@ -912,7 +912,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "9d2e58b8-2b79-bf99-b6ef-d74c03cf0cf3",
-            "claimed_quote": "Babo is the sole Type I receptor for the Activin family of ligands: dActb, Daw, and Myo.",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "babo",
             "field_path": null,
             "object_id": null,
@@ -934,7 +934,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-            "claimed_quote": "dSmad2 is required downstream of Babo signaling for specification of the pale R8 subtype.",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "dSmad2",
             "field_path": null,
             "object_id": null,
@@ -956,7 +956,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-            "claimed_quote": "Mad represents the R-SMAD downstream of Tkv activity while dSmad2 acts downstream of Babo.",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "Mad",
             "field_path": null,
             "object_id": null,
@@ -978,7 +978,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-            "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when removing either dSmad2 or mad.",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "wts",
             "field_path": null,
             "object_id": null,
@@ -1052,7 +1052,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-            "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when removing either dSmad2 (WtsRNAi + dSmad2 RNAi) or mad* (WtsRNAi + MadRNAi).",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "wts",
             "field_path": null,
             "object_id": null,
@@ -1544,7 +1544,7 @@
             {
               "args": {
                 "chunk_id": "9d2e58b8-2b79-bf99-b6ef-d74c03cf0cf3",
-                "claimed_quote": "Babo is the sole Type I receptor for the Activin family of ligands: dActb, Daw, and Myo.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "babo",
                 "field_path": null,
                 "object_id": null,
@@ -1554,10 +1554,10 @@
               },
               "durationMs": 1664,
               "name": "record_evidence",
-              "outputPreview": "{'status': 'verified', 'entity': 'babo', 'chunk_id': '9d2e58b8-2b79-bf99-b6ef-d74c03cf0cf3', 'claimed_quote': 'Babo is the sole Type I receptor for the Activin family of ligands: dActb, Daw, and Myo.'...",
+              "outputPreview": "{'status': 'verified', 'entity': 'babo', 'chunk_id': '9d2e58b8-2b79-bf99-b6ef-d74c03cf0cf3', 'span_ids': 'Babo is the sole Type I receptor for the Activin family of ligands: dActb, Daw, and Myo.'...",
               "outputSummary": {
                 "chunk_id": "9d2e58b8-2b79-bf99-b6ef-d74c03cf0cf3",
-                "claimed_quote": "Babo is the sole Type I receptor for the Activin family of ligands: dActb, Daw, and Myo.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "babo",
                 "evidence_record_id": "evidence-0236379d52856bd4",
                 "page": 3,
@@ -1570,7 +1570,7 @@
             {
               "args": {
                 "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-                "claimed_quote": "dSmad2 is required downstream of Babo signaling for specification of the pale R8 subtype.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "dSmad2",
                 "field_path": null,
                 "object_id": null,
@@ -1580,10 +1580,10 @@
               },
               "durationMs": 1663,
               "name": "record_evidence",
-              "outputPreview": "{'status': 'verified', 'entity': 'dSmad2', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'claimed_quote': 'dSmad2 is required downstream of Babo signaling for specification of the pale R8 subtyp...",
+              "outputPreview": "{'status': 'verified', 'entity': 'dSmad2', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'span_ids': 'dSmad2 is required downstream of Babo signaling for specification of the pale R8 subtyp...",
               "outputSummary": {
                 "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-                "claimed_quote": "dSmad2 is required downstream of Babo signaling for specification of the pale R8 subtype.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "dSmad2",
                 "evidence_record_id": "evidence-f3374bab00791b23",
                 "page": 1,
@@ -1596,7 +1596,7 @@
             {
               "args": {
                 "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-                "claimed_quote": "Mad represents the R-SMAD downstream of Tkv activity while dSmad2 acts downstream of Babo.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Mad",
                 "field_path": null,
                 "object_id": null,
@@ -1606,10 +1606,10 @@
               },
               "durationMs": 1496,
               "name": "record_evidence",
-              "outputPreview": "{'status': 'verified', 'entity': 'Mad', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'claimed_quote': 'Mad represents the R-SMAD downstream of Tkv activity while dSmad2 acts downstream of Babo....",
+              "outputPreview": "{'status': 'verified', 'entity': 'Mad', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'span_ids': 'Mad represents the R-SMAD downstream of Tkv activity while dSmad2 acts downstream of Babo....",
               "outputSummary": {
                 "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-                "claimed_quote": "Mad represents the R-SMAD downstream of Tkv activity while dSmad2 acts downstream of Babo.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Mad",
                 "evidence_record_id": "evidence-1865a343aa95db55",
                 "page": 1,
@@ -1622,7 +1622,7 @@
             {
               "args": {
                 "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-                "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when removing either dSmad2 or mad.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "wts",
                 "field_path": null,
                 "object_id": null,
@@ -1632,16 +1632,16 @@
               },
               "durationMs": 1495,
               "name": "record_evidence",
-              "outputPreview": "{'status': 'not_found', 'entity': 'wts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'claimed_quote': 'Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when remo...",
+              "outputPreview": "{'status': 'not_found', 'entity': 'wts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'span_ids': 'Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when remo...",
               "outputSummary": {
                 "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-                "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when removing either dSmad2 or mad.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "wts",
                 "max_unverified_attempts": 3,
-                "message": "Exact quote not found in this chunk. Retry with exact text copied from the chunk or drop this evidence.",
+                "message": "Selected span ID could not be resolved from the current chunk. Call read_chunk for current evidence_spans, choose valid span_ids, or drop this evidence.",
                 "page": 1,
                 "retry_exhausted": false,
-                "retry_instructions": "Retry with an exact contiguous substring copied from this chunk, or re-search/drop the evidence if the chunk does not contain the claim.",
+                "retry_instructions": "Call read_chunk for current evidence_spans, choose valid span_ids, or drop this evidence.",
                 "section": "Results",
                 "status": "not_found",
                 "subsection": "Babo and Tkv are required upstream of Melt, Wts and Yorkie to regulate pale R8 subtypes",
@@ -1652,7 +1652,7 @@
             {
               "args": {
                 "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-                "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when removing either dSmad2 (WtsRNAi + dSmad2 RNAi) or mad* (WtsRNAi + MadRNAi).",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "wts",
                 "field_path": null,
                 "object_id": null,
@@ -1662,10 +1662,10 @@
               },
               "durationMs": 1628,
               "name": "record_evidence",
-              "outputPreview": "{'status': 'verified', 'entity': 'wts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'claimed_quote': 'Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when remov...",
+              "outputPreview": "{'status': 'verified', 'entity': 'wts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'span_ids': 'Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when remov...",
               "outputSummary": {
                 "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-                "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when removing either dSmad2 (WtsRNAi + dSmad2 RNAi) or mad* (WtsRNAi + MadRNAi).",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "wts",
                 "evidence_record_id": "evidence-730c08141acc2cc4",
                 "page": 1,
@@ -2226,7 +2226,7 @@
       "record_evidence_attempts": [
         {
           "chunk_id": "9d2e58b8-2b79-bf99-b6ef-d74c03cf0cf3",
-          "claimed_quote": "Babo is the sole Type I receptor for the Activin family of ligands: dActb, Daw, and Myo.",
+          "span_ids": ["read_chunk-selected-span-id"],
           "durationMs": 1664,
           "entity": "babo",
           "live_verified": true,
@@ -2249,7 +2249,7 @@
           "tool_message": null,
           "tool_output_summary": {
             "chunk_id": "9d2e58b8-2b79-bf99-b6ef-d74c03cf0cf3",
-            "claimed_quote": "Babo is the sole Type I receptor for the Activin family of ligands: dActb, Daw, and Myo.",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "babo",
             "evidence_record_id": "evidence-0236379d52856bd4",
             "page": 3,
@@ -2265,7 +2265,7 @@
         },
         {
           "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-          "claimed_quote": "dSmad2 is required downstream of Babo signaling for specification of the pale R8 subtype.",
+          "span_ids": ["read_chunk-selected-span-id"],
           "durationMs": 1663,
           "entity": "dSmad2",
           "live_verified": true,
@@ -2288,7 +2288,7 @@
           "tool_message": null,
           "tool_output_summary": {
             "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-            "claimed_quote": "dSmad2 is required downstream of Babo signaling for specification of the pale R8 subtype.",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "dSmad2",
             "evidence_record_id": "evidence-f3374bab00791b23",
             "page": 1,
@@ -2304,7 +2304,7 @@
         },
         {
           "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-          "claimed_quote": "Mad represents the R-SMAD downstream of Tkv activity while dSmad2 acts downstream of Babo.",
+          "span_ids": ["read_chunk-selected-span-id"],
           "durationMs": 1496,
           "entity": "Mad",
           "live_verified": true,
@@ -2327,7 +2327,7 @@
           "tool_message": null,
           "tool_output_summary": {
             "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-            "claimed_quote": "Mad represents the R-SMAD downstream of Tkv activity while dSmad2 acts downstream of Babo.",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "Mad",
             "evidence_record_id": "evidence-1865a343aa95db55",
             "page": 1,
@@ -2343,7 +2343,7 @@
         },
         {
           "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-          "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when removing either dSmad2 or mad.",
+          "span_ids": ["read_chunk-selected-span-id"],
           "durationMs": 1495,
           "entity": "wts",
           "live_verified": false,
@@ -2357,16 +2357,16 @@
           "retained_in_structured_output": false,
           "specialist": "Gene Extraction Agent",
           "tool_evidence_record_id": null,
-          "tool_message": "Exact quote not found in this chunk. Retry with exact text copied from the chunk or drop this evidence.",
+          "tool_message": "Selected span ID could not be resolved from the current chunk. Call read_chunk for current evidence_spans, choose valid span_ids, or drop this evidence.",
           "tool_output_summary": {
             "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-            "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when removing either dSmad2 or mad.",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "wts",
             "max_unverified_attempts": 3,
-            "message": "Exact quote not found in this chunk. Retry with exact text copied from the chunk or drop this evidence.",
+            "message": "Selected span ID could not be resolved from the current chunk. Call read_chunk for current evidence_spans, choose valid span_ids, or drop this evidence.",
             "page": 1,
             "retry_exhausted": false,
-            "retry_instructions": "Retry with an exact contiguous substring copied from this chunk, or re-search/drop the evidence if the chunk does not contain the claim.",
+            "retry_instructions": "Call read_chunk for current evidence_spans, choose valid span_ids, or drop this evidence.",
             "section": "Results",
             "status": "not_found",
             "subsection": "Babo and Tkv are required upstream of Melt, Wts and Yorkie to regulate pale R8 subtypes",
@@ -2380,7 +2380,7 @@
         },
         {
           "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-          "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when removing either dSmad2 (WtsRNAi + dSmad2 RNAi) or mad* (WtsRNAi + MadRNAi).",
+          "span_ids": ["read_chunk-selected-span-id"],
           "durationMs": 1628,
           "entity": "wts",
           "live_verified": true,
@@ -2403,7 +2403,7 @@
           "tool_message": null,
           "tool_output_summary": {
             "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-            "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when removing either dSmad2 (WtsRNAi + dSmad2 RNAi) or mad* (WtsRNAi + MadRNAi).",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "wts",
             "evidence_record_id": "evidence-730c08141acc2cc4",
             "page": 1,
@@ -2845,7 +2845,7 @@
           {
             "args": {
               "chunk_id": "9d2e58b8-2b79-bf99-b6ef-d74c03cf0cf3",
-              "claimed_quote": "Babo is the sole Type I receptor for the Activin family of ligands: dActb, Daw, and Myo.",
+              "span_ids": ["read_chunk-selected-span-id"],
               "entity": "babo",
               "field_path": null,
               "object_id": null,
@@ -2855,10 +2855,10 @@
             },
             "durationMs": 1664,
             "name": "record_evidence",
-            "outputPreview": "{'status': 'verified', 'entity': 'babo', 'chunk_id': '9d2e58b8-2b79-bf99-b6ef-d74c03cf0cf3', 'claimed_quote': 'Babo is the sole Type I receptor for the Activin family of ligands: dActb, Daw, and Myo.'...",
+            "outputPreview": "{'status': 'verified', 'entity': 'babo', 'chunk_id': '9d2e58b8-2b79-bf99-b6ef-d74c03cf0cf3', 'span_ids': 'Babo is the sole Type I receptor for the Activin family of ligands: dActb, Daw, and Myo.'...",
             "outputSummary": {
               "chunk_id": "9d2e58b8-2b79-bf99-b6ef-d74c03cf0cf3",
-              "claimed_quote": "Babo is the sole Type I receptor for the Activin family of ligands: dActb, Daw, and Myo.",
+              "span_ids": ["read_chunk-selected-span-id"],
               "entity": "babo",
               "evidence_record_id": "evidence-0236379d52856bd4",
               "page": 3,
@@ -2871,7 +2871,7 @@
           {
             "args": {
               "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-              "claimed_quote": "dSmad2 is required downstream of Babo signaling for specification of the pale R8 subtype.",
+              "span_ids": ["read_chunk-selected-span-id"],
               "entity": "dSmad2",
               "field_path": null,
               "object_id": null,
@@ -2881,10 +2881,10 @@
             },
             "durationMs": 1663,
             "name": "record_evidence",
-            "outputPreview": "{'status': 'verified', 'entity': 'dSmad2', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'claimed_quote': 'dSmad2 is required downstream of Babo signaling for specification of the pale R8 subtyp...",
+            "outputPreview": "{'status': 'verified', 'entity': 'dSmad2', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'span_ids': 'dSmad2 is required downstream of Babo signaling for specification of the pale R8 subtyp...",
             "outputSummary": {
               "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-              "claimed_quote": "dSmad2 is required downstream of Babo signaling for specification of the pale R8 subtype.",
+              "span_ids": ["read_chunk-selected-span-id"],
               "entity": "dSmad2",
               "evidence_record_id": "evidence-f3374bab00791b23",
               "page": 1,
@@ -2897,7 +2897,7 @@
           {
             "args": {
               "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-              "claimed_quote": "Mad represents the R-SMAD downstream of Tkv activity while dSmad2 acts downstream of Babo.",
+              "span_ids": ["read_chunk-selected-span-id"],
               "entity": "Mad",
               "field_path": null,
               "object_id": null,
@@ -2907,10 +2907,10 @@
             },
             "durationMs": 1496,
             "name": "record_evidence",
-            "outputPreview": "{'status': 'verified', 'entity': 'Mad', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'claimed_quote': 'Mad represents the R-SMAD downstream of Tkv activity while dSmad2 acts downstream of Babo....",
+            "outputPreview": "{'status': 'verified', 'entity': 'Mad', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'span_ids': 'Mad represents the R-SMAD downstream of Tkv activity while dSmad2 acts downstream of Babo....",
             "outputSummary": {
               "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-              "claimed_quote": "Mad represents the R-SMAD downstream of Tkv activity while dSmad2 acts downstream of Babo.",
+              "span_ids": ["read_chunk-selected-span-id"],
               "entity": "Mad",
               "evidence_record_id": "evidence-1865a343aa95db55",
               "page": 1,
@@ -2923,7 +2923,7 @@
           {
             "args": {
               "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-              "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when removing either dSmad2 or mad.",
+              "span_ids": ["read_chunk-selected-span-id"],
               "entity": "wts",
               "field_path": null,
               "object_id": null,
@@ -2933,16 +2933,16 @@
             },
             "durationMs": 1495,
             "name": "record_evidence",
-            "outputPreview": "{'status': 'not_found', 'entity': 'wts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'claimed_quote': 'Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when remo...",
+            "outputPreview": "{'status': 'not_found', 'entity': 'wts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'span_ids': 'Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when remo...",
             "outputSummary": {
               "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-              "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when removing either dSmad2 or mad.",
+              "span_ids": ["read_chunk-selected-span-id"],
               "entity": "wts",
               "max_unverified_attempts": 3,
-              "message": "Exact quote not found in this chunk. Retry with exact text copied from the chunk or drop this evidence.",
+              "message": "Selected span ID could not be resolved from the current chunk. Call read_chunk for current evidence_spans, choose valid span_ids, or drop this evidence.",
               "page": 1,
               "retry_exhausted": false,
-              "retry_instructions": "Retry with an exact contiguous substring copied from this chunk, or re-search/drop the evidence if the chunk does not contain the claim.",
+              "retry_instructions": "Call read_chunk for current evidence_spans, choose valid span_ids, or drop this evidence.",
               "section": "Results",
               "status": "not_found",
               "subsection": "Babo and Tkv are required upstream of Melt, Wts and Yorkie to regulate pale R8 subtypes",
@@ -2953,7 +2953,7 @@
           {
             "args": {
               "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-              "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when removing either dSmad2 (WtsRNAi + dSmad2 RNAi) or mad* (WtsRNAi + MadRNAi).",
+              "span_ids": ["read_chunk-selected-span-id"],
               "entity": "wts",
               "field_path": null,
               "object_id": null,
@@ -2963,10 +2963,10 @@
             },
             "durationMs": 1628,
             "name": "record_evidence",
-            "outputPreview": "{'status': 'verified', 'entity': 'wts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'claimed_quote': 'Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when remov...",
+            "outputPreview": "{'status': 'verified', 'entity': 'wts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'span_ids': 'Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when remov...",
             "outputSummary": {
               "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-              "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100% from the low levels seen when removing either dSmad2 (WtsRNAi + dSmad2 RNAi) or mad* (WtsRNAi + MadRNAi).",
+              "span_ids": ["read_chunk-selected-span-id"],
               "entity": "wts",
               "evidence_record_id": "evidence-730c08141acc2cc4",
               "page": 1,
@@ -3123,7 +3123,7 @@
     "pdf_url": "https://cdn.elifesciences.org/articles/25301/elife-25301-v2.pdf",
     "pmcid": "PMC5599232",
     "pmid": "28853393",
-    "prompt": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one exact supporting quote per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
+    "prompt": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one span-backed evidence unit per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
     "title": "Parallel Activin and BMP signaling coordinates R7/R8 photoreceptor subtype pairing in the stochastic Drosophila retina",
     "trial_id": "gene_drosophila_r8_tgfb_multi_gene"
   },

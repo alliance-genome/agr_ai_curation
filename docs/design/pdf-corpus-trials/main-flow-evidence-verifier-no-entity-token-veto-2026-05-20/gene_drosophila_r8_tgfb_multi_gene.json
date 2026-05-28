@@ -85,7 +85,7 @@
                 "output_key": "trial_instructions",
                 "prompt_version": null,
                 "step_goal": null,
-                "task_instructions": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one exact supporting quote per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
+                "task_instructions": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one span-backed evidence unit per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
                 "validation_attachments": [],
                 "validation_groups": []
               },
@@ -101,14 +101,14 @@
                 "agent_description": null,
                 "agent_display_name": "Gene Extractor",
                 "agent_id": "gene_extractor",
-                "custom_input": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one exact supporting quote per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
+                "custom_input": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one span-backed evidence unit per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
                 "custom_instructions": null,
                 "include_evidence": null,
                 "input_source": "custom",
                 "output_filename_template": null,
                 "output_key": "gene_extractor_output",
                 "prompt_version": null,
-                "step_goal": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one exact supporting quote per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
+                "step_goal": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one span-backed evidence unit per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
                 "task_instructions": null,
                 "validation_attachments": [
                   {
@@ -1049,7 +1049,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "a75b5acb-fed6-f3ff-1020-6312eb63c76f",
-            "claimed_quote": "removing or overexpressing Babo-b significantly reduced (16%) and increased (65%) pale fate, respectively.",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "Baboon",
             "field_path": null,
             "object_id": null,
@@ -1071,7 +1071,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-            "claimed_quote": "removing dSmad2 resulted in a sharp decrease in pale R8 subtypes (15%).",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "dSmad2",
             "field_path": null,
             "object_id": null,
@@ -1093,7 +1093,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-            "claimed_quote": "removing mad with RNAi also resulted in a decrease of pale R8 subtypes (4%).",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "Mad",
             "field_path": null,
             "object_id": null,
@@ -1115,7 +1115,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-            "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100%.",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "Warts",
             "field_path": null,
             "object_id": null,
@@ -1609,7 +1609,7 @@
             {
               "args": {
                 "chunk_id": "a75b5acb-fed6-f3ff-1020-6312eb63c76f",
-                "claimed_quote": "removing or overexpressing Babo-b significantly reduced (16%) and increased (65%) pale fate, respectively.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Baboon",
                 "field_path": null,
                 "object_id": null,
@@ -1619,10 +1619,10 @@
               },
               "durationMs": 3585,
               "name": "record_evidence",
-              "outputPreview": "{'status': 'verified', 'entity': 'Baboon', 'chunk_id': 'a75b5acb-fed6-f3ff-1020-6312eb63c76f', 'claimed_quote': 'removing or overexpressing Babo-b significantly reduced (16%) and increased (65%) pale ...",
+              "outputPreview": "{'status': 'verified', 'entity': 'Baboon', 'chunk_id': 'a75b5acb-fed6-f3ff-1020-6312eb63c76f', 'span_ids': 'removing or overexpressing Babo-b significantly reduced (16%) and increased (65%) pale ...",
               "outputSummary": {
                 "chunk_id": "a75b5acb-fed6-f3ff-1020-6312eb63c76f",
-                "claimed_quote": "removing or overexpressing Babo-b significantly reduced (16%) and increased (65%) pale fate, respectively.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Baboon",
                 "evidence_record_id": "evidence-4701f6dfc776fcb0",
                 "figure_reference": "Figure 2",
@@ -1636,7 +1636,7 @@
             {
               "args": {
                 "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-                "claimed_quote": "removing dSmad2 resulted in a sharp decrease in pale R8 subtypes (15%).",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "dSmad2",
                 "field_path": null,
                 "object_id": null,
@@ -1646,10 +1646,10 @@
               },
               "durationMs": 3502,
               "name": "record_evidence",
-              "outputPreview": "{'status': 'verified', 'entity': 'dSmad2', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'claimed_quote': 'removing dSmad2 resulted in a sharp decrease in pale R8 subtypes (15%).', 'verified_quo...",
+              "outputPreview": "{'status': 'verified', 'entity': 'dSmad2', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'span_ids': 'removing dSmad2 resulted in a sharp decrease in pale R8 subtypes (15%).', 'verified_quo...",
               "outputSummary": {
                 "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-                "claimed_quote": "removing dSmad2 resulted in a sharp decrease in pale R8 subtypes (15%).",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "dSmad2",
                 "evidence_record_id": "evidence-6d2d2e18a66586f6",
                 "page": 1,
@@ -1662,7 +1662,7 @@
             {
               "args": {
                 "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-                "claimed_quote": "removing mad with RNAi also resulted in a decrease of pale R8 subtypes (4%).",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Mad",
                 "field_path": null,
                 "object_id": null,
@@ -1672,10 +1672,10 @@
               },
               "durationMs": 3436,
               "name": "record_evidence",
-              "outputPreview": "{'status': 'verified', 'entity': 'Mad', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'claimed_quote': 'removing mad with RNAi also resulted in a decrease of pale R8 subtypes (4%).', 'verified_q...",
+              "outputPreview": "{'status': 'verified', 'entity': 'Mad', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'span_ids': 'removing mad with RNAi also resulted in a decrease of pale R8 subtypes (4%).', 'verified_q...",
               "outputSummary": {
                 "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-                "claimed_quote": "removing mad with RNAi also resulted in a decrease of pale R8 subtypes (4%).",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Mad",
                 "evidence_record_id": "evidence-b34c34ccf6acb6eb",
                 "page": 1,
@@ -1688,7 +1688,7 @@
             {
               "args": {
                 "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-                "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100%.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Warts",
                 "field_path": null,
                 "object_id": null,
@@ -1698,10 +1698,10 @@
               },
               "durationMs": 3430,
               "name": "record_evidence",
-              "outputPreview": "{'status': 'verified', 'entity': 'Warts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'claimed_quote': 'Removing wts increased pale R8 subtypes to almost 100%.', 'verified_quote': 'Removing wt...",
+              "outputPreview": "{'status': 'verified', 'entity': 'Warts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'span_ids': 'Removing wts increased pale R8 subtypes to almost 100%.', 'verified_quote': 'Removing wt...",
               "outputSummary": {
                 "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-                "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100%.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Warts",
                 "evidence_record_id": "evidence-2d3e8ec78a344eda",
                 "page": 1,
@@ -2398,7 +2398,7 @@
       "record_evidence_attempts": [
         {
           "chunk_id": "a75b5acb-fed6-f3ff-1020-6312eb63c76f",
-          "claimed_quote": "removing or overexpressing Babo-b significantly reduced (16%) and increased (65%) pale fate, respectively.",
+          "span_ids": ["read_chunk-selected-span-id"],
           "durationMs": 3585,
           "entity": "Baboon",
           "live_verified": true,
@@ -2421,7 +2421,7 @@
           "tool_message": null,
           "tool_output_summary": {
             "chunk_id": "a75b5acb-fed6-f3ff-1020-6312eb63c76f",
-            "claimed_quote": "removing or overexpressing Babo-b significantly reduced (16%) and increased (65%) pale fate, respectively.",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "Baboon",
             "evidence_record_id": "evidence-4701f6dfc776fcb0",
             "figure_reference": "Figure 2",
@@ -2438,7 +2438,7 @@
         },
         {
           "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-          "claimed_quote": "removing dSmad2 resulted in a sharp decrease in pale R8 subtypes (15%).",
+          "span_ids": ["read_chunk-selected-span-id"],
           "durationMs": 3502,
           "entity": "dSmad2",
           "live_verified": true,
@@ -2461,7 +2461,7 @@
           "tool_message": null,
           "tool_output_summary": {
             "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-            "claimed_quote": "removing dSmad2 resulted in a sharp decrease in pale R8 subtypes (15%).",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "dSmad2",
             "evidence_record_id": "evidence-6d2d2e18a66586f6",
             "page": 1,
@@ -2477,7 +2477,7 @@
         },
         {
           "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-          "claimed_quote": "removing mad with RNAi also resulted in a decrease of pale R8 subtypes (4%).",
+          "span_ids": ["read_chunk-selected-span-id"],
           "durationMs": 3436,
           "entity": "Mad",
           "live_verified": true,
@@ -2500,7 +2500,7 @@
           "tool_message": null,
           "tool_output_summary": {
             "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-            "claimed_quote": "removing mad with RNAi also resulted in a decrease of pale R8 subtypes (4%).",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "Mad",
             "evidence_record_id": "evidence-b34c34ccf6acb6eb",
             "page": 1,
@@ -2516,7 +2516,7 @@
         },
         {
           "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-          "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100%.",
+          "span_ids": ["read_chunk-selected-span-id"],
           "durationMs": 3430,
           "entity": "Warts",
           "live_verified": true,
@@ -2539,7 +2539,7 @@
           "tool_message": null,
           "tool_output_summary": {
             "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-            "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100%.",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "Warts",
             "evidence_record_id": "evidence-2d3e8ec78a344eda",
             "page": 1,
@@ -2947,7 +2947,7 @@
           {
             "args": {
               "chunk_id": "a75b5acb-fed6-f3ff-1020-6312eb63c76f",
-              "claimed_quote": "removing or overexpressing Babo-b significantly reduced (16%) and increased (65%) pale fate, respectively.",
+              "span_ids": ["read_chunk-selected-span-id"],
               "entity": "Baboon",
               "field_path": null,
               "object_id": null,
@@ -2957,10 +2957,10 @@
             },
             "durationMs": 3585,
             "name": "record_evidence",
-            "outputPreview": "{'status': 'verified', 'entity': 'Baboon', 'chunk_id': 'a75b5acb-fed6-f3ff-1020-6312eb63c76f', 'claimed_quote': 'removing or overexpressing Babo-b significantly reduced (16%) and increased (65%) pale ...",
+            "outputPreview": "{'status': 'verified', 'entity': 'Baboon', 'chunk_id': 'a75b5acb-fed6-f3ff-1020-6312eb63c76f', 'span_ids': 'removing or overexpressing Babo-b significantly reduced (16%) and increased (65%) pale ...",
             "outputSummary": {
               "chunk_id": "a75b5acb-fed6-f3ff-1020-6312eb63c76f",
-              "claimed_quote": "removing or overexpressing Babo-b significantly reduced (16%) and increased (65%) pale fate, respectively.",
+              "span_ids": ["read_chunk-selected-span-id"],
               "entity": "Baboon",
               "evidence_record_id": "evidence-4701f6dfc776fcb0",
               "figure_reference": "Figure 2",
@@ -2974,7 +2974,7 @@
           {
             "args": {
               "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-              "claimed_quote": "removing dSmad2 resulted in a sharp decrease in pale R8 subtypes (15%).",
+              "span_ids": ["read_chunk-selected-span-id"],
               "entity": "dSmad2",
               "field_path": null,
               "object_id": null,
@@ -2984,10 +2984,10 @@
             },
             "durationMs": 3502,
             "name": "record_evidence",
-            "outputPreview": "{'status': 'verified', 'entity': 'dSmad2', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'claimed_quote': 'removing dSmad2 resulted in a sharp decrease in pale R8 subtypes (15%).', 'verified_quo...",
+            "outputPreview": "{'status': 'verified', 'entity': 'dSmad2', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'span_ids': 'removing dSmad2 resulted in a sharp decrease in pale R8 subtypes (15%).', 'verified_quo...",
             "outputSummary": {
               "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-              "claimed_quote": "removing dSmad2 resulted in a sharp decrease in pale R8 subtypes (15%).",
+              "span_ids": ["read_chunk-selected-span-id"],
               "entity": "dSmad2",
               "evidence_record_id": "evidence-6d2d2e18a66586f6",
               "page": 1,
@@ -3000,7 +3000,7 @@
           {
             "args": {
               "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-              "claimed_quote": "removing mad with RNAi also resulted in a decrease of pale R8 subtypes (4%).",
+              "span_ids": ["read_chunk-selected-span-id"],
               "entity": "Mad",
               "field_path": null,
               "object_id": null,
@@ -3010,10 +3010,10 @@
             },
             "durationMs": 3436,
             "name": "record_evidence",
-            "outputPreview": "{'status': 'verified', 'entity': 'Mad', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'claimed_quote': 'removing mad with RNAi also resulted in a decrease of pale R8 subtypes (4%).', 'verified_q...",
+            "outputPreview": "{'status': 'verified', 'entity': 'Mad', 'chunk_id': '9d5efc18-7c8c-2948-d21a-e76b78355e05', 'span_ids': 'removing mad with RNAi also resulted in a decrease of pale R8 subtypes (4%).', 'verified_q...",
             "outputSummary": {
               "chunk_id": "9d5efc18-7c8c-2948-d21a-e76b78355e05",
-              "claimed_quote": "removing mad with RNAi also resulted in a decrease of pale R8 subtypes (4%).",
+              "span_ids": ["read_chunk-selected-span-id"],
               "entity": "Mad",
               "evidence_record_id": "evidence-b34c34ccf6acb6eb",
               "page": 1,
@@ -3026,7 +3026,7 @@
           {
             "args": {
               "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-              "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100%.",
+              "span_ids": ["read_chunk-selected-span-id"],
               "entity": "Warts",
               "field_path": null,
               "object_id": null,
@@ -3036,10 +3036,10 @@
             },
             "durationMs": 3430,
             "name": "record_evidence",
-            "outputPreview": "{'status': 'verified', 'entity': 'Warts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'claimed_quote': 'Removing wts increased pale R8 subtypes to almost 100%.', 'verified_quote': 'Removing wt...",
+            "outputPreview": "{'status': 'verified', 'entity': 'Warts', 'chunk_id': '4088ff9d-8710-4965-9358-149150815771', 'span_ids': 'Removing wts increased pale R8 subtypes to almost 100%.', 'verified_quote': 'Removing wt...",
             "outputSummary": {
               "chunk_id": "4088ff9d-8710-4965-9358-149150815771",
-              "claimed_quote": "Removing wts increased pale R8 subtypes to almost 100%.",
+              "span_ids": ["read_chunk-selected-span-id"],
               "entity": "Warts",
               "evidence_record_id": "evidence-2d3e8ec78a344eda",
               "page": 1,
@@ -3196,7 +3196,7 @@
     "pdf_url": "https://cdn.elifesciences.org/articles/25301/elife-25301-v2.pdf",
     "pmcid": "PMC5599232",
     "pmid": "28853393",
-    "prompt": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one exact supporting quote per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
+    "prompt": "Read the loaded paper and extract four distinct paper-grounded Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype specification findings. Prefer concrete genes explicitly discussed in the abstract or results, such as babo/Baboon, dSmad2, Mad, wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one span-backed evidence unit per retained gene, include Drosophila melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, and do not resolve gene IDs in the extractor.",
     "title": "Parallel Activin and BMP signaling coordinates R7/R8 photoreceptor subtype pairing in the stochastic Drosophila retina",
     "trial_id": "gene_drosophila_r8_tgfb_multi_gene"
   },

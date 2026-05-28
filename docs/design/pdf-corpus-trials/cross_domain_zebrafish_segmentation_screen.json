@@ -101,7 +101,7 @@
                 "output_key": "trial_instructions",
                 "prompt_version": null,
                 "step_goal": null,
-                "task_instructions": "Run a compact cross-domain pass over this zebrafish segmentation paper. Extract one chemical condition, one phenotype statement, and one central gene supported by the paper. Each extractor must use record_evidence for one exact supporting quote and must leave identity/ontology resolution to validators. Preserve the explicit zebrafish organism context as ZFIN/NCBITaxon:7955 selector hints for gene or phenotype candidates; those hints are not final identity resolution.",
+                "task_instructions": "Run a compact cross-domain pass over this zebrafish segmentation paper. Extract one chemical condition, one phenotype statement, and one central gene supported by the paper. Each extractor must use read_chunk span IDs with record_evidence for one supporting evidence unit and must leave identity/ontology resolution to validators. Preserve the explicit zebrafish organism context as ZFIN/NCBITaxon:7955 selector hints for gene or phenotype candidates; those hints are not final identity resolution.",
                 "validation_attachments": [],
                 "validation_groups": []
               },
@@ -117,14 +117,14 @@
                 "agent_description": null,
                 "agent_display_name": "Chemical Extractor",
                 "agent_id": "chemical_extractor",
-                "custom_input": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: SB225002 treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context when present and use record_evidence for one exact supporting quote. Do not extract phenotype statements or genes in this step, and do not resolve ChEBI or condition ontology IDs in the extractor.",
+                "custom_input": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: SB225002 treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context when present and use read_chunk span IDs with record_evidence for one supporting evidence unit. Do not extract phenotype statements or genes in this step, and do not resolve ChEBI or condition ontology IDs in the extractor.",
                 "custom_instructions": null,
                 "include_evidence": null,
                 "input_source": "custom",
                 "output_filename_template": null,
                 "output_key": "chemical_extractor_output",
                 "prompt_version": null,
-                "step_goal": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: SB225002 treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context when present and use record_evidence for one exact supporting quote. Do not extract phenotype statements or genes in this step, and do not resolve ChEBI or condition ontology IDs in the extractor.",
+                "step_goal": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: SB225002 treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context when present and use read_chunk span IDs with record_evidence for one supporting evidence unit. Do not extract phenotype statements or genes in this step, and do not resolve ChEBI or condition ontology IDs in the extractor.",
                 "task_instructions": null,
                 "validation_attachments": [
                   {
@@ -1430,14 +1430,14 @@
                 "agent_description": null,
                 "agent_display_name": "Phenotype Extractor",
                 "agent_id": "phenotype_extractor",
-                "custom_input": "Read the loaded paper and extract exactly one phenotype assertion candidate: mid-trunk myotome boundary or segmentation defects in embryonic zebrafish after SB225002 treatment. Preserve the Danio rerio/ZFIN/NCBITaxon:7955 organism context as selector hints and use record_evidence for one exact supporting quote. Do not extract chemicals or genes in this step, and do not resolve phenotype ontology IDs in the extractor.",
+                "custom_input": "Read the loaded paper and extract exactly one phenotype assertion candidate: mid-trunk myotome boundary or segmentation defects in embryonic zebrafish after SB225002 treatment. Preserve the Danio rerio/ZFIN/NCBITaxon:7955 organism context as selector hints and use read_chunk span IDs with record_evidence for one supporting evidence unit. Do not extract chemicals or genes in this step, and do not resolve phenotype ontology IDs in the extractor.",
                 "custom_instructions": null,
                 "include_evidence": null,
                 "input_source": "custom",
                 "output_filename_template": null,
                 "output_key": "phenotype_extractor_output",
                 "prompt_version": null,
-                "step_goal": "Read the loaded paper and extract exactly one phenotype assertion candidate: mid-trunk myotome boundary or segmentation defects in embryonic zebrafish after SB225002 treatment. Preserve the Danio rerio/ZFIN/NCBITaxon:7955 organism context as selector hints and use record_evidence for one exact supporting quote. Do not extract chemicals or genes in this step, and do not resolve phenotype ontology IDs in the extractor.",
+                "step_goal": "Read the loaded paper and extract exactly one phenotype assertion candidate: mid-trunk myotome boundary or segmentation defects in embryonic zebrafish after SB225002 treatment. Preserve the Danio rerio/ZFIN/NCBITaxon:7955 organism context as selector hints and use read_chunk span IDs with record_evidence for one supporting evidence unit. Do not extract chemicals or genes in this step, and do not resolve phenotype ontology IDs in the extractor.",
                 "task_instructions": null,
                 "validation_attachments": [
                   {
@@ -2144,14 +2144,14 @@
                 "agent_description": null,
                 "agent_display_name": "Gene Extractor",
                 "agent_id": "gene_extractor",
-                "custom_input": "Read the loaded paper and extract exactly one central gene candidate: zebrafish her1 in the segmentation/small-molecule-screen context. Preserve Danio rerio, ZFIN, and NCBITaxon:7955 hints and use record_evidence for one exact supporting quote. Do not extract chemicals or phenotype statements in this step, and do not resolve gene IDs in the extractor.",
+                "custom_input": "Read the loaded paper and extract exactly one central gene candidate: zebrafish her1 in the segmentation/small-molecule-screen context. Preserve Danio rerio, ZFIN, and NCBITaxon:7955 hints and use read_chunk span IDs with record_evidence for one supporting evidence unit. Do not extract chemicals or phenotype statements in this step, and do not resolve gene IDs in the extractor.",
                 "custom_instructions": null,
                 "include_evidence": null,
                 "input_source": "custom",
                 "output_filename_template": null,
                 "output_key": "gene_extractor_output",
                 "prompt_version": null,
-                "step_goal": "Read the loaded paper and extract exactly one central gene candidate: zebrafish her1 in the segmentation/small-molecule-screen context. Preserve Danio rerio, ZFIN, and NCBITaxon:7955 hints and use record_evidence for one exact supporting quote. Do not extract chemicals or phenotype statements in this step, and do not resolve gene IDs in the extractor.",
+                "step_goal": "Read the loaded paper and extract exactly one central gene candidate: zebrafish her1 in the segmentation/small-molecule-screen context. Preserve Danio rerio, ZFIN, and NCBITaxon:7955 hints and use read_chunk span IDs with record_evidence for one supporting evidence unit. Do not extract chemicals or phenotype statements in this step, and do not resolve gene IDs in the extractor.",
                 "task_instructions": null,
                 "validation_attachments": [
                   {
@@ -3065,7 +3065,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "62b12d2a-97b5-66e7-c82d-76454feaab7a",
-            "claimed_quote": "3 \u03bcM SB225002 treatment from tailbud (tb), myotome boundary defects of the mid-trunk, segments 3-15 (brackets, inset).",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "SB225002",
             "field_path": null,
             "object_id": null,
@@ -3421,7 +3421,7 @@
             {
               "args": {
                 "chunk_id": "62b12d2a-97b5-66e7-c82d-76454feaab7a",
-                "claimed_quote": "3 \u03bcM SB225002 treatment from tailbud (tb), myotome boundary defects of the mid-trunk, segments 3-15 (brackets, inset).",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "SB225002",
                 "field_path": null,
                 "object_id": null,
@@ -3447,7 +3447,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "62b12d2a-97b5-66e7-c82d-76454feaab7a",
-            "claimed_quote": "b 3 \u03bcM SB225002 treatment from tailbud (tb), myotome boundary defects of the mid-trunk, segments 3-15 (brackets, inset).",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "mid-trunk myotome boundary defects",
             "field_path": null,
             "object_id": null,
@@ -3599,7 +3599,7 @@
             {
               "args": {
                 "chunk_id": "62b12d2a-97b5-66e7-c82d-76454feaab7a",
-                "claimed_quote": "b 3 \u03bcM SB225002 treatment from tailbud (tb), myotome boundary defects of the mid-trunk, segments 3-15 (brackets, inset).",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "mid-trunk myotome boundary defects",
                 "field_path": null,
                 "object_id": null,
@@ -3625,7 +3625,7 @@
           "isSpecialistInternal": true,
           "toolArgs": {
             "chunk_id": "d696dca6-99f2-310c-7ac4-3fa6b5e8a950",
-            "claimed_quote": "We identified seven small molecules that cause direct segmentation phenotypes only in the her1 mutant.",
+            "span_ids": ["read_chunk-selected-span-id"],
             "entity": "her1",
             "field_path": null,
             "object_id": null,
@@ -3726,7 +3726,7 @@
             {
               "args": {
                 "chunk_id": "d696dca6-99f2-310c-7ac4-3fa6b5e8a950",
-                "claimed_quote": "We identified seven small molecules that cause direct segmentation phenotypes only in the her1 mutant.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "her1",
                 "field_path": null,
                 "object_id": null,
@@ -4480,9 +4480,9 @@
       "gene_extractor"
     ],
     "agent_prompts": {
-      "chemical_extractor": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: SB225002 treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context when present and use record_evidence for one exact supporting quote. Do not extract phenotype statements or genes in this step, and do not resolve ChEBI or condition ontology IDs in the extractor.",
-      "gene_extractor": "Read the loaded paper and extract exactly one central gene candidate: zebrafish her1 in the segmentation/small-molecule-screen context. Preserve Danio rerio, ZFIN, and NCBITaxon:7955 hints and use record_evidence for one exact supporting quote. Do not extract chemicals or phenotype statements in this step, and do not resolve gene IDs in the extractor.",
-      "phenotype_extractor": "Read the loaded paper and extract exactly one phenotype assertion candidate: mid-trunk myotome boundary or segmentation defects in embryonic zebrafish after SB225002 treatment. Preserve the Danio rerio/ZFIN/NCBITaxon:7955 organism context as selector hints and use record_evidence for one exact supporting quote. Do not extract chemicals or genes in this step, and do not resolve phenotype ontology IDs in the extractor."
+      "chemical_extractor": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: SB225002 treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context when present and use read_chunk span IDs with record_evidence for one supporting evidence unit. Do not extract phenotype statements or genes in this step, and do not resolve ChEBI or condition ontology IDs in the extractor.",
+      "gene_extractor": "Read the loaded paper and extract exactly one central gene candidate: zebrafish her1 in the segmentation/small-molecule-screen context. Preserve Danio rerio, ZFIN, and NCBITaxon:7955 hints and use read_chunk span IDs with record_evidence for one supporting evidence unit. Do not extract chemicals or phenotype statements in this step, and do not resolve gene IDs in the extractor.",
+      "phenotype_extractor": "Read the loaded paper and extract exactly one phenotype assertion candidate: mid-trunk myotome boundary or segmentation defects in embryonic zebrafish after SB225002 treatment. Preserve the Danio rerio/ZFIN/NCBITaxon:7955 organism context as selector hints and use read_chunk span IDs with record_evidence for one supporting evidence unit. Do not extract chemicals or genes in this step, and do not resolve phenotype ontology IDs in the extractor."
     },
     "doi": "10.1038/s41467-017-01469-5",
     "domain": "cross_domain",
@@ -4496,7 +4496,7 @@
     "pdf_url": "https://www.nature.com/articles/s41467-017-01469-5.pdf",
     "pmcid": "PMC5711842",
     "pmid": "29196643",
-    "prompt": "Run a compact cross-domain pass over this zebrafish segmentation paper. Extract one chemical condition, one phenotype statement, and one central gene supported by the paper. Each extractor must use record_evidence for one exact supporting quote and must leave identity/ontology resolution to validators. Preserve the explicit zebrafish organism context as ZFIN/NCBITaxon:7955 selector hints for gene or phenotype candidates; those hints are not final identity resolution.",
+    "prompt": "Run a compact cross-domain pass over this zebrafish segmentation paper. Extract one chemical condition, one phenotype statement, and one central gene supported by the paper. Each extractor must use read_chunk span IDs with record_evidence for one supporting evidence unit and must leave identity/ontology resolution to validators. Preserve the explicit zebrafish organism context as ZFIN/NCBITaxon:7955 selector hints for gene or phenotype candidates; those hints are not final identity resolution.",
     "title": "Small molecule screen in embryonic zebrafish using modular variations to target segmentation",
     "trial_id": "cross_domain_zebrafish_segmentation_screen"
   },

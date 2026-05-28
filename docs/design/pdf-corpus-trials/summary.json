@@ -347,7 +347,7 @@
                 "output_key": "trial_instructions",
                 "prompt_version": null,
                 "step_goal": null,
-                "task_instructions": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one exact supporting quote, include organism/species hints, and do not extract other genes.",
+                "task_instructions": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one span-backed evidence unit, include organism/species hints, and do not extract other genes.",
                 "validation_attachments": [],
                 "validation_groups": []
               },
@@ -363,14 +363,14 @@
                 "agent_description": null,
                 "agent_display_name": "Gene Extractor",
                 "agent_id": "gene_extractor",
-                "custom_input": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one exact supporting quote, include organism/species hints, and do not extract other genes.",
+                "custom_input": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one span-backed evidence unit, include organism/species hints, and do not extract other genes.",
                 "custom_instructions": null,
                 "include_evidence": null,
                 "input_source": "custom",
                 "output_filename_template": null,
                 "output_key": "gene_extractor_output",
                 "prompt_version": null,
-                "step_goal": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one exact supporting quote, include organism/species hints, and do not extract other genes.",
+                "step_goal": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one span-backed evidence unit, include organism/species hints, and do not extract other genes.",
                 "task_instructions": null,
                 "validation_attachments": [
                   {
@@ -937,7 +937,7 @@
                 "output_key": "trial_instructions",
                 "prompt_version": null,
                 "step_goal": null,
-                "task_instructions": "Read the loaded paper and extract exactly one allele or variant candidate: the Drosophila Notch facet-glossy allele, written as Nfa-g, N^{fa-g}, or similar. Preserve the paper notation, genotype/phenotype context, organism hints, and one record_evidence verified quote. Do not resolve allele IDs in the extractor.",
+                "task_instructions": "Read the loaded paper and extract exactly one allele or variant candidate: the Drosophila Notch facet-glossy allele, written as Nfa-g, N^{fa-g}, or similar. Preserve the paper notation, genotype/phenotype context, organism hints, and one record_evidence span-backed evidence record. Do not resolve allele IDs in the extractor.",
                 "validation_attachments": [],
                 "validation_groups": []
               },
@@ -953,14 +953,14 @@
                 "agent_description": null,
                 "agent_display_name": "Allele Extractor",
                 "agent_id": "allele_extractor",
-                "custom_input": "Read the loaded paper and extract exactly one allele or variant candidate: the Drosophila Notch facet-glossy allele, written as Nfa-g, N^{fa-g}, or similar. Preserve the paper notation, genotype/phenotype context, organism hints, and one record_evidence verified quote. Do not resolve allele IDs in the extractor.",
+                "custom_input": "Read the loaded paper and extract exactly one allele or variant candidate: the Drosophila Notch facet-glossy allele, written as Nfa-g, N^{fa-g}, or similar. Preserve the paper notation, genotype/phenotype context, organism hints, and one record_evidence span-backed evidence record. Do not resolve allele IDs in the extractor.",
                 "custom_instructions": null,
                 "include_evidence": null,
                 "input_source": "custom",
                 "output_filename_template": null,
                 "output_key": "allele_extractor_output",
                 "prompt_version": null,
-                "step_goal": "Read the loaded paper and extract exactly one allele or variant candidate: the Drosophila Notch facet-glossy allele, written as Nfa-g, N^{fa-g}, or similar. Preserve the paper notation, genotype/phenotype context, organism hints, and one record_evidence verified quote. Do not resolve allele IDs in the extractor.",
+                "step_goal": "Read the loaded paper and extract exactly one allele or variant candidate: the Drosophila Notch facet-glossy allele, written as Nfa-g, N^{fa-g}, or similar. Preserve the paper notation, genotype/phenotype context, organism hints, and one record_evidence span-backed evidence record. Do not resolve allele IDs in the extractor.",
                 "task_instructions": null,
                 "validation_attachments": [
                   {
@@ -1818,7 +1818,7 @@
                 "output_key": "trial_instructions",
                 "prompt_version": null,
                 "step_goal": null,
-                "task_instructions": "Read the loaded paper and extract exactly one disease assertion candidate: the Pkd1 mouse model of autosomal dominant polycystic kidney disease. Preserve disease mention, model organism/subject context, role, and one record_evidence verified quote. Do not perform disease ontology lookup in the extractor.",
+                "task_instructions": "Read the loaded paper and extract exactly one disease assertion candidate: the Pkd1 mouse model of autosomal dominant polycystic kidney disease. Preserve disease mention, model organism/subject context, role, and one record_evidence span-backed evidence record. Do not perform disease ontology lookup in the extractor.",
                 "validation_attachments": [],
                 "validation_groups": []
               },
@@ -1834,14 +1834,14 @@
                 "agent_description": null,
                 "agent_display_name": "Disease Extractor",
                 "agent_id": "disease_extractor",
-                "custom_input": "Read the loaded paper and extract exactly one disease assertion candidate: the Pkd1 mouse model of autosomal dominant polycystic kidney disease. Preserve disease mention, model organism/subject context, role, and one record_evidence verified quote. Do not perform disease ontology lookup in the extractor.",
+                "custom_input": "Read the loaded paper and extract exactly one disease assertion candidate: the Pkd1 mouse model of autosomal dominant polycystic kidney disease. Preserve disease mention, model organism/subject context, role, and one record_evidence span-backed evidence record. Do not perform disease ontology lookup in the extractor.",
                 "custom_instructions": null,
                 "include_evidence": null,
                 "input_source": "custom",
                 "output_filename_template": null,
                 "output_key": "disease_extractor_output",
                 "prompt_version": null,
-                "step_goal": "Read the loaded paper and extract exactly one disease assertion candidate: the Pkd1 mouse model of autosomal dominant polycystic kidney disease. Preserve disease mention, model organism/subject context, role, and one record_evidence verified quote. Do not perform disease ontology lookup in the extractor.",
+                "step_goal": "Read the loaded paper and extract exactly one disease assertion candidate: the Pkd1 mouse model of autosomal dominant polycystic kidney disease. Preserve disease mention, model organism/subject context, role, and one record_evidence span-backed evidence record. Do not perform disease ontology lookup in the extractor.",
                 "task_instructions": null,
                 "validation_attachments": [
                   {
@@ -3485,7 +3485,7 @@
                 "output_key": "trial_instructions",
                 "prompt_version": null,
                 "step_goal": null,
-                "task_instructions": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: estradiol treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context and one record_evidence verified quote. Do not resolve ChEBI or condition ontology IDs in the extractor.",
+                "task_instructions": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: estradiol treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context and one record_evidence span-backed evidence record. Do not resolve ChEBI or condition ontology IDs in the extractor.",
                 "validation_attachments": [],
                 "validation_groups": []
               },
@@ -3501,14 +3501,14 @@
                 "agent_description": null,
                 "agent_display_name": "Chemical Extractor",
                 "agent_id": "chemical_extractor",
-                "custom_input": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: estradiol treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context and one record_evidence verified quote. Do not resolve ChEBI or condition ontology IDs in the extractor.",
+                "custom_input": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: estradiol treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context and one record_evidence span-backed evidence record. Do not resolve ChEBI or condition ontology IDs in the extractor.",
                 "custom_instructions": null,
                 "include_evidence": null,
                 "input_source": "custom",
                 "output_filename_template": null,
                 "output_key": "chemical_extractor_output",
                 "prompt_version": null,
-                "step_goal": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: estradiol treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context and one record_evidence verified quote. Do not resolve ChEBI or condition ontology IDs in the extractor.",
+                "step_goal": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: estradiol treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context and one record_evidence span-backed evidence record. Do not resolve ChEBI or condition ontology IDs in the extractor.",
                 "task_instructions": null,
                 "validation_attachments": [
                   {
@@ -5302,7 +5302,7 @@
                 "output_key": "trial_instructions",
                 "prompt_version": null,
                 "step_goal": null,
-                "task_instructions": "Read the loaded paper and extract exactly one phenotype assertion candidate: the reduced brood size phenotype reported for C. elegans mus-81(tm1937) mutants. Preserve subject, phenotype statement, organism hints, and one record_evidence verified quote. Do not resolve phenotype ontology IDs in the extractor.",
+                "task_instructions": "Read the loaded paper and extract exactly one phenotype assertion candidate: the reduced brood size phenotype reported for C. elegans mus-81(tm1937) mutants. Preserve subject, phenotype statement, organism hints, and one record_evidence span-backed evidence record. Do not resolve phenotype ontology IDs in the extractor.",
                 "validation_attachments": [],
                 "validation_groups": []
               },
@@ -5318,14 +5318,14 @@
                 "agent_description": null,
                 "agent_display_name": "Phenotype Extractor",
                 "agent_id": "phenotype_extractor",
-                "custom_input": "Read the loaded paper and extract exactly one phenotype assertion candidate: the reduced brood size phenotype reported for C. elegans mus-81(tm1937) mutants. Preserve subject, phenotype statement, organism hints, and one record_evidence verified quote. Do not resolve phenotype ontology IDs in the extractor.",
+                "custom_input": "Read the loaded paper and extract exactly one phenotype assertion candidate: the reduced brood size phenotype reported for C. elegans mus-81(tm1937) mutants. Preserve subject, phenotype statement, organism hints, and one record_evidence span-backed evidence record. Do not resolve phenotype ontology IDs in the extractor.",
                 "custom_instructions": null,
                 "include_evidence": null,
                 "input_source": "custom",
                 "output_filename_template": null,
                 "output_key": "phenotype_extractor_output",
                 "prompt_version": null,
-                "step_goal": "Read the loaded paper and extract exactly one phenotype assertion candidate: the reduced brood size phenotype reported for C. elegans mus-81(tm1937) mutants. Preserve subject, phenotype statement, organism hints, and one record_evidence verified quote. Do not resolve phenotype ontology IDs in the extractor.",
+                "step_goal": "Read the loaded paper and extract exactly one phenotype assertion candidate: the reduced brood size phenotype reported for C. elegans mus-81(tm1937) mutants. Preserve subject, phenotype statement, organism hints, and one record_evidence span-backed evidence record. Do not resolve phenotype ontology IDs in the extractor.",
                 "task_instructions": null,
                 "validation_attachments": [
                   {
@@ -6444,7 +6444,7 @@
                 "output_key": "trial_instructions",
                 "prompt_version": null,
                 "step_goal": null,
-                "task_instructions": "Read the loaded paper and extract exactly one gene-expression observation candidate: zebrafish flcn expression during embryonic development, preferably brain, retina, hatching gland, or fin-bud context if supported. Preserve anatomy/stage/taxon hints and one record_evidence verified quote. Use the explicit zebrafish organism context as the ZFIN data-provider selector, but do not resolve anatomy, stage, gene, or provider database IDs in the extractor.",
+                "task_instructions": "Read the loaded paper and extract exactly one gene-expression observation candidate: zebrafish flcn expression during embryonic development, preferably brain, retina, hatching gland, or fin-bud context if supported. Preserve anatomy/stage/taxon hints and one record_evidence span-backed evidence record. Use the explicit zebrafish organism context as the ZFIN data-provider selector, but do not resolve anatomy, stage, gene, or provider database IDs in the extractor.",
                 "validation_attachments": [],
                 "validation_groups": []
               },
@@ -6460,14 +6460,14 @@
                 "agent_description": null,
                 "agent_display_name": "Gene Expression",
                 "agent_id": "gene_expression",
-                "custom_input": "Read the loaded paper and extract exactly one gene-expression observation candidate: zebrafish flcn expression during embryonic development, preferably brain, retina, hatching gland, or fin-bud context if supported. Preserve anatomy/stage/taxon hints and one record_evidence verified quote. Use the explicit zebrafish organism context as the ZFIN data-provider selector, but do not resolve anatomy, stage, gene, or provider database IDs in the extractor.",
+                "custom_input": "Read the loaded paper and extract exactly one gene-expression observation candidate: zebrafish flcn expression during embryonic development, preferably brain, retina, hatching gland, or fin-bud context if supported. Preserve anatomy/stage/taxon hints and one record_evidence span-backed evidence record. Use the explicit zebrafish organism context as the ZFIN data-provider selector, but do not resolve anatomy, stage, gene, or provider database IDs in the extractor.",
                 "custom_instructions": null,
                 "include_evidence": null,
                 "input_source": "custom",
                 "output_filename_template": null,
                 "output_key": "gene_expression_output",
                 "prompt_version": null,
-                "step_goal": "Read the loaded paper and extract exactly one gene-expression observation candidate: zebrafish flcn expression during embryonic development, preferably brain, retina, hatching gland, or fin-bud context if supported. Preserve anatomy/stage/taxon hints and one record_evidence verified quote. Use the explicit zebrafish organism context as the ZFIN data-provider selector, but do not resolve anatomy, stage, gene, or provider database IDs in the extractor.",
+                "step_goal": "Read the loaded paper and extract exactly one gene-expression observation candidate: zebrafish flcn expression during embryonic development, preferably brain, retina, hatching gland, or fin-bud context if supported. Preserve anatomy/stage/taxon hints and one record_evidence span-backed evidence record. Use the explicit zebrafish organism context as the ZFIN data-provider selector, but do not resolve anatomy, stage, gene, or provider database IDs in the extractor.",
                 "task_instructions": null,
                 "validation_attachments": [
                   {
@@ -8114,7 +8114,7 @@
                 "output_key": "trial_instructions",
                 "prompt_version": null,
                 "step_goal": null,
-                "task_instructions": "Run a compact cross-domain pass over this zebrafish segmentation paper. Extract one chemical condition, one phenotype statement, and one central gene supported by the paper. Each extractor must use record_evidence for one exact supporting quote and must leave identity/ontology resolution to validators. Preserve the explicit zebrafish organism context as ZFIN/NCBITaxon:7955 selector hints for gene or phenotype candidates; those hints are not final identity resolution.",
+                "task_instructions": "Run a compact cross-domain pass over this zebrafish segmentation paper. Extract one chemical condition, one phenotype statement, and one central gene supported by the paper. Each extractor must use read_chunk span IDs with record_evidence for one supporting evidence unit and must leave identity/ontology resolution to validators. Preserve the explicit zebrafish organism context as ZFIN/NCBITaxon:7955 selector hints for gene or phenotype candidates; those hints are not final identity resolution.",
                 "validation_attachments": [],
                 "validation_groups": []
               },
@@ -8130,14 +8130,14 @@
                 "agent_description": null,
                 "agent_display_name": "Chemical Extractor",
                 "agent_id": "chemical_extractor",
-                "custom_input": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: SB225002 treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context when present and use record_evidence for one exact supporting quote. Do not extract phenotype statements or genes in this step, and do not resolve ChEBI or condition ontology IDs in the extractor.",
+                "custom_input": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: SB225002 treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context when present and use read_chunk span IDs with record_evidence for one supporting evidence unit. Do not extract phenotype statements or genes in this step, and do not resolve ChEBI or condition ontology IDs in the extractor.",
                 "custom_instructions": null,
                 "include_evidence": null,
                 "input_source": "custom",
                 "output_filename_template": null,
                 "output_key": "chemical_extractor_output",
                 "prompt_version": null,
-                "step_goal": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: SB225002 treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context when present and use record_evidence for one exact supporting quote. Do not extract phenotype statements or genes in this step, and do not resolve ChEBI or condition ontology IDs in the extractor.",
+                "step_goal": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: SB225002 treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context when present and use read_chunk span IDs with record_evidence for one supporting evidence unit. Do not extract phenotype statements or genes in this step, and do not resolve ChEBI or condition ontology IDs in the extractor.",
                 "task_instructions": null,
                 "validation_attachments": [
                   {
@@ -9443,14 +9443,14 @@
                 "agent_description": null,
                 "agent_display_name": "Phenotype Extractor",
                 "agent_id": "phenotype_extractor",
-                "custom_input": "Read the loaded paper and extract exactly one phenotype assertion candidate: mid-trunk myotome boundary or segmentation defects in embryonic zebrafish after SB225002 treatment. Preserve the Danio rerio/ZFIN/NCBITaxon:7955 organism context as selector hints and use record_evidence for one exact supporting quote. Do not extract chemicals or genes in this step, and do not resolve phenotype ontology IDs in the extractor.",
+                "custom_input": "Read the loaded paper and extract exactly one phenotype assertion candidate: mid-trunk myotome boundary or segmentation defects in embryonic zebrafish after SB225002 treatment. Preserve the Danio rerio/ZFIN/NCBITaxon:7955 organism context as selector hints and use read_chunk span IDs with record_evidence for one supporting evidence unit. Do not extract chemicals or genes in this step, and do not resolve phenotype ontology IDs in the extractor.",
                 "custom_instructions": null,
                 "include_evidence": null,
                 "input_source": "custom",
                 "output_filename_template": null,
                 "output_key": "phenotype_extractor_output",
                 "prompt_version": null,
-                "step_goal": "Read the loaded paper and extract exactly one phenotype assertion candidate: mid-trunk myotome boundary or segmentation defects in embryonic zebrafish after SB225002 treatment. Preserve the Danio rerio/ZFIN/NCBITaxon:7955 organism context as selector hints and use record_evidence for one exact supporting quote. Do not extract chemicals or genes in this step, and do not resolve phenotype ontology IDs in the extractor.",
+                "step_goal": "Read the loaded paper and extract exactly one phenotype assertion candidate: mid-trunk myotome boundary or segmentation defects in embryonic zebrafish after SB225002 treatment. Preserve the Danio rerio/ZFIN/NCBITaxon:7955 organism context as selector hints and use read_chunk span IDs with record_evidence for one supporting evidence unit. Do not extract chemicals or genes in this step, and do not resolve phenotype ontology IDs in the extractor.",
                 "task_instructions": null,
                 "validation_attachments": [
                   {
@@ -10157,14 +10157,14 @@
                 "agent_description": null,
                 "agent_display_name": "Gene Extractor",
                 "agent_id": "gene_extractor",
-                "custom_input": "Read the loaded paper and extract exactly one central gene candidate: zebrafish her1 in the segmentation/small-molecule-screen context. Preserve Danio rerio, ZFIN, and NCBITaxon:7955 hints and use record_evidence for one exact supporting quote. Do not extract chemicals or phenotype statements in this step, and do not resolve gene IDs in the extractor.",
+                "custom_input": "Read the loaded paper and extract exactly one central gene candidate: zebrafish her1 in the segmentation/small-molecule-screen context. Preserve Danio rerio, ZFIN, and NCBITaxon:7955 hints and use read_chunk span IDs with record_evidence for one supporting evidence unit. Do not extract chemicals or phenotype statements in this step, and do not resolve gene IDs in the extractor.",
                 "custom_instructions": null,
                 "include_evidence": null,
                 "input_source": "custom",
                 "output_filename_template": null,
                 "output_key": "gene_extractor_output",
                 "prompt_version": null,
-                "step_goal": "Read the loaded paper and extract exactly one central gene candidate: zebrafish her1 in the segmentation/small-molecule-screen context. Preserve Danio rerio, ZFIN, and NCBITaxon:7955 hints and use record_evidence for one exact supporting quote. Do not extract chemicals or phenotype statements in this step, and do not resolve gene IDs in the extractor.",
+                "step_goal": "Read the loaded paper and extract exactly one central gene candidate: zebrafish her1 in the segmentation/small-molecule-screen context. Preserve Danio rerio, ZFIN, and NCBITaxon:7955 hints and use read_chunk span IDs with record_evidence for one supporting evidence unit. Do not extract chemicals or phenotype statements in this step, and do not resolve gene IDs in the extractor.",
                 "task_instructions": null,
                 "validation_attachments": [
                   {
@@ -11104,7 +11104,7 @@
                     "output_key": "trial_instructions",
                     "prompt_version": null,
                     "step_goal": null,
-                    "task_instructions": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one exact supporting quote, include organism/species hints, and do not extract other genes.",
+                    "task_instructions": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one span-backed evidence unit, include organism/species hints, and do not extract other genes.",
                     "validation_attachments": [],
                     "validation_groups": []
                   },
@@ -11120,14 +11120,14 @@
                     "agent_description": null,
                     "agent_display_name": "Gene Extractor",
                     "agent_id": "gene_extractor",
-                    "custom_input": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one exact supporting quote, include organism/species hints, and do not extract other genes.",
+                    "custom_input": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one span-backed evidence unit, include organism/species hints, and do not extract other genes.",
                     "custom_instructions": null,
                     "include_evidence": null,
                     "input_source": "custom",
                     "output_filename_template": null,
                     "output_key": "gene_extractor_output",
                     "prompt_version": null,
-                    "step_goal": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one exact supporting quote, include organism/species hints, and do not extract other genes.",
+                    "step_goal": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one span-backed evidence unit, include organism/species hints, and do not extract other genes.",
                     "task_instructions": null,
                     "validation_attachments": [
                       {
@@ -11678,7 +11678,7 @@
               "isSpecialistInternal": true,
               "toolArgs": {
                 "chunk_id": "9dffdcf3-1488-16e3-161f-e5993a117229",
-                "claimed_quote": "Crumbs regulates R8 cell fate through its FERM-binding motif. Confocal microscope images of adult D. melanogaster retinas stained with anti-GFP (grey), anti-Rh5 (magenta) and anti-Rh6 (green) antibodies. GFP-negative clones harboured the following alleles: crb 11A22 (A), FRT82B (negative control) (B) or crb \u0394 FBM. HA (C).",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Crumbs",
                 "field_path": null,
                 "object_id": null,
@@ -11713,7 +11713,7 @@
               "isSpecialistInternal": true,
               "toolArgs": {
                 "chunk_id": "9dffdcf3-1488-16e3-161f-e5993a117229",
-                "claimed_quote": "Crumbs regulates R8 cell fate through its FERM-binding motif. Confocal microscope images of adult D. melanogaster retinas stained with anti-GFP (grey), anti-Rh5 (magenta) and anti-Rh6 (green) antibodies.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Crumbs",
                 "field_path": null,
                 "object_id": null,
@@ -11809,7 +11809,7 @@
                 {
                   "args": {
                     "chunk_id": "9dffdcf3-1488-16e3-161f-e5993a117229",
-                    "claimed_quote": "Crumbs regulates R8 cell fate through its FERM-binding motif. Confocal microscope images of adult D. melanogaster retinas stained with anti-GFP (grey), anti-Rh5 (magenta) and anti-Rh6 (green) antibodies. GFP-negative clones harboured the following alleles: crb 11A22 (A), FRT82B (negative control) (B) or crb \u0394 FBM. HA (C).",
+                    "span_ids": ["read_chunk-selected-span-id"],
                     "entity": "Crumbs",
                     "field_path": null,
                     "object_id": null,
@@ -11823,7 +11823,7 @@
                 {
                   "args": {
                     "chunk_id": "9dffdcf3-1488-16e3-161f-e5993a117229",
-                    "claimed_quote": "Crumbs regulates R8 cell fate through its FERM-binding motif. Confocal microscope images of adult D. melanogaster retinas stained with anti-GFP (grey), anti-Rh5 (magenta) and anti-Rh6 (green) antibodies.",
+                    "span_ids": ["read_chunk-selected-span-id"],
                     "entity": "Crumbs",
                     "field_path": null,
                     "object_id": null,
@@ -12228,7 +12228,7 @@
         "pdf_url": "https://journals.plos.org/plosgenetics/article/file?id=10.1371/journal.pgen.1009146&type=printable",
         "pmcid": "PMC8211197",
         "pmid": "34097697",
-        "prompt": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one exact supporting quote, include organism/species hints, and do not extract other genes.",
+        "prompt": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one span-backed evidence unit, include organism/species hints, and do not extract other genes.",
         "title": "Crumbs and the apical spectrin cytoskeleton regulate R8 cell fate in the Drosophila eye",
         "trial_id": "gene_drosophila_crb_rhabdomere"
       },
@@ -12319,7 +12319,7 @@
                     "output_key": "trial_instructions",
                     "prompt_version": null,
                     "step_goal": null,
-                    "task_instructions": "Read the loaded paper and extract exactly one allele or variant candidate: the Drosophila Notch facet-glossy allele, written as Nfa-g, N^{fa-g}, or similar. Preserve the paper notation, genotype/phenotype context, organism hints, and one record_evidence verified quote. Do not resolve allele IDs in the extractor.",
+                    "task_instructions": "Read the loaded paper and extract exactly one allele or variant candidate: the Drosophila Notch facet-glossy allele, written as Nfa-g, N^{fa-g}, or similar. Preserve the paper notation, genotype/phenotype context, organism hints, and one record_evidence span-backed evidence record. Do not resolve allele IDs in the extractor.",
                     "validation_attachments": [],
                     "validation_groups": []
                   },
@@ -12335,14 +12335,14 @@
                     "agent_description": null,
                     "agent_display_name": "Allele Extractor",
                     "agent_id": "allele_extractor",
-                    "custom_input": "Read the loaded paper and extract exactly one allele or variant candidate: the Drosophila Notch facet-glossy allele, written as Nfa-g, N^{fa-g}, or similar. Preserve the paper notation, genotype/phenotype context, organism hints, and one record_evidence verified quote. Do not resolve allele IDs in the extractor.",
+                    "custom_input": "Read the loaded paper and extract exactly one allele or variant candidate: the Drosophila Notch facet-glossy allele, written as Nfa-g, N^{fa-g}, or similar. Preserve the paper notation, genotype/phenotype context, organism hints, and one record_evidence span-backed evidence record. Do not resolve allele IDs in the extractor.",
                     "custom_instructions": null,
                     "include_evidence": null,
                     "input_source": "custom",
                     "output_filename_template": null,
                     "output_key": "allele_extractor_output",
                     "prompt_version": null,
-                    "step_goal": "Read the loaded paper and extract exactly one allele or variant candidate: the Drosophila Notch facet-glossy allele, written as Nfa-g, N^{fa-g}, or similar. Preserve the paper notation, genotype/phenotype context, organism hints, and one record_evidence verified quote. Do not resolve allele IDs in the extractor.",
+                    "step_goal": "Read the loaded paper and extract exactly one allele or variant candidate: the Drosophila Notch facet-glossy allele, written as Nfa-g, N^{fa-g}, or similar. Preserve the paper notation, genotype/phenotype context, organism hints, and one record_evidence span-backed evidence record. Do not resolve allele IDs in the extractor.",
                     "task_instructions": null,
                     "validation_attachments": [
                       {
@@ -13156,7 +13156,7 @@
               "isSpecialistInternal": true,
               "toolArgs": {
                 "chunk_id": "a7faab42-ff2c-4b02-3ddd-a6439639895f",
-                "claimed_quote": "In Nfa-g mutants, rst F6 -lacZ was expanded to all pigment cells surrounding cone cells",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Nfa-g",
                 "field_path": null,
                 "object_id": null,
@@ -13191,7 +13191,7 @@
               "isSpecialistInternal": true,
               "toolArgs": {
                 "chunk_id": "a7faab42-ff2c-4b02-3ddd-a6439639895f",
-                "claimed_quote": "in N fa-g mutants, rst F6 -lacZ was expanded to all pigment cells surrounding cone cells",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Nfa-g",
                 "field_path": null,
                 "object_id": null,
@@ -13364,7 +13364,7 @@
                 {
                   "args": {
                     "chunk_id": "a7faab42-ff2c-4b02-3ddd-a6439639895f",
-                    "claimed_quote": "In Nfa-g mutants, rst F6 -lacZ was expanded to all pigment cells surrounding cone cells",
+                    "span_ids": ["read_chunk-selected-span-id"],
                     "entity": "Nfa-g",
                     "field_path": null,
                     "object_id": null,
@@ -13378,7 +13378,7 @@
                 {
                   "args": {
                     "chunk_id": "a7faab42-ff2c-4b02-3ddd-a6439639895f",
-                    "claimed_quote": "in N fa-g mutants, rst F6 -lacZ was expanded to all pigment cells surrounding cone cells",
+                    "span_ids": ["read_chunk-selected-span-id"],
                     "entity": "Nfa-g",
                     "field_path": null,
                     "object_id": null,
@@ -13736,7 +13736,7 @@
         "pdf_url": "https://journals.plos.org/plosgenetics/article/file?id=10.1371/journal.pgen.1004087&type=printable",
         "pmcid": "PMC3886913",
         "pmid": "24415930",
-        "prompt": "Read the loaded paper and extract exactly one allele or variant candidate: the Drosophila Notch facet-glossy allele, written as Nfa-g, N^{fa-g}, or similar. Preserve the paper notation, genotype/phenotype context, organism hints, and one record_evidence verified quote. Do not resolve allele IDs in the extractor.",
+        "prompt": "Read the loaded paper and extract exactly one allele or variant candidate: the Drosophila Notch facet-glossy allele, written as Nfa-g, N^{fa-g}, or similar. Preserve the paper notation, genotype/phenotype context, organism hints, and one record_evidence span-backed evidence record. Do not resolve allele IDs in the extractor.",
         "title": "Notch Controls Cell Adhesion in the Drosophila Eye",
         "trial_id": "allele_drosophila_notch_facet_glossy"
       },
@@ -13827,7 +13827,7 @@
                     "output_key": "trial_instructions",
                     "prompt_version": null,
                     "step_goal": null,
-                    "task_instructions": "Read the loaded paper and extract exactly one disease assertion candidate: the Pkd1 mouse model of autosomal dominant polycystic kidney disease. Preserve disease mention, model organism/subject context, role, and one record_evidence verified quote. Do not perform disease ontology lookup in the extractor.",
+                    "task_instructions": "Read the loaded paper and extract exactly one disease assertion candidate: the Pkd1 mouse model of autosomal dominant polycystic kidney disease. Preserve disease mention, model organism/subject context, role, and one record_evidence span-backed evidence record. Do not perform disease ontology lookup in the extractor.",
                     "validation_attachments": [],
                     "validation_groups": []
                   },
@@ -13843,14 +13843,14 @@
                     "agent_description": null,
                     "agent_display_name": "Disease Extractor",
                     "agent_id": "disease_extractor",
-                    "custom_input": "Read the loaded paper and extract exactly one disease assertion candidate: the Pkd1 mouse model of autosomal dominant polycystic kidney disease. Preserve disease mention, model organism/subject context, role, and one record_evidence verified quote. Do not perform disease ontology lookup in the extractor.",
+                    "custom_input": "Read the loaded paper and extract exactly one disease assertion candidate: the Pkd1 mouse model of autosomal dominant polycystic kidney disease. Preserve disease mention, model organism/subject context, role, and one record_evidence span-backed evidence record. Do not perform disease ontology lookup in the extractor.",
                     "custom_instructions": null,
                     "include_evidence": null,
                     "input_source": "custom",
                     "output_filename_template": null,
                     "output_key": "disease_extractor_output",
                     "prompt_version": null,
-                    "step_goal": "Read the loaded paper and extract exactly one disease assertion candidate: the Pkd1 mouse model of autosomal dominant polycystic kidney disease. Preserve disease mention, model organism/subject context, role, and one record_evidence verified quote. Do not perform disease ontology lookup in the extractor.",
+                    "step_goal": "Read the loaded paper and extract exactly one disease assertion candidate: the Pkd1 mouse model of autosomal dominant polycystic kidney disease. Preserve disease mention, model organism/subject context, role, and one record_evidence span-backed evidence record. Do not perform disease ontology lookup in the extractor.",
                     "task_instructions": null,
                     "validation_attachments": [
                       {
@@ -15451,7 +15451,7 @@
               "isSpecialistInternal": true,
               "toolArgs": {
                 "chunk_id": "2e87e71d-5347-72d6-57a3-872c8c15c306",
-                "claimed_quote": "A total of 70 kidneys [36 Pkd1 cko/cko ;tamoxifen-cre positive (mutant) and 34 Pkd1 cko/cko ;tamoxifen-cre negative (control)] in which Pkd1 knockout was induced between P5 and P9 were harvested between P11 and P24 and analyzed using gene expression arrays. This set includes mutant kidneys with variable degrees of cystic transformation.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "Pkd1 mouse model of autosomal dominant polycystic kidney disease",
                 "field_path": null,
                 "object_id": null,
@@ -15654,7 +15654,7 @@
                 {
                   "args": {
                     "chunk_id": "2e87e71d-5347-72d6-57a3-872c8c15c306",
-                    "claimed_quote": "A total of 70 kidneys [36 Pkd1 cko/cko ;tamoxifen-cre positive (mutant) and 34 Pkd1 cko/cko ;tamoxifen-cre negative (control)] in which Pkd1 knockout was induced between P5 and P9 were harvested between P11 and P24 and analyzed using gene expression arrays. This set includes mutant kidneys with variable degrees of cystic transformation.",
+                    "span_ids": ["read_chunk-selected-span-id"],
                     "entity": "Pkd1 mouse model of autosomal dominant polycystic kidney disease",
                     "field_path": null,
                     "object_id": null,
@@ -16036,7 +16036,7 @@
         "pdf_url": "https://journals.plos.org/plosgenetics/article/file?id=10.1371/journal.pgen.1003053&type=printable",
         "pmcid": "PMC3516559",
         "pmid": "23209420",
-        "prompt": "Read the loaded paper and extract exactly one disease assertion candidate: the Pkd1 mouse model of autosomal dominant polycystic kidney disease. Preserve disease mention, model organism/subject context, role, and one record_evidence verified quote. Do not perform disease ontology lookup in the extractor.",
+        "prompt": "Read the loaded paper and extract exactly one disease assertion candidate: the Pkd1 mouse model of autosomal dominant polycystic kidney disease. Preserve disease mention, model organism/subject context, role, and one record_evidence span-backed evidence record. Do not perform disease ontology lookup in the extractor.",
         "title": "Network Analysis of a Pkd1-Mouse Model of Autosomal Dominant Polycystic Kidney Disease Identifies HNF4alpha as a Disease Modifier",
         "trial_id": "disease_mouse_pkd1_adpkd"
       },
@@ -16127,7 +16127,7 @@
                     "output_key": "trial_instructions",
                     "prompt_version": null,
                     "step_goal": null,
-                    "task_instructions": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: estradiol treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context and one record_evidence verified quote. Do not resolve ChEBI or condition ontology IDs in the extractor.",
+                    "task_instructions": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: estradiol treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context and one record_evidence span-backed evidence record. Do not resolve ChEBI or condition ontology IDs in the extractor.",
                     "validation_attachments": [],
                     "validation_groups": []
                   },
@@ -16143,14 +16143,14 @@
                     "agent_description": null,
                     "agent_display_name": "Chemical Extractor",
                     "agent_id": "chemical_extractor",
-                    "custom_input": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: estradiol treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context and one record_evidence verified quote. Do not resolve ChEBI or condition ontology IDs in the extractor.",
+                    "custom_input": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: estradiol treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context and one record_evidence span-backed evidence record. Do not resolve ChEBI or condition ontology IDs in the extractor.",
                     "custom_instructions": null,
                     "include_evidence": null,
                     "input_source": "custom",
                     "output_filename_template": null,
                     "output_key": "chemical_extractor_output",
                     "prompt_version": null,
-                    "step_goal": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: estradiol treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context and one record_evidence verified quote. Do not resolve ChEBI or condition ontology IDs in the extractor.",
+                    "step_goal": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: estradiol treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context and one record_evidence span-backed evidence record. Do not resolve ChEBI or condition ontology IDs in the extractor.",
                     "task_instructions": null,
                     "validation_attachments": [
                       {
@@ -17900,7 +17900,7 @@
               "isSpecialistInternal": true,
               "toolArgs": {
                 "chunk_id": "84778956-43c4-98a3-d5e2-30a68a06428b",
-                "claimed_quote": "Standard long-term small molecule treatment with 50 \u03bcM estradiol caused strong developmental defects with rudimentary head and axis in wild type embryos (arrowheads). Pulse experiments of 50 \u03bcM estradiol from 10 hpf for four hours showed recovered head and axis structures (arrowheads) and specific myotome boundary disruptions of up to 13 segments (bracket).",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "estradiol",
                 "field_path": null,
                 "object_id": null,
@@ -18330,7 +18330,7 @@
                 {
                   "args": {
                     "chunk_id": "84778956-43c4-98a3-d5e2-30a68a06428b",
-                    "claimed_quote": "Standard long-term small molecule treatment with 50 \u03bcM estradiol caused strong developmental defects with rudimentary head and axis in wild type embryos (arrowheads). Pulse experiments of 50 \u03bcM estradiol from 10 hpf for four hours showed recovered head and axis structures (arrowheads) and specific myotome boundary disruptions of up to 13 segments (bracket).",
+                    "span_ids": ["read_chunk-selected-span-id"],
                     "entity": "estradiol",
                     "field_path": null,
                     "object_id": null,
@@ -18740,7 +18740,7 @@
         "pdf_url": "https://www.nature.com/articles/s41467-017-01469-5.pdf",
         "pmcid": "PMC5711842",
         "pmid": "29196643",
-        "prompt": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: estradiol treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context and one record_evidence verified quote. Do not resolve ChEBI or condition ontology IDs in the extractor.",
+        "prompt": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: estradiol treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context and one record_evidence span-backed evidence record. Do not resolve ChEBI or condition ontology IDs in the extractor.",
         "title": "Small molecule screen in embryonic zebrafish using modular variations to target segmentation",
         "trial_id": "chemical_zebrafish_estradiol_segmentation"
       },
@@ -18831,7 +18831,7 @@
                     "output_key": "trial_instructions",
                     "prompt_version": null,
                     "step_goal": null,
-                    "task_instructions": "Read the loaded paper and extract exactly one phenotype assertion candidate: the reduced brood size phenotype reported for C. elegans mus-81(tm1937) mutants. Preserve subject, phenotype statement, organism hints, and one record_evidence verified quote. Do not resolve phenotype ontology IDs in the extractor.",
+                    "task_instructions": "Read the loaded paper and extract exactly one phenotype assertion candidate: the reduced brood size phenotype reported for C. elegans mus-81(tm1937) mutants. Preserve subject, phenotype statement, organism hints, and one record_evidence span-backed evidence record. Do not resolve phenotype ontology IDs in the extractor.",
                     "validation_attachments": [],
                     "validation_groups": []
                   },
@@ -18847,14 +18847,14 @@
                     "agent_description": null,
                     "agent_display_name": "Phenotype Extractor",
                     "agent_id": "phenotype_extractor",
-                    "custom_input": "Read the loaded paper and extract exactly one phenotype assertion candidate: the reduced brood size phenotype reported for C. elegans mus-81(tm1937) mutants. Preserve subject, phenotype statement, organism hints, and one record_evidence verified quote. Do not resolve phenotype ontology IDs in the extractor.",
+                    "custom_input": "Read the loaded paper and extract exactly one phenotype assertion candidate: the reduced brood size phenotype reported for C. elegans mus-81(tm1937) mutants. Preserve subject, phenotype statement, organism hints, and one record_evidence span-backed evidence record. Do not resolve phenotype ontology IDs in the extractor.",
                     "custom_instructions": null,
                     "include_evidence": null,
                     "input_source": "custom",
                     "output_filename_template": null,
                     "output_key": "phenotype_extractor_output",
                     "prompt_version": null,
-                    "step_goal": "Read the loaded paper and extract exactly one phenotype assertion candidate: the reduced brood size phenotype reported for C. elegans mus-81(tm1937) mutants. Preserve subject, phenotype statement, organism hints, and one record_evidence verified quote. Do not resolve phenotype ontology IDs in the extractor.",
+                    "step_goal": "Read the loaded paper and extract exactly one phenotype assertion candidate: the reduced brood size phenotype reported for C. elegans mus-81(tm1937) mutants. Preserve subject, phenotype statement, organism hints, and one record_evidence span-backed evidence record. Do not resolve phenotype ontology IDs in the extractor.",
                     "task_instructions": null,
                     "validation_attachments": [
                       {
@@ -19930,7 +19930,7 @@
               "isSpecialistInternal": true,
               "toolArgs": {
                 "chunk_id": "2c8ed461-32e4-d1ac-7bff-fcdd80861a89",
-                "claimed_quote": "mus-81 mutants had reduced brood sizes (142+/219, approximately 50% of wild type, Student's t-test p,0.005)",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "reduced brood size in mus-81(tm1937) mutants",
                 "field_path": null,
                 "object_id": null,
@@ -20016,7 +20016,7 @@
                 {
                   "args": {
                     "chunk_id": "2c8ed461-32e4-d1ac-7bff-fcdd80861a89",
-                    "claimed_quote": "mus-81 mutants had reduced brood sizes (142+/219, approximately 50% of wild type, Student's t-test p,0.005)",
+                    "span_ids": ["read_chunk-selected-span-id"],
                     "entity": "reduced brood size in mus-81(tm1937) mutants",
                     "field_path": null,
                     "object_id": null,
@@ -20415,7 +20415,7 @@
         "pdf_url": "https://journals.plos.org/plosgenetics/article/file?id=10.1371/journal.pgen.1003582&type=printable",
         "pmcid": "PMC3715453",
         "pmid": "23874212",
-        "prompt": "Read the loaded paper and extract exactly one phenotype assertion candidate: the reduced brood size phenotype reported for C. elegans mus-81(tm1937) mutants. Preserve subject, phenotype statement, organism hints, and one record_evidence verified quote. Do not resolve phenotype ontology IDs in the extractor.",
+        "prompt": "Read the loaded paper and extract exactly one phenotype assertion candidate: the reduced brood size phenotype reported for C. elegans mus-81(tm1937) mutants. Preserve subject, phenotype statement, organism hints, and one record_evidence span-backed evidence record. Do not resolve phenotype ontology IDs in the extractor.",
         "title": "Joint Molecule Resolution Requires the Redundant Activities of MUS-81 and XPF-1 during Caenorhabditis elegans Meiosis",
         "trial_id": "phenotype_celegans_mus81_reduced_brood"
       },
@@ -20506,7 +20506,7 @@
                     "output_key": "trial_instructions",
                     "prompt_version": null,
                     "step_goal": null,
-                    "task_instructions": "Read the loaded paper and extract exactly one gene-expression observation candidate: zebrafish flcn expression during embryonic development, preferably brain, retina, hatching gland, or fin-bud context if supported. Preserve anatomy/stage/taxon hints and one record_evidence verified quote. Use the explicit zebrafish organism context as the ZFIN data-provider selector, but do not resolve anatomy, stage, gene, or provider database IDs in the extractor.",
+                    "task_instructions": "Read the loaded paper and extract exactly one gene-expression observation candidate: zebrafish flcn expression during embryonic development, preferably brain, retina, hatching gland, or fin-bud context if supported. Preserve anatomy/stage/taxon hints and one record_evidence span-backed evidence record. Use the explicit zebrafish organism context as the ZFIN data-provider selector, but do not resolve anatomy, stage, gene, or provider database IDs in the extractor.",
                     "validation_attachments": [],
                     "validation_groups": []
                   },
@@ -20522,14 +20522,14 @@
                     "agent_description": null,
                     "agent_display_name": "Gene Expression",
                     "agent_id": "gene_expression",
-                    "custom_input": "Read the loaded paper and extract exactly one gene-expression observation candidate: zebrafish flcn expression during embryonic development, preferably brain, retina, hatching gland, or fin-bud context if supported. Preserve anatomy/stage/taxon hints and one record_evidence verified quote. Use the explicit zebrafish organism context as the ZFIN data-provider selector, but do not resolve anatomy, stage, gene, or provider database IDs in the extractor.",
+                    "custom_input": "Read the loaded paper and extract exactly one gene-expression observation candidate: zebrafish flcn expression during embryonic development, preferably brain, retina, hatching gland, or fin-bud context if supported. Preserve anatomy/stage/taxon hints and one record_evidence span-backed evidence record. Use the explicit zebrafish organism context as the ZFIN data-provider selector, but do not resolve anatomy, stage, gene, or provider database IDs in the extractor.",
                     "custom_instructions": null,
                     "include_evidence": null,
                     "input_source": "custom",
                     "output_filename_template": null,
                     "output_key": "gene_expression_output",
                     "prompt_version": null,
-                    "step_goal": "Read the loaded paper and extract exactly one gene-expression observation candidate: zebrafish flcn expression during embryonic development, preferably brain, retina, hatching gland, or fin-bud context if supported. Preserve anatomy/stage/taxon hints and one record_evidence verified quote. Use the explicit zebrafish organism context as the ZFIN data-provider selector, but do not resolve anatomy, stage, gene, or provider database IDs in the extractor.",
+                    "step_goal": "Read the loaded paper and extract exactly one gene-expression observation candidate: zebrafish flcn expression during embryonic development, preferably brain, retina, hatching gland, or fin-bud context if supported. Preserve anatomy/stage/taxon hints and one record_evidence span-backed evidence record. Use the explicit zebrafish organism context as the ZFIN data-provider selector, but do not resolve anatomy, stage, gene, or provider database IDs in the extractor.",
                     "task_instructions": null,
                     "validation_attachments": [
                       {
@@ -22142,7 +22142,7 @@
               "isSpecialistInternal": true,
               "toolArgs": {
                 "chunk_id": "4ff2f4fd-6d4c-8cde-5a39-68b2fca838d6",
-                "claimed_quote": "At Prim-5 stage there is increased expression in the myotome border/somatic furrow, eye, hatching gland (Fig. 1f arrow HG), fin bud (Fig. 1f arrow FB) tectum (Fig. 1g arrow T) and telencephalon (Fig.1g arrow TC). At long-pec stage pronounced expression is detected in a thin layer of cells in the posterior tectum (Fig. 1h arrow, i and j) and the fin (Fig. 1h).",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "zebrafish flcn expression",
                 "field_path": null,
                 "object_id": null,
@@ -22177,7 +22177,7 @@
               "isSpecialistInternal": true,
               "toolArgs": {
                 "chunk_id": "4ff2f4fd-6d4c-8cde-5a39-68b2fca838d6",
-                "claimed_quote": "At Prim-5 stage there is increased expression in the myotome border/somatic furrow, eye, hatching gland, fin bud, tectum and telencephalon. At long-pec stage pronounced expression is detected in a thin layer of cells in the posterior tectum and the fin.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "zebrafish flcn expression",
                 "field_path": null,
                 "object_id": null,
@@ -22212,7 +22212,7 @@
               "isSpecialistInternal": true,
               "toolArgs": {
                 "chunk_id": "4ff2f4fd-6d4c-8cde-5a39-68b2fca838d6",
-                "claimed_quote": "At Prim-5 stage there is increased expression in the myotome border/somatic furrow, eye, hatching gland, fin bud, tectum and telencephalon.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "zebrafish flcn expression",
                 "field_path": null,
                 "object_id": null,
@@ -22247,7 +22247,7 @@
               "isSpecialistInternal": true,
               "toolArgs": {
                 "chunk_id": "4ff2f4fd-6d4c-8cde-5a39-68b2fca838d6",
-                "claimed_quote": "At Prim-5 stage there is increased expression in the myotome border/somatic furrow, eye, hatching gland (Fig. 1f arrow HG), fin bud (Fig. 1f arrow FB) tectum (Fig. 1g arrow T) and telencephalon (Fig.1g arrow TC).",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "zebrafish flcn expression",
                 "field_path": null,
                 "object_id": null,
@@ -22282,7 +22282,7 @@
               "isSpecialistInternal": true,
               "toolArgs": {
                 "chunk_id": "3b503440-419b-56b6-441d-b9d324ca17d9",
-                "claimed_quote": "f Prim-10 stage embryo showing low level expression in the whole embryo with more pronounced expression in the forebrain and hindbrain areas, hatching gland (HG, arrow) and the fin bud (FB, arrow).",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "zebrafish flcn expression",
                 "field_path": null,
                 "object_id": null,
@@ -22410,7 +22410,7 @@
                 {
                   "args": {
                     "chunk_id": "4ff2f4fd-6d4c-8cde-5a39-68b2fca838d6",
-                    "claimed_quote": "At Prim-5 stage there is increased expression in the myotome border/somatic furrow, eye, hatching gland (Fig. 1f arrow HG), fin bud (Fig. 1f arrow FB) tectum (Fig. 1g arrow T) and telencephalon (Fig.1g arrow TC). At long-pec stage pronounced expression is detected in a thin layer of cells in the posterior tectum (Fig. 1h arrow, i and j) and the fin (Fig. 1h).",
+                    "span_ids": ["read_chunk-selected-span-id"],
                     "entity": "zebrafish flcn expression",
                     "field_path": null,
                     "object_id": null,
@@ -22424,7 +22424,7 @@
                 {
                   "args": {
                     "chunk_id": "4ff2f4fd-6d4c-8cde-5a39-68b2fca838d6",
-                    "claimed_quote": "At Prim-5 stage there is increased expression in the myotome border/somatic furrow, eye, hatching gland, fin bud, tectum and telencephalon. At long-pec stage pronounced expression is detected in a thin layer of cells in the posterior tectum and the fin.",
+                    "span_ids": ["read_chunk-selected-span-id"],
                     "entity": "zebrafish flcn expression",
                     "field_path": null,
                     "object_id": null,
@@ -22438,7 +22438,7 @@
                 {
                   "args": {
                     "chunk_id": "4ff2f4fd-6d4c-8cde-5a39-68b2fca838d6",
-                    "claimed_quote": "At Prim-5 stage there is increased expression in the myotome border/somatic furrow, eye, hatching gland, fin bud, tectum and telencephalon.",
+                    "span_ids": ["read_chunk-selected-span-id"],
                     "entity": "zebrafish flcn expression",
                     "field_path": null,
                     "object_id": null,
@@ -22459,7 +22459,7 @@
                 {
                   "args": {
                     "chunk_id": "4ff2f4fd-6d4c-8cde-5a39-68b2fca838d6",
-                    "claimed_quote": "At Prim-5 stage there is increased expression in the myotome border/somatic furrow, eye, hatching gland (Fig. 1f arrow HG), fin bud (Fig. 1f arrow FB) tectum (Fig. 1g arrow T) and telencephalon (Fig.1g arrow TC).",
+                    "span_ids": ["read_chunk-selected-span-id"],
                     "entity": "zebrafish flcn expression",
                     "field_path": null,
                     "object_id": null,
@@ -22473,7 +22473,7 @@
                 {
                   "args": {
                     "chunk_id": "3b503440-419b-56b6-441d-b9d324ca17d9",
-                    "claimed_quote": "f Prim-10 stage embryo showing low level expression in the whole embryo with more pronounced expression in the forebrain and hindbrain areas, hatching gland (HG, arrow) and the fin bud (FB, arrow).",
+                    "span_ids": ["read_chunk-selected-span-id"],
                     "entity": "zebrafish flcn expression",
                     "field_path": null,
                     "object_id": null,
@@ -22824,7 +22824,7 @@
         "pdf_url": "https://bmcdevbiol.biomedcentral.com/counter/pdf/10.1186/s12861-016-0119-8.pdf",
         "pmcid": "PMC4939010",
         "pmid": "27391801",
-        "prompt": "Read the loaded paper and extract exactly one gene-expression observation candidate: zebrafish flcn expression during embryonic development, preferably brain, retina, hatching gland, or fin-bud context if supported. Preserve anatomy/stage/taxon hints and one record_evidence verified quote. Use the explicit zebrafish organism context as the ZFIN data-provider selector, but do not resolve anatomy, stage, gene, or provider database IDs in the extractor.",
+        "prompt": "Read the loaded paper and extract exactly one gene-expression observation candidate: zebrafish flcn expression during embryonic development, preferably brain, retina, hatching gland, or fin-bud context if supported. Preserve anatomy/stage/taxon hints and one record_evidence span-backed evidence record. Use the explicit zebrafish organism context as the ZFIN data-provider selector, but do not resolve anatomy, stage, gene, or provider database IDs in the extractor.",
         "title": "Expression and knockdown of zebrafish folliculin suggests requirement for embryonic brain morphogenesis",
         "trial_id": "gene_expression_zebrafish_flcn_brain"
       },
@@ -22933,7 +22933,7 @@
                     "output_key": "trial_instructions",
                     "prompt_version": null,
                     "step_goal": null,
-                    "task_instructions": "Run a compact cross-domain pass over this zebrafish segmentation paper. Extract one chemical condition, one phenotype statement, and one central gene supported by the paper. Each extractor must use record_evidence for one exact supporting quote and must leave identity/ontology resolution to validators. Preserve the explicit zebrafish organism context as ZFIN/NCBITaxon:7955 selector hints for gene or phenotype candidates; those hints are not final identity resolution.",
+                    "task_instructions": "Run a compact cross-domain pass over this zebrafish segmentation paper. Extract one chemical condition, one phenotype statement, and one central gene supported by the paper. Each extractor must use read_chunk span IDs with record_evidence for one supporting evidence unit and must leave identity/ontology resolution to validators. Preserve the explicit zebrafish organism context as ZFIN/NCBITaxon:7955 selector hints for gene or phenotype candidates; those hints are not final identity resolution.",
                     "validation_attachments": [],
                     "validation_groups": []
                   },
@@ -22949,14 +22949,14 @@
                     "agent_description": null,
                     "agent_display_name": "Chemical Extractor",
                     "agent_id": "chemical_extractor",
-                    "custom_input": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: SB225002 treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context when present and use record_evidence for one exact supporting quote. Do not extract phenotype statements or genes in this step, and do not resolve ChEBI or condition ontology IDs in the extractor.",
+                    "custom_input": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: SB225002 treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context when present and use read_chunk span IDs with record_evidence for one supporting evidence unit. Do not extract phenotype statements or genes in this step, and do not resolve ChEBI or condition ontology IDs in the extractor.",
                     "custom_instructions": null,
                     "include_evidence": null,
                     "input_source": "custom",
                     "output_filename_template": null,
                     "output_key": "chemical_extractor_output",
                     "prompt_version": null,
-                    "step_goal": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: SB225002 treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context when present and use record_evidence for one exact supporting quote. Do not extract phenotype statements or genes in this step, and do not resolve ChEBI or condition ontology IDs in the extractor.",
+                    "step_goal": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: SB225002 treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context when present and use read_chunk span IDs with record_evidence for one supporting evidence unit. Do not extract phenotype statements or genes in this step, and do not resolve ChEBI or condition ontology IDs in the extractor.",
                     "task_instructions": null,
                     "validation_attachments": [
                       {
@@ -24262,14 +24262,14 @@
                     "agent_description": null,
                     "agent_display_name": "Phenotype Extractor",
                     "agent_id": "phenotype_extractor",
-                    "custom_input": "Read the loaded paper and extract exactly one phenotype assertion candidate: mid-trunk myotome boundary or segmentation defects in embryonic zebrafish after SB225002 treatment. Preserve the Danio rerio/ZFIN/NCBITaxon:7955 organism context as selector hints and use record_evidence for one exact supporting quote. Do not extract chemicals or genes in this step, and do not resolve phenotype ontology IDs in the extractor.",
+                    "custom_input": "Read the loaded paper and extract exactly one phenotype assertion candidate: mid-trunk myotome boundary or segmentation defects in embryonic zebrafish after SB225002 treatment. Preserve the Danio rerio/ZFIN/NCBITaxon:7955 organism context as selector hints and use read_chunk span IDs with record_evidence for one supporting evidence unit. Do not extract chemicals or genes in this step, and do not resolve phenotype ontology IDs in the extractor.",
                     "custom_instructions": null,
                     "include_evidence": null,
                     "input_source": "custom",
                     "output_filename_template": null,
                     "output_key": "phenotype_extractor_output",
                     "prompt_version": null,
-                    "step_goal": "Read the loaded paper and extract exactly one phenotype assertion candidate: mid-trunk myotome boundary or segmentation defects in embryonic zebrafish after SB225002 treatment. Preserve the Danio rerio/ZFIN/NCBITaxon:7955 organism context as selector hints and use record_evidence for one exact supporting quote. Do not extract chemicals or genes in this step, and do not resolve phenotype ontology IDs in the extractor.",
+                    "step_goal": "Read the loaded paper and extract exactly one phenotype assertion candidate: mid-trunk myotome boundary or segmentation defects in embryonic zebrafish after SB225002 treatment. Preserve the Danio rerio/ZFIN/NCBITaxon:7955 organism context as selector hints and use read_chunk span IDs with record_evidence for one supporting evidence unit. Do not extract chemicals or genes in this step, and do not resolve phenotype ontology IDs in the extractor.",
                     "task_instructions": null,
                     "validation_attachments": [
                       {
@@ -24976,14 +24976,14 @@
                     "agent_description": null,
                     "agent_display_name": "Gene Extractor",
                     "agent_id": "gene_extractor",
-                    "custom_input": "Read the loaded paper and extract exactly one central gene candidate: zebrafish her1 in the segmentation/small-molecule-screen context. Preserve Danio rerio, ZFIN, and NCBITaxon:7955 hints and use record_evidence for one exact supporting quote. Do not extract chemicals or phenotype statements in this step, and do not resolve gene IDs in the extractor.",
+                    "custom_input": "Read the loaded paper and extract exactly one central gene candidate: zebrafish her1 in the segmentation/small-molecule-screen context. Preserve Danio rerio, ZFIN, and NCBITaxon:7955 hints and use read_chunk span IDs with record_evidence for one supporting evidence unit. Do not extract chemicals or phenotype statements in this step, and do not resolve gene IDs in the extractor.",
                     "custom_instructions": null,
                     "include_evidence": null,
                     "input_source": "custom",
                     "output_filename_template": null,
                     "output_key": "gene_extractor_output",
                     "prompt_version": null,
-                    "step_goal": "Read the loaded paper and extract exactly one central gene candidate: zebrafish her1 in the segmentation/small-molecule-screen context. Preserve Danio rerio, ZFIN, and NCBITaxon:7955 hints and use record_evidence for one exact supporting quote. Do not extract chemicals or phenotype statements in this step, and do not resolve gene IDs in the extractor.",
+                    "step_goal": "Read the loaded paper and extract exactly one central gene candidate: zebrafish her1 in the segmentation/small-molecule-screen context. Preserve Danio rerio, ZFIN, and NCBITaxon:7955 hints and use read_chunk span IDs with record_evidence for one supporting evidence unit. Do not extract chemicals or phenotype statements in this step, and do not resolve gene IDs in the extractor.",
                     "task_instructions": null,
                     "validation_attachments": [
                       {
@@ -25897,7 +25897,7 @@
               "isSpecialistInternal": true,
               "toolArgs": {
                 "chunk_id": "62b12d2a-97b5-66e7-c82d-76454feaab7a",
-                "claimed_quote": "3 \u03bcM SB225002 treatment from tailbud (tb), myotome boundary defects of the mid-trunk, segments 3-15 (brackets, inset).",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "SB225002",
                 "field_path": null,
                 "object_id": null,
@@ -26253,7 +26253,7 @@
                 {
                   "args": {
                     "chunk_id": "62b12d2a-97b5-66e7-c82d-76454feaab7a",
-                    "claimed_quote": "3 \u03bcM SB225002 treatment from tailbud (tb), myotome boundary defects of the mid-trunk, segments 3-15 (brackets, inset).",
+                    "span_ids": ["read_chunk-selected-span-id"],
                     "entity": "SB225002",
                     "field_path": null,
                     "object_id": null,
@@ -26279,7 +26279,7 @@
               "isSpecialistInternal": true,
               "toolArgs": {
                 "chunk_id": "62b12d2a-97b5-66e7-c82d-76454feaab7a",
-                "claimed_quote": "b 3 \u03bcM SB225002 treatment from tailbud (tb), myotome boundary defects of the mid-trunk, segments 3-15 (brackets, inset).",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "mid-trunk myotome boundary defects",
                 "field_path": null,
                 "object_id": null,
@@ -26431,7 +26431,7 @@
                 {
                   "args": {
                     "chunk_id": "62b12d2a-97b5-66e7-c82d-76454feaab7a",
-                    "claimed_quote": "b 3 \u03bcM SB225002 treatment from tailbud (tb), myotome boundary defects of the mid-trunk, segments 3-15 (brackets, inset).",
+                    "span_ids": ["read_chunk-selected-span-id"],
                     "entity": "mid-trunk myotome boundary defects",
                     "field_path": null,
                     "object_id": null,
@@ -26457,7 +26457,7 @@
               "isSpecialistInternal": true,
               "toolArgs": {
                 "chunk_id": "d696dca6-99f2-310c-7ac4-3fa6b5e8a950",
-                "claimed_quote": "We identified seven small molecules that cause direct segmentation phenotypes only in the her1 mutant.",
+                "span_ids": ["read_chunk-selected-span-id"],
                 "entity": "her1",
                 "field_path": null,
                 "object_id": null,
@@ -26558,7 +26558,7 @@
                 {
                   "args": {
                     "chunk_id": "d696dca6-99f2-310c-7ac4-3fa6b5e8a950",
-                    "claimed_quote": "We identified seven small molecules that cause direct segmentation phenotypes only in the her1 mutant.",
+                    "span_ids": ["read_chunk-selected-span-id"],
                     "entity": "her1",
                     "field_path": null,
                     "object_id": null,
@@ -27313,9 +27313,9 @@
           "gene_extractor"
         ],
         "agent_prompts": {
-          "chemical_extractor": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: SB225002 treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context when present and use record_evidence for one exact supporting quote. Do not extract phenotype statements or genes in this step, and do not resolve ChEBI or condition ontology IDs in the extractor.",
-          "gene_extractor": "Read the loaded paper and extract exactly one central gene candidate: zebrafish her1 in the segmentation/small-molecule-screen context. Preserve Danio rerio, ZFIN, and NCBITaxon:7955 hints and use record_evidence for one exact supporting quote. Do not extract chemicals or phenotype statements in this step, and do not resolve gene IDs in the extractor.",
-          "phenotype_extractor": "Read the loaded paper and extract exactly one phenotype assertion candidate: mid-trunk myotome boundary or segmentation defects in embryonic zebrafish after SB225002 treatment. Preserve the Danio rerio/ZFIN/NCBITaxon:7955 organism context as selector hints and use record_evidence for one exact supporting quote. Do not extract chemicals or genes in this step, and do not resolve phenotype ontology IDs in the extractor."
+          "chemical_extractor": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: SB225002 treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context when present and use read_chunk span IDs with record_evidence for one supporting evidence unit. Do not extract phenotype statements or genes in this step, and do not resolve ChEBI or condition ontology IDs in the extractor.",
+          "gene_extractor": "Read the loaded paper and extract exactly one central gene candidate: zebrafish her1 in the segmentation/small-molecule-screen context. Preserve Danio rerio, ZFIN, and NCBITaxon:7955 hints and use read_chunk span IDs with record_evidence for one supporting evidence unit. Do not extract chemicals or phenotype statements in this step, and do not resolve gene IDs in the extractor.",
+          "phenotype_extractor": "Read the loaded paper and extract exactly one phenotype assertion candidate: mid-trunk myotome boundary or segmentation defects in embryonic zebrafish after SB225002 treatment. Preserve the Danio rerio/ZFIN/NCBITaxon:7955 organism context as selector hints and use read_chunk span IDs with record_evidence for one supporting evidence unit. Do not extract chemicals or genes in this step, and do not resolve phenotype ontology IDs in the extractor."
         },
         "doi": "10.1038/s41467-017-01469-5",
         "domain": "cross_domain",
@@ -27329,7 +27329,7 @@
         "pdf_url": "https://www.nature.com/articles/s41467-017-01469-5.pdf",
         "pmcid": "PMC5711842",
         "pmid": "29196643",
-        "prompt": "Run a compact cross-domain pass over this zebrafish segmentation paper. Extract one chemical condition, one phenotype statement, and one central gene supported by the paper. Each extractor must use record_evidence for one exact supporting quote and must leave identity/ontology resolution to validators. Preserve the explicit zebrafish organism context as ZFIN/NCBITaxon:7955 selector hints for gene or phenotype candidates; those hints are not final identity resolution.",
+        "prompt": "Run a compact cross-domain pass over this zebrafish segmentation paper. Extract one chemical condition, one phenotype statement, and one central gene supported by the paper. Each extractor must use read_chunk span IDs with record_evidence for one supporting evidence unit and must leave identity/ontology resolution to validators. Preserve the explicit zebrafish organism context as ZFIN/NCBITaxon:7955 selector hints for gene or phenotype candidates; those hints are not final identity resolution.",
         "title": "Small molecule screen in embryonic zebrafish using modular variations to target segmentation",
         "trial_id": "cross_domain_zebrafish_segmentation_screen"
       },
