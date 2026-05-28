@@ -123,19 +123,14 @@ def build_package_diagnostic_tools_prompt() -> str:
             line += f" Methods: {method_names}."
         lines.append(line)
 
+        hint = str(diagnostic_metadata.get("hint") or "").strip()
+        if hint:
+            lines.append(f"- {hint}")
+
     if not lines:
         return "- No package diagnostic tools are currently installed."
 
-    return "\n".join(
-        [
-            *lines,
-            (
-                "- For PDF evidence and document-tool advice, inspect the live "
-                "runtime catalog with `get_tool_inventory` and `get_tool_details` "
-                "instead of relying on remembered tool schemas."
-            ),
-        ]
-    )
+    return "\n".join(lines)
 
 
 def format_conversation_context(messages: Optional[List[dict]]) -> Optional[str]:
