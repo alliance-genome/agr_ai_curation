@@ -191,6 +191,19 @@ def _extract_stream_tool_call_tracking_id(item: Any) -> Optional[str]:
     return None
 
 
+def _normalize_record_evidence_span_ids(value: Any) -> List[str]:
+    """Return clean span IDs from a record_evidence payload."""
+
+    if not isinstance(value, list):
+        return []
+
+    return [
+        span_id
+        for span_id in (str(raw_span_id or "").strip() for raw_span_id in value)
+        if span_id
+    ]
+
+
 def _pop_matching_pending_tool_call(
     pending_tool_calls: "deque[Dict[str, Any]]",
     *,
@@ -211,11 +224,7 @@ def _pop_matching_pending_tool_call(
     output_payload = coerce_tool_event_dict(getattr(output_item, "output", None))
     if isinstance(output_payload, dict):
         output_entity = str(output_payload.get("entity") or "").strip()
-        output_span_ids = [
-            str(span_id or "").strip()
-            for span_id in output_payload.get("span_ids", [])
-            if str(span_id or "").strip()
-        ]
+        output_span_ids = _normalize_record_evidence_span_ids(output_payload.get("span_ids"))
         if output_entity and output_span_ids:
             for candidate_tool in list(pending_tool_calls):
                 if str(candidate_tool.get("tool_name") or "").strip() != "record_evidence":
@@ -223,11 +232,7 @@ def _pop_matching_pending_tool_call(
                 candidate_args = candidate_tool.get("tool_args")
                 if not isinstance(candidate_args, dict):
                     continue
-                candidate_span_ids = [
-                    str(span_id or "").strip()
-                    for span_id in candidate_args.get("span_ids", [])
-                    if str(span_id or "").strip()
-                ]
+                candidate_span_ids = _normalize_record_evidence_span_ids(candidate_args.get("span_ids"))
                 if (
                     str(candidate_args.get("entity") or "").strip() == output_entity
                     and candidate_span_ids == output_span_ids
@@ -256,7 +261,7 @@ class SpecialistOutputError(Exception):
     the expected Pydantic model output, even after being given a second chance with a
     nudge prompt.
     """
-    def __init__(self, specialist_name: str, output_type_name: str, message: str = None):
+    def __init__(self, specialist_name: str, output_type_name: str, message: str | None = None):
         self.specialist_name = specialist_name
         self.output_type_name = output_type_name
         super().__init__(message or f"{specialist_name} failed to produce {output_type_name} after retry")

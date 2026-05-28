@@ -1,6 +1,7 @@
 """Contract tests for TOOL_START/TOOL_COMPLETE friendlyName emission."""
 
 from types import SimpleNamespace
+from typing import Any
 import json
 
 import pytest
@@ -11,7 +12,7 @@ from src.lib.openai_agents.models import AlleleExtractionResultEnvelope
 
 
 class _FakeRunResult:
-    def __init__(self, events, final_output="ok"):
+    def __init__(self, events, final_output: Any = "ok"):
         self._events = events
         self.final_output = final_output
 
@@ -35,7 +36,7 @@ class _FakeRunResultWithLiveEvidence(_FakeRunResult):
         live_event_list_ref,
         *,
         tool_name: str | None = "ask_gene_specialist",
-        final_output="ok",
+        final_output: Any = "ok",
     ):
         super().__init__(events, final_output=final_output)
         self._live_event_list_ref = live_event_list_ref
@@ -86,6 +87,27 @@ def _build_expected_evidence_record(
         record["figure_reference"] = figure_reference
     record["evidence_record_id"] = build_evidence_record_id(evidence_record=record)
     return record
+
+
+def _record_evidence_arguments(entity: str, span_ids: list[str]) -> str:
+    return json.dumps({"entity": entity, "span_ids": span_ids})
+
+
+def _record_evidence_output(record: dict, span_ids: list[str]) -> str:
+    payload = {
+        "status": "verified",
+        "entity": record["entity"],
+        "span_ids": span_ids,
+        "chunk_id": record["chunk_id"],
+        "verified_quote": record["verified_quote"],
+        "page": record["page"],
+        "section": record["section"],
+        "evidence_record_id": record["evidence_record_id"],
+    }
+    for optional_field in ("subsection", "figure_reference"):
+        if optional_field in record:
+            payload[optional_field] = record[optional_field]
+    return json.dumps(payload)
 
 
 def _tool_call_stream_event(
@@ -210,22 +232,14 @@ async def test_runner_emits_evidence_summary_for_record_evidence_tool_calls(monk
         subsection="Gene Expression Analysis",
         figure_reference="Figure 2A",
     )
+    span_ids = ["span-crumb-1"]
     fake_events = [
         _tool_call_stream_event(
             "record_evidence",
-            arguments='{"entity":"crumb","chunk_id":"chunk-1","claimed_quote":"Crumb is essential"}',
+            arguments=_record_evidence_arguments("crumb", span_ids),
         ),
         _tool_output_stream_event(
-            json.dumps(
-                {
-                    "status": "verified",
-                    "verified_quote": "Crumb is essential for maintaining epithelial polarity.",
-                    "page": 4,
-                    "section": "Results",
-                    "subsection": "Gene Expression Analysis",
-                    "figure_reference": "Figure 2A",
-                }
-            )
+            _record_evidence_output(expected_record, span_ids)
         ),
     ]
 
@@ -291,40 +305,25 @@ async def test_runner_matches_concurrent_record_evidence_outputs_by_call_id(monk
         section="Results and Discussion",
         subsection="The Molar Abundance of Actins, Opsin, and Crumbs in Fly Eyes",
     )
+    crumbs_span_ids = ["span-crumbs-1"]
+    ninae_span_ids = ["span-ninae-1"]
     fake_events = [
         _tool_call_stream_event(
             "record_evidence",
-            arguments='{"entity":"crumbs","chunk_id":"chunk-crumbs-1","claimed_quote":"Changes in molecular organization following abnormal PRC development in crumbs mutants."}',
+            arguments=_record_evidence_arguments("crumbs", crumbs_span_ids),
             call_id="call-crumbs",
         ),
         _tool_call_stream_event(
             "record_evidence",
-            arguments='{"entity":"ninaE","chunk_id":"chunk-ninae-1","claimed_quote":"Decreased levels of Rh1 induced by mutating the ninaE gene resulted in substantially smaller rhabdomeres."}',
+            arguments=_record_evidence_arguments("ninaE", ninae_span_ids),
             call_id="call-ninae",
         ),
         _tool_output_stream_event(
-            json.dumps(
-                {
-                    "status": "verified",
-                    "verified_quote": crumbs_record["verified_quote"],
-                    "page": crumbs_record["page"],
-                    "section": crumbs_record["section"],
-                    "subsection": crumbs_record["subsection"],
-                    "figure_reference": crumbs_record["figure_reference"],
-                }
-            ),
+            _record_evidence_output(crumbs_record, crumbs_span_ids),
             call_id="call-crumbs",
         ),
         _tool_output_stream_event(
-            json.dumps(
-                {
-                    "status": "verified",
-                    "verified_quote": ninae_record["verified_quote"],
-                    "page": ninae_record["page"],
-                    "section": ninae_record["section"],
-                    "subsection": ninae_record["subsection"],
-                }
-            ),
+            _record_evidence_output(ninae_record, ninae_span_ids),
             call_id="call-ninae",
         ),
     ]
@@ -383,37 +382,22 @@ async def test_runner_emits_evidence_summary_from_structured_extraction_result(m
         section="Results and Discussion",
         subsection="Quantitative Changes of Proteins in crb Mutant Alleles",
     )
+    crumbs_span_ids = ["span-crumbs-1"]
+    crb_span_ids = ["span-crb-1"]
     fake_events = [
         _tool_call_stream_event(
             "record_evidence",
-            arguments='{"entity":"crumbs","chunk_id":"chunk-crumbs-1","claimed_quote":"Changes in molecular organization following abnormal PRC development in crumbs mutants."}',
+            arguments=_record_evidence_arguments("crumbs", crumbs_span_ids),
         ),
         _tool_output_stream_event(
-            json.dumps(
-                {
-                    "status": "verified",
-                    "verified_quote": crumbs_record["verified_quote"],
-                    "page": crumbs_record["page"],
-                    "section": crumbs_record["section"],
-                    "subsection": crumbs_record["subsection"],
-                    "figure_reference": crumbs_record["figure_reference"],
-                }
-            )
+            _record_evidence_output(crumbs_record, crumbs_span_ids)
         ),
         _tool_call_stream_event(
             "record_evidence",
-            arguments='{"entity":"crb","chunk_id":"chunk-crb-1","claimed_quote":"all proteins changed in the allele lacking the crb_C isoform constitute interesting candidates."}',
+            arguments=_record_evidence_arguments("crb", crb_span_ids),
         ),
         _tool_output_stream_event(
-            json.dumps(
-                {
-                    "status": "verified",
-                    "verified_quote": crb_record["verified_quote"],
-                    "page": crb_record["page"],
-                    "section": crb_record["section"],
-                    "subsection": crb_record["subsection"],
-                }
-            )
+            _record_evidence_output(crb_record, crb_span_ids)
         ),
     ]
 
@@ -698,20 +682,21 @@ async def test_runner_fails_fast_without_structured_evidence_even_when_live_ment
 
 @pytest.mark.asyncio
 async def test_runner_fails_fast_when_kept_count_is_positive_but_items_are_missing(monkeypatch):
+    record = _build_expected_evidence_record(
+        entity="crumb",
+        chunk_id="chunk-1",
+        verified_quote="Crumb is essential for maintaining epithelial polarity.",
+        page=4,
+        section="Results",
+    )
+    span_ids = ["span-crumb-1"]
     fake_events = [
         _tool_call_stream_event(
             "record_evidence",
-            arguments='{"entity":"crumb","chunk_id":"chunk-1","claimed_quote":"Crumb is essential for maintaining epithelial polarity."}',
+            arguments=_record_evidence_arguments("crumb", span_ids),
         ),
         _tool_output_stream_event(
-            json.dumps(
-                {
-                    "status": "verified",
-                    "verified_quote": "Crumb is essential for maintaining epithelial polarity.",
-                    "page": 4,
-                    "section": "Results",
-                }
-            )
+            _record_evidence_output(record, span_ids)
         ),
     ]
 
@@ -780,26 +765,14 @@ async def test_runner_accepts_schema_defined_retained_collection_without_items(m
         page=4,
         section="Results",
     )
+    span_ids = ["span-act5c-1"]
     fake_events = [
         _tool_call_stream_event(
             "record_evidence",
-            arguments=json.dumps(
-                {
-                    "entity": "Actin 5C",
-                    "chunk_id": "chunk-1",
-                    "claimed_quote": verified_quote,
-                }
-            ),
+            arguments=_record_evidence_arguments("Actin 5C", span_ids),
         ),
         _tool_output_stream_event(
-            json.dumps(
-                {
-                    "status": "verified",
-                    "verified_quote": verified_quote,
-                    "page": 4,
-                    "section": "Results",
-                }
-            )
+            _record_evidence_output(expected_record, span_ids)
         ),
     ]
 
@@ -1077,6 +1050,8 @@ async def test_specialist_emits_evidence_summary_for_structured_extraction_outpu
         page=1,
         section="Results and Discussion",
     )
+    crumbs_span_ids = ["span-crumbs-1"]
+    crb_span_ids = ["span-crb-1"]
 
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
@@ -1088,32 +1063,17 @@ async def test_specialist_emits_evidence_summary_for_structured_extraction_outpu
             [
                 _tool_call_stream_event(
                     "record_evidence",
-                    arguments='{"entity":"crumbs","chunk_id":"chunk-crumbs-1","claimed_quote":"Changes in molecular organization following abnormal PRC development in crumbs mutants."}',
+                    arguments=_record_evidence_arguments("crumbs", crumbs_span_ids),
                 ),
                 _tool_output_stream_event(
-                    json.dumps(
-                        {
-                            "status": "verified",
-                            "verified_quote": crumbs_record["verified_quote"],
-                            "page": crumbs_record["page"],
-                            "section": crumbs_record["section"],
-                            "figure_reference": crumbs_record["figure_reference"],
-                        }
-                    )
+                    _record_evidence_output(crumbs_record, crumbs_span_ids)
                 ),
                 _tool_call_stream_event(
                     "record_evidence",
-                    arguments='{"entity":"crb","chunk_id":"chunk-crb-1","claimed_quote":"all proteins changed in the allele lacking the crb_C isoform constitute interesting candidates."}',
+                    arguments=_record_evidence_arguments("crb", crb_span_ids),
                 ),
                 _tool_output_stream_event(
-                    json.dumps(
-                        {
-                            "status": "verified",
-                            "verified_quote": crb_record["verified_quote"],
-                            "page": crb_record["page"],
-                            "section": crb_record["section"],
-                        }
-                    )
+                    _record_evidence_output(crb_record, crb_span_ids)
                 ),
             ],
             final_output=_FakeStructuredOutput(
@@ -1216,6 +1176,8 @@ async def test_specialist_matches_concurrent_record_evidence_outputs_by_call_id(
         section="Results and Discussion",
         subsection="The Molar Abundance of Actins, Opsin, and Crumbs in Fly Eyes",
     )
+    crumbs_span_ids = ["span-crumbs-1"]
+    ninae_span_ids = ["span-ninae-1"]
 
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
@@ -1227,37 +1189,20 @@ async def test_specialist_matches_concurrent_record_evidence_outputs_by_call_id(
             [
                 _tool_call_stream_event(
                     "record_evidence",
-                    arguments='{"entity":"crumbs","chunk_id":"chunk-crumbs-1","claimed_quote":"Changes in molecular organization following abnormal PRC development in crumbs mutants."}',
+                    arguments=_record_evidence_arguments("crumbs", crumbs_span_ids),
                     call_id="call-crumbs",
                 ),
                 _tool_call_stream_event(
                     "record_evidence",
-                    arguments='{"entity":"ninaE","chunk_id":"chunk-ninae-1","claimed_quote":"Decreased levels of Rh1 induced by mutating the ninaE gene resulted in substantially smaller rhabdomeres."}',
+                    arguments=_record_evidence_arguments("ninaE", ninae_span_ids),
                     call_id="call-ninae",
                 ),
                 _tool_output_stream_event(
-                    json.dumps(
-                        {
-                            "status": "verified",
-                            "verified_quote": crumbs_record["verified_quote"],
-                            "page": crumbs_record["page"],
-                            "section": crumbs_record["section"],
-                            "subsection": crumbs_record["subsection"],
-                            "figure_reference": crumbs_record["figure_reference"],
-                        }
-                    ),
+                    _record_evidence_output(crumbs_record, crumbs_span_ids),
                     call_id="call-crumbs",
                 ),
                 _tool_output_stream_event(
-                    json.dumps(
-                        {
-                            "status": "verified",
-                            "verified_quote": ninae_record["verified_quote"],
-                            "page": ninae_record["page"],
-                            "section": ninae_record["section"],
-                            "subsection": ninae_record["subsection"],
-                        }
-                    ),
+                    _record_evidence_output(ninae_record, ninae_span_ids),
                     call_id="call-ninae",
                 ),
             ],
@@ -1343,6 +1288,8 @@ async def test_pdf_specialist_returns_plain_answer_from_structured_output_and_em
         page=3,
         section="Methods",
     )
+    oregon_span_ids = ["span-oregon-r"]
+    mutant_span_ids = ["span-crb-mutants"]
 
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
@@ -1354,31 +1301,17 @@ async def test_pdf_specialist_returns_plain_answer_from_structured_output_and_em
             [
                 _tool_call_stream_event(
                     "record_evidence",
-                    arguments='{"entity":"Oregon R","chunk_id":"chunk-strain-1","claimed_quote":"Oregon R flies were used as the wild-type strain."}',
+                    arguments=_record_evidence_arguments("Oregon R", oregon_span_ids),
                 ),
                 _tool_output_stream_event(
-                    json.dumps(
-                        {
-                            "status": "verified",
-                            "verified_quote": oregon_record["verified_quote"],
-                            "page": oregon_record["page"],
-                            "section": oregon_record["section"],
-                        }
-                    )
+                    _record_evidence_output(oregon_record, oregon_span_ids)
                 ),
                 _tool_call_stream_event(
                     "record_evidence",
-                    arguments='{"entity":"crb mutant alleles","chunk_id":"chunk-strain-2","claimed_quote":"The strains used were crb11A22, crb8F105, and crbp13A."}',
+                    arguments=_record_evidence_arguments("crb mutant alleles", mutant_span_ids),
                 ),
                 _tool_output_stream_event(
-                    json.dumps(
-                        {
-                            "status": "verified",
-                            "verified_quote": mutant_record["verified_quote"],
-                            "page": mutant_record["page"],
-                            "section": mutant_record["section"],
-                        }
-                    )
+                    _record_evidence_output(mutant_record, mutant_span_ids)
                 ),
             ],
             final_output=_FakeStructuredOutput(
@@ -1496,6 +1429,14 @@ async def test_specialist_fails_fast_when_structured_extraction_output_is_missin
 
 @pytest.mark.asyncio
 async def test_specialist_fails_fast_when_live_evidence_exists_but_item_refs_are_missing(monkeypatch):
+    record = _build_expected_evidence_record(
+        entity="crumb",
+        chunk_id="chunk-1",
+        verified_quote="Crumb is essential for maintaining epithelial polarity.",
+        page=4,
+        section="Results",
+    )
+    span_ids = ["span-crumb-1"]
     captured_events = []
 
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
@@ -1508,17 +1449,10 @@ async def test_specialist_fails_fast_when_live_evidence_exists_but_item_refs_are
             [
                 _tool_call_stream_event(
                     "record_evidence",
-                    arguments='{"entity":"crumb","chunk_id":"chunk-1","claimed_quote":"Crumb is essential for maintaining epithelial polarity."}',
+                    arguments=_record_evidence_arguments("crumb", span_ids),
                 ),
                 _tool_output_stream_event(
-                    json.dumps(
-                        {
-                            "status": "verified",
-                            "verified_quote": "Crumb is essential for maintaining epithelial polarity.",
-                            "page": 4,
-                            "section": "Results",
-                        }
-                    )
+                    _record_evidence_output(record, span_ids)
                 ),
             ],
             final_output=_FakeStructuredOutput(
@@ -1563,11 +1497,7 @@ async def test_specialist_fails_fast_when_live_evidence_exists_but_item_refs_are
 
 @pytest.mark.asyncio
 async def test_allele_specialist_rejects_empty_evidence_after_section_label_record_evidence_failure(monkeypatch):
-    claimed_quote = (
-        "Trp53 fl/fl ;Wwox fl/fl (18, 41) mice were bred with K14-Cre mice (JAX) "
-        "to generate double conditional KO (DKO) mice: K14-Cre; Wwox fl/fl "
-        "Trp53 fl/fl and the other genotypes."
-    )
+    span_ids = ["span-methods-1"]
     captured_events = []
 
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
@@ -1580,27 +1510,21 @@ async def test_allele_specialist_rejects_empty_evidence_after_section_label_reco
             [
                 _tool_call_stream_event(
                     "record_evidence",
-                    arguments=json.dumps(
-                        {
-                            "entity": "Trp53 fl/fl ;Wwox fl/fl",
-                            "chunk_id": "Methods_1",
-                            "claimed_quote": claimed_quote,
-                        }
-                    ),
+                    arguments=_record_evidence_arguments("Trp53 fl/fl ;Wwox fl/fl", span_ids),
                 ),
                 _tool_output_stream_event(
                     json.dumps(
                         {
                             "status": "not_found",
                             "entity": "Trp53 fl/fl ;Wwox fl/fl",
-                            "chunk_id": "Methods_1",
-                            "claimed_quote": claimed_quote,
-                            "chunk_content_preview": "",
+                            "span_ids": span_ids,
+                            "failed_span_id": span_ids[0],
+                            "failed_span_index": 0,
                             "message": (
-                                "chunk_id 'Methods_1' is not a chunk identifier returned by "
-                                "the document tools. Retry with search_document."
+                                "span_id 'span-methods-1' is stale or invalid. "
+                                "Call read_chunk again and retry with fresh evidence_spans[].span_id values."
                             ),
-                            "retry_tool": "search_document",
+                            "retry_tool": "read_chunk",
                         }
                     )
                 ),
@@ -1674,6 +1598,7 @@ async def test_specialist_accepts_schema_defined_retained_collection_without_ite
         page=4,
         section="Results",
     )
+    span_ids = ["span-act5c-1"]
     captured_events = []
 
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
@@ -1686,23 +1611,10 @@ async def test_specialist_accepts_schema_defined_retained_collection_without_ite
             [
                 _tool_call_stream_event(
                     "record_evidence",
-                    arguments=json.dumps(
-                        {
-                            "entity": "Actin 5C",
-                            "chunk_id": "chunk-1",
-                            "claimed_quote": verified_quote,
-                        }
-                    ),
+                    arguments=_record_evidence_arguments("Actin 5C", span_ids),
                 ),
                 _tool_output_stream_event(
-                    json.dumps(
-                        {
-                            "status": "verified",
-                            "verified_quote": verified_quote,
-                            "page": 4,
-                            "section": "Results",
-                        }
-                    )
+                    _record_evidence_output(expected_record, span_ids)
                 ),
             ],
             final_output=_FakeStructuredOutput(
@@ -1785,6 +1697,8 @@ async def test_specialist_matches_concurrent_record_evidence_outputs_by_identity
         section="Results",
         subsection="The Molar Abundance of Actins, Opsin, and Crumbs in Fly Eyes",
     )
+    crumbs_span_ids = ["span-crumbs"]
+    ninae_span_ids = ["span-ninae"]
     captured_events = []
 
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
@@ -1797,51 +1711,17 @@ async def test_specialist_matches_concurrent_record_evidence_outputs_by_identity
             [
                 _tool_call_stream_event(
                     "record_evidence",
-                    arguments=json.dumps(
-                        {
-                            "entity": "crumbs",
-                            "chunk_id": "chunk-crumbs",
-                            "claimed_quote": crumbs_quote,
-                        }
-                    ),
+                    arguments=_record_evidence_arguments("crumbs", crumbs_span_ids),
                 ),
                 _tool_call_stream_event(
                     "record_evidence",
-                    arguments=json.dumps(
-                        {
-                            "entity": "ninaE",
-                            "chunk_id": "chunk-ninae",
-                            "claimed_quote": ninae_quote,
-                        }
-                    ),
+                    arguments=_record_evidence_arguments("ninaE", ninae_span_ids),
                 ),
                 _tool_output_stream_event(
-                    json.dumps(
-                        {
-                            "status": "verified",
-                            "entity": "ninaE",
-                            "chunk_id": "chunk-ninae",
-                            "claimed_quote": ninae_quote,
-                            "verified_quote": ninae_record["verified_quote"],
-                            "page": ninae_record["page"],
-                            "section": ninae_record["section"],
-                            "subsection": ninae_record["subsection"],
-                        }
-                    )
+                    _record_evidence_output(ninae_record, ninae_span_ids)
                 ),
                 _tool_output_stream_event(
-                    json.dumps(
-                        {
-                            "status": "verified",
-                            "entity": "crumbs",
-                            "chunk_id": "chunk-crumbs",
-                            "claimed_quote": crumbs_quote,
-                            "verified_quote": crumbs_record["verified_quote"],
-                            "page": crumbs_record["page"],
-                            "section": crumbs_record["section"],
-                            "subsection": crumbs_record["subsection"],
-                        }
-                    )
+                    _record_evidence_output(crumbs_record, crumbs_span_ids)
                 ),
             ],
             final_output=_FakeStructuredOutput(
