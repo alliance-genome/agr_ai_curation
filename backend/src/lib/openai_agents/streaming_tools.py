@@ -41,12 +41,27 @@ from .evidence_summary import (
     structured_result_missing_evidence_record_refs,
     structured_result_requires_evidence,
 )
+from .event_types import (
+    INTERNAL_EXTRACTION_RESULT_EVENT_TYPE as _INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
+)
 from .tools.evidence_workspace import (
     reset_active_evidence_records,
     set_active_evidence_records,
 )
-from .event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
-from .extraction_trace_events import write_extraction_trace_event, write_stream_event
+from .extraction_builder_workspace import (
+    ExtractionBuilderWorkspace,
+    build_internal_extraction_result_event,
+    finalize_extraction_payload,
+    get_active_extraction_builder_workspace,
+    reset_active_extraction_builder_workspace,
+    set_active_extraction_builder_workspace,
+    stage_extraction_payload,
+)
+from .extraction_trace_events import (
+    get_current_extraction_trace_run,
+    write_extraction_trace_event,
+    write_stream_event,
+)
 from .tool_call_policy import (
     DOCUMENT_REQUIRED_TOOL_NAMES,
     required_package_tool_names_from_metadata,
@@ -62,6 +77,7 @@ from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtracti
 
 logger = logging.getLogger(__name__)
 
+INTERNAL_EXTRACTION_RESULT_EVENT_TYPE = _INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 _DOCUMENT_REQUIRED_TOOL_NAMES = set(DOCUMENT_REQUIRED_TOOL_NAMES)
 _GROQ_SCHEMA_CONSTRAINTS_ADAPTER_KEY = "groq_schema_constraints"
 _DOMAIN_ENVELOPE_SUPERVISOR_FIELD_PRIORITY = (
@@ -269,10 +285,21 @@ class SpecialistOutputError(Exception):
     the expected Pydantic model output, even after being given a second chance with a
     nudge prompt.
     """
-    def __init__(self, specialist_name: str, output_type_name: str, message: str | None = None):
+    def __init__(
+        self,
+        specialist_name: str,
+        output_type_name: str,
+        message: str | None = None,
+        *,
+        details: list[dict[str, Any]] | None = None,
+    ):
         self.specialist_name = specialist_name
         self.output_type_name = output_type_name
-        super().__init__(message or f"{specialist_name} failed to produce {output_type_name} after retry")
+        self.details = details or []
+        super().__init__(
+            message
+            or f"{specialist_name} failed to produce {output_type_name} after retry"
+        )
 
 
 def _extract_model_identifier(model: Any) -> str:
@@ -909,139 +936,6 @@ def _canonicalize_structured_output_text(
         return json.dumps(canonical_payload)
 
 
-def _json_object_text_from_text(text: str) -> Optional[str]:
-    """Extract the outermost JSON object text from a model text response."""
-
-    stripped = str(text or "").strip()
-    if not stripped:
-        return None
-
-    json_start = stripped.find("{")
-    json_end = stripped.rfind("}")
-    if json_start < 0 or json_end <= json_start:
-        return None
-    return stripped[json_start:json_end + 1]
-
-
-def _salvage_pending_ref_id_for_object(
-    domain_object: Dict[str, Any],
-    *,
-    object_index: int,
-) -> str:
-    """Build a deterministic pending ref for recoverable text-output objects."""
-
-    schema_ref = domain_object.get("schema_ref")
-    schema_id = (
-        schema_ref.get("schema_id")
-        if isinstance(schema_ref, dict)
-        else None
-    )
-    base = (
-        domain_object.get("object_type")
-        or domain_object.get("model_ref")
-        or schema_id
-        or "curatable_object"
-    )
-    slug = re.sub(r"[^a-zA-Z0-9_]+", "_", str(base).strip()).strip("_").lower()
-    return f"salvaged_{slug or 'curatable_object'}_{object_index + 1}"
-
-
-def _repair_salvaged_domain_envelope_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Apply minimal repairs needed for generic domain-envelope validation."""
-
-    repaired = copy.deepcopy(payload)
-    curatable_objects = repaired.get("curatable_objects")
-    if isinstance(curatable_objects, list):
-        for index, domain_object in enumerate(curatable_objects):
-            if not isinstance(domain_object, dict):
-                continue
-            if domain_object.get("object_id") or domain_object.get("pending_ref_id"):
-                continue
-            domain_object["pending_ref_id"] = _salvage_pending_ref_id_for_object(
-                domain_object,
-                object_index=index,
-            )
-    return repaired
-
-
-def _recover_domain_envelope_output_from_stream_text(
-    result: Any,
-    *,
-    expected_output_type: Any,
-    specialist_name: str,
-    error: Exception,
-) -> Optional[str]:
-    """Recover domain-envelope JSON emitted as text before SDK validation failed."""
-
-    if not _is_domain_envelope_extraction_output_type(expected_output_type):
-        return None
-
-    final_text = str(getattr(result, "_final_text_output", "") or "").strip()
-    accumulated_text = str(getattr(result, "_accumulated_text", "") or "").strip()
-    text = final_text or accumulated_text
-    json_candidate = _json_object_text_from_text(text)
-    if json_candidate is None:
-        logger.warning(
-            "%s stream recovery skipped: no JSON object text found after %s",
-            specialist_name,
-            type(error).__name__,
-        )
-        return None
-
-    try:
-        parsed_payload = json.loads(json_candidate)
-    except json.JSONDecodeError as exc:
-        logger.warning(
-            "%s stream recovery skipped: generated text was not valid JSON after %s: %s",
-            specialist_name,
-            type(error).__name__,
-            exc,
-        )
-        return None
-
-    if not isinstance(parsed_payload, dict):
-        return None
-
-    repaired_payload = _repair_salvaged_domain_envelope_payload(parsed_payload)
-    canonical_payload = canonicalize_structured_result_payload(repaired_payload)
-    try:
-        recovered = DomainEnvelopeExtractionResult.model_validate(canonical_payload)
-    except Exception as exc:
-        logger.warning(
-            "%s stream recovery skipped: text JSON did not satisfy generic "
-            "DomainEnvelopeExtractionResult after %s: %s",
-            specialist_name,
-            type(error).__name__,
-            exc,
-        )
-        return None
-
-    final_output = json.dumps(recovered.model_dump())
-    logger.warning(
-        "%s recovered domain-envelope output from generated text after %s "
-        "(json_length=%s)",
-        specialist_name,
-        type(error).__name__,
-        len(final_output),
-        extra={"specialist_name": specialist_name},
-    )
-    add_specialist_event({
-        "type": "SPECIALIST_TEXT_FALLBACK_SUCCESS",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "details": {
-            "specialist": specialist_name,
-            "output_type": getattr(expected_output_type, "__name__", "response"),
-            "json_length": len(final_output),
-            "extraction_method": "stream_validation_recovery",
-            "message": (
-                f"{specialist_name} output recovered from streamed text after "
-                f"{type(error).__name__}"
-            ),
-        },
-    })
-    return final_output
-
-
 def _reduce_specialist_output_for_supervisor(
     final_output: str,
     *,
@@ -1311,6 +1205,41 @@ def _agent_key_from_specialist_tool_name(tool_name: Optional[str]) -> Optional[s
     return match.group("agent_key")
 
 
+def _active_builder_workspace_or_none() -> ExtractionBuilderWorkspace | None:
+    try:
+        return get_active_extraction_builder_workspace()
+    except RuntimeError:
+        return None
+
+
+def _record_builder_specialist_output_failure(
+    *,
+    builder_workspace: ExtractionBuilderWorkspace,
+    specialist_name: str,
+    tool_name: Optional[str],
+    output_type_name: str,
+    reason: str,
+    message: str,
+    candidate_id: str,
+    extra: Mapping[str, Any] | None = None,
+) -> None:
+    if builder_workspace.finalization is not None:
+        return
+    error = {
+        "message": message,
+        "reason": reason,
+        "specialist_name": specialist_name,
+        "tool_name": tool_name,
+        "output_type": output_type_name,
+    }
+    if extra:
+        error.update(dict(extra))
+    builder_workspace.record_validation_failure(
+        errors=[error],
+        candidate_ids=[candidate_id],
+    )
+
+
 def _is_domain_envelope_output_json(
     final_output: str,
     *,
@@ -1333,6 +1262,37 @@ def _validator_dispatch_has_error_result(dispatch_result: Any) -> bool:
             if getattr(attempt, "outcome", None) == "error":
                 return True
     return False
+
+
+def _validator_dispatch_error_details(dispatch_result: Any) -> list[dict[str, Any]]:
+    """Return compact validator-dispatch execution errors for builder validation."""
+
+    errors: list[dict[str, Any]] = []
+    for result in getattr(dispatch_result, "validator_results", ()) or ():
+        result_request_id = getattr(result, "request_id", None)
+        result_binding_id = getattr(result, "validator_binding_id", None)
+        for attempt in getattr(result, "lookup_attempts", ()) or ():
+            if getattr(attempt, "outcome", None) != "error":
+                continue
+            errors.append(
+                {
+                    "reason": "domain_validator_dispatch_failed",
+                    "message": (
+                        getattr(attempt, "message", None)
+                        or getattr(result, "curator_message", None)
+                        or getattr(result, "explanation", None)
+                        or (
+                            "Domain-envelope validator dispatch reported an "
+                            "execution error."
+                        )
+                    ),
+                    "request_id": result_request_id,
+                    "validator_binding_id": result_binding_id,
+                    "provider": getattr(attempt, "provider", None),
+                    "method": getattr(attempt, "method", None),
+                }
+            )
+    return errors
 
 
 def _validator_dispatch_status_counts(dispatch_result: Any) -> dict[str, int]:
@@ -1757,6 +1717,19 @@ async def _dispatch_domain_envelope_validators_for_chat(
             specialist_name=specialist_name,
             dispatch_result=dispatch_result,
         )
+        if has_validator_error:
+            error_details = _validator_dispatch_error_details(dispatch_result)
+            error_message = (
+                "Domain-envelope validator dispatch reported execution errors."
+            )
+            if error_details:
+                error_message = str(error_details[0].get("message") or error_message)
+            raise SpecialistOutputError(
+                specialist_name=specialist_name,
+                output_type_name=getattr(expected_output_type, "__name__", "response"),
+                message=error_message,
+                details=error_details,
+            )
 
         logger.info(
             "%s chat domain-envelope validation dispatched %s binding(s), "
@@ -1778,6 +1751,25 @@ async def _dispatch_domain_envelope_validators_for_chat(
             serialization_started_at
         )
         return serialized_envelope
+    except SpecialistOutputError as exc:
+        logger.warning(
+            "Domain-envelope chat validation failed for %s: %s",
+            specialist_name,
+            exc,
+            exc_info=exc,
+        )
+        add_specialist_event({
+            "type": "SPECIALIST_ERROR",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "details": {
+                "specialist": specialist_name,
+                "error": f"Domain-envelope validator dispatch failed: {exc}",
+                "reason": "domain_validator_dispatch_failed",
+                "severity": "error",
+                "validatorDispatchErrors": getattr(exc, "details", []),
+            },
+        })
+        raise
     except Exception as exc:
         logger.warning(
             "Domain-envelope chat validation failed for %s: %s",
@@ -2293,11 +2285,27 @@ async def run_specialist_with_events(
     total_event_count = 0
     event_type_counts: dict = {}
     is_generating = False  # Track if we've emitted AGENT_GENERATING
-    stream_recovered_final_output = ""
     reasoning_summary_chunks: List[str] = []
 
     stream_consume_started_at = time.monotonic()
     evidence_workspace_token = set_active_evidence_records(live_evidence_records)
+    trace_run = get_current_extraction_trace_run()
+    parent_builder_workspace = _active_builder_workspace_or_none()
+    builder_workspace = ExtractionBuilderWorkspace(
+        run_id=trace_run.trace_id if trace_run is not None else str(uuid.uuid4()),
+        document_id=(
+            parent_builder_workspace.document_id
+            if parent_builder_workspace is not None
+            else None
+        ),
+        domain_pack_id=(
+            parent_builder_workspace.domain_pack_id
+            if parent_builder_workspace is not None
+            else None
+        ),
+        agent_id=specialist_name,
+    )
+    builder_workspace_token = set_active_extraction_builder_workspace(builder_workspace)
     try:
         async for event in result.stream_events():
             total_event_count += 1
@@ -2738,6 +2746,12 @@ async def run_specialist_with_events(
             stream_consume_started_at
         )
 
+    except asyncio.CancelledError:
+        phase_timings_ms["stream_consume_ms"] = _elapsed_ms(
+            stream_consume_started_at
+        )
+        builder_workspace.mark_cancelled(reason="specialist stream cancelled")
+        raise
     except Exception as e:
         phase_timings_ms["stream_consume_ms"] = _elapsed_ms(
             stream_consume_started_at
@@ -2765,25 +2779,17 @@ async def run_specialist_with_events(
             total_event_count,
             event_type_counts,
         )
-        stream_recovered_final_output = (
-            _recover_domain_envelope_output_from_stream_text(
-                result,
-                expected_output_type=expected_output_type,
-                specialist_name=specialist_name,
-                error=e,
-            )
-            or ""
-        )
-        if not stream_recovered_final_output:
-            # Re-raise to propagate unrecoverable stream errors.
-            raise
+        builder_workspace.mark_aborted(reason=f"{type(e).__name__}: {e}")
+        raise
     finally:
         reset_active_evidence_records(evidence_workspace_token)
+        reset_active_extraction_builder_workspace(builder_workspace_token)
 
     stream_duration = datetime.now(timezone.utc) - start_time
     stream_duration_ms = int(stream_duration.total_seconds() * 1000)
 
     post_stream_started_at = time.monotonic()
+    builder_candidate_id = f"{tool_name or specialist_name}:structured_result"
     required_tool_error = _required_tool_failure_message(
         agent=runtime_agent,
         specialist_name=specialist_name,
@@ -2807,6 +2813,15 @@ async def run_specialist_with_events(
                 "severity": "error",
             }
         })
+        _record_builder_specialist_output_failure(
+            builder_workspace=builder_workspace,
+            specialist_name=specialist_name,
+            tool_name=tool_name,
+            output_type_name=output_type_name,
+            reason="required_tool_not_called",
+            message=required_tool_error,
+            candidate_id=builder_candidate_id,
+        )
         raise SpecialistOutputError(
             specialist_name=specialist_name,
             output_type_name=output_type_name,
@@ -2814,7 +2829,7 @@ async def run_specialist_with_events(
         )
 
     # Get final output - handle both structured and string outputs
-    final_output = stream_recovered_final_output
+    final_output = ""
     logger.info(
         "%s checking final_output: hasattr=%s, value=%s, type=%s",
         specialist_name,
@@ -2823,13 +2838,7 @@ async def run_specialist_with_events(
         type(getattr(result, "final_output", None)),
     )
 
-    if final_output:
-        logger.info(
-            "%s using recovered final_output from stream text: %s...",
-            specialist_name,
-            final_output[:200],
-        )
-    elif hasattr(result, "final_output") and result.final_output is not None:
+    if hasattr(result, "final_output") and result.final_output is not None:
         if hasattr(result.final_output, "model_dump"):
             # Structured output (Pydantic model)
             final_output = json.dumps(result.final_output.model_dump())
@@ -2876,22 +2885,15 @@ async def run_specialist_with_events(
         logger.warning("%s has no final_output!", specialist_name)
 
         # =============================================================================
-        # TEXT OUTPUT FALLBACK PARSING
+        # PLAIN TEXT OUTPUT FALLBACK
         # =============================================================================
-        # GPT-5 models with reasoning enabled may output JSON as plain text instead of
-        # using the structured output mechanism. This fallback attempts to parse the
-        # text output as JSON and validate it against the output_type schema.
-        #
-        # This is the PRIMARY extraction path for GPT-5 + reasoning mode.
-        #
-        # IMPORTANT: We use ONLY result.new_items for text extraction because:
-        # 1. new_items contains COMPLETE output items after the stream finishes
-        # 2. accumulated_text from streaming deltas is ALWAYS incomplete/truncated
-        # 3. The SDK's as_tool() uses new_items for custom_output_extractor
+        # Text extracted from SDK message items may be used only for unstructured
+        # specialists. Structured extraction output must come from the SDK final_output
+        # path so model-authored JSON text cannot become the canonical builder payload.
 
         output_type = expected_output_type
 
-        # Extract complete text from result.new_items (the ONLY reliable source)
+        # Extract complete text from result.new_items for unstructured specialists.
         text_from_items = None
         try:
             from agents.items import ItemHelpers
@@ -2930,79 +2932,12 @@ async def run_specialist_with_events(
             )
 
         if text_from_items and output_type is not None:
-            # Try to extract JSON from the text
-            text_stripped = text_from_items.strip()
-
-            logger.info(
-                "%s TEXT FALLBACK: Extracting JSON from new_items (%s chars)",
+            logger.warning(
+                "%s produced text in new_items but requires %s structured output; "
+                "ignoring text so it cannot become canonical extraction JSON",
                 specialist_name,
-                len(text_stripped),
+                output_type.__name__,
             )
-
-            # Find JSON object boundaries
-            json_start = text_stripped.find('{')
-            json_end = text_stripped.rfind('}')
-
-            if json_start >= 0 and json_end > json_start:
-                json_candidate = text_stripped[json_start:json_end + 1]
-                logger.info(
-                    "%s TEXT FALLBACK: Found JSON candidate from new_items (%s chars)",
-                    specialist_name,
-                    len(json_candidate),
-                )
-
-                try:
-                    # Validate JSON syntax first
-                    parsed_json = json.loads(json_candidate)
-
-                    # Validate against Pydantic schema
-                    validated_output = output_type.model_validate(parsed_json)
-
-                    # Success! Convert to JSON string for consistency
-                    final_output = json.dumps(validated_output.model_dump())
-
-                    logger.info(
-                        "%s TEXT FALLBACK SUCCESS! Parsed and validated %s from new_items. JSON length: %s chars",
-                        specialist_name,
-                        output_type.__name__,
-                        len(final_output),
-                    )
-
-                    # Emit audit event for visibility
-                    add_specialist_event({
-                        "type": "SPECIALIST_TEXT_FALLBACK_SUCCESS",
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "details": {
-                            "specialist": specialist_name,
-                            "output_type": output_type.__name__,
-                            "json_length": len(final_output),
-                            "extraction_method": "text_fallback_new_items",
-                            "message": f"{specialist_name} output extracted from new_items (GPT-5 reasoning mode workaround)"
-                        }
-                    })
-
-                except json.JSONDecodeError as e:
-                    logger.warning(
-                        "%s TEXT FALLBACK: JSON parsing failed from new_items: %s. JSON candidate length: %s, First 200 chars: %s...",
-                        specialist_name,
-                        e,
-                        len(json_candidate),
-                        json_candidate[:200],
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "%s TEXT FALLBACK: Pydantic validation failed: %s: %s",
-                        specialist_name,
-                        type(e).__name__,
-                        e,
-                    )
-            else:
-                logger.warning(
-                    "%s TEXT FALLBACK: No JSON object found in new_items (%s chars). First 200 chars: %s...",
-                    specialist_name,
-                    len(text_stripped),
-                    text_stripped[:200],
-                )
         elif text_from_items:
             # Plain text agent - use text_from_items directly as output
             logger.info(
@@ -3024,7 +2959,12 @@ async def run_specialist_with_events(
         # GPT-5 + reasoning mode may not include a message_output_item in new_items,
         # but the text IS streamed via ResponseTextDeltaEvent and accumulated in
         # result._accumulated_text. Use this as a last-resort fallback for plain text agents.
-        if not final_output and hasattr(result, "_accumulated_text") and result._accumulated_text:
+        if (
+            not final_output
+            and output_type is None
+            and hasattr(result, "_accumulated_text")
+            and result._accumulated_text
+        ):
             accumulated_text = result._accumulated_text.strip()
             if accumulated_text:
                 logger.info(
@@ -3227,6 +3167,19 @@ async def run_specialist_with_events(
                             }
                         })
 
+                        _record_builder_specialist_output_failure(
+                            builder_workspace=builder_workspace,
+                            specialist_name=specialist_name,
+                            tool_name=tool_name,
+                            output_type_name=output_type_name,
+                            reason="missing_structured_output_after_retry",
+                            message=error_message,
+                            candidate_id=builder_candidate_id,
+                            extra={
+                                "retry_events": retry_event_count,
+                                "retry_duration_ms": retry_duration_ms,
+                            },
+                        )
                         raise SpecialistOutputError(
                             specialist_name=specialist_name,
                             output_type_name=output_type_name,
@@ -3239,10 +3192,21 @@ async def run_specialist_with_events(
                 except Exception as e:
                     # Retry mechanism itself failed
                     logger.error("%s retry mechanism error: %s", specialist_name, e)
+                    error_message = f"{specialist_name} retry failed with error: {str(e)}"
+                    _record_builder_specialist_output_failure(
+                        builder_workspace=builder_workspace,
+                        specialist_name=specialist_name,
+                        tool_name=tool_name,
+                        output_type_name=output_type_name,
+                        reason="structured_output_retry_failed",
+                        message=error_message,
+                        candidate_id=builder_candidate_id,
+                        extra={"error_type": type(e).__name__},
+                    )
                     raise SpecialistOutputError(
                         specialist_name=specialist_name,
                         output_type_name=output_type_name,
-                        message=f"{specialist_name} retry failed with error: {str(e)}"
+                        message=error_message,
                     )
 
     final_output = _canonicalize_structured_output_text(
@@ -3255,34 +3219,77 @@ async def run_specialist_with_events(
         except Exception:
             payload = None
         if isinstance(payload, dict):
-            final_output = json.dumps(
-                canonicalize_structured_result_payload(
-                    payload,
-                    preferred_evidence_records=live_evidence_records,
-                )
+            canonical_payload = stage_extraction_payload(
+                payload,
+                workspace=builder_workspace,
+                candidate_id=builder_candidate_id,
+                evidence_records=live_evidence_records,
             )
+            final_output = json.dumps(canonical_payload)
 
     phase_timings_ms["post_stream_output_ms"] = _elapsed_ms(post_stream_started_at)
 
     evidence_summary_started_at = time.monotonic()
-    _emit_specialist_evidence_summary_or_raise(
-        specialist_name=specialist_name,
-        tool_name=tool_name,
-        expected_output_type=expected_output_type,
-        final_output=final_output,
-        live_evidence_records=live_evidence_records,
-    )
+    try:
+        _emit_specialist_evidence_summary_or_raise(
+            specialist_name=specialist_name,
+            tool_name=tool_name,
+            expected_output_type=expected_output_type,
+            final_output=final_output,
+            live_evidence_records=live_evidence_records,
+        )
+    except SpecialistOutputError:
+        if builder_workspace.finalization is None:
+            builder_workspace.record_validation_failure(
+                errors=[
+                    {
+                        "message": (
+                            f"{specialist_name} completed extraction output without the "
+                            "required verified evidence records."
+                        ),
+                        "reason": "missing_evidence_records",
+                    }
+                ],
+                candidate_ids=[builder_candidate_id],
+            )
+        raise
     phase_timings_ms["evidence_summary_ms"] = _elapsed_ms(
         evidence_summary_started_at
     )
 
     validator_dispatch_started_at = time.monotonic()
-    final_output = await _dispatch_domain_envelope_validators_for_chat(
-        final_output,
-        expected_output_type=expected_output_type,
-        specialist_name=specialist_name,
-        tool_name=tool_name,
-    )
+    try:
+        final_output = await _dispatch_domain_envelope_validators_for_chat(
+            final_output,
+            expected_output_type=expected_output_type,
+            specialist_name=specialist_name,
+            tool_name=tool_name,
+        )
+    except SpecialistOutputError as exc:
+        if builder_workspace.finalization is None:
+            dispatch_errors = [
+                {
+                    **dict(error),
+                    "specialist_name": specialist_name,
+                    "tool_name": tool_name,
+                }
+                for error in getattr(exc, "details", [])
+                if isinstance(error, Mapping)
+            ]
+            if not dispatch_errors:
+                dispatch_errors = [
+                    {
+                        "message": str(exc),
+                        "reason": "domain_validator_dispatch_failed",
+                        "specialist_name": specialist_name,
+                        "tool_name": tool_name,
+                    }
+                ]
+            builder_workspace.record_validation_failure(
+                errors=dispatch_errors,
+                candidate_ids=[builder_candidate_id],
+            )
+        raise
     phase_timings_ms["domain_validator_dispatch_ms"] = _elapsed_ms(
         validator_dispatch_started_at
     )
@@ -3295,20 +3302,22 @@ async def run_specialist_with_events(
         final_output,
         expected_output_type=expected_output_type,
     ):
-        add_specialist_event({
-            "type": INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "details": {
-                "toolName": tool_name,
-                "friendlyName": f"{specialist_name}: Internal Extraction Result",
-                "success": True,
-                "isSpecialistInternal": True,
-            },
-            "internal": {
-                "tool_output": final_output,
-                "output_length": len(str(final_output)),
-            },
-        })
+        payload = json.loads(final_output)
+        builder_finalization = finalize_extraction_payload(
+            payload,
+            workspace=builder_workspace,
+            candidate_id=builder_candidate_id,
+            evidence_records=live_evidence_records,
+        )
+        final_output = json.dumps(builder_finalization.payload)
+        add_specialist_event(
+            build_internal_extraction_result_event(
+                tool_name=tool_name,
+                specialist_name=specialist_name,
+                finalization=builder_finalization,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+        )
     phase_timings_ms["internal_extraction_event_ms"] = _elapsed_ms(
         internal_event_started_at
     )

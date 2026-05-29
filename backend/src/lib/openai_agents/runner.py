@@ -71,11 +71,16 @@ from .extraction_trace_events import (
     write_extraction_trace_event,
     write_stream_event,
 )
+from .extraction_builder_workspace import (
+    ExtractionBuilderWorkspace,
+    reset_active_extraction_builder_workspace,
+    set_active_extraction_builder_workspace,
+    stage_extraction_payload,
+)
 from .guardrails import enforce_uncited_negative_guardrail
 from .models import Answer
 from .evidence_summary import (
     build_record_evidence_summary_record,
-    canonicalize_structured_result_payload,
     extract_evidence_records_from_structured_result,
     normalize_evidence_records,
     structured_result_missing_evidence_record_refs,
@@ -708,6 +713,12 @@ async def _run_agent_with_tracing(
     )
     evidence_records: List[Dict[str, Any]] = []
     evidence_workspace_token = set_active_evidence_records(evidence_records)
+    builder_workspace = ExtractionBuilderWorkspace(
+        run_id=trace_id,
+        document_id=document_id,
+        agent_id=current_agent,
+    )
+    builder_workspace_token = set_active_extraction_builder_workspace(builder_workspace)
     evidence_summary_tool_names: List[str] = []
 
     # max_turns from config gives agents more time to think and process complex queries
@@ -1210,24 +1221,35 @@ async def _run_agent_with_tracing(
             yield live_events[live_events_yielded]
             live_events_yielded += 1
 
+    except asyncio.CancelledError:
+        builder_workspace.mark_cancelled(reason="runner stream cancelled")
+        raise
+    except Exception as exc:
+        builder_workspace.mark_aborted(reason=f"{type(exc).__name__}: {exc}")
+        raise
     finally:
         # Clear the live event list reference
         set_live_event_list(None)
         reset_active_evidence_records(evidence_workspace_token)
+        reset_active_extraction_builder_workspace(builder_workspace_token)
 
     # Get final output if not captured from streaming
     if hasattr(result, "final_output"):
         final_output = result.final_output
         if final_output:
             if hasattr(final_output, "model_dump"):
-                structured_result = canonicalize_structured_result_payload(
+                structured_result = stage_extraction_payload(
                     final_output.model_dump(),
-                    preferred_evidence_records=evidence_records,
+                    workspace=builder_workspace,
+                    candidate_id="runner_structured_result",
+                    evidence_records=evidence_records,
                 )
             elif isinstance(final_output, dict):
-                structured_result = canonicalize_structured_result_payload(
+                structured_result = stage_extraction_payload(
                     final_output,
-                    preferred_evidence_records=evidence_records,
+                    workspace=builder_workspace,
+                    candidate_id="runner_structured_result",
+                    evidence_records=evidence_records,
                 )
             if not full_response:
                 full_response = str(final_output)
@@ -1274,6 +1296,15 @@ async def _run_agent_with_tracing(
                     else None,
                 },
             )
+            builder_workspace.record_validation_failure(
+                errors=[
+                    {
+                        "message": "Structured extraction result is missing required verified evidence records or references.",
+                        "reason": "missing_evidence_records",
+                    }
+                ],
+                candidate_ids=["runner_structured_result"],
+            )
             run_error_event = {
                 "type": "RUN_ERROR",
                 "data": {
@@ -1294,6 +1325,11 @@ async def _run_agent_with_tracing(
                 evidence_records,
                 structured_evidence_records,
             )
+
+        finalization = builder_workspace.finalize(
+            candidate_ids=["runner_structured_result"],
+        )
+        structured_result = finalization.payload
 
         try:
             parsed_answer = Answer.model_validate(structured_result)

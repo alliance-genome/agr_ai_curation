@@ -1049,7 +1049,7 @@ async def test_chat_domain_envelope_dispatch_covers_launchable_active_validator_
     dispatch_complete = [
         event
         for event in emitted
-        if event["details"]["toolName"] == "dispatch_active_validator_bindings"
+        if event["details"].get("toolName") == "dispatch_active_validator_bindings"
         and event["type"] == "TOOL_COMPLETE"
     ][0]
     assert len(captured_requests) == len(expected_binding_ids)
@@ -1087,19 +1087,21 @@ async def test_chat_domain_envelope_dispatch_surfaces_validator_lookup_errors(
         lambda request, *, binding: _errored_gene_validator_payload(request),
     )
 
-    result = await streaming_tools._dispatch_domain_envelope_validators_for_chat(
-        _gene_extractor_domain_output(),
-        expected_output_type=GeneExtractionResultEnvelope,
-        specialist_name="Gene Extraction",
-        tool_name="ask_gene_extractor_specialist",
-    )
+    with pytest.raises(
+        streaming_tools.SpecialistOutputError,
+        match="Validator agent execution failed",
+    ):
+        await streaming_tools._dispatch_domain_envelope_validators_for_chat(
+            _gene_extractor_domain_output(),
+            expected_output_type=GeneExtractionResultEnvelope,
+            specialist_name="Gene Extraction",
+            tool_name="ask_gene_extractor_specialist",
+        )
 
-    payload = json.loads(result)
-    assert payload["validation_findings"]
     dispatch_complete = [
         event
         for event in emitted
-        if event["details"]["toolName"] == "dispatch_active_validator_bindings"
+        if event["details"].get("toolName") == "dispatch_active_validator_bindings"
         and event["type"] == "TOOL_COMPLETE"
     ][0]
     assert dispatch_complete["details"]["success"] is False
@@ -1108,13 +1110,23 @@ async def test_chat_domain_envelope_dispatch_surfaces_validator_lookup_errors(
     lookup_complete = [
         event
         for event in emitted
-        if event["details"]["toolName"] == "domain_validator_lookup"
+        if event["details"].get("toolName") == "domain_validator_lookup"
         and event["type"] == "TOOL_COMPLETE"
     ][0]
     assert lookup_complete["details"]["success"] is False
     assert lookup_complete["details"]["outcome"] == "error"
     assert lookup_complete["details"]["error"].startswith(
         "Validator agent execution failed"
+    )
+
+    specialist_error = [
+        event
+        for event in emitted
+        if event["type"] == "SPECIALIST_ERROR"
+    ][0]
+    assert specialist_error["details"]["reason"] == "domain_validator_dispatch_failed"
+    assert specialist_error["details"]["validatorDispatchErrors"][0]["reason"] == (
+        "domain_validator_dispatch_failed"
     )
 
 

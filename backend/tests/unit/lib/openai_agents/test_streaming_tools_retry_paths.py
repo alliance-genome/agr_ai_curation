@@ -1,11 +1,14 @@
 """Coverage tests for streaming_tools retry and text-fallback paths."""
 
+import asyncio
 import json
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from pydantic import BaseModel
 
+from src.lib.openai_agents import extraction_builder_workspace as builder
 from src.lib.openai_agents import streaming_tools
 from src.lib.openai_agents.tools import evidence_workspace
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
@@ -112,7 +115,7 @@ async def test_run_specialist_uses_streaming_text_fallback_when_final_output_mis
 
 
 @pytest.mark.asyncio
-async def test_run_specialist_recovers_domain_envelope_text_after_stream_validation_error(monkeypatch):
+async def test_run_specialist_rejects_domain_envelope_text_after_stream_validation_error(monkeypatch):
     class ResponseTextDoneEvent:
         def __init__(self, text):
             self.text = text
@@ -146,18 +149,16 @@ async def test_run_specialist_recovers_domain_envelope_text_after_stream_validat
     )
     stream_error = RuntimeError("Invalid JSON when parsing text for TypeAdapter")
 
-    async def _passthrough_dispatch(final_output, **_kwargs):
-        return final_output
-
     captured_events = []
+    captured_builder_events = []
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(
+        builder,
+        "write_extraction_trace_event",
+        lambda **event: captured_builder_events.append(event) or event,
+    )
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
     monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
-    monkeypatch.setattr(
-        streaming_tools,
-        "_dispatch_domain_envelope_validators_for_chat",
-        _passthrough_dispatch,
-    )
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",
@@ -177,35 +178,39 @@ async def test_run_specialist_recovers_domain_envelope_text_after_stream_validat
         model="gpt-4o",
     )
 
-    result = await streaming_tools.run_specialist_with_events(
-        agent=agent,
-        input_text="extract gene expression evidence",
-        specialist_name="Gene Expression Extractor",
-        max_turns=3,
-        tool_name="ask_gene_expression_specialist",
-    )
+    with pytest.raises(RuntimeError, match="Invalid JSON"):
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="extract gene expression evidence",
+            specialist_name="Gene Expression Extractor",
+            max_turns=3,
+            tool_name="ask_gene_expression_specialist",
+        )
 
-    parsed_result = json.loads(result)
-    assert parsed_result["curatable_objects"][0]["pending_ref_id"] == (
-        "salvaged_gene_expression_annotation_1"
-    )
-    assert parsed_result["curatable_objects"][0]["evidence_record_ids"] == [
-        "evidence-record-1"
-    ]
-    assert parsed_result["metadata"]["evidence_records"][0]["evidence_record_id"] == (
-        "evidence-record-1"
-    )
-    assert any(
+    assert not any(
         e.get("type") == "SPECIALIST_TEXT_FALLBACK_SUCCESS"
         and e.get("details", {}).get("extraction_method") == "stream_validation_recovery"
         for e in captured_events
+    )
+    assert any(
+        event["event_type"] == "extraction_builder.aborted"
+        and event["output_summary"]["reason"] == (
+            "RuntimeError: Invalid JSON when parsing text for TypeAdapter"
+        )
+        for event in captured_builder_events
     )
 
 
 @pytest.mark.asyncio
 async def test_run_specialist_does_not_recover_non_domain_stream_errors(monkeypatch):
     stream_error = RuntimeError("Invalid JSON when parsing text for TypeAdapter")
+    captured_builder_events = []
 
+    monkeypatch.setattr(
+        builder,
+        "write_extraction_trace_event",
+        lambda **event: captured_builder_events.append(event) or event,
+    )
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
     monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
     monkeypatch.setattr(
@@ -235,6 +240,163 @@ async def test_run_specialist_does_not_recover_non_domain_stream_errors(monkeypa
             max_turns=3,
             tool_name=None,
         )
+
+    assert any(
+        event["event_type"] == "extraction_builder.aborted"
+        for event in captured_builder_events
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_specialist_rejects_structured_json_from_new_items_without_final_output(
+    monkeypatch,
+):
+    generated_payload = {
+        "summary": "Model-authored envelope text",
+        "curatable_objects": [
+            {
+                "object_type": "gene_expression_annotation",
+                "pending_ref_id": "annotation-1",
+                "payload": {"gene_symbol": "wg", "assay": "in situ"},
+                "evidence_record_ids": ["evidence-record-1"],
+            }
+        ],
+        "metadata": {
+            "evidence_records": [
+                {
+                    "evidence_record_id": "evidence-record-1",
+                    "entity": "wg",
+                    "verified_quote": "wg is expressed in embryonic stripes.",
+                    "page": 3,
+                    "section": "Results",
+                    "chunk_id": "chunk-1",
+                }
+            ]
+        },
+        "run_summary": {"candidate_count": 1, "kept_count": 1},
+    }
+    message_item = SimpleNamespace(type="message_output_item")
+    fake_items_module = ModuleType("agents.items")
+    setattr(
+        fake_items_module,
+        "ItemHelpers",
+        SimpleNamespace(text_message_output=lambda _item: json.dumps(generated_payload)),
+    )
+
+    calls = {"count": 0}
+    captured_events = []
+    captured_builder_events = []
+
+    def _run_streamed(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return _FakeRunResult(
+                events=[],
+                final_output=None,
+                new_items=[message_item],
+            )
+        return _FakeRunResult(events=[], final_output=None, new_items=[])
+
+    async def _pass_through_validator(final_output, **_kwargs):
+        return final_output
+
+    monkeypatch.setitem(sys.modules, "agents.items", fake_items_module)
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(
+        builder,
+        "write_extraction_trace_event",
+        lambda **event: captured_builder_events.append(event) or event,
+    )
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools.Runner, "run_streamed", _run_streamed)
+    monkeypatch.setattr(
+        streaming_tools,
+        "_emit_specialist_evidence_summary_or_raise",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "_dispatch_domain_envelope_validators_for_chat",
+        _pass_through_validator,
+    )
+
+    agent = SimpleNamespace(
+        name="Gene Expression Extractor",
+        tools=[],
+        output_type=_DomainEnvelope,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    with pytest.raises(streaming_tools.SpecialistOutputError):
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="extract gene expression evidence",
+            specialist_name="Gene Expression Extractor",
+            max_turns=3,
+            tool_name="ask_gene_expression_specialist",
+        )
+
+    assert calls["count"] == 2
+    assert not any(
+        e.get("type") == "SPECIALIST_TEXT_FALLBACK_SUCCESS"
+        and e.get("details", {}).get("extraction_method") == "text_fallback_new_items"
+        for e in captured_events
+    )
+    assert not any(
+        e.get("type") == streaming_tools.INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
+        for e in captured_events
+    )
+    assert not any(
+        event["event_type"] == "extraction_builder.finalization_decision"
+        for event in captured_builder_events
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_specialist_marks_builder_cancelled_on_stream_cancellation(monkeypatch):
+    captured_builder_events = []
+
+    monkeypatch.setattr(
+        builder,
+        "write_extraction_trace_event",
+        lambda **event: captured_builder_events.append(event) or event,
+    )
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FailingStreamRunResult(
+            events=[],
+            final_output=None,
+            new_items=[],
+            error=asyncio.CancelledError(),
+        ),
+    )
+
+    agent = SimpleNamespace(
+        name="Structured Specialist",
+        tools=[],
+        output_type=_Envelope,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="extract structured output",
+            specialist_name="Structured Specialist",
+            max_turns=3,
+            tool_name=None,
+        )
+
+    assert any(
+        event["event_type"] == "extraction_builder.cancelled"
+        for event in captured_builder_events
+    )
 
 
 @pytest.mark.asyncio
