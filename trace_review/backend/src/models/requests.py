@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-TraceSource = Literal["remote", "local"]
+TraceSource = Literal["remote", "local", "auto"]
 
 
 class AnalyzeTraceRequest(BaseModel):
@@ -14,7 +14,7 @@ class AnalyzeTraceRequest(BaseModel):
     trace_id: str = Field(..., description="Langfuse trace ID (32-char hex)")
     source: TraceSource = Field(
         default="remote",
-        description="Trace source: 'remote' (EC2) or 'local' (Docker)",
+        description="Trace source: 'remote' (EC2), 'local' (Docker), or 'auto'",
     )
 
 

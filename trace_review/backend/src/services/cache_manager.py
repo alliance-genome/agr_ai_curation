@@ -67,6 +67,11 @@ class CacheManager:
                 return None
             return entry.cache_status
 
+    def delete(self, trace_id: str) -> bool:
+        """Delete one cached trace entry if present."""
+        with self.lock:
+            return self.cache.pop(trace_id, None) is not None
+
     def set(
         self,
         trace_id: str,

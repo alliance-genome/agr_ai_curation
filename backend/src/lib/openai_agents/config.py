@@ -315,6 +315,46 @@ def supports_temperature(model: str) -> bool:
 
 # Type alias for reasoning effort levels
 ReasoningEffort = Literal["minimal", "low", "medium", "high"]
+ReasoningSummaryStatus = Literal["present", "not_requested", "not_supported", "unavailable"]
+
+
+def reasoning_summary_request_settings(
+    *,
+    model: str,
+    reasoning_effort: Optional[ReasoningEffort],
+    provider_override: Optional[str] = None,
+) -> dict[str, Optional[str]]:
+    """Return the reasoning-summary request contract for a model run."""
+
+    provider = resolve_model_provider(model, provider_override)
+    provider_def = _get_provider_definition(provider)
+    model_supports_reasoning = supports_reasoning(model)
+
+    if not model_supports_reasoning or provider_def.driver != "openai_native":
+        return {
+            "availability": "not_supported",
+            "reasoning_effort": reasoning_effort,
+            "requested_summary": None,
+            "provider": provider,
+            "model": model,
+        }
+
+    if not reasoning_effort:
+        return {
+            "availability": "not_requested",
+            "reasoning_effort": None,
+            "requested_summary": None,
+            "provider": provider,
+            "model": model,
+        }
+
+    return {
+        "availability": "present",
+        "reasoning_effort": reasoning_effort,
+        "requested_summary": "detailed",
+        "provider": provider,
+        "model": model,
+    }
 
 
 def build_model_settings(
@@ -357,11 +397,19 @@ def build_model_settings(
     from agents import ModelSettings
     from openai.types.shared import Reasoning
 
-    # Build reasoning config for models that support it
-    # Note: summary="auto" enables reasoning summary streaming for GPT-5 models
+    # Build reasoning config for models that support it.
     reasoning = None
     if reasoning_effort and supports_reasoning(model):
-        reasoning = Reasoning(effort=reasoning_effort, summary="auto")
+        summary_settings = reasoning_summary_request_settings(
+            model=model,
+            reasoning_effort=reasoning_effort,
+            provider_override=provider_override,
+        )
+        summary = summary_settings.get("requested_summary")
+        reasoning_kwargs = {"effort": reasoning_effort}
+        if summary:
+            reasoning_kwargs["summary"] = summary
+        reasoning = Reasoning(**reasoning_kwargs)
 
     # GPT-5 models don't support temperature parameter, others do
     effective_temperature = temperature if supports_temperature(model) else None

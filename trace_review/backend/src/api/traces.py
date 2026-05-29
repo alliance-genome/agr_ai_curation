@@ -17,6 +17,10 @@ from ..analyzers.agent_context import AgentContextAnalyzer
 from ..analyzers.trace_summary import TraceSummaryAnalyzer
 from ..analyzers.document_hierarchy import DocumentHierarchyAnalyzer
 from ..analyzers.agent_config import AgentConfigAnalyzer
+from ..analyzers.extraction_timeline import (
+    ANALYZER_SCHEMA_VERSION as EXTRACTION_TIMELINE_ANALYZER_SCHEMA_VERSION,
+    ExtractionTimelineAnalyzer,
+)
 from ..utils.token_budget import create_lightweight_tool_call_summary
 from ..utils.trace_output import is_trace_output_cacheable
 from .auth import get_auth_dependency
@@ -29,7 +33,8 @@ TRANSIENT_CACHE_TTL_SECONDS = 15
 ALL_VIEWS = [
     "summary", "conversation", "tool_calls",
     "pdf_citations", "token_analysis", "agent_context", "trace_summary",
-    "document_hierarchy", "agent_configs", "group_context", "domain_envelope"
+    "document_hierarchy", "agent_configs", "group_context", "domain_envelope",
+    "extraction_timeline",
 ]
 
 # Group descriptions for display (Alliance MODs as default groups)
@@ -73,6 +78,14 @@ def _group_context_from_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _effective_source(source: TraceSource) -> str:
+    return "local" if source == "auto" else source
+
+
+def _cache_schema_is_current(cache_data: Dict[str, Any]) -> bool:
+    return cache_data.get("analyzer_schema_version") == EXTRACTION_TIMELINE_ANALYZER_SCHEMA_VERSION
+
+
 def _build_trace_cache_data(trace_id: str, trace_data: Dict[str, Any]) -> Dict[str, Any]:
     raw_trace = trace_data["raw_trace"]
     observations = trace_data["observations"]
@@ -86,6 +99,11 @@ def _build_trace_cache_data(trace_id: str, trace_data: Dict[str, Any]) -> Dict[s
     domain_envelope, compact_domain_envelope = domain_envelope_response_views(trace_summary)
     document_hierarchy = DocumentHierarchyAnalyzer.analyze(trace_data, observations)
     agent_configs = AgentConfigAnalyzer.extract_agent_configs(observations)
+    extraction_timeline = ExtractionTimelineAnalyzer.analyze(
+        trace_id=trace_id,
+        raw_trace=raw_trace,
+        observations=observations,
+    )
 
     metadata = raw_trace.get("metadata") or {}
     system_domain = metadata.get("destination", "unknown")
@@ -105,6 +123,7 @@ def _build_trace_cache_data(trace_id: str, trace_data: Dict[str, Any]) -> Dict[s
     }
 
     return {
+        "analyzer_schema_version": EXTRACTION_TIMELINE_ANALYZER_SCHEMA_VERSION,
         "raw_trace": raw_trace,
         "observations": observations,
         "scores": trace_data["scores"],
@@ -119,6 +138,7 @@ def _build_trace_cache_data(trace_id: str, trace_data: Dict[str, Any]) -> Dict[s
             "domain_envelope": domain_envelope,
             "document_hierarchy": document_hierarchy,
             "agent_configs": agent_configs,
+            "extraction_timeline": extraction_timeline,
             "group_context": _group_context_from_metadata(metadata)
         }
     }
@@ -146,12 +166,18 @@ def _get_or_analyze_trace_export(
     cache_manager: Any,
     source: TraceSource,
     extractor: Optional[TraceExtractor] = None,
+    refresh: bool = False,
 ) -> Tuple[Dict[str, Any], Optional[str], bool]:
+    if refresh:
+        cache_manager.delete(trace_id)
+
     cached_data = cache_manager.get(trace_id)
     if cached_data:
-        return cached_data, cache_manager.get_status(trace_id), True
+        if _cache_schema_is_current(cached_data):
+            return cached_data, cache_manager.get_status(trace_id), True
+        cache_manager.delete(trace_id)
 
-    active_extractor = extractor or TraceExtractor(source=source)
+    active_extractor = extractor or TraceExtractor(source=_effective_source(source))
 
     try:
         trace_data = active_extractor.extract_complete_trace(trace_id)
@@ -165,6 +191,60 @@ def _get_or_analyze_trace_export(
 
     cache_status = _store_trace_cache(cache_manager, trace_id, cache_data)
     return cache_data, cache_status, False
+
+
+def _sibling_trace_ids(
+    *,
+    trace_id: str,
+    source: TraceSource,
+    session_id: Optional[str],
+    include_sibling_traces: bool,
+) -> List[str]:
+    if not include_sibling_traces or not session_id:
+        return []
+    extractor = TraceExtractor(source=_effective_source(source))
+    session_listing = extractor.list_session_traces(session_id)
+    return [
+        listed_trace["id"]
+        for listed_trace in session_listing.get("traces", [])
+        if listed_trace.get("id") and listed_trace.get("id") != trace_id
+    ]
+
+
+def _filtered_extraction_timeline(
+    *,
+    trace_id: str,
+    cache_data: Dict[str, Any],
+    include_raw_args: bool,
+    include_raw_outputs: bool,
+    tool_name: Optional[str],
+    event_type: Optional[str],
+    candidate_id: Optional[str],
+    sibling_trace_ids: Optional[List[str]] = None,
+    session_id: Optional[str] = None,
+    feedback_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    timeline = ExtractionTimelineAnalyzer.analyze(
+        trace_id=trace_id,
+        raw_trace=cache_data.get("raw_trace"),
+        observations=cache_data.get("observations", []),
+        include_raw_args=include_raw_args,
+        include_raw_outputs=include_raw_outputs,
+        tool_name=tool_name,
+        event_type=event_type,
+        candidate_id=candidate_id,
+        sibling_trace_ids=sibling_trace_ids,
+    )
+    timeline["query"] = {
+        "session_id": session_id,
+        "feedback_id": feedback_id,
+        "include_raw_args": include_raw_args,
+        "include_raw_outputs": include_raw_outputs,
+        "tool_name": tool_name,
+        "event_type": event_type,
+        "candidate_id": candidate_id,
+    }
+    return timeline
 
 
 def _listed_trace_reference(trace: Dict[str, Any]) -> Dict[str, Any]:
@@ -235,11 +315,7 @@ def _trace_error(source: TraceSource, listed_trace: Dict[str, Any], message: str
 
 
 def _session_timestamp_bounds(traces: List[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str]]:
-    timestamps = sorted(
-        trace.get("timestamp")
-        for trace in traces
-        if trace.get("timestamp")
-    )
+    timestamps = sorted(str(trace["timestamp"]) for trace in traces if trace.get("timestamp"))
     if not timestamps:
         return None, None
     return timestamps[0], timestamps[-1]
@@ -324,6 +400,7 @@ async def export_trace(
     trace_id: str,
     request: Request,
     source: TraceSource = "remote",
+    refresh: bool = Query(default=False, description="Refresh cached analysis before export"),
     user: Dict[str, Any] = get_auth_dependency()
 ) -> Dict[str, Any]:
     """
@@ -341,6 +418,7 @@ async def export_trace(
             trace_id,
             cache_manager,
             source,
+            refresh=refresh,
         )
     except TraceExtractionError as e:
         logger.error("Error extracting trace %s: %s", trace_id, e)
@@ -362,7 +440,7 @@ async def export_trace(
 async def export_session(
     session_id: str,
     request: Request,
-    source: TraceSource = Query(default="remote", description="Trace source: 'remote' (EC2) or 'local' (Docker)"),
+    source: TraceSource = Query(default="remote", description="Trace source: 'remote' (EC2), 'local' (Docker), or 'auto'"),
     user: Dict[str, Any] = get_auth_dependency()
 ) -> Dict[str, Any]:
     """
@@ -375,7 +453,7 @@ async def export_session(
     cache_manager = request.app.state.cache_manager
 
     try:
-        extractor = TraceExtractor(source=source)
+        extractor = TraceExtractor(source=_effective_source(source))
         session_listing = extractor.list_session_traces(session_id)
     except ValueError as e:
         raise HTTPException(status_code=503, detail=str(e))
@@ -457,6 +535,16 @@ async def get_trace_view(
     trace_id: str,
     view_name: str,
     request: Request,
+    source: TraceSource = Query(default="remote", description="Trace source: 'remote' (EC2), 'local' (Docker), or 'auto'"),
+    session_id: Optional[str] = Query(default=None, description="Langfuse session ID for sibling-trace expansion"),
+    feedback_id: Optional[str] = Query(default=None, description="Feedback ID linked to stored trace artifacts"),
+    include_sibling_traces: bool = Query(default=False, description="Include durable events from traces in the same session"),
+    refresh: bool = Query(default=False, description="Refresh cached trace analysis before rendering the view"),
+    include_raw_args: bool = Query(default=False, description="Include bounded raw tool/event argument summaries"),
+    include_raw_outputs: bool = Query(default=False, description="Include bounded raw tool/event output summaries"),
+    tool_name: Optional[str] = Query(default=None, description="Filter extraction events by tool name"),
+    event_type: Optional[str] = Query(default=None, description="Filter extraction events by event type"),
+    candidate_id: Optional[str] = Query(default=None, description="Filter extraction events by candidate ID"),
     user: Dict[str, Any] = get_auth_dependency()
 ) -> Dict[str, Any]:
     """
@@ -465,7 +553,50 @@ async def get_trace_view(
     """
     cache_manager = request.app.state.cache_manager
 
-    # Get from cache
+    if view_name == "extraction_timeline":
+        try:
+            cached_data, _cache_status, _from_cache = _get_or_analyze_trace_export(
+                trace_id,
+                cache_manager,
+                source,
+                refresh=refresh,
+            )
+            siblings = _sibling_trace_ids(
+                trace_id=trace_id,
+                source=source,
+                session_id=session_id,
+                include_sibling_traces=include_sibling_traces,
+            )
+        except TraceExtractionError as e:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Trace {trace_id} not found in Langfuse ({source}): {str(e)}"
+            )
+        except TraceAnalysisError as e:
+            logger.exception("Error analyzing trace: %s", e)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error analyzing trace: {str(e)}"
+            )
+
+        return {
+            "view": view_name,
+            "trace_id": trace_id,
+            "cached_at": cached_data.get("cached_at"),
+            "data": _filtered_extraction_timeline(
+                trace_id=trace_id,
+                cache_data=cached_data,
+                include_raw_args=include_raw_args,
+                include_raw_outputs=include_raw_outputs,
+                tool_name=tool_name,
+                event_type=event_type,
+                candidate_id=candidate_id,
+                sibling_trace_ids=siblings,
+                session_id=session_id,
+                feedback_id=feedback_id,
+            ),
+        }
+
     cached_data = cache_manager.get(trace_id)
     if not cached_data:
         raise HTTPException(
