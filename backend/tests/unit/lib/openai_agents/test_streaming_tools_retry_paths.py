@@ -1,11 +1,13 @@
 """Coverage tests for streaming_tools retry and text-fallback paths."""
 
+import asyncio
 import json
 from types import SimpleNamespace
 
 import pytest
 from pydantic import BaseModel
 
+from src.lib.openai_agents import extraction_builder_workspace as builder
 from src.lib.openai_agents import streaming_tools
 from src.lib.openai_agents.tools import evidence_workspace
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
@@ -205,7 +207,13 @@ async def test_run_specialist_recovers_domain_envelope_text_after_stream_validat
 @pytest.mark.asyncio
 async def test_run_specialist_does_not_recover_non_domain_stream_errors(monkeypatch):
     stream_error = RuntimeError("Invalid JSON when parsing text for TypeAdapter")
+    captured_builder_events = []
 
+    monkeypatch.setattr(
+        builder,
+        "write_extraction_trace_event",
+        lambda **event: captured_builder_events.append(event) or event,
+    )
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
     monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
     monkeypatch.setattr(
@@ -235,6 +243,56 @@ async def test_run_specialist_does_not_recover_non_domain_stream_errors(monkeypa
             max_turns=3,
             tool_name=None,
         )
+
+    assert any(
+        event["event_type"] == "extraction_builder.aborted"
+        for event in captured_builder_events
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_specialist_marks_builder_cancelled_on_stream_cancellation(monkeypatch):
+    captured_builder_events = []
+
+    monkeypatch.setattr(
+        builder,
+        "write_extraction_trace_event",
+        lambda **event: captured_builder_events.append(event) or event,
+    )
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FailingStreamRunResult(
+            events=[],
+            final_output=None,
+            new_items=[],
+            error=asyncio.CancelledError(),
+        ),
+    )
+
+    agent = SimpleNamespace(
+        name="Structured Specialist",
+        tools=[],
+        output_type=_Envelope,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="extract structured output",
+            specialist_name="Structured Specialist",
+            max_turns=3,
+            tool_name=None,
+        )
+
+    assert any(
+        event["event_type"] == "extraction_builder.cancelled"
+        for event in captured_builder_events
+    )
 
 
 @pytest.mark.asyncio

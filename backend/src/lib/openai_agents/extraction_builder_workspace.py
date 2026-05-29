@@ -183,6 +183,7 @@ class ExtractionBuilderWorkspace:
         errors: Iterable[Mapping[str, Any]],
         candidate_ids: Iterable[str] | None = None,
     ) -> None:
+        self._ensure_mutable()
         normalized_errors = [dict(error) for error in errors]
         if not normalized_errors:
             return
@@ -215,12 +216,14 @@ class ExtractionBuilderWorkspace:
         candidate_ids: Iterable[str],
         validation_errors: Iterable[Mapping[str, Any]] | None = None,
     ) -> ExtractionBuilderFinalization:
-        normalized_candidate_ids = tuple(_required_string(value, "candidate_id") for value in candidate_ids)
+        normalized_candidate_ids = tuple(
+            _unique_strings(_required_string(value, "candidate_id") for value in candidate_ids)
+        )
         if not normalized_candidate_ids:
             raise ValueError("At least one candidate_id is required for builder finalization")
 
         if self.finalization is not None:
-            if normalized_candidate_ids == self.finalized_candidate_ids:
+            if set(normalized_candidate_ids) == set(self.finalized_candidate_ids):
                 self._emit(
                     "extraction_builder.finalization_decision",
                     output_summary={
@@ -330,7 +333,7 @@ class ExtractionBuilderWorkspace:
             raise KeyError(f"Unknown extraction builder candidate: {normalized_candidate_id}") from exc
 
     def _ensure_mutable(self) -> None:
-        if self.state == BUILDER_STATE_FINALIZED:
+        if self.finalization is not None or self.state == BUILDER_STATE_FINALIZED:
             raise ExtractionBuilderFinalizedError(
                 "Extraction builder workspace is finalized; candidate mutations are rejected."
             )
@@ -407,6 +410,29 @@ def finalize_extraction_payload(
 ) -> ExtractionBuilderFinalization:
     """Stage and finalize one payload through the builder handoff contract."""
 
+    stage_extraction_payload(
+        payload,
+        workspace=workspace,
+        candidate_id=candidate_id,
+        evidence_records=evidence_records,
+        resolver_selection_refs=resolver_selection_refs,
+    )
+    return workspace.finalize(
+        candidate_ids=[candidate_id],
+        validation_errors=validation_errors,
+    )
+
+
+def stage_extraction_payload(
+    payload: Mapping[str, Any],
+    *,
+    workspace: ExtractionBuilderWorkspace,
+    candidate_id: str,
+    evidence_records: Iterable[Mapping[str, Any]] | None = None,
+    resolver_selection_refs: Iterable[Any] | None = None,
+) -> dict[str, Any]:
+    """Stage one canonical payload candidate without finalizing the workspace."""
+
     canonical_payload = canonicalize_structured_result_payload(
         dict(payload),
         preferred_evidence_records=list(evidence_records or []),
@@ -419,10 +445,7 @@ def finalize_extraction_payload(
         resolver_selection_refs=resolver_selection_refs,
         status=CANDIDATE_STATUS_VALID,
     )
-    return workspace.finalize(
-        candidate_ids=[candidate_id],
-        validation_errors=validation_errors,
-    )
+    return canonical_payload
 
 
 def build_internal_extraction_result_event(
@@ -541,4 +564,5 @@ __all__ = [
     "get_active_extraction_builder_workspace",
     "reset_active_extraction_builder_workspace",
     "set_active_extraction_builder_workspace",
+    "stage_extraction_payload",
 ]

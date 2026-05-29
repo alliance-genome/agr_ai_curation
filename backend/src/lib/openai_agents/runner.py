@@ -73,9 +73,9 @@ from .extraction_trace_events import (
 )
 from .extraction_builder_workspace import (
     ExtractionBuilderWorkspace,
-    finalize_extraction_payload,
     reset_active_extraction_builder_workspace,
     set_active_extraction_builder_workspace,
+    stage_extraction_payload,
 )
 from .guardrails import enforce_uncited_negative_guardrail
 from .models import Answer
@@ -1221,6 +1221,12 @@ async def _run_agent_with_tracing(
             yield live_events[live_events_yielded]
             live_events_yielded += 1
 
+    except asyncio.CancelledError:
+        builder_workspace.mark_cancelled(reason="runner stream cancelled")
+        raise
+    except Exception as exc:
+        builder_workspace.mark_aborted(reason=f"{type(exc).__name__}: {exc}")
+        raise
     finally:
         # Clear the live event list reference
         set_live_event_list(None)
@@ -1232,21 +1238,19 @@ async def _run_agent_with_tracing(
         final_output = result.final_output
         if final_output:
             if hasattr(final_output, "model_dump"):
-                finalization = finalize_extraction_payload(
+                structured_result = stage_extraction_payload(
                     final_output.model_dump(),
                     workspace=builder_workspace,
                     candidate_id="runner_structured_result",
                     evidence_records=evidence_records,
                 )
-                structured_result = finalization.payload
             elif isinstance(final_output, dict):
-                finalization = finalize_extraction_payload(
+                structured_result = stage_extraction_payload(
                     final_output,
                     workspace=builder_workspace,
                     candidate_id="runner_structured_result",
                     evidence_records=evidence_records,
                 )
-                structured_result = finalization.payload
             if not full_response:
                 full_response = str(final_output)
 
@@ -1299,7 +1303,7 @@ async def _run_agent_with_tracing(
                         "reason": "missing_evidence_records",
                     }
                 ],
-                candidate_ids=builder_workspace.finalized_candidate_ids,
+                candidate_ids=["runner_structured_result"],
             )
             run_error_event = {
                 "type": "RUN_ERROR",
@@ -1321,6 +1325,11 @@ async def _run_agent_with_tracing(
                 evidence_records,
                 structured_evidence_records,
             )
+
+        finalization = builder_workspace.finalize(
+            candidate_ids=["runner_structured_result"],
+        )
+        structured_result = finalization.payload
 
         try:
             parsed_answer = Answer.model_validate(structured_result)

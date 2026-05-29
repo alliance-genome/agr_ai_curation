@@ -46,12 +46,12 @@ from .tools.evidence_workspace import (
     set_active_evidence_records,
 )
 from .extraction_builder_workspace import (
-    CANDIDATE_STATUS_VALID,
     ExtractionBuilderWorkspace,
     build_internal_extraction_result_event,
     finalize_extraction_payload,
     reset_active_extraction_builder_workspace,
     set_active_extraction_builder_workspace,
+    stage_extraction_payload,
 )
 from .extraction_trace_events import (
     get_current_extraction_trace_run,
@@ -2755,6 +2755,12 @@ async def run_specialist_with_events(
             stream_consume_started_at
         )
 
+    except asyncio.CancelledError:
+        phase_timings_ms["stream_consume_ms"] = _elapsed_ms(
+            stream_consume_started_at
+        )
+        builder_workspace.mark_cancelled(reason="specialist stream cancelled")
+        raise
     except Exception as e:
         phase_timings_ms["stream_consume_ms"] = _elapsed_ms(
             stream_consume_started_at
@@ -2793,6 +2799,7 @@ async def run_specialist_with_events(
         )
         if not stream_recovered_final_output:
             # Re-raise to propagate unrecoverable stream errors.
+            builder_workspace.mark_aborted(reason=f"{type(e).__name__}: {e}")
             raise
     finally:
         reset_active_evidence_records(evidence_workspace_token)
@@ -3275,23 +3282,22 @@ async def run_specialist_with_events(
         except Exception:
             payload = None
         if isinstance(payload, dict):
-            canonical_payload = canonicalize_structured_result_payload(
+            canonical_payload = stage_extraction_payload(
                 payload,
-                preferred_evidence_records=live_evidence_records,
-            )
-            builder_workspace.upsert_candidate(
+                workspace=builder_workspace,
                 candidate_id=builder_candidate_id,
-                staged_fields=canonical_payload,
-                evidence_record_ids=[
-                    record.get("evidence_record_id")
-                    for record in extract_evidence_records_from_structured_result(
-                        canonical_payload
-                    )
-                    if isinstance(record, Mapping)
-                ],
-                status=CANDIDATE_STATUS_VALID,
+                evidence_records=live_evidence_records,
             )
             final_output = json.dumps(canonical_payload)
+
+    if tool_name and _is_domain_envelope_output_json(
+        final_output,
+        expected_output_type=expected_output_type,
+    ):
+        builder_finalization = builder_workspace.finalize(
+            candidate_ids=[builder_candidate_id],
+        )
+        final_output = json.dumps(builder_finalization.payload)
 
     phase_timings_ms["post_stream_output_ms"] = _elapsed_ms(post_stream_started_at)
 
@@ -3305,18 +3311,19 @@ async def run_specialist_with_events(
             live_evidence_records=live_evidence_records,
         )
     except SpecialistOutputError:
-        builder_workspace.record_validation_failure(
-            errors=[
-                {
-                    "message": (
-                        f"{specialist_name} completed extraction output without the "
-                        "required verified evidence records."
-                    ),
-                    "reason": "missing_evidence_records",
-                }
-            ],
-            candidate_ids=builder_workspace.finalized_candidate_ids,
-        )
+        if builder_workspace.finalization is None:
+            builder_workspace.record_validation_failure(
+                errors=[
+                    {
+                        "message": (
+                            f"{specialist_name} completed extraction output without the "
+                            "required verified evidence records."
+                        ),
+                        "reason": "missing_evidence_records",
+                    }
+                ],
+                candidate_ids=[builder_candidate_id],
+            )
         raise
     phase_timings_ms["evidence_summary_ms"] = _elapsed_ms(
         evidence_summary_started_at

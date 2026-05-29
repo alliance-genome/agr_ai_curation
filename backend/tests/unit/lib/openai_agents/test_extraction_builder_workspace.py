@@ -83,6 +83,29 @@ def test_finalize_rejects_late_mutation_and_duplicate_identical_finalize_is_idem
             candidate_id="candidate-2",
             staged_fields={"items": []},
         )
+    with pytest.raises(builder.ExtractionBuilderFinalizedError):
+        workspace.record_validation_failure(
+            errors=[{"message": "late failure", "reason": "late"}],
+            candidate_ids=["candidate-1"],
+        )
+
+
+def test_duplicate_finalize_with_same_membership_different_order_is_idempotent(
+    captured_events,
+):
+    workspace = _workspace()
+    workspace.upsert_candidate(candidate_id="candidate-1", staged_fields={"items": [{"id": 1}]})
+    workspace.upsert_candidate(candidate_id="candidate-2", staged_fields={"items": [{"id": 2}]})
+
+    finalization = workspace.finalize(candidate_ids=["candidate-1", "candidate-2"])
+    duplicate = workspace.finalize(candidate_ids=["candidate-2", "candidate-1"])
+
+    assert duplicate is finalization
+    assert finalization.candidate_ids == ("candidate-1", "candidate-2")
+    assert finalization.payload["candidates"] == [
+        {"items": [{"id": 1}]},
+        {"items": [{"id": 2}]},
+    ]
 
 
 def test_conflicting_duplicate_finalize_fails_clearly(captured_events):
