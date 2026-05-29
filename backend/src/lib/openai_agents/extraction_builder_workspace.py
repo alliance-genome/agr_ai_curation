@@ -163,6 +163,16 @@ class ExtractionBuilderWorkspace:
         )
         return candidate
 
+    def apply_scope_metadata(
+        self,
+        *,
+        document_id: str | None = None,
+        domain_pack_id: str | None = None,
+    ) -> None:
+        self._ensure_mutable()
+        self._ensure_scope_value("document_id", document_id)
+        self._ensure_scope_value("domain_pack_id", domain_pack_id)
+
     def discard_candidate(self, candidate_id: str, *, reason: str | None = None) -> None:
         self._ensure_mutable()
         candidate = self._candidate(candidate_id)
@@ -343,6 +353,21 @@ class ExtractionBuilderWorkspace:
                 f"Extraction builder workspace is {self.state}; candidate mutations are rejected."
             )
 
+    def _ensure_scope_value(self, field_name: str, value: str | None) -> None:
+        normalized = _optional_string(value)
+        if normalized is None:
+            return
+        current = getattr(self, field_name)
+        if current is None:
+            setattr(self, field_name, normalized)
+            self.updated_at = _now_iso()
+            return
+        if current != normalized:
+            raise ExtractionBuilderError(
+                f"Extraction builder workspace {field_name} conflict "
+                f"(existing={current!r}, requested={normalized!r})."
+            )
+
     def _mark_terminal(self, state: str, *, reason: str | None = None) -> None:
         if self.state == BUILDER_STATE_FINALIZED:
             raise ExtractionBuilderFinalizedError(
@@ -435,11 +460,20 @@ def stage_extraction_payload(
 ) -> dict[str, Any]:
     """Stage one canonical payload candidate without finalizing the workspace."""
 
+    preferred_evidence_records = list(evidence_records or [])
     canonical_payload = canonicalize_structured_result_payload(
         dict(payload),
-        preferred_evidence_records=list(evidence_records or []),
+        preferred_evidence_records=preferred_evidence_records,
     )
-    evidence_record_ids = _evidence_record_ids(canonical_payload, evidence_records)
+    workspace.apply_scope_metadata(
+        document_id=_scope_value_from_payload(
+            canonical_payload,
+            "document_id",
+            extra_payloads=preferred_evidence_records,
+        ),
+        domain_pack_id=_scope_value_from_payload(canonical_payload, "domain_pack_id"),
+    )
+    evidence_record_ids = _evidence_record_ids(canonical_payload, preferred_evidence_records)
     workspace.upsert_candidate(
         candidate_id=candidate_id,
         staged_fields=canonical_payload,
@@ -519,6 +553,39 @@ def _new_builder_run_id() -> str:
 def _optional_string(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
+
+
+def _scope_value_from_payload(
+    payload: Any,
+    key: str,
+    *,
+    extra_payloads: Iterable[Any] | None = None,
+) -> str | None:
+    values: list[str] = []
+
+    def visit(value: Any) -> None:
+        if hasattr(value, "model_dump"):
+            try:
+                value = value.model_dump(mode="json")
+            except Exception:
+                return
+        if isinstance(value, Mapping):
+            direct = _optional_string(value.get(key))
+            if direct:
+                values.append(direct)
+            for nested in value.values():
+                visit(nested)
+        elif isinstance(value, Iterable) and not isinstance(value, (str, bytes, bytearray)):
+            for item in value:
+                visit(item)
+
+    visit(payload)
+    if extra_payloads is not None:
+        visit(extra_payloads)
+    unique_values = _unique_strings(values)
+    if len(unique_values) == 1:
+        return unique_values[0]
+    return None
 
 
 def _required_string(value: Any, field_name: str) -> str:

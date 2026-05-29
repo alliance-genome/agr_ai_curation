@@ -64,6 +64,52 @@ def test_finalize_extraction_payload_returns_canonical_payload_with_evidence(mon
     assert captured_events[-1]["event_type"] == "extraction_builder.finalization_decision"
 
 
+def test_finalize_extraction_payload_backfills_scope_metadata_from_payload(monkeypatch):
+    captured_events = []
+    monkeypatch.setattr(
+        builder,
+        "write_extraction_trace_event",
+        lambda **event: captured_events.append(event) or event,
+    )
+    workspace = builder.ExtractionBuilderWorkspace(
+        run_id="trace-domain",
+        agent_id="agent",
+    )
+
+    finalization = builder.finalize_extraction_payload(
+        {
+            "domain_pack_id": "agr.test",
+            "objects": [
+                {
+                    "object_type": "gene_expression_annotation",
+                    "pending_ref_id": "annotation-1",
+                    "payload": {"gene_symbol": "wg"},
+                    "evidence_record_ids": ["evidence-record-1"],
+                }
+            ],
+            "run_summary": {"candidate_count": 1, "kept_count": 1},
+        },
+        workspace=workspace,
+        candidate_id="candidate-1",
+        evidence_records=[
+            {
+                "evidence_record_id": "evidence-record-1",
+                "document_id": "doc-1",
+                "entity": "wg",
+                "verified_quote": "wg is expressed in embryonic stripes.",
+            }
+        ],
+    )
+
+    assert finalization.status == "finalized"
+    assert workspace.document_id == "doc-1"
+    assert workspace.domain_pack_id == "agr.test"
+    finalization_event = captured_events[-1]
+    assert finalization_event["event_type"] == "extraction_builder.finalization_decision"
+    assert finalization_event["domain_pack_id"] == "agr.test"
+    assert finalization_event["metadata"]["document_id"] == "doc-1"
+
+
 def test_finalize_extraction_payload_duplicate_candidate_is_idempotent(monkeypatch):
     captured_events = []
     monkeypatch.setattr(
@@ -355,6 +401,103 @@ async def test_specialist_internal_event_uses_post_validator_builder_payload(mon
     assert candidate["raw_output"]["metadata"]["validator_appended_findings"] == [
         {"code": "domain_pack.validator_resolved", "message": "Resolved wg"}
     ]
+
+
+@pytest.mark.asyncio
+async def test_specialist_builder_events_track_document_and_domain(monkeypatch):
+    payload = {
+        "summary": "Expression extraction",
+        "curatable_objects": [
+            {
+                "object_type": "gene_expression_annotation",
+                "pending_ref_id": "annotation-1",
+                "payload": {"gene_symbol": "wg", "assay": "in situ"},
+                "evidence_record_ids": ["evidence-record-1"],
+            }
+        ],
+        "metadata": {
+            "evidence_records": [
+                {
+                    "evidence_record_id": "evidence-record-1",
+                    "document_id": "doc-1",
+                    "entity": "wg",
+                    "verified_quote": "wg is expressed in embryonic stripes.",
+                    "page": 3,
+                    "section": "Results",
+                    "chunk_id": "chunk-1",
+                }
+            ]
+        },
+        "run_summary": {"candidate_count": 1, "kept_count": 1},
+    }
+    captured_trace_events = []
+
+    async def _materialize_domain_envelope(final_output, **_kwargs):
+        dispatched_payload = json.loads(final_output)
+        dispatched_payload["domain_pack_id"] = "agr.test"
+        return json.dumps(dispatched_payload)
+
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", lambda _event: None)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(
+        streaming_tools,
+        "RunConfig",
+        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "_dispatch_domain_envelope_validators_for_chat",
+        _materialize_domain_envelope,
+    )
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult(final_output=json.dumps(payload)),
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "get_current_extraction_trace_run",
+        lambda: SimpleNamespace(trace_id="trace-domain"),
+    )
+    monkeypatch.setattr(
+        builder,
+        "write_extraction_trace_event",
+        lambda **event: captured_trace_events.append(event) or event,
+    )
+
+    parent_workspace = builder.ExtractionBuilderWorkspace(
+        run_id="trace-domain",
+        document_id="doc-1",
+        agent_id="supervisor",
+    )
+    token = builder.set_active_extraction_builder_workspace(parent_workspace)
+    try:
+        agent = SimpleNamespace(
+            name="Gene Expression Extractor",
+            tools=[],
+            output_type=_DomainEnvelope,
+            instructions="",
+            model="gpt-4o",
+        )
+
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="extract gene expression evidence",
+            specialist_name="Gene Expression Extractor",
+            max_turns=3,
+            tool_name="ask_gene_expression_specialist",
+        )
+    finally:
+        builder.reset_active_extraction_builder_workspace(token)
+
+    finalization_event = next(
+        event
+        for event in captured_trace_events
+        if event.get("event_type") == "extraction_builder.finalization_decision"
+        and event.get("output_summary", {}).get("decision") == "finalized"
+    )
+    assert finalization_event["domain_pack_id"] == "agr.test"
+    assert finalization_event["metadata"]["document_id"] == "doc-1"
 
 
 @pytest.mark.asyncio

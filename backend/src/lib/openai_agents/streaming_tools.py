@@ -52,6 +52,7 @@ from .extraction_builder_workspace import (
     ExtractionBuilderWorkspace,
     build_internal_extraction_result_event,
     finalize_extraction_payload,
+    get_active_extraction_builder_workspace,
     reset_active_extraction_builder_workspace,
     set_active_extraction_builder_workspace,
     stage_extraction_payload,
@@ -1204,6 +1205,13 @@ def _agent_key_from_specialist_tool_name(tool_name: Optional[str]) -> Optional[s
     return match.group("agent_key")
 
 
+def _active_builder_workspace_or_none() -> ExtractionBuilderWorkspace | None:
+    try:
+        return get_active_extraction_builder_workspace()
+    except RuntimeError:
+        return None
+
+
 def _is_domain_envelope_output_json(
     final_output: str,
     *,
@@ -2254,8 +2262,19 @@ async def run_specialist_with_events(
     stream_consume_started_at = time.monotonic()
     evidence_workspace_token = set_active_evidence_records(live_evidence_records)
     trace_run = get_current_extraction_trace_run()
+    parent_builder_workspace = _active_builder_workspace_or_none()
     builder_workspace = ExtractionBuilderWorkspace(
         run_id=trace_run.trace_id if trace_run is not None else str(uuid.uuid4()),
+        document_id=(
+            parent_builder_workspace.document_id
+            if parent_builder_workspace is not None
+            else None
+        ),
+        domain_pack_id=(
+            parent_builder_workspace.domain_pack_id
+            if parent_builder_workspace is not None
+            else None
+        ),
         agent_id=specialist_name,
     )
     builder_workspace_token = set_active_extraction_builder_workspace(builder_workspace)
