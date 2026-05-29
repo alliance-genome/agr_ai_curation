@@ -2696,7 +2696,13 @@ async def run_specialist_with_events(
                                 "durationMs": duration_ms,
                                 "toolCallId": completed_tool_id,
                                 "isSpecialistInternal": True  # Mark as internal specialist tool
-                            }
+                            },
+                            "internal": {
+                                "tool_output": output,
+                                "output_length": len(str(output)),
+                                "output_preview": output_preview,
+                                "output_summary": output_summary,
+                            },
                         })
 
                         # Check if tool output contains FileInfo (file download)

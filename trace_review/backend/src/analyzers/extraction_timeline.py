@@ -92,6 +92,32 @@ def _langfuse_extraction_event_from_observation(observation: Mapping[str, Any]) 
     return None
 
 
+def feedback_trace_sibling_ids(
+    trace_id: str,
+    feedback_trace_data: Mapping[str, Any] | None,
+) -> List[str]:
+    """Return sibling trace IDs present in a stored feedback trace artifact."""
+
+    if not isinstance(feedback_trace_data, Mapping):
+        return []
+
+    traces = feedback_trace_data.get("traces")
+    if not isinstance(traces, list):
+        return []
+
+    sibling_ids: List[str] = []
+    seen = {trace_id}
+    for trace in traces:
+        if not isinstance(trace, Mapping):
+            continue
+        event_trace_id = str(trace.get("trace_id") or trace.get("id") or "")
+        if not event_trace_id or event_trace_id in seen:
+            continue
+        seen.add(event_trace_id)
+        sibling_ids.append(event_trace_id)
+    return sibling_ids
+
+
 def _feedback_trace_events(
     *,
     trace_id: str,

@@ -24,6 +24,7 @@ from ..analyzers.trace_summary import TraceSummaryAnalyzer
 from ..analyzers.extraction_timeline import (
     ANALYZER_SCHEMA_VERSION as EXTRACTION_TIMELINE_ANALYZER_SCHEMA_VERSION,
     ExtractionTimelineAnalyzer,
+    feedback_trace_sibling_ids,
 )
 from ..utils.token_budget import (
     create_token_info_dict,
@@ -598,6 +599,11 @@ async def get_extraction_timeline(
     user: Dict[str, Any] = get_auth_dependency()
 ) -> ClaudeTraceResponse:
     feedback_artifacts = fetch_feedback_trace_artifacts(feedback_id)
+    feedback_trace_data = (
+        feedback_artifacts.get("trace_data")
+        if isinstance(feedback_artifacts, dict)
+        else None
+    )
     try:
         cached_data = await _ensure_trace_analyzed(trace_id, request, source, refresh=refresh)
         siblings = _sibling_trace_ids(
@@ -606,6 +612,10 @@ async def get_extraction_timeline(
             session_id=session_id,
             include_sibling_traces=include_sibling_traces,
         )
+        if include_sibling_traces:
+            for sibling_id in feedback_trace_sibling_ids(trace_id, feedback_trace_data):
+                if sibling_id not in siblings:
+                    siblings.append(sibling_id)
     except HTTPException:
         if not (
             isinstance(feedback_artifacts, dict)
@@ -619,7 +629,11 @@ async def get_extraction_timeline(
             },
             "observations": [],
         }
-        siblings = []
+        siblings = (
+            feedback_trace_sibling_ids(trace_id, feedback_trace_data)
+            if include_sibling_traces
+            else []
+        )
     timeline = _build_extraction_timeline(
         trace_id=trace_id,
         cached_data=cached_data,
@@ -666,6 +680,11 @@ async def get_extraction_diagnostic_report(
     user: Dict[str, Any] = get_auth_dependency()
 ) -> ClaudeTraceResponse:
     feedback_artifacts = fetch_feedback_trace_artifacts(feedback_id)
+    feedback_trace_data = (
+        feedback_artifacts.get("trace_data")
+        if isinstance(feedback_artifacts, dict)
+        else None
+    )
     try:
         cached_data = await _ensure_trace_analyzed(trace_id, request, source, refresh=refresh)
         siblings = _sibling_trace_ids(
@@ -674,6 +693,10 @@ async def get_extraction_diagnostic_report(
             session_id=session_id,
             include_sibling_traces=include_sibling_traces,
         )
+        if include_sibling_traces:
+            for sibling_id in feedback_trace_sibling_ids(trace_id, feedback_trace_data):
+                if sibling_id not in siblings:
+                    siblings.append(sibling_id)
     except HTTPException:
         if not (
             isinstance(feedback_artifacts, dict)
@@ -687,7 +710,11 @@ async def get_extraction_diagnostic_report(
             },
             "observations": [],
         }
-        siblings = []
+        siblings = (
+            feedback_trace_sibling_ids(trace_id, feedback_trace_data)
+            if include_sibling_traces
+            else []
+        )
     timeline = _build_extraction_timeline(
         trace_id=trace_id,
         cached_data=cached_data,

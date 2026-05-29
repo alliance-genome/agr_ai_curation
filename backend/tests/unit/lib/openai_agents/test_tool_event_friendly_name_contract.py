@@ -1000,6 +1000,8 @@ async def test_specialist_tool_events_emit_humanized_internal_labels(monkeypatch
     assert tool_events[1]["details"]["friendlyName"] == "Gene Validation Agent: Search Document complete"
     assert tool_events[0]["details"]["toolCallId"] == "call-search-1"
     assert tool_events[1]["details"]["toolCallId"] == "call-search-1"
+    assert tool_events[1]["internal"]["tool_output"] == '{"summary":"ok"}'
+    assert tool_events[1]["internal"]["output_preview"] == '{"summary":"ok"}'
 
 
 @pytest.mark.asyncio

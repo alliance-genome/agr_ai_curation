@@ -68,6 +68,21 @@ def test_stream_event_maps_specialist_tool_and_validation_events(tmp_path, monke
                 },
             }
         )
+        complete_event = events.write_stream_event(
+            {
+                "type": "TOOL_COMPLETE",
+                "timestamp": "2026-05-29T00:00:01Z",
+                "details": {
+                    "toolCallId": "call-specialist",
+                    "toolName": "search_document",
+                    "isSpecialistInternal": True,
+                    "success": True,
+                },
+                "internal": {
+                    "tool_output": {"summary": "found expression evidence"},
+                },
+            }
+        )
         validation_event = events.write_stream_event(
             {
                 "type": "SPECIALIST_ERROR",
@@ -81,8 +96,11 @@ def test_stream_event_maps_specialist_tool_and_validation_events(tmp_path, monke
         events.clear_extraction_trace_run()
 
     assert tool_event is not None
+    assert complete_event is not None
     assert validation_event is not None
     assert tool_event["event_type"] == "specialist_tool_call.started"
+    assert complete_event["event_type"] == "specialist_tool_call.completed"
     assert tool_event["tool_call_id"] == "call-specialist"
+    assert complete_event["output_summary"]["preview"] == {"summary": "found expression evidence"}
     assert validation_event["event_type"] == "validation.failure"
     assert validation_event["validation"]["status"] == "failed"

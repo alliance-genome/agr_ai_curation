@@ -118,6 +118,60 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(view_response["data"]["schema_version"], "extraction_timeline_analyzer.v1")
         self.assertEqual(view_response["data"]["reasoning_summary"]["status"], "unavailable")
 
+    @patch(
+        "src.api.traces.fetch_feedback_trace_artifacts",
+        return_value={
+            "status": "available",
+            "trace_data": {
+                "captured_at": "2026-05-29T00:00:00Z",
+                "traces": [
+                    {
+                        "trace_id": "trace-extraction-123",
+                        "timestamp": "2026-05-29T00:00:01Z",
+                        "tool_calls": [{"name": "resolve_domain_field_term", "status": "ok"}],
+                    },
+                    {
+                        "trace_id": "trace-sibling-456",
+                        "timestamp": "2026-05-29T00:00:02Z",
+                        "tool_calls": [{"name": "validate_gene_expression_candidate", "status": "ok"}],
+                    },
+                ],
+            },
+        },
+    )
+    @patch("src.api.traces.TraceExtractor")
+    async def test_trace_review_endpoint_expands_feedback_artifact_siblings_when_langfuse_unavailable(
+        self,
+        extractor_cls: Mock,
+        _feedback_artifacts: Mock,
+    ):
+        request = self._make_request()
+        extractor_cls.return_value.extract_complete_trace.side_effect = RuntimeError("langfuse down")
+
+        response = await traces.get_trace_view(
+            "trace-extraction-123",
+            "extraction_timeline",
+            request,
+            source="auto",
+            feedback_id="feedback-123",
+            session_id=None,
+            include_sibling_traces=True,
+            refresh=False,
+            include_raw_args=False,
+            include_raw_outputs=False,
+            tool_name=None,
+            event_type=None,
+            candidate_id=None,
+        )
+
+        self.assertEqual(response["view"], "extraction_timeline")
+        self.assertEqual(response["data"]["feedback_artifact_event_count"], 2)
+        self.assertEqual(response["data"]["sibling_trace_ids"], ["trace-sibling-456"])
+        self.assertEqual(
+            [item["event_trace_id"] for item in response["data"]["timeline"]],
+            ["trace-extraction-123", "trace-sibling-456"],
+        )
+
     @patch("src.analyzers.agent_config.AgentConfigAnalyzer.extract_agent_configs", return_value={})
     @patch("src.analyzers.document_hierarchy.DocumentHierarchyAnalyzer.analyze", return_value={})
     @patch(
@@ -176,6 +230,17 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
                                 "status": "ok",
                             }
                         ],
+                    },
+                    {
+                        "trace_id": "trace-sibling-456",
+                        "timestamp": "2026-05-29T00:00:02Z",
+                        "tool_calls": [
+                            {
+                                "name": "validate_gene_expression_candidate",
+                                "duration_ms": 12,
+                                "status": "ok",
+                            }
+                        ],
                     }
                 ],
             },
@@ -194,8 +259,10 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
             "trace-extraction-123",
             request,
             source="auto",
+            session_id=None,
             feedback_id="feedback-123",
-            include_sibling_traces=False,
+            include_sibling_traces=True,
+            refresh=False,
             include_raw_args=False,
             include_raw_outputs=False,
             tool_name=None,
@@ -204,6 +271,8 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(response.status, "success")
-        self.assertEqual(response.data["feedback_artifact_event_count"], 1)
+        self.assertEqual(response.data["feedback_artifact_event_count"], 2)
         self.assertEqual(response.data["query"]["feedback_artifact_status"], "available")
+        self.assertEqual(response.data["sibling_trace_ids"], ["trace-sibling-456"])
         self.assertEqual(response.data["timeline"][0]["tool_name"], "resolve_domain_field_term")
+        self.assertEqual(response.data["timeline"][1]["tool_name"], "validate_gene_expression_candidate")

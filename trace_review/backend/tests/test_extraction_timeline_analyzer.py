@@ -1,6 +1,6 @@
 import json
 
-from src.analyzers.extraction_timeline import ExtractionTimelineAnalyzer
+from src.analyzers.extraction_timeline import ExtractionTimelineAnalyzer, feedback_trace_sibling_ids
 
 
 def _write_event(directory, trace_id, event):
@@ -212,3 +212,36 @@ def test_analyzer_synthesizes_feedback_trace_artifact_events(monkeypatch, tmp_pa
     assert timeline["feedback_artifact_event_count"] == 1
     assert timeline["timeline"][0]["event_type"] == "stored_feedback.tool_call"
     assert timeline["timeline"][0]["tool_name"] == "resolve_domain_field_term"
+
+
+def test_analyzer_expands_stored_feedback_sibling_trace_artifacts(monkeypatch, tmp_path):
+    monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(tmp_path))
+    feedback_trace_data = {
+        "captured_at": "2026-05-29T00:00:00Z",
+        "traces": [
+            {
+                "trace_id": "trace-main",
+                "timestamp": "2026-05-29T00:00:01Z",
+                "tool_calls": [{"name": "resolve_domain_field_term", "status": "ok"}],
+            },
+            {
+                "trace_id": "trace-sibling",
+                "timestamp": "2026-05-29T00:00:02Z",
+                "tool_calls": [{"name": "validate_gene_expression_candidate", "status": "failed"}],
+            },
+        ],
+    }
+
+    sibling_ids = feedback_trace_sibling_ids("trace-main", feedback_trace_data)
+    timeline = ExtractionTimelineAnalyzer.analyze(
+        trace_id="trace-main",
+        raw_trace={},
+        observations=[],
+        sibling_trace_ids=sibling_ids,
+        feedback_trace_data=feedback_trace_data,
+    )
+
+    assert sibling_ids == ["trace-sibling"]
+    assert timeline["feedback_artifact_event_count"] == 2
+    assert timeline["sibling_trace_ids"] == ["trace-sibling"]
+    assert [item["event_trace_id"] for item in timeline["timeline"]] == ["trace-main", "trace-sibling"]

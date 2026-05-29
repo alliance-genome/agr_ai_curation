@@ -21,6 +21,7 @@ from ..analyzers.agent_config import AgentConfigAnalyzer
 from ..analyzers.extraction_timeline import (
     ANALYZER_SCHEMA_VERSION as EXTRACTION_TIMELINE_ANALYZER_SCHEMA_VERSION,
     ExtractionTimelineAnalyzer,
+    feedback_trace_sibling_ids,
 )
 from ..utils.token_budget import create_lightweight_tool_call_summary
 from ..utils.trace_output import is_trace_output_cacheable
@@ -568,6 +569,11 @@ async def get_trace_view(
 
     if view_name == "extraction_timeline":
         feedback_artifacts = fetch_feedback_trace_artifacts(feedback_id)
+        feedback_trace_data = (
+            feedback_artifacts.get("trace_data")
+            if isinstance(feedback_artifacts, dict)
+            else None
+        )
         try:
             cached_data, _cache_status, _from_cache = _get_or_analyze_trace_export(
                 trace_id,
@@ -581,6 +587,10 @@ async def get_trace_view(
                 session_id=session_id,
                 include_sibling_traces=include_sibling_traces,
             )
+            if include_sibling_traces:
+                for sibling_id in feedback_trace_sibling_ids(trace_id, feedback_trace_data):
+                    if sibling_id not in siblings:
+                        siblings.append(sibling_id)
         except TraceExtractionError as e:
             if not (
                 isinstance(feedback_artifacts, dict)
@@ -597,7 +607,11 @@ async def get_trace_view(
                 },
                 "observations": [],
             }
-            siblings = []
+            siblings = (
+                feedback_trace_sibling_ids(trace_id, feedback_trace_data)
+                if include_sibling_traces
+                else []
+            )
         except TraceAnalysisError as e:
             logger.exception("Error analyzing trace: %s", e)
             raise HTTPException(
