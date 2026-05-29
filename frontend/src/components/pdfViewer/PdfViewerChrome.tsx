@@ -134,6 +134,7 @@ export function PdfViewerChrome({
       elevation={isCurationVariant ? 0 : 3}
       sx={{
         height: '100%',
+        minWidth: 0,
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
@@ -153,6 +154,7 @@ export function PdfViewerChrome({
         sx={{
           px: isCurationVariant ? 1.5 : 2,
           py: isCurationVariant ? 1.25 : 2,
+          minWidth: 0,
           borderBottom: 1,
           borderColor: isCurationVariant ? alpha(theme.palette.primary.light, 0.16) : 'divider',
           background: isCurationVariant
@@ -265,12 +267,14 @@ export function PdfViewerChrome({
                 ))}
               </Stack>
             )}
-            <Stack
-              direction={{ xs: 'column', sm: 'row' }}
-              spacing={1}
-              alignItems={{ xs: 'stretch', sm: 'center' }}
+            <Box
               sx={{
                 pt: isCurationVariant ? 0 : 0.75,
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                gap: 1,
+                minWidth: 0,
                 '& .MuiIconButton-root': isCurationVariant
                   ? {
                       border: `1px solid ${alpha(theme.palette.common.white, 0.1)}`,
@@ -286,7 +290,7 @@ export function PdfViewerChrome({
                   : undefined,
               }}
             >
-              <Stack direction="row" spacing={0.5} alignItems="center">
+              <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flex: '0 0 auto', minWidth: 0 }}>
                 <Tooltip title="Previous page">
                   <span>
                     <IconButton
@@ -328,7 +332,7 @@ export function PdfViewerChrome({
                 </Tooltip>
               </Stack>
               <Divider orientation="vertical" flexItem sx={{ display: { xs: 'none', sm: 'block' } }} />
-              <Stack direction="row" spacing={0.5} alignItems="center">
+              <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flex: '0 0 auto', minWidth: 0 }}>
                 <Tooltip title="Zoom out">
                   <span>
                     <IconButton
@@ -390,8 +394,15 @@ export function PdfViewerChrome({
                 placeholder="Find in PDF"
                 inputProps={{ 'aria-label': 'Find in PDF' }}
                 sx={{
-                  flex: 1,
-                  minWidth: { xs: '100%', sm: 180 },
+                  flex: '1 1 12rem',
+                  minWidth: 0,
+                  maxWidth: '100%',
+                  '& .MuiInputBase-root': {
+                    minWidth: 0,
+                  },
+                  '& .MuiInputBase-input': {
+                    minWidth: 0,
+                  },
                   ...(isCurationVariant && {
                     '& .MuiOutlinedInput-root': {
                       backgroundColor: alpha('#020915', 0.58),
@@ -431,7 +442,7 @@ export function PdfViewerChrome({
                   ) : undefined,
                 }}
               />
-              <Stack direction="row" spacing={0.5} alignItems="center">
+              <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flex: '0 0 auto', minWidth: 0 }}>
                 <Tooltip title="Previous match">
                   <span>
                     <IconButton
@@ -457,7 +468,7 @@ export function PdfViewerChrome({
                   </span>
                 </Tooltip>
               </Stack>
-            </Stack>
+            </Box>
           </Stack>
         ) : (
           <Typography variant="h6">No document loaded</Typography>
@@ -469,6 +480,7 @@ export function PdfViewerChrome({
           flex: 1,
           position: 'relative',
           minHeight: 0,
+          minWidth: 0,
           backgroundColor: isCurationVariant ? '#030a13' : undefined,
         }}
       >
@@ -607,6 +619,7 @@ export function PdfViewerChrome({
           src={viewerSrc}
           style={{
             border: 'none',
+            display: 'block',
             width: '100%',
             height: '100%',
             backgroundColor: isCurationVariant ? '#030a13' : theme.palette.background.default,

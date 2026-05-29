@@ -14,6 +14,7 @@ const Root = styled(Box)(({ theme }) => ({
   flex: 1,
   display: 'flex',
   minHeight: 0,
+  minWidth: 0,
   height: '100%',
   overflow: 'hidden',
   padding: theme.spacing(2),
@@ -25,10 +26,12 @@ const PanelSection = styled(Box)(() => ({
   display: 'flex',
   flexDirection: 'column',
   minHeight: 0,
+  minWidth: 0,
   height: '100%',
   '& > *': {
     flex: 1,
     minHeight: 0,
+    minWidth: 0,
     height: '100%',
   },
 }))
