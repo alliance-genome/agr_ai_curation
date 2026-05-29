@@ -27,6 +27,18 @@ def _workspace() -> builder.ExtractionBuilderWorkspace:
     )
 
 
+def test_workspace_generates_uuid_backed_run_id_when_missing(monkeypatch):
+    monkeypatch.setattr(
+        builder,
+        "uuid4",
+        lambda: "00000000-0000-4000-8000-000000000001",
+    )
+
+    workspace = builder.ExtractionBuilderWorkspace(run_id=" ")
+
+    assert workspace.run_id == "builder-00000000-0000-4000-8000-000000000001"
+
+
 def test_upsert_is_idempotent_for_retry_and_tracks_state(captured_events):
     workspace = _workspace()
 

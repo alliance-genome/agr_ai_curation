@@ -8,6 +8,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping
+from uuid import uuid4
 
 from .evidence_summary import (
     canonicalize_structured_result_payload,
@@ -512,7 +513,7 @@ def _now_iso() -> str:
 
 
 def _new_builder_run_id() -> str:
-    return f"builder-{datetime.now(timezone.utc).timestamp():.6f}"
+    return f"builder-{uuid4()}"
 
 
 def _optional_string(value: Any) -> str | None:
