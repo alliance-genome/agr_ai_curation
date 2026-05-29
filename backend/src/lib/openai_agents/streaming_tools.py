@@ -2828,22 +2828,15 @@ async def run_specialist_with_events(
         logger.warning("%s has no final_output!", specialist_name)
 
         # =============================================================================
-        # TEXT OUTPUT FALLBACK PARSING
+        # PLAIN TEXT OUTPUT FALLBACK
         # =============================================================================
-        # GPT-5 models with reasoning enabled may output JSON as plain text instead of
-        # using the structured output mechanism. This fallback attempts to parse the
-        # text output as JSON and validate it against the output_type schema.
-        #
-        # This is the PRIMARY extraction path for GPT-5 + reasoning mode.
-        #
-        # IMPORTANT: We use ONLY result.new_items for text extraction because:
-        # 1. new_items contains COMPLETE output items after the stream finishes
-        # 2. accumulated_text from streaming deltas is ALWAYS incomplete/truncated
-        # 3. The SDK's as_tool() uses new_items for custom_output_extractor
+        # Text extracted from SDK message items may be used only for unstructured
+        # specialists. Structured extraction output must come from the SDK final_output
+        # path so model-authored JSON text cannot become the canonical builder payload.
 
         output_type = expected_output_type
 
-        # Extract complete text from result.new_items (the ONLY reliable source)
+        # Extract complete text from result.new_items for unstructured specialists.
         text_from_items = None
         try:
             from agents.items import ItemHelpers
@@ -2882,79 +2875,12 @@ async def run_specialist_with_events(
             )
 
         if text_from_items and output_type is not None:
-            # Try to extract JSON from the text
-            text_stripped = text_from_items.strip()
-
-            logger.info(
-                "%s TEXT FALLBACK: Extracting JSON from new_items (%s chars)",
+            logger.warning(
+                "%s produced text in new_items but requires %s structured output; "
+                "ignoring text so it cannot become canonical extraction JSON",
                 specialist_name,
-                len(text_stripped),
+                output_type.__name__,
             )
-
-            # Find JSON object boundaries
-            json_start = text_stripped.find('{')
-            json_end = text_stripped.rfind('}')
-
-            if json_start >= 0 and json_end > json_start:
-                json_candidate = text_stripped[json_start:json_end + 1]
-                logger.info(
-                    "%s TEXT FALLBACK: Found JSON candidate from new_items (%s chars)",
-                    specialist_name,
-                    len(json_candidate),
-                )
-
-                try:
-                    # Validate JSON syntax first
-                    parsed_json = json.loads(json_candidate)
-
-                    # Validate against Pydantic schema
-                    validated_output = output_type.model_validate(parsed_json)
-
-                    # Success! Convert to JSON string for consistency
-                    final_output = json.dumps(validated_output.model_dump())
-
-                    logger.info(
-                        "%s TEXT FALLBACK SUCCESS! Parsed and validated %s from new_items. JSON length: %s chars",
-                        specialist_name,
-                        output_type.__name__,
-                        len(final_output),
-                    )
-
-                    # Emit audit event for visibility
-                    add_specialist_event({
-                        "type": "SPECIALIST_TEXT_FALLBACK_SUCCESS",
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "details": {
-                            "specialist": specialist_name,
-                            "output_type": output_type.__name__,
-                            "json_length": len(final_output),
-                            "extraction_method": "text_fallback_new_items",
-                            "message": f"{specialist_name} output extracted from new_items (GPT-5 reasoning mode workaround)"
-                        }
-                    })
-
-                except json.JSONDecodeError as e:
-                    logger.warning(
-                        "%s TEXT FALLBACK: JSON parsing failed from new_items: %s. JSON candidate length: %s, First 200 chars: %s...",
-                        specialist_name,
-                        e,
-                        len(json_candidate),
-                        json_candidate[:200],
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "%s TEXT FALLBACK: Pydantic validation failed: %s: %s",
-                        specialist_name,
-                        type(e).__name__,
-                        e,
-                    )
-            else:
-                logger.warning(
-                    "%s TEXT FALLBACK: No JSON object found in new_items (%s chars). First 200 chars: %s...",
-                    specialist_name,
-                    len(text_stripped),
-                    text_stripped[:200],
-                )
         elif text_from_items:
             # Plain text agent - use text_from_items directly as output
             logger.info(
@@ -2976,7 +2902,12 @@ async def run_specialist_with_events(
         # GPT-5 + reasoning mode may not include a message_output_item in new_items,
         # but the text IS streamed via ResponseTextDeltaEvent and accumulated in
         # result._accumulated_text. Use this as a last-resort fallback for plain text agents.
-        if not final_output and hasattr(result, "_accumulated_text") and result._accumulated_text:
+        if (
+            not final_output
+            and output_type is None
+            and hasattr(result, "_accumulated_text")
+            and result._accumulated_text
+        ):
             accumulated_text = result._accumulated_text.strip()
             if accumulated_text:
                 logger.info(

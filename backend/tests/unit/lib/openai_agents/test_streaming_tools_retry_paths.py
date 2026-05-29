@@ -2,7 +2,8 @@
 
 import asyncio
 import json
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from pydantic import BaseModel
@@ -242,6 +243,113 @@ async def test_run_specialist_does_not_recover_non_domain_stream_errors(monkeypa
 
     assert any(
         event["event_type"] == "extraction_builder.aborted"
+        for event in captured_builder_events
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_specialist_rejects_structured_json_from_new_items_without_final_output(
+    monkeypatch,
+):
+    generated_payload = {
+        "summary": "Model-authored envelope text",
+        "curatable_objects": [
+            {
+                "object_type": "gene_expression_annotation",
+                "pending_ref_id": "annotation-1",
+                "payload": {"gene_symbol": "wg", "assay": "in situ"},
+                "evidence_record_ids": ["evidence-record-1"],
+            }
+        ],
+        "metadata": {
+            "evidence_records": [
+                {
+                    "evidence_record_id": "evidence-record-1",
+                    "entity": "wg",
+                    "verified_quote": "wg is expressed in embryonic stripes.",
+                    "page": 3,
+                    "section": "Results",
+                    "chunk_id": "chunk-1",
+                }
+            ]
+        },
+        "run_summary": {"candidate_count": 1, "kept_count": 1},
+    }
+    message_item = SimpleNamespace(type="message_output_item")
+    fake_items_module = ModuleType("agents.items")
+    setattr(
+        fake_items_module,
+        "ItemHelpers",
+        SimpleNamespace(text_message_output=lambda _item: json.dumps(generated_payload)),
+    )
+
+    calls = {"count": 0}
+    captured_events = []
+    captured_builder_events = []
+
+    def _run_streamed(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return _FakeRunResult(
+                events=[],
+                final_output=None,
+                new_items=[message_item],
+            )
+        return _FakeRunResult(events=[], final_output=None, new_items=[])
+
+    async def _pass_through_validator(final_output, **_kwargs):
+        return final_output
+
+    monkeypatch.setitem(sys.modules, "agents.items", fake_items_module)
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(
+        builder,
+        "write_extraction_trace_event",
+        lambda **event: captured_builder_events.append(event) or event,
+    )
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools.Runner, "run_streamed", _run_streamed)
+    monkeypatch.setattr(
+        streaming_tools,
+        "_emit_specialist_evidence_summary_or_raise",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "_dispatch_domain_envelope_validators_for_chat",
+        _pass_through_validator,
+    )
+
+    agent = SimpleNamespace(
+        name="Gene Expression Extractor",
+        tools=[],
+        output_type=_DomainEnvelope,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    with pytest.raises(streaming_tools.SpecialistOutputError):
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="extract gene expression evidence",
+            specialist_name="Gene Expression Extractor",
+            max_turns=3,
+            tool_name="ask_gene_expression_specialist",
+        )
+
+    assert calls["count"] == 2
+    assert not any(
+        e.get("type") == "SPECIALIST_TEXT_FALLBACK_SUCCESS"
+        and e.get("details", {}).get("extraction_method") == "text_fallback_new_items"
+        for e in captured_events
+    )
+    assert not any(
+        e.get("type") == streaming_tools.INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
+        for e in captured_events
+    )
+    assert not any(
+        event["event_type"] == "extraction_builder.finalization_decision"
         for event in captured_builder_events
     )
 
