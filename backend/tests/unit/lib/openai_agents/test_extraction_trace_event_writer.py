@@ -1,4 +1,5 @@
 import json
+import logging
 
 from src.lib.openai_agents import extraction_trace_events as events
 
@@ -104,3 +105,13 @@ def test_stream_event_maps_specialist_tool_and_validation_events(tmp_path, monke
     assert complete_event["output_summary"]["preview"] == {"summary": "found expression evidence"}
     assert validation_event["event_type"] == "validation.failure"
     assert validation_event["validation"]["status"] == "failed"
+
+
+def test_writer_logs_debug_when_event_has_no_trace_context(caplog):
+    events.clear_extraction_trace_run()
+
+    with caplog.at_level(logging.DEBUG, logger=events.logger.name):
+        event = events.write_extraction_trace_event(event_type="specialist_tool_call.started")
+
+    assert event is None
+    assert "Dropping extraction trace event without trace context" in caplog.text

@@ -239,6 +239,10 @@ def write_extraction_trace_event(
     run = _current_run.get()
     effective_trace_id = trace_id or (run.trace_id if run else None)
     if not effective_trace_id:
+        logger.debug(
+            "Dropping extraction trace event without trace context",
+            extra={"event_type": event_type},
+        )
         return None
 
     sequence = 1
