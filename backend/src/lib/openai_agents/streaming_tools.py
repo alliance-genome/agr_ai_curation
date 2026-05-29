@@ -3274,7 +3274,6 @@ async def run_specialist_with_events(
         final_output,
         expected_output_type=expected_output_type,
     )
-    builder_finalization = None
     builder_candidate_id = f"{tool_name or specialist_name}:structured_result"
     if expected_output_type is not None and final_output:
         try:
@@ -3289,15 +3288,6 @@ async def run_specialist_with_events(
                 evidence_records=live_evidence_records,
             )
             final_output = json.dumps(canonical_payload)
-
-    if tool_name and _is_domain_envelope_output_json(
-        final_output,
-        expected_output_type=expected_output_type,
-    ):
-        builder_finalization = builder_workspace.finalize(
-            candidate_ids=[builder_candidate_id],
-        )
-        final_output = json.dumps(builder_finalization.payload)
 
     phase_timings_ms["post_stream_output_ms"] = _elapsed_ms(post_stream_started_at)
 
@@ -3348,15 +3338,14 @@ async def run_specialist_with_events(
         final_output,
         expected_output_type=expected_output_type,
     ):
-        if builder_finalization is None:
-            payload = json.loads(final_output)
-            builder_finalization = finalize_extraction_payload(
-                payload,
-                workspace=builder_workspace,
-                candidate_id=builder_candidate_id,
-                evidence_records=live_evidence_records,
-            )
-            final_output = json.dumps(builder_finalization.payload)
+        payload = json.loads(final_output)
+        builder_finalization = finalize_extraction_payload(
+            payload,
+            workspace=builder_workspace,
+            candidate_id=builder_candidate_id,
+            evidence_records=live_evidence_records,
+        )
+        final_output = json.dumps(builder_finalization.payload)
         add_specialist_event(
             build_internal_extraction_result_event(
                 tool_name=tool_name,

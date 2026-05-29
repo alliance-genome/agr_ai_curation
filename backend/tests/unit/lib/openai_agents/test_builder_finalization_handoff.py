@@ -215,3 +215,112 @@ async def test_specialist_validation_consumes_builder_finalized_payload(monkeypa
     )
     assert captured["validator_payload"] == internal_event["internal"]["canonical_payload"]
     assert internal_event["internal"]["builder_finalization"]["status"] == "finalized"
+
+
+@pytest.mark.asyncio
+async def test_specialist_internal_event_uses_post_validator_builder_payload(monkeypatch):
+    payload = {
+        "summary": "Expression extraction",
+        "curatable_objects": [
+            {
+                "object_type": "gene_expression_annotation",
+                "pending_ref_id": "annotation-1",
+                "payload": {"gene_symbol": "wg", "assay": "in situ"},
+                "evidence_record_ids": ["evidence-record-1"],
+            }
+        ],
+        "metadata": {
+            "evidence_records": [
+                {
+                    "evidence_record_id": "evidence-record-1",
+                    "entity": "wg",
+                    "verified_quote": "wg is expressed in embryonic stripes.",
+                    "page": 3,
+                    "section": "Results",
+                    "chunk_id": "chunk-1",
+                }
+            ]
+        },
+        "run_summary": {"candidate_count": 1, "kept_count": 1},
+    }
+    captured_events = []
+
+    async def _append_validator_materialization(final_output, **_kwargs):
+        dispatched_payload = json.loads(final_output)
+        dispatched_payload["curatable_objects"][0]["payload"]["validator_marker"] = (
+            "post-dispatch"
+        )
+        dispatched_payload["metadata"]["validator_appended_findings"] = [
+            {"code": "domain_pack.validator_resolved", "message": "Resolved wg"}
+        ]
+        return json.dumps(dispatched_payload)
+
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(
+        streaming_tools,
+        "RunConfig",
+        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "_dispatch_domain_envelope_validators_for_chat",
+        _append_validator_materialization,
+    )
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult(final_output=json.dumps(payload)),
+    )
+    monkeypatch.setattr(
+        chat_common,
+        "build_extraction_envelope_candidate",
+        lambda raw_output, **kwargs: {
+            "raw_output": raw_output,
+            "agent_key": kwargs["agent_key"],
+            "metadata": kwargs["metadata"],
+        },
+    )
+
+    agent = SimpleNamespace(
+        name="Gene Expression Extractor",
+        tools=[],
+        output_type=_DomainEnvelope,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    await streaming_tools.run_specialist_with_events(
+        agent=agent,
+        input_text="extract gene expression evidence",
+        specialist_name="Gene Expression Extractor",
+        max_turns=3,
+        tool_name="ask_gene_expression_specialist",
+    )
+
+    internal_event = next(
+        event
+        for event in captured_events
+        if event.get("type") == "INTERNAL_EXTRACTION_RESULT"
+    )
+    canonical_payload = internal_event["internal"]["canonical_payload"]
+    assert canonical_payload["curatable_objects"][0]["payload"][
+        "validator_marker"
+    ] == "post-dispatch"
+    assert canonical_payload["metadata"]["validator_appended_findings"] == [
+        {"code": "domain_pack.validator_resolved", "message": "Resolved wg"}
+    ]
+
+    candidate = chat_common._build_extraction_candidate_from_tool_event(
+        internal_event,
+        tool_agent_map={"ask_gene_expression_specialist": "gene-expression"},
+        conversation_summary="extract",
+    )
+
+    assert isinstance(candidate, dict)
+    assert candidate["raw_output"]["curatable_objects"][0]["payload"][
+        "validator_marker"
+    ] == "post-dispatch"
+    assert candidate["raw_output"]["metadata"]["validator_appended_findings"] == [
+        {"code": "domain_pack.validator_resolved", "message": "Resolved wg"}
+    ]
