@@ -280,10 +280,21 @@ class SpecialistOutputError(Exception):
     the expected Pydantic model output, even after being given a second chance with a
     nudge prompt.
     """
-    def __init__(self, specialist_name: str, output_type_name: str, message: str | None = None):
+    def __init__(
+        self,
+        specialist_name: str,
+        output_type_name: str,
+        message: str | None = None,
+        *,
+        details: list[dict[str, Any]] | None = None,
+    ):
         self.specialist_name = specialist_name
         self.output_type_name = output_type_name
-        super().__init__(message or f"{specialist_name} failed to produce {output_type_name} after retry")
+        self.details = details or []
+        super().__init__(
+            message
+            or f"{specialist_name} failed to produce {output_type_name} after retry"
+        )
 
 
 def _extract_model_identifier(model: Any) -> str:
@@ -1346,6 +1357,37 @@ def _validator_dispatch_has_error_result(dispatch_result: Any) -> bool:
     return False
 
 
+def _validator_dispatch_error_details(dispatch_result: Any) -> list[dict[str, Any]]:
+    """Return compact validator-dispatch execution errors for builder validation."""
+
+    errors: list[dict[str, Any]] = []
+    for result in getattr(dispatch_result, "validator_results", ()) or ():
+        result_request_id = getattr(result, "request_id", None)
+        result_binding_id = getattr(result, "validator_binding_id", None)
+        for attempt in getattr(result, "lookup_attempts", ()) or ():
+            if getattr(attempt, "outcome", None) != "error":
+                continue
+            errors.append(
+                {
+                    "reason": "domain_validator_dispatch_failed",
+                    "message": (
+                        getattr(attempt, "message", None)
+                        or getattr(result, "curator_message", None)
+                        or getattr(result, "explanation", None)
+                        or (
+                            "Domain-envelope validator dispatch reported an "
+                            "execution error."
+                        )
+                    ),
+                    "request_id": result_request_id,
+                    "validator_binding_id": result_binding_id,
+                    "provider": getattr(attempt, "provider", None),
+                    "method": getattr(attempt, "method", None),
+                }
+            )
+    return errors
+
+
 def _validator_dispatch_status_counts(dispatch_result: Any) -> dict[str, int]:
     """Count validator result statuses for compact audit labels."""
 
@@ -1768,6 +1810,19 @@ async def _dispatch_domain_envelope_validators_for_chat(
             specialist_name=specialist_name,
             dispatch_result=dispatch_result,
         )
+        if has_validator_error:
+            error_details = _validator_dispatch_error_details(dispatch_result)
+            error_message = (
+                "Domain-envelope validator dispatch reported execution errors."
+            )
+            if error_details:
+                error_message = str(error_details[0].get("message") or error_message)
+            raise SpecialistOutputError(
+                specialist_name=specialist_name,
+                output_type_name=getattr(expected_output_type, "__name__", "response"),
+                message=error_message,
+                details=error_details,
+            )
 
         logger.info(
             "%s chat domain-envelope validation dispatched %s binding(s), "
@@ -1789,6 +1844,25 @@ async def _dispatch_domain_envelope_validators_for_chat(
             serialization_started_at
         )
         return serialized_envelope
+    except SpecialistOutputError as exc:
+        logger.warning(
+            "Domain-envelope chat validation failed for %s: %s",
+            specialist_name,
+            exc,
+            exc_info=exc,
+        )
+        add_specialist_event({
+            "type": "SPECIALIST_ERROR",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "details": {
+                "specialist": specialist_name,
+                "error": f"Domain-envelope validator dispatch failed: {exc}",
+                "reason": "domain_validator_dispatch_failed",
+                "severity": "error",
+                "validatorDispatchErrors": getattr(exc, "details", []),
+            },
+        })
+        raise
     except Exception as exc:
         logger.warning(
             "Domain-envelope chat validation failed for %s: %s",
@@ -3320,12 +3394,38 @@ async def run_specialist_with_events(
     )
 
     validator_dispatch_started_at = time.monotonic()
-    final_output = await _dispatch_domain_envelope_validators_for_chat(
-        final_output,
-        expected_output_type=expected_output_type,
-        specialist_name=specialist_name,
-        tool_name=tool_name,
-    )
+    try:
+        final_output = await _dispatch_domain_envelope_validators_for_chat(
+            final_output,
+            expected_output_type=expected_output_type,
+            specialist_name=specialist_name,
+            tool_name=tool_name,
+        )
+    except SpecialistOutputError as exc:
+        if builder_workspace.finalization is None:
+            dispatch_errors = [
+                {
+                    **dict(error),
+                    "specialist_name": specialist_name,
+                    "tool_name": tool_name,
+                }
+                for error in getattr(exc, "details", [])
+                if isinstance(error, Mapping)
+            ]
+            if not dispatch_errors:
+                dispatch_errors = [
+                    {
+                        "message": str(exc),
+                        "reason": "domain_validator_dispatch_failed",
+                        "specialist_name": specialist_name,
+                        "tool_name": tool_name,
+                    }
+                ]
+            builder_workspace.record_validation_failure(
+                errors=dispatch_errors,
+                candidate_ids=[builder_candidate_id],
+            )
+        raise
     phase_timings_ms["domain_validator_dispatch_ms"] = _elapsed_ms(
         validator_dispatch_started_at
     )

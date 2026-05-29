@@ -324,3 +324,115 @@ async def test_specialist_internal_event_uses_post_validator_builder_payload(mon
     assert candidate["raw_output"]["metadata"]["validator_appended_findings"] == [
         {"code": "domain_pack.validator_resolved", "message": "Resolved wg"}
     ]
+
+
+@pytest.mark.asyncio
+async def test_specialist_validator_dispatch_failure_records_builder_validation_failure(
+    monkeypatch,
+):
+    payload = {
+        "summary": "Expression extraction",
+        "curatable_objects": [
+            {
+                "object_type": "gene_expression_annotation",
+                "pending_ref_id": "annotation-1",
+                "payload": {"gene_symbol": "wg", "assay": "in situ"},
+                "evidence_record_ids": ["evidence-record-1"],
+            }
+        ],
+        "metadata": {
+            "evidence_records": [
+                {
+                    "evidence_record_id": "evidence-record-1",
+                    "entity": "wg",
+                    "verified_quote": "wg is expressed in embryonic stripes.",
+                    "page": 3,
+                    "section": "Results",
+                    "chunk_id": "chunk-1",
+                }
+            ]
+        },
+        "run_summary": {"candidate_count": 1, "kept_count": 1},
+    }
+    captured_events = []
+    captured_trace_events = []
+
+    async def _fail_validator_dispatch(_final_output, **_kwargs):
+        raise streaming_tools.SpecialistOutputError(
+            specialist_name="Gene Expression Extractor",
+            output_type_name="DomainEnvelopeExtractionResult",
+            message="Validator agent execution failed: resolver unavailable",
+            details=[
+                {
+                    "reason": "domain_validator_dispatch_failed",
+                    "message": "Validator agent execution failed: resolver unavailable",
+                    "request_id": "request-1",
+                    "validator_binding_id": "binding-1",
+                    "provider": "domain_validator_dispatch",
+                    "method": "validator_agent_error",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(
+        streaming_tools,
+        "RunConfig",
+        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "_dispatch_domain_envelope_validators_for_chat",
+        _fail_validator_dispatch,
+    )
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult(final_output=json.dumps(payload)),
+    )
+    monkeypatch.setattr(
+        builder,
+        "write_extraction_trace_event",
+        lambda **event: captured_trace_events.append(event) or event,
+    )
+
+    agent = SimpleNamespace(
+        name="Gene Expression Extractor",
+        tools=[],
+        output_type=_DomainEnvelope,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    with pytest.raises(
+        streaming_tools.SpecialistOutputError,
+        match="resolver unavailable",
+    ):
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="extract gene expression evidence",
+            specialist_name="Gene Expression Extractor",
+            max_turns=3,
+            tool_name="ask_gene_expression_specialist",
+        )
+
+    assert not [
+        event
+        for event in captured_events
+        if event.get("type") == "INTERNAL_EXTRACTION_RESULT"
+    ]
+    assert not [
+        event
+        for event in captured_trace_events
+        if event.get("event_type") == "extraction_builder.finalization_decision"
+    ]
+    validation_event = next(
+        event
+        for event in captured_trace_events
+        if event.get("event_type") == "extraction_builder.validation_failure"
+    )
+    errors = validation_event["validation"]["errors"]
+    assert errors[0]["reason"] == "domain_validator_dispatch_failed"
+    assert errors[0]["request_id"] == "request-1"
+    assert errors[0]["validator_binding_id"] == "binding-1"
