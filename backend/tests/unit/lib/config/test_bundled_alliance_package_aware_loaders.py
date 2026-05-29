@@ -92,6 +92,11 @@ def test_bundled_alliance_gene_expression_declares_record_evidence(monkeypatch):
         "search_domain_field_terms",
         "inspect_ontology_term",
         "resolve_domain_field_term",
+        "stage_gene_expression_observation",
+        "patch_gene_expression_observation",
+        "discard_gene_expression_observation",
+        "list_staged_gene_expression_observations",
+        "finalize_gene_expression_extraction",
     ]
 
 

@@ -757,6 +757,71 @@ tools:
             type: integer
             required: false
             description: Maximum candidate set used for final verification.
+  - tool_id: stage_gene_expression_observation
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.agr_curation:stage_gene_expression_observation
+    required_context: []
+    description: Stage one Alliance gene-expression observation candidate with evidence and resolver-backed controlled selectors
+    source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
+    metadata:
+      name: Stage Gene Expression Observation
+      category: Database
+      audit:
+        display_name: Stage Gene Expression Observation
+      documentation:
+        summary: Stages one gene-expression builder candidate. Controlled fields must reference prior resolve_domain_field_term tool call IDs.
+  - tool_id: patch_gene_expression_observation
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.agr_curation:patch_gene_expression_observation
+    required_context: []
+    description: Patch enumerated fields on a staged Alliance gene-expression observation candidate
+    source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
+    metadata:
+      name: Patch Gene Expression Observation
+      category: Database
+      audit:
+        display_name: Patch Gene Expression Observation
+      documentation:
+        summary: Applies bounded repairs to a staged gene-expression candidate. Controlled selector patches require resolver_call_id provenance.
+  - tool_id: discard_gene_expression_observation
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.agr_curation:discard_gene_expression_observation
+    required_context: []
+    description: Discard one staged Alliance gene-expression observation candidate
+    source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
+    metadata:
+      name: Discard Gene Expression Observation
+      category: Database
+      audit:
+        display_name: Discard Gene Expression Observation
+      documentation:
+        summary: Marks one staged gene-expression candidate as discarded without deleting the builder trace.
+  - tool_id: list_staged_gene_expression_observations
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.agr_curation:list_staged_gene_expression_observations
+    required_context: []
+    description: List compact summaries for staged Alliance gene-expression observation candidates
+    source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
+    metadata:
+      name: List Staged Gene Expression Observations
+      category: Database
+      audit:
+        display_name: List Staged Gene Expression Observations
+      documentation:
+        summary: Returns compact builder state summaries for staged gene-expression candidates.
+  - tool_id: finalize_gene_expression_extraction
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.agr_curation:finalize_gene_expression_extraction
+    required_context: []
+    description: Finalize staged Alliance gene-expression observations through the extraction builder handoff
+    source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
+    metadata:
+      name: Finalize Gene Expression Extraction
+      category: Database
+      audit:
+        display_name: Finalize Gene Expression Extraction
+      documentation:
+        summary: Validates and delegates staged gene-expression candidates into the project-agnostic builder finalization contract without materializing a GeneExpressionEnvelope.
   - tool_id: search_document
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_search_document_tool

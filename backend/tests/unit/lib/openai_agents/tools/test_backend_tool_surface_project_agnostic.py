@@ -62,6 +62,11 @@ def test_alliance_curation_query_is_package_owned_through_bindings():
         "search_domain_field_terms",
         "inspect_ontology_term",
         "resolve_domain_field_term",
+        "stage_gene_expression_observation",
+        "patch_gene_expression_observation",
+        "discard_gene_expression_observation",
+        "list_staged_gene_expression_observations",
+        "finalize_gene_expression_extraction",
     ):
         assert f"tool_id: {tool_id}" in bindings_source
         assert (

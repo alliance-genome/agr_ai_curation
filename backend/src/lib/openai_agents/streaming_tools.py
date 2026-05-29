@@ -62,6 +62,12 @@ from .extraction_trace_events import (
     write_extraction_trace_event,
     write_stream_event,
 )
+from .resolver_call_ledger import (
+    RESOLVER_TOOL_NAME,
+    ResolverCallLedger,
+    reset_active_resolver_call_ledger,
+    set_active_resolver_call_ledger,
+)
 from .tool_call_policy import (
     DOCUMENT_REQUIRED_TOOL_NAMES,
     required_package_tool_names_from_metadata,
@@ -2306,6 +2312,8 @@ async def run_specialist_with_events(
         agent_id=specialist_name,
     )
     builder_workspace_token = set_active_extraction_builder_workspace(builder_workspace)
+    resolver_call_ledger = ResolverCallLedger(trace_id=builder_workspace.run_id)
+    resolver_call_ledger_token = set_active_resolver_call_ledger(resolver_call_ledger)
     try:
         async for event in result.stream_events():
             total_event_count += 1
@@ -2669,6 +2677,13 @@ async def run_specialist_with_events(
                         if evidence_record is not None:
                             live_evidence_records.append(evidence_record)
 
+                        if current_tool_name == RESOLVER_TOOL_NAME:
+                            resolver_call_ledger.record_tool_output(
+                                tool_call_id=str(completed_tool.get("tool_id") or "") or None,
+                                tool_name=current_tool_name,
+                                output=output,
+                            )
+
                         # Extract chunk provenance from PDF tool outputs for highlighting
                         if current_tool_name in ("search_document", "read_section"):
                             _emit_chunk_provenance_from_output(current_tool_name, output)
@@ -2783,6 +2798,7 @@ async def run_specialist_with_events(
         raise
     finally:
         reset_active_evidence_records(evidence_workspace_token)
+        reset_active_resolver_call_ledger(resolver_call_ledger_token)
         reset_active_extraction_builder_workspace(builder_workspace_token)
 
     stream_duration = datetime.now(timezone.utc) - start_time
