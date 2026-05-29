@@ -155,6 +155,68 @@ def test_analyzer_filters_and_expands_sibling_durable_events(tmp_path, monkeypat
     assert timeline["timeline"][0]["tool_name"] == "validate_gene_expression_candidate"
 
 
+def test_analyzer_expands_sibling_observation_events_without_local_durable_files(tmp_path, monkeypatch):
+    monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(tmp_path))
+    sibling_observations = {
+        "trace-sibling": [
+            {
+                "id": "obs-mirrored-event",
+                "name": "extraction_trace_event",
+                "input": _event(
+                    "trace-sibling",
+                    1,
+                    "specialist_tool_call.completed",
+                    metadata={"tool_name": "record_evidence"},
+                    output_summary={"preview": {"message": "mirrored sibling durable event"}},
+                ),
+            },
+            {
+                "id": "gen-sibling",
+                "type": "GENERATION",
+                "startTime": "2026-05-29T00:00:02Z",
+                "model": "gpt-5.4-mini",
+                "input": [
+                    {
+                        "type": "function_call",
+                        "call_id": "call-sibling-resolve",
+                        "name": "resolve_domain_field_term",
+                        "arguments": json.dumps({"candidate_id": "gex-candidate-2"}),
+                        "status": "completed",
+                    },
+                    {
+                        "type": "function_call_output",
+                        "call_id": "call-sibling-resolve",
+                        "output": json.dumps({"status": "ok"}),
+                    },
+                ],
+                "output": {},
+            },
+        ]
+    }
+
+    timeline = ExtractionTimelineAnalyzer.analyze(
+        trace_id="trace-main",
+        raw_trace={},
+        observations=[],
+        sibling_trace_ids=["trace-sibling"],
+        sibling_observations_by_trace_id=sibling_observations,
+    )
+
+    assert timeline["local_durable_event_count"] == 0
+    assert timeline["langfuse_durable_event_count"] == 1
+    assert timeline["observation_event_count"] == 1
+    assert timeline["event_type_counts"]["specialist_tool_call.completed"] == 1
+    assert timeline["event_type_counts"]["openai_agents.function_call"] == 1
+    assert [item["event_trace_id"] for item in timeline["timeline"]] == [
+        "trace-sibling",
+        "trace-sibling",
+    ]
+    assert [item["tool_name"] for item in timeline["timeline"]] == [
+        "record_evidence",
+        "resolve_domain_field_term",
+    ]
+
+
 def test_analyzer_renders_concise_structured_output_summaries(tmp_path, monkeypatch):
     monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(tmp_path))
     _write_event(

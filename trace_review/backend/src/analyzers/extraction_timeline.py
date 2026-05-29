@@ -253,7 +253,7 @@ class ExtractionTimelineAnalyzer:
         return sorted(events, key=_sort_key)
 
     @staticmethod
-    def _observation_tool_events(observations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _observation_tool_events(trace_id: str, observations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         tool_calls = ToolCallAnalyzer.extract_tool_calls(observations).get("tool_calls", [])
         events: List[Dict[str, Any]] = []
         for index, call in enumerate(tool_calls, start=1):
@@ -266,9 +266,9 @@ class ExtractionTimelineAnalyzer:
                 {
                     "schema_version": EVENT_SCHEMA_VERSION,
                     "event_type": event_type,
-                    "event_id": f"obs-tool-{index}",
+                    "event_id": f"obs-tool-{trace_id}-{index}",
                     "sequence": index,
-                    "trace_id": "",
+                    "trace_id": trace_id,
                     "observation_id": call.get("id"),
                     "domain_pack_id": None,
                     "tool_call_id": call.get("call_id"),
@@ -289,11 +289,13 @@ class ExtractionTimelineAnalyzer:
         return events
 
     @staticmethod
-    def _observation_durable_events(observations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _observation_durable_events(trace_id: str, observations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         events: List[Dict[str, Any]] = []
         for observation in observations:
             event = _langfuse_extraction_event_from_observation(observation)
             if event is not None:
+                if not event.get("trace_id"):
+                    event["trace_id"] = trace_id
                 events.append(event)
         return sorted(events, key=_sort_key)
 
@@ -309,18 +311,30 @@ class ExtractionTimelineAnalyzer:
         event_type: str | None = None,
         candidate_id: str | None = None,
         sibling_trace_ids: Optional[Iterable[str]] = None,
+        sibling_observations_by_trace_id: Optional[Mapping[str, List[Dict[str, Any]]]] = None,
         feedback_trace_data: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
         sibling_ids = [sibling_id for sibling_id in (sibling_trace_ids or []) if sibling_id != trace_id]
+        observations_by_trace_id = {trace_id: observations}
+        for sibling_id in sibling_ids:
+            sibling_observations = (sibling_observations_by_trace_id or {}).get(sibling_id)
+            if isinstance(sibling_observations, list):
+                observations_by_trace_id[sibling_id] = sibling_observations
+
         durable_events = ExtractionTimelineAnalyzer.load_durable_events(trace_id)
         for sibling_id in sibling_ids:
             durable_events.extend(ExtractionTimelineAnalyzer.load_durable_events(sibling_id))
         durable_event_ids = {event.get("event_id") for event in durable_events}
-        observation_durable_events = [
-            event
-            for event in ExtractionTimelineAnalyzer._observation_durable_events(observations)
-            if event.get("event_id") not in durable_event_ids
-        ]
+        observation_durable_events: List[Dict[str, Any]] = []
+        observation_durable_event_ids = set(durable_event_ids)
+        for observation_trace_id, trace_observations in observations_by_trace_id.items():
+            for event in ExtractionTimelineAnalyzer._observation_durable_events(observation_trace_id, trace_observations):
+                event_id = event.get("event_id")
+                if event_id in observation_durable_event_ids:
+                    continue
+                observation_durable_event_ids.add(event_id)
+                observation_durable_events.append(event)
+
         feedback_events = [
             event
             for event in _feedback_trace_events(
@@ -330,9 +344,11 @@ class ExtractionTimelineAnalyzer:
             )
             if event.get("event_id") not in durable_event_ids
         ]
-        observation_events = ExtractionTimelineAnalyzer._observation_tool_events(observations)
-        for event in observation_events:
-            event["trace_id"] = trace_id
+        observation_events = [
+            event
+            for observation_trace_id, trace_observations in observations_by_trace_id.items()
+            for event in ExtractionTimelineAnalyzer._observation_tool_events(observation_trace_id, trace_observations)
+        ]
 
         durable_sources = [*durable_events, *observation_durable_events, *feedback_events]
         durable_event_ids = {event.get("event_id") for event in durable_sources}

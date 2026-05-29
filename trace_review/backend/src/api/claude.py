@@ -563,6 +563,12 @@ async def get_extraction_timeline(
             session_id=session_id,
             include_sibling_traces=include_sibling_traces,
         ),
+        load_sibling_cached_data=lambda sibling_trace_id: _ensure_trace_analyzed(
+            sibling_trace_id,
+            request,
+            source,
+            refresh=refresh,
+        ),
         fallback_exceptions=(HTTPException,),
     )
     timeline = build_extraction_timeline(
@@ -618,6 +624,12 @@ async def get_extraction_diagnostic_report(
             source=source,
             session_id=session_id,
             include_sibling_traces=include_sibling_traces,
+        ),
+        load_sibling_cached_data=lambda sibling_trace_id: _ensure_trace_analyzed(
+            sibling_trace_id,
+            request,
+            source,
+            refresh=refresh,
         ),
         fallback_exceptions=(HTTPException,),
     )

@@ -531,6 +531,15 @@ async def get_trace_view(
             )
             return cached_data
 
+        async def load_sibling_cached_data(sibling_trace_id: str) -> Dict[str, Any]:
+            cached_data, _cache_status, _from_cache = _get_or_analyze_trace_export(
+                sibling_trace_id,
+                cache_manager,
+                source,
+                refresh=refresh,
+            )
+            return cached_data
+
         try:
             context = await load_extraction_timeline_context(
                 trace_id=trace_id,
@@ -543,6 +552,7 @@ async def get_trace_view(
                     session_id=session_id,
                     include_sibling_traces=include_sibling_traces,
                 ),
+                load_sibling_cached_data=load_sibling_cached_data,
                 fallback_exceptions=(TraceExtractionError,),
                 unavailable_exception_factory=lambda exc: HTTPException(
                     status_code=404,

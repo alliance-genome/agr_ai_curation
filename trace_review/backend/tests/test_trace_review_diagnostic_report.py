@@ -1,3 +1,6 @@
+import json
+import os
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -196,6 +199,76 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
             [item["event_trace_id"] for item in response["data"]["timeline"]],
             ["trace-extraction-123", "trace-sibling-456"],
         )
+
+    @patch("src.api.traces.TraceExtractor")
+    async def test_trace_review_endpoint_expands_sibling_langfuse_observations(
+        self,
+        extractor_cls: Mock,
+    ):
+        request = self._make_request()
+
+        def trace_data_for(requested_trace_id: str):
+            trace_data = self._make_trace_data(requested_trace_id)
+            if requested_trace_id == "trace-sibling-456":
+                trace_data["observations"] = [
+                    {
+                        "id": "gen-sibling",
+                        "type": "GENERATION",
+                        "startTime": "2026-05-29T00:00:02Z",
+                        "model": "gpt-5.4-mini",
+                        "input": [
+                            {
+                                "type": "function_call",
+                                "call_id": "call-sibling-resolve",
+                                "name": "resolve_domain_field_term",
+                                "arguments": json.dumps({"candidate_id": "gex-candidate-2"}),
+                                "status": "completed",
+                            },
+                            {
+                                "type": "function_call_output",
+                                "call_id": "call-sibling-resolve",
+                                "output": json.dumps({"status": "ok"}),
+                            },
+                        ],
+                        "output": {},
+                    }
+                ]
+                trace_data["metadata"]["observation_count"] = 1
+            return trace_data
+
+        extractor = extractor_cls.return_value
+        extractor.extract_complete_trace.side_effect = trace_data_for
+        extractor.list_session_traces.return_value = {
+            "traces": [
+                {"id": "trace-extraction-123"},
+                {"id": "trace-sibling-456"},
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(os.environ, {"EXTRACTION_TRACE_EVENT_DIR": tmpdir}):
+                response = await traces.get_trace_view(
+                    "trace-extraction-123",
+                    "extraction_timeline",
+                    request,
+                    source="auto",
+                    session_id="session-123",
+                    feedback_id=None,
+                    include_sibling_traces=True,
+                    refresh=False,
+                    include_raw_args=False,
+                    include_raw_outputs=False,
+                    tool_name=None,
+                    event_type=None,
+                    candidate_id=None,
+                )
+
+        self.assertEqual(response["view"], "extraction_timeline")
+        self.assertEqual(response["data"]["sibling_trace_ids"], ["trace-sibling-456"])
+        self.assertEqual(response["data"]["observation_event_count"], 1)
+        self.assertEqual(response["data"]["timeline"][0]["event_trace_id"], "trace-sibling-456")
+        self.assertEqual(response["data"]["timeline"][0]["event_type"], "openai_agents.function_call")
+        self.assertEqual(response["data"]["timeline"][0]["tool_name"], "resolve_domain_field_term")
 
     @patch("src.analyzers.agent_config.AgentConfigAnalyzer.extract_agent_configs", return_value={})
     @patch("src.analyzers.document_hierarchy.DocumentHierarchyAnalyzer.analyze", return_value={})

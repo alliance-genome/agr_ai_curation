@@ -14,6 +14,7 @@ from ..services.feedback_artifacts import fetch_feedback_trace_artifacts
 
 TraceCacheLoader = Callable[[], Awaitable[Dict[str, Any]]]
 SiblingTraceLoader = Callable[[], List[str]]
+SiblingTraceCacheLoader = Callable[[str], Awaitable[Dict[str, Any]]]
 ExceptionFactory = Callable[[BaseException], BaseException]
 
 
@@ -21,6 +22,7 @@ ExceptionFactory = Callable[[BaseException], BaseException]
 class ExtractionTimelineContext:
     cached_data: Dict[str, Any]
     sibling_trace_ids: List[str]
+    sibling_cached_data_by_trace_id: Dict[str, Dict[str, Any]]
     feedback_artifacts: Optional[Dict[str, Any]]
 
 
@@ -67,6 +69,7 @@ async def load_extraction_timeline_context(
     include_sibling_traces: bool,
     load_cached_data: TraceCacheLoader,
     load_sibling_trace_ids: SiblingTraceLoader,
+    load_sibling_cached_data: SiblingTraceCacheLoader,
     fallback_exceptions: tuple[type[BaseException], ...],
     unavailable_exception_factory: ExceptionFactory | None = None,
 ) -> ExtractionTimelineContext:
@@ -81,6 +84,12 @@ async def load_extraction_timeline_context(
             feedback_trace_data=feedback_trace_data,
             include_sibling_traces=include_sibling_traces,
         )
+        sibling_cached_data_by_trace_id: Dict[str, Dict[str, Any]] = {}
+        for sibling_trace_id in sibling_trace_ids:
+            try:
+                sibling_cached_data_by_trace_id[sibling_trace_id] = await load_sibling_cached_data(sibling_trace_id)
+            except fallback_exceptions:
+                continue
     except fallback_exceptions as exc:
         if feedback_trace_data is None:
             if unavailable_exception_factory is not None:
@@ -93,10 +102,12 @@ async def load_extraction_timeline_context(
             feedback_trace_data=feedback_trace_data,
             include_sibling_traces=include_sibling_traces,
         )
+        sibling_cached_data_by_trace_id = {}
 
     return ExtractionTimelineContext(
         cached_data=cached_data,
         sibling_trace_ids=sibling_trace_ids,
+        sibling_cached_data_by_trace_id=sibling_cached_data_by_trace_id,
         feedback_artifacts=feedback_artifacts,
     )
 
@@ -114,6 +125,11 @@ def build_extraction_timeline(
     feedback_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     feedback_trace_data = _feedback_trace_data(context.feedback_artifacts)
+    sibling_observations_by_trace_id = {
+        sibling_trace_id: observations
+        for sibling_trace_id, sibling_cached_data in context.sibling_cached_data_by_trace_id.items()
+        if isinstance((observations := sibling_cached_data.get("observations")), list)
+    }
     timeline = ExtractionTimelineAnalyzer.analyze(
         trace_id=trace_id,
         raw_trace=context.cached_data.get("raw_trace"),
@@ -124,6 +140,7 @@ def build_extraction_timeline(
         event_type=event_type,
         candidate_id=candidate_id,
         sibling_trace_ids=context.sibling_trace_ids,
+        sibling_observations_by_trace_id=sibling_observations_by_trace_id,
         feedback_trace_data=feedback_trace_data,
     )
     timeline["query"] = {
