@@ -351,7 +351,7 @@ def reasoning_summary_request_settings(
     return {
         "availability": "present",
         "reasoning_effort": reasoning_effort,
-        "requested_summary": "auto",
+        "requested_summary": "detailed",
         "provider": provider,
         "model": model,
     }

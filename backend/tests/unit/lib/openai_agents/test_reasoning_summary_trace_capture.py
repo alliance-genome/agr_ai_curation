@@ -50,7 +50,7 @@ def _reasoning_event(*, summary=None, raw_summary=None, raw=None):
     )
 
 
-def test_reasoning_summary_settings_request_auto_for_openai_reasoning_model(monkeypatch):
+def test_reasoning_summary_settings_request_detailed_for_openai_reasoning_model(monkeypatch):
     monkeypatch.setattr(
         "src.lib.config.models_loader.get_model",
         lambda _model_id: _model("openai", supports_reasoning=True),
@@ -66,12 +66,12 @@ def test_reasoning_summary_settings_request_auto_for_openai_reasoning_model(monk
     )
 
     assert settings["availability"] == "present"
-    assert settings["requested_summary"] == "auto"
+    assert settings["requested_summary"] == "detailed"
     assert settings["reasoning_effort"] == "medium"
 
     model_settings = build_model_settings(model="gpt-5.4-mini", reasoning_effort="medium")
     assert model_settings.reasoning.effort == "medium"
-    assert model_settings.reasoning.summary == "auto"
+    assert model_settings.reasoning.summary == "detailed"
 
 
 def test_reasoning_summary_settings_report_not_supported_for_non_reasoning_model(monkeypatch):
