@@ -489,9 +489,8 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         "kind": "controlled_vocabulary",
         "vocabulary": "Expression Relation",
     }
-    assert relation_helper["lookup"]["package_tool"] == (
-        "get_domain_field_term_options"
-    )
+    assert relation_helper["resolver"]["primary_tool"] == "resolve_domain_field_term"
+    assert relation_helper["lookup"]["package_tool"] == "search_domain_field_terms"
     site_helper = expression_fields[
         "expression_pattern.where_expressed"
     ].metadata["term_helper"]
@@ -516,7 +515,7 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     assert expression_fields[
         "when_expressed_stage_name"
     ].metadata["term_helper"]["lookup"] == {
-        "package_tool": "get_domain_field_term_options",
+        "package_tool": "search_domain_field_terms",
         "method": "search_life_stage_terms",
         "provider_required": True,
         "candidate_authority": "selector_evidence",

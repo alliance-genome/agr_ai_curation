@@ -98,8 +98,14 @@ output:
       helper_selections:
         - field_path: relation.name
           selected_value: is_expressed_in
-          source_tool: get_domain_field_term_options
+          selected_name: is_expressed_in
+          source_tool: resolve_domain_field_term
+          source_phrase: is_expressed_in
           lookup_status: resolved
+          authority: live_validated_option
+          term_source:
+            kind: controlled_vocabulary
+            vocabulary: Expression Relation
           option:
             value: is_expressed_in
             term_name: is_expressed_in
@@ -111,8 +117,16 @@ output:
               method: search_vocabulary_terms
         - field_path: expression_experiment.expression_assay_used
           selected_value: MMO:0000655
-          source_tool: get_domain_field_term_options
+          selected_name: reverse transcription polymerase chain reaction assay
+          selected_curie: MMO:0000655
+          source_tool: resolve_domain_field_term
+          source_phrase: reverse transcription polymerase chain reaction assay
           lookup_status: resolved
+          authority: selector_evidence
+          term_source:
+            kind: ontology
+            ontology_family: assay
+            ontology_term_type: MMOTerm
           option:
             value: MMO:0000655
             term_name: reverse transcription polymerase chain reaction assay
@@ -122,10 +136,37 @@ output:
               provider: alliance_curation_db
               tool: agr_curation_query
               method: search_ontology_terms
+        - field_path: when_expressed_stage_name
+          selected_value: TS26
+          selected_name: TS26
+          selected_curie: EMAPA:TS26
+          source_tool: resolve_domain_field_term
+          source_phrase: TS26
+          lookup_status: resolved
+          authority: selector_evidence
+          term_source:
+            kind: ontology
+            ontology_family: life_stage
+          option:
+            value: EMAPA:TS26
+            term_name: TS26
+            curie: EMAPA:TS26
+            ontology_type: EMAPATerm
+            source:
+              provider: alliance_curation_db
+              tool: agr_curation_query
+              method: search_life_stage_terms
         - field_path: expression_pattern.where_expressed.anatomical_structure
           selected_value: EMAPA:17373
-          source_tool: get_domain_field_term_options
+          selected_name: metanephros
+          selected_curie: EMAPA:17373
+          source_tool: resolve_domain_field_term
+          source_phrase: metanephros
           lookup_status: resolved
+          authority: selector_evidence
+          term_source:
+            kind: ontology
+            ontology_family: anatomy
           option:
             value: EMAPA:17373
             term_name: metanephros

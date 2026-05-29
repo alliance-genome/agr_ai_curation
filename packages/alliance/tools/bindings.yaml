@@ -595,19 +595,19 @@ tools:
             type: integer
             required: false
             description: Maximum number of provider candidates to return.
-  - tool_id: get_domain_field_term_options
+  - tool_id: search_domain_field_terms
     binding_kind: static
-    callable: agr_ai_curation_alliance.tools.agr_curation:get_domain_field_term_options
+    callable: agr_ai_curation_alliance.tools.agr_curation:search_domain_field_terms
     required_context: []
-    description: Return extractor-facing term options and slot hints declared by domain-pack field metadata without making helper output final validator authority
+    description: Search domain-pack-declared ontology and controlled-vocabulary candidates for one controlled field without accepting a final selector
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
-      name: Domain Field Term Options
+      name: Search Domain Field Terms
       category: Database
       audit:
-        display_name: Domain Field Term Options
+        display_name: Search Domain Field Terms
       documentation:
-        summary: Narrow extractor-safe helper for domain-pack declared controlled-vocabulary options and first-pass ontology slot routing hints.
+        summary: Broad field-scoped candidate discovery from evidence-backed paper phrases. Search results are candidate guidance only; final selectors must be resolved with resolve_domain_field_term.
         parameters:
           - name: domain_pack_id
             type: string
@@ -623,12 +623,8 @@ tools:
             description: Domain payload field path, such as relation.name or expression_pattern.where_expressed.
           - name: query
             type: string
-            required: false
-            description: Optional paper label or controlled-field query text; source_phrase is preferred when preserving exact evidence wording.
-          - name: source_phrase
-            type: string
-            required: false
-            description: Evidence-backed paper phrase to route or search.
+            required: true
+            description: Evidence-backed paper label or controlled-field query text.
           - name: evidence_context
             type: object
             required: false
@@ -641,14 +637,126 @@ tools:
             type: string
             required: false
             description: Optional taxon context preserved for audit and future routing.
+          - name: branch_root_curie
+            type: string
+            required: false
+            description: Optional ontology branch root preserved for field-scoped branch filtering where available.
           - name: limit
             type: integer
             required: false
-            description: Maximum number of options per lookup.
+            description: Maximum number of candidates to return.
           - name: exact_match
             type: boolean
             required: false
             description: Require exact label/name matching when the declared package lookup method supports it.
+  - tool_id: inspect_ontology_term
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.agr_curation:inspect_ontology_term
+    required_context: []
+    description: Inspect one authoritative ontology term and bounded parent, child, or sibling context for a domain-pack field
+    source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
+    metadata:
+      name: Inspect Ontology Term
+      category: Database
+      audit:
+        display_name: Inspect Ontology Term
+      documentation:
+        summary: Bounded ontology term context inspection. This tool helps tree-walk and compare candidates but does not justify final controlled selector values.
+        parameters:
+          - name: domain_pack_id
+            type: string
+            required: true
+            description: Domain pack identifier, such as agr.alliance.gene_expression.
+          - name: object_type
+            type: string
+            required: true
+            description: Curatable object type, such as GeneExpressionAnnotation.
+          - name: field_path
+            type: string
+            required: true
+            description: Domain payload field path for policy checks.
+          - name: curie
+            type: string
+            required: true
+            description: Ontology term CURIE to inspect.
+          - name: data_provider
+            type: string
+            required: false
+            description: Alliance provider abbreviation for provider-scoped anatomy context.
+          - name: include_parents
+            type: boolean
+            required: false
+            description: Include bounded parent terms when available.
+          - name: include_children
+            type: boolean
+            required: false
+            description: Include bounded child terms when available.
+          - name: include_siblings
+            type: boolean
+            required: false
+            description: Include bounded sibling terms when available.
+          - name: max_depth
+            type: integer
+            required: false
+            description: Maximum tree-walk depth; currently bounded by available API-client support.
+          - name: limit
+            type: integer
+            required: false
+            description: Maximum context rows to return per relation.
+  - tool_id: resolve_domain_field_term
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.agr_curation:resolve_domain_field_term
+    required_context: []
+    description: Resolve one final domain-pack controlled field selector and return copyable resolver provenance
+    source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
+    metadata:
+      name: Resolve Domain Field Term
+      category: Database
+      audit:
+        display_name: Resolve Domain Field Term
+      documentation:
+        summary: Final controlled-field resolver. This is the only ontology/CV resolver tool whose output may justify writing a controlled selector into extractor JSON.
+        parameters:
+          - name: domain_pack_id
+            type: string
+            required: true
+            description: Domain pack identifier, such as agr.alliance.gene_expression.
+          - name: object_type
+            type: string
+            required: true
+            description: Curatable object type, such as GeneExpressionAnnotation.
+          - name: field_path
+            type: string
+            required: true
+            description: Domain payload field path to resolve.
+          - name: source_phrase
+            type: string
+            required: true
+            description: Evidence-backed paper phrase being resolved.
+          - name: evidence_context
+            type: object
+            required: false
+            description: Optional quote, page, section, span IDs, provider, or taxon context from verified evidence.
+          - name: candidate_curie
+            type: string
+            required: false
+            description: Candidate CURIE selected from search or inspect results.
+          - name: candidate_value
+            type: string
+            required: false
+            description: Candidate non-CURIE value selected from search results, such as a vocabulary term name.
+          - name: data_provider
+            type: string
+            required: false
+            description: Alliance provider abbreviation for provider-scoped lookup.
+          - name: taxon
+            type: string
+            required: false
+            description: Optional taxon context preserved for audit and future routing.
+          - name: limit
+            type: integer
+            required: false
+            description: Maximum candidate set used for final verification.
   - tool_id: search_document
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_search_document_tool

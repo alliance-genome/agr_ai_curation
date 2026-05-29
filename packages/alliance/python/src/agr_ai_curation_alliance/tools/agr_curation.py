@@ -3280,6 +3280,444 @@ def _helper_option(result: Mapping[str, Any]) -> Dict[str, Any]:
     return {key: value for key, value in option.items() if value is not None}
 
 
+def _resolver_metadata(policy: Mapping[str, Any]) -> Dict[str, Any]:
+    """Return domain-pack resolver config with conservative defaults."""
+
+    configured = policy.get("resolver")
+    resolver = dict(configured) if isinstance(configured, Mapping) else {}
+    resolver.setdefault("primary_tool", "resolve_domain_field_term")
+    resolver.setdefault("search_tool", "search_domain_field_terms")
+    resolver.setdefault("inspect_tool", "inspect_ontology_term")
+    resolver.setdefault("accepted_provenance_tools", ["resolve_domain_field_term"])
+    resolver.setdefault("unresolved_metadata_path", "metadata.normalization_notes")
+    resolver.setdefault(
+        "search_channels",
+        [
+            "exact_label",
+            "exact_synonym",
+            "configured_mapping",
+            "current_api_label_or_synonym_search",
+        ],
+    )
+    return resolver
+
+
+def _resolver_policy_response(
+    *,
+    domain_pack_id: str,
+    object_type: str,
+    field_path: str,
+    attempted_query: Dict[str, Any],
+) -> Tuple[Optional[Mapping[str, Any]], Optional[Mapping[str, Any]], Optional[AgrQueryResult]]:
+    policy = _field_term_helper_policy(
+        domain_pack_id=domain_pack_id,
+        object_type=object_type,
+        field_path=field_path,
+    )
+    if policy is None:
+        return (
+            None,
+            None,
+            _err(
+                "No domain-pack term helper policy is declared for this field.",
+                method=attempted_query.get("method") or "domain_field_resolver",
+                attempted_query=attempted_query,
+                failure_classification=LOOKUP_STATUS_NOT_FOUND,
+            ),
+        )
+    term_source = policy.get("term_source")
+    if not isinstance(term_source, Mapping):
+        return (
+            policy,
+            None,
+            _err(
+                "Domain-pack term helper policy is missing term_source metadata.",
+                method=attempted_query.get("method") or "domain_field_resolver",
+                attempted_query=attempted_query,
+                failure_classification=LOOKUP_STATUS_BLOCKED,
+            ),
+        )
+    return policy, term_source, None
+
+
+def _resolver_candidate_from_helper_result(
+    result: Mapping[str, Any],
+    *,
+    source_tool: str,
+    source_phrase: Optional[str],
+    index: int,
+) -> Dict[str, Any]:
+    candidate = result.get("candidate")
+    helper_result = result.get("helper_result")
+    source = result.get("source")
+    lookup = result.get("lookup") if isinstance(result.get("lookup"), Mapping) else {}
+    if not isinstance(candidate, Mapping):
+        candidate = {}
+    if not isinstance(helper_result, Mapping):
+        helper_result = {}
+    label = _first_present(
+        result.get("term_name"),
+        candidate.get("name"),
+        candidate.get("label"),
+        helper_result.get("term_name"),
+        helper_result.get("name"),
+    )
+    value = _first_present(result.get("value"), candidate.get("curie"), label)
+    curie = _first_present(result.get("curie"), candidate.get("curie"))
+    vocabulary = _first_present(result.get("vocabulary"), helper_result.get("vocabulary"))
+    matched_string = _first_present(
+        lookup.get("matched_value"),
+        label,
+        source_phrase,
+    )
+    matched_field = "label" if label and matched_string == label else "candidate"
+    match_mode = str(lookup.get("match_type") or "candidate")
+    score = 1.0 if match_mode in {"exact_label", "exact_synonym"} else max(0.0, 0.85 - (index * 0.05))
+    normalized = {
+        "candidate_id": f"candidate-{index + 1}",
+        "field_path": result.get("field_path"),
+        "slot_hint": result.get("slot_hint"),
+        "value": value,
+        "curie": curie,
+        "name": label,
+        "term_name": label,
+        "vocabulary": vocabulary,
+        "internal_id": _first_present(result.get("internal_id"), helper_result.get("internal_id")),
+        "ontology_type": _first_present(result.get("ontology_type"), candidate.get("ontology_type")),
+        "namespace": candidate.get("namespace"),
+        "definition": candidate.get("definition"),
+        "term_source": dict(result.get("term_source"))
+        if isinstance(result.get("term_source"), Mapping)
+        else None,
+        "obsolete": bool(_first_present(candidate.get("obsolete"), helper_result.get("obsolete"), False)),
+        "matched_string": matched_string,
+        "matched_field": matched_field,
+        "match_mode": match_mode,
+        "score": round(score, 3),
+        "score_breakdown": {
+            "authority": candidate.get("authority") or helper_result.get("authority"),
+            "rank": index + 1,
+            "backend": "alliance_curation_db_current_search",
+        },
+        "path_hints": [
+            hint
+            for hint in (
+                result.get("slot_hint"),
+                result.get("field_path"),
+            )
+            if hint
+        ],
+        "source": dict(source) if isinstance(source, Mapping) else None,
+        "source_tool": source_tool,
+    }
+    return {key: value for key, value in normalized.items() if value is not None}
+
+
+def _candidate_policy_blocker(
+    *,
+    term_source: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+) -> Optional[str]:
+    """Return a blocker code when a candidate violates field policy."""
+
+    slim_membership = term_source.get("slim_membership")
+    if isinstance(slim_membership, Mapping):
+        allowed_curies = slim_membership.get("allowed_term_curies")
+        if isinstance(allowed_curies, list):
+            allowed = {str(curie) for curie in allowed_curies if curie is not None}
+            candidate_curie = candidate.get("curie") or candidate.get("value")
+            if allowed and candidate_curie not in allowed:
+                return "candidate_not_in_allowed_slim_terms"
+    return None
+
+
+def _direct_resolution_context(
+    *,
+    domain_pack_id: str,
+    object_type: str,
+    field_path: str,
+    policy: Mapping[str, Any],
+    term_source: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+    attempted_query: Mapping[str, Any],
+) -> Tuple[str, Mapping[str, Any], Mapping[str, Any], Optional[AgrQueryResult]]:
+    """Resolve broad routing fields to their concrete selector slot."""
+
+    if term_source.get("kind") != "anatomical_site":
+        return field_path, policy, term_source, None
+
+    slot_hint = candidate.get("slot_hint")
+    if not isinstance(slot_hint, str) or not slot_hint.strip():
+        return (
+            field_path,
+            policy,
+            term_source,
+            _err(
+                "Anatomical-site resolver candidates must include a concrete slot_hint.",
+                method="resolve_domain_field_term",
+                attempted_query=dict(attempted_query),
+                failure_classification=LOOKUP_STATUS_BLOCKED,
+            ),
+        )
+
+    direct_policy = _field_term_helper_policy(
+        domain_pack_id=domain_pack_id,
+        object_type=object_type,
+        field_path=slot_hint,
+    )
+    direct_term_source = (
+        direct_policy.get("term_source")
+        if isinstance(direct_policy, Mapping)
+        else None
+    )
+    if not isinstance(direct_policy, Mapping) or not isinstance(direct_term_source, Mapping):
+        return (
+            field_path,
+            policy,
+            term_source,
+            _err(
+                f"Anatomical-site slot_hint {slot_hint!r} is not backed by a domain-pack resolver policy.",
+                method="resolve_domain_field_term",
+                attempted_query=dict(attempted_query),
+                failure_classification=LOOKUP_STATUS_BLOCKED,
+            ),
+        )
+
+    return slot_hint, direct_policy, direct_term_source, None
+
+
+def _resolver_candidates_from_helper_payload(
+    payload: Mapping[str, Any],
+    *,
+    source_tool: str,
+    source_phrase: Optional[str],
+) -> List[Dict[str, Any]]:
+    helper_results = payload.get("helper_results")
+    if not isinstance(helper_results, list):
+        return []
+    return [
+        _resolver_candidate_from_helper_result(
+            result,
+            source_tool=source_tool,
+            source_phrase=source_phrase,
+            index=index,
+        )
+        for index, result in enumerate(helper_results)
+        if isinstance(result, Mapping)
+    ]
+
+
+def _resolver_instruction(
+    *,
+    resolution_status: str,
+    field_path: str,
+    source_phrase: Optional[str],
+    resolver: Mapping[str, Any],
+    candidate: Optional[Mapping[str, Any]] = None,
+) -> List[str]:
+    if resolution_status == "resolved":
+        return [
+            f"Set only the controlled selector for {field_path} from the selected candidate.",
+            "Copy helper_selection into metadata.provenance.helper_selections[].",
+        ]
+    if resolution_status == "ambiguous":
+        return [
+            f"Do not set {field_path} yet.",
+            "Use the suggested next_tool_call, resolve with an explicit candidate_curie or candidate_value, or search with a narrower evidence phrase.",
+        ]
+    if resolution_status == "blocked":
+        return [
+            f"Do not set {field_path}.",
+            "Preserve the paper phrase in unresolved metadata and let validation report the blocker.",
+        ]
+    if candidate and candidate.get("obsolete"):
+        return [
+            f"Do not use obsolete candidate for {field_path}.",
+            "Search for a replacement or preserve the unresolved paper phrase.",
+        ]
+    phrase = source_phrase or "the paper phrase"
+    return [
+        f"Do not set {field_path} from memory.",
+        f"Preserve {phrase!r} in unresolved metadata and let validation report the unresolved selector.",
+    ]
+
+
+def _resolver_debug_payload(
+    *,
+    stage: str,
+    status: str,
+    field_path: str,
+    term_source: Mapping[str, Any],
+    policy: Mapping[str, Any],
+    lookup_attempts: Optional[List[Dict[str, Any]]] = None,
+    candidate_count: Optional[int] = None,
+    selected_candidate: Optional[Mapping[str, Any]] = None,
+    policy_blocker: Optional[str] = None,
+    context_counts: Optional[Mapping[str, int]] = None,
+    requested_field_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    lookup = policy.get("lookup") if isinstance(policy.get("lookup"), Mapping) else {}
+    resolver = _resolver_metadata(policy)
+    slim_membership = term_source.get("slim_membership")
+    allowed_term_count = None
+    if isinstance(slim_membership, Mapping):
+        allowed_terms = slim_membership.get("allowed_term_curies")
+        if isinstance(allowed_terms, list):
+            allowed_term_count = len(allowed_terms)
+
+    selected = selected_candidate or {}
+    debug = {
+        "resolver_stage": stage,
+        "status": status,
+        "field_path": field_path,
+        "requested_field_path": requested_field_path,
+        "term_source_kind": term_source.get("kind"),
+        "ontology_family": term_source.get("ontology_family"),
+        "ontology_term_type": term_source.get("ontology_term_type"),
+        "go_aspect": term_source.get("go_aspect"),
+        "vocabulary": term_source.get("vocabulary"),
+        "authority": policy.get("authority"),
+        "lookup_method": lookup.get("method"),
+        "provider_required": lookup.get("provider_required"),
+        "search_channels": resolver.get("search_channels"),
+        "accepted_provenance_tools": resolver.get("accepted_provenance_tools"),
+        "candidate_count": candidate_count,
+        "selected_candidate_id": selected.get("candidate_id"),
+        "selected_curie": selected.get("curie"),
+        "selected_value": selected.get("value"),
+        "selected_name": selected.get("name") or selected.get("term_name"),
+        "slot_hint": selected.get("slot_hint"),
+        "policy_blocker": policy_blocker,
+        "slim_allowed_term_count": allowed_term_count,
+        "lookup_attempt_count": len(lookup_attempts or []),
+        "lookup_methods": [
+            str(attempt.get("method"))
+            for attempt in (lookup_attempts or [])
+            if isinstance(attempt, Mapping) and attempt.get("method")
+        ],
+        "context_counts": dict(context_counts) if context_counts else None,
+    }
+    return {key: value for key, value in debug.items() if value is not None}
+
+
+def _resolver_diagnostic_summary(
+    *,
+    stage: str,
+    status: str,
+    field_path: str,
+    source_phrase: Optional[str],
+    candidate_count: Optional[int] = None,
+    selected_candidate: Optional[Mapping[str, Any]] = None,
+    policy_blocker: Optional[str] = None,
+    requested_field_path: Optional[str] = None,
+) -> str:
+    label = source_phrase or "(no source phrase)"
+    routed = (
+        f"; requested {requested_field_path}"
+        if requested_field_path and requested_field_path != field_path
+        else ""
+    )
+    count = f"; candidates={candidate_count}" if candidate_count is not None else ""
+    selected = ""
+    if selected_candidate:
+        selected_value = (
+            selected_candidate.get("curie")
+            or selected_candidate.get("value")
+            or selected_candidate.get("name")
+            or selected_candidate.get("term_name")
+        )
+        if selected_value:
+            selected = f"; selected={selected_value}"
+    blocker = f"; blocker={policy_blocker}" if policy_blocker else ""
+    return (
+        f"{stage} {status} for {field_path}{routed}: "
+        f"source_phrase={label!r}{count}{selected}{blocker}"
+    )
+
+
+def _payload_field_instructions(
+    *,
+    field_path: str,
+    candidate: Mapping[str, Any],
+    term_source: Mapping[str, Any],
+) -> Dict[str, Any]:
+    if term_source.get("kind") == "controlled_vocabulary":
+        return {
+            "set": [
+                {
+                    "field_path": field_path,
+                    "value": candidate.get("term_name") or candidate.get("name") or candidate.get("value"),
+                }
+            ]
+        }
+    curie = candidate.get("curie") or candidate.get("value")
+    name = candidate.get("name") or candidate.get("term_name")
+    if field_path.endswith("_terms") or field_path.endswith("_qualifiers"):
+        return {
+            "append": [
+                {
+                    "field_path": field_path,
+                    "value": {
+                        "curie": curie,
+                        "name": name,
+                    },
+                }
+            ]
+        }
+    if field_path.endswith("_name"):
+        return {
+            "set": [
+                {
+                    "field_path": field_path,
+                    "value": name or curie,
+                }
+            ]
+        }
+    return {
+        "set": [
+            {"field_path": f"{field_path}.curie", "value": curie},
+            {"field_path": f"{field_path}.name", "value": name},
+        ]
+    }
+
+
+def _resolver_helper_selection(
+    *,
+    field_path: str,
+    source_phrase: Optional[str],
+    candidate: Mapping[str, Any],
+    term_source: Mapping[str, Any],
+    policy: Mapping[str, Any],
+    evidence_context: Mapping[str, Any],
+    resolved_at: str,
+) -> Dict[str, Any]:
+    selected_value = (
+        candidate.get("term_name")
+        if term_source.get("kind") == "controlled_vocabulary"
+        else candidate.get("curie") or candidate.get("value")
+    )
+    selected_name = candidate.get("name") or candidate.get("term_name")
+    selection = {
+        "field_path": field_path,
+        "source_tool": "resolve_domain_field_term",
+        "source_phrase": source_phrase,
+        "selected_value": selected_value,
+        "selected_name": selected_name,
+        "selected_curie": candidate.get("curie"),
+        "selected_internal_id": candidate.get("internal_id"),
+        "vocabulary": candidate.get("vocabulary"),
+        "ontology_type": candidate.get("ontology_type"),
+        "slot_hint": candidate.get("slot_hint"),
+        "lookup_status": LOOKUP_STATUS_SUCCESS,
+        "authority": policy.get("authority") or "selector_evidence",
+        "term_source": dict(term_source),
+        "source": candidate.get("source"),
+        "resolved_at": resolved_at,
+        "evidence_context": dict(evidence_context) if evidence_context else None,
+    }
+    return {key: value for key, value in selection.items() if value is not None}
+
+
 def _ontology_lookup_result(
     *,
     lookup_method: str,
@@ -3716,6 +4154,903 @@ def get_domain_field_term_options(
         method="get_domain_field_term_options",
         attempted_query=attempted_query,
         failure_classification=LOOKUP_STATUS_UNDER_DEVELOPMENT,
+    )
+
+
+@function_tool(strict_mode=False)
+def search_domain_field_terms(
+    domain_pack_id: str,
+    object_type: str,
+    field_path: str,
+    query: str,
+    evidence_context: Optional[Dict[str, Any]] = None,
+    data_provider: Optional[str] = None,
+    taxon: Optional[str] = None,
+    branch_root_curie: Optional[str] = None,
+    limit: Optional[int] = None,
+    exact_match: bool = False,
+) -> AgrQueryResult:
+    """Search domain-pack declared ontology/CV candidates for one field.
+
+    This is broad candidate discovery only. It never accepts a controlled field
+    value; call resolve_domain_field_term before writing final selectors.
+    """
+
+    evidence_context = evidence_context or {}
+    normalized_query = query.strip() if isinstance(query, str) and query.strip() else None
+    limit_value = limit or 10
+    attempted_query = _attempt_query(
+        "search_domain_field_terms",
+        domain_pack_id=domain_pack_id,
+        object_type=object_type,
+        field_path=field_path,
+        query=normalized_query,
+        data_provider=data_provider,
+        taxon=taxon,
+        branch_root_curie=branch_root_curie,
+        limit=limit_value,
+        exact_match=exact_match,
+    )
+    if not normalized_query:
+        return _err(
+            "search_domain_field_terms requires a non-empty query.",
+            method="search_domain_field_terms",
+            attempted_query=attempted_query,
+        )
+
+    policy, term_source, policy_error = _resolver_policy_response(
+        domain_pack_id=domain_pack_id,
+        object_type=object_type,
+        field_path=field_path,
+        attempted_query=attempted_query,
+    )
+    if policy_error is not None:
+        return policy_error
+    assert policy is not None and term_source is not None
+    resolver = _resolver_metadata(policy)
+
+    helper_callable = _unwrap_function_tool_callable(
+        get_domain_field_term_options,
+        "get_domain_field_term_options",
+    )
+    result = helper_callable(
+        domain_pack_id=domain_pack_id,
+        object_type=object_type,
+        field_path=field_path,
+        query=normalized_query,
+        source_phrase=normalized_query,
+        evidence_context=evidence_context,
+        data_provider=data_provider,
+        taxon=taxon,
+        limit=limit_value,
+        exact_match=exact_match,
+    )
+    if result.status != "ok":
+        return result
+
+    payload = result.data if isinstance(result.data, Mapping) else {}
+    candidates = _resolver_candidates_from_helper_payload(
+        payload,
+        source_tool="search_domain_field_terms",
+        source_phrase=normalized_query,
+    )
+    lookup_status = _helper_lookup_status(candidates)
+    warnings = list(result.warnings or [])
+    warnings.append("limited_search_backend:current_api_exact_prefix_contains")
+    if branch_root_curie:
+        warnings.append("branch_root_curie_preserved_for_future_filtering")
+    if "vector_recall" in resolver.get("search_channels", []):
+        warnings.append("vector_recall_not_authoritative")
+
+    next_tool_call: Dict[str, Any]
+    if len(candidates) == 1:
+        next_field_path = candidates[0].get("slot_hint") or field_path
+        next_tool_call = {
+            "tool": "resolve_domain_field_term",
+            "arguments": {
+                "domain_pack_id": domain_pack_id,
+                "object_type": object_type,
+                "field_path": next_field_path,
+                "source_phrase": normalized_query,
+                "candidate_curie": candidates[0].get("curie"),
+                "candidate_value": candidates[0].get("value"),
+                "data_provider": data_provider,
+                "taxon": taxon,
+            },
+        }
+    elif candidates and term_source.get("kind") != "controlled_vocabulary":
+        next_tool_call = {
+            "tool": "inspect_ontology_term",
+            "arguments": {
+                "domain_pack_id": domain_pack_id,
+                "object_type": object_type,
+                "field_path": candidates[0].get("slot_hint") or field_path,
+                "curie": candidates[0].get("curie"),
+                "data_provider": data_provider,
+                "include_parents": True,
+                "include_children": True,
+                "include_siblings": True,
+                "max_depth": 1,
+                "limit": 10,
+            },
+        }
+    elif candidates:
+        next_tool_call = {
+            "tool": "search_domain_field_terms",
+            "arguments": {
+                "domain_pack_id": domain_pack_id,
+                "object_type": object_type,
+                "field_path": field_path,
+                "query": normalized_query,
+                "data_provider": data_provider,
+                "taxon": taxon,
+                "limit": limit_value,
+            },
+            "note": "Controlled-vocabulary ambiguity cannot be inspected as ontology; narrow the query or resolve with a chosen candidate_value.",
+        }
+    else:
+        next_tool_call = {
+            "tool": "search_domain_field_terms",
+            "arguments": {
+                "domain_pack_id": domain_pack_id,
+                "object_type": object_type,
+                "field_path": field_path,
+                "query": normalized_query,
+                "data_provider": data_provider,
+                "taxon": taxon,
+                "limit": limit_value,
+            },
+        }
+
+    lookup_attempts = result.lookup_attempts or [attempted_query]
+    resolution_status = (
+        LOOKUP_STATUS_SUCCESS
+        if len(candidates) == 1
+        else LOOKUP_STATUS_AMBIGUOUS
+        if candidates
+        else LOOKUP_STATUS_NOT_FOUND
+    )
+    data = {
+        "domain_pack_id": domain_pack_id,
+        "object_type": object_type,
+        "field_path": field_path,
+        "query": normalized_query,
+        "evidence_context": evidence_context,
+        "term_source": dict(term_source),
+        "resolver": resolver,
+        "candidates": candidates,
+        "lookup_attempts": lookup_attempts,
+        "next_tool_call": next_tool_call,
+        "instructions": _resolver_instruction(
+            resolution_status="ambiguous" if len(candidates) > 1 else "unresolved",
+            field_path=field_path,
+            source_phrase=normalized_query,
+            resolver=resolver,
+        )
+        if len(candidates) != 1
+        else [
+            "Candidate discovery found one candidate; call resolve_domain_field_term before setting the payload field.",
+        ],
+        "diagnostic_summary": _resolver_diagnostic_summary(
+            stage="search",
+            status=resolution_status,
+            field_path=field_path,
+            source_phrase=normalized_query,
+            candidate_count=len(candidates),
+            selected_candidate=candidates[0] if len(candidates) == 1 else None,
+        ),
+        "debug": _resolver_debug_payload(
+            stage="search",
+            status=resolution_status,
+            field_path=field_path,
+            term_source=term_source,
+            policy=policy,
+            lookup_attempts=lookup_attempts,
+            candidate_count=len(candidates),
+            selected_candidate=candidates[0] if len(candidates) == 1 else None,
+        ),
+        "authority": "candidate_discovery_only",
+    }
+    return AgrQueryResult(
+        status="ok",
+        data=data,
+        count=len(candidates),
+        warnings=warnings,
+        lookup_status=lookup_status,
+        failure_classification=None if candidates else LOOKUP_STATUS_NOT_FOUND,
+        lookup_attempts=lookup_attempts,
+        candidate_matches=[
+            _candidate_from_result("search_domain_field_terms", candidate)
+            for candidate in candidates
+        ],
+    )
+
+
+def _ontology_tree_rows(
+    *,
+    db: Any,
+    curie: str,
+    curie_prefix: str,
+    relation: str,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    pairs_method = getattr(db, "get_ontology_pairs", None)
+    if not callable(pairs_method):
+        return []
+    rows: List[Dict[str, Any]] = []
+    for pair in pairs_method(curie_prefix):
+        if not isinstance(pair, Mapping):
+            continue
+        if relation == "parents" and pair.get("child_curie") == curie:
+            rows.append(
+                {
+                    "relation": "parent",
+                    "curie": pair.get("parent_curie"),
+                    "name": pair.get("parent_name"),
+                    "namespace": pair.get("parent_type"),
+                    "obsolete": pair.get("parent_is_obsolete"),
+                }
+            )
+        elif relation == "children" and pair.get("parent_curie") == curie:
+            rows.append(
+                {
+                    "relation": "child",
+                    "curie": pair.get("child_curie"),
+                    "name": pair.get("child_name"),
+                    "namespace": pair.get("child_type"),
+                    "obsolete": pair.get("child_is_obsolete"),
+                }
+            )
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+@function_tool(strict_mode=False)
+def inspect_ontology_term(
+    domain_pack_id: str,
+    object_type: str,
+    field_path: str,
+    curie: str,
+    data_provider: Optional[str] = None,
+    include_parents: bool = True,
+    include_children: bool = True,
+    include_siblings: bool = False,
+    max_depth: int = 1,
+    limit: Optional[int] = None,
+) -> AgrQueryResult:
+    """Inspect one authoritative ontology term and bounded graph context."""
+
+    normalized_curie = curie.strip() if isinstance(curie, str) and curie.strip() else None
+    limit_value = limit or 25
+    attempted_query = _attempt_query(
+        "inspect_ontology_term",
+        domain_pack_id=domain_pack_id,
+        object_type=object_type,
+        field_path=field_path,
+        curie=normalized_curie,
+        data_provider=data_provider,
+        include_parents=include_parents,
+        include_children=include_children,
+        include_siblings=include_siblings,
+        max_depth=max_depth,
+        limit=limit_value,
+    )
+    if not normalized_curie:
+        return _err(
+            "inspect_ontology_term requires a CURIE.",
+            method="inspect_ontology_term",
+            attempted_query=attempted_query,
+        )
+
+    policy, term_source, policy_error = _resolver_policy_response(
+        domain_pack_id=domain_pack_id,
+        object_type=object_type,
+        field_path=field_path,
+        attempted_query=attempted_query,
+    )
+    if policy_error is not None:
+        return policy_error
+    assert policy is not None and term_source is not None
+    if term_source.get("kind") not in {"ontology", "anatomical_site"}:
+        return _err(
+            "inspect_ontology_term can only inspect ontology-backed fields.",
+            method="inspect_ontology_term",
+            attempted_query=attempted_query,
+            failure_classification=LOOKUP_STATUS_BLOCKED,
+        )
+
+    lookup_result = _AGR_QUERY_CALLABLE(
+        method="get_ontology_term",
+        term=normalized_curie,
+        ontology_term_type=term_source.get("ontology_term_type"),
+    )
+    if lookup_result.status != "ok":
+        return lookup_result
+    lookup_attempts = lookup_result.lookup_attempts or [attempted_query]
+    term = lookup_result.data if isinstance(lookup_result.data, Mapping) else None
+    if not term:
+        return AgrQueryResult(
+            status="unresolved",
+            data={
+                "domain_pack_id": domain_pack_id,
+                "object_type": object_type,
+                "field_path": field_path,
+                "curie": normalized_curie,
+                "term_source": dict(term_source),
+                "instructions": _resolver_instruction(
+                    resolution_status="unresolved",
+                    field_path=field_path,
+                    source_phrase=normalized_curie,
+                    resolver=_resolver_metadata(policy),
+                ),
+                "diagnostic_summary": _resolver_diagnostic_summary(
+                    stage="inspect",
+                    status=LOOKUP_STATUS_NOT_FOUND,
+                    field_path=field_path,
+                    source_phrase=normalized_curie,
+                    candidate_count=0,
+                ),
+                "debug": _resolver_debug_payload(
+                    stage="inspect",
+                    status=LOOKUP_STATUS_NOT_FOUND,
+                    field_path=field_path,
+                    term_source=term_source,
+                    policy=policy,
+                    lookup_attempts=lookup_attempts,
+                    candidate_count=0,
+                ),
+            },
+            count=0,
+            message=f"Ontology term not found: {normalized_curie}",
+            lookup_status=LOOKUP_STATUS_NOT_FOUND,
+            failure_classification=LOOKUP_STATUS_NOT_FOUND,
+            lookup_attempts=lookup_attempts,
+        )
+
+    warnings = list(lookup_result.warnings or [])
+    parents: List[Dict[str, Any]] = []
+    children: List[Dict[str, Any]] = []
+    siblings: List[Dict[str, Any]] = []
+    db = get_curation_resolver().get_db_client()
+    curie_prefix = normalized_curie.split(":", 1)[0]
+    if db is None:
+        warnings.append("ontology_tree_context_unavailable:curation_db_unavailable")
+    else:
+        if include_parents:
+            parents = _ontology_tree_rows(
+                db=db,
+                curie=normalized_curie,
+                curie_prefix=curie_prefix,
+                relation="parents",
+                limit=limit_value,
+            )
+        if include_children:
+            children = _ontology_tree_rows(
+                db=db,
+                curie=normalized_curie,
+                curie_prefix=curie_prefix,
+                relation="children",
+                limit=limit_value,
+            )
+        if include_siblings and parents:
+            sibling_seen: set[str] = set()
+            for parent in parents[:max(1, max_depth)]:
+                parent_curie = parent.get("curie")
+                if not isinstance(parent_curie, str):
+                    continue
+                for row in _ontology_tree_rows(
+                    db=db,
+                    curie=parent_curie,
+                    curie_prefix=curie_prefix,
+                    relation="children",
+                    limit=limit_value,
+                ):
+                    row_curie = row.get("curie")
+                    if row_curie == normalized_curie or not isinstance(row_curie, str):
+                        continue
+                    if row_curie in sibling_seen:
+                        continue
+                    sibling_seen.add(row_curie)
+                    row["relation"] = "sibling"
+                    siblings.append(row)
+                    if len(siblings) >= limit_value:
+                        break
+        if not parents and not children and not siblings:
+            warnings.append("ontology_tree_context_unavailable:api_client_has_no_bounded_neighbors")
+
+    expected_type = term_source.get("ontology_term_type")
+    policy_checks = {
+        "ontology_type_matches": (
+            True
+            if not expected_type
+            else term.get("ontology_type") == expected_type
+        ),
+        "allowed_by_slim_membership": (
+            _candidate_policy_blocker(term_source=term_source, candidate=term) is None
+        ),
+        "go_aspect": term_source.get("go_aspect"),
+        "ontology_family": term_source.get("ontology_family"),
+    }
+    resolver = _resolver_metadata(policy)
+    should_use = (
+        policy_checks["ontology_type_matches"]
+        and policy_checks["allowed_by_slim_membership"]
+        and not term.get("obsolete")
+    )
+    inspect_status = LOOKUP_STATUS_SUCCESS if should_use else LOOKUP_STATUS_BLOCKED
+    policy_blocker = None if should_use else _candidate_policy_blocker(
+        term_source=term_source,
+        candidate=term,
+    )
+    context_counts = {
+        "parents": len(parents),
+        "children": len(children),
+        "siblings": len(siblings),
+    }
+    data = {
+        "domain_pack_id": domain_pack_id,
+        "object_type": object_type,
+        "field_path": field_path,
+        "curie": normalized_curie,
+        "term": term,
+        "term_source": dict(term_source),
+        "policy_checks": policy_checks,
+        "context": {
+            "parents": parents,
+            "children": children,
+            "siblings": siblings,
+            "max_depth": max_depth,
+            "limit": limit_value,
+        },
+        "instructions": (
+            [
+                "This term passes field policy checks; call resolve_domain_field_term before setting the payload field.",
+            ]
+            if should_use
+            else _resolver_instruction(
+                resolution_status="unresolved",
+                field_path=field_path,
+                source_phrase=normalized_curie,
+                resolver=resolver,
+                candidate=term,
+            )
+        ),
+        "next_tool_call": {
+            "tool": "resolve_domain_field_term",
+            "arguments": {
+                "domain_pack_id": domain_pack_id,
+                "object_type": object_type,
+                "field_path": field_path,
+                "source_phrase": term.get("name") or normalized_curie,
+                "candidate_curie": normalized_curie,
+                "data_provider": data_provider,
+            },
+        }
+        if should_use
+        else None,
+        "diagnostic_summary": _resolver_diagnostic_summary(
+            stage="inspect",
+            status=inspect_status,
+            field_path=field_path,
+            source_phrase=term.get("name") or normalized_curie,
+            candidate_count=1,
+            selected_candidate=term,
+            policy_blocker=policy_blocker,
+        ),
+        "debug": _resolver_debug_payload(
+            stage="inspect",
+            status=inspect_status,
+            field_path=field_path,
+            term_source=term_source,
+            policy=policy,
+            lookup_attempts=lookup_attempts,
+            candidate_count=1,
+            selected_candidate=term,
+            policy_blocker=policy_blocker,
+            context_counts=context_counts,
+        ),
+        "authority": "inspection_only",
+    }
+    return AgrQueryResult(
+        status="ok",
+        data=data,
+        count=1,
+        warnings=warnings or None,
+        lookup_status=LOOKUP_STATUS_SUCCESS,
+        lookup_attempts=lookup_attempts,
+    )
+
+
+@function_tool(strict_mode=False)
+def resolve_domain_field_term(
+    domain_pack_id: str,
+    object_type: str,
+    field_path: str,
+    source_phrase: str,
+    evidence_context: Optional[Dict[str, Any]] = None,
+    candidate_curie: Optional[str] = None,
+    candidate_value: Optional[str] = None,
+    data_provider: Optional[str] = None,
+    taxon: Optional[str] = None,
+    limit: Optional[int] = None,
+) -> AgrQueryResult:
+    """Resolve one final controlled selector for a domain-pack field."""
+
+    evidence_context = evidence_context or {}
+    normalized_phrase = (
+        source_phrase.strip()
+        if isinstance(source_phrase, str) and source_phrase.strip()
+        else None
+    )
+    normalized_candidate_curie = (
+        candidate_curie.strip()
+        if isinstance(candidate_curie, str) and candidate_curie.strip()
+        else None
+    )
+    normalized_candidate_value = (
+        candidate_value.strip()
+        if isinstance(candidate_value, str) and candidate_value.strip()
+        else None
+    )
+    limit_value = limit or 10
+    attempted_query = _attempt_query(
+        "resolve_domain_field_term",
+        domain_pack_id=domain_pack_id,
+        object_type=object_type,
+        field_path=field_path,
+        source_phrase=normalized_phrase,
+        candidate_curie=normalized_candidate_curie,
+        candidate_value=normalized_candidate_value,
+        data_provider=data_provider,
+        taxon=taxon,
+        limit=limit_value,
+    )
+    if not normalized_phrase:
+        return _err(
+            "resolve_domain_field_term requires source_phrase.",
+            method="resolve_domain_field_term",
+            attempted_query=attempted_query,
+        )
+
+    policy, term_source, policy_error = _resolver_policy_response(
+        domain_pack_id=domain_pack_id,
+        object_type=object_type,
+        field_path=field_path,
+        attempted_query=attempted_query,
+    )
+    if policy_error is not None:
+        return policy_error
+    assert policy is not None and term_source is not None
+    resolver = _resolver_metadata(policy)
+
+    search_callable = _unwrap_function_tool_callable(
+        search_domain_field_terms,
+        "search_domain_field_terms",
+    )
+    search_result = search_callable(
+        domain_pack_id=domain_pack_id,
+        object_type=object_type,
+        field_path=field_path,
+        query=normalized_phrase,
+        evidence_context=evidence_context,
+        data_provider=data_provider,
+        taxon=taxon,
+        limit=limit_value,
+    )
+    if search_result.status != "ok":
+        lookup_attempts = search_result.lookup_attempts or [attempted_query]
+        return AgrQueryResult(
+            status="blocked",
+            data={
+                "domain_pack_id": domain_pack_id,
+                "object_type": object_type,
+                "field_path": field_path,
+                "source_phrase": normalized_phrase,
+                "term_source": dict(term_source),
+                "instructions": _resolver_instruction(
+                    resolution_status="blocked",
+                    field_path=field_path,
+                    source_phrase=normalized_phrase,
+                    resolver=resolver,
+                ),
+                "unresolved_metadata_path": resolver.get("unresolved_metadata_path"),
+                "diagnostic_summary": _resolver_diagnostic_summary(
+                    stage="resolve",
+                    status=LOOKUP_STATUS_BLOCKED,
+                    field_path=field_path,
+                    source_phrase=normalized_phrase,
+                    candidate_count=0,
+                ),
+                "debug": _resolver_debug_payload(
+                    stage="resolve",
+                    status=LOOKUP_STATUS_BLOCKED,
+                    field_path=field_path,
+                    term_source=term_source,
+                    policy=policy,
+                    lookup_attempts=lookup_attempts,
+                    candidate_count=0,
+                ),
+            },
+            message=search_result.message,
+            warnings=search_result.warnings,
+            lookup_status=search_result.lookup_status,
+            failure_classification=LOOKUP_STATUS_BLOCKED,
+            lookup_attempts=lookup_attempts,
+        )
+
+    search_payload = search_result.data if isinstance(search_result.data, Mapping) else {}
+    candidates = [
+        candidate
+        for candidate in search_payload.get("candidates", [])
+        if isinstance(candidate, Mapping)
+    ]
+    lookup_attempts = search_result.lookup_attempts or [attempted_query]
+
+    selected_candidates: List[Mapping[str, Any]] = []
+    if normalized_candidate_curie:
+        selected_candidates = [
+            candidate
+            for candidate in candidates
+            if candidate.get("curie") == normalized_candidate_curie
+        ]
+    elif normalized_candidate_value:
+        selected_candidates = [
+            candidate
+            for candidate in candidates
+            if normalized_candidate_value
+            in {
+                str(value)
+                for value in (
+                    candidate.get("value"),
+                    candidate.get("name"),
+                    candidate.get("term_name"),
+                    candidate.get("internal_id"),
+                )
+                if value is not None
+            }
+        ]
+    else:
+        selected_candidates = list(candidates)
+
+    if len(selected_candidates) != 1:
+        resolution_status = "ambiguous" if selected_candidates or candidates else "unresolved"
+        selected_or_all = selected_candidates or candidates
+        lookup_status = (
+            LOOKUP_STATUS_AMBIGUOUS
+            if resolution_status == "ambiguous"
+            else LOOKUP_STATUS_NOT_FOUND
+        )
+        return AgrQueryResult(
+            status=resolution_status,
+            data={
+                "domain_pack_id": domain_pack_id,
+                "object_type": object_type,
+                "field_path": field_path,
+                "source_phrase": normalized_phrase,
+                "term_source": dict(term_source),
+                "candidates": selected_candidates or candidates,
+                "instructions": _resolver_instruction(
+                    resolution_status=resolution_status,
+                    field_path=field_path,
+                    source_phrase=normalized_phrase,
+                    resolver=resolver,
+                ),
+                "next_tool_call": search_payload.get("next_tool_call"),
+                "unresolved_metadata_path": resolver.get("unresolved_metadata_path"),
+                "diagnostic_summary": _resolver_diagnostic_summary(
+                    stage="resolve",
+                    status=lookup_status,
+                    field_path=field_path,
+                    source_phrase=normalized_phrase,
+                    candidate_count=len(selected_or_all),
+                ),
+                "debug": _resolver_debug_payload(
+                    stage="resolve",
+                    status=lookup_status,
+                    field_path=field_path,
+                    term_source=term_source,
+                    policy=policy,
+                    lookup_attempts=lookup_attempts,
+                    candidate_count=len(selected_or_all),
+                ),
+            },
+            count=len(selected_or_all),
+            warnings=search_result.warnings,
+            lookup_status=lookup_status,
+            failure_classification=resolution_status,
+            lookup_attempts=lookup_attempts,
+            candidate_matches=[
+                _candidate_from_result("resolve_domain_field_term", candidate)
+                for candidate in selected_or_all
+            ],
+        )
+
+    selected = selected_candidates[0]
+    if selected.get("obsolete"):
+        return AgrQueryResult(
+            status="blocked",
+            data={
+                "domain_pack_id": domain_pack_id,
+                "object_type": object_type,
+                "field_path": field_path,
+                "source_phrase": normalized_phrase,
+                "selected_candidate": dict(selected),
+                "instructions": _resolver_instruction(
+                    resolution_status="blocked",
+                    field_path=field_path,
+                    source_phrase=normalized_phrase,
+                    resolver=resolver,
+                    candidate=selected,
+                ),
+                "diagnostic_summary": _resolver_diagnostic_summary(
+                    stage="resolve",
+                    status=LOOKUP_STATUS_BLOCKED,
+                    field_path=field_path,
+                    source_phrase=normalized_phrase,
+                    candidate_count=1,
+                    selected_candidate=selected,
+                    policy_blocker="candidate_is_obsolete",
+                ),
+                "debug": _resolver_debug_payload(
+                    stage="resolve",
+                    status=LOOKUP_STATUS_BLOCKED,
+                    field_path=field_path,
+                    term_source=term_source,
+                    policy=policy,
+                    lookup_attempts=lookup_attempts,
+                    candidate_count=1,
+                    selected_candidate=selected,
+                    policy_blocker="candidate_is_obsolete",
+                ),
+            },
+            count=1,
+            warnings=search_result.warnings,
+            lookup_status=LOOKUP_STATUS_BLOCKED,
+            failure_classification=LOOKUP_STATUS_BLOCKED,
+            lookup_attempts=lookup_attempts,
+        )
+
+    (
+        effective_field_path,
+        effective_policy,
+        effective_term_source,
+        direct_policy_error,
+    ) = _direct_resolution_context(
+        domain_pack_id=domain_pack_id,
+        object_type=object_type,
+        field_path=field_path,
+        policy=policy,
+        term_source=term_source,
+        candidate=selected,
+        attempted_query=attempted_query,
+    )
+    if direct_policy_error is not None:
+        return direct_policy_error
+
+    policy_blocker = _candidate_policy_blocker(
+        term_source=effective_term_source,
+        candidate=selected,
+    )
+    if policy_blocker is not None:
+        return AgrQueryResult(
+            status="blocked",
+            data={
+                "domain_pack_id": domain_pack_id,
+                "object_type": object_type,
+                "field_path": effective_field_path,
+                "requested_field_path": field_path,
+                "source_phrase": normalized_phrase,
+                "selected_candidate": dict(selected),
+                "term_source": dict(effective_term_source),
+                "policy_blocker": policy_blocker,
+                "instructions": _resolver_instruction(
+                    resolution_status="blocked",
+                    field_path=effective_field_path,
+                    source_phrase=normalized_phrase,
+                    resolver=resolver,
+                    candidate=selected,
+                ),
+                "diagnostic_summary": _resolver_diagnostic_summary(
+                    stage="resolve",
+                    status=LOOKUP_STATUS_BLOCKED,
+                    field_path=effective_field_path,
+                    requested_field_path=field_path,
+                    source_phrase=normalized_phrase,
+                    candidate_count=1,
+                    selected_candidate=selected,
+                    policy_blocker=policy_blocker,
+                ),
+                "debug": _resolver_debug_payload(
+                    stage="resolve",
+                    status=LOOKUP_STATUS_BLOCKED,
+                    field_path=effective_field_path,
+                    requested_field_path=field_path,
+                    term_source=effective_term_source,
+                    policy=effective_policy,
+                    lookup_attempts=lookup_attempts,
+                    candidate_count=1,
+                    selected_candidate=selected,
+                    policy_blocker=policy_blocker,
+                ),
+            },
+            count=1,
+            warnings=search_result.warnings,
+            lookup_status=LOOKUP_STATUS_BLOCKED,
+            failure_classification=LOOKUP_STATUS_BLOCKED,
+            lookup_attempts=lookup_attempts,
+        )
+
+    resolved_at = datetime.now(timezone.utc).isoformat()
+    helper_selection = _resolver_helper_selection(
+        field_path=effective_field_path,
+        source_phrase=normalized_phrase,
+        candidate=selected,
+        term_source=effective_term_source,
+        policy=effective_policy,
+        evidence_context=evidence_context,
+        resolved_at=resolved_at,
+    )
+    data = {
+        "domain_pack_id": domain_pack_id,
+        "object_type": object_type,
+        "field_path": effective_field_path,
+        "requested_field_path": field_path,
+        "source_phrase": normalized_phrase,
+        "selected_candidate": dict(selected),
+        "payload_field_instructions": _payload_field_instructions(
+            field_path=effective_field_path,
+            candidate=selected,
+            term_source=effective_term_source,
+        ),
+        "helper_selection": helper_selection,
+        "instructions": _resolver_instruction(
+            resolution_status="resolved",
+            field_path=effective_field_path,
+            source_phrase=normalized_phrase,
+            resolver=resolver,
+        ),
+        "diagnostic_summary": _resolver_diagnostic_summary(
+            stage="resolve",
+            status=LOOKUP_STATUS_SUCCESS,
+            field_path=effective_field_path,
+            requested_field_path=field_path,
+            source_phrase=normalized_phrase,
+            candidate_count=1,
+            selected_candidate=selected,
+        ),
+        "debug": _resolver_debug_payload(
+            stage="resolve",
+            status=LOOKUP_STATUS_SUCCESS,
+            field_path=effective_field_path,
+            requested_field_path=field_path,
+            term_source=effective_term_source,
+            policy=effective_policy,
+            lookup_attempts=lookup_attempts,
+            candidate_count=1,
+            selected_candidate=selected,
+        ),
+        "authority": "selector_evidence",
+    }
+    return AgrQueryResult(
+        status="resolved",
+        data=data,
+        count=1,
+        warnings=search_result.warnings,
+        lookup_status=LOOKUP_STATUS_SUCCESS,
+        lookup_attempts=lookup_attempts,
+        candidate_matches=[
+            _candidate_from_result("resolve_domain_field_term", dict(selected))
+        ],
+        result_projections=[
+            {
+                "projection_type": "domain_field_selector",
+                "field_path": effective_field_path,
+                "resolved_value": helper_selection.get("selected_value"),
+                "resolved_name": helper_selection.get("selected_name"),
+                "source_tool": "resolve_domain_field_term",
+            }
+        ],
     )
 
 

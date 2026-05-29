@@ -69,7 +69,9 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
         "update_recorded_evidence_metadata",
         "get_agent_contract",
         "agr_species_context_lookup",
-        "get_domain_field_term_options",
+        "search_domain_field_terms",
+        "inspect_ontology_term",
+        "resolve_domain_field_term",
     ]
 
     assert "Return JSON only, matching GeneExpressionEnvelope." in content
@@ -108,9 +110,11 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
     assert "metadata.repair_notes" not in content
     assert "Do not emit top-level `items[]`" in content
     assert "agr_species_context_lookup" in content
-    assert "get_domain_field_term_options" in content
+    assert "search_domain_field_terms" in content
+    assert "inspect_ontology_term" in content
+    assert "resolve_domain_field_term" in content
     assert "`relation.name`" in content
-    assert "controlled-vocabulary options" in content
+    assert "controlled-vocabulary value" in content
     assert "`expression_pattern.where_expressed`" in content
     assert "`expression_experiment.expression_assay_used`" in content
     assert "`when_expressed_stage_name`" in content
@@ -237,6 +241,21 @@ def test_gene_expression_schema_rejects_relation_helper_selection_without_select
     for selection in payload["metadata"]["provenance"]["helper_selections"]:
         if selection["field_path"] == "relation.name":
             selection["value"] = selection.pop("selected_value")
+            selection.pop("selected_name", None)
+            selection.pop("selected_curie", None)
+
+    with pytest.raises(ValidationError) as exc_info:
+        schema.model_validate(payload)
+
+    assert "metadata.provenance.helper_selections[]" in str(exc_info.value)
+
+
+def test_gene_expression_schema_rejects_relation_resolver_selection_without_source_phrase():
+    schema = _load_gene_expression_schema()
+    payload = deepcopy(_load_tmem67_output())
+    for selection in payload["metadata"]["provenance"]["helper_selections"]:
+        if selection["field_path"] == "relation.name":
+            selection.pop("source_phrase", None)
 
     with pytest.raises(ValidationError) as exc_info:
         schema.model_validate(payload)

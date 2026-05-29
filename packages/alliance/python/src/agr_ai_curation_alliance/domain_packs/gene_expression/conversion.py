@@ -104,7 +104,10 @@ GENE_EXPRESSION_LINKML_CONTRACT_VALIDATOR_ID = (
 )
 VALID_GENE_EXPRESSION_RELATION_NAMES = frozenset({"is_expressed_in"})
 EXPRESSION_RELATION_VOCABULARY = "Expression Relation"
-CONTROLLED_FIELD_HELPER_TOOL_NAME = "get_domain_field_term_options"
+CONTROLLED_FIELD_RESOLVER_TOOL_NAME = "resolve_domain_field_term"
+ACCEPTED_CONTROLLED_FIELD_PROVENANCE_TOOLS = frozenset(
+    {CONTROLLED_FIELD_RESOLVER_TOOL_NAME}
+)
 LOGGER = logging.getLogger(__name__)
 FORBIDDEN_PAYLOAD_EVIDENCE_FIELDS = frozenset(
     {
@@ -183,17 +186,58 @@ def _has_helper_selection(
     output: DomainEnvelopeExtractionResult,
     *,
     field_path: str,
-    selected_value: str,
+    selected_value: str | None = None,
+    selected_curie: str | None = None,
 ) -> bool:
     for selection in _helper_selections(output):
         if selection.get("field_path") != field_path:
             continue
-        if selection.get("source_tool") != CONTROLLED_FIELD_HELPER_TOOL_NAME:
+        if selection.get("source_tool") not in ACCEPTED_CONTROLLED_FIELD_PROVENANCE_TOOLS:
             continue
-        value = selection.get("selected_value")
-        if isinstance(value, str) and value.strip() == selected_value:
+        if selection.get("authority") not in {"selector_evidence", "live_validated_option"}:
+            continue
+        lookup_status = selection.get("lookup_status")
+        if lookup_status not in {"success", "resolved"}:
+            continue
+        source_phrase = selection.get("source_phrase")
+        if not isinstance(source_phrase, str) or not source_phrase.strip():
+            continue
+        term_source = selection.get("term_source")
+        if not isinstance(term_source, Mapping) or not isinstance(term_source.get("kind"), str):
+            continue
+        values = {
+            str(value).strip()
+            for value in (
+                selection.get("selected_value"),
+                selection.get("selected_name"),
+                selection.get("selected_curie"),
+            )
+            if value is not None and str(value).strip()
+        }
+        if selected_curie is not None and not (
+            isinstance(selection.get("selected_curie"), str)
+            or ":" in str(selection.get("selected_value") or "")
+        ):
+            continue
+        if selected_value is None and selected_curie is None:
+            return True
+        if selected_value is not None and selected_value.strip() in values:
+            return True
+        if selected_curie is not None and selected_curie.strip() in values:
             return True
     return False
+
+
+def _resolver_provenance_error(
+    *,
+    location: str,
+    field_path: str,
+) -> str:
+    return (
+        f"{location}.payload {field_path} must include "
+        "metadata.provenance.helper_selections[] evidence from "
+        f"{CONTROLLED_FIELD_RESOLVER_TOOL_NAME}"
+    )
 
 
 def _diagnostic_details(
@@ -316,10 +360,59 @@ def validate_gene_expression_extraction_objects(
             selected_value=relation_name.strip(),
         ):
             errors.append(
-                f"{location}.payload relation.name must include "
-                "metadata.provenance.helper_selections[] evidence from "
-                f"{CONTROLLED_FIELD_HELPER_TOOL_NAME}"
+                _resolver_provenance_error(
+                    location=location,
+                    field_path="relation.name",
+                )
             )
+        assay_curie = _payload_value(
+            obj.payload,
+            "expression_experiment.expression_assay_used.curie",
+        )
+        if isinstance(assay_curie, str) and assay_curie.strip():
+            if not _has_helper_selection(
+                output,
+                field_path="expression_experiment.expression_assay_used",
+                selected_curie=assay_curie.strip(),
+            ):
+                errors.append(
+                    _resolver_provenance_error(
+                        location=location,
+                        field_path="expression_experiment.expression_assay_used",
+                    )
+                )
+        stage_name = _payload_value(obj.payload, "when_expressed_stage_name")
+        if isinstance(stage_name, str) and stage_name.strip():
+            if not _has_helper_selection(
+                output,
+                field_path="when_expressed_stage_name",
+                selected_value=stage_name.strip(),
+            ):
+                errors.append(
+                    _resolver_provenance_error(
+                        location=location,
+                        field_path="when_expressed_stage_name",
+                    )
+                )
+        stage_curie = _payload_value(
+            obj.payload,
+            "expression_pattern.when_expressed.developmental_stage_start.curie",
+        )
+        if isinstance(stage_curie, str) and stage_curie.strip():
+            if not _has_helper_selection(
+                output,
+                field_path="expression_pattern.when_expressed.developmental_stage_start",
+                selected_curie=stage_curie.strip(),
+            ):
+                errors.append(
+                    _resolver_provenance_error(
+                        location=location,
+                        field_path=(
+                            "expression_pattern.when_expressed."
+                            "developmental_stage_start"
+                        ),
+                    )
+                )
         data_provider = obj.payload.get("data_provider")
         provider_abbreviation = (
             data_provider.get("abbreviation")
@@ -345,6 +438,44 @@ def validate_gene_expression_extraction_objects(
                 f"{location}.payload expression_pattern.where_expressed must "
                 "include anatomical_structure or cellular_component"
             )
+        anatomy_curie = _payload_value(
+            obj.payload,
+            "expression_pattern.where_expressed.anatomical_structure.curie",
+        )
+        if isinstance(anatomy_curie, str) and anatomy_curie.strip():
+            if not _has_helper_selection(
+                output,
+                field_path="expression_pattern.where_expressed.anatomical_structure",
+                selected_curie=anatomy_curie.strip(),
+            ):
+                errors.append(
+                    _resolver_provenance_error(
+                        location=location,
+                        field_path=(
+                            "expression_pattern.where_expressed."
+                            "anatomical_structure"
+                        ),
+                    )
+                )
+        cellular_curie = _payload_value(
+            obj.payload,
+            "expression_pattern.where_expressed.cellular_component.curie",
+        )
+        if isinstance(cellular_curie, str) and cellular_curie.strip():
+            if not _has_helper_selection(
+                output,
+                field_path="expression_pattern.where_expressed.cellular_component",
+                selected_curie=cellular_curie.strip(),
+            ):
+                errors.append(
+                    _resolver_provenance_error(
+                        location=location,
+                        field_path=(
+                            "expression_pattern.where_expressed."
+                            "cellular_component"
+                        ),
+                    )
+                )
 
         if not obj.evidence_record_ids:
             errors.append(f"{location}.evidence_record_ids must not be empty")

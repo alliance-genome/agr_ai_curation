@@ -58,4 +58,14 @@ def test_alliance_curation_query_is_package_owned_through_bindings():
         "callable: agr_ai_curation_alliance.tools.agr_curation:agr_curation_query"
         in bindings_source
     )
+    for tool_id in (
+        "search_domain_field_terms",
+        "inspect_ontology_term",
+        "resolve_domain_field_term",
+    ):
+        assert f"tool_id: {tool_id}" in bindings_source
+        assert (
+            f"callable: agr_ai_curation_alliance.tools.agr_curation:{tool_id}"
+            in bindings_source
+        )
     assert "backend/src/lib/openai_agents/tools/agr_curation.py" not in bindings_source

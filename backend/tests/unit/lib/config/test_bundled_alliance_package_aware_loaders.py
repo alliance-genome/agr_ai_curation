@@ -89,7 +89,9 @@ def test_bundled_alliance_gene_expression_declares_record_evidence(monkeypatch):
         "update_recorded_evidence_metadata",
         "get_agent_contract",
         "agr_species_context_lookup",
-        "get_domain_field_term_options",
+        "search_domain_field_terms",
+        "inspect_ontology_term",
+        "resolve_domain_field_term",
     ]
 
 

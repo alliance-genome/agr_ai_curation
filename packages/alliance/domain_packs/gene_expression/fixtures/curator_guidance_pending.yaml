@@ -347,32 +347,77 @@ fixtures:
             helper_selections:
               - field_path: relation.name
                 selected_value: is_expressed_in
-                source_tool: get_domain_field_term_options
+                selected_name: is_expressed_in
+                source_tool: resolve_domain_field_term
+                source_phrase: is_expressed_in
                 lookup_status: resolved
+                authority: live_validated_option
+                term_source:
+                  kind: controlled_vocabulary
+                  vocabulary: Expression Relation
               - field_path: expression_experiment.expression_assay_used
                 selected_value: MMO:0000642
-                source_tool: get_domain_field_term_options
+                selected_curie: MMO:0000642
+                source_tool: resolve_domain_field_term
+                source_phrase: in situ hybridization
                 lookup_status: resolved
+                authority: selector_evidence
+                term_source:
+                  kind: ontology
+                  ontology_family: assay
+                  ontology_term_type: MMOTerm
               - field_path: when_expressed_stage_name
                 selected_value: ZFS:0000029
-                source_tool: get_domain_field_term_options
+                selected_curie: ZFS:0000029
+                source_tool: resolve_domain_field_term
+                source_phrase: 24 hpf
                 lookup_status: resolved
+                authority: selector_evidence
+                term_source:
+                  kind: ontology
+                  ontology_family: life_stage
               - field_path: expression_pattern.when_expressed.developmental_stage_start
                 selected_value: ZFS:0000030
-                source_tool: get_domain_field_term_options
+                selected_curie: ZFS:0000030
+                source_tool: resolve_domain_field_term
+                source_phrase: 30 hpf
                 lookup_status: resolved
+                authority: selector_evidence
+                term_source:
+                  kind: ontology
+                  ontology_family: life_stage
               - field_path: expression_pattern.where_expressed.anatomical_structure
                 selected_value: ZFA:0000260
-                source_tool: get_domain_field_term_options
+                selected_curie: ZFA:0000260
+                source_tool: resolve_domain_field_term
+                source_phrase: brain
                 lookup_status: resolved
+                authority: selector_evidence
+                term_source:
+                  kind: ontology
+                  ontology_family: anatomy
               - field_path: expression_pattern.where_expressed.cellular_component
                 selected_value: GO:0005634
-                source_tool: get_domain_field_term_options
+                selected_curie: GO:0005634
+                source_tool: resolve_domain_field_term
+                source_phrase: nucleus
                 lookup_status: resolved
+                authority: selector_evidence
+                term_source:
+                  kind: ontology
+                  ontology_family: go
+                  go_aspect: cellular_component
               - field_path: expression_pattern.where_expressed.cellular_component
                 selected_value: GO:0005737
-                source_tool: get_domain_field_term_options
+                selected_curie: GO:0005737
+                source_tool: resolve_domain_field_term
+                source_phrase: cytoplasm
                 lookup_status: resolved
+                authority: selector_evidence
+                term_source:
+                  kind: ontology
+                  ontology_family: go
+                  go_aspect: cellular_component
         run_summary:
           candidate_count: 5
           kept_count: 3

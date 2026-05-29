@@ -21,6 +21,27 @@ def _term_helper_fn():
     )
 
 
+def _search_resolver_fn():
+    return agr_curation._unwrap_function_tool_callable(
+        agr_curation.search_domain_field_terms,
+        "search_domain_field_terms",
+    )
+
+
+def _inspect_resolver_fn():
+    return agr_curation._unwrap_function_tool_callable(
+        agr_curation.inspect_ontology_term,
+        "inspect_ontology_term",
+    )
+
+
+def _resolve_resolver_fn():
+    return agr_curation._unwrap_function_tool_callable(
+        agr_curation.resolve_domain_field_term,
+        "resolve_domain_field_term",
+    )
+
+
 class _Resolver:
     def __init__(self, db):
         self._db = db
@@ -725,3 +746,330 @@ def test_domain_field_term_options_routes_gene_expression_site(monkeypatch):
             },
         ),
     ]
+
+
+def test_search_domain_field_terms_returns_field_scoped_candidates(monkeypatch):
+    calls = []
+
+    class FakeDb:
+        @staticmethod
+        def search_anatomy_terms(**kwargs):
+            calls.append(kwargs)
+            return [
+                SimpleNamespace(
+                    curie="WBbt:0004758",
+                    name="ALM neuron",
+                    ontology_type="WBBTTerm",
+                )
+            ]
+
+    monkeypatch.setattr(
+        agr_curation,
+        "get_curation_resolver",
+        lambda: _Resolver(FakeDb()),
+    )
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+
+    result = _search_resolver_fn()(
+        domain_pack_id="agr.alliance.gene_expression",
+        object_type="GeneExpressionAnnotation",
+        field_path="expression_pattern.where_expressed.anatomical_structure",
+        query="ALM neuron",
+        data_provider="WB",
+        limit=5,
+    )
+
+    assert result.status == "ok"
+    assert result.lookup_status == "success"
+    assert result.data["authority"] == "candidate_discovery_only"
+    assert result.data["candidates"][0]["curie"] == "WBbt:0004758"
+    assert result.data["candidates"][0]["source_tool"] == "search_domain_field_terms"
+    assert result.data["diagnostic_summary"].startswith(
+        "search success for expression_pattern.where_expressed.anatomical_structure"
+    )
+    assert result.data["debug"]["resolver_stage"] == "search"
+    assert result.data["debug"]["candidate_count"] == 1
+    assert result.data["debug"]["selected_curie"] == "WBbt:0004758"
+    assert result.data["next_tool_call"]["tool"] == "resolve_domain_field_term"
+    assert result.data["next_tool_call"]["arguments"]["field_path"] == (
+        "expression_pattern.where_expressed.anatomical_structure"
+    )
+    assert "limited_search_backend:current_api_exact_prefix_contains" in result.warnings
+    assert calls == [
+        {
+            "term": "ALM neuron",
+            "data_provider": "WB",
+            "exact_match": False,
+            "include_synonyms": True,
+            "limit": 5,
+        }
+    ]
+
+
+def test_search_domain_field_terms_does_not_suggest_ontology_inspection_for_cv_ambiguity(monkeypatch):
+    class FakeDb:
+        @staticmethod
+        def search_vocabulary_terms(**_kwargs):
+            return [
+                _term(internal_id=1, vocabulary="Expression Relation", name="is_expressed_in"),
+                _term(internal_id=2, vocabulary="Expression Relation", name="is_not_expressed_in"),
+            ]
+
+    monkeypatch.setattr(
+        agr_curation,
+        "get_curation_resolver",
+        lambda: _Resolver(FakeDb()),
+    )
+
+    result = _search_resolver_fn()(
+        domain_pack_id="agr.alliance.gene_expression",
+        object_type="GeneExpressionAnnotation",
+        field_path="relation.name",
+        query="expressed",
+    )
+
+    assert result.status == "ok"
+    assert result.lookup_status == "ambiguous"
+    assert result.data["next_tool_call"]["tool"] == "search_domain_field_terms"
+    assert "candidate_value" in result.data["next_tool_call"]["note"]
+
+
+def test_inspect_ontology_term_returns_bounded_context(monkeypatch):
+    class FakeDb:
+        @staticmethod
+        def get_ontology_term(curie):
+            assert curie == "WBbt:0004758"
+            return SimpleNamespace(
+                curie="WBbt:0004758",
+                name="ALM neuron",
+                namespace="wormbase_anatomy",
+                definition="An ALM mechanosensory neuron.",
+                ontology_type="WBBTTerm",
+                synonyms=["anterior lateral microtubule cell"],
+            )
+
+        @staticmethod
+        def get_ontology_pairs(prefix):
+            assert prefix == "WBbt"
+            return [
+                {
+                    "parent_curie": "WBbt:0004017",
+                    "parent_name": "mechanosensory neuron",
+                    "parent_type": "wormbase_anatomy",
+                    "parent_is_obsolete": False,
+                    "child_curie": "WBbt:0004758",
+                    "child_name": "ALM neuron",
+                    "child_type": "wormbase_anatomy",
+                    "child_is_obsolete": False,
+                },
+                {
+                    "parent_curie": "WBbt:0004017",
+                    "parent_name": "mechanosensory neuron",
+                    "parent_type": "wormbase_anatomy",
+                    "parent_is_obsolete": False,
+                    "child_curie": "WBbt:0004759",
+                    "child_name": "PLM neuron",
+                    "child_type": "wormbase_anatomy",
+                    "child_is_obsolete": False,
+                },
+            ]
+
+    monkeypatch.setattr(
+        agr_curation,
+        "get_curation_resolver",
+        lambda: _Resolver(FakeDb()),
+    )
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+
+    result = _inspect_resolver_fn()(
+        domain_pack_id="agr.alliance.gene_expression",
+        object_type="GeneExpressionAnnotation",
+        field_path="expression_pattern.where_expressed.anatomical_structure",
+        curie="WBbt:0004758",
+        data_provider="WB",
+        include_siblings=True,
+    )
+
+    assert result.status == "ok"
+    assert result.data["term"]["curie"] == "WBbt:0004758"
+    assert result.data["context"]["parents"][0]["curie"] == "WBbt:0004017"
+    assert result.data["context"]["siblings"][0]["curie"] == "WBbt:0004759"
+    assert result.data["authority"] == "inspection_only"
+    assert result.data["debug"]["resolver_stage"] == "inspect"
+    assert result.data["debug"]["context_counts"] == {
+        "parents": 1,
+        "children": 0,
+        "siblings": 1,
+    }
+    assert result.data["next_tool_call"]["tool"] == "resolve_domain_field_term"
+
+
+def test_inspect_ontology_term_blocks_terms_outside_slim_allowlist(monkeypatch):
+    class FakeDb:
+        @staticmethod
+        def get_ontology_term(curie):
+            return SimpleNamespace(
+                curie=curie,
+                name="not an allowed slim term",
+                ontology_type="UBERONTerm",
+            )
+
+        @staticmethod
+        def get_ontology_pairs(_prefix):
+            return []
+
+    monkeypatch.setattr(
+        agr_curation,
+        "get_curation_resolver",
+        lambda: _Resolver(FakeDb()),
+    )
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+
+    result = _inspect_resolver_fn()(
+        domain_pack_id="agr.alliance.gene_expression",
+        object_type="GeneExpressionAnnotation",
+        field_path="expression_pattern.where_expressed.anatomical_structure_uberon_terms",
+        curie="UBERON:9999999",
+    )
+
+    assert result.status == "ok"
+    assert result.data["policy_checks"]["ontology_type_matches"] is True
+    assert result.data["policy_checks"]["allowed_by_slim_membership"] is False
+    assert result.data["debug"]["policy_blocker"] == (
+        "candidate_not_in_allowed_slim_terms"
+    )
+    assert result.data["next_tool_call"] is None
+
+
+def test_resolve_domain_field_term_returns_copyable_provenance(monkeypatch):
+    class FakeDb:
+        @staticmethod
+        def search_ontology_terms(**kwargs):
+            assert kwargs["ontology_type"] == "MMOTerm"
+            return [
+                SimpleNamespace(
+                    curie="MMO:0000658",
+                    name="whole mount in situ hybridization assay",
+                    ontology_type="MMOTerm",
+                )
+            ]
+
+    monkeypatch.setattr(
+        agr_curation,
+        "get_curation_resolver",
+        lambda: _Resolver(FakeDb()),
+    )
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+
+    result = _resolve_resolver_fn()(
+        domain_pack_id="agr.alliance.gene_expression",
+        object_type="GeneExpressionAnnotation",
+        field_path="expression_experiment.expression_assay_used",
+        source_phrase="reverse transcription polymerase chain reaction assay",
+        candidate_curie="MMO:0000655",
+    )
+
+    assert result.status == "resolved"
+    assert result.lookup_status == "success"
+    assert result.data["diagnostic_summary"].startswith(
+        "resolve success for expression_experiment.expression_assay_used"
+    )
+    assert result.data["debug"]["resolver_stage"] == "resolve"
+    assert result.data["debug"]["selected_curie"] == "MMO:0000655"
+    selection = result.data["helper_selection"]
+    assert selection["source_tool"] == "resolve_domain_field_term"
+    assert selection["field_path"] == "expression_experiment.expression_assay_used"
+    assert selection["selected_value"] == "MMO:0000655"
+    assert selection["selected_name"] == "reverse transcription polymerase chain reaction assay"
+    assert selection["authority"] == "selector_evidence"
+    assert result.data["payload_field_instructions"] == {
+        "set": [
+            {
+                "field_path": "expression_experiment.expression_assay_used.curie",
+                "value": "MMO:0000655",
+            },
+            {
+                "field_path": "expression_experiment.expression_assay_used.name",
+                "value": "reverse transcription polymerase chain reaction assay",
+            },
+        ]
+    }
+
+
+def test_resolve_domain_field_term_routes_broad_site_to_concrete_slot(monkeypatch):
+    class FakeDb:
+        @staticmethod
+        def search_anatomy_terms(**_kwargs):
+            return []
+
+        @staticmethod
+        def search_go_terms(**_kwargs):
+            return [
+                SimpleNamespace(
+                    curie="GO:0005634",
+                    name="nucleus",
+                    namespace="cellular_component",
+                )
+            ]
+
+    monkeypatch.setattr(
+        agr_curation,
+        "get_curation_resolver",
+        lambda: _Resolver(FakeDb()),
+    )
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+
+    result = _resolve_resolver_fn()(
+        domain_pack_id="agr.alliance.gene_expression",
+        object_type="GeneExpressionAnnotation",
+        field_path="expression_pattern.where_expressed",
+        source_phrase="nucleus",
+        candidate_curie="GO:0005634",
+        data_provider="ZFIN",
+    )
+
+    assert result.status == "resolved"
+    assert result.data["field_path"] == (
+        "expression_pattern.where_expressed.cellular_component"
+    )
+    assert result.data["requested_field_path"] == "expression_pattern.where_expressed"
+    assert result.data["payload_field_instructions"]["set"][0]["field_path"] == (
+        "expression_pattern.where_expressed.cellular_component.curie"
+    )
+    assert result.data["helper_selection"]["field_path"] == (
+        "expression_pattern.where_expressed.cellular_component"
+    )
+
+
+def test_resolve_domain_field_term_blocks_slim_terms_outside_allowlist(monkeypatch):
+    class FakeDb:
+        @staticmethod
+        def search_ontology_terms(**_kwargs):
+            return [
+                SimpleNamespace(
+                    curie="UBERON:9999999",
+                    name="not an allowed slim term",
+                    ontology_type="UBERONTerm",
+                )
+            ]
+
+    monkeypatch.setattr(
+        agr_curation,
+        "get_curation_resolver",
+        lambda: _Resolver(FakeDb()),
+    )
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+
+    result = _resolve_resolver_fn()(
+        domain_pack_id="agr.alliance.gene_expression",
+        object_type="GeneExpressionAnnotation",
+        field_path="expression_pattern.where_expressed.anatomical_structure_uberon_terms",
+        source_phrase="not an allowed slim term",
+        candidate_curie="UBERON:9999999",
+    )
+
+    assert result.status == "blocked"
+    assert result.data["policy_blocker"] == "candidate_not_in_allowed_slim_terms"
+    assert result.data["debug"]["policy_blocker"] == (
+        "candidate_not_in_allowed_slim_terms"
+    )
