@@ -3373,6 +3373,7 @@ def _resolver_candidate_from_helper_result(
     matched_field = "label" if label and matched_string == label else "candidate"
     match_mode = str(lookup.get("match_type") or "candidate")
     score = 1.0 if match_mode in {"exact_label", "exact_synonym"} else max(0.0, 0.85 - (index * 0.05))
+    source_provider = source.get("provider") if isinstance(source, Mapping) else None
     normalized = {
         "candidate_id": f"candidate-{index + 1}",
         "field_path": result.get("field_path"),
@@ -3397,7 +3398,7 @@ def _resolver_candidate_from_helper_result(
         "score_breakdown": {
             "authority": candidate.get("authority") or helper_result.get("authority"),
             "rank": index + 1,
-            "backend": "alliance_curation_db_current_search",
+            "backend": source_provider or "alliance_curation_db_current_search",
         },
         "path_hints": [
             hint
@@ -3420,12 +3421,37 @@ def _candidate_policy_blocker(
 ) -> Optional[str]:
     """Return a blocker code when a candidate violates field policy."""
 
+    ontology_family = str(term_source.get("ontology_family") or "").strip().casefold()
+    candidate_curie = str(candidate.get("curie") or candidate.get("value") or "").strip()
+    namespace = str(candidate.get("namespace") or "").strip()
+    namespace_key = namespace.casefold()
+    ontology_type = str(candidate.get("ontology_type") or "").strip()
+    expected_type = str(term_source.get("ontology_term_type") or "").strip()
+
+    if expected_type and ontology_type != expected_type:
+        return "candidate_ontology_type_mismatch"
+
+    if ontology_family == "go":
+        if candidate_curie and not candidate_curie.upper().startswith("GO:"):
+            return "candidate_ontology_family_mismatch"
+        go_aspect = str(term_source.get("go_aspect") or "").strip()
+        if go_aspect:
+            if not namespace:
+                return "candidate_go_aspect_unavailable"
+            if namespace_key != go_aspect.casefold():
+                return "candidate_go_aspect_mismatch"
+    elif ontology_family == "uberon":
+        if candidate_curie and not candidate_curie.upper().startswith("UBERON:"):
+            return "candidate_ontology_family_mismatch"
+    elif ontology_family in {"anatomy", "life_stage", "assay"}:
+        if candidate_curie.upper().startswith("GO:"):
+            return "candidate_ontology_family_mismatch"
+
     slim_membership = term_source.get("slim_membership")
     if isinstance(slim_membership, Mapping):
         allowed_curies = slim_membership.get("allowed_term_curies")
         if isinstance(allowed_curies, list):
             allowed = {str(curie) for curie in allowed_curies if curie is not None}
-            candidate_curie = candidate.get("curie") or candidate.get("value")
             if allowed and candidate_curie not in allowed:
                 return "candidate_not_in_allowed_slim_terms"
     return None
@@ -4376,13 +4402,15 @@ def _ontology_tree_rows(
 ) -> List[Dict[str, Any]]:
     create_session = getattr(db, "create_session", None)
     if callable(create_session):
-        return _ontology_tree_rows_from_session(
+        session_rows = _ontology_tree_rows_from_session(
             create_session=create_session,
             curie=curie,
             curie_prefix=curie_prefix,
             relation=relation,
             limit=limit,
         )
+        if session_rows is not None:
+            return session_rows
 
     pairs_method = getattr(db, "get_ontology_pairs", None)
     if not callable(pairs_method):
@@ -4423,16 +4451,17 @@ def _ontology_tree_rows_from_session(
     curie_prefix: str,
     relation: str,
     limit: int,
-) -> List[Dict[str, Any]]:
+) -> Optional[List[Dict[str, Any]]]:
     """Return bounded ontology context without scanning an entire ontology."""
 
     try:
         from sqlalchemy import text
     except ImportError:
-        return []
+        return None
 
     if relation == "parents":
         where_clause = "otc.curie = :curie"
+        context_prefix_clause = "otp.curie LIKE :curieprefix"
         select_columns = """
             'parent' AS relation,
             otp.curie AS contextCurie,
@@ -4442,6 +4471,7 @@ def _ontology_tree_rows_from_session(
         """
     elif relation == "children":
         where_clause = "otp.curie = :curie"
+        context_prefix_clause = "otc.curie LIKE :curieprefix"
         select_columns = """
             'child' AS relation,
             otc.curie AS contextCurie,
@@ -4464,7 +4494,7 @@ def _ontology_tree_rows_from_session(
                 JOIN ontologyterm otp ON otpc.closureobject_id = otp.id
             WHERE
                 {where_clause}
-                AND otp.curie LIKE :curieprefix
+                AND {context_prefix_clause}
                 AND otpc.distance = 1
                 AND otpc.closuretypes in ('["part_of"]', '["is_a"]')
             LIMIT :limit
@@ -4495,7 +4525,7 @@ def _ontology_tree_rows_from_session(
             relation,
             exc,
         )
-        return []
+        return None
     finally:
         close = getattr(session, "close", None)
         if callable(close):
@@ -4656,29 +4686,40 @@ def inspect_ontology_term(
             warnings.append("ontology_tree_context_unavailable:api_client_has_no_bounded_neighbors")
 
     expected_type = term_source.get("ontology_term_type")
+    policy_blocker = _candidate_policy_blocker(
+        term_source=term_source,
+        candidate=term,
+    )
     policy_checks = {
         "ontology_type_matches": (
             True
             if not expected_type
             else term.get("ontology_type") == expected_type
         ),
-        "allowed_by_slim_membership": (
-            _candidate_policy_blocker(term_source=term_source, candidate=term) is None
-        ),
+        "ontology_family_matches": policy_blocker
+        not in {
+            "candidate_ontology_family_mismatch",
+            "candidate_ontology_type_mismatch",
+        },
+        "go_aspect_matches": policy_blocker
+        not in {
+            "candidate_go_aspect_mismatch",
+            "candidate_go_aspect_unavailable",
+        },
+        "allowed_by_slim_membership": policy_blocker != "candidate_not_in_allowed_slim_terms",
         "go_aspect": term_source.get("go_aspect"),
         "ontology_family": term_source.get("ontology_family"),
     }
     resolver = _resolver_metadata(policy)
     should_use = (
         policy_checks["ontology_type_matches"]
+        and policy_checks["ontology_family_matches"]
+        and policy_checks["go_aspect_matches"]
         and policy_checks["allowed_by_slim_membership"]
         and not term.get("obsolete")
     )
     inspect_status = LOOKUP_STATUS_SUCCESS if should_use else LOOKUP_STATUS_BLOCKED
-    policy_blocker = None if should_use else _candidate_policy_blocker(
-        term_source=term_source,
-        candidate=term,
-    )
+    policy_blocker = None if should_use else policy_blocker
     context_counts = {
         "parents": len(parents),
         "children": len(children),
@@ -4753,7 +4794,8 @@ def inspect_ontology_term(
         data=data,
         count=1,
         warnings=warnings or None,
-        lookup_status=LOOKUP_STATUS_SUCCESS,
+        lookup_status=inspect_status,
+        failure_classification=None if should_use else LOOKUP_STATUS_BLOCKED,
         lookup_attempts=lookup_attempts,
     )
 

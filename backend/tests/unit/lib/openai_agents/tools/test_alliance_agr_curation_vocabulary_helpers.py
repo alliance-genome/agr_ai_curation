@@ -994,6 +994,66 @@ def test_inspect_ontology_term_uses_targeted_tree_lookup_when_session_available(
         "siblings": 1,
     }
     assert all(call[1]["curieprefix"] == "WBbt%" for call in execute_calls)
+    assert any("otc.curie LIKE :curieprefix" in call[0] for call in execute_calls)
+
+
+def test_inspect_ontology_term_falls_back_when_targeted_tree_lookup_fails(monkeypatch):
+    class FakeSession:
+        @staticmethod
+        def execute(_query, _params):
+            raise RuntimeError("schema drift")
+
+        @staticmethod
+        def close():
+            return None
+
+    class FakeDb:
+        @staticmethod
+        def get_ontology_term(curie):
+            return SimpleNamespace(
+                curie=curie,
+                name="ALM neuron",
+                namespace="wormbase_anatomy",
+                ontology_type="WBBTTerm",
+            )
+
+        @staticmethod
+        def create_session():
+            return FakeSession()
+
+        @staticmethod
+        def get_ontology_pairs(prefix):
+            assert prefix == "WBbt"
+            return [
+                {
+                    "parent_curie": "WBbt:0004017",
+                    "parent_name": "mechanosensory neuron",
+                    "parent_type": "wormbase_anatomy",
+                    "parent_is_obsolete": False,
+                    "child_curie": "WBbt:0004758",
+                    "child_name": "ALM neuron",
+                    "child_type": "wormbase_anatomy",
+                    "child_is_obsolete": False,
+                }
+            ]
+
+    monkeypatch.setattr(
+        agr_curation,
+        "get_curation_resolver",
+        lambda: _Resolver(FakeDb()),
+    )
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+
+    result = _inspect_resolver_fn()(
+        domain_pack_id="agr.alliance.gene_expression",
+        object_type="GeneExpressionAnnotation",
+        field_path="expression_pattern.where_expressed.anatomical_structure",
+        curie="WBbt:0004758",
+        data_provider="WB",
+    )
+
+    assert result.status == "ok"
+    assert result.data["context"]["parents"][0]["curie"] == "WBbt:0004017"
 
 
 def test_inspect_ontology_term_blocks_terms_outside_slim_allowlist(monkeypatch):
@@ -1030,6 +1090,41 @@ def test_inspect_ontology_term_blocks_terms_outside_slim_allowlist(monkeypatch):
     assert result.data["debug"]["policy_blocker"] == (
         "candidate_not_in_allowed_slim_terms"
     )
+    assert result.data["next_tool_call"] is None
+
+
+def test_inspect_ontology_term_blocks_go_term_with_wrong_aspect(monkeypatch):
+    class FakeDb:
+        @staticmethod
+        def get_ontology_term(curie):
+            return SimpleNamespace(
+                curie=curie,
+                name="biological process",
+                namespace="biological_process",
+            )
+
+        @staticmethod
+        def get_ontology_pairs(_prefix):
+            return []
+
+    monkeypatch.setattr(
+        agr_curation,
+        "get_curation_resolver",
+        lambda: _Resolver(FakeDb()),
+    )
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+
+    result = _inspect_resolver_fn()(
+        domain_pack_id="agr.alliance.gene_expression",
+        object_type="GeneExpressionAnnotation",
+        field_path="expression_pattern.where_expressed.cellular_component",
+        curie="GO:0008150",
+    )
+
+    assert result.status == "ok"
+    assert result.lookup_status == "blocked"
+    assert result.data["policy_checks"]["go_aspect_matches"] is False
+    assert result.data["debug"]["policy_blocker"] == "candidate_go_aspect_mismatch"
     assert result.data["next_tool_call"] is None
 
 
