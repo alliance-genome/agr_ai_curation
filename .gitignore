@@ -57,6 +57,7 @@ pdf_storage/
 # File Outputs (generated CSV, TSV, JSON exports)
 file_outputs/
 !file_outputs/.gitkeep
+extraction_trace_events/
 
 # Logs
 *.log

@@ -2588,6 +2588,7 @@ async def run_specialist_with_events(
                             current_tool_name,
                             extra={"specialist_name": specialist_name, "tool_name": current_tool_name},
                         )
+                        tool_call_id = _extract_stream_tool_call_tracking_id(item)
 
                         # Emit event for real-time visibility
                         # Use standard TOOL_START type so frontend can display it
@@ -2602,6 +2603,7 @@ async def run_specialist_with_events(
                                 ),
                                 "agent": specialist_name,
                                 "toolArgs": tool_args,
+                                "toolCallId": tool_call_id,
                                 "isSpecialistInternal": True  # Mark as internal specialist tool
                             }
                         })
@@ -2615,7 +2617,7 @@ async def run_specialist_with_events(
                         pending_tool_calls.append({
                             "tool_name": current_tool_name,
                             "tool_args": tool_args,
-                            "tool_id": _extract_stream_tool_call_tracking_id(item),
+                            "tool_id": tool_call_id,
                             "tool_index": tool_index,
                             "tool_started_at": tool_started_at,
                         })
@@ -2679,6 +2681,7 @@ async def run_specialist_with_events(
 
                         # Emit event for real-time visibility
                         # Use standard TOOL_COMPLETE type so frontend can display it
+                        completed_tool_id = completed_tool.get("tool_id")
                         add_specialist_event({
                             "type": "TOOL_COMPLETE",
                             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -2691,6 +2694,7 @@ async def run_specialist_with_events(
                                 ),
                                 "success": True,
                                 "durationMs": duration_ms,
+                                "toolCallId": completed_tool_id,
                                 "isSpecialistInternal": True  # Mark as internal specialist tool
                             }
                         })

@@ -43,7 +43,7 @@ def test_analyzer_merges_durable_events_and_agents_sdk_tool_observations(tmp_pat
                 "preview": {
                     "availability": "present",
                     "reasoning_effort": "medium",
-                    "requested_summary": "detailed",
+                    "requested_summary": "auto",
                 }
             },
         ),
@@ -153,3 +153,62 @@ def test_analyzer_filters_and_expands_sibling_durable_events(tmp_path, monkeypat
     assert timeline["sibling_trace_ids"] == ["trace-sibling"]
     assert timeline["timeline"][0]["event_trace_id"] == "trace-sibling"
     assert timeline["timeline"][0]["tool_name"] == "validate_gene_expression_candidate"
+
+
+def test_analyzer_reads_langfuse_mirrored_extraction_trace_events(monkeypatch, tmp_path):
+    monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(tmp_path))
+    observations = [
+        {
+            "id": "obs-event",
+            "name": "extraction_trace_event",
+            "input": _event(
+                "trace-main",
+                1,
+                "specialist_tool_call.started",
+                tool_call_id="call-specialist-1",
+                metadata={"tool_name": "search_document"},
+            ),
+        }
+    ]
+
+    timeline = ExtractionTimelineAnalyzer.analyze(
+        trace_id="trace-main",
+        raw_trace={},
+        observations=observations,
+    )
+
+    assert timeline["durable_event_count"] == 1
+    assert timeline["local_durable_event_count"] == 0
+    assert timeline["langfuse_durable_event_count"] == 1
+    assert timeline["timeline"][0]["tool_call_id"] == "call-specialist-1"
+
+
+def test_analyzer_synthesizes_feedback_trace_artifact_events(monkeypatch, tmp_path):
+    monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(tmp_path))
+    feedback_trace_data = {
+        "captured_at": "2026-05-29T00:00:00Z",
+        "traces": [
+            {
+                "trace_id": "trace-main",
+                "timestamp": "2026-05-29T00:00:01Z",
+                "tool_calls": [
+                    {
+                        "name": "resolve_domain_field_term",
+                        "duration_ms": 17,
+                        "status": "ok",
+                    }
+                ],
+            }
+        ],
+    }
+
+    timeline = ExtractionTimelineAnalyzer.analyze(
+        trace_id="trace-main",
+        raw_trace={},
+        observations=[],
+        feedback_trace_data=feedback_trace_data,
+    )
+
+    assert timeline["feedback_artifact_event_count"] == 1
+    assert timeline["timeline"][0]["event_type"] == "stored_feedback.tool_call"
+    assert timeline["timeline"][0]["tool_name"] == "resolve_domain_field_term"

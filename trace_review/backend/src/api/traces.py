@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Optional, Tuple
 
 from ..models.requests import AnalyzeTraceRequest, TraceSource
 from ..models.responses import SessionTraceExportResponse
+from ..services.feedback_artifacts import fetch_feedback_trace_artifacts
 from ..services.trace_extractor import TraceExtractor
 from ..analyzers.conversation import ConversationAnalyzer
 from ..analyzers.tool_calls import ToolCallAnalyzer
@@ -223,7 +224,13 @@ def _filtered_extraction_timeline(
     sibling_trace_ids: Optional[List[str]] = None,
     session_id: Optional[str] = None,
     feedback_id: Optional[str] = None,
+    feedback_artifacts: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    feedback_trace_data = (
+        feedback_artifacts.get("trace_data")
+        if isinstance(feedback_artifacts, dict)
+        else None
+    )
     timeline = ExtractionTimelineAnalyzer.analyze(
         trace_id=trace_id,
         raw_trace=cache_data.get("raw_trace"),
@@ -234,10 +241,16 @@ def _filtered_extraction_timeline(
         event_type=event_type,
         candidate_id=candidate_id,
         sibling_trace_ids=sibling_trace_ids,
+        feedback_trace_data=feedback_trace_data,
     )
     timeline["query"] = {
         "session_id": session_id,
         "feedback_id": feedback_id,
+        "feedback_artifact_status": (
+            feedback_artifacts.get("status")
+            if isinstance(feedback_artifacts, dict)
+            else None
+        ),
         "include_raw_args": include_raw_args,
         "include_raw_outputs": include_raw_outputs,
         "tool_name": tool_name,
@@ -554,6 +567,7 @@ async def get_trace_view(
     cache_manager = request.app.state.cache_manager
 
     if view_name == "extraction_timeline":
+        feedback_artifacts = fetch_feedback_trace_artifacts(feedback_id)
         try:
             cached_data, _cache_status, _from_cache = _get_or_analyze_trace_export(
                 trace_id,
@@ -568,10 +582,22 @@ async def get_trace_view(
                 include_sibling_traces=include_sibling_traces,
             )
         except TraceExtractionError as e:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Trace {trace_id} not found in Langfuse ({source}): {str(e)}"
-            )
+            if not (
+                isinstance(feedback_artifacts, dict)
+                and feedback_artifacts.get("trace_data")
+            ):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Trace {trace_id} not found in Langfuse ({source}): {str(e)}"
+                )
+            cached_data = {
+                "raw_trace": {
+                    "id": trace_id,
+                    "name": "Stored feedback trace artifact",
+                },
+                "observations": [],
+            }
+            siblings = []
         except TraceAnalysisError as e:
             logger.exception("Error analyzing trace: %s", e)
             raise HTTPException(
@@ -594,6 +620,7 @@ async def get_trace_view(
                 sibling_trace_ids=siblings,
                 session_id=session_id,
                 feedback_id=feedback_id,
+                feedback_artifacts=feedback_artifacts,
             ),
         }
 

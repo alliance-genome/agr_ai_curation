@@ -16,6 +16,7 @@ import math
 from typing import Dict, Any, Optional, List
 from fastapi import APIRouter, HTTPException, Request, Query, Path
 
+from ..services.feedback_artifacts import fetch_feedback_trace_artifacts
 from ..services.trace_extractor import TraceExtractor
 from ..analyzers.conversation import ConversationAnalyzer
 from ..analyzers.tool_calls import ToolCallAnalyzer
@@ -230,7 +231,13 @@ def _build_extraction_timeline(
     sibling_trace_ids: Optional[List[str]] = None,
     session_id: Optional[str] = None,
     feedback_id: Optional[str] = None,
+    feedback_artifacts: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    feedback_trace_data = (
+        feedback_artifacts.get("trace_data")
+        if isinstance(feedback_artifacts, dict)
+        else None
+    )
     timeline = ExtractionTimelineAnalyzer.analyze(
         trace_id=trace_id,
         raw_trace=cached_data.get("raw_trace"),
@@ -241,10 +248,16 @@ def _build_extraction_timeline(
         event_type=event_type,
         candidate_id=candidate_id,
         sibling_trace_ids=sibling_trace_ids,
+        feedback_trace_data=feedback_trace_data,
     )
     timeline["query"] = {
         "session_id": session_id,
         "feedback_id": feedback_id,
+        "feedback_artifact_status": (
+            feedback_artifacts.get("status")
+            if isinstance(feedback_artifacts, dict)
+            else None
+        ),
         "include_raw_args": include_raw_args,
         "include_raw_outputs": include_raw_outputs,
         "tool_name": tool_name,
@@ -584,13 +597,29 @@ async def get_extraction_timeline(
     candidate_id: Optional[str] = Query(default=None, description="Filter by candidate ID"),
     user: Dict[str, Any] = get_auth_dependency()
 ) -> ClaudeTraceResponse:
-    cached_data = await _ensure_trace_analyzed(trace_id, request, source, refresh=refresh)
-    siblings = _sibling_trace_ids(
-        trace_id=trace_id,
-        source=source,
-        session_id=session_id,
-        include_sibling_traces=include_sibling_traces,
-    )
+    feedback_artifacts = fetch_feedback_trace_artifacts(feedback_id)
+    try:
+        cached_data = await _ensure_trace_analyzed(trace_id, request, source, refresh=refresh)
+        siblings = _sibling_trace_ids(
+            trace_id=trace_id,
+            source=source,
+            session_id=session_id,
+            include_sibling_traces=include_sibling_traces,
+        )
+    except HTTPException:
+        if not (
+            isinstance(feedback_artifacts, dict)
+            and feedback_artifacts.get("trace_data")
+        ):
+            raise
+        cached_data = {
+            "raw_trace": {
+                "id": trace_id,
+                "name": "Stored feedback trace artifact",
+            },
+            "observations": [],
+        }
+        siblings = []
     timeline = _build_extraction_timeline(
         trace_id=trace_id,
         cached_data=cached_data,
@@ -602,6 +631,7 @@ async def get_extraction_timeline(
         sibling_trace_ids=siblings,
         session_id=session_id,
         feedback_id=feedback_id,
+        feedback_artifacts=feedback_artifacts,
     )
     token_info = create_token_info_dict(timeline)
     return ClaudeTraceResponse(
@@ -635,13 +665,29 @@ async def get_extraction_diagnostic_report(
     candidate_id: Optional[str] = Query(default=None, description="Filter by candidate ID"),
     user: Dict[str, Any] = get_auth_dependency()
 ) -> ClaudeTraceResponse:
-    cached_data = await _ensure_trace_analyzed(trace_id, request, source, refresh=refresh)
-    siblings = _sibling_trace_ids(
-        trace_id=trace_id,
-        source=source,
-        session_id=session_id,
-        include_sibling_traces=include_sibling_traces,
-    )
+    feedback_artifacts = fetch_feedback_trace_artifacts(feedback_id)
+    try:
+        cached_data = await _ensure_trace_analyzed(trace_id, request, source, refresh=refresh)
+        siblings = _sibling_trace_ids(
+            trace_id=trace_id,
+            source=source,
+            session_id=session_id,
+            include_sibling_traces=include_sibling_traces,
+        )
+    except HTTPException:
+        if not (
+            isinstance(feedback_artifacts, dict)
+            and feedback_artifacts.get("trace_data")
+        ):
+            raise
+        cached_data = {
+            "raw_trace": {
+                "id": trace_id,
+                "name": "Stored feedback trace artifact",
+            },
+            "observations": [],
+        }
+        siblings = []
     timeline = _build_extraction_timeline(
         trace_id=trace_id,
         cached_data=cached_data,
@@ -653,6 +699,7 @@ async def get_extraction_diagnostic_report(
         sibling_trace_ids=siblings,
         session_id=session_id,
         feedback_id=feedback_id,
+        feedback_artifacts=feedback_artifacts,
     )
     report = ExtractionTimelineAnalyzer.diagnostic_report(timeline)
     token_info = create_token_info_dict(report)

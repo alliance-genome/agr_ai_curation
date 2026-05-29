@@ -960,8 +960,8 @@ async def test_runner_guardrail_yields_run_error_and_skips_completion(monkeypatc
 @pytest.mark.asyncio
 async def test_specialist_tool_events_emit_humanized_internal_labels(monkeypatch):
     fake_events = [
-        _tool_call_stream_event("search_document"),
-        _tool_output_stream_event(),
+        _tool_call_stream_event("search_document", call_id="call-search-1"),
+        _tool_output_stream_event(call_id="call-search-1"),
     ]
     captured_events = []
 
@@ -998,6 +998,8 @@ async def test_specialist_tool_events_emit_humanized_internal_labels(monkeypatch
 
     assert tool_events[0]["details"]["friendlyName"] == "Gene Validation Agent: Search Document"
     assert tool_events[1]["details"]["friendlyName"] == "Gene Validation Agent: Search Document complete"
+    assert tool_events[0]["details"]["toolCallId"] == "call-search-1"
+    assert tool_events[1]["details"]["toolCallId"] == "call-search-1"
 
 
 @pytest.mark.asyncio

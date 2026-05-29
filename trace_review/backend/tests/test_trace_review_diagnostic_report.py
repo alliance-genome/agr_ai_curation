@@ -158,3 +158,52 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.data["trace_id"], "trace-extraction-123")
         self.assertEqual(response.data["summary"]["reasoning_summary_status"], "unavailable")
         self.assertGreaterEqual(response.token_info.estimated_tokens, 1)
+
+    @patch(
+        "src.api.claude.fetch_feedback_trace_artifacts",
+        return_value={
+            "status": "available",
+            "trace_data": {
+                "captured_at": "2026-05-29T00:00:00Z",
+                "traces": [
+                    {
+                        "trace_id": "trace-extraction-123",
+                        "timestamp": "2026-05-29T00:00:01Z",
+                        "tool_calls": [
+                            {
+                                "name": "resolve_domain_field_term",
+                                "duration_ms": 11,
+                                "status": "ok",
+                            }
+                        ],
+                    }
+                ],
+            },
+        },
+    )
+    @patch("src.api.claude.TraceExtractor")
+    async def test_claude_extraction_timeline_uses_feedback_artifacts_when_langfuse_unavailable(
+        self,
+        extractor_cls: Mock,
+        _feedback_artifacts: Mock,
+    ):
+        request = self._make_request()
+        extractor_cls.return_value.extract_complete_trace.side_effect = RuntimeError("langfuse down")
+
+        response = await claude.get_extraction_timeline(
+            "trace-extraction-123",
+            request,
+            source="auto",
+            feedback_id="feedback-123",
+            include_sibling_traces=False,
+            include_raw_args=False,
+            include_raw_outputs=False,
+            tool_name=None,
+            event_type=None,
+            candidate_id=None,
+        )
+
+        self.assertEqual(response.status, "success")
+        self.assertEqual(response.data["feedback_artifact_event_count"], 1)
+        self.assertEqual(response.data["query"]["feedback_artifact_status"], "available")
+        self.assertEqual(response.data["timeline"][0]["tool_name"], "resolve_domain_field_term")

@@ -47,6 +47,18 @@ def _summary_text(summary: Mapping[str, Any] | None) -> str:
     return ""
 
 
+def _coerce_mapping(value: Any) -> Mapping[str, Any] | None:
+    if isinstance(value, Mapping):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, Mapping) else None
+    return None
+
+
 def _event_matches(
     event: Mapping[str, Any],
     *,
@@ -67,6 +79,106 @@ def _event_matches(
         if candidate_id not in haystack:
             return False
     return True
+
+
+def _langfuse_extraction_event_from_observation(observation: Mapping[str, Any]) -> Dict[str, Any] | None:
+    if observation.get("name") != "extraction_trace_event":
+        return None
+
+    for key in ("input", "output", "metadata"):
+        event = _coerce_mapping(observation.get(key))
+        if event and event.get("schema_version") == EVENT_SCHEMA_VERSION:
+            return dict(event)
+    return None
+
+
+def _feedback_trace_events(
+    *,
+    trace_id: str,
+    feedback_trace_data: Mapping[str, Any] | None,
+    sibling_trace_ids: Iterable[str],
+) -> List[Dict[str, Any]]:
+    if not isinstance(feedback_trace_data, Mapping):
+        return []
+
+    allowed_trace_ids = {trace_id, *sibling_trace_ids}
+    events: List[Dict[str, Any]] = []
+    traces = feedback_trace_data.get("traces")
+    if not isinstance(traces, list):
+        return events
+
+    sequence = 1
+    for trace in traces:
+        if not isinstance(trace, Mapping):
+            continue
+        event_trace_id = str(trace.get("trace_id") or "")
+        if not event_trace_id or event_trace_id not in allowed_trace_ids:
+            continue
+
+        timestamp = trace.get("timestamp") or feedback_trace_data.get("captured_at")
+        tool_calls = trace.get("tool_calls")
+        if isinstance(tool_calls, list):
+            for tool_call in tool_calls:
+                if not isinstance(tool_call, Mapping):
+                    continue
+                tool_name = tool_call.get("name")
+                events.append(
+                    {
+                        "schema_version": EVENT_SCHEMA_VERSION,
+                        "event_type": "stored_feedback.tool_call",
+                        "event_id": f"feedback-{event_trace_id}-tool-{sequence}",
+                        "sequence": sequence,
+                        "trace_id": event_trace_id,
+                        "observation_id": None,
+                        "domain_pack_id": None,
+                        "tool_call_id": None,
+                        "input_summary": {},
+                        "output_summary": {
+                            "preview": {
+                                "status": tool_call.get("status"),
+                                "duration_ms": tool_call.get("duration_ms"),
+                            },
+                            "bounded": True,
+                        },
+                        "validation": {},
+                        "metadata": {
+                            "tool_name": tool_name,
+                            "source": "stored_feedback_trace_artifact",
+                        },
+                        "timestamp": timestamp,
+                    }
+                )
+                sequence += 1
+
+        if trace.get("capture_status") == "error":
+            raw_error = trace.get("error")
+            error: Mapping[str, Any] = raw_error if isinstance(raw_error, Mapping) else {}
+            events.append(
+                {
+                    "schema_version": EVENT_SCHEMA_VERSION,
+                    "event_type": "stored_feedback.trace_capture_error",
+                    "event_id": f"feedback-{event_trace_id}-error-{sequence}",
+                    "sequence": sequence,
+                    "trace_id": event_trace_id,
+                    "observation_id": None,
+                    "domain_pack_id": None,
+                    "tool_call_id": None,
+                    "input_summary": {},
+                    "output_summary": {
+                        "preview": {
+                            "type": error.get("type"),
+                            "message": error.get("message"),
+                        },
+                        "bounded": True,
+                    },
+                    "validation": {"status": "failed"},
+                    "metadata": {"source": "stored_feedback_trace_artifact"},
+                    "timestamp": timestamp,
+                }
+            )
+            sequence += 1
+
+    return events
 
 
 class ExtractionTimelineAnalyzer:
@@ -129,6 +241,15 @@ class ExtractionTimelineAnalyzer:
         return events
 
     @staticmethod
+    def _observation_durable_events(observations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        events: List[Dict[str, Any]] = []
+        for observation in observations:
+            event = _langfuse_extraction_event_from_observation(observation)
+            if event is not None:
+                events.append(event)
+        return sorted(events, key=_sort_key)
+
+    @staticmethod
     def analyze(
         *,
         trace_id: str,
@@ -140,17 +261,34 @@ class ExtractionTimelineAnalyzer:
         event_type: str | None = None,
         candidate_id: str | None = None,
         sibling_trace_ids: Optional[Iterable[str]] = None,
+        feedback_trace_data: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
         sibling_ids = [sibling_id for sibling_id in (sibling_trace_ids or []) if sibling_id != trace_id]
         durable_events = ExtractionTimelineAnalyzer.load_durable_events(trace_id)
         for sibling_id in sibling_ids:
             durable_events.extend(ExtractionTimelineAnalyzer.load_durable_events(sibling_id))
         durable_event_ids = {event.get("event_id") for event in durable_events}
+        observation_durable_events = [
+            event
+            for event in ExtractionTimelineAnalyzer._observation_durable_events(observations)
+            if event.get("event_id") not in durable_event_ids
+        ]
+        feedback_events = [
+            event
+            for event in _feedback_trace_events(
+                trace_id=trace_id,
+                feedback_trace_data=feedback_trace_data,
+                sibling_trace_ids=sibling_ids,
+            )
+            if event.get("event_id") not in durable_event_ids
+        ]
         observation_events = ExtractionTimelineAnalyzer._observation_tool_events(observations)
         for event in observation_events:
             event["trace_id"] = trace_id
 
-        combined = [*durable_events, *observation_events]
+        durable_sources = [*durable_events, *observation_durable_events, *feedback_events]
+        durable_event_ids = {event.get("event_id") for event in durable_sources}
+        combined = [*durable_sources, *observation_events]
         filtered = [
             event
             for event in sorted(combined, key=_sort_key)
@@ -223,7 +361,10 @@ class ExtractionTimelineAnalyzer:
             "trace_id": trace_id,
             "trace_name": (raw_trace or {}).get("name"),
             "event_count": len(timeline),
-            "durable_event_count": len(durable_events),
+            "durable_event_count": len(durable_sources),
+            "local_durable_event_count": len(durable_events),
+            "langfuse_durable_event_count": len(observation_durable_events),
+            "feedback_artifact_event_count": len(feedback_events),
             "observation_event_count": len(observation_events),
             "event_type_counts": counts,
             "reasoning_summary": {
