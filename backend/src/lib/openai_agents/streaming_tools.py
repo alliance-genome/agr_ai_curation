@@ -45,8 +45,19 @@ from .tools.evidence_workspace import (
     reset_active_evidence_records,
     set_active_evidence_records,
 )
-from .event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
-from .extraction_trace_events import write_extraction_trace_event, write_stream_event
+from .extraction_builder_workspace import (
+    CANDIDATE_STATUS_VALID,
+    ExtractionBuilderWorkspace,
+    build_internal_extraction_result_event,
+    finalize_extraction_payload,
+    reset_active_extraction_builder_workspace,
+    set_active_extraction_builder_workspace,
+)
+from .extraction_trace_events import (
+    get_current_extraction_trace_run,
+    write_extraction_trace_event,
+    write_stream_event,
+)
 from .tool_call_policy import (
     DOCUMENT_REQUIRED_TOOL_NAMES,
     required_package_tool_names_from_metadata,
@@ -2298,6 +2309,12 @@ async def run_specialist_with_events(
 
     stream_consume_started_at = time.monotonic()
     evidence_workspace_token = set_active_evidence_records(live_evidence_records)
+    trace_run = get_current_extraction_trace_run()
+    builder_workspace = ExtractionBuilderWorkspace(
+        run_id=trace_run.trace_id if trace_run is not None else str(uuid.uuid4()),
+        agent_id=specialist_name,
+    )
+    builder_workspace_token = set_active_extraction_builder_workspace(builder_workspace)
     try:
         async for event in result.stream_events():
             total_event_count += 1
@@ -2779,6 +2796,7 @@ async def run_specialist_with_events(
             raise
     finally:
         reset_active_evidence_records(evidence_workspace_token)
+        reset_active_extraction_builder_workspace(builder_workspace_token)
 
     stream_duration = datetime.now(timezone.utc) - start_time
     stream_duration_ms = int(stream_duration.total_seconds() * 1000)
@@ -3249,29 +3267,57 @@ async def run_specialist_with_events(
         final_output,
         expected_output_type=expected_output_type,
     )
+    builder_finalization = None
+    builder_candidate_id = f"{tool_name or specialist_name}:structured_result"
     if expected_output_type is not None and final_output:
         try:
             payload = json.loads(final_output)
         except Exception:
             payload = None
         if isinstance(payload, dict):
-            final_output = json.dumps(
-                canonicalize_structured_result_payload(
-                    payload,
-                    preferred_evidence_records=live_evidence_records,
-                )
+            canonical_payload = canonicalize_structured_result_payload(
+                payload,
+                preferred_evidence_records=live_evidence_records,
             )
+            builder_workspace.upsert_candidate(
+                candidate_id=builder_candidate_id,
+                staged_fields=canonical_payload,
+                evidence_record_ids=[
+                    record.get("evidence_record_id")
+                    for record in extract_evidence_records_from_structured_result(
+                        canonical_payload
+                    )
+                    if isinstance(record, Mapping)
+                ],
+                status=CANDIDATE_STATUS_VALID,
+            )
+            final_output = json.dumps(canonical_payload)
 
     phase_timings_ms["post_stream_output_ms"] = _elapsed_ms(post_stream_started_at)
 
     evidence_summary_started_at = time.monotonic()
-    _emit_specialist_evidence_summary_or_raise(
-        specialist_name=specialist_name,
-        tool_name=tool_name,
-        expected_output_type=expected_output_type,
-        final_output=final_output,
-        live_evidence_records=live_evidence_records,
-    )
+    try:
+        _emit_specialist_evidence_summary_or_raise(
+            specialist_name=specialist_name,
+            tool_name=tool_name,
+            expected_output_type=expected_output_type,
+            final_output=final_output,
+            live_evidence_records=live_evidence_records,
+        )
+    except SpecialistOutputError:
+        builder_workspace.record_validation_failure(
+            errors=[
+                {
+                    "message": (
+                        f"{specialist_name} completed extraction output without the "
+                        "required verified evidence records."
+                    ),
+                    "reason": "missing_evidence_records",
+                }
+            ],
+            candidate_ids=builder_workspace.finalized_candidate_ids,
+        )
+        raise
     phase_timings_ms["evidence_summary_ms"] = _elapsed_ms(
         evidence_summary_started_at
     )
@@ -3295,20 +3341,23 @@ async def run_specialist_with_events(
         final_output,
         expected_output_type=expected_output_type,
     ):
-        add_specialist_event({
-            "type": INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "details": {
-                "toolName": tool_name,
-                "friendlyName": f"{specialist_name}: Internal Extraction Result",
-                "success": True,
-                "isSpecialistInternal": True,
-            },
-            "internal": {
-                "tool_output": final_output,
-                "output_length": len(str(final_output)),
-            },
-        })
+        if builder_finalization is None:
+            payload = json.loads(final_output)
+            builder_finalization = finalize_extraction_payload(
+                payload,
+                workspace=builder_workspace,
+                candidate_id=builder_candidate_id,
+                evidence_records=live_evidence_records,
+            )
+            final_output = json.dumps(builder_finalization.payload)
+        add_specialist_event(
+            build_internal_extraction_result_event(
+                tool_name=tool_name,
+                specialist_name=specialist_name,
+                finalization=builder_finalization,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+        )
     phase_timings_ms["internal_extraction_event_ms"] = _elapsed_ms(
         internal_event_started_at
     )

@@ -162,9 +162,29 @@ def _build_extraction_candidate_from_tool_event(
 
     candidate_metadata = dict(metadata or {})
     candidate_metadata.setdefault("tool_name", tool_name)
+    candidate_metadata.update(
+        {
+            key: value
+            for key, value in {
+                "builder_run_id": (
+                    internal_payload.get("builder_finalization", {}).get("builder_run_id")
+                    if isinstance(internal_payload.get("builder_finalization"), dict)
+                    else None
+                ),
+                "builder_candidate_ids": (
+                    internal_payload.get("builder_finalization", {}).get("candidate_ids")
+                    if isinstance(internal_payload.get("builder_finalization"), dict)
+                    else None
+                ),
+            }.items()
+            if value not in (None, "", [])
+        }
+    )
 
     return build_extraction_envelope_candidate(
-        internal_payload.get("tool_output"),
+        internal_payload.get("canonical_payload")
+        if "canonical_payload" in internal_payload
+        else internal_payload.get("tool_output"),
         agent_key=agent_key,
         conversation_summary=conversation_summary,
         metadata=candidate_metadata,
