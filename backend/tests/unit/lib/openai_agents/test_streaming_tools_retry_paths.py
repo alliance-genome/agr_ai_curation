@@ -114,7 +114,7 @@ async def test_run_specialist_uses_streaming_text_fallback_when_final_output_mis
 
 
 @pytest.mark.asyncio
-async def test_run_specialist_recovers_domain_envelope_text_after_stream_validation_error(monkeypatch):
+async def test_run_specialist_rejects_domain_envelope_text_after_stream_validation_error(monkeypatch):
     class ResponseTextDoneEvent:
         def __init__(self, text):
             self.text = text
@@ -148,18 +148,16 @@ async def test_run_specialist_recovers_domain_envelope_text_after_stream_validat
     )
     stream_error = RuntimeError("Invalid JSON when parsing text for TypeAdapter")
 
-    async def _passthrough_dispatch(final_output, **_kwargs):
-        return final_output
-
     captured_events = []
+    captured_builder_events = []
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(
+        builder,
+        "write_extraction_trace_event",
+        lambda **event: captured_builder_events.append(event) or event,
+    )
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
     monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
-    monkeypatch.setattr(
-        streaming_tools,
-        "_dispatch_domain_envelope_validators_for_chat",
-        _passthrough_dispatch,
-    )
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",
@@ -179,28 +177,26 @@ async def test_run_specialist_recovers_domain_envelope_text_after_stream_validat
         model="gpt-4o",
     )
 
-    result = await streaming_tools.run_specialist_with_events(
-        agent=agent,
-        input_text="extract gene expression evidence",
-        specialist_name="Gene Expression Extractor",
-        max_turns=3,
-        tool_name="ask_gene_expression_specialist",
-    )
+    with pytest.raises(RuntimeError, match="Invalid JSON"):
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="extract gene expression evidence",
+            specialist_name="Gene Expression Extractor",
+            max_turns=3,
+            tool_name="ask_gene_expression_specialist",
+        )
 
-    parsed_result = json.loads(result)
-    assert parsed_result["curatable_objects"][0]["pending_ref_id"] == (
-        "salvaged_gene_expression_annotation_1"
-    )
-    assert parsed_result["curatable_objects"][0]["evidence_record_ids"] == [
-        "evidence-record-1"
-    ]
-    assert parsed_result["metadata"]["evidence_records"][0]["evidence_record_id"] == (
-        "evidence-record-1"
-    )
-    assert any(
+    assert not any(
         e.get("type") == "SPECIALIST_TEXT_FALLBACK_SUCCESS"
         and e.get("details", {}).get("extraction_method") == "stream_validation_recovery"
         for e in captured_events
+    )
+    assert any(
+        event["event_type"] == "extraction_builder.aborted"
+        and event["output_summary"]["reason"] == (
+            "RuntimeError: Invalid JSON when parsing text for TypeAdapter"
+        )
+        for event in captured_builder_events
     )
 
 
