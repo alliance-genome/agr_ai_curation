@@ -385,7 +385,7 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["errors"][0]["trace_id"], "trace-missing")
 
     @patch("src.api.traces.TraceExtractor")
-    async def test_export_session_bundle_surfaces_compact_bundle_cache_errors(
+    async def test_export_session_bundle_invalidates_stale_compact_bundle_cache(
         self,
         extractor_cls: Mock,
     ):
@@ -406,11 +406,18 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
             ],
             "meta": {"page": 1, "limit": 100, "totalItems": 1, "totalPages": 1},
         }
+        extractor.extract_complete_trace.return_value = self._make_trace_data(
+            {"answer": "Recovered answer"},
+            trace_id="trace-corrupt",
+            name="query_supervisor_config",
+        )
 
-        with self.assertRaises(KeyError):
-            await traces.export_session("session-123", request, source="remote")
+        response = await traces.export_session("session-123", request, source="remote")
 
-        extractor.extract_complete_trace.assert_not_called()
+        extractor.extract_complete_trace.assert_called_once_with("trace-corrupt")
+        self.assertEqual(response["status"], "success")
+        self.assertEqual(response["session"]["successful_trace_count"], 1)
+        self.assertEqual(response["traces"][0]["status"], "success")
 
     @patch("src.api.traces.TraceExtractor")
     async def test_export_session_bundle_surfaces_session_listing_contract_errors(

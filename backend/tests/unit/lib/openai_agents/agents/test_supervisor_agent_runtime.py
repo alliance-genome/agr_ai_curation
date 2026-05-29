@@ -141,7 +141,10 @@ def test_build_model_settings_applies_reasoning_and_provider_parallel_policy(mon
     )
     monkeypatch.setattr(
         "src.lib.config.providers_loader.get_provider",
-        lambda _provider: SimpleNamespace(supports_parallel_tool_calls=False),
+        lambda _provider: SimpleNamespace(
+            driver="openai_native",
+            supports_parallel_tool_calls=False,
+        ),
     )
 
     settings = supervisor_agent._build_model_settings(

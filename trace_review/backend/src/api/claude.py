@@ -13,18 +13,25 @@ Endpoints:
 """
 
 import math
-from typing import Dict, Any, Optional, List
+from typing import Annotated, Dict, Any, Optional, List
 from fastapi import APIRouter, HTTPException, Request, Query, Path
 
 from ..services.trace_extractor import TraceExtractor
 from ..analyzers.conversation import ConversationAnalyzer
 from ..analyzers.tool_calls import ToolCallAnalyzer
 from ..analyzers.trace_summary import TraceSummaryAnalyzer
+from ..analyzers.extraction_timeline import (
+    ANALYZER_SCHEMA_VERSION as EXTRACTION_TIMELINE_ANALYZER_SCHEMA_VERSION,
+    ExtractionTimelineAnalyzer,
+)
+from .extraction_timeline_helpers import (
+    build_extraction_timeline,
+    load_extraction_timeline_context,
+)
 from ..utils.token_budget import (
     create_token_info_dict,
     create_lightweight_tool_call_summary,
     truncate_tool_call_results,
-    MAX_TOKENS_DEFAULT,
 )
 from ..models.responses import (
     TokenInfo,
@@ -51,10 +58,19 @@ TRANSIENT_CACHE_TTL_SECONDS = 15
 DEFAULT_SOURCE = "local"
 
 
+def _effective_source(source: str) -> str:
+    return "local" if source == "auto" else source
+
+
+def _cache_schema_is_current(cache_data: Dict[str, Any]) -> bool:
+    return cache_data.get("analyzer_schema_version") == EXTRACTION_TIMELINE_ANALYZER_SCHEMA_VERSION
+
+
 async def _ensure_trace_analyzed(
     trace_id: str,
     request: Request,
-    source: str = DEFAULT_SOURCE
+    source: str = DEFAULT_SOURCE,
+    refresh: bool = False,
 ) -> Dict[str, Any]:
     """
     Ensure trace is analyzed and cached.
@@ -74,14 +90,18 @@ async def _ensure_trace_analyzed(
     """
     cache_manager = request.app.state.cache_manager
 
-    # Check cache first
+    if refresh:
+        cache_manager.delete(trace_id)
+
     cached_data = cache_manager.get(trace_id)
     if cached_data:
-        return cached_data
+        if _cache_schema_is_current(cached_data):
+            return cached_data
+        cache_manager.delete(trace_id)
 
     # Cache miss - fetch and analyze
     try:
-        extractor = TraceExtractor(source=source)
+        extractor = TraceExtractor(source=_effective_source(source))
         trace_data = extractor.extract_complete_trace(trace_id)
     except Exception as e:
         raise HTTPException(
@@ -111,6 +131,11 @@ async def _ensure_trace_analyzed(
         domain_envelope, compact_domain_envelope = domain_envelope_response_views(trace_summary)
         document_hierarchy = DocumentHierarchyAnalyzer.analyze(trace_data, observations)
         agent_configs = AgentConfigAnalyzer.extract_agent_configs(observations)
+        extraction_timeline = ExtractionTimelineAnalyzer.analyze(
+            trace_id=trace_id,
+            raw_trace=raw_trace,
+            observations=observations,
+        )
 
         # Build summary
         metadata = raw_trace.get("metadata") or {}
@@ -141,6 +166,7 @@ async def _ensure_trace_analyzed(
 
         # Cache the data
         cache_data = {
+            "analyzer_schema_version": EXTRACTION_TIMELINE_ANALYZER_SCHEMA_VERSION,
             "raw_trace": raw_trace,
             "observations": observations,
             "scores": trace_data["scores"],
@@ -155,6 +181,7 @@ async def _ensure_trace_analyzed(
                 "domain_envelope": domain_envelope,
                 "document_hierarchy": document_hierarchy,
                 "agent_configs": agent_configs,
+                "extraction_timeline": extraction_timeline,
                 "group_context": group_context
             }
         }
@@ -177,6 +204,24 @@ async def _ensure_trace_analyzed(
         )
 
 
+def _sibling_trace_ids(
+    *,
+    trace_id: str,
+    source: str,
+    session_id: Optional[str],
+    include_sibling_traces: bool,
+) -> List[str]:
+    if not include_sibling_traces or not session_id:
+        return []
+    extractor = TraceExtractor(source=_effective_source(source))
+    session_listing = extractor.list_session_traces(session_id)
+    return [
+        listed_trace["id"]
+        for listed_trace in session_listing.get("traces", [])
+        if listed_trace.get("id") and listed_trace.get("id") != trace_id
+    ]
+
+
 # =============================================================================
 # Summary Endpoint
 # =============================================================================
@@ -194,8 +239,8 @@ async def _ensure_trace_analyzed(
     """
 )
 async def get_trace_summary(
-    trace_id: str = Path(..., description="Langfuse trace ID"),
-    request: Request = None,
+    trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     user: Dict[str, Any] = get_auth_dependency()
 ) -> ClaudeTraceResponse:
@@ -248,8 +293,8 @@ async def get_trace_summary(
     """
 )
 async def get_tool_calls_summary(
-    trace_id: str = Path(..., description="Langfuse trace ID"),
-    request: Request = None,
+    trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     user: Dict[str, Any] = get_auth_dependency()
 ) -> ToolCallsSummaryResponse:
@@ -316,8 +361,8 @@ async def get_tool_calls_summary(
     """
 )
 async def get_tool_calls_paginated(
-    trace_id: str = Path(..., description="Langfuse trace ID"),
-    request: Request = None,
+    trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
     page: int = Query(default=1, ge=1, description="Page number (1-indexed)"),
     page_size: int = Query(default=10, ge=1, le=20, description="Items per page"),
     tool_name: Optional[str] = Query(default=None, description="Filter by tool name"),
@@ -396,9 +441,9 @@ async def get_tool_calls_paginated(
     """
 )
 async def get_tool_call_detail(
-    trace_id: str = Path(..., description="Langfuse trace ID"),
-    call_id: str = Path(..., description="Tool call_id or observation id"),
-    request: Request = None,
+    trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    call_id: Annotated[str, Path(description="Tool call_id or observation id")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     user: Dict[str, Any] = get_auth_dependency()
 ) -> SingleToolCallResponse:
@@ -452,8 +497,8 @@ async def get_tool_call_detail(
     """
 )
 async def get_trace_conversation(
-    trace_id: str = Path(..., description="Langfuse trace ID"),
-    request: Request = None,
+    trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     user: Dict[str, Any] = get_auth_dependency()
 ) -> ConversationResponse:
@@ -480,6 +525,135 @@ async def get_trace_conversation(
 
 
 # =============================================================================
+# Extraction Diagnostics Endpoints
+# =============================================================================
+
+@router.get(
+    "/{trace_id}/extraction_timeline",
+    response_model=ClaudeTraceResponse,
+    summary="Get extraction diagnostic timeline",
+    description="""
+    Returns ordered extraction-adjacent durable events plus OpenAI/Agents SDK
+    tool-call observations. Supports filters and bounded raw args/output views.
+    """
+)
+async def get_extraction_timeline(
+    trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
+    source: str = Query(default=DEFAULT_SOURCE, description="Trace source: local, remote, or auto"),
+    session_id: Optional[str] = Query(default=None, description="Langfuse session ID for sibling-trace expansion"),
+    feedback_id: Optional[str] = Query(default=None, description="Feedback ID linked to stored trace artifacts"),
+    include_sibling_traces: bool = Query(default=False, description="Include durable events from traces in the same session"),
+    refresh: bool = Query(default=False, description="Refresh cached trace analysis before rendering"),
+    include_raw_args: bool = Query(default=False, description="Include bounded raw argument summaries"),
+    include_raw_outputs: bool = Query(default=False, description="Include bounded raw output summaries"),
+    tool_name: Optional[str] = Query(default=None, description="Filter by tool name"),
+    event_type: Optional[str] = Query(default=None, description="Filter by event type"),
+    candidate_id: Optional[str] = Query(default=None, description="Filter by candidate ID"),
+    user: Dict[str, Any] = get_auth_dependency()
+) -> ClaudeTraceResponse:
+    context = await load_extraction_timeline_context(
+        trace_id=trace_id,
+        feedback_id=feedback_id,
+        include_sibling_traces=include_sibling_traces,
+        load_cached_data=lambda: _ensure_trace_analyzed(trace_id, request, source, refresh=refresh),
+        load_sibling_trace_ids=lambda: _sibling_trace_ids(
+            trace_id=trace_id,
+            source=source,
+            session_id=session_id,
+            include_sibling_traces=include_sibling_traces,
+        ),
+        load_sibling_cached_data=lambda sibling_trace_id: _ensure_trace_analyzed(
+            sibling_trace_id,
+            request,
+            source,
+            refresh=refresh,
+        ),
+        fallback_exceptions=(HTTPException,),
+    )
+    timeline = build_extraction_timeline(
+        trace_id=trace_id,
+        context=context,
+        include_raw_args=include_raw_args,
+        include_raw_outputs=include_raw_outputs,
+        tool_name=tool_name,
+        event_type=event_type,
+        candidate_id=candidate_id,
+        session_id=session_id,
+        feedback_id=feedback_id,
+    )
+    token_info = create_token_info_dict(timeline)
+    return ClaudeTraceResponse(
+        status="success",
+        data=timeline,
+        token_info=TokenInfo(**token_info),
+    )
+
+
+@router.get(
+    "/{trace_id}/diagnostic_report",
+    response_model=ClaudeTraceResponse,
+    summary="Get concise extraction diagnostic report",
+    description="""
+    Returns a concise extraction diagnostics report rendered from the same
+    extraction timeline analysis.
+    """
+)
+async def get_extraction_diagnostic_report(
+    trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
+    source: str = Query(default=DEFAULT_SOURCE, description="Trace source: local, remote, or auto"),
+    session_id: Optional[str] = Query(default=None, description="Langfuse session ID for sibling-trace expansion"),
+    feedback_id: Optional[str] = Query(default=None, description="Feedback ID linked to stored trace artifacts"),
+    include_sibling_traces: bool = Query(default=False, description="Include durable events from traces in the same session"),
+    refresh: bool = Query(default=False, description="Refresh cached trace analysis before rendering"),
+    include_raw_args: bool = Query(default=False, description="Include bounded raw argument summaries"),
+    include_raw_outputs: bool = Query(default=False, description="Include bounded raw output summaries"),
+    tool_name: Optional[str] = Query(default=None, description="Filter by tool name"),
+    event_type: Optional[str] = Query(default=None, description="Filter by event type"),
+    candidate_id: Optional[str] = Query(default=None, description="Filter by candidate ID"),
+    user: Dict[str, Any] = get_auth_dependency()
+) -> ClaudeTraceResponse:
+    context = await load_extraction_timeline_context(
+        trace_id=trace_id,
+        feedback_id=feedback_id,
+        include_sibling_traces=include_sibling_traces,
+        load_cached_data=lambda: _ensure_trace_analyzed(trace_id, request, source, refresh=refresh),
+        load_sibling_trace_ids=lambda: _sibling_trace_ids(
+            trace_id=trace_id,
+            source=source,
+            session_id=session_id,
+            include_sibling_traces=include_sibling_traces,
+        ),
+        load_sibling_cached_data=lambda sibling_trace_id: _ensure_trace_analyzed(
+            sibling_trace_id,
+            request,
+            source,
+            refresh=refresh,
+        ),
+        fallback_exceptions=(HTTPException,),
+    )
+    timeline = build_extraction_timeline(
+        trace_id=trace_id,
+        context=context,
+        include_raw_args=include_raw_args,
+        include_raw_outputs=include_raw_outputs,
+        tool_name=tool_name,
+        event_type=event_type,
+        candidate_id=candidate_id,
+        session_id=session_id,
+        feedback_id=feedback_id,
+    )
+    report = ExtractionTimelineAnalyzer.diagnostic_report(timeline)
+    token_info = create_token_info_dict(report)
+    return ClaudeTraceResponse(
+        status="success",
+        data=report,
+        token_info=TokenInfo(**token_info),
+    )
+
+
+# =============================================================================
 # Generic View Endpoint (for other views)
 # =============================================================================
 
@@ -497,9 +671,9 @@ async def get_trace_conversation(
     """
 )
 async def get_trace_view(
-    trace_id: str = Path(..., description="Langfuse trace ID"),
-    view_name: str = Path(..., description="View name"),
-    request: Request = None,
+    trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    view_name: Annotated[str, Path(description="View name")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     user: Dict[str, Any] = get_auth_dependency()
 ) -> ClaudeTraceResponse:
@@ -507,7 +681,7 @@ async def get_trace_view(
     valid_views = [
         "token_analysis", "agent_context", "pdf_citations",
         "document_hierarchy", "agent_configs", "mod_context", "trace_summary",
-        "domain_envelope",
+        "domain_envelope", "extraction_timeline",
     ]
 
     if view_name not in valid_views:

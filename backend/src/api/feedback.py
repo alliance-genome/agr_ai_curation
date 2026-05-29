@@ -1,10 +1,12 @@
 """Feedback submission API endpoints."""
 
 import logging
+import os
+import secrets
 import threading
 from typing import Annotated, Any, Dict
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
@@ -22,6 +24,7 @@ from src.schemas.feedback import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/feedback")
+TRACE_REVIEW_INTERNAL_API_TOKEN_ENV = "TRACE_REVIEW_INTERNAL_API_TOKEN"
 
 
 def _require_user_sub(user: Dict[str, Any]) -> str:
@@ -59,6 +62,27 @@ def _can_admin_debug_feedback(user: Dict[str, Any]) -> bool:
     if user_email is None:
         return False
     return user_email.lower() in get_admin_emails()
+
+
+def _require_trace_review_internal_request(request: Request) -> None:
+    expected_token = os.getenv(TRACE_REVIEW_INTERNAL_API_TOKEN_ENV, "").strip()
+    if not expected_token:
+        raise HTTPException(
+            status_code=503,
+            detail="TraceReview internal artifact access is not configured.",
+        )
+
+    authorization = request.headers.get("authorization", "")
+    scheme, separator, token = authorization.partition(" ")
+    if (
+        not separator
+        or scheme.lower() != "bearer"
+        or not secrets.compare_digest(token.strip(), expected_token)
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid TraceReview service token.",
+        )
 
 
 def _run_feedback_processing_in_background(feedback_id: str) -> None:
@@ -274,3 +298,34 @@ def get_feedback_debug_detail(
         )
 
     return FeedbackDebugDetailResponse.model_validate(detail)
+
+
+@router.get(
+    "/{feedback_id}/trace-artifacts",
+    summary="Get internal feedback trace artifacts",
+    description="""
+    Returns the redacted trace snapshot persisted with a feedback report for
+    TraceReview diagnostics. Access is limited to requests carrying the shared
+    TRACE_REVIEW_INTERNAL_API_TOKEN bearer token.
+    """,
+)
+def get_feedback_trace_artifacts(
+    feedback_id: str,
+    request: Request,
+    db: Annotated[Session, Depends(get_feedback_db)],
+) -> Dict[str, Any]:
+    """Return persisted feedback trace artifacts for TraceReview."""
+
+    _require_trace_review_internal_request(request)
+    from src.lib.feedback.models import FeedbackReport
+
+    report = db.query(FeedbackReport).filter(FeedbackReport.id == feedback_id).first()
+    if report is None:
+        raise HTTPException(status_code=404, detail="Feedback report not found")
+
+    return {
+        "feedback_id": str(report.id),
+        "session_id": report.session_id,
+        "trace_ids": FeedbackService._normalize_trace_ids(report.trace_ids),
+        "trace_data": report.trace_data,
+    }

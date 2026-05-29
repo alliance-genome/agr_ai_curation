@@ -26,12 +26,12 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import lru_cache
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Mapping, Optional
 
 from agents import Agent, AgentOutputSchema, Runner, RunConfig
 
 from .audit_labels import build_specialist_internal_friendly_name
-from .config import get_max_turns
+from .config import get_max_turns, reasoning_summary_request_settings, resolve_model_provider
 from .evidence_summary import (
     build_record_evidence_summary_record,
     canonicalize_structured_result_payload,
@@ -46,6 +46,7 @@ from .tools.evidence_workspace import (
     set_active_evidence_records,
 )
 from .event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
+from .extraction_trace_events import write_extraction_trace_event, write_stream_event
 from .tool_call_policy import (
     DOCUMENT_REQUIRED_TOOL_NAMES,
     required_package_tool_names_from_metadata,
@@ -279,6 +280,51 @@ def _extract_model_identifier(model: Any) -> str:
     if isinstance(model, str):
         return model
     return str(getattr(model, "model", "") or "").strip()
+
+
+def _reasoning_request_metadata(agent: Agent) -> Dict[str, Any]:
+    model = _extract_model_identifier(getattr(agent, "model", None))
+    reasoning_settings = getattr(getattr(agent, "model_settings", None), "reasoning", None)
+    reasoning_effort = getattr(reasoning_settings, "effort", None)
+    if not model:
+        return {
+            "availability": "unavailable",
+            "reason": "missing_model_identifier",
+        }
+    try:
+        provider = resolve_model_provider(model)
+        return reasoning_summary_request_settings(
+            model=model,
+            reasoning_effort=reasoning_effort,
+            provider_override=provider,
+        )
+    except Exception as exc:
+        return {
+            "availability": "unavailable",
+            "model": model,
+            "reason": type(exc).__name__,
+        }
+
+
+def _reasoning_summary_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, Mapping):
+        for key in ("summary_text", "text"):
+            text = value.get(key)
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+        return ""
+    if isinstance(value, (list, tuple)):
+        parts = [_reasoning_summary_text(item) for item in value]
+        return " ".join(part for part in parts if part).strip()
+
+    text = getattr(value, "text", None)
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+    return ""
 
 
 def _should_use_groq_tool_json_compat(agent: Agent) -> bool:
@@ -2006,6 +2052,8 @@ def add_specialist_event(event: Dict[str, Any]):
     Uses ContextVar for proper isolation - each concurrent batch execution
     has its own list that cannot be contaminated by other batches.
     """
+    write_stream_event(event)
+
     event_list = _live_event_list_var.get()
     if event_list is not None:
         # Real-time mode: append to list immediately
@@ -2235,12 +2283,18 @@ async def run_specialist_with_events(
         run_config=effective_config
     )
     phase_timings_ms["runner_create_ms"] = _elapsed_ms(runner_create_started_at)
+    write_extraction_trace_event(
+        event_type="model.reasoning_summary.request",
+        input_summary=_reasoning_request_metadata(runtime_agent),
+        metadata={"agent": specialist_name, "tool_name": tool_name},
+    )
 
     # Event tracking for debugging
     total_event_count = 0
     event_type_counts: dict = {}
     is_generating = False  # Track if we've emitted AGENT_GENERATING
     stream_recovered_final_output = ""
+    reasoning_summary_chunks: List[str] = []
 
     stream_consume_started_at = time.monotonic()
     evidence_workspace_token = set_active_evidence_records(live_evidence_records)
@@ -2309,6 +2363,15 @@ async def run_specialist_with_events(
                         if part:
                             text = getattr(part, "text", None)
                             if text:
+                                write_extraction_trace_event(
+                                    event_type="model.reasoning_summary.output",
+                                    output_summary={"summary_text": text},
+                                    metadata={
+                                        "agent": specialist_name,
+                                        "tool_name": tool_name,
+                                        "availability": "present",
+                                    },
+                                )
                                 logger.debug(
                                     "%s REASONING SUMMARY PART: %s",
                                     specialist_name,
@@ -2319,6 +2382,16 @@ async def run_specialist_with_events(
                         # This event streams reasoning summary text deltas
                         delta = getattr(data, "delta", "")
                         if delta:
+                            reasoning_summary_chunks.append(delta)
+                            write_extraction_trace_event(
+                                event_type="model.reasoning_summary.delta",
+                                output_summary={"summary_text": delta},
+                                metadata={
+                                    "agent": specialist_name,
+                                    "tool_name": tool_name,
+                                    "availability": "present",
+                                },
+                            )
                             # Accumulate reasoning for logging
                             if not hasattr(result, "_accumulated_reasoning"):
                                 result._accumulated_reasoning = ""
@@ -2339,6 +2412,15 @@ async def run_specialist_with_events(
                         # Final reasoning summary text
                         text = getattr(data, "text", "")
                         if text:
+                            write_extraction_trace_event(
+                                event_type="model.reasoning_summary.output",
+                                output_summary={"summary_text": text},
+                                metadata={
+                                    "agent": specialist_name,
+                                    "tool_name": tool_name,
+                                    "availability": "present",
+                                },
+                            )
                             logger.debug(
                                 "%s REASONING COMPLETE (%s chars): %s",
                                 specialist_name,
@@ -2403,25 +2485,11 @@ async def run_specialist_with_events(
 
                         # Special handling for reasoning_item - log the reasoning content
                         if item_type == "reasoning_item":
-                            # Try multiple ways to extract reasoning content
-                            reasoning_content = None
-                            reasoning_summary = None
+                            reasoning_content = ""
 
                             # Check for summary attribute (per OpenAI docs, this is the key attribute)
                             if hasattr(item, "summary"):
-                                reasoning_summary = getattr(item, "summary", None)
-                                if reasoning_summary:
-                                    # Summary might be a list of text objects
-                                    if isinstance(reasoning_summary, list):
-                                        texts = []
-                                        for s in reasoning_summary:
-                                            if hasattr(s, "text"):
-                                                texts.append(getattr(s, "text", ""))
-                                            else:
-                                                texts.append(str(s))
-                                        reasoning_content = " ".join(texts)
-                                    else:
-                                        reasoning_content = str(reasoning_summary)
+                                reasoning_content = _reasoning_summary_text(getattr(item, "summary", None))
 
                             # Check raw_item for nested content
                             if not reasoning_content and hasattr(item, "raw_item"):
@@ -2429,30 +2497,18 @@ async def run_specialist_with_events(
                                 if raw:
                                     # Try to get summary from raw_item
                                     if hasattr(raw, "summary"):
-                                        raw_summary = getattr(raw, "summary", None)
-                                        if raw_summary:
-                                            if isinstance(raw_summary, list):
-                                                texts = []
-                                                for s in raw_summary:
-                                                    if hasattr(s, "text"):
-                                                        texts.append(getattr(s, "text", ""))
-                                                    else:
-                                                        texts.append(str(s))
-                                                reasoning_content = " ".join(texts)
-                                            else:
-                                                reasoning_content = str(raw_summary)
-                                    # Try to serialize the raw item to see its structure
-                                    if not reasoning_content:
-                                        try:
-                                            if hasattr(raw, "model_dump"):
-                                                raw_dict = raw.model_dump()
-                                                reasoning_content = str(raw_dict)
-                                            elif hasattr(raw, "__dict__"):
-                                                reasoning_content = str(raw.__dict__)
-                                        except Exception:
-                                            pass
+                                        reasoning_content = _reasoning_summary_text(getattr(raw, "summary", None))
 
                             if reasoning_content:
+                                write_extraction_trace_event(
+                                    event_type="model.reasoning_summary.output",
+                                    output_summary={"summary_text": reasoning_content},
+                                    metadata={
+                                        "agent": specialist_name,
+                                        "tool_name": tool_name,
+                                        "availability": "present",
+                                    },
+                                )
                                 # Log reasoning content (truncate to 500 chars for readability)
                                 content_preview = str(reasoning_content)[:500]
                                 logger.debug(
@@ -2518,6 +2574,7 @@ async def run_specialist_with_events(
                             current_tool_name,
                             extra={"specialist_name": specialist_name, "tool_name": current_tool_name},
                         )
+                        tool_call_id = _extract_stream_tool_call_tracking_id(item)
 
                         # Emit event for real-time visibility
                         # Use standard TOOL_START type so frontend can display it
@@ -2532,6 +2589,7 @@ async def run_specialist_with_events(
                                 ),
                                 "agent": specialist_name,
                                 "toolArgs": tool_args,
+                                "toolCallId": tool_call_id,
                                 "isSpecialistInternal": True  # Mark as internal specialist tool
                             }
                         })
@@ -2545,7 +2603,7 @@ async def run_specialist_with_events(
                         pending_tool_calls.append({
                             "tool_name": current_tool_name,
                             "tool_args": tool_args,
-                            "tool_id": _extract_stream_tool_call_tracking_id(item),
+                            "tool_id": tool_call_id,
                             "tool_index": tool_index,
                             "tool_started_at": tool_started_at,
                         })
@@ -2609,6 +2667,7 @@ async def run_specialist_with_events(
 
                         # Emit event for real-time visibility
                         # Use standard TOOL_COMPLETE type so frontend can display it
+                        completed_tool_id = completed_tool.get("tool_id")
                         add_specialist_event({
                             "type": "TOOL_COMPLETE",
                             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -2621,8 +2680,15 @@ async def run_specialist_with_events(
                                 ),
                                 "success": True,
                                 "durationMs": duration_ms,
+                                "toolCallId": completed_tool_id,
                                 "isSpecialistInternal": True  # Mark as internal specialist tool
-                            }
+                            },
+                            "internal": {
+                                "tool_output": output,
+                                "output_length": len(str(output)),
+                                "output_preview": output_preview,
+                                "output_summary": output_summary,
+                            },
                         })
 
                         # Check if tool output contains FileInfo (file download)

@@ -250,6 +250,7 @@ services:
       - TESTING_API_KEY_MODS=${TESTING_API_KEY_MODS:-}
       # Redis for cross-worker state (requires password for Langfuse compatibility)
       - REDIS_URL=${REDIS_URL:-redis://:${REDIS_AUTH:-CHANGE_ME_REDIS_PASSWORD}@redis:6379/0}
+      - EXTRACTION_TRACE_EVENT_DIR=${EXTRACTION_TRACE_EVENT_DIR:-/app/extraction_trace_events}
     volumes:
       - ./scripts:/app/scripts:ro
       - ./backend/src:/app/backend/src:ro
@@ -268,6 +269,7 @@ services:
       - ${RERANK_AWS_CREDENTIALS_MOUNT_DIR:-./.empty_aws_credentials}:/runtime/secrets/aws-rerank:ro
       - ./pdf_storage:/app/pdf_storage
       - ./file_outputs:/app/file_outputs
+      - ./extraction_trace_events:/app/extraction_trace_events
       - ./backend/config:/app/backend/config
       - ./config:/app/config:ro  # Config files including maintenance_message.txt
       # REMOVED: docker.sock and docker-compose.yml mounts (security hardening 2026-03-24)
@@ -341,8 +343,10 @@ services:
       # Server config
       - BACKEND_HOST=${TRACE_REVIEW_BACKEND_HOST:-${BACKEND_HOST:-localhost}}
       - BACKEND_PORT=${TRACE_REVIEW_BACKEND_PORT:-${BACKEND_PORT:-8001}}
+      - AI_CURATION_BACKEND_URL=${TRACE_REVIEW_AI_CURATION_BACKEND_URL:-http://backend:8000}
       - FRONTEND_URL=${TRACE_REVIEW_FRONTEND_URL:-${FRONTEND_URL:-http://localhost:3001}}
       - CACHE_TTL_HOURS=${TRACE_REVIEW_CACHE_TTL_HOURS:-1}
+      - EXTRACTION_TRACE_EVENT_DIR=${EXTRACTION_TRACE_EVENT_DIR:-/app/extraction_trace_events}
     restart: unless-stopped
     labels:
       log_env: dev
@@ -352,6 +356,8 @@ services:
       - "${TRACE_REVIEW_BACKEND_HOST_PORT:-8001}:8001"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    volumes:
+      - ./extraction_trace_events:/app/extraction_trace_events
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; response = urllib.request.urlopen('http://localhost:8001/health', timeout=2); response.read(1)"]
       interval: 30s

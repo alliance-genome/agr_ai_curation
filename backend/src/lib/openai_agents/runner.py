@@ -62,6 +62,14 @@ from .config import (
     get_groq_tool_call_max_retries,
     get_groq_tool_call_retry_delay_seconds,
     is_retryable_groq_tool_call_error,
+    reasoning_summary_request_settings,
+    resolve_model_provider,
+)
+from .extraction_trace_events import (
+    clear_extraction_trace_run,
+    start_extraction_trace_run,
+    write_extraction_trace_event,
+    write_stream_event,
 )
 from .guardrails import enforce_uncited_negative_guardrail
 from .models import Answer
@@ -427,6 +435,30 @@ def _extract_model_identifier(model: Any) -> str:
     return str(getattr(model, "model", "") or "").strip()
 
 
+def _reasoning_request_metadata(agent: Agent) -> Dict[str, Any]:
+    model = _extract_model_identifier(getattr(agent, "model", None))
+    reasoning_settings = getattr(getattr(agent, "model_settings", None), "reasoning", None)
+    reasoning_effort = getattr(reasoning_settings, "effort", None)
+    if not model:
+        return {
+            "availability": "unavailable",
+            "reason": "missing_model_identifier",
+        }
+    try:
+        provider = resolve_model_provider(model)
+        return reasoning_summary_request_settings(
+            model=model,
+            reasoning_effort=reasoning_effort,
+            provider_override=provider,
+        )
+    except Exception as exc:
+        return {
+            "availability": "unavailable",
+            "model": model,
+            "reason": type(exc).__name__,
+        }
+
+
 def _is_groq_runtime_model(model: Any) -> bool:
     """Detect whether runtime model appears to be Groq-backed."""
     model_id = _extract_model_identifier(model).lower()
@@ -655,6 +687,7 @@ async def _run_agent_with_tracing(
     agents_used = [agent.name]
     custom_tool_display_names = _build_custom_tool_display_names(agent)
     is_generating = False  # Track if we've emitted AGENT_GENERATING for current generation phase
+    reasoning_summary_chunks: List[str] = []
 
     # Create Langfuse-wrapped OpenAI client
     # It will automatically pick up the active span context via OpenTelemetry
@@ -681,6 +714,12 @@ async def _run_agent_with_tracing(
     max_turns = get_max_turns()
     llm_run_start = time.monotonic()
     result = Runner.run_streamed(agent, input=input_items, max_turns=max_turns, run_config=run_config)
+    write_extraction_trace_event(
+        event_type="model.reasoning_summary.request",
+        trace_id=trace_id,
+        input_summary=_reasoning_request_metadata(agent),
+        metadata={"agent": current_agent},
+    )
 
     # Track position in live_events list for yielding new events
     live_events_yielded = 0
@@ -854,6 +893,13 @@ async def _run_agent_with_tracing(
                         # Reasoning summary text - show in audit panel
                         delta = getattr(data, "delta", None)
                         if delta:
+                            reasoning_summary_chunks.append(delta)
+                            write_extraction_trace_event(
+                                event_type="model.reasoning_summary.delta",
+                                trace_id=trace_id,
+                                output_summary={"summary_text": delta},
+                                metadata={"agent": current_agent, "availability": "present"},
+                            )
                             yield {
                                 "type": "AGENT_THINKING",
                                 "timestamp": _now_iso(),
@@ -863,6 +909,22 @@ async def _run_agent_with_tracing(
                                     "message": delta
                                 }
                             }
+                    elif type(data).__name__ in {
+                        "ResponseReasoningSummaryTextDoneEvent",
+                        "ResponseReasoningSummaryPartDoneEvent",
+                    }:
+                        text = getattr(data, "text", None)
+                        if text is None:
+                            part = getattr(data, "part", None)
+                            text = getattr(part, "text", None)
+                        summary_text = str(text or "").strip() or "".join(reasoning_summary_chunks).strip()
+                        if summary_text:
+                            write_extraction_trace_event(
+                                event_type="model.reasoning_summary.output",
+                                trace_id=trace_id,
+                                output_summary={"summary_text": summary_text},
+                                metadata={"agent": current_agent, "availability": "present"},
+                            )
 
             elif event_type == "run_item_stream_event":
                 # Handle structured events (tool calls, outputs, messages)
@@ -908,7 +970,7 @@ async def _run_agent_with_tracing(
                             },
                         )
                         # Audit event: TOOL_START
-                        yield {
+                        tool_start_event = {
                             "type": "TOOL_START",
                             "timestamp": _now_iso(),
                             "details": {
@@ -921,6 +983,8 @@ async def _run_agent_with_tracing(
                                 "toolArgs": tool_args
                             }
                         }
+                        write_stream_event(tool_start_event, trace_id=trace_id, tool_call_id=tool_id)
+                        yield tool_start_event
 
                     elif item_type == "tool_call_output_item":
                         output = getattr(item, "output", "")
@@ -983,7 +1047,7 @@ async def _run_agent_with_tracing(
                             clear_collected_events()
 
                         # Audit event: TOOL_COMPLETE
-                        yield {
+                        tool_complete_event = {
                             "type": "TOOL_COMPLETE",
                             "timestamp": _now_iso(),
                             "details": {
@@ -1004,6 +1068,12 @@ async def _run_agent_with_tracing(
                                 "output_preview": output_preview,
                             },
                         }
+                        write_stream_event(
+                            tool_complete_event,
+                            trace_id=trace_id,
+                            tool_call_id=str(completed_tool.get("tool_id") or "") or None,
+                        )
+                        yield tool_complete_event
 
                         # Check if chat_output agent completed (for flow termination)
                         # This signals that a chat-based flow has produced its final output
@@ -1013,7 +1083,7 @@ async def _run_agent_with_tracing(
                                 "Chat output agent completed",
                                 extra={"trace_id": trace_id, "user_id": user_id},
                             )
-                            yield {
+                            chat_ready_event = {
                                 "type": "CHAT_OUTPUT_READY",
                                 "timestamp": _now_iso(),
                                 "details": {
@@ -1022,6 +1092,8 @@ async def _run_agent_with_tracing(
                                     "output_length": len(full_output),
                                 }
                             }
+                            write_stream_event(chat_ready_event, trace_id=trace_id)
+                            yield chat_ready_event
 
                         # Check if tool output contains FileInfo (file download)
                         # export_to_file and file formatter tools return FileInfo as JSON
@@ -1041,7 +1113,7 @@ async def _run_agent_with_tracing(
                                         output_data.get("format"),
                                         extra={"trace_id": trace_id, "user_id": user_id},
                                     )
-                                    yield {
+                                    file_ready_event = {
                                         "type": "FILE_READY",
                                         "timestamp": _now_iso(),
                                         "details": {
@@ -1054,6 +1126,8 @@ async def _run_agent_with_tracing(
                                             "created_at": output_data.get("created_at"),
                                         }
                                     }
+                                    write_stream_event(file_ready_event, trace_id=trace_id)
+                                    yield file_ready_event
                             except (json.JSONDecodeError, TypeError, AttributeError):
                                 # Not JSON or not FileInfo - ignore
                                 pass
@@ -1200,7 +1274,7 @@ async def _run_agent_with_tracing(
                     else None,
                 },
             )
-            yield {
+            run_error_event = {
                 "type": "RUN_ERROR",
                 "data": {
                     "message": (
@@ -1211,6 +1285,8 @@ async def _run_agent_with_tracing(
                     "trace_id": trace_id,
                 },
             }
+            write_stream_event(run_error_event, trace_id=trace_id)
+            yield run_error_event
             return
 
         if structured_evidence_records:
@@ -1223,7 +1299,7 @@ async def _run_agent_with_tracing(
             parsed_answer = Answer.model_validate(structured_result)
             guardrail_message = enforce_uncited_negative_guardrail(parsed_answer, tools_called)
             if guardrail_message:
-                yield {
+                run_error_event = {
                     "type": "RUN_ERROR",
                     "data": {
                         "message": guardrail_message,
@@ -1231,20 +1307,29 @@ async def _run_agent_with_tracing(
                         "trace_id": trace_id
                     }
                 }
+                write_stream_event(run_error_event, trace_id=trace_id)
+                yield run_error_event
                 return
         except ValidationError:
             pass
 
-        yield {
+        structured_event = {
             "type": "STRUCTURED_RESULT",
             "data": {
                 "result": structured_result,
                 "trace_id": trace_id
             }
         }
+        write_extraction_trace_event(
+            event_type="extraction_builder.structured_result",
+            trace_id=trace_id,
+            output_summary=structured_result,
+            metadata={"agent": current_agent},
+        )
+        yield structured_event
 
     # Audit event: SUPERVISOR_COMPLETE
-    yield {
+    supervisor_complete_event = {
         "type": "SUPERVISOR_COMPLETE",
         "timestamp": _now_iso(),
         "details": {
@@ -1252,6 +1337,8 @@ async def _run_agent_with_tracing(
             "totalSteps": len(agents_used)
         }
     }
+    write_stream_event(supervisor_complete_event, trace_id=trace_id)
+    yield supervisor_complete_event
 
     # Emit consolidated evidence summary for verified extraction records.
     if evidence_records:
@@ -1264,10 +1351,11 @@ async def _run_agent_with_tracing(
             evidence_summary_event["tool_names"] = evidence_summary_tool_names
             if len(evidence_summary_tool_names) == 1:
                 evidence_summary_event["tool_name"] = evidence_summary_tool_names[0]
+        write_stream_event(evidence_summary_event, trace_id=trace_id)
         yield evidence_summary_event
 
     # Emit completion event with summary for updating the span
-    yield {
+    run_finished_event = {
         "type": "RUN_FINISHED",
         "data": {
             "response": full_response,
@@ -1277,6 +1365,8 @@ async def _run_agent_with_tracing(
             "trace_id": trace_id
         }
     }
+    write_stream_event(run_finished_event, trace_id=trace_id)
+    yield run_finished_event
 
 
 async def run_agent_streamed(
@@ -1502,6 +1592,12 @@ async def run_agent_streamed(
 
                 # Set trace_id in context for tools (enables closure capture)
                 set_current_trace_id(trace_id)
+                start_extraction_trace_run(
+                    trace_id=trace_id,
+                    session_id=session_id,
+                    user_id=user_id,
+                    observation_id=getattr(root_span, "id", None),
+                )
 
                 logger.info(
                     "Trace created",
@@ -1524,7 +1620,7 @@ async def run_agent_streamed(
                 )
 
                 # Emit start event AFTER we have the Langfuse trace_id
-                yield {
+                run_started_event = {
                     "type": "RUN_STARTED",
                     "data": {
                         "agent": agent.name,
@@ -1533,12 +1629,16 @@ async def run_agent_streamed(
                         "trace_id": trace_id
                     }
                 }
+                write_stream_event(run_started_event, trace_id=trace_id, observation_id=getattr(root_span, "id", None))
+                yield run_started_event
                 # Audit event: SUPERVISOR_START
-                yield {
+                supervisor_start_event = {
                     "type": "SUPERVISOR_START",
                     "timestamp": _now_iso(),
                     "details": {"message": f"Processing query with {agent.name}"}
                 }
+                write_stream_event(supervisor_start_event, trace_id=trace_id, observation_id=getattr(root_span, "id", None))
+                yield supervisor_start_event
 
                 try:
                     # Run agent inside the active span context
@@ -1615,7 +1715,7 @@ async def run_agent_streamed(
                         )
                     )
                     # Audit event: SPECIALIST_ERROR (more specific than SUPERVISOR_ERROR)
-                    yield {
+                    specialist_error_event = {
                         "type": "SPECIALIST_ERROR",
                         "timestamp": _now_iso(),
                         "details": {
@@ -1630,8 +1730,10 @@ async def run_agent_streamed(
                             )
                         }
                     }
+                    write_stream_event(specialist_error_event, trace_id=trace_id)
+                    yield specialist_error_event
                     # Note: Prompt logging moved to finally block for guaranteed execution
-                    yield {
+                    run_error_event = {
                         "type": "RUN_ERROR",
                         "data": {
                             "message": (
@@ -1642,6 +1744,8 @@ async def run_agent_streamed(
                             "trace_id": trace_id
                         }
                     }
+                    write_stream_event(run_error_event, trace_id=trace_id)
+                    yield run_error_event
 
                 except Exception as e:
                     logger.error(
@@ -1672,7 +1776,7 @@ async def run_agent_streamed(
                         )
                     )
                     # Audit event: SUPERVISOR_ERROR
-                    yield {
+                    supervisor_error_event = {
                         "type": "SUPERVISOR_ERROR",
                         "timestamp": _now_iso(),
                         "details": {
@@ -1680,8 +1784,10 @@ async def run_agent_streamed(
                             "context": type(e).__name__
                         }
                     }
+                    write_stream_event(supervisor_error_event, trace_id=trace_id)
+                    yield supervisor_error_event
                     # Note: Prompt logging moved to finally block for guaranteed execution
-                    yield {
+                    run_error_event = {
                         "type": "RUN_ERROR",
                         "data": {
                             "message": str(e),
@@ -1689,6 +1795,8 @@ async def run_agent_streamed(
                             "trace_id": trace_id
                         }
                     }
+                    write_stream_event(run_error_event, trace_id=trace_id)
+                    yield run_error_event
 
             finally:
                 # CRITICAL: Log prompts regardless of how the generator exits (success, error, or client disconnect)
@@ -1712,6 +1820,7 @@ async def run_agent_streamed(
                     user_id=user_id,
                 )
                 flush_langfuse()
+                clear_extraction_trace_run()
                 logger.info(
                     "Flushed trace data",
                     extra={"trace_id": trace_id, "session_id": session_id, "user_id": user_id},
@@ -1727,7 +1836,12 @@ async def run_agent_streamed(
             # Fall back to running without tracing
             # Set fallback trace_id in context for tools
             set_current_trace_id(fallback_trace_id)
-            yield {
+            start_extraction_trace_run(
+                trace_id=fallback_trace_id,
+                session_id=session_id,
+                user_id=user_id,
+            )
+            run_started_event = {
                 "type": "RUN_STARTED",
                 "data": {
                     "agent": agent.name,
@@ -1736,11 +1850,15 @@ async def run_agent_streamed(
                     "trace_id": fallback_trace_id
                 }
             }
-            yield {
+            write_stream_event(run_started_event, trace_id=fallback_trace_id)
+            yield run_started_event
+            supervisor_start_event = {
                 "type": "SUPERVISOR_START",
                 "timestamp": _now_iso(),
                 "details": {"message": f"Processing query with {agent.name}"}
             }
+            write_stream_event(supervisor_start_event, trace_id=fallback_trace_id)
+            yield supervisor_start_event
             try:
                 async for event in _run_agent_with_groq_retry(
                     agent=agent,
@@ -1755,6 +1873,7 @@ async def run_agent_streamed(
             finally:
                 # Guarantee prompt logging even on client disconnect
                 _log_used_prompts_to_db(trace_id=fallback_trace_id, session_id=session_id)
+                clear_extraction_trace_run()
     else:
         # No Langfuse configured, run without tracing
         logger.info(
@@ -1763,7 +1882,12 @@ async def run_agent_streamed(
         )
         # Set fallback trace_id in context for tools
         set_current_trace_id(fallback_trace_id)
-        yield {
+        start_extraction_trace_run(
+            trace_id=fallback_trace_id,
+            session_id=session_id,
+            user_id=user_id,
+        )
+        run_started_event = {
             "type": "RUN_STARTED",
             "data": {
                 "agent": agent.name,
@@ -1772,11 +1896,15 @@ async def run_agent_streamed(
                 "trace_id": fallback_trace_id
             }
         }
-        yield {
+        write_stream_event(run_started_event, trace_id=fallback_trace_id)
+        yield run_started_event
+        supervisor_start_event = {
             "type": "SUPERVISOR_START",
             "timestamp": _now_iso(),
             "details": {"message": f"Processing query with {agent.name}"}
         }
+        write_stream_event(supervisor_start_event, trace_id=fallback_trace_id)
+        yield supervisor_start_event
         try:
             async for event in _run_agent_with_groq_retry(
                 agent=agent,
@@ -1791,3 +1919,4 @@ async def run_agent_streamed(
         finally:
             # Guarantee prompt logging even on client disconnect
             _log_used_prompts_to_db(trace_id=fallback_trace_id, session_id=session_id)
+            clear_extraction_trace_run()

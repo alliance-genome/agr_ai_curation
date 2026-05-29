@@ -32,3 +32,8 @@ services:
       - LANGFUSE_LOCAL_HOST=${LANGFUSE_LOCAL_HOST:-http://host.docker.internal:3000}
       - LANGFUSE_LOCAL_PUBLIC_KEY=${LANGFUSE_LOCAL_PUBLIC_KEY:-}
       - LANGFUSE_LOCAL_SECRET_KEY=${LANGFUSE_LOCAL_SECRET_KEY:-}
+      - AI_CURATION_BACKEND_URL=${AI_CURATION_BACKEND_URL:-}
+      - TRACE_REVIEW_INTERNAL_API_TOKEN=${TRACE_REVIEW_INTERNAL_API_TOKEN:-}
+      - EXTRACTION_TRACE_EVENT_DIR=${EXTRACTION_TRACE_EVENT_DIR:-/app/extraction_trace_events}
+    volumes:
+      - ../extraction_trace_events:/app/extraction_trace_events

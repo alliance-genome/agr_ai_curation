@@ -1,0 +1,400 @@
+import json
+import os
+import tempfile
+import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+
+from src.analyzers.extraction_timeline import ExtractionTimelineAnalyzer
+from src.api import claude, traces
+from src.api.extraction_timeline_helpers import load_extraction_timeline_context
+from src.models.requests import AnalyzeTraceRequest
+from src.services.cache_manager import CacheManager
+
+
+class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
+    def _make_request(self) -> SimpleNamespace:
+        cache_manager = CacheManager(ttl_hours=1)
+        return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(cache_manager=cache_manager)))
+
+    def _make_trace_data(self, trace_id="trace-extraction-123"):
+        return {
+            "raw_trace": {
+                "id": trace_id,
+                "name": "gene expression extraction",
+                "timestamp": "2026-05-29T00:00:00Z",
+                "input": {"message": "Extract gene expression."},
+                "metadata": {},
+                "output": {"answer": "done"},
+            },
+            "observations": [],
+            "scores": [],
+            "trace_id_short": trace_id[:8],
+            "metadata": {
+                "trace_name": "gene expression extraction",
+                "duration_seconds": 2.0,
+                "total_cost": 0.0,
+                "total_tokens": 0,
+                "observation_count": 0,
+                "score_count": 0,
+                "timestamp": "2026-05-29T00:00:00Z",
+            },
+        }
+
+    def test_diagnostic_report_summarizes_reasoning_validation_and_timeline(self):
+        timeline = {
+            "schema_version": "extraction_timeline_analyzer.v1",
+            "trace_id": "trace-report",
+            "event_count": 3,
+            "durable_event_count": 2,
+            "reasoning_summary": {
+                "status": "present",
+                "summaries": ["Checked evidence and resolver output."],
+            },
+            "timeline": [
+                {"event_type": "model.reasoning_summary.output", "validation": {}},
+                {"event_type": "specialist_tool_call.completed", "validation": {"status": "ok"}},
+                {
+                    "event_type": "validation.failure",
+                    "validation": {"status": "needs_patch", "errors": [{"message": "missing evidence"}]},
+                },
+            ],
+        }
+
+        report = ExtractionTimelineAnalyzer.diagnostic_report(timeline)
+
+        self.assertEqual(report["summary"]["event_count"], 3)
+        self.assertEqual(report["summary"]["tool_event_count"], 1)
+        self.assertEqual(report["summary"]["validation_failure_count"], 1)
+        self.assertEqual(report["summary"]["reasoning_summary_status"], "present")
+        self.assertEqual(len(report["validation_failures"]), 1)
+        self.assertEqual(report["timeline"], timeline["timeline"])
+
+    def test_diagnostic_report_preserves_concise_structured_tool_output(self):
+        timeline = {
+            "schema_version": "extraction_timeline_analyzer.v1",
+            "trace_id": "trace-report",
+            "event_count": 1,
+            "durable_event_count": 1,
+            "reasoning_summary": {"status": "unavailable", "summaries": []},
+            "timeline": [
+                {
+                    "event_type": "specialist_tool_call.completed",
+                    "tool_name": "resolve_domain_field_term",
+                    "output": "status: ok; summary: Resolved FBbt term.",
+                    "validation": {},
+                }
+            ],
+        }
+
+        report = ExtractionTimelineAnalyzer.diagnostic_report(timeline)
+
+        self.assertEqual(report["summary"]["tool_event_count"], 1)
+        self.assertEqual(
+            report["timeline"][0]["output"],
+            "status: ok; summary: Resolved FBbt term.",
+        )
+
+    async def test_timeline_context_logs_sibling_cached_data_load_failures(self):
+        async def load_cached_data():
+            return self._make_trace_data("trace-extraction-123")
+
+        async def load_sibling_cached_data(_trace_id: str):
+            raise RuntimeError("langfuse sibling unavailable")
+
+        with self.assertLogs("src.api.extraction_timeline_helpers", level="DEBUG") as captured:
+            context = await load_extraction_timeline_context(
+                trace_id="trace-extraction-123",
+                feedback_id=None,
+                include_sibling_traces=True,
+                load_cached_data=load_cached_data,
+                load_sibling_trace_ids=lambda: ["trace-sibling-456"],
+                load_sibling_cached_data=load_sibling_cached_data,
+                fallback_exceptions=(RuntimeError,),
+            )
+
+        self.assertEqual(context.sibling_trace_ids, ["trace-sibling-456"])
+        self.assertEqual(context.sibling_cached_data_by_trace_id, {})
+        self.assertIn("trace-extraction-123", captured.output[0])
+        self.assertIn("trace-sibling-456", captured.output[0])
+
+    @patch("src.api.traces.AgentConfigAnalyzer.extract_agent_configs", return_value={})
+    @patch("src.api.traces.DocumentHierarchyAnalyzer.analyze", return_value={})
+    @patch(
+        "src.api.traces.TraceSummaryAnalyzer.analyze",
+        return_value={"has_errors": False, "domain_envelope": {"found": False, "summary": {}}},
+    )
+    @patch("src.api.traces.AgentContextAnalyzer.analyze", return_value={})
+    @patch("src.api.traces.TokenAnalysisAnalyzer.analyze", return_value={})
+    @patch("src.api.traces.PDFCitationsAnalyzer.analyze", return_value={})
+    @patch("src.api.traces.ToolCallAnalyzer.extract_tool_calls", return_value={"total_count": 0, "unique_tools": [], "tool_calls": [], "duplicates": {}})
+    @patch("src.api.traces.ConversationAnalyzer.extract_conversation", return_value={"user_input": "Question", "assistant_response": "N/A"})
+    @patch("src.api.traces.TraceExtractor")
+    async def test_trace_review_endpoint_renders_extraction_timeline_and_refreshes_stale_cache(
+        self,
+        extractor_cls: Mock,
+        _conversation: Mock,
+        _tool_calls: Mock,
+        _pdf_citations: Mock,
+        _token_analysis: Mock,
+        _agent_context: Mock,
+        _trace_summary: Mock,
+        _document_hierarchy: Mock,
+        _agent_configs: Mock,
+    ):
+        request = self._make_request()
+        request.app.state.cache_manager.set(
+            "trace-extraction-123",
+            {
+                "analyzer_schema_version": "old",
+                "analysis": {"summary": {"trace_id": "trace-extraction-123"}},
+            },
+        )
+        extractor_cls.return_value.extract_complete_trace.return_value = self._make_trace_data()
+
+        analyze_response = await traces.analyze_trace(
+            AnalyzeTraceRequest(trace_id="trace-extraction-123", source="auto"),
+            request,
+        )
+        view_response = await traces.get_trace_view(
+            "trace-extraction-123",
+            "extraction_timeline",
+            request,
+            source="auto",
+            refresh=True,
+        )
+
+        extractor_cls.assert_called_with(source="local")
+        self.assertEqual(analyze_response["status"], "success")
+        self.assertEqual(view_response["view"], "extraction_timeline")
+        self.assertEqual(view_response["data"]["schema_version"], "extraction_timeline_analyzer.v1")
+        self.assertEqual(view_response["data"]["reasoning_summary"]["status"], "unavailable")
+
+    @patch(
+        "src.api.extraction_timeline_helpers.fetch_feedback_trace_artifacts",
+        return_value={
+            "status": "available",
+            "trace_data": {
+                "captured_at": "2026-05-29T00:00:00Z",
+                "traces": [
+                    {
+                        "trace_id": "trace-extraction-123",
+                        "timestamp": "2026-05-29T00:00:01Z",
+                        "tool_calls": [{"name": "resolve_domain_field_term", "status": "ok"}],
+                    },
+                    {
+                        "trace_id": "trace-sibling-456",
+                        "timestamp": "2026-05-29T00:00:02Z",
+                        "tool_calls": [{"name": "validate_gene_expression_candidate", "status": "ok"}],
+                    },
+                ],
+            },
+        },
+    )
+    @patch("src.api.traces.TraceExtractor")
+    async def test_trace_review_endpoint_expands_feedback_artifact_siblings_when_langfuse_unavailable(
+        self,
+        extractor_cls: Mock,
+        _feedback_artifacts: Mock,
+    ):
+        request = self._make_request()
+        extractor_cls.return_value.extract_complete_trace.side_effect = RuntimeError("langfuse down")
+
+        response = await traces.get_trace_view(
+            "trace-extraction-123",
+            "extraction_timeline",
+            request,
+            source="auto",
+            feedback_id="feedback-123",
+            session_id=None,
+            include_sibling_traces=True,
+            refresh=False,
+            include_raw_args=False,
+            include_raw_outputs=False,
+            tool_name=None,
+            event_type=None,
+            candidate_id=None,
+        )
+
+        self.assertEqual(response["view"], "extraction_timeline")
+        self.assertEqual(response["data"]["feedback_artifact_event_count"], 2)
+        self.assertEqual(response["data"]["sibling_trace_ids"], ["trace-sibling-456"])
+        self.assertEqual(
+            [item["event_trace_id"] for item in response["data"]["timeline"]],
+            ["trace-extraction-123", "trace-sibling-456"],
+        )
+
+    @patch("src.api.traces.TraceExtractor")
+    async def test_trace_review_endpoint_expands_sibling_langfuse_observations(
+        self,
+        extractor_cls: Mock,
+    ):
+        request = self._make_request()
+
+        def trace_data_for(requested_trace_id: str):
+            trace_data = self._make_trace_data(requested_trace_id)
+            if requested_trace_id == "trace-sibling-456":
+                trace_data["observations"] = [
+                    {
+                        "id": "gen-sibling",
+                        "type": "GENERATION",
+                        "startTime": "2026-05-29T00:00:02Z",
+                        "model": "gpt-5.4-mini",
+                        "input": [
+                            {
+                                "type": "function_call",
+                                "call_id": "call-sibling-resolve",
+                                "name": "resolve_domain_field_term",
+                                "arguments": json.dumps({"candidate_id": "gex-candidate-2"}),
+                                "status": "completed",
+                            },
+                            {
+                                "type": "function_call_output",
+                                "call_id": "call-sibling-resolve",
+                                "output": json.dumps({"status": "ok"}),
+                            },
+                        ],
+                        "output": {},
+                    }
+                ]
+                trace_data["metadata"]["observation_count"] = 1
+            return trace_data
+
+        extractor = extractor_cls.return_value
+        extractor.extract_complete_trace.side_effect = trace_data_for
+        extractor.list_session_traces.return_value = {
+            "traces": [
+                {"id": "trace-extraction-123"},
+                {"id": "trace-sibling-456"},
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(os.environ, {"EXTRACTION_TRACE_EVENT_DIR": tmpdir}):
+                response = await traces.get_trace_view(
+                    "trace-extraction-123",
+                    "extraction_timeline",
+                    request,
+                    source="auto",
+                    session_id="session-123",
+                    feedback_id=None,
+                    include_sibling_traces=True,
+                    refresh=False,
+                    include_raw_args=False,
+                    include_raw_outputs=False,
+                    tool_name=None,
+                    event_type=None,
+                    candidate_id=None,
+                )
+
+        self.assertEqual(response["view"], "extraction_timeline")
+        self.assertEqual(response["data"]["sibling_trace_ids"], ["trace-sibling-456"])
+        self.assertEqual(response["data"]["observation_event_count"], 1)
+        self.assertEqual(response["data"]["timeline"][0]["event_trace_id"], "trace-sibling-456")
+        self.assertEqual(response["data"]["timeline"][0]["event_type"], "openai_agents.function_call")
+        self.assertEqual(response["data"]["timeline"][0]["tool_name"], "resolve_domain_field_term")
+
+    @patch("src.analyzers.agent_config.AgentConfigAnalyzer.extract_agent_configs", return_value={})
+    @patch("src.analyzers.document_hierarchy.DocumentHierarchyAnalyzer.analyze", return_value={})
+    @patch(
+        "src.api.claude.TraceSummaryAnalyzer.analyze",
+        return_value={"has_errors": False, "domain_envelope": {"found": False, "summary": {}}},
+    )
+    @patch("src.analyzers.agent_context.AgentContextAnalyzer.analyze", return_value={})
+    @patch("src.analyzers.token_analysis.TokenAnalysisAnalyzer.analyze", return_value={})
+    @patch("src.analyzers.pdf_citations.PDFCitationsAnalyzer.analyze", return_value={})
+    @patch("src.api.claude.ToolCallAnalyzer.extract_tool_calls", return_value={"total_count": 0, "unique_tools": [], "tool_calls": [], "duplicates": {}})
+    @patch("src.api.claude.ConversationAnalyzer.extract_conversation", return_value={"user_input": "Question", "assistant_response": "N/A"})
+    @patch("src.api.claude.TraceExtractor")
+    async def test_claude_diagnostic_report_endpoint_returns_token_metadata(
+        self,
+        extractor_cls: Mock,
+        _conversation: Mock,
+        _tool_calls: Mock,
+        _pdf_citations: Mock,
+        _token_analysis: Mock,
+        _agent_context: Mock,
+        _trace_summary: Mock,
+        _document_hierarchy: Mock,
+        _agent_configs: Mock,
+    ):
+        request = self._make_request()
+        extractor_cls.return_value.extract_complete_trace.return_value = self._make_trace_data()
+
+        response = await claude.get_extraction_diagnostic_report(
+            "trace-extraction-123",
+            request,
+            source="auto",
+            session_id=None,
+            include_sibling_traces=False,
+        )
+
+        extractor_cls.assert_called_once_with(source="local")
+        self.assertEqual(response.status, "success")
+        self.assertEqual(response.data["trace_id"], "trace-extraction-123")
+        self.assertEqual(response.data["summary"]["reasoning_summary_status"], "unavailable")
+        self.assertGreaterEqual(response.token_info.estimated_tokens, 1)
+
+    @patch(
+        "src.api.extraction_timeline_helpers.fetch_feedback_trace_artifacts",
+        return_value={
+            "status": "available",
+            "trace_data": {
+                "captured_at": "2026-05-29T00:00:00Z",
+                "traces": [
+                    {
+                        "trace_id": "trace-extraction-123",
+                        "timestamp": "2026-05-29T00:00:01Z",
+                        "tool_calls": [
+                            {
+                                "name": "resolve_domain_field_term",
+                                "duration_ms": 11,
+                                "status": "ok",
+                            }
+                        ],
+                    },
+                    {
+                        "trace_id": "trace-sibling-456",
+                        "timestamp": "2026-05-29T00:00:02Z",
+                        "tool_calls": [
+                            {
+                                "name": "validate_gene_expression_candidate",
+                                "duration_ms": 12,
+                                "status": "ok",
+                            }
+                        ],
+                    }
+                ],
+            },
+        },
+    )
+    @patch("src.api.claude.TraceExtractor")
+    async def test_claude_extraction_timeline_uses_feedback_artifacts_when_langfuse_unavailable(
+        self,
+        extractor_cls: Mock,
+        _feedback_artifacts: Mock,
+    ):
+        request = self._make_request()
+        extractor_cls.return_value.extract_complete_trace.side_effect = RuntimeError("langfuse down")
+
+        response = await claude.get_extraction_timeline(
+            "trace-extraction-123",
+            request,
+            source="auto",
+            session_id=None,
+            feedback_id="feedback-123",
+            include_sibling_traces=True,
+            refresh=False,
+            include_raw_args=False,
+            include_raw_outputs=False,
+            tool_name=None,
+            event_type=None,
+            candidate_id=None,
+        )
+
+        self.assertEqual(response.status, "success")
+        self.assertEqual(response.data["feedback_artifact_event_count"], 2)
+        self.assertEqual(response.data["query"]["feedback_artifact_status"], "available")
+        self.assertEqual(response.data["sibling_trace_ids"], ["trace-sibling-456"])
+        self.assertEqual(response.data["timeline"][0]["tool_name"], "resolve_domain_field_term")
+        self.assertEqual(response.data["timeline"][1]["tool_name"], "validate_gene_expression_candidate")

@@ -1,5 +1,7 @@
 """Unit tests for feedback submission API."""
 
+from types import SimpleNamespace
+
 import pytest
 from fastapi.responses import JSONResponse
 
@@ -415,3 +417,47 @@ def test_get_feedback_debug_detail_returns_404_when_missing(monkeypatch):
     assert isinstance(response, JSONResponse)
     assert response.status_code == 404
     assert b"Feedback report not found" in response.body
+
+
+def test_get_feedback_trace_artifacts_returns_internal_trace_data(monkeypatch):
+    monkeypatch.setenv("TRACE_REVIEW_INTERNAL_API_TOKEN", "service-token")
+    report = SimpleNamespace(
+        id="feedback-123",
+        session_id="session-123",
+        trace_ids=["trace-1"],
+        trace_data={"schema_version": 1, "traces": [{"trace_id": "trace-1"}]},
+    )
+
+    class _Query:
+        def filter(self, *_args):
+            return self
+
+        def first(self):
+            return report
+
+    class _Db:
+        def query(self, *_args):
+            return _Query()
+
+    response = feedback_api.get_feedback_trace_artifacts(
+        feedback_id="feedback-123",
+        request=SimpleNamespace(headers={"authorization": "Bearer service-token"}),
+        db=_Db(),
+    )
+
+    assert response["feedback_id"] == "feedback-123"
+    assert response["trace_ids"] == ["trace-1"]
+    assert response["trace_data"]["traces"][0]["trace_id"] == "trace-1"
+
+
+def test_get_feedback_trace_artifacts_rejects_invalid_internal_token(monkeypatch):
+    monkeypatch.setenv("TRACE_REVIEW_INTERNAL_API_TOKEN", "service-token")
+
+    with pytest.raises(feedback_api.HTTPException) as exc:
+        feedback_api.get_feedback_trace_artifacts(
+            feedback_id="feedback-123",
+            request=SimpleNamespace(headers={"authorization": "Bearer wrong-token"}),
+            db=object(),
+        )
+
+    assert exc.value.status_code == 401
