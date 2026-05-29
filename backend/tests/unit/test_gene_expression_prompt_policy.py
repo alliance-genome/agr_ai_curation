@@ -90,9 +90,14 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
     assert "read_chunk(chunk_id)" in content
     assert "`evidence_spans[].span_id`" in content
     assert "record_evidence(entity=..., span_ids=[...])" in content
+    assert "reuse that `evidence_record_id`" in content
+    assert "do not call `record_evidence` again for the" in content
     assert "list_recorded_evidence" in content
     assert "get_recorded_evidence" in content
     assert "attach_evidence_to_object" in content
+    assert "Choose the retained object's `pending_ref_id` before attachment" in content
+    assert "gene-expression-annotation-pef-1" in content
+    assert "retry once with the" in content
     assert "detach_evidence_from_object" in content
     assert "discard_recorded_evidence" in content
     assert "update_recorded_evidence_metadata" in content

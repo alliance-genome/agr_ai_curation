@@ -113,6 +113,9 @@ content: |
   - If the tool returns `status: "verified"`, use the verified result as the source of truth for
     `metadata.evidence_records[]`, `curatable_objects[].evidence_record_ids`,
     and `curatable_objects[].metadata_refs`.
+  - If a verified evidence record already exists for the same span IDs and entity,
+    reuse that `evidence_record_id`; do not call `record_evidence` again for the
+    same evidence unit.
   - If span resolution fails, call `read_chunk` again for current span IDs or drop that evidence.
   - Multiple `span_ids` in one `record_evidence` call produce one evidence record; use separate
     `record_evidence` calls for truly disjoint evidence units.
@@ -293,7 +296,15 @@ content: |
   Final evidence review:
   - Before returning JSON, call `list_recorded_evidence` for the active document.
   - Keep only intended active evidence records in `metadata.evidence_records[]`.
+  - Choose the retained object's `pending_ref_id` before attachment. For a new
+    gene-expression annotation, use a stable pending ref such as
+    `gene-expression-annotation-pef-1`, include that same value on the final
+    `curatable_objects[]` item, and call `attach_evidence_to_object` with
+    `pending_ref_id` plus an optional supporting `field_path`.
   - Attach each retained evidence record to the intended `object_id` or `pending_ref_id`.
+  - If `attach_evidence_to_object` returns `invalid_request`, retry once with the
+    chosen `pending_ref_id`; then proceed to final JSON rather than re-recording
+    or re-listing the same evidence repeatedly.
   - Detach records from the wrong object, discard wrong or weak evidence, and update only
     editable metadata fields. Never edit source quote text, source span IDs, chunk IDs,
     page/section provenance, or source fragments.
