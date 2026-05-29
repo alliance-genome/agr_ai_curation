@@ -64,6 +64,37 @@ def test_finalize_extraction_payload_returns_canonical_payload_with_evidence(mon
     assert captured_events[-1]["event_type"] == "extraction_builder.finalization_decision"
 
 
+def test_finalize_extraction_payload_duplicate_candidate_is_idempotent(monkeypatch):
+    captured_events = []
+    monkeypatch.setattr(
+        builder,
+        "write_extraction_trace_event",
+        lambda **event: captured_events.append(event) or event,
+    )
+    workspace = _workspace()
+
+    first = builder.finalize_extraction_payload(
+        {"items": [{"label": "crumb"}], "run_summary": {"candidate_count": 1}},
+        workspace=workspace,
+        candidate_id="candidate-1",
+    )
+    duplicate = builder.finalize_extraction_payload(
+        {"items": [{"label": "crumb"}], "run_summary": {"candidate_count": 1}},
+        workspace=workspace,
+        candidate_id="candidate-1",
+    )
+
+    assert duplicate is first
+    assert duplicate.payload == first.payload
+    assert duplicate.payload["items"][0]["label"] == "crumb"
+    decisions = [
+        event["output_summary"]["decision"]
+        for event in captured_events
+        if event.get("event_type") == "extraction_builder.finalization_decision"
+    ]
+    assert decisions == ["finalized", "duplicate_idempotent"]
+
+
 def test_internal_extraction_result_event_carries_canonical_builder_payload(monkeypatch):
     monkeypatch.setattr(builder, "write_extraction_trace_event", lambda **event: event)
     finalization = builder.finalize_extraction_payload(

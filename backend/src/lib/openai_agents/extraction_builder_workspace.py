@@ -410,13 +410,14 @@ def finalize_extraction_payload(
 ) -> ExtractionBuilderFinalization:
     """Stage and finalize one payload through the builder handoff contract."""
 
-    stage_extraction_payload(
-        payload,
-        workspace=workspace,
-        candidate_id=candidate_id,
-        evidence_records=evidence_records,
-        resolver_selection_refs=resolver_selection_refs,
-    )
+    if workspace.finalization is None:
+        stage_extraction_payload(
+            payload,
+            workspace=workspace,
+            candidate_id=candidate_id,
+            evidence_records=evidence_records,
+            resolver_selection_refs=resolver_selection_refs,
+        )
     return workspace.finalize(
         candidate_ids=[candidate_id],
         validation_errors=validation_errors,
