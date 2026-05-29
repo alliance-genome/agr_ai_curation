@@ -62,6 +62,7 @@ jobs:
             5. Security concerns (no secrets, proper validation)
             6. Test coverage for changes
             7. Docker and dependency changes
+            8. TRACEREVIEW COUPLING — if the diff changes agents, tools, or Langfuse instrumentation, flag as BLOCKING both changes that break the trace_review/ support program AND new agents/tools/instrumentation it does not yet extract; trace_review must stay faithful and complete or our diagnostics degrade
 
             If the repo contains a CLAUDE.md file, read it first for project context.
             If the repo contains a REVIEW.md file, follow its review guidelines.
@@ -187,6 +188,42 @@ jobs:
 
             Use grep/glob to verify whether flagged code is actually still referenced. Do not flag code as dead unless you have confirmed it is unreferenced.
 
+            ### Rule 4: TRACEREVIEW EXTRACTION COUPLING
+            The `trace_review/` support program parses the Langfuse traces the core program emits. Developers rely
+            on it to faithfully extract traces, reasoning, agent decisions, tool calls, supervisor routing, and
+            domain envelopes from curator-feedback sessions. When a PR changes the agent/tool runtime or its
+            instrumentation, the trace structure can drift away from what TraceReview's analyzers parse, silently
+            breaking extraction. Treat the diff as TraceReview-affecting when it touches:
+            - Agent identity/surface: agent names, the `{agent_name}_config` observation contract, or supervisor
+              routing (read by `trace_review/backend/src/analyzers/agent_config.py`, `agent_context.py`,
+              `supervisor_routing.py`)
+            - Tools: tool names, tool input/output shapes, or the tool-call record fields `name`/`arguments`/`call_id`
+              emitted from `backend/src/lib/openai_agents/streaming_tools.py`, `tools/`, and `tool_call_policy.py`
+              (read by `trace_review/backend/src/analyzers/tool_calls.py`, `agent_context.py`, `pdf_citations.py`,
+              `document_hierarchy.py`, `token_analysis.py`; some key on literal tool-name strings such as
+              `search_document`, `read_section`, `ask_*`)
+            - Instrumentation: Langfuse span/observation naming, evidence spans, or the trace metadata keys
+              `supervisor_agent`, `supervisor_model`, `has_document` assembled in
+              `backend/src/lib/openai_agents/runner.py` (the `trace_metadata` dict) and emitted via
+              `langfuse_client.py`; related instrumentation lives in `evidence_spans.py`, `evidence_summary.py`,
+              `event_types.py`, `audit_labels.py`
+            - Domain envelope/validation schemas read by `trace_review/backend/src/analyzers/domain_envelopes.py`
+
+            Use grep to confirm whether the affected analyzer depends on (breakage) or is missing (new surface)
+            the changed name, key, or shape before flagging. Flag BOTH of these as BLOCKING, because TraceReview
+            is core diagnostic tooling that must stay faithful AND complete:
+            - Breakage: the change would make TraceReview drop, misparse, or mislabel data it currently surfaces
+              (renamed/removed tool or agent, changed tool-call field, altered observation/metadata key the
+              analyzers read).
+            - Missing coverage: the change adds a new agent, tool, tool-call/decision type, routing path, or
+              diagnostic instrumentation signal that no analyzer extracts yet, so it would be invisible or
+              unparsed in trace review. A new extraction surface that ships without the matching `trace_review/`
+              wiring is a BLOCKING coverage gap, not a future nicety — diagnostics depend on TraceReview seeing
+              everything the agents now do.
+            In both cases, name the analyzer file that breaks or lacks coverage and the `trace_review/` change
+            needed (new or extended analyzer, view, tool-name match, metadata key, or envelope schema). Only
+            downgrade from BLOCKING if the PR already includes the corresponding `trace_review/` changes.
+
             ## Standard Review Checklist
 
             ### 3. Code Quality
@@ -218,7 +255,7 @@ jobs:
 
             Provide your review as a structured comment with:
             - A summary of what the PR does
-            - BLOCKING issues first (fallbacks found, project-specific core leakage, legacy code not removed) with exact file:line references
+            - BLOCKING issues first (fallbacks found, project-specific core leakage, legacy code not removed, broken or missing TraceReview extraction coverage) with exact file:line references
             - Other issues (categorized by severity: critical, warning, suggestion)
             - Overall assessment
 
