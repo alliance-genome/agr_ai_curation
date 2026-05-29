@@ -43,7 +43,7 @@ def test_analyzer_merges_durable_events_and_agents_sdk_tool_observations(tmp_pat
                 "preview": {
                     "availability": "present",
                     "reasoning_effort": "medium",
-                    "requested_summary": "detailed",
+                    "requested_summary": "auto",
                 }
             },
         ),
