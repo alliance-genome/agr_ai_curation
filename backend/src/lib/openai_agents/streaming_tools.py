@@ -41,6 +41,9 @@ from .evidence_summary import (
     structured_result_missing_evidence_record_refs,
     structured_result_requires_evidence,
 )
+from .event_types import (
+    INTERNAL_EXTRACTION_RESULT_EVENT_TYPE as _INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
+)
 from .tools.evidence_workspace import (
     reset_active_evidence_records,
     set_active_evidence_records,
@@ -73,6 +76,7 @@ from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtracti
 
 logger = logging.getLogger(__name__)
 
+INTERNAL_EXTRACTION_RESULT_EVENT_TYPE = _INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 _DOCUMENT_REQUIRED_TOOL_NAMES = set(DOCUMENT_REQUIRED_TOOL_NAMES)
 _GROQ_SCHEMA_CONSTRAINTS_ADAPTER_KEY = "groq_schema_constraints"
 _DOMAIN_ENVELOPE_SUPERVISOR_FIELD_PRIORITY = (
