@@ -100,8 +100,8 @@ describe('PdfViewerChrome', () => {
     })
 
     expect(screen.getByText('paper.pdf')).toBeInTheDocument()
-    expect(screen.getByText(/12 pages/)).toBeInTheDocument()
-    expect(screen.getByText(/Serving from/)).toBeInTheDocument()
+    expect(screen.queryByText(/12 pages/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Serving from/)).not.toBeInTheDocument()
     expect(screen.getByText('Exact quote')).toBeInTheDocument()
     expect(screen.getByText('Selection sync')).toBeInTheDocument()
     expect(screen.getByText('Page 3')).toBeInTheDocument()

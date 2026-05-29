@@ -170,11 +170,16 @@ export function PdfViewerChrome({
               sx={{ minWidth: 0 }}
             >
               <Typography
-                variant={isCurationVariant ? 'subtitle2' : 'h6'}
+                variant={isCurationVariant ? 'subtitle2' : 'subtitle1'}
                 sx={{
                   color: isCurationVariant ? alpha(theme.palette.common.white, 0.92) : undefined,
                   fontWeight: isCurationVariant ? 800 : undefined,
                   letterSpacing: isCurationVariant ? 0 : undefined,
+                  lineHeight: 1.25,
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
                 }}
               >
                 {isCurationVariant ? 'Document viewer' : activeDocument.filename}
@@ -195,11 +200,6 @@ export function PdfViewerChrome({
                 </Typography>
               ) : null}
             </Stack>
-            {!isCurationVariant ? (
-              <Typography variant="body2" color="text.secondary">
-                {activeDocument.pageCount} pages · Serving from {activeDocument.viewerUrl}
-              </Typography>
-            ) : null}
             {navigationResult && (
               <>
                 <Stack direction="row" spacing={1} flexWrap="wrap">
