@@ -66,6 +66,17 @@ def test_build_tool_start_friendly_name_for_curation_prep_tool():
     assert build_tool_start_friendly_name("prepare_for_curation") == "Calling Curation Prep..."
 
 
+def test_active_evidence_workspace_tools_have_display_labels():
+    assert resolve_tool_display_name("list_recorded_evidence") == "List Recorded Evidence"
+    assert (
+        build_specialist_internal_friendly_name(
+            "Gene Expression Extractor",
+            "attach_evidence_to_object",
+        )
+        == "Gene Expression Extractor: Attach Evidence To Object"
+    )
+
+
 def test_build_tool_complete_friendly_name():
     assert build_tool_complete_friendly_name("ask_gene_specialist") == "Gene Validation Agent complete"
 

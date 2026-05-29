@@ -7,9 +7,12 @@ This module contains foundational types used across all schema models:
 - StructuredMessageEnvelope: Base class for all envelope schemas
 """
 
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 from enum import Enum
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
+from pydantic.json_schema import DEFAULT_REF_TEMPLATE, GenerateJsonSchema, JsonSchemaMode
+
+from src.schemas.domain_envelope import ObjectRef, validate_field_path_syntax
 
 
 class Destination(str, Enum):
@@ -158,6 +161,30 @@ class EvidenceRecord(BaseModel):
         description="Exact source fragments selected by record_evidence span IDs",
     )
     figure_reference: Optional[str] = Field(default=None, description="Figure or table locator literal, if available")
+    object_id: Optional[str] = Field(
+        default=None,
+        description="Durable curatable object ID this evidence was attached to, if available",
+    )
+    pending_ref_id: Optional[str] = Field(
+        default=None,
+        description="Extraction-time curatable object ref this evidence was attached to, if available",
+    )
+    object_ref: Optional[ObjectRef] = Field(
+        default=None,
+        description="Canonical object reference this evidence supports, if available",
+    )
+    field_path: Optional[str] = Field(
+        default=None,
+        description="Primary domain payload field path supported by this evidence, if available",
+    )
+    field_paths: Optional[List[str]] = Field(
+        default=None,
+        description="Domain payload field paths supported by this evidence, if available",
+    )
+    agent_note: Optional[str] = Field(
+        default=None,
+        description="Agent-owned note about how this evidence should be used",
+    )
 
     @field_validator("page", mode="before")
     @classmethod
@@ -177,6 +204,10 @@ class EvidenceRecord(BaseModel):
         "chunk_id",
         "document_id",
         "figure_reference",
+        "object_id",
+        "pending_ref_id",
+        "field_path",
+        "agent_note",
         mode="before",
     )
     @classmethod
@@ -188,7 +219,7 @@ class EvidenceRecord(BaseModel):
         normalized = value.strip()
         return normalized or None
 
-    @field_validator("chunk_ids", "source_span_ids", mode="before")
+    @field_validator("chunk_ids", "source_span_ids", "field_paths", mode="before")
     @classmethod
     def _normalize_optional_string_lists(cls, value: object) -> object:
         if value is None:
@@ -206,6 +237,23 @@ class EvidenceRecord(BaseModel):
             seen.add(normalized)
             normalized_values.append(normalized)
         return normalized_values or None
+
+    @field_validator("field_path")
+    @classmethod
+    def _validate_optional_field_path(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return validate_field_path_syntax(value)
+
+    @field_validator("field_paths")
+    @classmethod
+    def _validate_optional_field_paths(
+        cls,
+        value: Optional[List[str]],
+    ) -> Optional[List[str]]:
+        if value is None:
+            return None
+        return [validate_field_path_syntax(item) for item in value]
 
 
 class MentionCandidate(BaseModel):
@@ -286,10 +334,25 @@ class StructuredMessageEnvelope(BaseModel):
     reasoning: str = Field(description="Explanation of the decision or response")
 
     @classmethod
-    def model_json_schema(cls, **kwargs):
+    def model_json_schema(
+        cls,
+        by_alias: bool = True,
+        ref_template: str = DEFAULT_REF_TEMPLATE,
+        schema_generator: type[GenerateJsonSchema] = GenerateJsonSchema,
+        mode: JsonSchemaMode = "validation",
+        *,
+        union_format: Literal["any_of", "primitive_type_array"] = "any_of",
+    ) -> dict[str, Any]:
         """Generate JSON schema for OpenAI API"""
         # Use mode='serialization' to get the proper schema
-        schema = super().model_json_schema(mode='serialization', **kwargs)
+        _ = mode
+        schema = super().model_json_schema(
+            by_alias=by_alias,
+            ref_template=ref_template,
+            schema_generator=schema_generator,
+            mode="serialization",
+            union_format=union_format,
+        )
         # Ensure all fields are required for OpenAI strict mode
         schema = cls._ensure_required_fields(schema)
         # Ensure additionalProperties is false (handled by ConfigDict now)

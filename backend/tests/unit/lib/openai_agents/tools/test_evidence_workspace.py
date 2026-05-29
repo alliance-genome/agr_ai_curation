@@ -6,6 +6,7 @@ import pytest
 
 import src.lib.openai_agents.tools.evidence_workspace as evidence_workspace
 from src.lib.openai_agents.evidence_summary import canonicalize_structured_result_payload
+from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
 
 @pytest.fixture(autouse=True)
@@ -249,3 +250,8 @@ async def test_record_list_attach_discard_finalize_flow_omits_discarded(workspac
             "evidence_record_id": "ev-active",
         }
     ]
+    validated = DomainEnvelopeExtractionResult.model_validate(canonical)
+    validated_record = validated.metadata.evidence_records[0]
+    assert validated_record.pending_ref_id == "expression-flcn-brain"
+    assert validated_record.object_ref is not None
+    assert validated_record.object_ref.pending_ref_id == "expression-flcn-brain"

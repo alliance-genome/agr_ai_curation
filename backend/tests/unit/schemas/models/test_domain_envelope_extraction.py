@@ -172,6 +172,27 @@ def test_first_pass_extractor_envelopes_reject_top_level_evidence_records(envelo
     )
 
 
+def test_first_pass_extractor_evidence_records_accept_workspace_attachment_metadata():
+    payload = _valid_domain_envelope_payload()
+    payload["metadata"]["evidence_records"][0].update(
+        {
+            "pending_ref_id": "object-alpha-1",
+            "object_ref": {"pending_ref_id": "object-alpha-1"},
+            "field_path": "normalized_id",
+            "field_paths": ["normalized_id"],
+            "agent_note": "Supports the normalized identifier field.",
+        }
+    )
+
+    envelope = GeneExpressionEnvelope.model_validate(payload)
+    evidence_record = envelope.metadata.evidence_records[0]
+
+    assert evidence_record.pending_ref_id == "object-alpha-1"
+    assert evidence_record.object_ref is not None
+    assert evidence_record.object_ref.pending_ref_id == "object-alpha-1"
+    assert evidence_record.field_paths == ["normalized_id"]
+
+
 def test_domain_envelope_extraction_schema_has_no_top_level_legacy_lists():
     schema_properties = GeneExtractionResultEnvelope.model_json_schema()["properties"]
 
