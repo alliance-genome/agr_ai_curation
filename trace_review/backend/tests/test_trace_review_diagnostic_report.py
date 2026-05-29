@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 
 from src.analyzers.extraction_timeline import ExtractionTimelineAnalyzer
 from src.api import claude, traces
+from src.api.extraction_timeline_helpers import load_extraction_timeline_context
 from src.models.requests import AnalyzeTraceRequest
 from src.services.cache_manager import CacheManager
 
@@ -93,6 +94,29 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
             report["timeline"][0]["output"],
             "status: ok; summary: Resolved FBbt term.",
         )
+
+    async def test_timeline_context_logs_sibling_cached_data_load_failures(self):
+        async def load_cached_data():
+            return self._make_trace_data("trace-extraction-123")
+
+        async def load_sibling_cached_data(_trace_id: str):
+            raise RuntimeError("langfuse sibling unavailable")
+
+        with self.assertLogs("src.api.extraction_timeline_helpers", level="DEBUG") as captured:
+            context = await load_extraction_timeline_context(
+                trace_id="trace-extraction-123",
+                feedback_id=None,
+                include_sibling_traces=True,
+                load_cached_data=load_cached_data,
+                load_sibling_trace_ids=lambda: ["trace-sibling-456"],
+                load_sibling_cached_data=load_sibling_cached_data,
+                fallback_exceptions=(RuntimeError,),
+            )
+
+        self.assertEqual(context.sibling_trace_ids, ["trace-sibling-456"])
+        self.assertEqual(context.sibling_cached_data_by_trace_id, {})
+        self.assertIn("trace-extraction-123", captured.output[0])
+        self.assertIn("trace-sibling-456", captured.output[0])
 
     @patch("src.api.traces.AgentConfigAnalyzer.extract_agent_configs", return_value={})
     @patch("src.api.traces.DocumentHierarchyAnalyzer.analyze", return_value={})

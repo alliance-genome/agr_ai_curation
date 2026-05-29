@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional
 
@@ -16,6 +17,8 @@ TraceCacheLoader = Callable[[], Awaitable[Dict[str, Any]]]
 SiblingTraceLoader = Callable[[], List[str]]
 SiblingTraceCacheLoader = Callable[[str], Awaitable[Dict[str, Any]]]
 ExceptionFactory = Callable[[BaseException], BaseException]
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -87,8 +90,16 @@ async def load_extraction_timeline_context(
         sibling_cached_data_by_trace_id: Dict[str, Dict[str, Any]] = {}
         for sibling_trace_id in sibling_trace_ids:
             try:
-                sibling_cached_data_by_trace_id[sibling_trace_id] = await load_sibling_cached_data(sibling_trace_id)
-            except fallback_exceptions:
+                sibling_cached_data_by_trace_id[sibling_trace_id] = await load_sibling_cached_data(
+                    sibling_trace_id
+                )
+            except fallback_exceptions as exc:
+                logger.debug(
+                    "Skipping extraction timeline sibling cached data: trace_id=%s sibling_trace_id=%s error=%s",
+                    trace_id,
+                    sibling_trace_id,
+                    exc,
+                )
                 continue
     except fallback_exceptions as exc:
         if feedback_trace_data is None:
