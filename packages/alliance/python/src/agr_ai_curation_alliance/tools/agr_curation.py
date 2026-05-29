@@ -4374,6 +4374,16 @@ def _ontology_tree_rows(
     relation: str,
     limit: int,
 ) -> List[Dict[str, Any]]:
+    create_session = getattr(db, "create_session", None)
+    if callable(create_session):
+        return _ontology_tree_rows_from_session(
+            create_session=create_session,
+            curie=curie,
+            curie_prefix=curie_prefix,
+            relation=relation,
+            limit=limit,
+        )
+
     pairs_method = getattr(db, "get_ontology_pairs", None)
     if not callable(pairs_method):
         return []
@@ -4404,6 +4414,92 @@ def _ontology_tree_rows(
         if len(rows) >= limit:
             break
     return rows
+
+
+def _ontology_tree_rows_from_session(
+    *,
+    create_session: Any,
+    curie: str,
+    curie_prefix: str,
+    relation: str,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """Return bounded ontology context without scanning an entire ontology."""
+
+    try:
+        from sqlalchemy import text
+    except ImportError:
+        return []
+
+    if relation == "parents":
+        where_clause = "otc.curie = :curie"
+        select_columns = """
+            'parent' AS relation,
+            otp.curie AS contextCurie,
+            otp.name AS contextName,
+            otp.namespace AS contextType,
+            otp.obsolete AS contextIsObsolete
+        """
+    elif relation == "children":
+        where_clause = "otp.curie = :curie"
+        select_columns = """
+            'child' AS relation,
+            otc.curie AS contextCurie,
+            otc.name AS contextName,
+            otc.namespace AS contextType,
+            otc.obsolete AS contextIsObsolete
+        """
+    else:
+        return []
+
+    session = create_session()
+    try:
+        sql_query = text(
+            f"""
+            SELECT DISTINCT
+                {select_columns}
+            FROM
+                ontologyterm otc
+                JOIN ontologytermclosure otpc ON otc.id = otpc.closuresubject_id
+                JOIN ontologyterm otp ON otpc.closureobject_id = otp.id
+            WHERE
+                {where_clause}
+                AND otp.curie LIKE :curieprefix
+                AND otpc.distance = 1
+                AND otpc.closuretypes in ('["part_of"]', '["is_a"]')
+            LIMIT :limit
+            """
+        )
+        rows = session.execute(
+            sql_query,
+            {
+                "curie": curie,
+                "curieprefix": f"{curie_prefix}%",
+                "limit": limit,
+            },
+        ).fetchall()
+        return [
+            {
+                "relation": row[0],
+                "curie": row[1],
+                "name": row[2],
+                "namespace": row[3],
+                "obsolete": row[4],
+            }
+            for row in rows
+        ]
+    except Exception as exc:
+        logger.warning(
+            "Targeted ontology tree lookup failed for %s relation=%s: %s",
+            curie,
+            relation,
+            exc,
+        )
+        return []
+    finally:
+        close = getattr(session, "close", None)
+        if callable(close):
+            close()
 
 
 @function_tool(strict_mode=False)

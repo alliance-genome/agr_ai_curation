@@ -904,6 +904,98 @@ def test_inspect_ontology_term_returns_bounded_context(monkeypatch):
     assert result.data["next_tool_call"]["tool"] == "resolve_domain_field_term"
 
 
+def test_inspect_ontology_term_uses_targeted_tree_lookup_when_session_available(monkeypatch):
+    execute_calls = []
+
+    class FakeSession:
+        def execute(self, query, params):
+            query_text = str(query)
+            execute_calls.append((query_text, dict(params)))
+            curie = params["curie"]
+            is_parent_lookup = "otc.curie = :curie" in query_text
+            is_child_lookup = "otp.curie = :curie" in query_text
+            if is_parent_lookup and curie == "WBbt:0004758":
+                return SimpleNamespace(
+                    fetchall=lambda: [
+                        (
+                            "parent",
+                            "WBbt:0004017",
+                            "mechanosensory neuron",
+                            "wormbase_anatomy",
+                            False,
+                        )
+                    ]
+                )
+            if is_child_lookup and curie == "WBbt:0004017":
+                return SimpleNamespace(
+                    fetchall=lambda: [
+                        (
+                            "child",
+                            "WBbt:0004758",
+                            "ALM neuron",
+                            "wormbase_anatomy",
+                            False,
+                        ),
+                        (
+                            "child",
+                            "WBbt:0004759",
+                            "PLM neuron",
+                            "wormbase_anatomy",
+                            False,
+                        ),
+                    ]
+                )
+            return SimpleNamespace(fetchall=lambda: [])
+
+        @staticmethod
+        def close():
+            return None
+
+    class FakeDb:
+        @staticmethod
+        def get_ontology_term(curie):
+            return SimpleNamespace(
+                curie=curie,
+                name="ALM neuron",
+                namespace="wormbase_anatomy",
+                ontology_type="WBBTTerm",
+            )
+
+        @staticmethod
+        def create_session():
+            return FakeSession()
+
+        @staticmethod
+        def get_ontology_pairs(_prefix):
+            raise AssertionError("targeted DB session lookup should avoid broad pair scan")
+
+    monkeypatch.setattr(
+        agr_curation,
+        "get_curation_resolver",
+        lambda: _Resolver(FakeDb()),
+    )
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+
+    result = _inspect_resolver_fn()(
+        domain_pack_id="agr.alliance.gene_expression",
+        object_type="GeneExpressionAnnotation",
+        field_path="expression_pattern.where_expressed.anatomical_structure",
+        curie="WBbt:0004758",
+        data_provider="WB",
+        include_siblings=True,
+    )
+
+    assert result.status == "ok"
+    assert result.data["context"]["parents"][0]["curie"] == "WBbt:0004017"
+    assert result.data["context"]["siblings"][0]["curie"] == "WBbt:0004759"
+    assert result.data["debug"]["context_counts"] == {
+        "parents": 1,
+        "children": 0,
+        "siblings": 1,
+    }
+    assert all(call[1]["curieprefix"] == "WBbt%" for call in execute_calls)
+
+
 def test_inspect_ontology_term_blocks_terms_outside_slim_allowlist(monkeypatch):
     class FakeDb:
         @staticmethod
