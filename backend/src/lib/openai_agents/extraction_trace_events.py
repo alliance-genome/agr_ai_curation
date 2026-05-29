@@ -59,7 +59,7 @@ def trace_event_dir() -> Path:
     configured = os.getenv("EXTRACTION_TRACE_EVENT_DIR", "").strip()
     if configured:
         return Path(configured).expanduser()
-    return Path.home() / ".agr_ai_curation" / "extraction_trace_events"
+    return Path.home() / ".ai_curation" / "extraction_trace_events"
 
 
 def trace_event_path(trace_id: str) -> Path:

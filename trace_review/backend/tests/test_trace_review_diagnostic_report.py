@@ -144,7 +144,7 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(view_response["data"]["reasoning_summary"]["status"], "unavailable")
 
     @patch(
-        "src.api.traces.fetch_feedback_trace_artifacts",
+        "src.api.extraction_timeline_helpers.fetch_feedback_trace_artifacts",
         return_value={
             "status": "available",
             "trace_data": {
@@ -239,7 +239,7 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(response.token_info.estimated_tokens, 1)
 
     @patch(
-        "src.api.claude.fetch_feedback_trace_artifacts",
+        "src.api.extraction_timeline_helpers.fetch_feedback_trace_artifacts",
         return_value={
             "status": "available",
             "trace_data": {

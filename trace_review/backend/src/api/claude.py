@@ -13,10 +13,9 @@ Endpoints:
 """
 
 import math
-from typing import Dict, Any, Optional, List
+from typing import Annotated, Dict, Any, Optional, List
 from fastapi import APIRouter, HTTPException, Request, Query, Path
 
-from ..services.feedback_artifacts import fetch_feedback_trace_artifacts
 from ..services.trace_extractor import TraceExtractor
 from ..analyzers.conversation import ConversationAnalyzer
 from ..analyzers.tool_calls import ToolCallAnalyzer
@@ -24,7 +23,10 @@ from ..analyzers.trace_summary import TraceSummaryAnalyzer
 from ..analyzers.extraction_timeline import (
     ANALYZER_SCHEMA_VERSION as EXTRACTION_TIMELINE_ANALYZER_SCHEMA_VERSION,
     ExtractionTimelineAnalyzer,
-    feedback_trace_sibling_ids,
+)
+from .extraction_timeline_helpers import (
+    build_extraction_timeline,
+    load_extraction_timeline_context,
 )
 from ..utils.token_budget import (
     create_token_info_dict,
@@ -220,54 +222,6 @@ def _sibling_trace_ids(
     ]
 
 
-def _build_extraction_timeline(
-    *,
-    trace_id: str,
-    cached_data: Dict[str, Any],
-    include_raw_args: bool,
-    include_raw_outputs: bool,
-    tool_name: Optional[str],
-    event_type: Optional[str],
-    candidate_id: Optional[str],
-    sibling_trace_ids: Optional[List[str]] = None,
-    session_id: Optional[str] = None,
-    feedback_id: Optional[str] = None,
-    feedback_artifacts: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    feedback_trace_data = (
-        feedback_artifacts.get("trace_data")
-        if isinstance(feedback_artifacts, dict)
-        else None
-    )
-    timeline = ExtractionTimelineAnalyzer.analyze(
-        trace_id=trace_id,
-        raw_trace=cached_data.get("raw_trace"),
-        observations=cached_data.get("observations", []),
-        include_raw_args=include_raw_args,
-        include_raw_outputs=include_raw_outputs,
-        tool_name=tool_name,
-        event_type=event_type,
-        candidate_id=candidate_id,
-        sibling_trace_ids=sibling_trace_ids,
-        feedback_trace_data=feedback_trace_data,
-    )
-    timeline["query"] = {
-        "session_id": session_id,
-        "feedback_id": feedback_id,
-        "feedback_artifact_status": (
-            feedback_artifacts.get("status")
-            if isinstance(feedback_artifacts, dict)
-            else None
-        ),
-        "include_raw_args": include_raw_args,
-        "include_raw_outputs": include_raw_outputs,
-        "tool_name": tool_name,
-        "event_type": event_type,
-        "candidate_id": candidate_id,
-    }
-    return timeline
-
-
 # =============================================================================
 # Summary Endpoint
 # =============================================================================
@@ -285,8 +239,8 @@ def _build_extraction_timeline(
     """
 )
 async def get_trace_summary(
-    trace_id: str = Path(..., description="Langfuse trace ID"),
-    request: Request = None,
+    trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     user: Dict[str, Any] = get_auth_dependency()
 ) -> ClaudeTraceResponse:
@@ -339,8 +293,8 @@ async def get_trace_summary(
     """
 )
 async def get_tool_calls_summary(
-    trace_id: str = Path(..., description="Langfuse trace ID"),
-    request: Request = None,
+    trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     user: Dict[str, Any] = get_auth_dependency()
 ) -> ToolCallsSummaryResponse:
@@ -407,8 +361,8 @@ async def get_tool_calls_summary(
     """
 )
 async def get_tool_calls_paginated(
-    trace_id: str = Path(..., description="Langfuse trace ID"),
-    request: Request = None,
+    trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
     page: int = Query(default=1, ge=1, description="Page number (1-indexed)"),
     page_size: int = Query(default=10, ge=1, le=20, description="Items per page"),
     tool_name: Optional[str] = Query(default=None, description="Filter by tool name"),
@@ -487,9 +441,9 @@ async def get_tool_calls_paginated(
     """
 )
 async def get_tool_call_detail(
-    trace_id: str = Path(..., description="Langfuse trace ID"),
-    call_id: str = Path(..., description="Tool call_id or observation id"),
-    request: Request = None,
+    trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    call_id: Annotated[str, Path(description="Tool call_id or observation id")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     user: Dict[str, Any] = get_auth_dependency()
 ) -> SingleToolCallResponse:
@@ -543,8 +497,8 @@ async def get_tool_call_detail(
     """
 )
 async def get_trace_conversation(
-    trace_id: str = Path(..., description="Langfuse trace ID"),
-    request: Request = None,
+    trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     user: Dict[str, Any] = get_auth_dependency()
 ) -> ConversationResponse:
@@ -584,8 +538,8 @@ async def get_trace_conversation(
     """
 )
 async def get_extraction_timeline(
-    trace_id: str = Path(..., description="Langfuse trace ID"),
-    request: Request = None,
+    trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source: local, remote, or auto"),
     session_id: Optional[str] = Query(default=None, description="Langfuse session ID for sibling-trace expansion"),
     feedback_id: Optional[str] = Query(default=None, description="Feedback ID linked to stored trace artifacts"),
@@ -598,54 +552,29 @@ async def get_extraction_timeline(
     candidate_id: Optional[str] = Query(default=None, description="Filter by candidate ID"),
     user: Dict[str, Any] = get_auth_dependency()
 ) -> ClaudeTraceResponse:
-    feedback_artifacts = fetch_feedback_trace_artifacts(feedback_id)
-    feedback_trace_data = (
-        feedback_artifacts.get("trace_data")
-        if isinstance(feedback_artifacts, dict)
-        else None
-    )
-    try:
-        cached_data = await _ensure_trace_analyzed(trace_id, request, source, refresh=refresh)
-        siblings = _sibling_trace_ids(
+    context = await load_extraction_timeline_context(
+        trace_id=trace_id,
+        feedback_id=feedback_id,
+        include_sibling_traces=include_sibling_traces,
+        load_cached_data=lambda: _ensure_trace_analyzed(trace_id, request, source, refresh=refresh),
+        load_sibling_trace_ids=lambda: _sibling_trace_ids(
             trace_id=trace_id,
             source=source,
             session_id=session_id,
             include_sibling_traces=include_sibling_traces,
-        )
-        if include_sibling_traces:
-            for sibling_id in feedback_trace_sibling_ids(trace_id, feedback_trace_data):
-                if sibling_id not in siblings:
-                    siblings.append(sibling_id)
-    except HTTPException:
-        if not (
-            isinstance(feedback_artifacts, dict)
-            and feedback_artifacts.get("trace_data")
-        ):
-            raise
-        cached_data = {
-            "raw_trace": {
-                "id": trace_id,
-                "name": "Stored feedback trace artifact",
-            },
-            "observations": [],
-        }
-        siblings = (
-            feedback_trace_sibling_ids(trace_id, feedback_trace_data)
-            if include_sibling_traces
-            else []
-        )
-    timeline = _build_extraction_timeline(
+        ),
+        fallback_exceptions=(HTTPException,),
+    )
+    timeline = build_extraction_timeline(
         trace_id=trace_id,
-        cached_data=cached_data,
+        context=context,
         include_raw_args=include_raw_args,
         include_raw_outputs=include_raw_outputs,
         tool_name=tool_name,
         event_type=event_type,
         candidate_id=candidate_id,
-        sibling_trace_ids=siblings,
         session_id=session_id,
         feedback_id=feedback_id,
-        feedback_artifacts=feedback_artifacts,
     )
     token_info = create_token_info_dict(timeline)
     return ClaudeTraceResponse(
@@ -665,8 +594,8 @@ async def get_extraction_timeline(
     """
 )
 async def get_extraction_diagnostic_report(
-    trace_id: str = Path(..., description="Langfuse trace ID"),
-    request: Request = None,
+    trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source: local, remote, or auto"),
     session_id: Optional[str] = Query(default=None, description="Langfuse session ID for sibling-trace expansion"),
     feedback_id: Optional[str] = Query(default=None, description="Feedback ID linked to stored trace artifacts"),
@@ -679,54 +608,29 @@ async def get_extraction_diagnostic_report(
     candidate_id: Optional[str] = Query(default=None, description="Filter by candidate ID"),
     user: Dict[str, Any] = get_auth_dependency()
 ) -> ClaudeTraceResponse:
-    feedback_artifacts = fetch_feedback_trace_artifacts(feedback_id)
-    feedback_trace_data = (
-        feedback_artifacts.get("trace_data")
-        if isinstance(feedback_artifacts, dict)
-        else None
-    )
-    try:
-        cached_data = await _ensure_trace_analyzed(trace_id, request, source, refresh=refresh)
-        siblings = _sibling_trace_ids(
+    context = await load_extraction_timeline_context(
+        trace_id=trace_id,
+        feedback_id=feedback_id,
+        include_sibling_traces=include_sibling_traces,
+        load_cached_data=lambda: _ensure_trace_analyzed(trace_id, request, source, refresh=refresh),
+        load_sibling_trace_ids=lambda: _sibling_trace_ids(
             trace_id=trace_id,
             source=source,
             session_id=session_id,
             include_sibling_traces=include_sibling_traces,
-        )
-        if include_sibling_traces:
-            for sibling_id in feedback_trace_sibling_ids(trace_id, feedback_trace_data):
-                if sibling_id not in siblings:
-                    siblings.append(sibling_id)
-    except HTTPException:
-        if not (
-            isinstance(feedback_artifacts, dict)
-            and feedback_artifacts.get("trace_data")
-        ):
-            raise
-        cached_data = {
-            "raw_trace": {
-                "id": trace_id,
-                "name": "Stored feedback trace artifact",
-            },
-            "observations": [],
-        }
-        siblings = (
-            feedback_trace_sibling_ids(trace_id, feedback_trace_data)
-            if include_sibling_traces
-            else []
-        )
-    timeline = _build_extraction_timeline(
+        ),
+        fallback_exceptions=(HTTPException,),
+    )
+    timeline = build_extraction_timeline(
         trace_id=trace_id,
-        cached_data=cached_data,
+        context=context,
         include_raw_args=include_raw_args,
         include_raw_outputs=include_raw_outputs,
         tool_name=tool_name,
         event_type=event_type,
         candidate_id=candidate_id,
-        sibling_trace_ids=siblings,
         session_id=session_id,
         feedback_id=feedback_id,
-        feedback_artifacts=feedback_artifacts,
     )
     report = ExtractionTimelineAnalyzer.diagnostic_report(timeline)
     token_info = create_token_info_dict(report)
@@ -755,9 +659,9 @@ async def get_extraction_diagnostic_report(
     """
 )
 async def get_trace_view(
-    trace_id: str = Path(..., description="Langfuse trace ID"),
-    view_name: str = Path(..., description="View name"),
-    request: Request = None,
+    trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    view_name: Annotated[str, Path(description="View name")],
+    request: Request,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     user: Dict[str, Any] = get_auth_dependency()
 ) -> ClaudeTraceResponse:

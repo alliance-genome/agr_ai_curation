@@ -8,7 +8,6 @@ from typing import Dict, Any, List, Optional, Tuple
 
 from ..models.requests import AnalyzeTraceRequest, TraceSource
 from ..models.responses import SessionTraceExportResponse
-from ..services.feedback_artifacts import fetch_feedback_trace_artifacts
 from ..services.trace_extractor import TraceExtractor
 from ..analyzers.conversation import ConversationAnalyzer
 from ..analyzers.tool_calls import ToolCallAnalyzer
@@ -21,7 +20,10 @@ from ..analyzers.agent_config import AgentConfigAnalyzer
 from ..analyzers.extraction_timeline import (
     ANALYZER_SCHEMA_VERSION as EXTRACTION_TIMELINE_ANALYZER_SCHEMA_VERSION,
     ExtractionTimelineAnalyzer,
-    feedback_trace_sibling_ids,
+)
+from .extraction_timeline_helpers import (
+    build_extraction_timeline,
+    load_extraction_timeline_context,
 )
 from ..utils.token_budget import create_lightweight_tool_call_summary
 from ..utils.trace_output import is_trace_output_cacheable
@@ -211,54 +213,6 @@ def _sibling_trace_ids(
         for listed_trace in session_listing.get("traces", [])
         if listed_trace.get("id") and listed_trace.get("id") != trace_id
     ]
-
-
-def _filtered_extraction_timeline(
-    *,
-    trace_id: str,
-    cache_data: Dict[str, Any],
-    include_raw_args: bool,
-    include_raw_outputs: bool,
-    tool_name: Optional[str],
-    event_type: Optional[str],
-    candidate_id: Optional[str],
-    sibling_trace_ids: Optional[List[str]] = None,
-    session_id: Optional[str] = None,
-    feedback_id: Optional[str] = None,
-    feedback_artifacts: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    feedback_trace_data = (
-        feedback_artifacts.get("trace_data")
-        if isinstance(feedback_artifacts, dict)
-        else None
-    )
-    timeline = ExtractionTimelineAnalyzer.analyze(
-        trace_id=trace_id,
-        raw_trace=cache_data.get("raw_trace"),
-        observations=cache_data.get("observations", []),
-        include_raw_args=include_raw_args,
-        include_raw_outputs=include_raw_outputs,
-        tool_name=tool_name,
-        event_type=event_type,
-        candidate_id=candidate_id,
-        sibling_trace_ids=sibling_trace_ids,
-        feedback_trace_data=feedback_trace_data,
-    )
-    timeline["query"] = {
-        "session_id": session_id,
-        "feedback_id": feedback_id,
-        "feedback_artifact_status": (
-            feedback_artifacts.get("status")
-            if isinstance(feedback_artifacts, dict)
-            else None
-        ),
-        "include_raw_args": include_raw_args,
-        "include_raw_outputs": include_raw_outputs,
-        "tool_name": tool_name,
-        "event_type": event_type,
-        "candidate_id": candidate_id,
-    }
-    return timeline
 
 
 def _listed_trace_reference(trace: Dict[str, Any]) -> Dict[str, Any]:
@@ -568,49 +522,43 @@ async def get_trace_view(
     cache_manager = request.app.state.cache_manager
 
     if view_name == "extraction_timeline":
-        feedback_artifacts = fetch_feedback_trace_artifacts(feedback_id)
-        feedback_trace_data = (
-            feedback_artifacts.get("trace_data")
-            if isinstance(feedback_artifacts, dict)
-            else None
-        )
-        try:
+        async def load_cached_data() -> Dict[str, Any]:
             cached_data, _cache_status, _from_cache = _get_or_analyze_trace_export(
                 trace_id,
                 cache_manager,
                 source,
                 refresh=refresh,
             )
-            siblings = _sibling_trace_ids(
+            return cached_data
+
+        try:
+            context = await load_extraction_timeline_context(
                 trace_id=trace_id,
-                source=source,
-                session_id=session_id,
+                feedback_id=feedback_id,
                 include_sibling_traces=include_sibling_traces,
-            )
-            if include_sibling_traces:
-                for sibling_id in feedback_trace_sibling_ids(trace_id, feedback_trace_data):
-                    if sibling_id not in siblings:
-                        siblings.append(sibling_id)
-        except TraceExtractionError as e:
-            if not (
-                isinstance(feedback_artifacts, dict)
-                and feedback_artifacts.get("trace_data")
-            ):
-                raise HTTPException(
+                load_cached_data=load_cached_data,
+                load_sibling_trace_ids=lambda: _sibling_trace_ids(
+                    trace_id=trace_id,
+                    source=source,
+                    session_id=session_id,
+                    include_sibling_traces=include_sibling_traces,
+                ),
+                fallback_exceptions=(TraceExtractionError,),
+                unavailable_exception_factory=lambda exc: HTTPException(
                     status_code=404,
-                    detail=f"Trace {trace_id} not found in Langfuse ({source}): {str(e)}"
-                )
-            cached_data = {
-                "raw_trace": {
-                    "id": trace_id,
-                    "name": "Stored feedback trace artifact",
-                },
-                "observations": [],
-            }
-            siblings = (
-                feedback_trace_sibling_ids(trace_id, feedback_trace_data)
-                if include_sibling_traces
-                else []
+                    detail=f"Trace {trace_id} not found in Langfuse ({source}): {str(exc)}",
+                ),
+            )
+            timeline = build_extraction_timeline(
+                trace_id=trace_id,
+                context=context,
+                include_raw_args=include_raw_args,
+                include_raw_outputs=include_raw_outputs,
+                tool_name=tool_name,
+                event_type=event_type,
+                candidate_id=candidate_id,
+                session_id=session_id,
+                feedback_id=feedback_id,
             )
         except TraceAnalysisError as e:
             logger.exception("Error analyzing trace: %s", e)
@@ -622,20 +570,8 @@ async def get_trace_view(
         return {
             "view": view_name,
             "trace_id": trace_id,
-            "cached_at": cached_data.get("cached_at"),
-            "data": _filtered_extraction_timeline(
-                trace_id=trace_id,
-                cache_data=cached_data,
-                include_raw_args=include_raw_args,
-                include_raw_outputs=include_raw_outputs,
-                tool_name=tool_name,
-                event_type=event_type,
-                candidate_id=candidate_id,
-                sibling_trace_ids=siblings,
-                session_id=session_id,
-                feedback_id=feedback_id,
-                feedback_artifacts=feedback_artifacts,
-            ),
+            "cached_at": context.cached_data.get("cached_at"),
+            "data": timeline,
         }
 
     cached_data = cache_manager.get(trace_id)
