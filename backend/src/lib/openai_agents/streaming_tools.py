@@ -26,7 +26,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import lru_cache
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Mapping, Optional
 
 from agents import Agent, AgentOutputSchema, Runner, RunConfig
 
@@ -304,6 +304,27 @@ def _reasoning_request_metadata(agent: Agent) -> Dict[str, Any]:
             "model": model,
             "reason": type(exc).__name__,
         }
+
+
+def _reasoning_summary_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, Mapping):
+        for key in ("summary_text", "text"):
+            text = value.get(key)
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+        return ""
+    if isinstance(value, (list, tuple)):
+        parts = [_reasoning_summary_text(item) for item in value]
+        return " ".join(part for part in parts if part).strip()
+
+    text = getattr(value, "text", None)
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+    return ""
 
 
 def _should_use_groq_tool_json_compat(agent: Agent) -> bool:
@@ -2464,25 +2485,11 @@ async def run_specialist_with_events(
 
                         # Special handling for reasoning_item - log the reasoning content
                         if item_type == "reasoning_item":
-                            # Try multiple ways to extract reasoning content
-                            reasoning_content = None
-                            reasoning_summary = None
+                            reasoning_content = ""
 
                             # Check for summary attribute (per OpenAI docs, this is the key attribute)
                             if hasattr(item, "summary"):
-                                reasoning_summary = getattr(item, "summary", None)
-                                if reasoning_summary:
-                                    # Summary might be a list of text objects
-                                    if isinstance(reasoning_summary, list):
-                                        texts = []
-                                        for s in reasoning_summary:
-                                            if hasattr(s, "text"):
-                                                texts.append(getattr(s, "text", ""))
-                                            else:
-                                                texts.append(str(s))
-                                        reasoning_content = " ".join(texts)
-                                    else:
-                                        reasoning_content = str(reasoning_summary)
+                                reasoning_content = _reasoning_summary_text(getattr(item, "summary", None))
 
                             # Check raw_item for nested content
                             if not reasoning_content and hasattr(item, "raw_item"):
@@ -2490,28 +2497,7 @@ async def run_specialist_with_events(
                                 if raw:
                                     # Try to get summary from raw_item
                                     if hasattr(raw, "summary"):
-                                        raw_summary = getattr(raw, "summary", None)
-                                        if raw_summary:
-                                            if isinstance(raw_summary, list):
-                                                texts = []
-                                                for s in raw_summary:
-                                                    if hasattr(s, "text"):
-                                                        texts.append(getattr(s, "text", ""))
-                                                    else:
-                                                        texts.append(str(s))
-                                                reasoning_content = " ".join(texts)
-                                            else:
-                                                reasoning_content = str(raw_summary)
-                                    # Try to serialize the raw item to see its structure
-                                    if not reasoning_content:
-                                        try:
-                                            if hasattr(raw, "model_dump"):
-                                                raw_dict = raw.model_dump()
-                                                reasoning_content = str(raw_dict)
-                                            elif hasattr(raw, "__dict__"):
-                                                reasoning_content = str(raw.__dict__)
-                                        except Exception:
-                                            pass
+                                        reasoning_content = _reasoning_summary_text(getattr(raw, "summary", None))
 
                             if reasoning_content:
                                 write_extraction_trace_event(

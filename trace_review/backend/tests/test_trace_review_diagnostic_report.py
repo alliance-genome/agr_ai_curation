@@ -66,6 +66,31 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(report["validation_failures"]), 1)
         self.assertEqual(report["timeline"], timeline["timeline"])
 
+    def test_diagnostic_report_preserves_concise_structured_tool_output(self):
+        timeline = {
+            "schema_version": "extraction_timeline_analyzer.v1",
+            "trace_id": "trace-report",
+            "event_count": 1,
+            "durable_event_count": 1,
+            "reasoning_summary": {"status": "unavailable", "summaries": []},
+            "timeline": [
+                {
+                    "event_type": "specialist_tool_call.completed",
+                    "tool_name": "resolve_domain_field_term",
+                    "output": "status: ok; summary: Resolved FBbt term.",
+                    "validation": {},
+                }
+            ],
+        }
+
+        report = ExtractionTimelineAnalyzer.diagnostic_report(timeline)
+
+        self.assertEqual(report["summary"]["tool_event_count"], 1)
+        self.assertEqual(
+            report["timeline"][0]["output"],
+            "status: ok; summary: Resolved FBbt term.",
+        )
+
     @patch("src.api.traces.AgentConfigAnalyzer.extract_agent_configs", return_value={})
     @patch("src.api.traces.DocumentHierarchyAnalyzer.analyze", return_value={})
     @patch(

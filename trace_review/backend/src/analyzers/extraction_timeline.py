@@ -12,6 +12,7 @@ from .tool_calls import ToolCallAnalyzer
 
 ANALYZER_SCHEMA_VERSION = "extraction_timeline_analyzer.v1"
 EVENT_SCHEMA_VERSION = "extraction_trace_event.v1"
+SUMMARY_TEXT_LIMIT = 500
 
 
 def _trace_event_dir() -> Path:
@@ -33,6 +34,18 @@ def _sort_key(item: Mapping[str, Any]) -> tuple[str, int]:
     )
 
 
+def _bounded_summary_text(value: Any) -> str:
+    text = value if isinstance(value, str) else json.dumps(
+        value,
+        sort_keys=True,
+        default=str,
+        separators=(",", ":"),
+    )
+    if len(text) <= SUMMARY_TEXT_LIMIT:
+        return text
+    return f"{text[: SUMMARY_TEXT_LIMIT - 3]}..."
+
+
 def _summary_text(summary: Mapping[str, Any] | None) -> str:
     if not isinstance(summary, Mapping):
         return ""
@@ -42,6 +55,15 @@ def _summary_text(summary: Mapping[str, Any] | None) -> str:
             return str(preview.get("summary_text") or "")
         if "message" in preview:
             return str(preview.get("message") or "")
+        parts = []
+        for key in ("status", "summary"):
+            value = preview.get(key)
+            if value not in (None, ""):
+                parts.append(f"{key}: {_bounded_summary_text(value)}")
+        if parts:
+            return "; ".join(parts)
+        if preview:
+            return _bounded_summary_text(preview)
     if isinstance(preview, str):
         return preview
     return ""

@@ -1,5 +1,8 @@
 from types import SimpleNamespace
 
+import pytest
+
+from src.lib.openai_agents import streaming_tools
 from src.lib.openai_agents.config import (
     build_model_settings,
     reasoning_summary_request_settings,
@@ -24,6 +27,26 @@ def _model(provider: str, *, supports_reasoning: bool):
         provider=provider,
         supports_reasoning=supports_reasoning,
         supports_temperature=not supports_reasoning,
+    )
+
+
+class _FakeRunResult:
+    def __init__(self, events=None, final_output="done"):
+        self._events = events or []
+        self.final_output = final_output
+
+    async def stream_events(self):
+        for event in self._events:
+            yield event
+
+
+def _reasoning_event(*, summary=None, raw_summary=None, raw=None):
+    if raw is None:
+        raw = SimpleNamespace(summary=raw_summary)
+        raw.model_dump = lambda: {"encrypted_content": "not a summary"}
+    return SimpleNamespace(
+        type="run_item_stream_event",
+        item=SimpleNamespace(type="reasoning_item", summary=summary, raw_item=raw),
     )
 
 
@@ -106,3 +129,114 @@ def test_reasoning_summary_settings_report_not_requested_without_reasoning_effor
 
     assert settings["availability"] == "not_requested"
     assert settings["requested_summary"] is None
+
+
+@pytest.mark.asyncio
+async def test_specialist_reasoning_item_persists_only_first_class_summary_text(monkeypatch):
+    captured_trace_events = []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", lambda _event: None)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(
+        streaming_tools,
+        "RunConfig",
+        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+    )
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult(
+            events=[_reasoning_event(summary=[SimpleNamespace(text="Used resolver evidence.")])]
+        ),
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "_reasoning_request_metadata",
+        lambda _agent: {"availability": "present"},
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "write_extraction_trace_event",
+        lambda **event: captured_trace_events.append(event),
+    )
+
+    agent = SimpleNamespace(
+        name="Reasoning Specialist",
+        tools=[],
+        output_type=None,
+        instructions="",
+        model="gpt-5.4-mini",
+    )
+
+    await streaming_tools.run_specialist_with_events(
+        agent=agent,
+        input_text="extract findings",
+        specialist_name="Reasoning Specialist",
+        max_turns=3,
+        tool_name="ask_gene_expression_specialist",
+    )
+
+    summary_events = [
+        event
+        for event in captured_trace_events
+        if event["event_type"] == "model.reasoning_summary.output"
+    ]
+    assert summary_events == [
+        {
+            "event_type": "model.reasoning_summary.output",
+            "output_summary": {"summary_text": "Used resolver evidence."},
+            "metadata": {
+                "agent": "Reasoning Specialist",
+                "tool_name": "ask_gene_expression_specialist",
+                "availability": "present",
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_specialist_reasoning_item_does_not_persist_raw_item_dump_as_summary(monkeypatch):
+    captured_trace_events = []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", lambda _event: None)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(
+        streaming_tools,
+        "RunConfig",
+        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+    )
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult(events=[_reasoning_event()]),
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "_reasoning_request_metadata",
+        lambda _agent: {"availability": "present"},
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "write_extraction_trace_event",
+        lambda **event: captured_trace_events.append(event),
+    )
+
+    agent = SimpleNamespace(
+        name="Reasoning Specialist",
+        tools=[],
+        output_type=None,
+        instructions="",
+        model="gpt-5.4-mini",
+    )
+
+    await streaming_tools.run_specialist_with_events(
+        agent=agent,
+        input_text="extract findings",
+        specialist_name="Reasoning Specialist",
+        max_turns=3,
+        tool_name="ask_gene_expression_specialist",
+    )
+
+    assert [
+        event["event_type"]
+        for event in captured_trace_events
+        if event["event_type"] == "model.reasoning_summary.output"
+    ] == []

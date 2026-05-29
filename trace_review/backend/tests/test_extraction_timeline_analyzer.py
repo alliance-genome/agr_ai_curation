@@ -155,6 +155,63 @@ def test_analyzer_filters_and_expands_sibling_durable_events(tmp_path, monkeypat
     assert timeline["timeline"][0]["tool_name"] == "validate_gene_expression_candidate"
 
 
+def test_analyzer_renders_concise_structured_output_summaries(tmp_path, monkeypatch):
+    monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(tmp_path))
+    _write_event(
+        tmp_path,
+        "trace-main",
+        _event(
+            "trace-main",
+            1,
+            "specialist_tool_call.completed",
+            metadata={"tool_name": "resolve_domain_field_term"},
+            output_summary={
+                "preview": {
+                    "status": "ok",
+                    "summary": "Resolved FBbt term.",
+                    "term_id": "FBbt:00000001",
+                }
+            },
+        ),
+    )
+    _write_event(
+        tmp_path,
+        "trace-main",
+        _event(
+            "trace-main",
+            2,
+            "specialist_tool_call.completed",
+            metadata={"tool_name": "record_evidence"},
+            output_summary={
+                "preview": {
+                    "evidence_record_id": "evidence-record-1",
+                    "candidate_id": "gex-candidate-1",
+                }
+            },
+        ),
+    )
+
+    timeline = ExtractionTimelineAnalyzer.analyze(
+        trace_id="trace-main",
+        raw_trace={},
+        observations=[],
+        include_raw_outputs=False,
+    )
+
+    assert timeline["timeline"][0]["output"] == "status: ok; summary: Resolved FBbt term."
+    assert timeline["timeline"][1]["output"] == (
+        '{"candidate_id":"gex-candidate-1","evidence_record_id":"evidence-record-1"}'
+    )
+
+    raw_timeline = ExtractionTimelineAnalyzer.analyze(
+        trace_id="trace-main",
+        raw_trace={},
+        observations=[],
+        include_raw_outputs=True,
+    )
+    assert raw_timeline["timeline"][0]["output"]["preview"]["term_id"] == "FBbt:00000001"
+
+
 def test_analyzer_reads_langfuse_mirrored_extraction_trace_events(monkeypatch, tmp_path):
     monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(tmp_path))
     observations = [
