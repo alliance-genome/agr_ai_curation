@@ -1212,6 +1212,34 @@ def _active_builder_workspace_or_none() -> ExtractionBuilderWorkspace | None:
         return None
 
 
+def _record_builder_specialist_output_failure(
+    *,
+    builder_workspace: ExtractionBuilderWorkspace,
+    specialist_name: str,
+    tool_name: Optional[str],
+    output_type_name: str,
+    reason: str,
+    message: str,
+    candidate_id: str,
+    extra: Mapping[str, Any] | None = None,
+) -> None:
+    if builder_workspace.finalization is not None:
+        return
+    error = {
+        "message": message,
+        "reason": reason,
+        "specialist_name": specialist_name,
+        "tool_name": tool_name,
+        "output_type": output_type_name,
+    }
+    if extra:
+        error.update(dict(extra))
+    builder_workspace.record_validation_failure(
+        errors=[error],
+        candidate_ids=[candidate_id],
+    )
+
+
 def _is_domain_envelope_output_json(
     final_output: str,
     *,
@@ -2761,6 +2789,7 @@ async def run_specialist_with_events(
     stream_duration_ms = int(stream_duration.total_seconds() * 1000)
 
     post_stream_started_at = time.monotonic()
+    builder_candidate_id = f"{tool_name or specialist_name}:structured_result"
     required_tool_error = _required_tool_failure_message(
         agent=runtime_agent,
         specialist_name=specialist_name,
@@ -2784,6 +2813,15 @@ async def run_specialist_with_events(
                 "severity": "error",
             }
         })
+        _record_builder_specialist_output_failure(
+            builder_workspace=builder_workspace,
+            specialist_name=specialist_name,
+            tool_name=tool_name,
+            output_type_name=output_type_name,
+            reason="required_tool_not_called",
+            message=required_tool_error,
+            candidate_id=builder_candidate_id,
+        )
         raise SpecialistOutputError(
             specialist_name=specialist_name,
             output_type_name=output_type_name,
@@ -3129,6 +3167,19 @@ async def run_specialist_with_events(
                             }
                         })
 
+                        _record_builder_specialist_output_failure(
+                            builder_workspace=builder_workspace,
+                            specialist_name=specialist_name,
+                            tool_name=tool_name,
+                            output_type_name=output_type_name,
+                            reason="missing_structured_output_after_retry",
+                            message=error_message,
+                            candidate_id=builder_candidate_id,
+                            extra={
+                                "retry_events": retry_event_count,
+                                "retry_duration_ms": retry_duration_ms,
+                            },
+                        )
                         raise SpecialistOutputError(
                             specialist_name=specialist_name,
                             output_type_name=output_type_name,
@@ -3141,17 +3192,27 @@ async def run_specialist_with_events(
                 except Exception as e:
                     # Retry mechanism itself failed
                     logger.error("%s retry mechanism error: %s", specialist_name, e)
+                    error_message = f"{specialist_name} retry failed with error: {str(e)}"
+                    _record_builder_specialist_output_failure(
+                        builder_workspace=builder_workspace,
+                        specialist_name=specialist_name,
+                        tool_name=tool_name,
+                        output_type_name=output_type_name,
+                        reason="structured_output_retry_failed",
+                        message=error_message,
+                        candidate_id=builder_candidate_id,
+                        extra={"error_type": type(e).__name__},
+                    )
                     raise SpecialistOutputError(
                         specialist_name=specialist_name,
                         output_type_name=output_type_name,
-                        message=f"{specialist_name} retry failed with error: {str(e)}"
+                        message=error_message,
                     )
 
     final_output = _canonicalize_structured_output_text(
         final_output,
         expected_output_type=expected_output_type,
     )
-    builder_candidate_id = f"{tool_name or specialist_name}:structured_result"
     if expected_output_type is not None and final_output:
         try:
             payload = json.loads(final_output)

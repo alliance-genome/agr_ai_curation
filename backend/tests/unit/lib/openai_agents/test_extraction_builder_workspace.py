@@ -185,3 +185,12 @@ def test_context_binding_resets_to_previous_workspace(captured_events):
 
     with pytest.raises(RuntimeError, match="No active extraction builder workspace"):
         builder.get_active_extraction_builder_workspace()
+
+
+def test_scope_metadata_model_dump_failure_surfaces_loudly(captured_events):
+    class BrokenPayload:
+        def model_dump(self, *, mode):
+            raise RuntimeError(f"cannot serialize in {mode} mode")
+
+    with pytest.raises(RuntimeError, match="cannot serialize in json mode"):
+        builder._scope_value_from_payload({"nested": BrokenPayload()}, "document_id")

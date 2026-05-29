@@ -565,10 +565,7 @@ def _scope_value_from_payload(
 
     def visit(value: Any) -> None:
         if hasattr(value, "model_dump"):
-            try:
-                value = value.model_dump(mode="json")
-            except Exception:
-                return
+            value = value.model_dump(mode="json")
         if isinstance(value, Mapping):
             direct = _optional_string(value.get(key))
             if direct:

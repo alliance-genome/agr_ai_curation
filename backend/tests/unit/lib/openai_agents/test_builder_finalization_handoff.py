@@ -610,3 +610,67 @@ async def test_specialist_validator_dispatch_failure_records_builder_validation_
     assert errors[0]["reason"] == "domain_validator_dispatch_failed"
     assert errors[0]["request_id"] == "request-1"
     assert errors[0]["validator_binding_id"] == "binding-1"
+
+
+@pytest.mark.asyncio
+async def test_specialist_retry_failure_records_builder_validation_failure(
+    monkeypatch,
+):
+    captured_trace_events = []
+    run_results = [
+        _FakeRunResult(final_output=None),
+        _FakeRunResult(final_output=None),
+    ]
+
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", lambda _event: None)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(
+        streaming_tools,
+        "RunConfig",
+        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "Agent",
+        lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: run_results.pop(0),
+    )
+    monkeypatch.setattr(
+        builder,
+        "write_extraction_trace_event",
+        lambda **event: captured_trace_events.append(event) or event,
+    )
+
+    agent = SimpleNamespace(
+        name="Gene Expression Extractor",
+        tools=[],
+        output_type=_DomainEnvelope,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    with pytest.raises(
+        streaming_tools.SpecialistOutputError,
+        match="failed to produce .* output after retry",
+    ):
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="extract gene expression evidence",
+            specialist_name="Gene Expression Extractor",
+            max_turns=3,
+            tool_name="ask_gene_expression_specialist",
+        )
+
+    validation_event = next(
+        event
+        for event in captured_trace_events
+        if event.get("event_type") == "extraction_builder.validation_failure"
+    )
+    errors = validation_event["validation"]["errors"]
+    assert errors[0]["reason"] == "missing_structured_output_after_retry"
+    assert errors[0]["retry_events"] == 0
+    assert errors[0]["specialist_name"] == "Gene Expression Extractor"
