@@ -226,7 +226,7 @@ output_schema: GeneValidationEnvelope
 
 # Model configuration
 model_config:
-  model: "${AGENT_GENE_MODEL:-gpt-4o}"
+  model: "${AGENT_GENE_MODEL:-gpt-5.5}"
   temperature: 0.1
   reasoning: "medium"
 
@@ -631,7 +631,7 @@ tools:
 output_schema: MyAgentEnvelope
 
 model_config:
-  model: "${AGENT_MY_AGENT_MODEL:-gpt-4o}"
+  model: "${AGENT_MY_AGENT_MODEL:-gpt-5.5}"
   temperature: 0.2
   reasoning: "low"
 

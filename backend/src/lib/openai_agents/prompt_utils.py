@@ -324,15 +324,14 @@ async def _extract_abstract_with_llm(raw_text: str) -> Optional[str]:
     Returns:
         Clean extracted abstract text, or None if extraction fails
     """
-    import os
-
     try:
         from openai import AsyncOpenAI
 
         client = AsyncOpenAI()
 
-        # Use a fast, cheap model for this extraction
-        model = os.getenv("ABSTRACT_EXTRACTION_MODEL", "gpt-5.4-mini")
+        # Use the configured abstract-extraction model (.env, no code fallback).
+        from src.lib.config.env import require_env
+        model = require_env("ABSTRACT_EXTRACTION_MODEL")
 
         # GPT-5 models use max_completion_tokens, others use max_tokens
         is_gpt5 = model.startswith("gpt-5")

@@ -23,7 +23,7 @@ from src.lib.config.agent_loader import (
 logger = logging.getLogger(__name__)
 
 
-def _build_config_defaults(model_config: ModelConfig) -> Dict[str, Any]:
+def _build_config_defaults(model_config: Optional[ModelConfig]) -> Dict[str, Any]:
     """
     Build config_defaults dict from YAML model_config.
 
@@ -42,22 +42,23 @@ def _build_config_defaults(model_config: ModelConfig) -> Dict[str, Any]:
     Returns:
         Dictionary with model, temperature, reasoning defaults
     """
-    # Preserve per-agent model defaults from YAML as authoritative runtime
-    # defaults (unless env vars explicitly override at runtime).
-    defaults = {"model": model_config.model}
+    if model_config is None:
+        raise ValueError(
+            "Cannot build config_defaults: agent is missing model_config "
+            "(model and reasoning are required, no code fallback)."
+        )
 
-    # Compare remaining fields against ModelConfig defaults to avoid
-    # hardcoding values here. This ensures changes to ModelConfig defaults
-    # automatically propagate.
-    default_config = ModelConfig()
+    # model is the required per-agent default declared in the package agent.yaml,
+    # so it is always preserved. reasoning and temperature are optional and only
+    # included when the agent actually sets them (e.g. the supervisor omits
+    # reasoning; Gemini agents set temperature). There is no ModelConfig() code
+    # default to compare against.
+    defaults: Dict[str, Any] = {"model": model_config.model}
 
-    # Include temperature if not the default
-    if model_config.temperature != default_config.temperature:
-        defaults["temperature"] = model_config.temperature
-
-    # Include reasoning if not the default
-    if model_config.reasoning != default_config.reasoning:
+    if model_config.reasoning is not None:
         defaults["reasoning"] = model_config.reasoning
+    if model_config.temperature is not None:
+        defaults["temperature"] = model_config.temperature
 
     return defaults
 

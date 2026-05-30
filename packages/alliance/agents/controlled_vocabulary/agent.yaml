@@ -36,7 +36,7 @@ tools:
 output_schema: ControlledVocabularyValidationResult
 
 model_config:
-  model: "${AGENT_CONTROLLED_VOCABULARY_MODEL:-gpt-4o}"
+  model: "${AGENT_CONTROLLED_VOCABULARY_MODEL:-gpt-5.5}"
   temperature: 0.1
   reasoning: "low"
 

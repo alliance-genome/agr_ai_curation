@@ -484,7 +484,7 @@ def _build_model_settings(
     - high -> "high" thinking level (Gemini 3) or 24,576 budget (Gemini 2.5)
 
     Args:
-        model: The model name (e.g., "gpt-5", "gpt-4o", "gemini-3.0-pro")
+        model: The model name (e.g., "gpt-5.5", "gpt-5.4-mini", "gemini-3-pro-preview")
         temperature: Optional temperature override (0.0-1.0)
         reasoning_effort: Optional reasoning effort for models that support it
 

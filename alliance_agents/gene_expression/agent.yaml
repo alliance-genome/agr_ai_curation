@@ -49,7 +49,7 @@ output_schema: GeneExpressionEnvelope
 # MODEL CONFIGURATION
 # -----------------------------------------------------------------------------
 model_config:
-  model: "${AGENT_GENE_EXPRESSION_MODEL:-gpt-4o}"
+  model: "${AGENT_GENE_EXPRESSION_MODEL:-gpt-5.5}"
   temperature: 0.1
   reasoning: "medium"
 

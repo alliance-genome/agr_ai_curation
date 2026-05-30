@@ -8,7 +8,7 @@ Environment variable naming convention:
   AGENT_{AGENT_NAME}_{SETTING}
 
 Example:
-  AGENT_SUPERVISOR_MODEL=gpt-4o
+  AGENT_SUPERVISOR_MODEL=gpt-5.5
   AGENT_PDF_MODEL=gpt-5.4-mini
   AGENT_PDF_TEMPERATURE=0.3
   AGENT_GENE_REASONING=medium
@@ -483,35 +483,44 @@ def _get_env_reasoning(key: str, default: Optional[ReasoningEffort]) -> Optional
 # =============================================================================
 
 def get_default_model() -> str:
-    """Get default model ID, preferring explicit env override if valid."""
-    from src.lib.config.models_loader import get_default_model as get_catalog_default_model
+    """Get the default agent model from DEFAULT_AGENT_MODEL (.env).
 
-    explicit = str(os.getenv("DEFAULT_AGENT_MODEL", "")).strip()
-    if explicit:
-        _get_model_definition(explicit)
-        return explicit
+    Fail-fast: .env is the single source of truth. There is no catalog or code
+    fallback -- a missing/unset value raises so the misconfiguration is fixed
+    rather than silently running on the wrong model.
+    """
+    from src.lib.config.env import require_env
 
-    default_model = get_catalog_default_model()
-    if default_model is None:
-        raise ValueError("No default model configured in models.yaml")
-    return default_model.model_id
+    model_id = require_env(
+        "DEFAULT_AGENT_MODEL",
+        hint="gpt-4o is retired; use gpt-5.5 or newer.",
+    )
+    _get_model_definition(model_id)  # validate the model is registered in models.yaml
+    return model_id
 
 
-def get_default_temperature() -> float:
-    """Get the default temperature from DEFAULT_AGENT_TEMPERATURE env var."""
-    val = os.getenv("DEFAULT_AGENT_TEMPERATURE", "0.2")
-    try:
-        return float(val)
-    except ValueError:
-        return 0.2
+def get_default_temperature() -> Optional[float]:
+    """Get the optional default temperature from DEFAULT_AGENT_TEMPERATURE (.env).
+
+    Temperature is optional and has no code default: GPT-5 ignores it, and agents
+    that need it (e.g. Gemini) declare it in their package agent.yaml. Returns
+    None when unset.
+    """
+    from src.lib.config.env import optional_env_float
+
+    return optional_env_float("DEFAULT_AGENT_TEMPERATURE")
 
 
 def get_default_reasoning() -> ReasoningEffort:
-    """Get the default reasoning effort from DEFAULT_AGENT_REASONING env var."""
-    val = os.getenv("DEFAULT_AGENT_REASONING", "low")
-    if val in ("minimal", "low", "medium", "high"):
-        return val  # type: ignore
-    return "low"
+    """Get the default reasoning effort from DEFAULT_AGENT_REASONING (.env).
+
+    Fail-fast: .env is the source of truth; there is no code default.
+    """
+    from src.lib.config.env import require_env_choice
+
+    return require_env_choice(  # type: ignore[return-value]
+        "DEFAULT_AGENT_REASONING", ("minimal", "low", "medium", "high")
+    )
 
 
 # NOTE: get_supervisor_reasoning() was removed as part of the registry simplification.

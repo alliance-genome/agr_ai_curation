@@ -33,7 +33,7 @@ tools:
 output_schema: ReferenceValidationResult
 
 model_config:
-  model: "${AGENT_REFERENCE_MODEL:-gpt-4o}"
+  model: "${AGENT_REFERENCE_MODEL:-gpt-5.5}"
   temperature: 0.1
   reasoning: "low"
 

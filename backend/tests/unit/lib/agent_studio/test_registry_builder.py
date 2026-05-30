@@ -34,15 +34,13 @@ def _flatten_strings(value):
 class TestBuildConfigDefaults:
     """Tests for _build_config_defaults function."""
 
-    def test_returns_model_when_all_values_match_defaults(self):
-        """When all values match defaults, model is still preserved."""
-        # Use default ModelConfig values
-        config = ModelConfig()
-        default_model = ModelConfig().model
+    def test_returns_only_model_when_optional_fields_unset(self):
+        """With only model set, reasoning/temperature are omitted (both optional)."""
+        config = ModelConfig(model="gpt-5.5")
 
         result = _build_config_defaults(config)
 
-        assert result == {"model": default_model}
+        assert result == {"model": "gpt-5.5"}
 
     def test_returns_model_when_differs_from_default(self):
         """When model differs from default, include it in result."""
@@ -52,23 +50,21 @@ class TestBuildConfigDefaults:
 
         assert result == {"model": "gpt-4-turbo"}
 
-    def test_returns_temperature_when_differs_from_default(self):
-        """When temperature differs from default, include it in result."""
-        config = ModelConfig(temperature=0.7)
-        default_model = ModelConfig().model
+    def test_returns_temperature_when_set(self):
+        """When temperature is set, include it in result."""
+        config = ModelConfig(model="gpt-5.5", temperature=0.7)
 
         result = _build_config_defaults(config)
 
-        assert result == {"model": default_model, "temperature": 0.7}
+        assert result == {"model": "gpt-5.5", "temperature": 0.7}
 
-    def test_returns_reasoning_when_differs_from_default(self):
-        """When reasoning differs from default, include it in result."""
-        config = ModelConfig(reasoning="high")
-        default_model = ModelConfig().model
+    def test_returns_reasoning_when_set(self):
+        """When reasoning is set, include it in result."""
+        config = ModelConfig(model="gpt-5.5", reasoning="high")
 
         result = _build_config_defaults(config)
 
-        assert result == {"model": default_model, "reasoning": "high"}
+        assert result == {"model": "gpt-5.5", "reasoning": "high"}
 
     def test_returns_multiple_non_default_values(self):
         """When multiple values differ, include all of them."""
@@ -97,23 +93,15 @@ class TestBuildConfigDefaults:
         assert "temperature" not in result
         assert "reasoning" not in result
 
-    def test_compares_against_modelconfig_defaults(self):
-        """Verify comparison is against ModelConfig dataclass defaults."""
-        # This test ensures we're comparing against the actual ModelConfig
-        # defaults rather than hardcoded values
-        default_config = ModelConfig()
-
-        # Create config with explicit default values (same as ModelConfig defaults)
-        config = ModelConfig(
-            model=default_config.model,
-            temperature=default_config.temperature,
-            reasoning=default_config.reasoning,
-        )
+    def test_omits_optional_fields_when_none(self):
+        """reasoning and temperature are omitted when None (no code default to apply)."""
+        config = ModelConfig(model="gpt-5.5", reasoning=None, temperature=None)
 
         result = _build_config_defaults(config)
 
-        # Model is always preserved; other values remain omitted at default.
-        assert result == {"model": default_config.model}
+        assert result == {"model": "gpt-5.5"}
+        assert "reasoning" not in result
+        assert "temperature" not in result
 
 
 class TestAgentDocumentationCoverage:

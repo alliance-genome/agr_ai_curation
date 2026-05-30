@@ -82,7 +82,7 @@ tools:
 output_schema: MyAgentEnvelope
 
 model_config:
-  model: "${AGENT_MY_AGENT_MODEL:-gpt-4o}"
+  model: "${AGENT_MY_AGENT_MODEL:-gpt-5.5}"
   temperature: 0.1
   reasoning: "medium"
 
@@ -220,7 +220,7 @@ Model configuration supports environment variable substitution:
 
 ```yaml
 model_config:
-  model: "${AGENT_GENE_MODEL:-gpt-4o}"
+  model: "${AGENT_GENE_MODEL:-gpt-5.5}"
   temperature: ${AGENT_GENE_TEMP:-0.1}
 ```
 

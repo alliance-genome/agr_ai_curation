@@ -50,7 +50,7 @@ output_schema: PdfExtractionResultEnvelope
 # MODEL CONFIGURATION
 # -----------------------------------------------------------------------------
 model_config:
-  model: "${AGENT_PDF_MODEL:-gpt-4o}"
+  model: "${AGENT_PDF_MODEL:-gpt-5.5}"
   temperature: 0.1
   reasoning: "medium"
 

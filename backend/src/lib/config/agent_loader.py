@@ -51,13 +51,52 @@ class SupervisorRouting:
     batching_entity: str = ""  # e.g., "genes", "alleles" - for batching nudge prompts
 
 
+def _expand_env_ref(value: Any) -> str:
+    """Expand an agent.yaml config value that may reference the environment.
+
+    Supported forms:
+      - "literal"            -> returned unchanged
+      - "${VAR}"             -> required; raises if VAR is unset (no fallback)
+      - "${VAR:-default}"    -> VAR if set, else the package-declared default
+
+    The package agent.yaml is the only place a model literal default may live;
+    code never substitutes one.
+    """
+    text = str(value).strip()
+    if not (text.startswith("${") and text.endswith("}")):
+        return text
+
+    inner = text[2:-1]
+    if ":-" in inner:
+        var_name, default_val = inner.split(":-", 1)
+        return os.environ.get(var_name.strip(), default_val)
+
+    var_name = inner.strip()
+    resolved = os.environ.get(var_name)
+    if resolved is None or not resolved.strip():
+        raise ValueError(
+            f"Environment variable '{var_name}' referenced in agent.yaml is not "
+            f"set, and there is no code fallback. Define it in .env."
+        )
+    return resolved
+
+
 @dataclass
 class ModelConfig:
-    """LLM configuration for the agent."""
+    """LLM configuration for the agent.
 
-    model: str = "gpt-4o"
-    temperature: float = 0.1
-    reasoning: str = "medium"
+    ``model`` is required and is supplied by the package ``agent.yaml`` (the
+    per-package config contract); a yaml that omits it fails fast rather than
+    silently running on a code-default model. ``reasoning`` and ``temperature``
+    are optional and declared in the yaml only when used: an agent that omits
+    ``reasoning`` (e.g. the supervisor) resolves it from AGENT_*_REASONING or the
+    required DEFAULT_AGENT_REASONING in .env, and ``temperature`` only matters for
+    models that use it (e.g. Gemini). There are no code-side model literals.
+    """
+
+    model: str
+    reasoning: Optional[str] = None
+    temperature: Optional[float] = None
 
 
 @dataclass
@@ -114,7 +153,7 @@ class AgentDefinition:
     supervisor_routing: SupervisorRouting = field(default_factory=SupervisorRouting)
     tools: List[str] = field(default_factory=list)
     output_schema: Optional[str] = None
-    model_config: ModelConfig = field(default_factory=ModelConfig)
+    model_config: Optional[ModelConfig] = None
     requires_document: bool = False
     required_params: List[str] = field(default_factory=list)
     batch_capabilities: List[str] = field(default_factory=list)
@@ -122,6 +161,10 @@ class AgentDefinition:
     frontend: FrontendConfig = field(default_factory=FrontendConfig)
     curation: CurationConfig = field(default_factory=CurationConfig)
     documentation: Optional[Dict[str, Any]] = None
+    # model_config is required for agents that are actually executed; that is
+    # enforced at the real use-point (from_yaml requires a model; building the
+    # agent registry / config raises on a missing model_config). It stays optional
+    # on the dataclass so non-execution helpers can construct lightweight agents.
 
     @property
     def tool_name(self) -> str:
@@ -160,21 +203,41 @@ class AgentDefinition:
             batching_entity=routing_data.get("batching_entity", default_entity).strip(),
         )
 
-        # Parse model_config with environment variable substitution
-        model_data = data.get("model_config", {})
-        model_str = model_data.get("model", "gpt-4o")
-        # Handle ${VAR:-default} syntax
-        if model_str.startswith("${") and ":-" in model_str:
-            # Parse ${AGENT_GENE_MODEL:-gpt-4o} -> check env var, else use default
-            var_part = model_str[2:]  # Remove ${
-            var_name, default_val = var_part.split(":-", 1)
-            default_val = default_val.rstrip("}")
-            model_str = os.environ.get(var_name, default_val)
-        model_config = ModelConfig(
-            model=model_str,
-            temperature=model_data.get("temperature", 0.1),
-            reasoning=model_data.get("reasoning", "medium"),
-        )
+        # Parse model_config from the package agent.yaml (the config contract).
+        # When model_config is present, model is REQUIRED (no code-side fallback);
+        # reasoning/temperature stay optional (e.g. the supervisor omits reasoning).
+        # The yaml's own ${VAR:-default} is the package default, expanded against the
+        # environment by _expand_env_ref. When model_config is absent entirely the
+        # definition still loads with no model, and the fail-fast is deferred to the
+        # point of use: building the agent registry (and runtime model resolution)
+        # raises on a missing model. That lets lightweight agents that are only
+        # loaded for inspection (never executed) load without forcing a model here.
+        model_data = data.get("model_config")
+        if not model_data:
+            model_config = None
+        else:
+            if "model" not in model_data:
+                raise ValueError(
+                    f"Agent '{folder_name}' agent.yaml model_config is missing required 'model'."
+                )
+
+            temperature_raw = model_data.get("temperature")
+            temperature = (
+                float(_expand_env_ref(temperature_raw))
+                if temperature_raw is not None and str(temperature_raw).strip() != ""
+                else None
+            )
+            reasoning_raw = model_data.get("reasoning")
+            reasoning = (
+                _expand_env_ref(reasoning_raw)
+                if reasoning_raw is not None and str(reasoning_raw).strip() != ""
+                else None
+            )
+            model_config = ModelConfig(
+                model=_expand_env_ref(model_data["model"]),
+                reasoning=reasoning,
+                temperature=temperature,
+            )
 
         # Parse frontend config
         frontend_data = data.get("frontend", {})

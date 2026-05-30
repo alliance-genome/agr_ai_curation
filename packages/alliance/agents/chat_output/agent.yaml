@@ -40,7 +40,7 @@ output_schema: null
 # MODEL CONFIGURATION
 # -----------------------------------------------------------------------------
 model_config:
-  model: "${AGENT_CHAT_OUTPUT_MODEL:-gpt-4o}"
+  model: "${AGENT_CHAT_OUTPUT_MODEL:-gpt-5.5}"
   temperature: 0.1
   reasoning: "disabled"
 

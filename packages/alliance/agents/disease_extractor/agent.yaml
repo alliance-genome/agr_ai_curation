@@ -55,7 +55,7 @@ output_schema: DiseaseExtractionResultEnvelope
 # MODEL CONFIGURATION
 # -----------------------------------------------------------------------------
 model_config:
-  model: "${AGENT_DISEASE_EXTRACTOR_MODEL:-gpt-4o}"
+  model: "${AGENT_DISEASE_EXTRACTOR_MODEL:-gpt-5.5}"
   temperature: 0.1
   reasoning: "medium"
 

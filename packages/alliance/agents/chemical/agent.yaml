@@ -49,7 +49,7 @@ output_schema: ChemicalValidationResult
 # MODEL CONFIGURATION
 # -----------------------------------------------------------------------------
 model_config:
-  model: "${AGENT_CHEMICAL_MODEL:-gpt-4o}"
+  model: "${AGENT_CHEMICAL_MODEL:-gpt-5.5}"
   temperature: 0.1
   reasoning: "low"
 

@@ -437,8 +437,8 @@ class TestErrorHandling:
         gene = get_agent_definition("gene_validation")
 
         assert gene is not None
-        # Should use the default from YAML (gpt-4o)
-        assert gene.model_config.model == "gpt-4o"
+        # Should use the default from the gene agent.yaml (${AGENT_GENE_MODEL:-gpt-5.5})
+        assert gene.model_config.model == "gpt-5.5"
 
     def test_force_reload_actually_reloads(self):
         """Test that force_reload=True actually reloads the definitions."""
@@ -1085,23 +1085,24 @@ class TestAgentLoaderEdgeCases:
 
         assert agents == {}
 
-    def test_agent_yaml_with_only_agent_id(self, tmp_path):
-        """Minimal YAML with only agent_id should use defaults."""
+    def test_agent_yaml_without_model_config_loads_with_none(self, tmp_path):
+        """A yaml without model_config loads with model_config=None.
+
+        There is no code-side model default; fail-fast is deferred to the point of
+        use (building the agent registry / runtime model resolution raises on a
+        missing model). A definition only loaded for inspection does not force a
+        model here.
+        """
         from src.lib.config.agent_loader import load_agent_definitions
 
         agent_dir = tmp_path / "minimal"
         agent_dir.mkdir()
-        (agent_dir / "agent.yaml").write_text("agent_id: minimal_agent")
+        (agent_dir / "agent.yaml").write_text("agent_id: minimal_agent\nname: Minimal Agent\n")
 
-        agents = load_agent_definitions(tmp_path)
+        agents = load_agent_definitions(tmp_path, force_reload=True)
 
         assert "minimal_agent" in agents
-        # Check defaults are applied
-        agent = agents["minimal_agent"]
-        assert agent.model_config.model == "gpt-4o"
-        assert agent.model_config.temperature == 0.1
-        assert agent.supervisor_routing.enabled is True
-        assert agent.tools == []
+        assert agents["minimal_agent"].model_config is None
 
     def test_get_agent_definition_auto_initializes(self):
         """get_agent_definition should auto-initialize if needed."""
@@ -1167,15 +1168,18 @@ class TestAgentLoaderEdgeCases:
         assert routing.batchable is False
         assert routing.batching_instructions == ""
 
-    def test_model_config_defaults(self):
-        """ModelConfig should have correct defaults."""
+    def test_model_config_requires_model_optional_fields_default_none(self):
+        """ModelConfig requires model (no code default); reasoning/temperature optional."""
+        import pytest
         from src.lib.config.agent_loader import ModelConfig
 
-        config = ModelConfig()
+        with pytest.raises(TypeError):
+            ModelConfig()  # type: ignore[call-arg]  # model is required; no fallback
 
-        assert config.model == "gpt-4o"
-        assert config.temperature == 0.1
-        assert config.reasoning == "medium"
+        config = ModelConfig(model="gpt-5.5")
+        assert config.model == "gpt-5.5"
+        assert config.reasoning is None
+        assert config.temperature is None
 
     def test_frontend_config_defaults(self):
         """FrontendConfig should have correct defaults."""

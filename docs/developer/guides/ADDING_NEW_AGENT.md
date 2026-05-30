@@ -108,7 +108,7 @@ output_schema: MyAgentEnvelope
 
 # LLM settings (supports environment variables)
 model_config:
-  model: "${AGENT_MY_AGENT_MODEL:-gpt-4o}"
+  model: "${AGENT_MY_AGENT_MODEL:-gpt-5.5}"
   temperature: 0.1
   reasoning: "medium"
 

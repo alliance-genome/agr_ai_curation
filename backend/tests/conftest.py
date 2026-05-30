@@ -74,6 +74,57 @@ if "WEAVIATE_HOST" not in os.environ:
 os.environ.setdefault("WEAVIATE_PORT", "8080")
 os.environ.setdefault("WEAVIATE_SCHEME", "http")
 
+# Model / LLM config is now sourced from .env with fail-fast (no code fallback).
+# Seed test defaults so suites that hit a default-model/reasoning code path have
+# values; tests that exercise the missing-var fail-fast monkeypatch.delenv these.
+os.environ.setdefault("DEFAULT_AGENT_MODEL", "gpt-5.5")
+os.environ.setdefault("DEFAULT_AGENT_REASONING", "low")
+os.environ.setdefault("EMBEDDING_MODEL", "text-embedding-3-small")
+os.environ.setdefault("HIERARCHY_LLM_MODEL", "gpt-5-mini")
+os.environ.setdefault("HIERARCHY_LLM_REASONING", "low")
+os.environ.setdefault("ABSTRACT_EXTRACTION_MODEL", "gpt-5-mini")
+
+
+@pytest.fixture(autouse=True)
+def _ensure_required_model_env(monkeypatch):
+    """Guarantee required model/LLM env vars exist for every test.
+
+    Model/LLM config is now fail-fast (no code fallback). Without this, a single
+    test that clears or pops one of these env vars would cascade into unrelated
+    failures across the suite. Re-asserting them per test isolates that pollution.
+    Tests that intentionally exercise the missing-var fail-fast clear the var in
+    their own body, which still takes effect during the test.
+    """
+    for key, value in (
+        ("DEFAULT_AGENT_MODEL", "gpt-5.5"),
+        ("DEFAULT_AGENT_REASONING", "low"),
+        ("EMBEDDING_MODEL", "text-embedding-3-small"),
+        ("HIERARCHY_LLM_MODEL", "gpt-5-mini"),
+        ("HIERARCHY_LLM_REASONING", "low"),
+        ("ABSTRACT_EXTRACTION_MODEL", "gpt-5-mini"),
+    ):
+        if key not in os.environ:
+            monkeypatch.setenv(key, value)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_agent_loader_cache():
+    """Reset the global agent-definition cache around each test.
+
+    Several tests `load_agent_definitions(force_reload=True)` against fixture
+    package paths, which leaves the process-global agent cache pointing at fixture
+    agents. Without isolation that leaks into unrelated tests (they then resolve
+    fixture/empty registries instead of the real packages), producing order-
+    dependent failures. Resetting to the uninitialized state means each test
+    re-loads the real packages on first access.
+    """
+    from src.lib.config import agent_loader
+
+    agent_loader.reset_cache()
+    yield
+    agent_loader.reset_cache()
+
 
 def _is_tcp_reachable(host: str, port: int, timeout: float = 0.4) -> bool:
     """Return True when a TCP endpoint is reachable within a short timeout."""

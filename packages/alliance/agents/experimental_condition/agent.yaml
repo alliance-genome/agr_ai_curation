@@ -37,7 +37,7 @@ tools:
 output_schema: ExperimentalConditionValidationResult
 
 model_config:
-  model: "${AGENT_EXPERIMENTAL_CONDITION_MODEL:-gpt-4o}"
+  model: "${AGENT_EXPERIMENTAL_CONDITION_MODEL:-gpt-5.5}"
   temperature: 0.1
   reasoning: "low"
 

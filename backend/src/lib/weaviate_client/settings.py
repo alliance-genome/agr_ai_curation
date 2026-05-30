@@ -2,10 +2,10 @@
 
 import asyncio
 import logging
-import os
 from typing import Any, Dict, List
 
 from . import connection as connection_module
+from src.lib.config.env import require_env
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ EMBEDDING_CONFIGS = {
 _current_config = {
     "embedding": {
         "modelProvider": "openai",
-        "modelName": os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"),
+        "modelName": require_env("EMBEDDING_MODEL"),
         "dimensions": 1536,
         "batchSize": 100,
     },

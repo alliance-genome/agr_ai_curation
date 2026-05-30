@@ -1,6 +1,6 @@
 models:
-  - model_id: gpt-5.4-mini
-    name: GPT-5.4 Mini
+  - model_id: gpt-5-mini
+    name: GPT-5 Mini
     provider: openai
     description: Faster, lower-cost model for quick drafting and lightweight extraction.
     guidance: Use when speed matters more than peak accuracy. GPT-5.5 is generally more reliable for nuanced or high-stakes curation decisions.
@@ -53,12 +53,6 @@ models:
     avoid_for:
       - The most difficult long-chain reasoning tasks where GPT-5.5 is preferred
 
-  - model_id: gpt-4o
-    name: GPT-4o
-    provider: openai
-    description: Runtime compatibility model for legacy system agent defaults.
-    guidance: Internal compatibility model; prefer GPT-5.4 Mini or GPT-5.5 for new curator workflows.
-    default: false
-    curator_visible: false
-    supports_reasoning: false
-    supports_temperature: true
+  # gpt-4o is intentionally NOT registered. It is retired; the minimum model is
+  # gpt-5.5. Do not re-add it. Persisted agents that referenced gpt-4o are moved
+  # to gpt-5.5 by the alembic migration migrate_agent_gpt4o_models_to_gpt55.

@@ -3024,7 +3024,7 @@ class TestCreateFlowSupervisorNoTools:
                 },
             ),
         )
-        mock_config.return_value = MagicMock(model="gpt-4o", temperature=0.0, reasoning=None)
+        mock_config.return_value = MagicMock(model="gpt-5.5", temperature=0.0, reasoning=None)
 
         flow = _make_flow([
             _task_input_node(),
@@ -3036,7 +3036,7 @@ class TestCreateFlowSupervisorNoTools:
             create_flow_supervisor(flow, document_id=None)  # No doc — both steps skipped
 
     @patch("src.lib.flows.executor.build_model_settings")
-    @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-4o")
+    @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-5.5")
     @patch("src.lib.flows.executor.get_agent_config")
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -3044,7 +3044,7 @@ class TestCreateFlowSupervisorNoTools:
         self, mock_get_agent, mock_streaming, mock_config, mock_model, mock_settings
     ):
         """Should NOT raise when at least one tool is created."""
-        mock_config.return_value = MagicMock(model="gpt-4o", temperature=0.0, reasoning=None)
+        mock_config.return_value = MagicMock(model="gpt-5.5", temperature=0.0, reasoning=None)
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         mock_streaming.return_value = MagicMock()
         mock_settings.return_value = ModelSettings()
