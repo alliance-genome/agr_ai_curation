@@ -126,6 +126,9 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
     assert "search_domain_field_terms" in content
     assert "inspect_ontology_term" in content
     assert "resolve_domain_field_term" in content
+    assert "copyable provenance" not in content
+    assert "copy the returned helper_selection into provenance" not in content
+    assert "Pass resolver call IDs to builder tools" in content
     assert "`relation.name`" in content
     assert "controlled-vocabulary value" in content
     assert "`expression_pattern.where_expressed`" in content

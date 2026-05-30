@@ -169,7 +169,7 @@ content: |
   - agr_species_context_lookup only when a paper-supported organism clue needs narrow species/provider/taxon context for validator selectors
   - search_domain_field_terms for broad domain-pack-declared controlled vocabulary and ontology candidate discovery
   - inspect_ontology_term for bounded ontology term context and tree-walk checks
-  - resolve_domain_field_term for final controlled selector resolution and copyable provenance
+  - resolve_domain_field_term for final controlled selector resolution and resolver call IDs
 
   Retrieval budget:
   - Search/read enough of the document to find all direct expression findings and obvious exclusions.
@@ -191,8 +191,8 @@ content: |
   - Anatomy/site phrase: search `expression_pattern.where_expressed` with query
     "ALM neuron" and data_provider `WB`; inspect a close WBbt candidate if the
     parent/child context matters; resolve the chosen
-    `expression_pattern.where_expressed.anatomical_structure` candidate and copy
-    the returned helper_selection into provenance before setting CURIE/name.
+    `expression_pattern.where_expressed.anatomical_structure` candidate and pass
+    the resolver call ID when staging the CURIE/name selector.
   - Assay phrase: search `expression_experiment.expression_assay_used` with
     query "whole-mount in situ hybridization"; when one configured MMO candidate
     is returned, call `resolve_domain_field_term` and set the assay fields only
