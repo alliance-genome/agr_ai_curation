@@ -62,6 +62,12 @@ from .extraction_trace_events import (
     write_extraction_trace_event,
     write_stream_event,
 )
+from .resolver_call_ledger import (
+    RESOLVER_TOOL_NAME,
+    ResolverCallLedger,
+    reset_active_resolver_call_ledger,
+    set_active_resolver_call_ledger,
+)
 from .tool_call_policy import (
     DOCUMENT_REQUIRED_TOOL_NAMES,
     required_package_tool_names_from_metadata,
@@ -2306,6 +2312,8 @@ async def run_specialist_with_events(
         agent_id=specialist_name,
     )
     builder_workspace_token = set_active_extraction_builder_workspace(builder_workspace)
+    resolver_call_ledger = ResolverCallLedger(trace_id=builder_workspace.run_id)
+    resolver_call_ledger_token = set_active_resolver_call_ledger(resolver_call_ledger)
     try:
         async for event in result.stream_events():
             total_event_count += 1
@@ -2669,6 +2677,13 @@ async def run_specialist_with_events(
                         if evidence_record is not None:
                             live_evidence_records.append(evidence_record)
 
+                        if current_tool_name == RESOLVER_TOOL_NAME:
+                            resolver_call_ledger.record_tool_output(
+                                tool_call_id=str(completed_tool.get("tool_id") or "") or None,
+                                tool_name=current_tool_name,
+                                output=output,
+                            )
+
                         # Extract chunk provenance from PDF tool outputs for highlighting
                         if current_tool_name in ("search_document", "read_section"):
                             _emit_chunk_provenance_from_output(current_tool_name, output)
@@ -2783,6 +2798,7 @@ async def run_specialist_with_events(
         raise
     finally:
         reset_active_evidence_records(evidence_workspace_token)
+        reset_active_resolver_call_ledger(resolver_call_ledger_token)
         reset_active_extraction_builder_workspace(builder_workspace_token)
 
     stream_duration = datetime.now(timezone.utc) - start_time
@@ -3213,7 +3229,8 @@ async def run_specialist_with_events(
         final_output,
         expected_output_type=expected_output_type,
     )
-    if expected_output_type is not None and final_output:
+    builder_finalization = builder_workspace.finalization
+    if expected_output_type is not None and final_output and builder_finalization is None:
         try:
             payload = json.loads(final_output)
         except Exception:
@@ -3230,16 +3247,16 @@ async def run_specialist_with_events(
     phase_timings_ms["post_stream_output_ms"] = _elapsed_ms(post_stream_started_at)
 
     evidence_summary_started_at = time.monotonic()
-    try:
-        _emit_specialist_evidence_summary_or_raise(
-            specialist_name=specialist_name,
-            tool_name=tool_name,
-            expected_output_type=expected_output_type,
-            final_output=final_output,
-            live_evidence_records=live_evidence_records,
-        )
-    except SpecialistOutputError:
-        if builder_workspace.finalization is None:
+    if builder_finalization is None:
+        try:
+            _emit_specialist_evidence_summary_or_raise(
+                specialist_name=specialist_name,
+                tool_name=tool_name,
+                expected_output_type=expected_output_type,
+                final_output=final_output,
+                live_evidence_records=live_evidence_records,
+            )
+        except SpecialistOutputError:
             builder_workspace.record_validation_failure(
                 errors=[
                     {
@@ -3252,21 +3269,21 @@ async def run_specialist_with_events(
                 ],
                 candidate_ids=[builder_candidate_id],
             )
-        raise
+            raise
     phase_timings_ms["evidence_summary_ms"] = _elapsed_ms(
         evidence_summary_started_at
     )
 
     validator_dispatch_started_at = time.monotonic()
-    try:
-        final_output = await _dispatch_domain_envelope_validators_for_chat(
-            final_output,
-            expected_output_type=expected_output_type,
-            specialist_name=specialist_name,
-            tool_name=tool_name,
-        )
-    except SpecialistOutputError as exc:
-        if builder_workspace.finalization is None:
+    if builder_finalization is None:
+        try:
+            final_output = await _dispatch_domain_envelope_validators_for_chat(
+                final_output,
+                expected_output_type=expected_output_type,
+                specialist_name=specialist_name,
+                tool_name=tool_name,
+            )
+        except SpecialistOutputError as exc:
             dispatch_errors = [
                 {
                     **dict(error),
@@ -3289,16 +3306,32 @@ async def run_specialist_with_events(
                 errors=dispatch_errors,
                 candidate_ids=[builder_candidate_id],
             )
-        raise
+            raise
+        builder_finalization = builder_workspace.finalization
     phase_timings_ms["domain_validator_dispatch_ms"] = _elapsed_ms(
         validator_dispatch_started_at
     )
+    retained_evidence_source = (
+        json.dumps(builder_finalization.payload)
+        if builder_finalization is not None
+        else final_output
+    )
     retained_evidence_records = extract_evidence_records_from_structured_result(
-        final_output
+        retained_evidence_source
     )
 
     internal_event_started_at = time.monotonic()
-    if tool_name and _is_domain_envelope_output_json(
+    if tool_name and builder_finalization is not None:
+        final_output = json.dumps(builder_finalization.payload)
+        add_specialist_event(
+            build_internal_extraction_result_event(
+                tool_name=tool_name,
+                specialist_name=specialist_name,
+                finalization=builder_finalization,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+        )
+    elif tool_name and _is_domain_envelope_output_json(
         final_output,
         expected_output_type=expected_output_type,
     ):

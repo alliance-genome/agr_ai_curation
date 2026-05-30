@@ -17,6 +17,7 @@ from .evidence_workspace import (
     create_list_recorded_evidence_tool,
     create_update_recorded_evidence_metadata_tool,
 )
+from .extraction_trace_events import write_extraction_trace_event
 from .weaviate_chunks import (
     get_chunk_by_id,
     get_chunk_neighbor_ids,
@@ -42,6 +43,7 @@ __all__ = [
     "create_get_recorded_evidence_tool",
     "create_list_recorded_evidence_tool",
     "create_update_recorded_evidence_metadata_tool",
+    "write_extraction_trace_event",
     "get_chunk_by_id",
     "get_chunk_neighbor_ids",
     "get_chunks_by_parent_section",

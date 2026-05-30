@@ -60,7 +60,7 @@ jobs:
           # Without an explicit scope, unrelated CI image builds can overwrite
           # the default GHA cache entry and make layer reuse less predictable.
           cache-from: type=gha,scope=backend-unit-test
-          cache-to: type=gha,mode=max,scope=backend-unit-test
+          cache-to: type=gha,mode=max,scope=backend-unit-test,ignore-error=true
 
       - name: Validate ignored test paths
         run: |
@@ -160,7 +160,7 @@ jobs:
           # Contract tests use backend/Dockerfile.test, so keep this separate
           # from the lighter backend/Dockerfile.unit-test cache namespace.
           cache-from: type=gha,scope=backend-contract-test
-          cache-to: type=gha,mode=max,scope=backend-contract-test
+          cache-to: type=gha,mode=max,scope=backend-contract-test,ignore-error=true
 
       - name: Validate contract-core test paths
         run: |
@@ -270,7 +270,7 @@ jobs:
           # Reuse the same cache scope as Backend Unit Tests because this job
           # builds the same backend/Dockerfile.unit-test image.
           cache-from: type=gha,scope=backend-unit-test
-          cache-to: type=gha,mode=max,scope=backend-unit-test
+          cache-to: type=gha,mode=max,scope=backend-unit-test,ignore-error=true
 
       - name: Run persistence tests
         run: |

@@ -12,10 +12,11 @@ import json
 import inspect
 from collections import defaultdict
 from collections.abc import Mapping
+from copy import deepcopy
 from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, Literal, Annotated, Sequence
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError, field_validator, model_validator
 from agents import function_tool
 import yaml
 
@@ -44,6 +45,17 @@ from .agr_lookup import (
     projection_from_result as _projection_from_result,
 )
 from agr_ai_curation_runtime import get_curation_resolver, is_valid_curie, list_groups
+from agr_ai_curation_runtime.extraction_builder import (
+    CANDIDATE_STATUS_VALID,
+    ExtractionBuilderError,
+    ExtractionBuilderValidationError,
+    get_active_extraction_builder_workspace,
+)
+from agr_ai_curation_runtime.extraction_trace_events import write_extraction_trace_event
+from agr_ai_curation_runtime.resolver_call_ledger import (
+    ResolverCallLedgerEntry,
+    get_active_resolver_call_ledger,
+)
 from .search_helpers import (
     enrich_with_match_context,
 )
@@ -70,6 +82,130 @@ class AgrQueryResult(BaseModel):
     lookup_attempts: Optional[List[Dict[str, Any]]] = None
     candidate_matches: Optional[List[Dict[str, Any]]] = None
     result_projections: Optional[List[Dict[str, Any]]] = None
+
+
+GENE_EXPRESSION_DOMAIN_PACK_ID = "agr.alliance.gene_expression"
+GENE_EXPRESSION_OBJECT_TYPE = "GeneExpressionAnnotation"
+
+GeneExpressionControlledFieldPath = Literal[
+    "relation.name",
+    "expression_experiment.expression_assay_used",
+    "when_expressed_stage_name",
+    "expression_pattern.when_expressed.developmental_stage_start",
+    "expression_pattern.when_expressed.stage_uberon_slim_terms",
+    "expression_pattern.where_expressed",
+    "expression_pattern.where_expressed.anatomical_structure",
+    "expression_pattern.where_expressed.anatomical_structure_uberon_terms",
+    "expression_pattern.where_expressed.cellular_component",
+    "expression_pattern.where_expressed.cellular_component_qualifiers",
+]
+
+GeneExpressionPatchFieldPath = Literal[
+    "pending_ref_id",
+    "evidence_record_ids",
+    "where_expressed_statement",
+    "subject.source_phrase",
+    "subject.gene_symbol",
+    "subject.primary_external_id",
+    "reference.source_phrase",
+    "reference.reference_id",
+    "reference.curie",
+    "reference.pmid",
+    "reference.doi",
+    "reference.title",
+    "data_provider.abbreviation",
+    "relation.name",
+    "expression_experiment.expression_assay_used",
+    "when_expressed_stage_name",
+    "expression_pattern.when_expressed.developmental_stage_start",
+    "expression_pattern.when_expressed.stage_uberon_slim_terms",
+    "expression_pattern.where_expressed",
+    "expression_pattern.where_expressed.anatomical_structure",
+    "expression_pattern.where_expressed.anatomical_structure_uberon_terms",
+    "expression_pattern.where_expressed.cellular_component",
+    "expression_pattern.where_expressed.cellular_component_qualifiers",
+]
+
+_CONTROLLED_GENE_EXPRESSION_FIELD_PATHS = set(GeneExpressionControlledFieldPath.__args__)
+_REFERENCE_PLACEHOLDER_VALUES = {"", "pmid", "pmid:", "doi", "doi:", "wb:...", "...", "unknown", "tbd"}
+
+
+class _StrictToolModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class GeneExpressionSubjectInput(_StrictToolModel):
+    source_phrase: StrictStr
+    gene_symbol: StrictStr
+    primary_external_id: Optional[StrictStr]
+
+
+class GeneExpressionReferenceInput(_StrictToolModel):
+    source_phrase: StrictStr
+    reference_id: StrictStr
+
+
+class GeneExpressionControlledFieldInput(_StrictToolModel):
+    field_path: GeneExpressionControlledFieldPath
+    resolver_call_id: StrictStr
+    selected_value: StrictStr
+
+
+class GeneExpressionPatchUpdateInput(_StrictToolModel):
+    field_path: GeneExpressionPatchFieldPath
+    string_value: Optional[StrictStr]
+    resolver_call_id: Optional[StrictStr]
+    evidence_record_ids: Optional[List[StrictStr]] = Field(min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def _validate_update_shape(self) -> "GeneExpressionPatchUpdateInput":
+        if self.field_path in _CONTROLLED_GENE_EXPRESSION_FIELD_PATHS:
+            if not _clean_string(self.resolver_call_id):
+                raise ValueError("controlled field patches require resolver_call_id")
+            return self
+        if self.field_path == "evidence_record_ids":
+            if not self.evidence_record_ids:
+                raise ValueError("evidence_record_ids patch requires evidence_record_ids")
+            return self
+        if not _clean_string(self.string_value):
+            raise ValueError(f"{self.field_path} patch requires string_value")
+        return self
+
+
+class GeneExpressionStageInput(_StrictToolModel):
+    pending_ref_id: StrictStr
+    evidence_record_ids: List[StrictStr] = Field(min_length=1, max_length=20)
+    where_expressed_statement: StrictStr
+    subject: GeneExpressionSubjectInput
+    reference: GeneExpressionReferenceInput
+    controlled_fields: List[GeneExpressionControlledFieldInput] = Field(min_length=1, max_length=20)
+
+    @field_validator("pending_ref_id", "where_expressed_statement")
+    @classmethod
+    def _non_empty_string(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("value must be non-empty")
+        return cleaned
+
+
+class GeneExpressionPatchInput(_StrictToolModel):
+    candidate_id: StrictStr
+    pending_ref_id: StrictStr
+    updates: List[GeneExpressionPatchUpdateInput] = Field(min_length=1, max_length=25)
+
+
+class GeneExpressionDiscardInput(_StrictToolModel):
+    candidate_id: StrictStr
+    reason: Optional[StrictStr]
+
+
+class GeneExpressionListInput(_StrictToolModel):
+    include_discarded: bool
+
+
+class GeneExpressionFinalizeInput(_StrictToolModel):
+    candidate_ids: List[StrictStr] = Field(min_length=1, max_length=50)
 
 
 # Group-to-taxon mapping — loaded from config/groups.yaml via groups_loader
@@ -5190,6 +5326,718 @@ def resolve_domain_field_term(
             }
         ],
     )
+
+
+def _clean_string(value: Any) -> Optional[str]:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _gene_expression_candidate_id(workspace: Any, pending_ref_id: str) -> str:
+    for candidate in workspace.candidates.values():
+        if pending_ref_id in candidate.pending_ref_ids:
+            return candidate.candidate_id
+    return f"gex-candidate-{len(workspace.candidates) + 1}"
+
+
+def _reference_id_validation_issue(reference_id: str) -> Optional[Dict[str, Any]]:
+    normalized = reference_id.strip()
+    if normalized.casefold() in _REFERENCE_PLACEHOLDER_VALUES or "..." in normalized:
+        return {
+            "field_path": "reference.reference_id",
+            "reason": "placeholder_reference",
+            "message": "reference.reference_id must be an actual PMID, DOI, or Alliance reference identifier.",
+        }
+    if ":" not in normalized and not normalized.upper().startswith("PMID"):
+        return {
+            "field_path": "reference.reference_id",
+            "reason": "invalid_reference_id",
+            "message": "reference.reference_id must include a concrete identifier prefix.",
+        }
+    return None
+
+
+def _gene_expression_validation_result(
+    *,
+    message: str,
+    issues: Sequence[Mapping[str, Any]],
+    method: str,
+    attempted_query: Optional[Dict[str, Any]] = None,
+) -> AgrQueryResult:
+    issue_list = [dict(issue) for issue in issues]
+    _emit_gene_expression_builder_event(
+        "gene_expression_builder.validation_failed",
+        action=method,
+        input_summary=attempted_query,
+        output_summary={"message": message, "validation_issues": issue_list},
+        validation={"status": "failed", "issues": issue_list},
+    )
+    return AgrQueryResult(
+        status="error",
+        data={"validation_issues": issue_list},
+        count=len(issue_list),
+        message=message,
+        lookup_status=LOOKUP_STATUS_BLOCKED,
+        failure_classification="validation_failed",
+        explanation=message,
+        lookup_attempts=[
+            _lookup_attempt(
+                method=method,
+                attempted_query=attempted_query or _attempt_query(method),
+                lookup_status=LOOKUP_STATUS_BLOCKED,
+                explanation=message,
+            )
+        ],
+    )
+
+
+def _emit_gene_expression_builder_event(
+    event_type: str,
+    *,
+    action: str,
+    input_summary: Any = None,
+    output_summary: Any = None,
+    validation: Optional[Mapping[str, Any]] = None,
+    tool_call_id: Optional[str] = None,
+) -> None:
+    workspace = None
+    try:
+        workspace = get_active_extraction_builder_workspace()
+    except RuntimeError:
+        pass
+    write_extraction_trace_event(
+        event_type=event_type,
+        trace_id=getattr(workspace, "run_id", None),
+        tool_call_id=tool_call_id,
+        domain_pack_id=GENE_EXPRESSION_DOMAIN_PACK_ID,
+        input_summary=input_summary,
+        output_summary=output_summary,
+        validation=validation,
+        metadata={
+            "action": action,
+            "builder_run_id": getattr(workspace, "run_id", None),
+            "object_type": GENE_EXPRESSION_OBJECT_TYPE,
+        },
+    )
+
+
+def _model_validation_issues(exc: ValidationError) -> List[Dict[str, Any]]:
+    return [
+        {
+            "field_path": ".".join(str(part) for part in error.get("loc", ())),
+            "reason": str(error.get("type") or "invalid"),
+            "message": str(error.get("msg") or "Invalid value"),
+        }
+        for error in exc.errors()
+    ]
+
+
+def _resolver_entry_for_controlled_field(
+    *,
+    resolver_call_id: str,
+    field_path: str,
+    selected_value: Optional[str] = None,
+) -> Tuple[Optional[ResolverCallLedgerEntry], Optional[Dict[str, Any]]]:
+    if not _clean_string(resolver_call_id):
+        issue = {
+            "field_path": field_path,
+            "reason": "missing_resolver_call_id",
+            "message": "Controlled fields require resolver_call_id from resolve_domain_field_term.",
+        }
+        _emit_gene_expression_builder_event(
+            "gene_expression_builder.missing_provenance_rejected",
+            action="resolver_lookup",
+            input_summary={"field_path": field_path, "resolver_call_id": resolver_call_id},
+            output_summary=issue,
+            validation={"status": "failed", "issue": issue},
+        )
+        return None, issue
+    try:
+        entry = get_active_resolver_call_ledger().get(resolver_call_id)
+    except (RuntimeError, KeyError) as exc:
+        issue = {
+            "field_path": field_path,
+            "reason": "unknown_resolver_call_id",
+            "message": str(exc),
+            "resolver_call_id": resolver_call_id,
+        }
+        _emit_gene_expression_builder_event(
+            "gene_expression_builder.missing_provenance_rejected",
+            action="resolver_lookup",
+            input_summary={"field_path": field_path, "resolver_call_id": resolver_call_id},
+            output_summary=issue,
+            validation={"status": "failed", "issue": issue},
+            tool_call_id=resolver_call_id,
+        )
+        return None, issue
+
+    if entry.domain_pack_id != GENE_EXPRESSION_DOMAIN_PACK_ID or entry.object_type != GENE_EXPRESSION_OBJECT_TYPE:
+        issue = {
+            "field_path": field_path,
+            "reason": "resolver_scope_mismatch",
+            "message": "resolver_call_id was not resolved for Alliance gene-expression annotations.",
+            "resolver_call_id": resolver_call_id,
+        }
+        return None, issue
+    if entry.field_path != field_path:
+        issue = {
+            "field_path": field_path,
+            "reason": "resolver_field_path_mismatch",
+            "message": f"resolver_call_id resolved {entry.field_path}, not {field_path}.",
+            "resolver_call_id": resolver_call_id,
+        }
+        return None, issue
+    if selected_value is not None and _clean_string(selected_value) != entry.selected_value:
+        issue = {
+            "field_path": field_path,
+            "reason": "resolver_selected_value_mismatch",
+            "message": "selected_value must match the validated resolver output.",
+            "resolver_call_id": resolver_call_id,
+        }
+        return None, issue
+    return entry, None
+
+
+def _apply_resolver_selection(
+    payload: Dict[str, Any],
+    *,
+    entry: ResolverCallLedgerEntry,
+) -> None:
+    instructions = entry.payload_field_instructions
+    for operation in instructions.get("set", []) if isinstance(instructions.get("set"), list) else []:
+        if isinstance(operation, Mapping):
+            _set_dotted_payload_value(
+                payload,
+                str(operation.get("field_path") or ""),
+                operation.get("value"),
+            )
+    for operation in instructions.get("append", []) if isinstance(instructions.get("append"), list) else []:
+        if isinstance(operation, Mapping):
+            _append_dotted_payload_value(
+                payload,
+                str(operation.get("field_path") or ""),
+                operation.get("value"),
+            )
+
+
+def _set_dotted_payload_value(payload: Dict[str, Any], field_path: str, value: Any) -> None:
+    if not field_path:
+        return
+    current = payload
+    parts = field_path.split(".")
+    for part in parts[:-1]:
+        current = current.setdefault(part, {})
+        if not isinstance(current, dict):
+            return
+    current[parts[-1]] = value
+
+
+def _append_dotted_payload_value(payload: Dict[str, Any], field_path: str, value: Any) -> None:
+    if not field_path:
+        return
+    current = payload
+    parts = field_path.split(".")
+    for part in parts[:-1]:
+        current = current.setdefault(part, {})
+        if not isinstance(current, dict):
+            return
+    current.setdefault(parts[-1], [])
+    if isinstance(current[parts[-1]], list):
+        current[parts[-1]].append(value)
+
+
+def _stage_payload_from_gene_expression_input(
+    stage_input: GeneExpressionStageInput,
+    resolver_entries: List[ResolverCallLedgerEntry],
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "domain_pack_id": GENE_EXPRESSION_DOMAIN_PACK_ID,
+        "object_type": GENE_EXPRESSION_OBJECT_TYPE,
+        "pending_ref_id": stage_input.pending_ref_id,
+        "where_expressed_statement": stage_input.where_expressed_statement,
+        "expression_annotation_subject": {
+            "source_phrase": stage_input.subject.source_phrase,
+            "gene_symbol": stage_input.subject.gene_symbol,
+            "primary_external_id": stage_input.subject.primary_external_id,
+        },
+        "single_reference": {
+            "source_phrase": stage_input.reference.source_phrase,
+            "reference_id": stage_input.reference.reference_id,
+        },
+        "metadata": {
+            "provenance": {
+                "helper_selections": [
+                    entry.provenance_selection() for entry in resolver_entries
+                ]
+            }
+        },
+    }
+    for entry in resolver_entries:
+        _apply_resolver_selection(payload, entry=entry)
+    return payload
+
+
+def _builder_summary(workspace: Any, *, include_discarded: bool = False) -> Dict[str, Any]:
+    snapshot = workspace.snapshot(redact_payload=True)
+    candidates = snapshot["candidates"]
+    if not include_discarded:
+        candidates = [
+            candidate
+            for candidate in candidates
+            if candidate.get("status") != "discarded"
+        ]
+    return {
+        "builder_run_id": snapshot.get("run_id"),
+        "state": snapshot.get("state"),
+        "candidate_count": len(candidates),
+        "candidate_ids": [candidate.get("candidate_id") for candidate in candidates],
+        "pending_ref_ids": snapshot["pending_ref_ids"],
+        "evidence_record_ids": snapshot["evidence_record_ids"],
+        "resolver_selection_refs": snapshot["resolver_selection_refs"],
+        "candidates": candidates,
+        "finalization": snapshot.get("finalization"),
+    }
+
+
+@function_tool(strict_mode=True)
+def stage_gene_expression_observation(
+    pending_ref_id: str,
+    evidence_record_ids: Annotated[List[str], Field(min_length=1, max_length=20)],
+    where_expressed_statement: str,
+    subject: GeneExpressionSubjectInput,
+    reference: GeneExpressionReferenceInput,
+    controlled_fields: Annotated[List[GeneExpressionControlledFieldInput], Field(min_length=1, max_length=20)],
+) -> AgrQueryResult:
+    """Stage one gene-expression observation candidate through the builder workspace."""
+
+    attempted_query = _attempt_query(
+        "stage_gene_expression_observation",
+        pending_ref_id=pending_ref_id,
+        evidence_record_ids=evidence_record_ids,
+        where_expressed_statement=where_expressed_statement,
+        subject=subject.model_dump(mode="json") if hasattr(subject, "model_dump") else subject,
+        reference=reference.model_dump(mode="json") if hasattr(reference, "model_dump") else reference,
+        controlled_fields=[
+            item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+            for item in (controlled_fields or [])
+        ],
+    )
+    _emit_gene_expression_builder_event(
+        "gene_expression_builder.stage_requested",
+        action="stage",
+        input_summary=attempted_query,
+    )
+    try:
+        stage_input = GeneExpressionStageInput(
+            pending_ref_id=pending_ref_id,
+            evidence_record_ids=evidence_record_ids,
+            where_expressed_statement=where_expressed_statement,
+            subject=subject,
+            reference=reference,
+            controlled_fields=controlled_fields,
+        )
+    except ValidationError as exc:
+        return _gene_expression_validation_result(
+            message="stage_gene_expression_observation failed input validation.",
+            issues=_model_validation_issues(exc),
+            method="stage_gene_expression_observation",
+            attempted_query=attempted_query,
+        )
+
+    issues: List[Dict[str, Any]] = []
+    reference_issue = _reference_id_validation_issue(stage_input.reference.reference_id)
+    if reference_issue:
+        issues.append(reference_issue)
+
+    resolver_entries: List[ResolverCallLedgerEntry] = []
+    for controlled_field in stage_input.controlled_fields:
+        entry, issue = _resolver_entry_for_controlled_field(
+            resolver_call_id=controlled_field.resolver_call_id,
+            field_path=controlled_field.field_path,
+            selected_value=controlled_field.selected_value,
+        )
+        if issue:
+            issues.append(issue)
+        elif entry is not None:
+            resolver_entries.append(entry)
+    if issues:
+        return _gene_expression_validation_result(
+            message="stage_gene_expression_observation rejected invalid builder input.",
+            issues=issues,
+            method="stage_gene_expression_observation",
+            attempted_query=attempted_query,
+        )
+
+    workspace = get_active_extraction_builder_workspace()
+    candidate_id = _gene_expression_candidate_id(workspace, stage_input.pending_ref_id)
+    payload = _stage_payload_from_gene_expression_input(stage_input, resolver_entries)
+    candidate = workspace.upsert_candidate(
+        candidate_id=candidate_id,
+        staged_fields=payload,
+        pending_ref_ids=[stage_input.pending_ref_id],
+        evidence_record_ids=stage_input.evidence_record_ids,
+        resolver_selection_refs=[entry.tool_call_id for entry in resolver_entries],
+        status=CANDIDATE_STATUS_VALID,
+    )
+    summary = {
+        "candidate_id": candidate.candidate_id,
+        "status": candidate.status,
+        "pending_ref_ids": candidate.pending_ref_ids,
+        "evidence_record_ids": candidate.evidence_record_ids,
+        "resolver_selection_refs": candidate.resolver_selection_refs,
+        "builder": _builder_summary(workspace),
+    }
+    _emit_gene_expression_builder_event(
+        "gene_expression_builder.stage_completed",
+        action="stage",
+        input_summary=attempted_query,
+        output_summary=summary,
+    )
+    return _ok(data=summary, count=1, lookup_status=LOOKUP_STATUS_SUCCESS)
+
+
+@function_tool(strict_mode=True)
+def patch_gene_expression_observation(
+    candidate_id: str,
+    pending_ref_id: str,
+    updates: Annotated[List[GeneExpressionPatchUpdateInput], Field(min_length=1, max_length=25)],
+) -> AgrQueryResult:
+    """Patch enumerated fields on one staged gene-expression observation."""
+
+    attempted_query = _attempt_query(
+        "patch_gene_expression_observation",
+        candidate_id=candidate_id,
+        pending_ref_id=pending_ref_id,
+        updates=[
+            item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+            for item in (updates or [])
+        ],
+    )
+    _emit_gene_expression_builder_event(
+        "gene_expression_builder.patch_requested",
+        action="patch",
+        input_summary=attempted_query,
+    )
+    try:
+        patch_input = GeneExpressionPatchInput(
+            candidate_id=candidate_id,
+            pending_ref_id=pending_ref_id,
+            updates=updates,
+        )
+    except ValidationError as exc:
+        return _gene_expression_validation_result(
+            message="patch_gene_expression_observation failed input validation.",
+            issues=_model_validation_issues(exc),
+            method="patch_gene_expression_observation",
+            attempted_query=attempted_query,
+        )
+
+    workspace = get_active_extraction_builder_workspace()
+    try:
+        candidate = workspace.get_candidate(patch_input.candidate_id)
+    except KeyError as exc:
+        return _gene_expression_validation_result(
+            message=str(exc),
+            issues=[
+                {
+                    "field_path": "candidate_id",
+                    "reason": "unknown_candidate_id",
+                    "message": str(exc),
+                }
+            ],
+            method="patch_gene_expression_observation",
+            attempted_query=attempted_query,
+        )
+    if patch_input.pending_ref_id not in candidate.pending_ref_ids:
+        return _gene_expression_validation_result(
+            message="patch_gene_expression_observation pending_ref_id does not match the staged candidate.",
+            issues=[
+                {
+                    "field_path": "pending_ref_id",
+                    "reason": "pending_ref_id_mismatch",
+                    "message": "pending_ref_id must match the staged candidate.",
+                }
+            ],
+            method="patch_gene_expression_observation",
+            attempted_query=attempted_query,
+        )
+
+    issues: List[Dict[str, Any]] = []
+    payload = deepcopy(candidate.staged_fields)
+    resolver_refs = list(candidate.resolver_selection_refs)
+    evidence_ids = list(candidate.evidence_record_ids)
+    helper_selections = (
+        payload.setdefault("metadata", {})
+        .setdefault("provenance", {})
+        .setdefault("helper_selections", [])
+    )
+    for update in patch_input.updates:
+        if update.field_path in _CONTROLLED_GENE_EXPRESSION_FIELD_PATHS:
+            assert update.resolver_call_id is not None
+            entry, issue = _resolver_entry_for_controlled_field(
+                resolver_call_id=update.resolver_call_id,
+                field_path=update.field_path,
+            )
+            if issue:
+                issues.append(issue)
+                continue
+            assert entry is not None
+            _apply_resolver_selection(payload, entry=entry)
+            helper_selections.append(entry.provenance_selection())
+            if entry.tool_call_id not in resolver_refs:
+                resolver_refs.append(entry.tool_call_id)
+            continue
+        if update.field_path == "evidence_record_ids":
+            evidence_ids = list(update.evidence_record_ids or [])
+            continue
+        if update.field_path == "reference.reference_id" and update.string_value:
+            reference_issue = _reference_id_validation_issue(update.string_value)
+            if reference_issue:
+                issues.append(reference_issue)
+                continue
+        _set_gene_expression_patch_value(
+            payload,
+            update.field_path,
+            update.string_value,
+        )
+
+    if issues:
+        return _gene_expression_validation_result(
+            message="patch_gene_expression_observation rejected invalid builder input.",
+            issues=issues,
+            method="patch_gene_expression_observation",
+            attempted_query=attempted_query,
+        )
+    workspace.upsert_candidate(
+        candidate_id=patch_input.candidate_id,
+        staged_fields=payload,
+        pending_ref_ids=candidate.pending_ref_ids,
+        evidence_record_ids=evidence_ids,
+        resolver_selection_refs=resolver_refs,
+        status=CANDIDATE_STATUS_VALID,
+    )
+    summary = {
+        "candidate_id": patch_input.candidate_id,
+        "patched_field_count": len(patch_input.updates),
+        "builder": _builder_summary(workspace),
+    }
+    _emit_gene_expression_builder_event(
+        "gene_expression_builder.patch_completed",
+        action="patch",
+        input_summary=attempted_query,
+        output_summary=summary,
+    )
+    return _ok(data=summary, count=1, lookup_status=LOOKUP_STATUS_SUCCESS)
+
+
+def _set_gene_expression_patch_value(
+    payload: Dict[str, Any],
+    field_path: str,
+    value: Optional[str],
+) -> None:
+    mapping = {
+        "subject.source_phrase": "expression_annotation_subject.source_phrase",
+        "subject.gene_symbol": "expression_annotation_subject.gene_symbol",
+        "subject.primary_external_id": "expression_annotation_subject.primary_external_id",
+        "reference.source_phrase": "single_reference.source_phrase",
+        "reference.reference_id": "single_reference.reference_id",
+        "reference.curie": "single_reference.curie",
+        "reference.pmid": "single_reference.pmid",
+        "reference.doi": "single_reference.doi",
+        "reference.title": "single_reference.title",
+    }
+    target_path = mapping.get(field_path, field_path)
+    _set_dotted_payload_value(payload, target_path, value)
+
+
+@function_tool(strict_mode=True)
+def discard_gene_expression_observation(
+    candidate_id: str,
+    reason: Optional[str],
+) -> AgrQueryResult:
+    """Discard one staged gene-expression observation candidate."""
+
+    attempted_query = _attempt_query(
+        "discard_gene_expression_observation",
+        candidate_id=candidate_id,
+        reason=reason,
+    )
+    _emit_gene_expression_builder_event(
+        "gene_expression_builder.discard_requested",
+        action="discard",
+        input_summary=attempted_query,
+    )
+    try:
+        discard_input = GeneExpressionDiscardInput(candidate_id=candidate_id, reason=reason)
+    except ValidationError as exc:
+        return _gene_expression_validation_result(
+            message="discard_gene_expression_observation failed input validation.",
+            issues=_model_validation_issues(exc),
+            method="discard_gene_expression_observation",
+            attempted_query=attempted_query,
+        )
+    workspace = get_active_extraction_builder_workspace()
+    try:
+        workspace.discard_candidate(discard_input.candidate_id, reason=discard_input.reason)
+    except (KeyError, ExtractionBuilderError) as exc:
+        return _gene_expression_validation_result(
+            message=str(exc),
+            issues=[
+                {
+                    "field_path": "candidate_id",
+                    "reason": "discard_failed",
+                    "message": str(exc),
+                }
+            ],
+            method="discard_gene_expression_observation",
+            attempted_query=attempted_query,
+        )
+    summary = _builder_summary(workspace, include_discarded=True)
+    _emit_gene_expression_builder_event(
+        "gene_expression_builder.discard_completed",
+        action="discard",
+        input_summary=attempted_query,
+        output_summary=summary,
+    )
+    return _ok(data=summary, count=summary["candidate_count"], lookup_status=LOOKUP_STATUS_SUCCESS)
+
+
+@function_tool(strict_mode=True)
+def list_staged_gene_expression_observations(
+    include_discarded: bool,
+) -> AgrQueryResult:
+    """List compact summaries for staged gene-expression observations."""
+
+    attempted_query = _attempt_query(
+        "list_staged_gene_expression_observations",
+        include_discarded=include_discarded,
+    )
+    _emit_gene_expression_builder_event(
+        "gene_expression_builder.list_requested",
+        action="list",
+        input_summary=attempted_query,
+    )
+    try:
+        list_input = GeneExpressionListInput(include_discarded=include_discarded)
+    except ValidationError as exc:
+        return _gene_expression_validation_result(
+            message="list_staged_gene_expression_observations failed input validation.",
+            issues=_model_validation_issues(exc),
+            method="list_staged_gene_expression_observations",
+            attempted_query=attempted_query,
+        )
+    workspace = get_active_extraction_builder_workspace()
+    summary = _builder_summary(workspace, include_discarded=list_input.include_discarded)
+    _emit_gene_expression_builder_event(
+        "gene_expression_builder.list_completed",
+        action="list",
+        input_summary=attempted_query,
+        output_summary=summary,
+    )
+    return _ok(data=summary, count=summary["candidate_count"], lookup_status=LOOKUP_STATUS_SUCCESS)
+
+
+@function_tool(strict_mode=True)
+def finalize_gene_expression_extraction(
+    candidate_ids: Annotated[List[str], Field(min_length=1, max_length=50)],
+) -> AgrQueryResult:
+    """Finalize staged gene-expression candidates through the builder handoff contract."""
+
+    attempted_query = _attempt_query(
+        "finalize_gene_expression_extraction",
+        candidate_ids=candidate_ids,
+    )
+    _emit_gene_expression_builder_event(
+        "gene_expression_builder.finalize_requested",
+        action="finalize",
+        input_summary=attempted_query,
+    )
+    try:
+        finalize_input = GeneExpressionFinalizeInput(candidate_ids=candidate_ids)
+    except ValidationError as exc:
+        return _gene_expression_validation_result(
+            message="finalize_gene_expression_extraction failed input validation.",
+            issues=_model_validation_issues(exc),
+            method="finalize_gene_expression_extraction",
+            attempted_query=attempted_query,
+        )
+
+    workspace = get_active_extraction_builder_workspace()
+    issues: List[Dict[str, Any]] = []
+    for candidate_id in finalize_input.candidate_ids:
+        try:
+            candidate = workspace.get_candidate(candidate_id)
+        except KeyError as exc:
+            issues.append(
+                {
+                    "field_path": "candidate_ids",
+                    "reason": "unknown_candidate_id",
+                    "message": str(exc),
+                    "candidate_id": candidate_id,
+                }
+            )
+            continue
+        if not candidate.evidence_record_ids:
+            issues.append(
+                {
+                    "field_path": "evidence_record_ids",
+                    "reason": "missing_evidence_record_ids",
+                    "message": "Finalized gene-expression candidates require evidence_record_ids.",
+                    "candidate_id": candidate_id,
+                }
+            )
+        if not candidate.resolver_selection_refs:
+            issues.append(
+                {
+                    "field_path": "controlled_fields",
+                    "reason": "missing_resolver_call_id",
+                    "message": "Finalized gene-expression candidates require validated resolver selections.",
+                    "candidate_id": candidate_id,
+                }
+            )
+    if issues:
+        workspace.record_validation_failure(errors=issues, candidate_ids=finalize_input.candidate_ids)
+        return _gene_expression_validation_result(
+            message="finalize_gene_expression_extraction failed builder validation.",
+            issues=issues,
+            method="finalize_gene_expression_extraction",
+            attempted_query=attempted_query,
+        )
+
+    try:
+        finalization = workspace.finalize(candidate_ids=finalize_input.candidate_ids)
+    except ExtractionBuilderValidationError as exc:
+        return _gene_expression_validation_result(
+            message=str(exc),
+            issues=list(workspace.validation_errors),
+            method="finalize_gene_expression_extraction",
+            attempted_query=attempted_query,
+        )
+    except (KeyError, ValueError, ExtractionBuilderError) as exc:
+        return _gene_expression_validation_result(
+            message=str(exc),
+            issues=[
+                {
+                    "field_path": "candidate_ids",
+                    "reason": "finalization_failed",
+                    "message": str(exc),
+                }
+            ],
+            method="finalize_gene_expression_extraction",
+            attempted_query=attempted_query,
+        )
+
+    summary = {
+        "builder_finalization": finalization.summary(),
+        "builder": _builder_summary(workspace, include_discarded=True),
+    }
+    _emit_gene_expression_builder_event(
+        "gene_expression_builder.finalize_completed",
+        action="finalize",
+        input_summary=attempted_query,
+        output_summary=summary,
+    )
+    return _ok(data=summary, count=finalization.finalized_candidate_count, lookup_status=LOOKUP_STATUS_SUCCESS)
 
 
 @function_tool(strict_mode=False)
