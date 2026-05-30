@@ -6051,10 +6051,14 @@ def finalize_gene_expression_extraction(
     try:
         evidence_records = get_active_evidence_records_snapshot()
     except RuntimeError:
+        # Missing run-scoped context is not recoverable; empty inputs below
+        # become explicit materialization validation issues.
         evidence_records = []
     try:
         resolver_ledger = get_active_resolver_call_ledger()
     except RuntimeError:
+        # Missing resolver ledger context surfaces as resolver provenance
+        # validation failures rather than a successful finalization.
         resolver_ledger = None
 
     materialization = materialize_gene_expression_builder_state(
