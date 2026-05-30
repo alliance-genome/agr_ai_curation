@@ -349,7 +349,7 @@ Located at: `config/models.yaml`
 
 ```yaml
 models:
-  - model_id: gpt-5.4-mini
+  - model_id: gpt-5-mini
     name: GPT-5.4 Mini
     provider: openai                    # Must match a key in providers.yaml
     description: Faster, lower-cost model for quick drafting and lightweight extraction.

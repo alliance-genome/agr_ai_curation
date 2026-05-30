@@ -203,7 +203,7 @@ def _make_legacy_candidate() -> CurationPrepCandidate:
                 }
             ],
             "run_metadata": {
-                "model_name": "gpt-5.4-mini",
+                "model_name": "gpt-5-mini",
                 "token_usage": {
                     "input_tokens": 120,
                     "output_tokens": 45,

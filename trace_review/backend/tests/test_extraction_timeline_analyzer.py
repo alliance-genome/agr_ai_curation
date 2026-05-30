@@ -75,7 +75,7 @@ def test_analyzer_merges_durable_events_and_agents_sdk_tool_observations(tmp_pat
             "id": "gen-1",
             "type": "GENERATION",
             "startTime": "2026-05-29T00:00:04Z",
-            "model": "gpt-5.4-mini",
+            "model": "gpt-5-mini",
             "input": [
                 {
                     "type": "function_call",
@@ -174,7 +174,7 @@ def test_analyzer_expands_sibling_observation_events_without_local_durable_files
                 "id": "gen-sibling",
                 "type": "GENERATION",
                 "startTime": "2026-05-29T00:00:02Z",
-                "model": "gpt-5.4-mini",
+                "model": "gpt-5-mini",
                 "input": [
                     {
                         "type": "function_call",

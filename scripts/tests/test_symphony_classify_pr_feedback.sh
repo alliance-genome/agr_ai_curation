@@ -202,7 +202,7 @@ test_malformed_override_config_warns_and_uses_defaults() {
 
   output="$(cat "${output_file}")"
   assert_contains "PR_FEEDBACK_CLASSIFIER_CONFIG_WARNING=Failed to read overrides file" "${output}"
-  assert_contains "PR_FEEDBACK_CLASSIFIER_MODEL=gpt-5.4-mini" "${output}"
+  assert_contains "PR_FEEDBACK_CLASSIFIER_MODEL=gpt-5-mini" "${output}"
   assert_contains "PR_FEEDBACK_CLASSIFIER_REASONING_EFFORT=high" "${output}"
 }
 

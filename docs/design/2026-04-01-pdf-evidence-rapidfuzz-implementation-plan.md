@@ -333,7 +333,7 @@ The frontend viewer should still verify and render via PDF.js.
 
 ### Phase 6: final review
 
-- [ ] Run a `gpt-5.4-mini` `xhigh` sub-agent code review on the completed implementation
+- [ ] Run a `gpt-5-mini` `xhigh` sub-agent code review on the completed implementation
 - [ ] Address any actionable findings from that review
 
 ## Testing priorities

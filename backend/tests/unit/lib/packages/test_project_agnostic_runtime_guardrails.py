@@ -471,7 +471,7 @@ def test_runtime_validation_accepts_synthetic_system_agent_without_alliance(monk
     monkeypatch.setattr(
         runtime_validation,
         "list_models",
-        lambda: [SimpleNamespace(model_id="gpt-5.4-mini")],
+        lambda: [SimpleNamespace(model_id="gpt-5-mini")],
     )
     monkeypatch.setattr(
         runtime_validation,
@@ -484,7 +484,7 @@ def test_runtime_validation_accepts_synthetic_system_agent_without_alliance(monk
                 user_id=None,
                 project_id=None,
                 template_source=None,
-                model_id="gpt-5.4-mini",
+                model_id="gpt-5-mini",
                 model_reasoning=None,
                 tool_ids=["demo_search_tool"],
                 output_schema_key=None,
