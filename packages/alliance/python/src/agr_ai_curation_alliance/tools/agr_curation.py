@@ -6131,6 +6131,8 @@ def finalize_gene_expression_extraction(
         output_summary={
             **materialization.summary(),
             "materialized_candidate_id": materialized_candidate_id,
+            "curatable_objects": materialization.payload.get("curatable_objects", []),
+            "materialized_envelope": materialization.payload,
         },
     )
 

@@ -121,7 +121,7 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
     assert "negated: true" in content
     assert "repair_mode" not in content
     assert "metadata.repair_notes" not in content
-    assert "Do not emit top-level `items[]`" in content
+    assert "Do not emit top-level legacy semantic lists" in content
     assert "agr_species_context_lookup" in content
     assert "search_domain_field_terms" in content
     assert "inspect_ontology_term" in content
@@ -139,7 +139,6 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
     assert "slot_hint" in content
     assert "cellular-component-only sites such as nucleus or cytoplasm are valid" in content
     assert "`data_provider.abbreviation`" in content
-    assert "zebrafish / Danio rerio => `ZFIN`" in content
     assert "zebrafish / Danio rerio => `ZFIN`" in content
     assert "broad expression ontology lookup" in content
     assert "agr_curation_query" not in content

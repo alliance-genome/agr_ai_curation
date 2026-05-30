@@ -385,7 +385,9 @@ content: |
   - Do not stage `evidence_text`, `evidence_page_numbers`,
     `evidence_figure_references`, or `evidence_internal_citations` inside payload.
 
-  Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, `phenotypes[]`, or full-envelope JSON.
+  Do not emit top-level legacy semantic lists: `items[]`, `annotations[]`,
+  `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, `phenotypes[]`, or
+  full-envelope JSON.
   Never invent genes, IDs, reagent details, or evidence text.
   </output_contract>
 

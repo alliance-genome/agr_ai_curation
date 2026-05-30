@@ -484,11 +484,18 @@ def test_finalize_returns_compact_builder_summary(active_builder_context):
     }
     assert annotation["payload"]["relation"]["name"] == "is_expressed_in"
     assert annotation["payload"]["data_provider"]["abbreviation"] == "WB"
+    assert annotation["payload"]["date_created"] == workspace.created_at
     assert annotation["payload"]["expression_experiment"]["unique_id"].startswith(
         "gene-expression-experiment-"
     )
     assert any(event["event_type"] == "gene_expression_builder.finalize_completed" for event in events)
-    assert any(event["event_type"] == "gene_expression_materializer.completed" for event in events)
+    completed_event = next(
+        event
+        for event in events
+        if event["event_type"] == "gene_expression_materializer.completed"
+    )
+    assert completed_event["output_summary"]["curatable_objects"] == payload["curatable_objects"]
+    assert completed_event["output_summary"]["materialized_envelope"] == payload
 
 
 def test_finalize_rejects_missing_evidence_records(active_builder_context):

@@ -137,7 +137,6 @@ FORBIDDEN_LEGACY_COLLECTIONS = frozenset(
     }
 )
 GENE_EXPRESSION_MATERIALIZER_ID = "gene_expression.builder_materializer.v1"
-GENE_EXPRESSION_MATERIALIZER_DEFAULT_DATE_CREATED = "1970-01-01T00:00:00Z"
 PLACEHOLDER_REFERENCE_IDS = frozenset({"PMID:12345678", "PMID12345678"})
 GENE_ID_PROVIDER_PREFIXES = {
     "WB:": "WB",
@@ -668,6 +667,18 @@ def materialize_gene_expression_builder_state(
     raw_mentions: list[dict[str, Any]] = []
     helper_selections: list[dict[str, Any]] = []
     retained_evidence_ids: list[str] = []
+    default_date_created = _clean_text(getattr(workspace, "created_at", None))
+    if default_date_created is None:
+        issues.append(
+            _materialization_issue(
+                field_path="date_created",
+                reason="missing_builder_created_at",
+                message=(
+                    "Gene-expression materialization requires the builder "
+                    "workspace creation timestamp for date_created defaults."
+                ),
+            )
+        )
 
     for index, candidate in enumerate(candidates):
         staged_fields = copy.deepcopy(dict(getattr(candidate, "staged_fields", {}) or {}))
@@ -716,6 +727,7 @@ def materialize_gene_expression_builder_state(
             staged_fields,
             pending_ref_id=pending_ref_id,
             candidate_id=candidate.candidate_id,
+            default_date_created=default_date_created,
             issues=issues,
         )
         selections = _materialized_helper_selections(
@@ -899,6 +911,7 @@ def _materialized_gene_expression_payload(
     *,
     pending_ref_id: str,
     candidate_id: str,
+    default_date_created: str | None,
     issues: list[dict[str, Any]],
 ) -> dict[str, Any]:
     payload = copy.deepcopy(dict(staged_fields))
@@ -907,7 +920,8 @@ def _materialized_gene_expression_payload(
     payload.pop("pending_ref_id", None)
     payload.pop("metadata", None)
     payload.pop("evidence_record_ids", None)
-    payload.setdefault("date_created", GENE_EXPRESSION_MATERIALIZER_DEFAULT_DATE_CREATED)
+    if _value_missing_or_blank(payload.get("date_created")) and default_date_created is not None:
+        payload["date_created"] = default_date_created
     payload.setdefault("internal", False)
     payload.setdefault("obsolete", False)
 
