@@ -89,6 +89,7 @@ def test_finalize_rejects_late_mutation_and_duplicate_identical_finalize_is_idem
         "resolver_selection_count": 2,
         "builder_run_id": "trace-1",
         "candidate_ids": ["candidate-1"],
+        "source_candidate_ids": [],
     }
     with pytest.raises(builder.ExtractionBuilderFinalizedError):
         workspace.upsert_candidate(
@@ -128,6 +129,34 @@ def test_conflicting_duplicate_finalize_fails_clearly(captured_events):
 
     with pytest.raises(builder.ExtractionBuilderFinalizationConflict, match="different candidate membership"):
         workspace.finalize(candidate_ids=["candidate-2"])
+
+
+def test_source_candidate_ids_define_duplicate_finalize_identity(captured_events):
+    workspace = _workspace()
+    workspace.upsert_candidate(
+        candidate_id="materialized-envelope-1",
+        staged_fields={"items": [{"id": 1}, {"id": 2}]},
+    )
+
+    finalization = workspace.finalize(
+        candidate_ids=["materialized-envelope-1"],
+        source_candidate_ids=["candidate-1", "candidate-2"],
+    )
+    duplicate = workspace.finalize(
+        candidate_ids=["materialized-envelope-1"],
+        source_candidate_ids=["candidate-2", "candidate-1"],
+    )
+
+    assert duplicate is finalization
+    assert finalization.candidate_ids == ("materialized-envelope-1",)
+    assert finalization.source_candidate_ids == ("candidate-1", "candidate-2")
+    assert finalization.summary()["source_candidate_ids"] == ["candidate-1", "candidate-2"]
+
+    with pytest.raises(builder.ExtractionBuilderFinalizationConflict, match="different candidate membership"):
+        workspace.finalize(
+            candidate_ids=["materialized-envelope-1"],
+            source_candidate_ids=["candidate-1", "candidate-3"],
+        )
 
 
 def test_validation_failure_supports_repair_before_successful_finalize(captured_events):

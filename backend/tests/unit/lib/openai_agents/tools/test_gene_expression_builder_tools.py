@@ -465,6 +465,7 @@ def test_finalize_returns_compact_builder_summary(active_builder_context):
     finalization = result.data["builder_finalization"]
     assert finalization["status"] == "finalized"
     assert finalization["candidate_ids"] == ["gex-candidate-1"]
+    assert finalization["source_candidate_ids"] == ["gex-candidate-1"]
     assert finalization["evidence_record_ids"] == ["evidence-67598e5688f123c8"]
     assert finalization["resolver_selection_count"] == 4
     assert "GeneExpressionEnvelope" not in result.data
@@ -496,6 +497,104 @@ def test_finalize_returns_compact_builder_summary(active_builder_context):
     )
     assert completed_event["output_summary"]["curatable_objects"] == payload["curatable_objects"]
     assert completed_event["output_summary"]["materialized_envelope"] == payload
+
+
+def test_finalize_preserves_multi_observation_source_candidate_identity(active_builder_context):
+    workspace, ledger, _events = active_builder_context
+    _stage_materializable_observation(ledger)
+    first = workspace.get_candidate("gex-candidate-1")
+    second_payload = dict(first.staged_fields)
+    second_payload["pending_ref_id"] = "gene-expression-annotation-pef-2"
+    workspace.upsert_candidate(
+        candidate_id="gex-candidate-2",
+        staged_fields=second_payload,
+        pending_ref_ids=["gene-expression-annotation-pef-2"],
+        evidence_record_ids=first.evidence_record_ids,
+        resolver_selection_refs=first.resolver_selection_refs,
+        status=builder.CANDIDATE_STATUS_VALID,
+    )
+
+    result = _tool_fn(
+        agr_curation.finalize_gene_expression_extraction,
+        "finalize_gene_expression_extraction",
+    )(candidate_ids=["gex-candidate-1", "gex-candidate-2"])
+
+    assert result.status == "ok"
+    finalization = workspace.finalization
+    assert finalization is not None
+    assert finalization.candidate_ids == ("gene-expression-envelope-818f1fdf2501",)
+    assert finalization.source_candidate_ids == ("gex-candidate-1", "gex-candidate-2")
+    assert finalization.summary()["source_candidate_ids"] == [
+        "gex-candidate-1",
+        "gex-candidate-2",
+    ]
+    assert finalization.payload["metadata"]["provenance"]["source_candidate_ids"] == [
+        "gex-candidate-1",
+        "gex-candidate-2",
+    ]
+    assert len(finalization.payload["curatable_objects"]) == 2
+
+
+def test_duplicate_finalize_conflicts_when_source_candidates_change(active_builder_context):
+    workspace, ledger, _events = active_builder_context
+    _stage_materializable_observation(ledger)
+    first_candidate = workspace.get_candidate("gex-candidate-1")
+    second_payload = dict(first_candidate.staged_fields)
+    second_payload["pending_ref_id"] = "gene-expression-annotation-pef-2"
+    workspace.upsert_candidate(
+        candidate_id="gex-candidate-2",
+        staged_fields=second_payload,
+        pending_ref_ids=["gene-expression-annotation-pef-2"],
+        evidence_record_ids=first_candidate.evidence_record_ids,
+        resolver_selection_refs=first_candidate.resolver_selection_refs,
+        status=builder.CANDIDATE_STATUS_VALID,
+    )
+
+    first = _tool_fn(
+        agr_curation.finalize_gene_expression_extraction,
+        "finalize_gene_expression_extraction",
+    )(candidate_ids=["gex-candidate-1"])
+    duplicate = _tool_fn(
+        agr_curation.finalize_gene_expression_extraction,
+        "finalize_gene_expression_extraction",
+    )(candidate_ids=["gex-candidate-1"])
+    conflict = _tool_fn(
+        agr_curation.finalize_gene_expression_extraction,
+        "finalize_gene_expression_extraction",
+    )(candidate_ids=["gex-candidate-2"])
+
+    assert first.status == "ok"
+    assert duplicate.status == "ok"
+    assert conflict.status == "error"
+    assert conflict.failure_classification == "validation_failed"
+    assert conflict.data["validation_issues"][0]["reason"] == "finalization_conflict"
+    assert conflict.data["validation_issues"][0]["existing_candidate_ids"] == [
+        "gex-candidate-1"
+    ]
+    assert conflict.data["validation_issues"][0]["requested_candidate_ids"] == [
+        "gex-candidate-2"
+    ]
+
+
+def test_finalize_rejects_duplicate_candidate_ids_before_materialization(active_builder_context):
+    workspace, ledger, _events = active_builder_context
+    _stage_materializable_observation(ledger)
+
+    result = _tool_fn(
+        agr_curation.finalize_gene_expression_extraction,
+        "finalize_gene_expression_extraction",
+    )(candidate_ids=["gex-candidate-1", "gex-candidate-1"])
+
+    assert result.status == "error"
+    assert workspace.finalization is None
+    assert result.data["validation_issues"] == [
+        {
+            "field_path": "candidate_ids",
+            "reason": "duplicate_candidate_id",
+            "message": "candidate_ids must not contain duplicate candidate IDs.",
+            "duplicate_candidate_ids": ["gex-candidate-1"],
+        }
+    ]
 
 
 def test_finalize_rejects_missing_evidence_records(active_builder_context):

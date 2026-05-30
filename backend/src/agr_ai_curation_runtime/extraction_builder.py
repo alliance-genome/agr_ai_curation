@@ -9,12 +9,14 @@ from typing import Any
 _BUILDER_EXPORTS = {
     "CANDIDATE_STATUS_VALID",
     "ExtractionBuilderError",
+    "ExtractionBuilderFinalizationConflict",
     "ExtractionBuilderValidationError",
     "get_active_extraction_builder_workspace",
 }
 
 CANDIDATE_STATUS_VALID: Any
 ExtractionBuilderError: Any
+ExtractionBuilderFinalizationConflict: Any
 ExtractionBuilderValidationError: Any
 
 
@@ -42,6 +44,7 @@ def __dir__() -> list[str]:
 __all__ = [
     "CANDIDATE_STATUS_VALID",
     "ExtractionBuilderError",
+    "ExtractionBuilderFinalizationConflict",
     "ExtractionBuilderValidationError",
     "get_active_extraction_builder_workspace",
 ]

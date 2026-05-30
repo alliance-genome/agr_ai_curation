@@ -111,6 +111,47 @@ def test_non_domain_envelope_output_schema_keeps_default_sdk_strictness():
     assert runtime_agent is source_agent
 
 
+def test_builder_materializer_agent_detection_uses_finalization_tool_name():
+    assert streaming_tools._is_builder_materializer_agent(
+        SimpleNamespace(
+            tools=[
+                SimpleNamespace(name="search_document"),
+                SimpleNamespace(name="finalize_gene_expression_extraction"),
+            ]
+        )
+    )
+    assert not streaming_tools._is_builder_materializer_agent(
+        SimpleNamespace(tools=[SimpleNamespace(name="search_document")])
+    )
+
+
+@pytest.mark.asyncio
+async def test_builder_materializer_agent_rejects_structured_output_schema():
+    agent = SimpleNamespace(
+        name="Gene Expression",
+        output_type=_Envelope,
+        tools=[SimpleNamespace(name="finalize_gene_expression_extraction")],
+    )
+
+    with pytest.raises(
+        streaming_tools.SpecialistOutputError,
+        match="builder/materializer specialist",
+    ) as exc_info:
+        await streaming_tools.run_specialist_with_events(
+            agent,
+            "extract gene expression",
+            "Gene Expression",
+            tool_name="ask_gene_expression_specialist",
+        )
+
+    assert exc_info.value.details == [
+        {
+            "reason": "builder_materializer_output_schema_forbidden",
+            "output_type": "_Envelope",
+        }
+    ]
+
+
 def test_domain_envelope_reduction_prioritizes_materialized_fields_for_supervisor():
     envelope_output = json.dumps(
         {

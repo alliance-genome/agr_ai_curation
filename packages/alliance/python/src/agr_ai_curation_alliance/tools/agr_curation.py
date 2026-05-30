@@ -49,6 +49,7 @@ from agr_ai_curation_runtime import get_curation_resolver, is_valid_curie, list_
 from agr_ai_curation_runtime.extraction_builder import (
     CANDIDATE_STATUS_VALID,
     ExtractionBuilderError,
+    ExtractionBuilderFinalizationConflict,
     ExtractionBuilderValidationError,
     get_active_extraction_builder_workspace,
 )
@@ -5979,10 +5980,70 @@ def finalize_gene_expression_extraction(
             method="finalize_gene_expression_extraction",
             attempted_query=attempted_query,
         )
+    normalized_candidate_ids: List[str] = []
+    seen_candidate_ids: set[str] = set()
+    duplicate_candidate_ids: List[str] = []
+    blank_candidate_ids = False
+    for candidate_id in finalize_input.candidate_ids:
+        normalized_candidate_id = candidate_id.strip()
+        if not normalized_candidate_id:
+            blank_candidate_ids = True
+            continue
+        if normalized_candidate_id in seen_candidate_ids:
+            duplicate_candidate_ids.append(normalized_candidate_id)
+            continue
+        seen_candidate_ids.add(normalized_candidate_id)
+        normalized_candidate_ids.append(normalized_candidate_id)
+    normalization_issues: List[Dict[str, Any]] = []
+    if blank_candidate_ids:
+        normalization_issues.append(
+            {
+                "field_path": "candidate_ids",
+                "reason": "blank_candidate_id",
+                "message": "candidate_ids must contain non-empty candidate IDs.",
+            }
+        )
+    if duplicate_candidate_ids:
+        normalization_issues.append(
+            {
+                "field_path": "candidate_ids",
+                "reason": "duplicate_candidate_id",
+                "message": "candidate_ids must not contain duplicate candidate IDs.",
+                "duplicate_candidate_ids": duplicate_candidate_ids,
+            }
+        )
+    if normalization_issues:
+        return _gene_expression_validation_result(
+            message="finalize_gene_expression_extraction failed input validation.",
+            issues=normalization_issues,
+            method="finalize_gene_expression_extraction",
+            attempted_query=attempted_query,
+        )
 
     workspace = get_active_extraction_builder_workspace()
     if getattr(workspace, "finalization", None) is not None:
         finalization = workspace.finalization
+        existing_source_candidate_ids = (
+            tuple(getattr(finalization, "source_candidate_ids", ()) or ())
+            or tuple(getattr(finalization, "candidate_ids", ()) or ())
+        )
+        if set(existing_source_candidate_ids) != set(normalized_candidate_ids):
+            issue = {
+                "field_path": "candidate_ids",
+                "reason": "finalization_conflict",
+                "message": (
+                    "Builder run already finalized with different source candidate "
+                    "membership."
+                ),
+                "existing_candidate_ids": list(existing_source_candidate_ids),
+                "requested_candidate_ids": list(normalized_candidate_ids),
+            }
+            return _gene_expression_validation_result(
+                message="finalize_gene_expression_extraction failed because the builder run is already finalized.",
+                issues=[issue],
+                method="finalize_gene_expression_extraction",
+                attempted_query=attempted_query,
+            )
         summary = {
             "builder_finalization": finalization.summary(),
             "builder": _builder_summary(workspace, include_discarded=True),
@@ -6000,7 +6061,7 @@ def finalize_gene_expression_extraction(
         )
 
     issues: List[Dict[str, Any]] = []
-    for candidate_id in finalize_input.candidate_ids:
+    for candidate_id in normalized_candidate_ids:
         try:
             candidate = workspace.get_candidate(candidate_id)
         except KeyError as exc:
@@ -6032,7 +6093,7 @@ def finalize_gene_expression_extraction(
                 }
             )
     if issues:
-        workspace.record_validation_failure(errors=issues, candidate_ids=finalize_input.candidate_ids)
+        workspace.record_validation_failure(errors=issues, candidate_ids=normalized_candidate_ids)
         return _gene_expression_validation_result(
             message="finalize_gene_expression_extraction failed builder validation.",
             issues=issues,
@@ -6044,7 +6105,7 @@ def finalize_gene_expression_extraction(
         "gene_expression_materializer.started",
         action="materialize",
         input_summary={
-            "candidate_ids": finalize_input.candidate_ids,
+            "candidate_ids": normalized_candidate_ids,
             "materializer_id": GENE_EXPRESSION_MATERIALIZER_ID,
         },
     )
@@ -6063,7 +6124,7 @@ def finalize_gene_expression_extraction(
 
     materialization = materialize_gene_expression_builder_state(
         workspace=workspace,
-        candidate_ids=finalize_input.candidate_ids,
+        candidate_ids=normalized_candidate_ids,
         evidence_records=evidence_records,
         resolver_entry_lookup=resolver_ledger.get if resolver_ledger is not None else None,
     )
@@ -6076,7 +6137,7 @@ def finalize_gene_expression_extraction(
         _emit_gene_expression_builder_event(
             "gene_expression_materializer.placeholder_reference_rejected",
             action="materialize",
-            input_summary={"candidate_ids": finalize_input.candidate_ids},
+            input_summary={"candidate_ids": normalized_candidate_ids},
             output_summary=issue,
             validation={"status": "failed", "issue": issue},
         )
@@ -6084,12 +6145,12 @@ def finalize_gene_expression_extraction(
         issue_list = [dict(issue) for issue in materialization.issues]
         workspace.record_validation_failure(
             errors=issue_list,
-            candidate_ids=finalize_input.candidate_ids,
+            candidate_ids=normalized_candidate_ids,
         )
         _emit_gene_expression_builder_event(
             "gene_expression_materializer.validation_failed",
             action="materialize",
-            input_summary={"candidate_ids": finalize_input.candidate_ids},
+            input_summary={"candidate_ids": normalized_candidate_ids},
             output_summary=materialization.summary(),
             validation={"status": "failed", "issues": issue_list},
         )
@@ -6100,10 +6161,10 @@ def finalize_gene_expression_extraction(
             attempted_query=attempted_query,
         )
 
-    materialized_candidate_id = finalize_input.candidate_ids[0]
-    if len(finalize_input.candidate_ids) > 1:
+    materialized_candidate_id = normalized_candidate_ids[0]
+    if len(normalized_candidate_ids) > 1:
         digest = hashlib.sha256(
-            "|".join(finalize_input.candidate_ids).encode("utf-8")
+            "|".join(normalized_candidate_ids).encode("utf-8")
         ).hexdigest()[:12]
         materialized_candidate_id = f"gene-expression-envelope-{digest}"
     workspace.upsert_candidate(
@@ -6111,13 +6172,13 @@ def finalize_gene_expression_extraction(
         staged_fields=materialization.payload,
         pending_ref_ids=[
             pending_ref
-            for candidate_id in finalize_input.candidate_ids
+            for candidate_id in normalized_candidate_ids
             for pending_ref in workspace.get_candidate(candidate_id).pending_ref_ids
         ],
         evidence_record_ids=materialization.evidence_record_ids,
         resolver_selection_refs=[
             resolver_ref
-            for candidate_id in finalize_input.candidate_ids
+            for candidate_id in normalized_candidate_ids
             for resolver_ref in workspace.get_candidate(candidate_id).resolver_selection_refs
         ],
         status=CANDIDATE_STATUS_VALID,
@@ -6125,13 +6186,13 @@ def finalize_gene_expression_extraction(
     _emit_gene_expression_builder_event(
         "gene_expression_materializer.evidence_provenance_summary",
         action="materialize",
-        input_summary={"candidate_ids": finalize_input.candidate_ids},
+        input_summary={"candidate_ids": normalized_candidate_ids},
         output_summary=materialization.summary(),
     )
     _emit_gene_expression_builder_event(
         "gene_expression_materializer.completed",
         action="materialize",
-        input_summary={"candidate_ids": finalize_input.candidate_ids},
+        input_summary={"candidate_ids": normalized_candidate_ids},
         output_summary={
             **materialization.summary(),
             "materialized_candidate_id": materialized_candidate_id,
@@ -6141,11 +6202,28 @@ def finalize_gene_expression_extraction(
     )
 
     try:
-        finalization = workspace.finalize(candidate_ids=[materialized_candidate_id])
+        finalization = workspace.finalize(
+            candidate_ids=[materialized_candidate_id],
+            source_candidate_ids=normalized_candidate_ids,
+        )
     except ExtractionBuilderValidationError as exc:
         return _gene_expression_validation_result(
             message=str(exc),
             issues=list(workspace.validation_errors),
+            method="finalize_gene_expression_extraction",
+            attempted_query=attempted_query,
+        )
+    except ExtractionBuilderFinalizationConflict as exc:
+        return _gene_expression_validation_result(
+            message=str(exc),
+            issues=[
+                {
+                    "field_path": "candidate_ids",
+                    "reason": "finalization_conflict",
+                    "message": str(exc),
+                    "requested_candidate_ids": list(normalized_candidate_ids),
+                }
+            ],
             method="finalize_gene_expression_extraction",
             attempted_query=attempted_query,
         )

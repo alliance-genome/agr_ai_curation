@@ -544,6 +544,21 @@ def _extract_tool_name(tool: Any) -> str:
     ).strip()
 
 
+_BUILDER_MATERIALIZER_FINALIZATION_TOOLS = frozenset(
+    {
+        "finalize_gene_expression_extraction",
+    }
+)
+
+
+def _is_builder_materializer_agent(agent: Agent) -> bool:
+    """Return whether an agent finalizes backend-materialized builder output."""
+    return any(
+        _extract_tool_name(tool) in _BUILDER_MATERIALIZER_FINALIZATION_TOOLS
+        for tool in (getattr(agent, "tools", None) or [])
+    )
+
+
 def _import_callable(import_path: str) -> Any:
     module_name, attr_name = import_path.split(":", 1)
     module = importlib.import_module(module_name)
@@ -2205,6 +2220,24 @@ async def run_specialist_with_events(
     )
 
     expected_output_type = getattr(agent, "output_type", None)
+    builder_materializer_agent = _is_builder_materializer_agent(agent)
+    if builder_materializer_agent and expected_output_type is not None:
+        output_type_name = getattr(expected_output_type, "__name__", "response")
+        raise SpecialistOutputError(
+            specialist_name,
+            output_type_name,
+            message=(
+                f"{specialist_name} is configured as a builder/materializer specialist "
+                f"but also declares {output_type_name} structured output. Backend "
+                "builder finalization owns canonical extraction output for this agent."
+            ),
+            details=[
+                {
+                    "reason": "builder_materializer_output_schema_forbidden",
+                    "output_type": output_type_name,
+                }
+            ],
+        )
     groq_tool_json_compat_mode = False
     runtime_agent = agent
 

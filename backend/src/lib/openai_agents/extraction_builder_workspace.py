@@ -94,6 +94,7 @@ class ExtractionBuilderFinalization:
     evidence_record_ids: tuple[str, ...]
     resolver_selection_count: int
     builder_run_id: str
+    source_candidate_ids: tuple[str, ...] = ()
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -104,6 +105,7 @@ class ExtractionBuilderFinalization:
             "resolver_selection_count": self.resolver_selection_count,
             "builder_run_id": self.builder_run_id,
             "candidate_ids": list(self.candidate_ids),
+            "source_candidate_ids": list(self.source_candidate_ids),
         }
 
 
@@ -225,16 +227,31 @@ class ExtractionBuilderWorkspace:
         self,
         *,
         candidate_ids: Iterable[str],
+        source_candidate_ids: Iterable[str] | None = None,
         validation_errors: Iterable[Mapping[str, Any]] | None = None,
     ) -> ExtractionBuilderFinalization:
         normalized_candidate_ids = tuple(
             _unique_strings(_required_string(value, "candidate_id") for value in candidate_ids)
         )
+        normalized_source_candidate_ids = (
+            tuple(
+                _unique_strings(
+                    _required_string(value, "source_candidate_id")
+                    for value in source_candidate_ids
+                )
+            )
+            if source_candidate_ids is not None
+            else ()
+        )
+        requested_identity_ids = normalized_source_candidate_ids or normalized_candidate_ids
         if not normalized_candidate_ids:
             raise ValueError("At least one candidate_id is required for builder finalization")
 
         if self.finalization is not None:
-            if set(normalized_candidate_ids) == set(self.finalized_candidate_ids):
+            existing_identity_ids = (
+                self.finalization.source_candidate_ids or self.finalized_candidate_ids
+            )
+            if set(requested_identity_ids) == set(existing_identity_ids):
                 self._emit(
                     "extraction_builder.finalization_decision",
                     output_summary={
@@ -245,7 +262,7 @@ class ExtractionBuilderWorkspace:
                 return self.finalization
             raise ExtractionBuilderFinalizationConflict(
                 "Builder run already finalized with different candidate membership "
-                f"(existing={list(self.finalized_candidate_ids)}, requested={list(normalized_candidate_ids)})."
+                f"(existing={list(existing_identity_ids)}, requested={list(requested_identity_ids)})."
             )
 
         if self.state in {BUILDER_STATE_CANCELLED, BUILDER_STATE_ABORTED}:
@@ -282,6 +299,7 @@ class ExtractionBuilderWorkspace:
             status=BUILDER_STATE_FINALIZED,
             payload=payload,
             candidate_ids=normalized_candidate_ids,
+            source_candidate_ids=normalized_source_candidate_ids,
             finalized_candidate_count=len(selected),
             validation_errors=(),
             evidence_record_ids=tuple(evidence_record_ids),
@@ -434,6 +452,7 @@ def finalize_extraction_payload(
     *,
     workspace: ExtractionBuilderWorkspace,
     candidate_id: str,
+    source_candidate_ids: Iterable[str] | None = None,
     evidence_records: Iterable[Mapping[str, Any]] | None = None,
     resolver_selection_refs: Iterable[Any] | None = None,
     validation_errors: Iterable[Mapping[str, Any]] | None = None,
@@ -450,6 +469,7 @@ def finalize_extraction_payload(
         )
     return workspace.finalize(
         candidate_ids=[candidate_id],
+        source_candidate_ids=source_candidate_ids,
         validation_errors=validation_errors,
     )
 
