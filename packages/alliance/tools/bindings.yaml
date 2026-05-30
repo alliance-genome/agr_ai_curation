@@ -821,7 +821,7 @@ tools:
       audit:
         display_name: Finalize Gene Expression Extraction
       documentation:
-        summary: Validates and delegates staged gene-expression candidates into the project-agnostic builder finalization contract without materializing a GeneExpressionEnvelope.
+        summary: Materializes staged gene-expression candidates into the canonical GeneExpressionEnvelope payload, then finalizes through the project-agnostic builder handoff.
   - tool_id: search_document
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_search_document_tool

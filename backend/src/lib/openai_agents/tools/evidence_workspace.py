@@ -37,6 +37,12 @@ def reset_active_evidence_records(
     _ACTIVE_EVIDENCE_RECORDS.reset(token)
 
 
+def get_active_evidence_records_snapshot() -> list[dict[str, Any]]:
+    """Return a copy of the active-run evidence registry for backend materializers."""
+
+    return deepcopy(_workspace_records())
+
+
 def _workspace_records() -> list[dict[str, Any]]:
     records = _ACTIVE_EVIDENCE_RECORDS.get()
     if records is None:
@@ -573,6 +579,7 @@ __all__ = [
     "create_get_recorded_evidence_tool",
     "create_list_recorded_evidence_tool",
     "create_update_recorded_evidence_metadata_tool",
+    "get_active_evidence_records_snapshot",
     "reset_active_evidence_records",
     "set_active_evidence_records",
 ]

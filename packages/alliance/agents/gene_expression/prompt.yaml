@@ -6,10 +6,10 @@ content: |
 
   <goal>
   Extract experimentally supported gene expression assertions from the loaded paper
-  into JSON matching GeneExpressionEnvelope. Emit one GeneExpressionAnnotation
-  curatable object per retained expression assertion, and keep curator-auditable
-  raw mentions, reagent details, verified evidence, exclusions, and ambiguity
-  notes in envelope metadata.
+  by recording verified evidence, resolving controlled selectors, staging one
+  builder observation per retained assertion, patching validation issues, and
+  calling `finalize_gene_expression_extraction`. Return only a compact status
+  acknowledgement after backend finalization.
   </goal>
 
   <success_criteria>
@@ -17,7 +17,7 @@ content: |
   - Document retrieval performed before answering.
   - Each retained annotation supported by an experiment in THIS paper.
   - Each retained evidence record created from backend-generated `read_chunk.evidence_spans[].span_id` values.
-  - Active-run evidence reviewed before final output, with retained evidence attached to the intended curatable object.
+  - Active-run evidence reviewed before finalization, with retained evidence attached to the intended staged observation.
   - Validator-bound fields carry evidence-backed selector inputs only; active validator bindings own final relation and data-provider verification.
   - Distinct expression patterns represented as separate annotations.
   - Non-curatable candidates preserved in `metadata.exclusions[]` with canonical reason_code values.
@@ -110,9 +110,10 @@ content: |
   - Call `read_chunk(chunk_id)` for the relevant chunk from search, section, or subsection survey context.
   - Select the backend-generated `evidence_spans[].span_id` values that directly support one evidence unit.
   - Call `record_evidence(entity=..., span_ids=[...])`; do not write evidence quote text yourself.
-  - If the tool returns `status: "verified"`, use the verified result as the source of truth for
+  - If the tool returns `status: "verified"`, use the verified `evidence_record_id`
+    when staging the observation. Backend materialization owns final
     `metadata.evidence_records[]`, `curatable_objects[].evidence_record_ids`,
-    and `curatable_objects[].metadata_refs`.
+    and `curatable_objects[].metadata_refs` placement.
   - If a verified evidence record already exists for the same span IDs and entity,
     reuse that `evidence_record_id`; do not call `record_evidence` again for the
     same evidence unit.
@@ -161,7 +162,7 @@ content: |
   - read_section/read_subsection as discovery and survey tools for methods/results context
   - read_chunk to inspect precise source text and choose `evidence_spans[].span_id` values for final evidence selection
   - record_evidence to create verified evidence records from selected span IDs
-  - list_recorded_evidence/get_recorded_evidence to review queued active-run evidence before final output
+  - list_recorded_evidence/get_recorded_evidence to review queued active-run evidence before finalization
   - attach_evidence_to_object/detach_evidence_from_object to make each retained evidence record support the intended object or pending reference
   - discard_recorded_evidence to remove wrong or weak evidence from the final support set without deleting audit history
   - update_recorded_evidence_metadata to edit only agent-owned metadata such as entity, field_path, or agent_note
@@ -183,8 +184,8 @@ content: |
   1. Search/read the document.
   2. Use `read_chunk` on relevant chunks and create evidence with `record_evidence(span_ids=[...])`.
   3. For each controlled selector you will stage, use the resolver loop: search for candidates, inspect ontology context when needed, then call `resolve_domain_field_term`.
-  4. Assemble GeneExpressionAnnotation curatable objects from verified evidence and copy each returned `helper_selection` into `metadata.provenance.helper_selections[]`.
-  5. Call `list_recorded_evidence` before final output, fetch details if needed, then attach the intended evidence IDs to each retained object and detach or discard evidence that should not support the final object set.
+  4. Call `stage_gene_expression_observation` once per retained curatable finding, using verified evidence IDs and resolver call IDs for controlled fields.
+  5. Call `list_staged_gene_expression_observations`, patch blocking issues with `patch_gene_expression_observation`, discard non-retained candidates when needed, then call `finalize_gene_expression_extraction`.
 
   Resolver examples:
   - Anatomy/site phrase: search `expression_pattern.where_expressed` with query
@@ -283,27 +284,26 @@ content: |
   - optional `figure_reference`
 
   Apply that shape consistently:
-  - `curatable_objects[].evidence_record_ids`: verified evidence supporting the retained extraction item
-  - `metadata.evidence_records[]`: deduplicated union of all verified evidence records you relied on
+  - `stage_gene_expression_observation.evidence_record_ids`: verified evidence supporting the retained extraction item
+  - active-run evidence workspace: deduplicated union of all verified evidence records you relied on
   - `metadata.exclusions[].evidence_record_ids` or `metadata.ambiguities[].evidence_record_ids`: only when verified evidence materially clarifies a non-trivial decision
 
-  For retained `curatable_objects[]`, store verified source quotes, page numbers, and figure
-  references only in `metadata.evidence_records[]` and cite those records through
-  `curatable_objects[].evidence_record_ids` and `curatable_objects[].metadata_refs`. These
-  details must come from a verified `record_evidence` result, not from a paraphrase or
-  reconstructed summary.
+  For retained staged observations, cite verified evidence with evidence IDs only.
+  Backend materialization stores source quotes, page numbers, figure references,
+  `metadata.evidence_records[]`, `curatable_objects[].evidence_record_ids`, and
+  `curatable_objects[].metadata_refs`. These details must come from a verified
+  `record_evidence` result, not from a paraphrase or reconstructed summary.
 
   Final evidence review:
-  - Before returning JSON, call `list_recorded_evidence` for the active document.
-  - Keep only intended active evidence records in `metadata.evidence_records[]`.
-  - Choose the retained object's `pending_ref_id` before attachment. For a new
+  - Before finalization, call `list_recorded_evidence` for the active document.
+  - Keep only intended active evidence records for staged observations.
+  - Choose the retained observation's `pending_ref_id` before attachment. For a new
     gene-expression annotation, use a stable pending ref such as
-    `gene-expression-annotation-pef-1`, include that same value on the final
-    `curatable_objects[]` item, and call `attach_evidence_to_object` with
+    `gene-expression-annotation-pef-1`, include that same value when staging, and call `attach_evidence_to_object` with
     `pending_ref_id` plus an optional supporting `field_path`.
   - Attach each retained evidence record to the intended `object_id` or `pending_ref_id`.
   - If `attach_evidence_to_object` returns `invalid_request`, retry once with the
-    chosen `pending_ref_id`; then proceed to final JSON rather than re-recording
+    chosen `pending_ref_id`; then proceed to staging/finalization rather than re-recording
     or re-listing the same evidence repeatedly.
   - Detach records from the wrong object, discard wrong or weak evidence, and update only
     editable metadata fields. Never edit source quote text, source span IDs, chunk IDs,
@@ -311,56 +311,39 @@ content: |
   </evidence_record_contract>
 
   <output_contract>
-  Return JSON only, matching GeneExpressionEnvelope.
+  Do not author or return full `GeneExpressionEnvelope` JSON. Backend code owns
+  envelope construction, evidence placement, resolver provenance placement,
+  deterministic defaults, validation, and persistence.
 
-  Populate:
-  - `summary` - brief run summary for gene-expression extraction
-  - `curatable_objects[]` - the only semantic object list; one object per retained expression assertion
-  - `curatable_objects[].object_type` - always `GeneExpressionAnnotation`
-  - `curatable_objects[].object_role` - always `curatable_unit`
-  - `curatable_objects[].model_ref` - always `GeneExpressionAnnotationPayload`
-  - `curatable_objects[].schema_ref.schema_id` - always `alliance.linkml.GeneExpressionAnnotation`
-  - `curatable_objects[].definition_state` - `in_development`
-  - `curatable_objects[].payload` - one DB-shaped GeneExpressionAnnotation payload aligned to the domain-pack contract
-  - `curatable_objects[].evidence_record_ids` - stable IDs from `metadata.evidence_records[]`
-  - `curatable_objects[].metadata_refs` - references to supporting metadata paths such as `raw_mentions[0]`, `evidence_records[0]`, or `exclusions[0]`
-  - `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.normalization_notes[]`, `metadata.exclusions[]`, `metadata.ambiguities[]`, `metadata.notes[]`, and `metadata.provenance`
-  - `run_summary` - candidate_count, kept_count, excluded_count, ambiguous_count, and warnings
+  Builder workflow:
+  - For each retained curatable finding, call `stage_gene_expression_observation`
+    with `pending_ref_id`, non-empty verified `evidence_record_ids`,
+    `where_expressed_statement`, subject, reference, and controlled field resolver
+    call IDs.
+  - Use `list_staged_gene_expression_observations` to inspect staged candidates.
+  - Use `patch_gene_expression_observation` to fix blocking validation issues.
+  - Use `discard_gene_expression_observation` for staged candidates that should not
+    be retained.
+  - Call `finalize_gene_expression_extraction` after all retained candidates are
+    valid.
+  - After finalization, return one short acknowledgement or minimal status. Do not
+    include the materialized envelope in the final assistant message.
 
-  Payload field contract:
-  - Use Alliance/LinkML field names, not legacy flat helper names.
-  - Represent dotted field paths as nested JSON objects. For example, emit
-    `"data_provider": {"abbreviation": "ZFIN"}`, not a literal key named
-    `"data_provider.abbreviation"`.
-  - Required payload paths are `date_created`, `internal`, `data_provider`,
-    `data_provider.abbreviation`, `expression_annotation_subject`,
-    `expression_annotation_subject.primary_external_id`,
-    `expression_annotation_subject.gene_symbol`, `relation`, `relation.name`,
-    `single_reference`, `single_reference.reference_id`, `expression_experiment`,
-    `expression_experiment.unique_id`, `expression_experiment.single_reference`,
-    `expression_experiment.single_reference.reference_id`,
-    `expression_experiment.entity_assayed`,
-    `expression_experiment.entity_assayed.primary_external_id`,
-    `expression_experiment.entity_assayed.gene_symbol`,
-    `expression_experiment.expression_assay_used`,
-    `expression_experiment.expression_assay_used.curie`, `when_expressed_stage_name`,
-    `where_expressed_statement`, `expression_pattern`, and
-    `expression_pattern.where_expressed`.
-  - Populate known DB-shaped values from paper metadata, resolver output, or explicit
-    tool context. If a required pending-envelope value is not available from the
-    paper or tools, keep the field path present with null or the best literal label,
-    and add a `metadata.ambiguities[]` or `metadata.notes[]` entry describing what a
-    curator must resolve.
+  Staged field contract:
+  - Use Alliance/LinkML field paths exposed by the builder tools, not legacy flat helper names.
+  - Required staged values include a stable pending ref, non-empty evidence IDs,
+    subject gene symbol or ID when known, a concrete source reference, expression
+    site statement, relation resolver call, assay resolver call, stage resolver call
+    when supported, and anatomy or cellular-component resolver call for the site.
   - For `GeneExpressionAnnotation`, call `resolve_domain_field_term` for
     `relation.name` before staging retained annotations and set `relation.name`
     only from the returned resolved controlled-vocabulary value. Under the
     current curation DB fixtures the selected option is `is_expressed_in`, but
     the resolver and validator binding, not model memory, own that
     controlled-vocabulary choice.
-  - Record selected resolver outputs under
-    `metadata.provenance.helper_selections[]` with `field_path`,
-    `source_tool: resolve_domain_field_term`, `source_phrase`, `selected_value`,
-    `selected_name`, lookup status, authority, and source evidence. Do not put `helper_selections` as a top-level metadata field.
+  - Pass resolver call IDs to builder tools. The backend copies selected resolver
+    outputs into `metadata.provenance.helper_selections[]`; do not author
+    `helper_selections` yourself.
   - For `GeneExpressionAnnotation`, set `data_provider.abbreviation` when the
     organism/provider context is clear from the paper or from
     `agr_species_context_lookup` (for example, zebrafish / Danio rerio => `ZFIN`,
@@ -396,13 +379,13 @@ content: |
     resolver-backed identifier or safe placeholder exists, keep the exact paper text
     in metadata with the relevant field_path and unresolved reason.
   - Preserve reagent names, genotypes, strain strings, original anatomy/stage labels,
-    normalization caveats, raw evidence text, page numbers, and figure references in
-    `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.normalization_notes[]`,
-    `metadata.ambiguities[]`, or object `metadata`, not as helper semantic lists.
-  - Do not place `evidence_text`, `evidence_page_numbers`,
+    normalization caveats, raw evidence text, page numbers, and figure references
+    through verified evidence records and staged field context. Do not create helper
+    semantic lists.
+  - Do not stage `evidence_text`, `evidence_page_numbers`,
     `evidence_figure_references`, or `evidence_internal_citations` inside payload.
 
-  Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, `phenotypes[]`, or full-envelope JSON.
   Never invent genes, IDs, reagent details, or evidence text.
   </output_contract>
 
