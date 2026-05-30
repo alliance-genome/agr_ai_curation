@@ -5518,8 +5518,6 @@ def _apply_resolver_selection(
                 str(operation.get("field_path") or ""),
                 operation.get("value"),
             )
-    if not instructions:
-        _set_dotted_payload_value(payload, entry.field_path, entry.selected_value)
 
 
 def _set_dotted_payload_value(payload: Dict[str, Any], field_path: str, value: Any) -> None:

@@ -222,6 +222,121 @@ class _FakeRunResult:
         return [{"role": "user", "content": "extract"}]
 
 
+class _BuilderFinalizingRunResult:
+    final_output = json.dumps({"model_authored": "must not be staged"})
+
+    async def stream_events(self):
+        workspace = builder.get_active_extraction_builder_workspace()
+        workspace.upsert_candidate(
+            candidate_id="gex-candidate-1",
+            staged_fields={
+                "relation": {"name": "is_expressed_in"},
+                "single_reference": {"reference_id": "PMID:39550471"},
+                "expression_annotation_subject": {"gene_symbol": "pef-1"},
+            },
+            pending_ref_ids=["gene-expression-annotation-pef-1"],
+            evidence_record_ids=["evidence-67598e5688f123c8"],
+            resolver_selection_refs=["call_relation"],
+            status=builder.CANDIDATE_STATUS_VALID,
+        )
+        workspace.finalize(candidate_ids=["gex-candidate-1"])
+        if False:
+            yield None
+
+    def to_input_list(self):
+        return [{"role": "user", "content": "extract"}]
+
+
+@pytest.mark.asyncio
+async def test_builder_finalized_specialist_skips_model_authored_output_staging(
+    monkeypatch,
+):
+    captured_events = []
+    captured_trace_events = []
+
+    async def _unexpected_validator_dispatch(*_args, **_kwargs):
+        pytest.fail("builder-finalized output must not run domain validators")
+
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(
+        streaming_tools,
+        "RunConfig",
+        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+    )
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _BuilderFinalizingRunResult(),
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "stage_extraction_payload",
+        lambda *args, **kwargs: pytest.fail(
+            "builder-finalized output must not stage model-authored JSON"
+        ),
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "finalize_extraction_payload",
+        lambda *args, **kwargs: pytest.fail(
+            "builder-finalized output must not finalize model-authored JSON"
+        ),
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "_emit_specialist_evidence_summary_or_raise",
+        lambda *args, **kwargs: pytest.fail(
+            "builder-finalized output must not require model-authored evidence"
+        ),
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "_dispatch_domain_envelope_validators_for_chat",
+        _unexpected_validator_dispatch,
+    )
+    monkeypatch.setattr(
+        builder,
+        "write_extraction_trace_event",
+        lambda **event: captured_trace_events.append(event) or event,
+    )
+
+    agent = SimpleNamespace(
+        name="Gene Expression Extractor",
+        tools=[],
+        output_type=_DomainEnvelope,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    final_output = await streaming_tools.run_specialist_with_events(
+        agent=agent,
+        input_text="extract gene expression evidence",
+        specialist_name="Gene Expression Extractor",
+        max_turns=3,
+        tool_name="ask_gene_expression_specialist",
+    )
+
+    payload = json.loads(final_output)
+    assert payload["relation"]["name"] == "is_expressed_in"
+    assert "model_authored" not in payload
+
+    internal_event = next(
+        event
+        for event in captured_events
+        if event.get("type") == "INTERNAL_EXTRACTION_RESULT"
+    )
+    assert internal_event["internal"]["canonical_payload"] == payload
+    assert internal_event["internal"]["builder_finalization"]["candidate_ids"] == [
+        "gex-candidate-1"
+    ]
+    assert [
+        event
+        for event in captured_trace_events
+        if event.get("event_type") == "extraction_builder.finalization_decision"
+    ]
+
+
 @pytest.mark.asyncio
 async def test_specialist_validation_consumes_builder_finalized_payload(monkeypatch):
     payload = {

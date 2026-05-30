@@ -3229,7 +3229,8 @@ async def run_specialist_with_events(
         final_output,
         expected_output_type=expected_output_type,
     )
-    if expected_output_type is not None and final_output:
+    builder_finalization = builder_workspace.finalization
+    if expected_output_type is not None and final_output and builder_finalization is None:
         try:
             payload = json.loads(final_output)
         except Exception:
@@ -3246,16 +3247,16 @@ async def run_specialist_with_events(
     phase_timings_ms["post_stream_output_ms"] = _elapsed_ms(post_stream_started_at)
 
     evidence_summary_started_at = time.monotonic()
-    try:
-        _emit_specialist_evidence_summary_or_raise(
-            specialist_name=specialist_name,
-            tool_name=tool_name,
-            expected_output_type=expected_output_type,
-            final_output=final_output,
-            live_evidence_records=live_evidence_records,
-        )
-    except SpecialistOutputError:
-        if builder_workspace.finalization is None:
+    if builder_finalization is None:
+        try:
+            _emit_specialist_evidence_summary_or_raise(
+                specialist_name=specialist_name,
+                tool_name=tool_name,
+                expected_output_type=expected_output_type,
+                final_output=final_output,
+                live_evidence_records=live_evidence_records,
+            )
+        except SpecialistOutputError:
             builder_workspace.record_validation_failure(
                 errors=[
                     {
@@ -3268,21 +3269,21 @@ async def run_specialist_with_events(
                 ],
                 candidate_ids=[builder_candidate_id],
             )
-        raise
+            raise
     phase_timings_ms["evidence_summary_ms"] = _elapsed_ms(
         evidence_summary_started_at
     )
 
     validator_dispatch_started_at = time.monotonic()
-    try:
-        final_output = await _dispatch_domain_envelope_validators_for_chat(
-            final_output,
-            expected_output_type=expected_output_type,
-            specialist_name=specialist_name,
-            tool_name=tool_name,
-        )
-    except SpecialistOutputError as exc:
-        if builder_workspace.finalization is None:
+    if builder_finalization is None:
+        try:
+            final_output = await _dispatch_domain_envelope_validators_for_chat(
+                final_output,
+                expected_output_type=expected_output_type,
+                specialist_name=specialist_name,
+                tool_name=tool_name,
+            )
+        except SpecialistOutputError as exc:
             dispatch_errors = [
                 {
                     **dict(error),
@@ -3305,16 +3306,32 @@ async def run_specialist_with_events(
                 errors=dispatch_errors,
                 candidate_ids=[builder_candidate_id],
             )
-        raise
+            raise
+        builder_finalization = builder_workspace.finalization
     phase_timings_ms["domain_validator_dispatch_ms"] = _elapsed_ms(
         validator_dispatch_started_at
     )
+    retained_evidence_source = (
+        json.dumps(builder_finalization.payload)
+        if builder_finalization is not None
+        else final_output
+    )
     retained_evidence_records = extract_evidence_records_from_structured_result(
-        final_output
+        retained_evidence_source
     )
 
     internal_event_started_at = time.monotonic()
-    if tool_name and _is_domain_envelope_output_json(
+    if tool_name and builder_finalization is not None:
+        final_output = json.dumps(builder_finalization.payload)
+        add_specialist_event(
+            build_internal_extraction_result_event(
+                tool_name=tool_name,
+                specialist_name=specialist_name,
+                finalization=builder_finalization,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+        )
+    elif tool_name and _is_domain_envelope_output_json(
         final_output,
         expected_output_type=expected_output_type,
     ):
