@@ -28,7 +28,7 @@ sqlalchemy>=2.0
 psycopg2-binary
 alembic
 agr-abc-document-parsers>=1.5.0
-agr-curation-api-client>=0.10.1  # Includes literature ES reference lookup/search helpers.
+agr-curation-api-client>=0.11.0  # Literature ES helpers + pg_trgm trigram ontology fuzzy search (Tier 4).
 
 # Ontology processing
 pronto  # OBO file parsing for biological ontologies

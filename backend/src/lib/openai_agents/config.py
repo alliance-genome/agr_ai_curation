@@ -600,12 +600,12 @@ def get_agent_config(agent_id: str) -> AgentConfig:
 
 def get_max_turns() -> int:
     """Get maximum turns for agent runs."""
-    val = os.getenv("AGENT_MAX_TURNS", "20")
+    val = os.getenv("AGENT_MAX_TURNS", "60")
     try:
         return int(val)
     except ValueError:
-        logger.warning('Invalid AGENT_MAX_TURNS value: %s, using default 20', val)
-        return 20
+        logger.warning('Invalid AGENT_MAX_TURNS value: %s, using default 60', val)
+        return 60
 
 
 # =============================================================================
