@@ -3698,7 +3698,7 @@ def _resolver_instruction(
     if resolution_status == "resolved":
         return [
             f"Set only the controlled selector for {field_path} from the selected candidate.",
-            "Copy helper_selection into metadata.provenance.helper_selections[].",
+            "Pass this resolve_domain_field_term tool call ID as resolver_call_id to the builder tool; do not author metadata.provenance.helper_selections.",
         ]
     if resolution_status == "ambiguous":
         return [
