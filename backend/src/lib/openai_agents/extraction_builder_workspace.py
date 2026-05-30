@@ -336,6 +336,10 @@ class ExtractionBuilderWorkspace:
             "updated_at": self.updated_at,
         }
 
+    def get_candidate(self, candidate_id: str) -> ExtractionBuilderCandidate:
+        """Return a staged candidate by ID."""
+        return self._candidate(candidate_id)
+
     def _candidate(self, candidate_id: str) -> ExtractionBuilderCandidate:
         normalized_candidate_id = _required_string(candidate_id, "candidate_id")
         try:

@@ -9,6 +9,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from pydantic_core import PydanticSerializationError  # type: ignore[import-not-found]
+
 from .extraction_trace_events import write_extraction_trace_event
 
 logger = logging.getLogger(__name__)
@@ -184,8 +186,8 @@ class ResolverCallLedger:
             return None
 
         payload_instructions = data.get("payload_field_instructions")
-        if not isinstance(payload_instructions, Mapping):
-            payload_instructions = {}
+        if not isinstance(payload_instructions, Mapping) or not payload_instructions:
+            return None
 
         return ResolverCallLedgerEntry(
             tool_call_id=tool_call_id,
@@ -243,7 +245,7 @@ def _coerce_mapping(output: Any) -> dict[str, Any] | None:
         try:
             dumped = output.model_dump(mode="json")
             return dict(dumped) if isinstance(dumped, Mapping) else None
-        except Exception:
+        except (TypeError, ValueError, PydanticSerializationError):
             logger.debug("Failed to dump resolver output model", exc_info=True)
             return None
     if isinstance(output, str):

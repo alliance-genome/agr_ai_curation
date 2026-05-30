@@ -48,6 +48,11 @@ EXTRACTION_SAFE_TOOLS = {
     "search_domain_field_terms",
     "inspect_ontology_term",
     "resolve_domain_field_term",
+    "stage_gene_expression_observation",
+    "patch_gene_expression_observation",
+    "discard_gene_expression_observation",
+    "list_staged_gene_expression_observations",
+    "finalize_gene_expression_extraction",
 }
 
 FORBIDDEN_EXTRACTOR_METADATA_PHRASES = (

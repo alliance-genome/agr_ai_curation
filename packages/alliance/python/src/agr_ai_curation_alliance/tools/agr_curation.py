@@ -45,14 +45,14 @@ from .agr_lookup import (
     projection_from_result as _projection_from_result,
 )
 from agr_ai_curation_runtime import get_curation_resolver, is_valid_curie, list_groups
-from src.lib.openai_agents.extraction_builder_workspace import (
+from agr_ai_curation_runtime.extraction_builder import (
     CANDIDATE_STATUS_VALID,
     ExtractionBuilderError,
     ExtractionBuilderValidationError,
     get_active_extraction_builder_workspace,
 )
-from src.lib.openai_agents.extraction_trace_events import write_extraction_trace_event
-from src.lib.openai_agents.resolver_call_ledger import (
+from agr_ai_curation_runtime.extraction_trace_events import write_extraction_trace_event
+from agr_ai_curation_runtime.resolver_call_ledger import (
     ResolverCallLedgerEntry,
     get_active_resolver_call_ledger,
 )
@@ -5581,7 +5581,7 @@ def _stage_payload_from_gene_expression_input(
 
 def _builder_summary(workspace: Any, *, include_discarded: bool = False) -> Dict[str, Any]:
     snapshot = workspace.snapshot(redact_payload=True)
-    candidates = snapshot.get("candidates") or []
+    candidates = snapshot["candidates"]
     if not include_discarded:
         candidates = [
             candidate
@@ -5593,9 +5593,9 @@ def _builder_summary(workspace: Any, *, include_discarded: bool = False) -> Dict
         "state": snapshot.get("state"),
         "candidate_count": len(candidates),
         "candidate_ids": [candidate.get("candidate_id") for candidate in candidates],
-        "pending_ref_ids": snapshot.get("pending_ref_ids") or [],
-        "evidence_record_ids": snapshot.get("evidence_record_ids") or [],
-        "resolver_selection_refs": snapshot.get("resolver_selection_refs") or [],
+        "pending_ref_ids": snapshot["pending_ref_ids"],
+        "evidence_record_ids": snapshot["evidence_record_ids"],
+        "resolver_selection_refs": snapshot["resolver_selection_refs"],
         "candidates": candidates,
         "finalization": snapshot.get("finalization"),
     }
@@ -5736,7 +5736,7 @@ def patch_gene_expression_observation(
 
     workspace = get_active_extraction_builder_workspace()
     try:
-        candidate = workspace._candidate(patch_input.candidate_id)
+        candidate = workspace.get_candidate(patch_input.candidate_id)
     except KeyError as exc:
         return _gene_expression_validation_result(
             message=str(exc),
@@ -5968,7 +5968,7 @@ def finalize_gene_expression_extraction(
     issues: List[Dict[str, Any]] = []
     for candidate_id in finalize_input.candidate_ids:
         try:
-            candidate = workspace._candidate(candidate_id)
+            candidate = workspace.get_candidate(candidate_id)
         except KeyError as exc:
             issues.append(
                 {
