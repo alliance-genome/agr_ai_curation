@@ -477,6 +477,41 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
         self.assertEqual(domain["objects"][0]["pending_ref_id"], "pending-gene-expression-1")
         self.assertEqual(domain["objects"][0]["source_path"], "payload.curatable_objects[0]")
 
+    def test_domain_envelope_analyzer_reads_materializer_completed_observation(self):
+        observations = [
+            {
+                "id": "obs-materializer-completed",
+                "type": "EVENT",
+                "name": "gene_expression_materializer.completed",
+                "output_summary": {
+                    "preview": {
+                        "materialized_envelope": {
+                            "curatable_objects": [
+                                {
+                                    "pending_ref_id": "gene-expression-annotation-pef-1",
+                                    "object_type": "GeneExpressionAnnotation",
+                                    "payload": {
+                                        "relation": {"name": "is_expressed_in"},
+                                    },
+                                    "evidence_record_ids": ["evidence-1"],
+                                }
+                            ]
+                        }
+                    }
+                },
+            }
+        ]
+
+        domain = DomainEnvelopeTraceAnalyzer.analyze(
+            {"raw_trace": self._make_trace({"response": "Finalized."})},
+            observations,
+        )
+
+        self.assertTrue(domain["found"])
+        self.assertEqual(domain["summary"]["object_count"], 1)
+        self.assertEqual(domain["pending_ref_ids"], ["gene-expression-annotation-pef-1"])
+        self.assertEqual(domain["objects"][0]["object_type"], "GeneExpressionAnnotation")
+
     def test_tool_calls_report_domain_envelope_projection_blocker_and_submission_state(self):
         data = ToolCallAnalyzer.extract_tool_calls(self._make_domain_envelope_tool_observations())
 

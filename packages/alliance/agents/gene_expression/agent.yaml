@@ -13,9 +13,9 @@ agent_id: gene_expression_extraction
 name: "Gene Expression Extractor"
 
 description: >
-  Extracts gene expression patterns and experimental data from PDFs,
-  emitting GeneExpressionAnnotation domain-envelope objects with evidence and
-  raw extraction detail preserved as metadata.
+  Extracts gene expression patterns and experimental data from PDFs by recording
+  evidence, resolving controlled selectors, staging builder observations, and
+  triggering backend-owned GeneExpressionEnvelope materialization.
 
 category: "Extraction"
 subcategory: "PDF Extraction"
@@ -27,9 +27,9 @@ subcategory: "PDF Extraction"
 supervisor_routing:
   enabled: true
   description: >
-    Extract gene expression data from the paper. Returns GeneExpressionAnnotation
-    curatable_objects with anatomy, life stage, assay, reagent, evidence, and
-    curation notes preserved in domain-envelope metadata.
+    Extract gene expression data from the paper through the builder workflow.
+    Records evidence, resolves selectors, stages observations, finalizes the
+    backend-owned GeneExpressionEnvelope, and returns a compact status.
     Use export_to_file to save results as CSV, TSV, or JSON.
   batchable: false  # Document-based agent, processes one document at a time
 
@@ -62,7 +62,7 @@ tools:
 # -----------------------------------------------------------------------------
 # OUTPUT SCHEMA
 # -----------------------------------------------------------------------------
-output_schema: GeneExpressionEnvelope
+output_schema: null
 
 # -----------------------------------------------------------------------------
 # MODEL CONFIGURATION

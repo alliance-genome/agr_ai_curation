@@ -35,6 +35,10 @@ def create_update_recorded_evidence_metadata_tool(*args: Any, **kwargs: Any) -> 
     return _load_evidence_workspace_module().create_update_recorded_evidence_metadata_tool(*args, **kwargs)
 
 
+def get_active_evidence_records_snapshot() -> Any:
+    return _load_evidence_workspace_module().get_active_evidence_records_snapshot()
+
+
 __all__ = [
     "create_attach_evidence_to_object_tool",
     "create_detach_evidence_from_object_tool",
@@ -42,4 +46,5 @@ __all__ = [
     "create_get_recorded_evidence_tool",
     "create_list_recorded_evidence_tool",
     "create_update_recorded_evidence_metadata_tool",
+    "get_active_evidence_records_snapshot",
 ]

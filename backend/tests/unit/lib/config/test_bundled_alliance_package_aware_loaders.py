@@ -75,6 +75,7 @@ def test_bundled_alliance_gene_expression_declares_record_evidence(monkeypatch):
     agents = agent_loader.load_agent_definitions(force_reload=True)
     gene_expression = agents["gene_expression_extraction"]
 
+    assert gene_expression.output_schema is None
     assert gene_expression.tools == [
         "search_document",
         "read_chunk",

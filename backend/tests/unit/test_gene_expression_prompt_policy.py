@@ -79,7 +79,10 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
         "finalize_gene_expression_extraction",
     ]
 
-    assert "Return JSON only, matching GeneExpressionEnvelope." in content
+    assert agent_data["output_schema"] is None
+    assert "Return JSON only, matching GeneExpressionEnvelope." not in content
+    assert "Do not author or return full `GeneExpressionEnvelope` JSON" in content
+    assert "include the materialized envelope in the final assistant message" in content
     assert "previously_reported" in content
     assert "non_experimental_claim" in content
     assert "marker_only_visualization" in content
@@ -89,9 +92,9 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
     assert "Capture reagent genotype strings exactly as written" in content
     assert "midbrain-hindbrain boundary at 18 hpf" in content
     assert "Tg(kdrl:EGFP)" in content
-    assert "object_type` - always `GeneExpressionAnnotation" in content
+    assert "stage_gene_expression_observation" in content
     assert "metadata.evidence_records[]" in content
-    assert "Do not place `evidence_text`" in content
+    assert "Do not stage `evidence_text`" in content
     assert "read_chunk(chunk_id)" in content
     assert "`evidence_spans[].span_id`" in content
     assert "record_evidence(entity=..., span_ids=[...])" in content
@@ -100,7 +103,7 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
     assert "list_recorded_evidence" in content
     assert "get_recorded_evidence" in content
     assert "attach_evidence_to_object" in content
-    assert "Choose the retained object's `pending_ref_id` before attachment" in content
+    assert "Choose the retained observation's `pending_ref_id` before attachment" in content
     assert "gene-expression-annotation-pef-1" in content
     assert "retry once with the" in content
     assert "detach_evidence_from_object" in content
@@ -118,22 +121,24 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
     assert "negated: true" in content
     assert "repair_mode" not in content
     assert "metadata.repair_notes" not in content
-    assert "Do not emit top-level `items[]`" in content
+    assert "Do not emit top-level legacy semantic lists" in content
     assert "agr_species_context_lookup" in content
     assert "search_domain_field_terms" in content
     assert "inspect_ontology_term" in content
     assert "resolve_domain_field_term" in content
+    assert "copyable provenance" not in content
+    assert "copy the returned helper_selection into provenance" not in content
+    assert "Pass resolver call IDs to builder tools" in content
     assert "`relation.name`" in content
     assert "controlled-vocabulary value" in content
     assert "`expression_pattern.where_expressed`" in content
     assert "`expression_experiment.expression_assay_used`" in content
     assert "`when_expressed_stage_name`" in content
     assert "metadata.provenance.helper_selections[]" in content
-    assert "Do not put `helper_selections` as a top-level metadata field" in content
+    assert "do not author" in content
     assert "slot_hint" in content
     assert "cellular-component-only sites such as nucleus or cytoplasm are valid" in content
     assert "`data_provider.abbreviation`" in content
-    assert '"data_provider": {"abbreviation": "ZFIN"}' in content
     assert "zebrafish / Danio rerio => `ZFIN`" in content
     assert "broad expression ontology lookup" in content
     assert "agr_curation_query" not in content

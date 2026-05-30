@@ -26,7 +26,7 @@ EXTRACTOR_OUTPUT_SCHEMAS = {
     "packages/alliance/agents/allele_extractor/agent.yaml": "AlleleExtractionResultEnvelope",
     "packages/alliance/agents/chemical_extractor/agent.yaml": "ChemicalExtractionResultEnvelope",
     "packages/alliance/agents/disease_extractor/agent.yaml": "DiseaseExtractionResultEnvelope",
-    "packages/alliance/agents/gene_expression/agent.yaml": "GeneExpressionEnvelope",
+    "packages/alliance/agents/gene_expression/agent.yaml": None,
     "packages/alliance/agents/gene_extractor/agent.yaml": "GeneExtractionResultEnvelope",
     "packages/alliance/agents/phenotype_extractor/agent.yaml": "PhenotypeResultEnvelope",
 }
@@ -214,6 +214,8 @@ def test_extractor_agents_use_plain_extraction_result_schemas():
     for relative_path, schema_name in EXTRACTOR_OUTPUT_SCHEMAS.items():
         agent_payload = _yaml(relative_path)
         assert agent_payload["output_schema"] == schema_name
+        if schema_name is None:
+            continue
 
         schema_cls = getattr(agent_models, schema_name)
         assert issubclass(schema_cls, DomainEnvelopeExtractionResult)

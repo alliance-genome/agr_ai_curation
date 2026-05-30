@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import logging
+import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
-from pydantic import model_validator
+from pydantic import ValidationError, model_validator
 
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
@@ -29,6 +32,7 @@ from src.schemas.domain_envelope import (
     parse_field_path,
 )
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
+from src.schemas.models.base import EvidenceRecord
 
 from ..schema_refs import (
     ALLIANCE_LINKML_COMMIT,
@@ -132,6 +136,43 @@ FORBIDDEN_LEGACY_COLLECTIONS = frozenset(
         "annotation_drafts",
     }
 )
+GENE_EXPRESSION_MATERIALIZER_ID = "gene_expression.builder_materializer.v1"
+PLACEHOLDER_REFERENCE_IDS = frozenset({"PMID:12345678", "PMID12345678"})
+GENE_ID_PROVIDER_PREFIXES = {
+    "WB:": "WB",
+    "WBGene:": "WB",
+    "MGI:": "MGI",
+    "ZFIN:": "ZFIN",
+    "FB:": "FB",
+    "FBgn": "FB",
+    "RGD:": "RGD",
+    "SGD:": "SGD",
+    "Xenbase:": "XB",
+}
+
+
+@dataclass(frozen=True)
+class GeneExpressionMaterializationResult:
+    """Outcome from materializing staged builder candidates into envelope output."""
+
+    payload: dict[str, Any] | None
+    issues: tuple[dict[str, Any], ...]
+    source_candidate_ids: tuple[str, ...]
+    evidence_record_ids: tuple[str, ...]
+    helper_selection_count: int
+
+    @property
+    def ok(self) -> bool:
+        return self.payload is not None and not self.issues
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "status": "ok" if self.ok else "error",
+            "source_candidate_ids": list(self.source_candidate_ids),
+            "evidence_record_ids": list(self.evidence_record_ids),
+            "helper_selection_count": self.helper_selection_count,
+            "validation_issues": [dict(issue) for issue in self.issues],
+        }
 
 
 def _has_anatomical_site_slot(where_expressed: Any) -> bool:
@@ -586,6 +627,517 @@ def _legacy_keys_in_envelope(envelope: DomainEnvelope) -> set[str]:
             _iter_mapping_keys(envelope.model_dump(mode="python"))
         )
     )
+
+
+def materialize_gene_expression_builder_state(
+    *,
+    workspace: Any,
+    candidate_ids: list[str] | tuple[str, ...],
+    evidence_records: list[Mapping[str, Any]] | None = None,
+    resolver_entry_lookup: Callable[[str], Any] | None = None,
+    produced_by: str = "gene_expression_extraction",
+) -> GeneExpressionMaterializationResult:
+    """Build canonical GeneExpressionEnvelope output from finalized builder state."""
+
+    normalized_candidate_ids = tuple(
+        value.strip() for value in candidate_ids if isinstance(value, str) and value.strip()
+    )
+    issues: list[dict[str, Any]] = []
+    candidates: list[Any] = []
+    for candidate_id in normalized_candidate_ids:
+        try:
+            candidates.append(workspace.get_candidate(candidate_id))
+        except KeyError as exc:
+            issues.append(
+                _materialization_issue(
+                    field_path="candidate_ids",
+                    reason="unknown_candidate_id",
+                    message=str(exc),
+                    candidate_id=candidate_id,
+                )
+            )
+
+    normalized_evidence_records = _normalized_evidence_records(evidence_records or [])
+    evidence_records_by_id = {
+        record["evidence_record_id"]: record
+        for record in normalized_evidence_records
+        if isinstance(record.get("evidence_record_id"), str)
+    }
+    curatable_objects: list[CuratableObjectEnvelope] = []
+    raw_mentions: list[dict[str, Any]] = []
+    helper_selections: list[dict[str, Any]] = []
+    retained_evidence_ids: list[str] = []
+    default_date_created = _clean_text(getattr(workspace, "created_at", None))
+    if default_date_created is None:
+        issues.append(
+            _materialization_issue(
+                field_path="date_created",
+                reason="missing_builder_created_at",
+                message=(
+                    "Gene-expression materialization requires the builder "
+                    "workspace creation timestamp for date_created defaults."
+                ),
+            )
+        )
+
+    for index, candidate in enumerate(candidates):
+        staged_fields = copy.deepcopy(dict(getattr(candidate, "staged_fields", {}) or {}))
+        pending_ref_id = _candidate_pending_ref_id(candidate, staged_fields, index)
+        evidence_ids = _string_list(
+            getattr(candidate, "evidence_record_ids", None)
+            or staged_fields.get("evidence_record_ids")
+        )
+        if not evidence_ids:
+            issues.append(
+                _materialization_issue(
+                    field_path="evidence_record_ids",
+                    reason="missing_evidence_record_ids",
+                    message="Finalized gene-expression candidates require non-empty evidence_record_ids.",
+                    candidate_id=candidate.candidate_id,
+                )
+            )
+
+        for evidence_id in evidence_ids:
+            evidence_record = evidence_records_by_id.get(evidence_id)
+            if evidence_record is None:
+                issues.append(
+                    _materialization_issue(
+                        field_path="evidence_record_ids",
+                        reason="unknown_evidence_record_id",
+                        message=(
+                            "evidence_record_ids must reference verified active-run "
+                            "metadata.evidence_records entries."
+                        ),
+                        candidate_id=candidate.candidate_id,
+                        evidence_record_id=evidence_id,
+                    )
+                )
+            elif _value_missing_or_blank(evidence_record.get("verified_quote")):
+                issues.append(
+                    _materialization_issue(
+                        field_path="evidence_record_ids",
+                        reason="incomplete_evidence_record",
+                        message="Verified evidence records must include verified_quote.",
+                        candidate_id=candidate.candidate_id,
+                        evidence_record_id=evidence_id,
+                    )
+                )
+
+        payload = _materialized_gene_expression_payload(
+            staged_fields,
+            pending_ref_id=pending_ref_id,
+            candidate_id=candidate.candidate_id,
+            default_date_created=default_date_created,
+            issues=issues,
+        )
+        selections = _materialized_helper_selections(
+            staged_fields,
+            resolver_selection_refs=getattr(candidate, "resolver_selection_refs", ()),
+            resolver_entry_lookup=resolver_entry_lookup,
+            candidate_id=candidate.candidate_id,
+            issues=issues,
+        )
+        helper_selections.extend(selections)
+        retained_evidence_ids.extend(evidence_ids)
+        raw_mentions.append(
+            {
+                "mention": _raw_mention_label(payload, fallback=pending_ref_id),
+                "entity_type": "gene_expression",
+                "evidence_record_ids": evidence_ids,
+            }
+        )
+        metadata_refs = [
+            {
+                "metadata_path": f"raw_mentions[{index}]",
+                "role": "source_mention",
+            }
+        ]
+        metadata_refs.extend(
+            {
+                "metadata_path": f"evidence_records[{evidence_index}]",
+                "role": "verified_evidence",
+            }
+            for evidence_index, record in enumerate(normalized_evidence_records)
+            if record.get("evidence_record_id") in set(evidence_ids)
+        )
+        curatable_objects.append(
+            CuratableObjectEnvelope(
+                object_type=GENE_EXPRESSION_OBJECT_TYPE,
+                object_role=GENE_EXPRESSION_OBJECT_ROLE,
+                pending_ref_id=pending_ref_id,
+                model_ref=GENE_EXPRESSION_MODEL_ID,
+                schema_ref=_gene_expression_schema_ref(),
+                definition_state=DefinitionState.IN_DEVELOPMENT,
+                definition_notes=[
+                    "The envelope carries exactly one GeneExpressionAnnotation object per annotation.",
+                    "Evidence and resolver provenance are materialized by backend builder finalization.",
+                ],
+                payload=payload,
+                evidence_record_ids=evidence_ids,
+                metadata_refs=metadata_refs,
+                metadata=_object_metadata({"materialized_by": GENE_EXPRESSION_MATERIALIZER_ID}),
+            )
+        )
+
+    provenance = {
+        "source": GENE_EXPRESSION_MATERIALIZER_ID,
+        "produced_by": produced_by,
+        "builder_run_id": getattr(workspace, "run_id", None),
+        "source_candidate_ids": list(normalized_candidate_ids),
+        "helper_selections": _dedupe_helper_selections(helper_selections),
+    }
+    output_payload = {
+        "summary": (
+            "Finalized gene-expression extraction from builder-staged observations."
+        ),
+        "curatable_objects": [
+            obj.model_dump(mode="json", exclude_none=True)
+            for obj in curatable_objects
+        ],
+        "metadata": {
+            "raw_mentions": raw_mentions,
+            "evidence_records": normalized_evidence_records,
+            "normalization_notes": [
+                "GeneExpressionEnvelope payload was assembled by backend materialization from builder state."
+            ],
+            "exclusions": [],
+            "ambiguities": [],
+            "notes": [],
+            "provenance": provenance,
+        },
+        "run_summary": {
+            "candidate_count": len(normalized_candidate_ids),
+            "kept_count": len(curatable_objects),
+            "excluded_count": 0,
+            "ambiguous_count": 0,
+            "warnings": [],
+        },
+        "schema_ref": _gene_expression_schema_ref().model_dump(mode="json", exclude_none=True),
+    }
+
+    if not issues:
+        try:
+            output = GeneExpressionExtractionOutput.model_validate(output_payload)
+        except ValidationError as exc:
+            issues.extend(_pydantic_issues(exc))
+        else:
+            output_payload = output.model_dump(mode="json", exclude_none=True)
+
+    return GeneExpressionMaterializationResult(
+        payload=None if issues else output_payload,
+        issues=tuple(issues),
+        source_candidate_ids=normalized_candidate_ids,
+        evidence_record_ids=tuple(_unique_strings(retained_evidence_ids)),
+        helper_selection_count=len(provenance["helper_selections"]),
+    )
+
+
+def _materialization_issue(
+    *,
+    field_path: str,
+    reason: str,
+    message: str,
+    candidate_id: str | None = None,
+    **details: Any,
+) -> dict[str, Any]:
+    issue = {
+        "field_path": field_path,
+        "reason": reason,
+        "message": message,
+    }
+    if candidate_id:
+        issue["candidate_id"] = candidate_id
+    issue.update({key: value for key, value in details.items() if value is not None})
+    return issue
+
+
+def _pydantic_issues(exc: ValidationError) -> list[dict[str, Any]]:
+    return [
+        _materialization_issue(
+            field_path=".".join(str(part) for part in error.get("loc", ())),
+            reason=str(error.get("type") or "invalid"),
+            message=str(error.get("msg") or "Invalid materialized envelope"),
+        )
+        for error in exc.errors()
+    ]
+
+
+def _normalized_evidence_records(
+    evidence_records: list[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    allowed_fields = set(EvidenceRecord.model_fields)
+    for record in evidence_records:
+        if not isinstance(record, Mapping):
+            continue
+        if str(record.get("workspace_status") or record.get("status") or "").strip() == "discarded":
+            continue
+        payload = {
+            key: value
+            for key, value in record.items()
+            if key in allowed_fields and value is not None
+        }
+        evidence_id = str(payload.get("evidence_record_id") or "").strip()
+        if not evidence_id or evidence_id in seen:
+            continue
+        try:
+            normalized_record = EvidenceRecord.model_validate(payload)
+        except ValidationError:
+            LOGGER.warning(
+                "Dropped malformed gene expression evidence record during materialization",
+                extra={"evidence_record_id": evidence_id},
+            )
+            continue
+        seen.add(evidence_id)
+        normalized.append(normalized_record.model_dump(mode="json", exclude_none=True))
+    return normalized
+
+
+def _candidate_pending_ref_id(candidate: Any, payload: Mapping[str, Any], index: int) -> str:
+    pending_ref_id = _clean_text(payload.get("pending_ref_id"))
+    if pending_ref_id:
+        return pending_ref_id
+    pending_ref_ids = getattr(candidate, "pending_ref_ids", None) or []
+    if pending_ref_ids:
+        pending_ref_id = _clean_text(pending_ref_ids[0])
+        if pending_ref_id:
+            return pending_ref_id
+    return f"gene-expression-annotation-{index + 1}"
+
+
+def _materialized_gene_expression_payload(
+    staged_fields: Mapping[str, Any],
+    *,
+    pending_ref_id: str,
+    candidate_id: str,
+    default_date_created: str | None,
+    issues: list[dict[str, Any]],
+) -> dict[str, Any]:
+    payload = copy.deepcopy(dict(staged_fields))
+    payload.pop("domain_pack_id", None)
+    payload.pop("object_type", None)
+    payload.pop("pending_ref_id", None)
+    payload.pop("metadata", None)
+    payload.pop("evidence_record_ids", None)
+    if _value_missing_or_blank(payload.get("date_created")) and default_date_created is not None:
+        payload["date_created"] = default_date_created
+    payload.setdefault("internal", False)
+    payload.setdefault("obsolete", False)
+
+    subject = _mapping_payload(payload.setdefault("expression_annotation_subject", {}))
+    reference = _mapping_payload(payload.setdefault("single_reference", {}))
+    reference_id, reference_issue = _normalized_reference_id(reference.get("reference_id"))
+    if reference_issue:
+        issues.append(
+            _materialization_issue(
+                field_path="single_reference.reference_id",
+                candidate_id=candidate_id,
+                **reference_issue,
+            )
+        )
+    if reference_id:
+        reference["reference_id"] = reference_id
+    payload["single_reference"] = reference
+
+    data_provider = _mapping_payload(payload.setdefault("data_provider", {}))
+    if _value_missing_or_blank(data_provider.get("abbreviation")):
+        provider = _provider_from_gene_id(subject.get("primary_external_id"))
+        if provider:
+            data_provider["abbreviation"] = provider
+    payload["data_provider"] = data_provider
+
+    expression_experiment = _mapping_payload(payload.setdefault("expression_experiment", {}))
+    expression_experiment.setdefault("single_reference", copy.deepcopy(reference))
+    expression_experiment.setdefault(
+        "entity_assayed",
+        {
+            key: subject[key]
+            for key in ("primary_external_id", "gene_symbol")
+            if not _value_missing_or_blank(subject.get(key))
+        },
+    )
+    expression_experiment.setdefault(
+        "unique_id",
+        _deterministic_experiment_id(
+            pending_ref_id=pending_ref_id,
+            subject_id=subject.get("primary_external_id"),
+            reference_id=reference.get("reference_id"),
+            assay_curie=_payload_value(
+                expression_experiment,
+                "expression_assay_used.curie",
+            ),
+        ),
+    )
+    payload["expression_experiment"] = expression_experiment
+    payload.setdefault("expression_pattern", {}).setdefault("where_expressed", {})
+    return payload
+
+
+def _normalized_reference_id(value: Any) -> tuple[str | None, dict[str, str] | None]:
+    reference_id = _clean_text(value)
+    if reference_id is None:
+        return None, {
+            "reason": "missing_reference_id",
+            "message": "single_reference.reference_id is required.",
+        }
+    compact = re.sub(r"[\s_-]+", "", reference_id).upper()
+    if compact in PLACEHOLDER_REFERENCE_IDS:
+        return None, {
+            "reason": "placeholder_reference",
+            "message": "Placeholder references such as PMID:12345678 cannot be finalized.",
+        }
+    pmid_match = re.fullmatch(r"PMID\s*:?\s*(\d+)", reference_id, flags=re.IGNORECASE)
+    if pmid_match:
+        return f"PMID:{pmid_match.group(1)}", None
+    return reference_id, None
+
+
+def _materialized_helper_selections(
+    staged_fields: Mapping[str, Any],
+    *,
+    resolver_selection_refs: Any,
+    resolver_entry_lookup: Callable[[str], Any] | None,
+    candidate_id: str,
+    issues: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    selections: list[dict[str, Any]] = []
+    provenance = staged_fields.get("metadata")
+    if isinstance(provenance, Mapping):
+        nested = provenance.get("provenance")
+        raw_selections = (
+            nested.get("helper_selections")
+            if isinstance(nested, Mapping)
+            else provenance.get("helper_selections")
+        )
+        if isinstance(raw_selections, list):
+            selections.extend(
+                dict(item)
+                for item in raw_selections
+                if (
+                    isinstance(item, Mapping)
+                    and item.get("source_tool") == CONTROLLED_FIELD_RESOLVER_TOOL_NAME
+                )
+            )
+
+    for resolver_call_id in _string_list(resolver_selection_refs):
+        if any(selection.get("resolver_call_id") == resolver_call_id for selection in selections):
+            continue
+        if resolver_entry_lookup is None:
+            issues.append(
+                _materialization_issue(
+                    field_path="metadata.provenance.helper_selections",
+                    reason="resolver_ledger_unavailable",
+                    message="Resolver selections must be copied from the active resolver ledger.",
+                    candidate_id=candidate_id,
+                    resolver_call_id=resolver_call_id,
+                )
+            )
+            continue
+        try:
+            entry = resolver_entry_lookup(resolver_call_id)
+        except (KeyError, RuntimeError, ValueError) as exc:
+            issues.append(
+                _materialization_issue(
+                    field_path="metadata.provenance.helper_selections",
+                    reason="unknown_resolver_call_id",
+                    message=str(exc),
+                    candidate_id=candidate_id,
+                    resolver_call_id=resolver_call_id,
+                )
+            )
+            continue
+        if hasattr(entry, "provenance_selection"):
+            selection = entry.provenance_selection()
+        else:
+            selection = getattr(entry, "helper_selection", None)
+        if isinstance(selection, Mapping):
+            materialized_selection = dict(selection)
+            materialized_selection.setdefault("resolver_call_id", resolver_call_id)
+            materialized_selection.setdefault("source_tool", CONTROLLED_FIELD_RESOLVER_TOOL_NAME)
+            selections.append(materialized_selection)
+    return selections
+
+
+def _dedupe_helper_selections(selections: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for selection in selections:
+        key = (
+            str(selection.get("resolver_call_id") or ""),
+            str(selection.get("field_path") or ""),
+            str(selection.get("selected_value") or selection.get("selected_curie") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(selection)
+    return deduped
+
+
+def _provider_from_gene_id(primary_external_id: Any) -> str | None:
+    text = _clean_text(primary_external_id)
+    if text is None:
+        return None
+    for prefix, provider in GENE_ID_PROVIDER_PREFIXES.items():
+        if text.startswith(prefix):
+            return provider
+    return None
+
+
+def _deterministic_experiment_id(
+    *,
+    pending_ref_id: str,
+    subject_id: Any,
+    reference_id: Any,
+    assay_curie: Any,
+) -> str:
+    seed = "|".join(
+        value
+        for value in (
+            _clean_text(subject_id),
+            _clean_text(reference_id),
+            _clean_text(assay_curie),
+            _clean_text(pending_ref_id),
+        )
+        if value
+    )
+    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
+    return f"gene-expression-experiment-{digest}"
+
+
+def _raw_mention_label(payload: Mapping[str, Any], *, fallback: str) -> str:
+    subject = _payload_value(payload, "expression_annotation_subject.gene_symbol")
+    where = _payload_value(payload, "where_expressed_statement")
+    parts = [part for part in (_clean_text(subject), _clean_text(where)) if part]
+    return " expression in ".join(parts) if parts else fallback
+
+
+def _mapping_payload(value: Any) -> dict[str, Any]:
+    return copy.deepcopy(dict(value)) if isinstance(value, Mapping) else {}
+
+
+def _clean_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    return _unique_strings(value)
+
+
+def _unique_strings(values: Any) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for value in values or []:
+        text = _clean_text(value)
+        if text is None or text in seen:
+            continue
+        seen.add(text)
+        unique.append(text)
+    return unique
 
 
 def gene_expression_extraction_output_to_pending_envelope(
@@ -1292,10 +1844,14 @@ __all__ = [
     "FORBIDDEN_LEGACY_COLLECTIONS",
     "FORBIDDEN_PAYLOAD_EVIDENCE_FIELDS",
     "GENE_EXPRESSION_LINKML_CONTRACT_VALIDATOR_ID",
+    "GENE_EXPRESSION_MATERIALIZER_ID",
     "GeneExpressionExtractionOutput",
+    "GeneExpressionMaterializationResult",
+    "PLACEHOLDER_REFERENCE_IDS",
     "REQUIRED_GENE_EXPRESSION_PAYLOAD_FIELDS",
     "VALID_GENE_EXPRESSION_RELATION_NAMES",
     "gene_expression_extraction_output_to_pending_envelope",
+    "materialize_gene_expression_builder_state",
     "validate_gene_expression_extraction_objects",
     "validate_pending_gene_expression_envelope",
 ]

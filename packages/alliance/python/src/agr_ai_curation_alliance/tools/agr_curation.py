@@ -10,6 +10,7 @@ import os
 import re
 import json
 import inspect
+import hashlib
 from collections import defaultdict
 from collections.abc import Mapping
 from copy import deepcopy
@@ -51,10 +52,15 @@ from agr_ai_curation_runtime.extraction_builder import (
     ExtractionBuilderValidationError,
     get_active_extraction_builder_workspace,
 )
+from agr_ai_curation_runtime.evidence_workspace import get_active_evidence_records_snapshot
 from agr_ai_curation_runtime.extraction_trace_events import write_extraction_trace_event
 from agr_ai_curation_runtime.resolver_call_ledger import (
     ResolverCallLedgerEntry,
     get_active_resolver_call_ledger,
+)
+from agr_ai_curation_alliance.domain_packs.gene_expression import (
+    GENE_EXPRESSION_MATERIALIZER_ID,
+    materialize_gene_expression_builder_state,
 )
 from .search_helpers import (
     enrich_with_match_context,
@@ -127,7 +133,19 @@ GeneExpressionPatchFieldPath = Literal[
 ]
 
 _CONTROLLED_GENE_EXPRESSION_FIELD_PATHS = set(GeneExpressionControlledFieldPath.__args__)
-_REFERENCE_PLACEHOLDER_VALUES = {"", "pmid", "pmid:", "doi", "doi:", "wb:...", "...", "unknown", "tbd"}
+_REFERENCE_PLACEHOLDER_VALUES = {
+    "",
+    "pmid",
+    "pmid:",
+    "pmid:12345678",
+    "pmid12345678",
+    "doi",
+    "doi:",
+    "wb:...",
+    "...",
+    "unknown",
+    "tbd",
+}
 
 
 class _StrictToolModel(BaseModel):
@@ -3680,7 +3698,7 @@ def _resolver_instruction(
     if resolution_status == "resolved":
         return [
             f"Set only the controlled selector for {field_path} from the selected candidate.",
-            "Copy helper_selection into metadata.provenance.helper_selections[].",
+            "Pass this resolve_domain_field_term tool call ID as resolver_call_id to the builder tool; do not author metadata.provenance.helper_selections.",
         ]
     if resolution_status == "ambiguous":
         return [
@@ -5963,6 +5981,24 @@ def finalize_gene_expression_extraction(
         )
 
     workspace = get_active_extraction_builder_workspace()
+    if getattr(workspace, "finalization", None) is not None:
+        finalization = workspace.finalization
+        summary = {
+            "builder_finalization": finalization.summary(),
+            "builder": _builder_summary(workspace, include_discarded=True),
+        }
+        _emit_gene_expression_builder_event(
+            "gene_expression_builder.finalize_completed",
+            action="finalize",
+            input_summary=attempted_query,
+            output_summary=summary,
+        )
+        return _ok(
+            data=summary,
+            count=finalization.finalized_candidate_count,
+            lookup_status=LOOKUP_STATUS_SUCCESS,
+        )
+
     issues: List[Dict[str, Any]] = []
     for candidate_id in finalize_input.candidate_ids:
         try:
@@ -6004,8 +6040,108 @@ def finalize_gene_expression_extraction(
             attempted_query=attempted_query,
         )
 
+    _emit_gene_expression_builder_event(
+        "gene_expression_materializer.started",
+        action="materialize",
+        input_summary={
+            "candidate_ids": finalize_input.candidate_ids,
+            "materializer_id": GENE_EXPRESSION_MATERIALIZER_ID,
+        },
+    )
     try:
-        finalization = workspace.finalize(candidate_ids=finalize_input.candidate_ids)
+        evidence_records = get_active_evidence_records_snapshot()
+    except RuntimeError:
+        # Missing run-scoped context is not recoverable; empty inputs below
+        # become explicit materialization validation issues.
+        evidence_records = []
+    try:
+        resolver_ledger = get_active_resolver_call_ledger()
+    except RuntimeError:
+        # Missing resolver ledger context surfaces as resolver provenance
+        # validation failures rather than a successful finalization.
+        resolver_ledger = None
+
+    materialization = materialize_gene_expression_builder_state(
+        workspace=workspace,
+        candidate_ids=finalize_input.candidate_ids,
+        evidence_records=evidence_records,
+        resolver_entry_lookup=resolver_ledger.get if resolver_ledger is not None else None,
+    )
+    placeholder_issues = [
+        issue
+        for issue in materialization.issues
+        if issue.get("reason") == "placeholder_reference"
+    ]
+    for issue in placeholder_issues:
+        _emit_gene_expression_builder_event(
+            "gene_expression_materializer.placeholder_reference_rejected",
+            action="materialize",
+            input_summary={"candidate_ids": finalize_input.candidate_ids},
+            output_summary=issue,
+            validation={"status": "failed", "issue": issue},
+        )
+    if not materialization.ok or materialization.payload is None:
+        issue_list = [dict(issue) for issue in materialization.issues]
+        workspace.record_validation_failure(
+            errors=issue_list,
+            candidate_ids=finalize_input.candidate_ids,
+        )
+        _emit_gene_expression_builder_event(
+            "gene_expression_materializer.validation_failed",
+            action="materialize",
+            input_summary={"candidate_ids": finalize_input.candidate_ids},
+            output_summary=materialization.summary(),
+            validation={"status": "failed", "issues": issue_list},
+        )
+        return _gene_expression_validation_result(
+            message="finalize_gene_expression_extraction failed materialization validation.",
+            issues=issue_list,
+            method="finalize_gene_expression_extraction",
+            attempted_query=attempted_query,
+        )
+
+    materialized_candidate_id = finalize_input.candidate_ids[0]
+    if len(finalize_input.candidate_ids) > 1:
+        digest = hashlib.sha256(
+            "|".join(finalize_input.candidate_ids).encode("utf-8")
+        ).hexdigest()[:12]
+        materialized_candidate_id = f"gene-expression-envelope-{digest}"
+    workspace.upsert_candidate(
+        candidate_id=materialized_candidate_id,
+        staged_fields=materialization.payload,
+        pending_ref_ids=[
+            pending_ref
+            for candidate_id in finalize_input.candidate_ids
+            for pending_ref in workspace.get_candidate(candidate_id).pending_ref_ids
+        ],
+        evidence_record_ids=materialization.evidence_record_ids,
+        resolver_selection_refs=[
+            resolver_ref
+            for candidate_id in finalize_input.candidate_ids
+            for resolver_ref in workspace.get_candidate(candidate_id).resolver_selection_refs
+        ],
+        status=CANDIDATE_STATUS_VALID,
+    )
+    _emit_gene_expression_builder_event(
+        "gene_expression_materializer.evidence_provenance_summary",
+        action="materialize",
+        input_summary={"candidate_ids": finalize_input.candidate_ids},
+        output_summary=materialization.summary(),
+    )
+    _emit_gene_expression_builder_event(
+        "gene_expression_materializer.completed",
+        action="materialize",
+        input_summary={"candidate_ids": finalize_input.candidate_ids},
+        output_summary={
+            **materialization.summary(),
+            "materialized_candidate_id": materialized_candidate_id,
+            "curatable_objects": materialization.payload.get("curatable_objects", []),
+            "materialized_envelope": materialization.payload,
+        },
+    )
+
+    try:
+        finalization = workspace.finalize(candidate_ids=[materialized_candidate_id])
     except ExtractionBuilderValidationError as exc:
         return _gene_expression_validation_result(
             message=str(exc),
