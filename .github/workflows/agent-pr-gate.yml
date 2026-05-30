@@ -43,7 +43,7 @@ jobs:
           # Share the cache namespace with the Unit Tests workflow because this
           # gate builds the same backend/Dockerfile.unit-test image.
           cache-from: type=gha,scope=backend-unit-test
-          cache-to: type=gha,mode=max,scope=backend-unit-test
+          cache-to: type=gha,mode=max,scope=backend-unit-test,ignore-error=true
 
       - name: Run agent PR gate
         env:
