@@ -712,6 +712,9 @@ tools:
     metadata:
       name: Resolve Domain Field Term
       category: Database
+      # Run-state builder/resolver tool: platform closure-binds the active resolver ledger +
+      # builder workspace into this tool per run (streaming_tools._bind_run_state_into_tools).
+      builder_run_state: true
       audit:
         display_name: Resolve Domain Field Term
       documentation:
@@ -766,6 +769,7 @@ tools:
     metadata:
       name: Stage Gene Expression Observation
       category: Database
+      builder_run_state: true
       audit:
         display_name: Stage Gene Expression Observation
       documentation:
@@ -779,6 +783,7 @@ tools:
     metadata:
       name: Patch Gene Expression Observation
       category: Database
+      builder_run_state: true
       audit:
         display_name: Patch Gene Expression Observation
       documentation:
@@ -792,6 +797,7 @@ tools:
     metadata:
       name: Discard Gene Expression Observation
       category: Database
+      builder_run_state: true
       audit:
         display_name: Discard Gene Expression Observation
       documentation:
@@ -805,6 +811,7 @@ tools:
     metadata:
       name: List Staged Gene Expression Observations
       category: Database
+      builder_run_state: true
       audit:
         display_name: List Staged Gene Expression Observations
       documentation:
@@ -823,10 +830,93 @@ tools:
       # (see streaming_tools._builder_finalization_tool_names) so adding a new
       # builder data type is a domain-pack edit, not a platform edit.
       builder_finalization: true
+      builder_run_state: true
       audit:
         display_name: Finalize Gene Expression Extraction
       documentation:
         summary: Materializes staged gene-expression candidates into the canonical GeneExpressionEnvelope payload, then finalizes through the project-agnostic builder handoff.
+  # ---------------------------------------------------------------------------------------
+  # Gene extractor builder tools (Phase 1 envelope -> builder migration). Per-domain module
+  # gene_builder_tools.py over the project-agnostic ExtractionBuilderWorkspace; the gene
+  # validator owns identity so there are NO resolver-backed controlled fields here.
+  # ---------------------------------------------------------------------------------------
+  - tool_id: stage_gene_mention_evidence
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.gene_builder_tools:stage_gene_mention_evidence
+    required_context: []
+    description: Stage one retained, evidence-backed Alliance gene mention candidate with paper-backed identity hints
+    source_file: python/src/agr_ai_curation_alliance/tools/gene_builder_tools.py
+    metadata:
+      name: Stage Gene Mention Evidence
+      category: Database
+      # Run-state builder tool: the platform closure-binds the active builder workspace +
+      # evidence records into this tool per run (streaming_tools._bind_run_state_into_tools).
+      builder_run_state: true
+      audit:
+        display_name: Stage Gene Mention Evidence
+      documentation:
+        summary: Stages one gene_mention_evidence builder candidate from verified evidence and paper-backed identity hints. The gene validator owns final identity.
+  - tool_id: patch_gene_mention_evidence
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.gene_builder_tools:patch_gene_mention_evidence
+    required_context: []
+    description: Patch enumerated fields on a staged Alliance gene mention candidate
+    source_file: python/src/agr_ai_curation_alliance/tools/gene_builder_tools.py
+    metadata:
+      name: Patch Gene Mention Evidence
+      category: Database
+      builder_run_state: true
+      audit:
+        display_name: Patch Gene Mention Evidence
+      documentation:
+        summary: Applies bounded repairs to a staged gene_mention_evidence candidate.
+  - tool_id: discard_gene_mention_evidence
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.gene_builder_tools:discard_gene_mention_evidence
+    required_context: []
+    description: Discard one staged Alliance gene mention candidate
+    source_file: python/src/agr_ai_curation_alliance/tools/gene_builder_tools.py
+    metadata:
+      name: Discard Gene Mention Evidence
+      category: Database
+      builder_run_state: true
+      audit:
+        display_name: Discard Gene Mention Evidence
+      documentation:
+        summary: Marks one staged gene_mention_evidence candidate as discarded without deleting the builder trace.
+  - tool_id: list_staged_gene_mention_evidence
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.gene_builder_tools:list_staged_gene_mention_evidence
+    required_context: []
+    description: List compact summaries for staged Alliance gene mention candidates
+    source_file: python/src/agr_ai_curation_alliance/tools/gene_builder_tools.py
+    metadata:
+      name: List Staged Gene Mention Evidence
+      category: Database
+      builder_run_state: true
+      audit:
+        display_name: List Staged Gene Mention Evidence
+      documentation:
+        summary: Returns compact builder state summaries for staged gene_mention_evidence candidates.
+  - tool_id: finalize_gene_extraction
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.gene_builder_tools:finalize_gene_extraction
+    required_context: []
+    description: Finalize staged Alliance gene mentions through the extraction builder handoff
+    source_file: python/src/agr_ai_curation_alliance/tools/gene_builder_tools.py
+    metadata:
+      name: Finalize Gene Extraction
+      category: Database
+      # Marks this tool as a builder-materializer finalize tool. The platform runtime derives
+      # the set of builder finalize-tool names from this flag
+      # (streaming_tools._builder_finalization_tool_names) so this is a domain-pack edit, not a
+      # platform edit.
+      builder_finalization: true
+      builder_run_state: true
+      audit:
+        display_name: Finalize Gene Extraction
+      documentation:
+        summary: Materializes staged gene_mention_evidence candidates into the GeneExtractionResultEnvelope payload, then finalizes through the project-agnostic builder handoff.
   - tool_id: search_document
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_search_document_tool

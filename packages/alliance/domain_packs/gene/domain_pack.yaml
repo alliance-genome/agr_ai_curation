@@ -327,6 +327,12 @@ fixture_packs:
     description: Pending-ref domain envelopes converted from verified gene extraction fixtures.
     object_types:
       - gene_mention_evidence
+  - fixture_pack_id: daf16_builder_pending
+    display_name: Builder-materialized gene mention evidence fixtures
+    path: fixtures/daf16_builder_pending.yaml
+    description: Production-like pending envelope produced by the gene builder materializer with RELATIVE metadata_refs.
+    object_types:
+      - gene_mention_evidence
 metadata:
   base_pack_id: agr.alliance.base
   object_role_key: object_role

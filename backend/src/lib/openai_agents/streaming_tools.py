@@ -1259,18 +1259,34 @@ def _active_builder_workspace_or_none() -> ExtractionBuilderWorkspace | None:
 # state inside the worker thread. Package tool bodies are unchanged (they keep calling the
 # agr_ai_curation_runtime get_active_* shims). Future work: drive this from binding
 # metadata instead of an explicit map so new tools need no core change.
-_GENE_EXPRESSION_PACKAGE = "agr_ai_curation_alliance.tools.agr_curation"
-_RUN_STATE_TOOL_IMPLS: Dict[str, str] = {
-    name: f"{_GENE_EXPRESSION_PACKAGE}:_{name}_impl"
-    for name in (
-        "resolve_domain_field_term",
-        "stage_gene_expression_observation",
-        "patch_gene_expression_observation",
-        "discard_gene_expression_observation",
-        "list_staged_gene_expression_observations",
-        "finalize_gene_expression_extraction",
-    )
-}
+_BUILDER_RUN_STATE_METADATA_KEY = "builder_run_state"
+
+
+@lru_cache(maxsize=1)
+def _run_state_tool_impls() -> Dict[str, str]:
+    """Return the registry-derived map of run-state tool name -> raw impl import path.
+
+    A tool is a run-state builder/resolver tool when its package tool-binding metadata declares
+    ``builder_run_state: true``. The raw impl path follows the ``_<tool_id>_impl`` convention in
+    the same module as the tool's public ``callable`` binding. Deriving this from binding metadata
+    (rather than a hardcoded per-type literal) keeps run-state binding a domain-pack/registry
+    concern, so adding a new builder data type needs no platform edit. (Mirrors Phase 0's
+    ``_builder_finalization_tool_names``.)
+    """
+    from src.lib.packages.tool_registry import load_tool_registry
+
+    registry = load_tool_registry()
+    impls: Dict[str, str] = {}
+    for binding in registry.bindings:
+        metadata = binding.metadata if isinstance(binding.metadata, dict) else {}
+        if not bool(metadata.get(_BUILDER_RUN_STATE_METADATA_KEY)):
+            continue
+        import_path = binding.import_path or ""
+        module_name = import_path.split(":", 1)[0] if ":" in import_path else import_path
+        if not module_name:
+            continue
+        impls[binding.tool_id] = f"{module_name}:_{binding.tool_id}_impl"
+    return impls
 
 
 def _build_run_state_bound_tool(
@@ -1330,9 +1346,10 @@ def _bind_run_state_into_tools(
     ``_adapt_tools_with_provider_adapter``'s tool-replacement pattern."""
     rebuilt: List[Any] = []
     bound_count = 0
+    run_state_tool_impls = _run_state_tool_impls()
     for tool in list(getattr(agent, "tools", []) or []):
         tool_name = _extract_tool_name(tool)
-        impl_path = _RUN_STATE_TOOL_IMPLS.get(tool_name)
+        impl_path = run_state_tool_impls.get(tool_name)
         if impl_path is None:
             rebuilt.append(tool)
             continue

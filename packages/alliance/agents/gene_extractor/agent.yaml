@@ -38,19 +38,36 @@ supervisor_routing:
 # -----------------------------------------------------------------------------
 # TOOLS
 # -----------------------------------------------------------------------------
+# Builder tool-loop: record evidence -> stage gene mentions -> finalize. Mirrors the
+# gene_expression builder tool set (minus the controlled-field resolver loop, since the gene
+# validator owns identity).
 tools:
   - search_document
   - read_chunk
   - read_section
   - read_subsection
   - record_evidence
+  - list_recorded_evidence
+  - get_recorded_evidence
+  - attach_evidence_to_object
+  - detach_evidence_from_object
+  - discard_recorded_evidence
+  - update_recorded_evidence_metadata
   - get_agent_contract
   - agr_species_context_lookup
+  - stage_gene_mention_evidence
+  - patch_gene_mention_evidence
+  - discard_gene_mention_evidence
+  - list_staged_gene_mention_evidence
+  - finalize_gene_extraction
 
 # -----------------------------------------------------------------------------
 # OUTPUT SCHEMA
 # -----------------------------------------------------------------------------
-output_schema: GeneExtractionResultEnvelope
+# Builder-pattern agents are FORBIDDEN an output schema; the backend materializes
+# GeneExtractionResultEnvelope from staged builder state (see streaming_tools forbid-output-schema
+# guard + builder-materializer detection).
+output_schema: null
 
 # -----------------------------------------------------------------------------
 # MODEL CONFIGURATION

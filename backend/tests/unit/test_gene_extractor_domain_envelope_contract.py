@@ -376,7 +376,12 @@ def test_gene_extractor_prompt_agent_and_group_rules_name_domain_envelope_contra
     example_object_count = prompt_content.count("stage_gene_mention_evidence(")
     assert example_object_count == 3
     assert prompt_content.count("record_evidence(") >= example_object_count
-    assert prompt_content.count("finalize_gene_extraction(") == 2
+    # Builder tool-loop: finalize is referenced in the tool guidance, output-alignment,
+    # domain-envelope contract, and both few-shot examples. It must always be called with the
+    # builder candidate_ids handoff, never the legacy summary/counts signature.
+    assert prompt_content.count("finalize_gene_extraction(") >= 2
+    assert "finalize_gene_extraction(candidate_ids=" in prompt_content
+    assert "kept_count=" not in prompt_content
 
     for group_rule_file in source.group_rule_files:
         content = str(yaml.safe_load(group_rule_file.read_text(encoding="utf-8"))["content"])

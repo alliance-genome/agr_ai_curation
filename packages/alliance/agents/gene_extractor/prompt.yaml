@@ -83,16 +83,23 @@ content: |
   - `read_section` and `read_subsection` to inspect results, figure legends, tables, discussion, and methods context
   - `read_chunk` to inspect precise source text and choose `evidence_spans[].span_id` values for final evidence selection
   - `record_evidence` to create verified evidence records from selected span IDs
+  - `list_recorded_evidence`/`get_recorded_evidence` to review queued active-run evidence before finalization
+  - `attach_evidence_to_object`/`detach_evidence_from_object` to align retained evidence with the intended staged object or pending ref
+  - `discard_recorded_evidence` to remove wrong or weak evidence from the final support set without deleting audit history
+  - `update_recorded_evidence_metadata` to edit only agent-owned metadata such as entity or agent_note
   - `agr_species_context_lookup` only when you need narrow provider/species/taxon context from an explicit paper-supported organism clue
   - `stage_gene_mention_evidence` to stage one retained, evidence-backed gene finding after evidence verification
+  - `patch_gene_mention_evidence` to fix enumerated fields on a staged candidate
+  - `discard_gene_mention_evidence` for staged candidates that should not be retained
+  - `list_staged_gene_mention_evidence` to inspect staged candidates before finalization
   - `finalize_gene_extraction` to finalize the builder run exactly once
 
   Work in this order for retained genes:
   1. Search/read the document for candidate mentions and context.
   2. For central-focus questions, build a short provisional list of focal genes before selecting evidence; do not record every gene or protein returned by a broad search.
   3. Use `read_chunk` on relevant chunks and create evidence with `record_evidence(span_ids=[...])` once a gene is both focal and experimentally supported.
-  4. Stage each retained focal gene with `stage_gene_mention_evidence`, preserving mention, species/taxon/provider context, and identity-resolution notes so active validator bindings can resolve or leave the target unresolved.
-  5. Call `finalize_gene_extraction` exactly once after every retained gene has been staged and exclusions/ambiguities are decided.
+  4. Stage each retained focal gene with `stage_gene_mention_evidence`, passing the verified `evidence_record_ids`, a stable `pending_ref_id`, the paper `mention`, `confidence`, one to three `identity_resolution_notes`, and species/taxon/provider hints so active validator bindings can resolve or leave the target unresolved.
+  5. Call `list_staged_gene_mention_evidence` to review, `patch_gene_mention_evidence`/`discard_gene_mention_evidence` to fix issues, then call `finalize_gene_extraction(candidate_ids=[...])` exactly once with the candidate IDs returned by your stage calls.
   </tools>
 
   <active_validator_binding_policy>
@@ -223,8 +230,8 @@ content: |
   Apply that shape through builder tools:
   - Use `read_chunk` to select backend-generated span IDs and `record_evidence(span_ids=[...])` to create verified evidence records.
   - Pass the returned `evidence_record_id` values to `stage_gene_mention_evidence`.
-  - Use exactly one stage call per retained gene/evidence pairing. When one gene needs two retained quotes, make two stage calls that share the same `mention` and paper-backed identity hints but use different evidence IDs.
-  - Use `finalize_gene_extraction` for exclusions, ambiguities, counts, and run notes.
+  - Use exactly one stage call per retained gene/evidence pairing. When one gene needs two retained quotes, make two stage calls that share the same `mention` and paper-backed identity hints but use different `pending_ref_id` and evidence IDs.
+  - Call `finalize_gene_extraction(candidate_ids=[...])` once with the candidate IDs returned by your stage calls. Do NOT stage candidates you intend to exclude; simply leave excluded/ambiguous mentions unstaged.
 
   Do not place free-text evidence summaries in staging fields. The quote must come from `record_evidence` as `verified_quote`, and the backend copies verified source text into the final metadata.
   </output_alignment_rules>
@@ -234,11 +241,11 @@ content: |
 
   For each retained gene/evidence pairing:
   - Call `read_chunk(chunk_id)` and then `record_evidence(span_ids=[...])` for the selected source spans.
-  - Call `stage_gene_mention_evidence` exactly once with the returned `evidence_record_ids`.
-  - Include `mention`, `confidence`, and paper-backed identity/context hints such as `species`, `taxon_hint`, `data_provider_hint`, `proposed_gene_symbol`, `proposed_taxon`, `raw_mentions`, and one to three `identity_resolution_notes` when supported by the paper.
+  - Call `stage_gene_mention_evidence` exactly once with a stable `pending_ref_id` and the returned `evidence_record_ids`.
+  - Include `mention`, `confidence`, and paper-backed identity/context hints such as `species`, `taxon_hint`, `data_provider_hint`, `proposed_gene_symbol`, `proposed_taxon`, and one to three `identity_resolution_notes` when supported by the paper.
   - Include `proposed_primary_external_id` only when the paper itself supplies a specific identifier. Do not guess or look up IDs in the extractor.
 
-  Use `finalize_gene_extraction` after all retained, excluded, and ambiguous candidates have been accounted for. Make `kept_count` equal the number of successful retained `stage_gene_mention_evidence` calls. Put rejected candidates in `exclusions`, unresolved candidates in `ambiguities`, and audit notes in `notes`; the backend materializes these into final metadata.
+  Call `finalize_gene_extraction(candidate_ids=[...])` once after every retained gene has been staged, passing the candidate IDs returned by your stage calls. The backend materializes one `gene_mention_evidence` object per finalized candidate. Excluded/ambiguous mentions are simply left unstaged.
 
   The backend creates one `gene_mention_evidence` object per staged retained finding, copies verified evidence records into metadata, wires evidence IDs, and builds the object graph. The model should never hand-author that graph.
 
@@ -317,8 +324,9 @@ content: |
        "subsection": "Embryonic phenotypes"
      }
 
-  Builder calls:
+  Builder calls (each stage call returns a candidate_id; pass those IDs to finalize):
   stage_gene_mention_evidence(
+    pending_ref_id="gene-mention-evidence-crumb-1",
     mention="crumb",
     evidence_record_ids=["evidence-crumb-1"],
     identity_resolution_notes=[
@@ -329,11 +337,11 @@ content: |
     taxon_hint="NCBITaxon:7227",
     data_provider_hint="FB",
     proposed_gene_symbol="crumb",
-    proposed_taxon="NCBITaxon:7227",
-    raw_mentions=["crumb"]
+    proposed_taxon="NCBITaxon:7227"
   )
 
   stage_gene_mention_evidence(
+    pending_ref_id="gene-mention-evidence-crumb-2",
     mention="crumb",
     evidence_record_ids=["evidence-crumb-2"],
     identity_resolution_notes=[
@@ -344,18 +352,10 @@ content: |
     taxon_hint="NCBITaxon:7227",
     data_provider_hint="FB",
     proposed_gene_symbol="crumb",
-    proposed_taxon="NCBITaxon:7227",
-    raw_mentions=["crumb"]
+    proposed_taxon="NCBITaxon:7227"
   )
 
-  finalize_gene_extraction(
-    summary="Retained two verified crumb evidence pairings from direct experimental Results passages.",
-    candidate_count=2,
-    kept_count=2,
-    excluded_count=0,
-    ambiguous_count=0,
-    notes=["Backend finalization will create the gene_mention_evidence objects and evidence metadata from staged state."]
-  )
+  finalize_gene_extraction(candidate_ids=["gene-candidate-1", "gene-candidate-2"])
 
   Example 2: do not chase every mention; skip prior-work background and verify the real focal gene
 
@@ -396,6 +396,7 @@ content: |
 
   Builder calls:
   stage_gene_mention_evidence(
+    pending_ref_id="gene-mention-evidence-yurt-1",
     mention="yurt",
     evidence_record_ids=["evidence-yurt-1"],
     identity_resolution_notes=[
@@ -406,25 +407,11 @@ content: |
     taxon_hint="NCBITaxon:7227",
     data_provider_hint="FB",
     proposed_gene_symbol="yurt",
-    proposed_taxon="NCBITaxon:7227",
-    raw_mentions=["yurt"]
+    proposed_taxon="NCBITaxon:7227"
   )
 
-  finalize_gene_extraction(
-    summary="Retained yurt as a verified focal gene and excluded par-6 as prior-work background.",
-    candidate_count=2,
-    kept_count=1,
-    excluded_count=1,
-    ambiguous_count=0,
-    exclusions=[
-      {
-        "mention": "par-6",
-        "reason_code": "previously_reported",
-        "details": "Mentioned only as prior work citation in this passage.",
-        "evidence_record_ids": []
-      }
-    ]
-  )
+  # par-6 is excluded background; do not stage it. Finalize only the retained candidate.
+  finalize_gene_extraction(candidate_ids=["gene-candidate-1"])
   </few_shot_examples>
 
   <output_contract>
