@@ -296,7 +296,7 @@ clean (or issues resolved); Status Table updated; committed + pushed to main.
 | 1 | gene | Claude | done | done | 172+8 | 0 struct | clean | DONE (39663f46) |
 | 2 | disease | Claude | done | ☐ | ☐ | ☐ | ☐ | grounded; impl pending open-Qs + test PDF |
 | 3 | phenotype | Claude | done | done | 10 new | 33 units, 0 struct | clean | DONE (b42cdea1) |
-| 4 | allele | Claude | done | ☐ | ☐ | ☐ | ☐ | grounded; impl pending open-Qs + test PDF |
+| 4 | allele | Claude | done | done | 10 new | 6 assoc, 0 struct | clean | DONE (eca78ad8) |
 | 5 | chemical_condition | Claude | done | ☐ | ☐ | ☐ | ☐ | grounded; impl pending open-Qs + test PDF |
 
 (gene_expression = reference, already done + structurally clean as of ge17.)
@@ -388,3 +388,35 @@ clean (or issues resolved); Status Table updated; committed + pushed to main.
   e2e feasibility on a31b1ff3 uncertain), disease + chemical_condition (no representative test PDF in
   sandbox → grounded-only, awaiting Chris's open-Q decisions + test data; will not commit
   prompt-unverified builders for types that can't be exercised e2e).
+- 2026-05-31 (afternoon cont.): PHASE 4 (allele) LANDED (commit eca78ad8). Migrated allele
+  envelope→builder mirroring gene (mention-only) + phenotype (multi-object graph). agents/allele_extractor
+  migrated; agents/allele (the validator) left intact. Stays mention-only (require_resolver_selections
+  =False; allele_mention_reference_validation owns identity). New materialize_allele_builder_state +
+  allele_builder_tools.py + conversion.py + bindings flags + builder agent/prompt + golden fixture +
+  contract test (10 new; 167 suite pass). NO backend/src edits. E2E on a31b1ff3: routed to
+  allele_extractor, 6 AllelePaperEvidenceAssociation candidates (29 objects), inline validation in the
+  chat turn resolved gcy-9(tm2816)/pef-1(gk5346)/osm-3(p802)/che-3(e1124) to WBVar curies, 0 of the 4
+  structural codes. The 19 required_field_missing + write_blocked findings are PRE-EXISTING pack posture
+  (verified: the existing envelope converter produces identical findings) — faithfully reproduced, not a
+  regression. Opus review CLEAN. Open questions preserved-as-existing-posture (mention-only; not
+  capturing mutation-type SO terms).
+- 2026-05-31 SESSION CLOSE (autonomous run): DONE + on main = pre(validator_materialization_invalid
+  fix eb59c04e), Phase 0 (7d891dbe), Phase 1 gene (39663f46), Phase 3 phenotype (b42cdea1), Phase 4
+  allele (eca78ad8), + runbook/grounding commits. 4 of 6 envelope extractors now on the builder pattern
+  (gene_expression reference + gene + phenotype + allele); the builder runtime is fully generic
+  (builder_finalization + builder_run_state metadata flags; zero per-type platform edits after gene).
+  REMAINING for Chris:
+  * Phase 2 (disease) + Phase 5 (chemical_condition): GROUNDED ONLY (approach docs committed). NOT
+    implemented because (a) the sandbox has NO representative test PDF (only a31b1ff3, a gene-expression
+    paper with no disease annotations or formal experimental/chemical conditions) so a meaningful e2e is
+    impossible, and (b) each carries real scope open questions (disease: write-blocked posture, ECO
+    codes, relation-vocab subset; chemical: WBMol coverage, relation types beyond has_condition). Per the
+    playbook we do NOT guess on genuine design decisions and do NOT commit prompt-unverified builders.
+    To finish them: answer the open questions in their approach docs + stage one disease and one
+    chemical-bearing PDF in the sandbox, then run the same per-type workflow (the gene/phenotype/allele
+    pattern is proven and copy-paste-able).
+  * Open questions across all four grounded types are consolidated in each docs/design/data-type-approaches/
+    <type>-approach.md "Open questions" section.
+  * Minor follow-ups (non-blocking): trim verbose materializer trace payloads; the per-type builder-tools
+    Optional-access (BuilderFinalizationOutcome.finalization) + str|None Pyright nits are type-checker
+    strictness only (all tests + e2e green) but could be tidied.
