@@ -23,7 +23,7 @@ import time
 import uuid
 from collections import deque
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from functools import lru_cache
 from typing import List, Dict, Any, Mapping, Optional
@@ -1233,6 +1233,113 @@ def _active_builder_workspace_or_none() -> ExtractionBuilderWorkspace | None:
         return None
 
 
+# Package tools that need the run-scoped extraction state (builder workspace + resolver
+# ledger + evidence records). Maps the LLM-facing tool name to the import path of the raw
+# (undecorated) implementation. These tools run as sync function tools, which the Agents
+# SDK dispatches on worker threads via asyncio.to_thread; contextvars set on the event
+# loop do not reliably appear there, but a per-run CLOSURE does (it rides in the function
+# object). So the core rebuilds each of these per run from its raw impl, binding the run
+# state inside the worker thread. Package tool bodies are unchanged (they keep calling the
+# agr_ai_curation_runtime get_active_* shims). Future work: drive this from binding
+# metadata instead of an explicit map so new tools need no core change.
+_GENE_EXPRESSION_PACKAGE = "agr_ai_curation_alliance.tools.agr_curation"
+_RUN_STATE_TOOL_IMPLS: Dict[str, str] = {
+    name: f"{_GENE_EXPRESSION_PACKAGE}:_{name}_impl"
+    for name in (
+        "resolve_domain_field_term",
+        "stage_gene_expression_observation",
+        "patch_gene_expression_observation",
+        "discard_gene_expression_observation",
+        "list_staged_gene_expression_observations",
+        "finalize_gene_expression_extraction",
+    )
+}
+
+
+def _build_run_state_bound_tool(
+    raw_func: Any,
+    existing_tool: Any,
+    *,
+    builder_workspace: ExtractionBuilderWorkspace,
+    resolver_ledger: ResolverCallLedger,
+    evidence_records: List[Dict[str, Any]],
+) -> Any:
+    """Rebuild a package tool so the run-scoped state is bound INSIDE the tool's worker
+    thread via a per-run closure.
+
+    The OpenAI Agents SDK runs sync function tools on worker threads (asyncio.to_thread).
+    Contextvars set on the event loop do not reliably appear in that thread, but a closure
+    does -- it is captured in the function object -- which is exactly why the async
+    ``record_evidence`` factory works. We capture the run's workspace/ledger/evidence in a
+    closure and bind them into the contextvars at the top of the call (running in-thread),
+    where the unchanged tool body's ``get_active_*`` shims then resolve. ``functools.wraps``
+    preserves the original signature so the LLM-facing JSON schema is identical, and the
+    tool stays sync so concurrency is unchanged (the DB call still runs in the worker
+    thread exactly as before).
+    """
+    import functools
+
+    from agents import function_tool
+
+    @function_tool(
+        strict_mode=bool(getattr(existing_tool, "strict_json_schema", True)),
+        name_override=getattr(existing_tool, "name", None) or raw_func.__name__,
+        description_override=getattr(existing_tool, "description", "") or "",
+    )
+    @functools.wraps(raw_func)
+    def _run_state_bound(*args: Any, **kwargs: Any) -> Any:
+        ev_token = set_active_evidence_records(evidence_records)
+        bw_token = set_active_extraction_builder_workspace(builder_workspace)
+        rl_token = set_active_resolver_call_ledger(resolver_ledger)
+        try:
+            return raw_func(*args, **kwargs)
+        finally:
+            reset_active_resolver_call_ledger(rl_token)
+            reset_active_extraction_builder_workspace(bw_token)
+            reset_active_evidence_records(ev_token)
+
+    return _run_state_bound
+
+
+def _bind_run_state_into_tools(
+    agent: Agent,
+    *,
+    evidence_records: List[Dict[str, Any]],
+    builder_workspace: ExtractionBuilderWorkspace,
+    resolver_ledger: ResolverCallLedger,
+) -> Agent:
+    """Replace each run-state package tool on the agent with a closure-bound rebuild for
+    this run. Non-run-state tools are left untouched. Mirrors
+    ``_adapt_tools_with_provider_adapter``'s tool-replacement pattern."""
+    rebuilt: List[Any] = []
+    bound_count = 0
+    for tool in list(getattr(agent, "tools", []) or []):
+        tool_name = _extract_tool_name(tool)
+        impl_path = _RUN_STATE_TOOL_IMPLS.get(tool_name)
+        if impl_path is None:
+            rebuilt.append(tool)
+            continue
+        raw_func = _import_callable(impl_path)
+        rebuilt.append(
+            _build_run_state_bound_tool(
+                raw_func,
+                tool,
+                builder_workspace=builder_workspace,
+                resolver_ledger=resolver_ledger,
+                evidence_records=evidence_records,
+            )
+        )
+        bound_count += 1
+    agent.tools = rebuilt
+    logger.info(
+        "Rebuilt %d run-state tool(s) with closure-bound run state for run_id=%s",
+        bound_count,
+        builder_workspace.run_id,
+        extra={"builder_run_id": builder_workspace.run_id},
+    )
+    return agent
+
+
 def _record_builder_specialist_output_failure(
     *,
     builder_workspace: ExtractionBuilderWorkspace,
@@ -1523,10 +1630,19 @@ async def _dispatch_domain_envelope_validators_for_chat(
     expected_output_type: Any,
     specialist_name: str,
     tool_name: Optional[str],
+    is_builder_envelope: bool = False,
 ) -> str:
-    """Run active domain-pack validators before extractor output reaches supervisor."""
+    """Run active domain-pack validators before extractor output reaches supervisor.
 
-    if not _is_domain_envelope_output_json(
+    Envelope extractors declare a domain-envelope output schema, so the gate below
+    recognizes their structured output. Builder/materializer agents have NO output schema
+    (expected_output_type is None) and produce their envelope via the builder workspace, so
+    that gate would short-circuit them. When the caller already holds a finalized builder
+    envelope it passes ``is_builder_envelope=True`` (with ``final_output`` set to that
+    envelope's JSON) to run the same validator dispatch on it.
+    """
+
+    if not is_builder_envelope and not _is_domain_envelope_output_json(
         final_output,
         expected_output_type=expected_output_type,
     ):
@@ -2305,6 +2421,62 @@ async def run_specialist_with_events(
         tracing_disabled=True,  # Disable to avoid nested context issues
     )
 
+    # Bind the run-scoped extraction context (evidence records, builder workspace,
+    # resolver ledger) BEFORE starting the streamed run. Runner.run_streamed() snapshots
+    # the current context for the SDK's background execution task, so any contextvar bound
+    # AFTER it is invisible to the specialist's tools (record_evidence / stage /
+    # attach_evidence / finalize), which manifests as "No active extraction builder
+    # workspace is bound to this run". This mirrors the supervisor's ordering in runner.py
+    # (bind, then run). trace_run is established earlier in the supervisor flow, so the
+    # builder run_id still matches the real trace_id.
+    evidence_workspace_token = set_active_evidence_records(live_evidence_records)
+    trace_run = get_current_extraction_trace_run()
+    parent_builder_workspace = _active_builder_workspace_or_none()
+    builder_workspace = ExtractionBuilderWorkspace(
+        run_id=trace_run.trace_id if trace_run is not None else str(uuid.uuid4()),
+        document_id=(
+            parent_builder_workspace.document_id
+            if parent_builder_workspace is not None
+            else None
+        ),
+        domain_pack_id=(
+            parent_builder_workspace.domain_pack_id
+            if parent_builder_workspace is not None
+            else None
+        ),
+        agent_id=specialist_name,
+    )
+    builder_workspace_token = set_active_extraction_builder_workspace(builder_workspace)
+    resolver_call_ledger = ResolverCallLedger(trace_id=builder_workspace.run_id)
+    resolver_call_ledger_token = set_active_resolver_call_ledger(resolver_call_ledger)
+    logger.info(
+        "%s bound extraction builder workspace before run start (run_id=%s, "
+        "document_id=%s, domain_pack_id=%s, trace_run_present=%s)",
+        specialist_name,
+        builder_workspace.run_id,
+        builder_workspace.document_id,
+        builder_workspace.domain_pack_id,
+        trace_run is not None,
+        extra={
+            "specialist_name": specialist_name,
+            "tool_name": tool_name,
+            "builder_run_id": builder_workspace.run_id,
+        },
+    )
+
+    # Rebuild the run-state package tools so the builder workspace + resolver ledger +
+    # evidence records are bound INSIDE each tool's worker thread via a per-run closure.
+    # The SDK runs sync function tools on worker threads (asyncio.to_thread) where the
+    # contextvars set above do not reliably appear; a closure does (it rides in the
+    # function object), so each tool resolves its run state regardless of the thread
+    # boundary. Tool bodies and the package contract are unchanged.
+    runtime_agent = _bind_run_state_into_tools(
+        runtime_agent,
+        evidence_records=live_evidence_records,
+        builder_workspace=builder_workspace,
+        resolver_ledger=resolver_call_ledger,
+    )
+
     # Run with streaming to capture internal events
     runner_create_started_at = time.monotonic()
     result = Runner.run_streamed(
@@ -2327,26 +2499,6 @@ async def run_specialist_with_events(
     reasoning_summary_chunks: List[str] = []
 
     stream_consume_started_at = time.monotonic()
-    evidence_workspace_token = set_active_evidence_records(live_evidence_records)
-    trace_run = get_current_extraction_trace_run()
-    parent_builder_workspace = _active_builder_workspace_or_none()
-    builder_workspace = ExtractionBuilderWorkspace(
-        run_id=trace_run.trace_id if trace_run is not None else str(uuid.uuid4()),
-        document_id=(
-            parent_builder_workspace.document_id
-            if parent_builder_workspace is not None
-            else None
-        ),
-        domain_pack_id=(
-            parent_builder_workspace.domain_pack_id
-            if parent_builder_workspace is not None
-            else None
-        ),
-        agent_id=specialist_name,
-    )
-    builder_workspace_token = set_active_extraction_builder_workspace(builder_workspace)
-    resolver_call_ledger = ResolverCallLedger(trace_id=builder_workspace.run_id)
-    resolver_call_ledger_token = set_active_resolver_call_ledger(resolver_call_ledger)
     try:
         async for event in result.stream_events():
             total_event_count += 1
@@ -3347,6 +3499,53 @@ async def run_specialist_with_events(
             )
             raise
         builder_finalization = builder_workspace.finalization
+    elif builder_finalization is not None and tool_name:
+        # Builder/materializer path: the agent finalized in-loop, so the envelope-path
+        # dispatch above was skipped. Run the SAME validator dispatch on the builder's
+        # finalized envelope so validation happens in the chat turn (extraction ->
+        # validation -> reply), matching the envelope extractors. Fold the validated
+        # envelope (DomainEnvelope shape, with findings embedded) back into the
+        # finalization so the supervisor summary + persistence carry the validated result.
+        try:
+            validated_builder_output = await _dispatch_domain_envelope_validators_for_chat(
+                json.dumps(builder_finalization.payload),
+                expected_output_type=expected_output_type,
+                specialist_name=specialist_name,
+                tool_name=tool_name,
+                is_builder_envelope=True,
+            )
+        except SpecialistOutputError as exc:
+            dispatch_errors = [
+                {
+                    **dict(error),
+                    "specialist_name": specialist_name,
+                    "tool_name": tool_name,
+                }
+                for error in getattr(exc, "details", [])
+                if isinstance(error, Mapping)
+            ]
+            if not dispatch_errors:
+                dispatch_errors = [
+                    {
+                        "message": str(exc),
+                        "reason": "domain_validator_dispatch_failed",
+                        "specialist_name": specialist_name,
+                        "tool_name": tool_name,
+                    }
+                ]
+            builder_workspace.record_validation_failure(
+                errors=dispatch_errors,
+                candidate_ids=[builder_candidate_id],
+            )
+            raise
+        try:
+            validated_builder_payload = json.loads(validated_builder_output)
+        except (TypeError, ValueError):
+            validated_builder_payload = None
+        if isinstance(validated_builder_payload, dict):
+            builder_finalization = replace(
+                builder_finalization, payload=validated_builder_payload
+            )
     phase_timings_ms["domain_validator_dispatch_ms"] = _elapsed_ms(
         validator_dispatch_started_at
     )
