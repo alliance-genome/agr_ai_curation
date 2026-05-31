@@ -293,11 +293,11 @@ clean (or issues resolved); Status Table updated; committed + pushed to main.
 |---|---|---|---|---|---|---|---|---|
 | 0 | generic builder infra + gene_expression refactor (canary) | Claude | n/a | done | 84/84 | 0 struct | clean | DONE (7d891dbe) |
 | pre | validator_materialization_invalid fix (baseline cleanup) | Claude | n/a | 16/16 | 8→0 | clean | DONE (eb59c04e) | (made the 0-struct gate genuine) |
-| 1 | gene | — | ☐ | ☐ | ☐ | ☐ | ☐ | ready (P0 done) |
-| 2 | disease | — | ☐ | ☐ | ☐ | ☐ | ☐ | ready (P0 done) |
-| 3 | phenotype | — | ☐ | ☐ | ☐ | ☐ | ☐ | ready (P0 done) |
-| 4 | allele | — | ☐ | ☐ | ☐ | ☐ | ☐ | ready (P0 done) |
-| 5 | chemical_condition | — | ☐ | ☐ | ☐ | ☐ | ☐ | ready (P0 done) |
+| 1 | gene | Claude | done | done | 172+8 | 0 struct | clean | DONE (39663f46) |
+| 2 | disease | Claude | done | ☐ | ☐ | ☐ | ☐ | grounded; impl pending open-Qs + test PDF |
+| 3 | phenotype | Claude | done | ☐ | ☐ | ☐ | ☐ | grounded; impl pending open-Qs + test PDF |
+| 4 | allele | Claude | done | ☐ | ☐ | ☐ | ☐ | grounded; impl pending open-Qs + test PDF |
+| 5 | chemical_condition | Claude | done | ☐ | ☐ | ☐ | ☐ | grounded; impl pending open-Qs + test PDF |
 
 (gene_expression = reference, already done + structurally clean as of ge17.)
 
@@ -339,3 +339,35 @@ clean (or issues resolved); Status Table updated; committed + pushed to main.
     the finalize tool; agent.yaml drops output_schema + uses the builder tool list; prompt.yaml is a
     builder tool-loop; domain_pack.yaml declares objects/fields/validator bindings. NO platform edits.
   - Sandbox reconciled to main (7d891dbe). Phases 1-5 unblocked; starting gene (Phase 1).
+- 2026-05-31 (afternoon cont.): PHASE 1 (gene) LANDED (commit 39663f46) + all 5 types grounded.
+  - gene migrated envelope→builder, mirroring gene_expression. Target is a gene_mention_evidence
+    validated-reference object; the gene VALIDATOR owns identity, so gene has NO resolver-backed
+    controlled fields and NO mirror fields (require_resolver_selections=False). Added per-domain
+    materialize_gene_builder_state (RELATIVE metadata_refs), a per-domain gene_builder_tools.py over
+    the generic finalize_builder_extraction, bindings.yaml registration (builder_finalization +
+    builder_run_state flags), agent.yaml output_schema dropped, builder-loop prompt, golden fixture,
+    contract test. E2E on a31b1ff3: routed to gene_extractor, finalize_gene_extraction called,
+    inline validation dispatched 11 bindings IN THE CHAT TURN, persisted envelope (domain_pack=gene,
+    11 gene_mention_evidence objects) = 0 structural findings (validator_resolved x11 only). 172+8+25
+    tests pass. Opus 4.8 review CLEAN.
+  - SECOND platform generalization (needed + made, reviewed clean): _RUN_STATE_TOOL_IMPLS in
+    streaming_tools.py was still a hardcoded per-type map (Phase 0 generalized only detection +
+    finalize). gene made it registry-derived from a new `builder_run_state: true` binding-metadata
+    flag — same pattern as Phase 0's builder_finalization, NO per-type names in backend/src. The
+    platform is now FULLY GENERIC for builder types: a new type needs only domain-pack/adapter files
+    + the two binding-metadata flags (builder_finalization on finalize, builder_run_state on staging
+    tools). NO platform edits for phases 2-5.
+  - Template watch-items for phases 2-5 (from gene's review): the evidence-locator contract
+    hard-requires payload section+chunk_id though the source EvidenceRecord has them Optional —
+    confirm each type's evidence tool always populates them; and trim verbose materializer trace
+    payloads.
+  - Phases 2-5 (disease/phenotype/allele/chemical_condition): GROUNDED — approach docs written under
+    docs/design/data-type-approaches/ from LinkML + the live curation DB + the existing envelope
+    packs. Each surfaced genuine OPEN QUESTIONS FOR CHRIS (see each doc's "Open questions" section):
+    mostly whether the builder preserves the existing pack's conservative posture (write-blocked /
+    mention-only / deferred fields) or expands scope, plus ontology/validator coverage gaps. Per §3
+    ("change the mechanism, not the curation target") the default is preserve-existing-posture, but
+    several are real scope decisions. BLOCKER for all four e2e gates: the sandbox has only ONE
+    processed PDF (a31b1ff3, gene-expression) — no representative disease/phenotype/allele/chemical
+    test document. Implementation of phases 2-5 awaits Chris's open-question decisions + test PDFs;
+    structural correctness is otherwise coverable via gene_expression-style unit/contract fixtures.
