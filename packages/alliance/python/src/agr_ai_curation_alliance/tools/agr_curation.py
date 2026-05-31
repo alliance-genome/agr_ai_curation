@@ -166,21 +166,21 @@ class GeneExpressionReferenceInput(_StrictToolModel):
 
 class GeneExpressionControlledFieldInput(_StrictToolModel):
     field_path: GeneExpressionControlledFieldPath
-    resolver_call_id: StrictStr
     selected_value: StrictStr
 
 
 class GeneExpressionPatchUpdateInput(_StrictToolModel):
     field_path: GeneExpressionPatchFieldPath
     string_value: Optional[StrictStr]
-    resolver_call_id: Optional[StrictStr]
     evidence_record_ids: Optional[List[StrictStr]] = Field(min_length=1, max_length=20)
 
     @model_validator(mode="after")
     def _validate_update_shape(self) -> "GeneExpressionPatchUpdateInput":
         if self.field_path in _CONTROLLED_GENE_EXPRESSION_FIELD_PATHS:
-            if not _clean_string(self.resolver_call_id):
-                raise ValueError("controlled field patches require resolver_call_id")
+            if not _clean_string(self.string_value):
+                raise ValueError(
+                    "controlled field patches require the resolved value in string_value"
+                )
             return self
         if self.field_path == "evidence_record_ids":
             if not self.evidence_record_ids:
@@ -3699,7 +3699,7 @@ def _resolver_instruction(
     if resolution_status == "resolved":
         return [
             f"Set only the controlled selector for {field_path} from the selected candidate.",
-            "Pass this resolve_domain_field_term tool call ID as resolver_call_id to the builder tool; do not author metadata.provenance.helper_selections.",
+            "When you stage this controlled selector, pass the resolved value as selected_value; provenance is verified automatically against this resolve call. Do not author metadata.provenance.helper_selections.",
         ]
     if resolution_status == "ambiguous":
         return [
@@ -4955,8 +4955,7 @@ def inspect_ontology_term(
     )
 
 
-@function_tool(strict_mode=False)
-def resolve_domain_field_term(
+def _resolve_domain_field_term_impl(
     domain_pack_id: str,
     object_type: str,
     field_path: str,
@@ -5453,40 +5452,61 @@ def _model_validation_issues(exc: ValidationError) -> List[Dict[str, Any]]:
 
 def _resolver_entry_for_controlled_field(
     *,
-    resolver_call_id: str,
     field_path: str,
-    selected_value: Optional[str] = None,
+    selected_value: Optional[str],
 ) -> Tuple[Optional[ResolverCallLedgerEntry], Optional[Dict[str, Any]]]:
-    if not _clean_string(resolver_call_id):
+    """Verify provenance for a controlled field from the resolved value the agent stages.
+
+    The agent stages ``selected_value`` -- the resolved value returned by
+    ``resolve_domain_field_term`` (e.g. ``WBbt:0006816``, ``is_expressed_in``). We look the
+    matching resolver-call-ledger entry up by (field_path, selected_value) rather than
+    asking the agent to thread the resolve call's opaque runtime tool_call_id. A value with
+    no matching resolve call has no provenance and is rejected (anti-hallucination).
+    """
+    cleaned_value = _clean_string(selected_value)
+    if not cleaned_value:
         issue = {
             "field_path": field_path,
-            "reason": "missing_resolver_call_id",
-            "message": "Controlled fields require resolver_call_id from resolve_domain_field_term.",
+            "reason": "missing_selected_value",
+            "message": "Controlled fields require the resolved value (selected_value) from resolve_domain_field_term.",
         }
         _emit_gene_expression_builder_event(
             "gene_expression_builder.missing_provenance_rejected",
             action="resolver_lookup",
-            input_summary={"field_path": field_path, "resolver_call_id": resolver_call_id},
+            input_summary={"field_path": field_path, "selected_value": selected_value},
             output_summary=issue,
             validation={"status": "failed", "issue": issue},
         )
         return None, issue
+
     try:
-        entry = get_active_resolver_call_ledger().get(resolver_call_id)
-    except (RuntimeError, KeyError) as exc:
+        ledger = get_active_resolver_call_ledger()
+    except RuntimeError as exc:
         issue = {
             "field_path": field_path,
-            "reason": "unknown_resolver_call_id",
+            "reason": "resolver_ledger_unavailable",
             "message": str(exc),
-            "resolver_call_id": resolver_call_id,
+            "selected_value": cleaned_value,
+        }
+        return None, issue
+
+    entry = ledger.find_validated_selection(field_path=field_path, selected_value=cleaned_value)
+    if entry is None:
+        issue = {
+            "field_path": field_path,
+            "reason": "unresolved_selected_value",
+            "message": (
+                f"No resolve_domain_field_term call validated '{cleaned_value}' for {field_path}; "
+                "resolve the value first, then stage it."
+            ),
+            "selected_value": cleaned_value,
         }
         _emit_gene_expression_builder_event(
             "gene_expression_builder.missing_provenance_rejected",
             action="resolver_lookup",
-            input_summary={"field_path": field_path, "resolver_call_id": resolver_call_id},
+            input_summary={"field_path": field_path, "selected_value": cleaned_value},
             output_summary=issue,
             validation={"status": "failed", "issue": issue},
-            tool_call_id=resolver_call_id,
         )
         return None, issue
 
@@ -5494,24 +5514,8 @@ def _resolver_entry_for_controlled_field(
         issue = {
             "field_path": field_path,
             "reason": "resolver_scope_mismatch",
-            "message": "resolver_call_id was not resolved for Alliance gene-expression annotations.",
-            "resolver_call_id": resolver_call_id,
-        }
-        return None, issue
-    if entry.field_path != field_path:
-        issue = {
-            "field_path": field_path,
-            "reason": "resolver_field_path_mismatch",
-            "message": f"resolver_call_id resolved {entry.field_path}, not {field_path}.",
-            "resolver_call_id": resolver_call_id,
-        }
-        return None, issue
-    if selected_value is not None and _clean_string(selected_value) != entry.selected_value:
-        issue = {
-            "field_path": field_path,
-            "reason": "resolver_selected_value_mismatch",
-            "message": "selected_value must match the validated resolver output.",
-            "resolver_call_id": resolver_call_id,
+            "message": "selected_value was not resolved for Alliance gene-expression annotations.",
+            "selected_value": cleaned_value,
         }
         return None, issue
     return entry, None
@@ -5618,8 +5622,7 @@ def _builder_summary(workspace: Any, *, include_discarded: bool = False) -> Dict
     }
 
 
-@function_tool(strict_mode=True)
-def stage_gene_expression_observation(
+def _stage_gene_expression_observation_impl(
     pending_ref_id: str,
     evidence_record_ids: Annotated[List[str], Field(min_length=1, max_length=20)],
     where_expressed_statement: str,
@@ -5671,7 +5674,6 @@ def stage_gene_expression_observation(
     resolver_entries: List[ResolverCallLedgerEntry] = []
     for controlled_field in stage_input.controlled_fields:
         entry, issue = _resolver_entry_for_controlled_field(
-            resolver_call_id=controlled_field.resolver_call_id,
             field_path=controlled_field.field_path,
             selected_value=controlled_field.selected_value,
         )
@@ -5715,8 +5717,7 @@ def stage_gene_expression_observation(
     return _ok(data=summary, count=1, lookup_status=LOOKUP_STATUS_SUCCESS)
 
 
-@function_tool(strict_mode=True)
-def patch_gene_expression_observation(
+def _patch_gene_expression_observation_impl(
     candidate_id: str,
     pending_ref_id: str,
     updates: Annotated[List[GeneExpressionPatchUpdateInput], Field(min_length=1, max_length=25)],
@@ -5792,10 +5793,9 @@ def patch_gene_expression_observation(
     )
     for update in patch_input.updates:
         if update.field_path in _CONTROLLED_GENE_EXPRESSION_FIELD_PATHS:
-            assert update.resolver_call_id is not None
             entry, issue = _resolver_entry_for_controlled_field(
-                resolver_call_id=update.resolver_call_id,
                 field_path=update.field_path,
+                selected_value=update.string_value,
             )
             if issue:
                 issues.append(issue)
@@ -5869,8 +5869,7 @@ def _set_gene_expression_patch_value(
     _set_dotted_payload_value(payload, target_path, value)
 
 
-@function_tool(strict_mode=True)
-def discard_gene_expression_observation(
+def _discard_gene_expression_observation_impl(
     candidate_id: str,
     reason: Optional[str],
 ) -> AgrQueryResult:
@@ -5921,8 +5920,7 @@ def discard_gene_expression_observation(
     return _ok(data=summary, count=summary["candidate_count"], lookup_status=LOOKUP_STATUS_SUCCESS)
 
 
-@function_tool(strict_mode=True)
-def list_staged_gene_expression_observations(
+def _list_staged_gene_expression_observations_impl(
     include_discarded: bool,
 ) -> AgrQueryResult:
     """List compact summaries for staged gene-expression observations."""
@@ -5956,8 +5954,7 @@ def list_staged_gene_expression_observations(
     return _ok(data=summary, count=summary["candidate_count"], lookup_status=LOOKUP_STATUS_SUCCESS)
 
 
-@function_tool(strict_mode=True)
-def finalize_gene_expression_extraction(
+def _finalize_gene_expression_extraction_impl(
     candidate_ids: Annotated[List[str], Field(min_length=1, max_length=50)],
 ) -> AgrQueryResult:
     """Finalize staged gene-expression candidates through the builder handoff contract."""
@@ -6087,7 +6084,7 @@ def finalize_gene_expression_extraction(
             issues.append(
                 {
                     "field_path": "controlled_fields",
-                    "reason": "missing_resolver_call_id",
+                    "reason": "missing_resolver_selection",
                     "message": "Finalized gene-expression candidates require validated resolver selections.",
                     "candidate_id": candidate_id,
                 }
@@ -6322,3 +6319,35 @@ def create_groq_agr_curation_query_tool():
         return _AGR_QUERY_CALLABLE(method=method, **forwarded_kwargs)
 
     return agr_curation_query_groq
+
+
+# ---------------------------------------------------------------------------------------
+# Public, LLM-facing FunctionTools for the run-state builder/resolver tools.
+#
+# The raw ``_*_impl`` functions above are plain sync functions that read run-scoped state
+# (builder workspace / resolver ledger / evidence records) via the agr_ai_curation_runtime
+# ``get_active_*`` shims. The OpenAI Agents SDK runs sync function tools on worker threads,
+# where event-loop contextvars do not reliably appear -- so the core rebuilds each of these
+# per run with a closure that binds the run state inside the worker thread (see
+# ``streaming_tools._bind_run_state_into_tools``). These decorated exports back the tool
+# bindings and the initial agent tool list; they are swapped for the closure-bound build at
+# run time. The tool bodies themselves are unchanged.
+# ---------------------------------------------------------------------------------------
+resolve_domain_field_term = function_tool(
+    strict_mode=False, name_override="resolve_domain_field_term"
+)(_resolve_domain_field_term_impl)
+stage_gene_expression_observation = function_tool(
+    strict_mode=True, name_override="stage_gene_expression_observation"
+)(_stage_gene_expression_observation_impl)
+patch_gene_expression_observation = function_tool(
+    strict_mode=True, name_override="patch_gene_expression_observation"
+)(_patch_gene_expression_observation_impl)
+discard_gene_expression_observation = function_tool(
+    strict_mode=True, name_override="discard_gene_expression_observation"
+)(_discard_gene_expression_observation_impl)
+list_staged_gene_expression_observations = function_tool(
+    strict_mode=True, name_override="list_staged_gene_expression_observations"
+)(_list_staged_gene_expression_observations_impl)
+finalize_gene_expression_extraction = function_tool(
+    strict_mode=True, name_override="finalize_gene_expression_extraction"
+)(_finalize_gene_expression_extraction_impl)

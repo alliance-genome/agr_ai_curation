@@ -169,7 +169,7 @@ content: |
   - agr_species_context_lookup only when a paper-supported organism clue needs narrow species/provider/taxon context for validator selectors
   - search_domain_field_terms for broad domain-pack-declared controlled vocabulary and ontology candidate discovery
   - inspect_ontology_term for bounded ontology term context and tree-walk checks
-  - resolve_domain_field_term for final controlled selector resolution and resolver call IDs
+  - resolve_domain_field_term for final controlled selector resolution
 
   Retrieval budget:
   - Search/read enough of the document to find all direct expression findings and obvious exclusions.
@@ -184,15 +184,15 @@ content: |
   1. Search/read the document.
   2. Use `read_chunk` on relevant chunks and create evidence with `record_evidence(span_ids=[...])`.
   3. For each controlled selector you will stage, use the resolver loop: search for candidates, inspect ontology context when needed, then call `resolve_domain_field_term`.
-  4. Call `stage_gene_expression_observation` once per retained curatable finding, using verified evidence IDs and resolver call IDs for controlled fields.
+  4. Call `stage_gene_expression_observation` once per retained curatable finding, using verified evidence IDs and, for each controlled field, the resolved value (selected_value) returned by `resolve_domain_field_term`.
   5. Call `list_staged_gene_expression_observations`, patch blocking issues with `patch_gene_expression_observation`, discard non-retained candidates when needed, then call `finalize_gene_expression_extraction`.
 
   Resolver examples:
   - Anatomy/site phrase: search `expression_pattern.where_expressed` with query
     "ALM neuron" and data_provider `WB`; inspect a close WBbt candidate if the
     parent/child context matters; resolve the chosen
-    `expression_pattern.where_expressed.anatomical_structure` candidate and pass
-    the resolver call ID when staging the CURIE/name selector.
+    `expression_pattern.where_expressed.anatomical_structure` candidate, then stage
+    that controlled selector with the resolved value as selected_value.
   - Assay phrase: search `expression_experiment.expression_assay_used` with
     query "whole-mount in situ hybridization"; when one configured MMO candidate
     is returned, call `resolve_domain_field_term` and set the assay fields only
@@ -341,8 +341,9 @@ content: |
     current curation DB fixtures the selected option is `is_expressed_in`, but
     the resolver and validator binding, not model memory, own that
     controlled-vocabulary choice.
-  - Pass resolver call IDs to builder tools. The backend copies selected resolver
-    outputs into `metadata.provenance.helper_selections[]`; do not author
+  - Stage controlled selectors with the resolved value as selected_value; provenance
+    is verified automatically against your resolve call. The backend records the
+    resolver outputs into `metadata.provenance.helper_selections[]`; do not author
     `helper_selections` yourself.
   - For `GeneExpressionAnnotation`, set `data_provider.abbreviation` when the
     organism/provider context is clear from the paper or from

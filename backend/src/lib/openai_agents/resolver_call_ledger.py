@@ -132,6 +132,27 @@ class ResolverCallLedger:
         )
         return entry
 
+    def find_validated_selection(
+        self, *, field_path: str, selected_value: str
+    ) -> ResolverCallLedgerEntry | None:
+        """Find a recorded resolver selection by its field_path and resolved value.
+
+        This lets the builder verify provenance from what the agent naturally stages -- the
+        resolved value for a controlled field -- without requiring it to thread the resolve
+        call's opaque runtime tool_call_id. selected_value is the canonical resolved value
+        the resolve output exposes (e.g. 'WBbt:0006816', 'is_expressed_in'). Among equally
+        matching entries the most recently recorded wins (entries preserve insertion order).
+        """
+        target_field = _optional_string(field_path)
+        target_value = _optional_string(selected_value)
+        if not target_field or not target_value:
+            return None
+        match: ResolverCallLedgerEntry | None = None
+        for entry in self._entries.values():
+            if entry.field_path == target_field and entry.selected_value == target_value:
+                match = entry
+        return match
+
     def get(self, tool_call_id: str) -> ResolverCallLedgerEntry:
         normalized_call_id = _required_string(tool_call_id, "resolver_call_id")
         try:
