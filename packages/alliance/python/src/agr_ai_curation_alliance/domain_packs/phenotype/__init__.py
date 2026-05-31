@@ -24,12 +24,16 @@ from src.schemas.domain_envelope import (
 
 from ..schema_refs import ALLIANCE_LINKML_COMMIT, ALLIANCE_LINKML_PROVIDER_KEY
 from .constants import (
+    PHENOTYPE_ANNOTATION_KIND,
+    PHENOTYPE_ANNOTATION_MODEL_ID,
+    PHENOTYPE_ANNOTATION_OBJECT_ROLE,
     PHENOTYPE_CORE_SCHEMA_SOURCE_FILE,
     PHENOTYPE_DOMAIN_PACK_DIR_NAME,
     PHENOTYPE_DOMAIN_PACK_ID,
     PHENOTYPE_DOMAIN_PACK_VERSION,
     PHENOTYPE_FIXTURE_PACK_ID,
     PHENOTYPE_LINKML_SCHEMA_SOURCE_FILE,
+    PHENOTYPE_MATERIALIZER_ID,
     PHENOTYPE_OBJECT_TYPE,
     PHENOTYPE_ONTOLOGY_TERM_SCHEMA_SOURCE_FILE,
     PHENOTYPE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID,
@@ -39,6 +43,12 @@ from .constants import (
     PHENOTYPE_TERM_OBJECT_TYPE,
     PHENOTYPE_TERM_VALIDATOR_BINDING_ID,
     get_phenotype_domain_pack_metadata_path,
+)
+from .conversion import (
+    PhenotypeBuilderExtractionOutput,
+    PhenotypeMaterializationResult,
+    materialize_phenotype_builder_state,
+    validate_phenotype_builder_objects,
 )
 from .export import (
     PHENOTYPE_EXPORT_SCHEMA_VERSION,
@@ -1043,12 +1053,16 @@ def _optional_bool(value: Any, field_name: str) -> bool | None:
 
 
 __all__ = [
+    "PHENOTYPE_ANNOTATION_KIND",
+    "PHENOTYPE_ANNOTATION_MODEL_ID",
+    "PHENOTYPE_ANNOTATION_OBJECT_ROLE",
     "PHENOTYPE_DOMAIN_PACK_DIR_NAME",
     "PHENOTYPE_DOMAIN_PACK_ID",
     "PHENOTYPE_DOMAIN_PACK_VERSION",
     "PHENOTYPE_EXPORT_SCHEMA_VERSION",
     "PHENOTYPE_EXPORT_TARGET_ID",
     "PHENOTYPE_FIXTURE_PACK_ID",
+    "PHENOTYPE_MATERIALIZER_ID",
     "PHENOTYPE_OBJECT_TYPE",
     "PHENOTYPE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID",
     "PHENOTYPE_REQUIRED_BEFORE_WRITE",
@@ -1059,8 +1073,12 @@ __all__ = [
     "PHENOTYPE_TERM_VALIDATOR_BINDING_ID",
     "PhenotypeAnnotationExportAdapter",
     "PhenotypeAnnotationSubmissionBlockerAdapter",
+    "PhenotypeBuilderExtractionOutput",
+    "PhenotypeMaterializationResult",
     "build_phenotype_annotation_export_payload",
     "build_pending_phenotype_envelope_from_tool_verified_fixture",
     "get_phenotype_domain_pack_metadata_path",
+    "materialize_phenotype_builder_state",
+    "validate_phenotype_builder_objects",
     "validate_pending_phenotype_envelope",
 ]

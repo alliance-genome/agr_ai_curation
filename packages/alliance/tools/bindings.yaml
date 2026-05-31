@@ -917,6 +917,89 @@ tools:
         display_name: Finalize Gene Extraction
       documentation:
         summary: Materializes staged gene_mention_evidence candidates into the GeneExtractionResultEnvelope payload, then finalizes through the project-agnostic builder handoff.
+  # ---------------------------------------------------------------------------------------
+  # Phenotype extractor builder tools (Phase 3 envelope -> builder migration). Per-domain module
+  # phenotype_builder_tools.py over the project-agnostic ExtractionBuilderWorkspace. The active
+  # phenotype_term_ontology_validator resolves the staged term inline, so there are NO
+  # resolver-backed controlled fields here (preserve the existing-pack posture).
+  # ---------------------------------------------------------------------------------------
+  - tool_id: stage_phenotype_observation
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.phenotype_builder_tools:stage_phenotype_observation
+    required_context: []
+    description: Stage one retained, evidence-backed phenotype assertion candidate with a free-text statement, pending subject/term references, and source mentions
+    source_file: python/src/agr_ai_curation_alliance/tools/phenotype_builder_tools.py
+    metadata:
+      name: Stage Phenotype Observation
+      category: Database
+      # Run-state builder tool: the platform closure-binds the active builder workspace +
+      # evidence records into this tool per run (streaming_tools._bind_run_state_into_tools).
+      builder_run_state: true
+      audit:
+        display_name: Stage Phenotype Observation
+      documentation:
+        summary: Stages one PhenotypeAnnotation builder candidate from verified evidence, a free-text phenotype statement, and pending subject/term references. The active validators own final identity.
+  - tool_id: patch_phenotype_observation
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.phenotype_builder_tools:patch_phenotype_observation
+    required_context: []
+    description: Patch enumerated fields on a staged phenotype assertion candidate
+    source_file: python/src/agr_ai_curation_alliance/tools/phenotype_builder_tools.py
+    metadata:
+      name: Patch Phenotype Observation
+      category: Database
+      builder_run_state: true
+      audit:
+        display_name: Patch Phenotype Observation
+      documentation:
+        summary: Applies bounded repairs to a staged PhenotypeAnnotation candidate.
+  - tool_id: discard_phenotype_observation
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.phenotype_builder_tools:discard_phenotype_observation
+    required_context: []
+    description: Discard one staged phenotype assertion candidate
+    source_file: python/src/agr_ai_curation_alliance/tools/phenotype_builder_tools.py
+    metadata:
+      name: Discard Phenotype Observation
+      category: Database
+      builder_run_state: true
+      audit:
+        display_name: Discard Phenotype Observation
+      documentation:
+        summary: Marks one staged PhenotypeAnnotation candidate as discarded without deleting the builder trace.
+  - tool_id: list_staged_phenotype_observations
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.phenotype_builder_tools:list_staged_phenotype_observations
+    required_context: []
+    description: List compact summaries for staged phenotype assertion candidates
+    source_file: python/src/agr_ai_curation_alliance/tools/phenotype_builder_tools.py
+    metadata:
+      name: List Staged Phenotype Observations
+      category: Database
+      builder_run_state: true
+      audit:
+        display_name: List Staged Phenotype Observations
+      documentation:
+        summary: Returns compact builder state summaries for staged PhenotypeAnnotation candidates.
+  - tool_id: finalize_phenotype_extraction
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.phenotype_builder_tools:finalize_phenotype_extraction
+    required_context: []
+    description: Finalize staged phenotype assertions through the extraction builder handoff
+    source_file: python/src/agr_ai_curation_alliance/tools/phenotype_builder_tools.py
+    metadata:
+      name: Finalize Phenotype Extraction
+      category: Database
+      # Marks this tool as a builder-materializer finalize tool. The platform runtime derives
+      # the set of builder finalize-tool names from this flag
+      # (streaming_tools._builder_finalization_tool_names) so this is a domain-pack edit, not a
+      # platform edit.
+      builder_finalization: true
+      builder_run_state: true
+      audit:
+        display_name: Finalize Phenotype Extraction
+      documentation:
+        summary: Materializes staged PhenotypeAnnotation candidates into the PhenotypeResultEnvelope payload, then finalizes through the project-agnostic builder handoff.
   - tool_id: search_document
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_search_document_tool

@@ -1,0 +1,270 @@
+fixture_pack_id: cilia_builder_pending
+domain_pack_id: agr.alliance.phenotype
+fixtures_api_version: 1.0.0
+display_name: Cilia builder pending phenotype annotation
+description: Production-like pending PhenotypeAnnotation produced by the phenotype builder materializer with RELATIVE metadata_refs.
+fixtures:
+- name: che2_cilia_builder_pending
+  description: One pending PhenotypeAnnotation (abnormal sensory cilia morphology) with pending subject/term/reference and
+    verified evidence.
+  envelope:
+    envelope_id: phenotype-builder-cilia-wb
+    domain_pack_id: agr.alliance.phenotype
+    domain_pack_version: 0.1.0
+    status: extracted
+    schema_ref:
+      schema_id: alliance.linkml.PhenotypeAnnotation
+      provider: alliance_linkml
+      name: PhenotypeAnnotation
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/phenotypeAndDiseaseAnnotation.yaml
+      definition_state: in_development
+      definition_notes:
+      - Pending envelope target; concrete phenotype annotation subtype is unresolved.
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+            class: PhenotypeAnnotation
+    objects:
+    - object_type: PhenotypeSubject
+      object_role: validated_reference
+      pending_ref_id: phenotype-subject-1
+      status: pending
+      definition_state: in_development
+      payload:
+        resolution_state: pending_entity_resolution
+        subject_identifier: WB:WBGene00000111
+        subject_label: che-2
+        subject_type: gene
+        taxon: NCBITaxon:6239
+      schema_ref:
+        schema_id: alliance.linkml.BiologicalEntity
+        provider: alliance_linkml
+        name: BiologicalEntity
+        version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+        uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/core.yaml
+        definition_state: in_development
+        definition_notes:
+        - Generic subject placeholder until the Gene, Allele, or AGM subtype is resolved.
+        metadata: {}
+      definition_notes:
+      - Pending subject reference; concrete Gene, Allele, or AGM subtype must be resolved before export.
+      metadata:
+        object_role: validated_reference
+        validation_state: pending_entity_resolution
+        validator_binding_id: phenotype_subject_entity_validator
+    - object_type: PhenotypeTerm
+      object_role: validated_reference
+      pending_ref_id: phenotype-term-1
+      status: pending
+      definition_state: in_development
+      payload:
+        resolution_state: pending_ontology_resolution
+        curie: null
+        label: abnormal sensory cilium morphology
+        source_mentions:
+        - sensory cilia were truncated in mutant animals
+        ontology_lookup_hint:
+          data_provider: WB
+          taxon_id: NCBITaxon:6239
+          evidence_record_id: evidence-cilia-1
+        export_state: blocked_pending_ontology_resolution
+        write_blocked_reason: phenotype term CURIE unresolved
+      schema_ref:
+        schema_id: alliance.linkml.PhenotypeTerm
+        provider: alliance_linkml
+        name: PhenotypeTerm
+        version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+        uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/ontologyTerm.yaml
+        definition_state: stable
+        definition_notes: []
+        metadata: {}
+      evidence_record_ids:
+      - evidence-cilia-1
+      metadata:
+        object_role: validated_reference
+        validation_state: pending_ontology_resolution
+        validator_binding_id: phenotype_term_ontology_validator
+        export_state: blocked_pending_ontology_resolution
+        write_blocked_reason: phenotype term CURIE unresolved
+    - object_type: Reference
+      object_role: validated_reference
+      pending_ref_id: phenotype-reference-1
+      status: pending
+      definition_state: in_development
+      payload: {}
+      schema_ref:
+        schema_id: alliance.linkml.Reference
+        provider: alliance_linkml
+        name: Reference
+        version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+        uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/reference.yaml
+        definition_state: stable
+        definition_notes: []
+        metadata: {}
+      metadata:
+        object_role: validated_reference
+        validation_state: pending_reference_resolution
+        validator_binding_id: phenotype_reference_validator
+    - object_type: EvidenceQuote
+      object_role: metadata_only
+      pending_ref_id: evidence-quote-1-1
+      status: pending
+      definition_state: in_development
+      payload:
+        evidence_record_id: evidence-cilia-1
+        verified_quote: Sensory cilia were severely truncated in che-2 mutant amphid neurons.
+        entity: che-2
+        page: 6
+        section: Results
+        subsection: Cilia morphology
+        chunk_id: chunk-cilia-1
+      evidence_record_ids:
+      - evidence-cilia-1
+      metadata:
+        object_role: metadata_only
+    - object_type: PhenotypeAnnotation
+      object_role: curatable_unit
+      pending_ref_id: phenotype-annotation-1
+      status: pending
+      definition_state: in_development
+      payload:
+        annotation_kind: phenotype_assertion
+        phenotype_annotation_object: abnormal sensory cilia morphology
+        phenotype_annotation_subject:
+          resolution_state: pending_entity_resolution
+          subject_identifier: WB:WBGene00000111
+          subject_label: che-2
+          subject_type: gene
+          taxon: NCBITaxon:6239
+        phenotype_terms:
+        - resolution_state: pending_ontology_resolution
+          curie: null
+          label: abnormal sensory cilium morphology
+          source_mentions:
+          - sensory cilia were truncated in mutant animals
+          ontology_lookup_hint:
+            data_provider: WB
+            taxon_id: NCBITaxon:6239
+            evidence_record_id: evidence-cilia-1
+          export_state: blocked_pending_ontology_resolution
+          write_blocked_reason: phenotype term CURIE unresolved
+        single_reference: {}
+        evidence_quote:
+          evidence_record_id: evidence-cilia-1
+        evidence_record_ids:
+        - evidence-cilia-1
+        source_mentions:
+        - sensory cilia were truncated in mutant animals
+        negated: false
+      model_ref: PhenotypeAnnotationPayload
+      schema_ref:
+        schema_id: alliance.linkml.PhenotypeAnnotation
+        provider: alliance_linkml
+        name: PhenotypeAnnotation
+        version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+        uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/phenotypeAndDiseaseAnnotation.yaml
+        definition_state: in_development
+        definition_notes:
+        - Pending envelope target; concrete phenotype annotation subtype is unresolved.
+        metadata:
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: PhenotypeAnnotation
+      definition_notes:
+      - Pending only; export is blocked until subject, reference, ontology, and write targets are resolved.
+      - Evidence and pending references are materialized by backend builder finalization.
+      object_refs:
+      - pending_ref_id: phenotype-subject-1
+        object_type: PhenotypeSubject
+      - pending_ref_id: phenotype-term-1
+        object_type: PhenotypeTerm
+      - pending_ref_id: phenotype-reference-1
+        object_type: Reference
+      - pending_ref_id: evidence-quote-1-1
+        object_type: EvidenceQuote
+      evidence_record_ids:
+      - evidence-cilia-1
+      metadata_refs:
+      - metadata_path: raw_mentions[0]
+        role: source_mention
+      - metadata_path: evidence_records[0]
+        role: verified_evidence
+      metadata:
+        object_role: curatable_unit
+        association_kind: phenotype_assertion
+        validation_state: pending_entity_resolution
+        export_behavior:
+          status: blocked
+          exportable: false
+          submit: false
+        write_behavior:
+          status: blocked
+        materialized_by: agr.alliance.phenotype.builder_materializer.v1
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+            class: PhenotypeAnnotation
+    validation_findings:
+    - severity: info
+      status: resolved
+      code: alliance.phenotype.tool_verified
+      message: Pending PhenotypeAnnotation was materialized from builder-staged evidence.
+      object_ref:
+        pending_ref_id: phenotype-annotation-1
+        object_type: PhenotypeAnnotation
+    history:
+    - event_type: created
+      timestamp: '2026-05-31T00:00:00Z'
+      actor_type: system
+      message: Loaded cilia pending PhenotypeAnnotation builder fixture.
+      object_ref:
+        pending_ref_id: phenotype-annotation-1
+        object_type: PhenotypeAnnotation
+    metadata:
+      semantic_source: domain_envelope.objects
+      legacy_semantic_lists: []
+      extraction_summary: Finalized phenotype extraction from builder-staged assertions.
+      extraction_metadata:
+        raw_mentions:
+        - mention: sensory cilia were truncated in mutant animals
+          entity_type: phenotype
+          evidence_record_ids:
+          - evidence-cilia-1
+        evidence_records:
+        - evidence_record_id: evidence-cilia-1
+          entity: che-2
+          verified_quote: Sensory cilia were severely truncated in che-2 mutant amphid neurons.
+          page: 6
+          section: Results
+          subsection: Cilia morphology
+          chunk_id: chunk-cilia-1
+        normalization_notes:
+        - Phenotype annotation envelope was assembled by backend materialization from builder state.
+        exclusions: []
+        ambiguities: []
+        notes: []
+        provenance:
+          source: agr.alliance.phenotype.builder_materializer.v1
+          produced_by: phenotype_extractor
+          builder_run_id: pheno-smoke
+          source_candidate_ids:
+          - phenotype-candidate-1
+      run_summary:
+        candidate_count: 1
+        kept_count: 1
+        excluded_count: 0
+        ambiguous_count: 0
+        warnings: []
+      export_behavior:
+        status: blocked
+      write_behavior:
+        status: blocked

@@ -604,6 +604,19 @@ fixture_packs:
     definition_state: in_development
     definition_notes:
       - Fixtures use curatable_objects/domain-envelope objects as the semantic source of truth.
+  - fixture_pack_id: cilia_builder_pending
+    display_name: Builder-materialized pending phenotype fixtures
+    path: fixtures/cilia_builder_pending.yaml
+    description: Production-like pending PhenotypeAnnotation envelope produced by the phenotype builder materializer with RELATIVE metadata_refs.
+    object_types:
+      - PhenotypeAnnotation
+      - PhenotypeSubject
+      - PhenotypeTerm
+      - Reference
+      - EvidenceQuote
+    definition_state: in_development
+    definition_notes:
+      - Builder-pattern golden fixture; metadata_refs are RELATIVE to envelope.metadata.extraction_metadata.
 metadata:
   base_pack_id: agr.alliance.base
   object_role_key: object_role
