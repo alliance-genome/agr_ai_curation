@@ -486,6 +486,7 @@ def _single_result_finding(result):
         if finding.code in {
             "domain_pack.validator_resolved",
             "domain_pack.validator_unresolved",
+            "domain_pack.validator_error",
         }
     )
 
@@ -842,10 +843,14 @@ def test_bad_batch_result_identity_becomes_controlled_unresolved_result(
         finding
         for finding in result.envelope.validation_findings
         if finding.code
-        in {"domain_pack.validator_resolved", "domain_pack.validator_unresolved"}
+        in {
+            "domain_pack.validator_resolved",
+            "domain_pack.validator_unresolved",
+            "domain_pack.validator_error",
+        }
     ]
     assert [finding.code for finding in findings] == [
-        "domain_pack.validator_unresolved",
+        "domain_pack.validator_error",
         "domain_pack.validator_resolved",
     ]
 
@@ -1389,7 +1394,7 @@ def test_invalid_validator_schema_becomes_controlled_unresolved_result(
     )
 
     finding = _single_result_finding(result)
-    assert finding.code == "domain_pack.validator_unresolved"
+    assert finding.code == "domain_pack.validator_error"
     assert finding.details["failure_classification"] == "invalid_schema"
     assert "incompatible output" in result.validator_results[0].explanation
 

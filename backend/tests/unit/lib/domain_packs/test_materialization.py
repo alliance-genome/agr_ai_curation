@@ -1027,6 +1027,35 @@ def test_unresolved_validator_result_materializes_missing_field_finding():
     assert finding.details["lookup_attempts"][0]["lookup_status"] == "not_found"
 
 
+def test_errored_validator_result_materializes_validator_error_finding():
+    """A validator that could not RUN its lookup yields a distinct validator_error finding.
+
+    This is the non-fatal path: outcome 'error' (e.g. a flaky validator tool call) must surface as
+    a separate, more prominent finding the curator reviews, not as validator_unresolved and not as a
+    raised exception that loses the extraction.
+    """
+    metadata = _validator_metadata()
+    envelope = _validator_envelope()
+    item = _validator_item(
+        metadata,
+        envelope,
+        status="unresolved",
+        missing_expected_fields=["curie", "symbol"],
+        lookup_outcome="error",
+    )
+
+    result = materialize_validator_results_into_envelope(envelope, metadata, [item])
+
+    assert result.materialized_objects == ()
+    finding = result.appended_findings[0]
+    assert finding.code == "domain_pack.validator_error"
+    assert finding.status is ValidationFindingStatus.OPEN
+    assert finding.severity in (
+        ValidationFindingSeverity.ERROR,
+        ValidationFindingSeverity.BLOCKER,
+    )
+
+
 def test_ambiguous_validator_result_preserves_candidate_diagnostics():
     metadata = _validator_metadata()
     envelope = _validator_envelope()

@@ -1855,18 +1855,40 @@ async def _dispatch_domain_envelope_validators_for_chat(
             dispatch_result=dispatch_result,
         )
         if has_validator_error:
+            # A validator could not RUN its lookup (e.g. a flaky validator tool call). This is NOT
+            # fatal: the dispatch already recorded it as an OPEN `validator_error` finding on the
+            # envelope, so the extraction persists and the curator reviews the flagged field. Log it
+            # (with the underlying error) so legitimate validator failures stay debuggable, and emit
+            # a non-fatal event for the UI/trace. Genuine crashes are still raised by `except` below.
             error_details = _validator_dispatch_error_details(dispatch_result)
-            error_message = (
-                "Domain-envelope validator dispatch reported execution errors."
+            logger.warning(
+                "%s chat domain-envelope validation recorded %s validator error(s); "
+                "persisted as validator_error finding(s) for curator review (non-fatal)",
+                specialist_name,
+                len(error_details),
+                extra={
+                    "specialist_name": specialist_name,
+                    "tool_name": tool_name,
+                    "domain_pack_id": envelope.domain_pack_id,
+                    "operation": "chat_domain_envelope_validation",
+                    "validator_dispatch_errors": error_details,
+                },
             )
-            if error_details:
-                error_message = str(error_details[0].get("message") or error_message)
-            raise SpecialistOutputError(
-                specialist_name=specialist_name,
-                output_type_name=getattr(expected_output_type, "__name__", "response"),
-                message=error_message,
-                details=error_details,
-            )
+            add_specialist_event({
+                "type": "SPECIALIST_ERROR",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "details": {
+                    "specialist": specialist_name,
+                    "error": (
+                        "Domain-envelope validator dispatch recorded validator error(s); "
+                        "persisted as validator_error findings for curator review."
+                    ),
+                    "reason": "domain_validator_dispatch_error",
+                    "severity": "warning",
+                    "fatal": False,
+                    "validatorDispatchErrors": error_details,
+                },
+            })
 
         logger.info(
             "%s chat domain-envelope validation dispatched %s binding(s), "

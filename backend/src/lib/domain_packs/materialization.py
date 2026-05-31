@@ -870,6 +870,14 @@ def _finding_for_validator_result(
 ) -> ValidationFinding:
     result = item.result
     resolved = result.status == "resolved"
+    # A validator that could not RUN its lookup (e.g. a flaky validator tool call) records a
+    # lookup attempt with outcome "error". That is distinct from a validator that ran and found
+    # no match ("unresolved"): surface it as a separate, more prominent validator_error finding so
+    # curators see it and we can grep legitimate validator failures in the logs. It is NOT fatal to
+    # the chat turn — the extraction persists and the flagged field awaits curator review.
+    is_validator_error = not resolved and any(
+        attempt.outcome == "error" for attempt in result.lookup_attempts
+    )
     details = _validator_result_finding_details(
         item,
         source_envelope_revision=source_envelope_revision,
@@ -880,32 +888,40 @@ def _finding_for_validator_result(
             error_type=DomainEnvelopeMaterializationError,
         )
 
+    if resolved:
+        severity = ValidationFindingSeverity.INFO
+        finding_status = ValidationFindingStatus.RESOLVED
+        code = "domain_pack.validator_resolved"
+        outcome_label = "resolved"
+    elif is_validator_error:
+        severity = (
+            ValidationFindingSeverity.BLOCKER
+            if item.match.binding.blocking
+            else ValidationFindingSeverity.ERROR
+        )
+        finding_status = ValidationFindingStatus.OPEN
+        code = "domain_pack.validator_error"
+        outcome_label = "could not be run for"
+    else:
+        severity = (
+            ValidationFindingSeverity.BLOCKER
+            if item.match.binding.blocking
+            else ValidationFindingSeverity.WARNING
+        )
+        finding_status = ValidationFindingStatus.OPEN
+        code = "domain_pack.validator_unresolved"
+        outcome_label = "did not resolve"
+
     return ValidationFinding(
-        severity=(
-            ValidationFindingSeverity.INFO
-            if resolved
-            else (
-                ValidationFindingSeverity.BLOCKER
-                if item.match.binding.blocking
-                else ValidationFindingSeverity.WARNING
-            )
-        ),
-        status=(
-            ValidationFindingStatus.RESOLVED
-            if resolved
-            else ValidationFindingStatus.OPEN
-        ),
-        code=(
-            "domain_pack.validator_resolved"
-            if resolved
-            else "domain_pack.validator_unresolved"
-        ),
+        severity=severity,
+        status=finding_status,
+        code=code,
         message=(
             result.curator_message
             or result.explanation
             or (
                 f"Validator binding '{item.request.validator_binding_id}' "
-                f"{'resolved' if resolved else 'did not resolve'} the target."
+                f"{outcome_label} the target."
             )
         ),
         object_ref=_match_object_ref(item.match),

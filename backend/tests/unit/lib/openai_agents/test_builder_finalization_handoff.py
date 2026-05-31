@@ -253,9 +253,15 @@ async def test_builder_finalized_specialist_skips_model_authored_output_staging(
 ):
     captured_events = []
     captured_trace_events = []
+    dispatched = {}
 
-    async def _unexpected_validator_dispatch(*_args, **_kwargs):
-        pytest.fail("builder-finalized output must not run domain validators")
+    async def _record_validator_dispatch(serialized_payload, *_args, **_kwargs):
+        # A1: builder-finalized output DOES run domain validators inline (extraction ->
+        # validation -> reply). Echo the payload back as the validated envelope; validation
+        # makes no changes in this test.
+        dispatched["called"] = True
+        dispatched["is_builder_envelope"] = _kwargs.get("is_builder_envelope")
+        return serialized_payload
 
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
@@ -293,7 +299,7 @@ async def test_builder_finalized_specialist_skips_model_authored_output_staging(
     monkeypatch.setattr(
         streaming_tools,
         "_dispatch_domain_envelope_validators_for_chat",
-        _unexpected_validator_dispatch,
+        _record_validator_dispatch,
     )
     monkeypatch.setattr(
         builder,
@@ -335,6 +341,9 @@ async def test_builder_finalized_specialist_skips_model_authored_output_staging(
         for event in captured_trace_events
         if event.get("event_type") == "extraction_builder.finalization_decision"
     ]
+    # A1: validators run on the builder-finalized envelope in the chat turn.
+    assert dispatched["called"] is True
+    assert dispatched["is_builder_envelope"] is True
 
 
 @pytest.mark.asyncio

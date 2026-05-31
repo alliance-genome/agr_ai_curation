@@ -889,6 +889,7 @@ async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(mo
     dispatched = {}
 
     validated_envelope = SimpleNamespace(
+        metadata={"validated": True},
         model_dump=lambda mode="json": {
             "envelope_id": "chat-runtime",
             "domain_pack_id": "gene",
@@ -1128,16 +1129,23 @@ async def test_chat_domain_envelope_dispatch_surfaces_validator_lookup_errors(
         lambda request, *, binding: _errored_gene_validator_payload(request),
     )
 
-    with pytest.raises(
-        streaming_tools.SpecialistOutputError,
-        match="Validator agent execution failed",
-    ):
+    # A validator that could not RUN its lookup is NOT fatal: the dispatch records a
+    # validator_error finding and the envelope still persists for curator review.
+    serialized_envelope = (
         await streaming_tools._dispatch_domain_envelope_validators_for_chat(
             _gene_extractor_domain_output(),
             expected_output_type=GeneExtractionResultEnvelope,
             specialist_name="Gene Extraction",
             tool_name="ask_gene_extractor_specialist",
         )
+    )
+
+    envelope_payload = json.loads(serialized_envelope)
+    finding_codes = [
+        finding.get("code")
+        for finding in envelope_payload.get("validation_findings", [])
+    ]
+    assert "domain_pack.validator_error" in finding_codes
 
     dispatch_complete = [
         event
@@ -1146,7 +1154,6 @@ async def test_chat_domain_envelope_dispatch_surfaces_validator_lookup_errors(
         and event["type"] == "TOOL_COMPLETE"
     ][0]
     assert dispatch_complete["details"]["success"] is False
-    assert "(unresolved 1)" in dispatch_complete["details"]["friendlyName"]
 
     lookup_complete = [
         event
@@ -1160,12 +1167,14 @@ async def test_chat_domain_envelope_dispatch_surfaces_validator_lookup_errors(
         "Validator agent execution failed"
     )
 
+    # The dispatch error is reported as a NON-FATAL specialist event, not a raised exception.
     specialist_error = [
         event
         for event in emitted
         if event["type"] == "SPECIALIST_ERROR"
     ][0]
-    assert specialist_error["details"]["reason"] == "domain_validator_dispatch_failed"
+    assert specialist_error["details"]["reason"] == "domain_validator_dispatch_error"
+    assert specialist_error["details"]["fatal"] is False
     assert specialist_error["details"]["validatorDispatchErrors"][0]["reason"] == (
         "domain_validator_dispatch_failed"
     )
