@@ -291,12 +291,13 @@ clean (or issues resolved); Status Table updated; committed + pushed to main.
 
 | Phase | Type | Owner | Approach doc | Code | Unit | E2E | Opus review | Status |
 |---|---|---|---|---|---|---|---|---|
-| 0 | generic builder infra + gene_expression refactor (canary) | — | n/a | ☐ | ☐ | ☐ | ☐ | pending |
-| 1 | gene | — | ☐ | ☐ | ☐ | ☐ | ☐ | blocked by P0 |
-| 2 | disease | — | ☐ | ☐ | ☐ | ☐ | ☐ | blocked by P0 |
-| 3 | phenotype | — | ☐ | ☐ | ☐ | ☐ | ☐ | blocked by P0 |
-| 4 | allele | — | ☐ | ☐ | ☐ | ☐ | ☐ | blocked by P0 |
-| 5 | chemical_condition | — | ☐ | ☐ | ☐ | ☐ | ☐ | blocked by P0 |
+| 0 | generic builder infra + gene_expression refactor (canary) | Claude | n/a | done | 84/84 | 0 struct | clean | DONE (7d891dbe) |
+| pre | validator_materialization_invalid fix (baseline cleanup) | Claude | n/a | 16/16 | 8→0 | clean | DONE (eb59c04e) | (made the 0-struct gate genuine) |
+| 1 | gene | — | ☐ | ☐ | ☐ | ☐ | ☐ | ready (P0 done) |
+| 2 | disease | — | ☐ | ☐ | ☐ | ☐ | ☐ | ready (P0 done) |
+| 3 | phenotype | — | ☐ | ☐ | ☐ | ☐ | ☐ | ready (P0 done) |
+| 4 | allele | — | ☐ | ☐ | ☐ | ☐ | ☐ | ready (P0 done) |
+| 5 | chemical_condition | — | ☐ | ☐ | ☐ | ☐ | ☐ | ready (P0 done) |
 
 (gene_expression = reference, already done + structurally clean as of ge17.)
 
@@ -307,3 +308,34 @@ clean (or issues resolved); Status Table updated; committed + pushed to main.
 - 2026-05-31: Guide created. gene_expression reference is structurally clean (ge17: 0 structural
   findings). Curation DB readonly confirmed (189 tables); LinkML clone present; literature DB
   tunnel down. Builder anatomy mapped (§2). Awaiting Chris's go to launch the workflow.
+- 2026-05-31 (afternoon, autonomous run): FOUNDATION LANDED ON MAIN.
+  - Sandbox worktree had diverged (stale base 7e343619 + 21 dirty files == main content); reconciled
+    to clean main with zero progress lost (all 20 tracked dirty files were byte-identical to main).
+  - Prerequisite bug fix `validator_materialization_invalid` (commit eb59c04e): the runbook's
+    "ge17 = 0 structural findings" baseline was actually inaccurate — a fresh baseline run on
+    unmodified main reproduced validator_materialization_invalid. Root cause: scalar validator
+    bindings (e.g. subject_gene_validation) report their raw lookup hit in `resolved_objects` as
+    DIAGNOSTIC context (object_type + resolved_id/provider_data, no canonical_id/payload), but
+    `_looks_like_materializable_object` treated any object with an object_type key as a
+    materialization candidate, tripping the strict `canonical_id is required` check. Fix: identify
+    materialization payloads by canonical_id/payload (not object_type); diagnostic projections are
+    skipped, genuine validated_reference payloads still fully validated. gene_expression e2e:
+    validator_materialization_invalid 8 → 0. Unit RED→GREEN (16/16), Opus 4.8 review CLEAN. This
+    makes the "0 structural findings" gate GENUINE for all per-type phases.
+  - Phase 0 (commit 7d891dbe): builder detection generalized — `_BUILDER_MATERIALIZER_FINALIZATION_TOOLS`
+    frozenset replaced by `_builder_finalization_tool_names()` deriving the finalize-tool set from a
+    `builder_finalization: true` tool-binding metadata flag (forbid-output-schema guard preserved);
+    new domain-agnostic `builder_finalization.py` finalize orchestration over ExtractionBuilderWorkspace;
+    `_finalize_gene_expression_extraction_impl` refactored into a thin adapter delegating to
+    `finalize_builder_extraction(materialize=_materialize_gene_expression_with_events, ...)`.
+    gene_expression canary: 84/84 unit + e2e 0 structural findings (no regression). Opus 4.8 review
+    CLEAN. Non-blocking follow-ups (iterate later): the `gene_expression_materializer.completed`
+    trace event no longer carries `materialized_candidate_id` (observability only); error-path
+    message strings now prefixed with the tool name (no test asserts them).
+  - PER-TYPE TEMPLATE for phases 1-5: copy gene_expression — add a `materialize_<type>_builder_state`
+    in `domain_packs/<type>/conversion.py`; a thin finalize adapter that calls
+    `finalize_builder_extraction(...)` with that materializer + `materialized_candidate_prefix`;
+    register the finalize/stage tools in bindings.yaml WITH `metadata.builder_finalization: true` on
+    the finalize tool; agent.yaml drops output_schema + uses the builder tool list; prompt.yaml is a
+    builder tool-loop; domain_pack.yaml declares objects/fields/validator bindings. NO platform edits.
+  - Sandbox reconciled to main (7d891dbe). Phases 1-5 unblocked; starting gene (Phase 1).
