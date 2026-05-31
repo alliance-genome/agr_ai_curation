@@ -465,13 +465,24 @@ clean (or issues resolved); Status Table updated; committed + pushed to main.
     is GENUINELY BLOCKED (verified, not faked) and D6 is deferred.
 
   OPEN QUESTIONS FOR CHRIS (post-pass):
-  * R1 — reference-binding infrastructure (D4), affects disease + phenotype + allele uniformly. Binding
-    `single_reference` durably needs (a) the REAL workspace document identity threaded into the inline
-    validator dispatch instead of the transient document_id=chat-runtime (streaming_tools.py:1751), and
-    (b) a document -> Alliance-reference resolution (PMID/DOI/AGRKB) at chat-extraction time. Neither exists
-    today (the pdf_documents/PDFDocument model has no reference-identity column). Until built, the paper
-    reference is honestly pending and the reference validator returns validator_unresolved (non-structural).
-    This is the single biggest remaining infra item and the right fix is uniform across the three types.
+  * R1 — reference-binding (D4), affects disease + phenotype + allele uniformly. Binding `single_reference`
+    has three pieces, only one of which is a real gap: (1) the PMID/DOI/AGRKB -> AGRKB-reference RESOLVER
+    already exists (reference_validation agent + tools/literature_references.py via the literature ES
+    references_index); (2) the materializers already stage a pending Reference object with
+    reference_id/title/pmid/doi slots ready to fill (disease/builder_conversion.py:661,
+    phenotype/conversion.py:606); (3) THE GAP is the loaded document's durable paper identifier —
+    pdf_documents has no PMID/DOI/AGRKB column (the id only appears incidentally in the filename, e.g.
+    a31b1ff3="PMID39550471_..."; the Alzheimer's PDF had a generic name, so its reference came back
+    validator_unresolved). That identifier is being delivered by the ABC literature integration
+    (docs/design/2026-05-28-abc-literature-document-ingestion-migration.md) — coming soon, NOT ours to build.
+    Once ABC lands, the remaining BUILDER-side work is small + uniform: populate single_reference.reference_id
+    from the ABC reference + flip disease_reference_materialization (and the phenotype/allele equivalents)
+    under_development->active. It can bind at bootstrap/curation-prep (cheapest — the real document_id + db
+    already exist there); binding in the CHAT turn additionally needs the real document identity threaded into
+    the inline dispatch (today document_id=chat-runtime at streaming_tools.py:~1751 — the runtime-vs-endpoint
+    layering the companion inline-validation doc flagged) and is an optional refinement so the chat reply shows
+    the resolved reference. NOT blocking; the current pending/validator_unresolved reference is the honest
+    non-structural placeholder until ABC.
   * R2 — per-subtype relation subset ENFORCEMENT (disease D5). To actually reject e.g. is_model_of on a
     GeneDiseaseAnnotation, the controlled_vocabulary_validation agent/schema/dispatch need a `subset`
     concept. Today the relation is validated against the umbrella CV and the LLM does the subsetting via
