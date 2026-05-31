@@ -592,50 +592,6 @@ class DiseaseExtractionResultEnvelope(DomainEnvelopeExtractionResult):
 
 
 # ============================================================================
-# Chemical Extraction Structured Output Models
-# ============================================================================
-
-class ChemicalExtractionFinding(BaseModel):
-    """A single retained chemical assertion."""
-    mention: str = Field(
-        ...,
-        description="Chemical mention exactly as written in the paper"
-    )
-    normalized_label: Optional[str] = Field(
-        None,
-        description="Normalized chemical label when resolved"
-    )
-    normalized_id: Optional[str] = Field(
-        None,
-        description="Normalized identifier when resolved (e.g., CHEBI:...)"
-    )
-    role: Literal["treatment", "assay_reagent", "buffer", "control", "other", "unspecified"] = Field(
-        "unspecified",
-        description="Experimental role of the chemical in paper context"
-    )
-    concentration: Optional[str] = Field(
-        None,
-        description="Concentration/dose string exactly as reported when available"
-    )
-    timing: Optional[str] = Field(
-        None,
-        description="Timing/exposure context exactly as reported when available"
-    )
-    confidence: Literal["high", "medium", "low"] = Field(
-        "medium",
-        description="Extractor confidence in normalization and role classification"
-    )
-    evidence_record_ids: List[StrictStr] = Field(
-        default_factory=list,
-        description="Stable IDs of verified evidence records supporting this retained chemical assertion"
-    )
-
-
-class ChemicalExtractionResultEnvelope(DomainEnvelopeExtractionResult):
-    """Structured output for chemical-condition domain-envelope extraction."""
-
-
-# ============================================================================
 # Gene Extraction Structured Output Models
 # ============================================================================
 

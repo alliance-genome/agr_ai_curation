@@ -47,8 +47,6 @@ VALIDATOR_CASES = {
         "schema_name": "ChemicalValidationResult",
         "tool": "chebi_api_call",
         "provider": "ebi_chebi",
-        "domain_pack": "packages/alliance/domain_packs/chemical_condition/domain_pack.yaml",
-        "active_binding_agent_ids": {"chemical_validation"},
     },
 }
 
@@ -181,14 +179,17 @@ def test_active_disease_and_chemical_bindings_resolve_to_package_validators(monk
     schemas = schema_discovery.discover_agent_schemas(force_reload=True)
 
     for case in VALIDATOR_CASES.values():
+        if "domain_pack" not in case:
+            continue
         domain_pack = _load_yaml(case["domain_pack"])
         active_bindings = domain_pack["metadata"]["validator_bindings"]["active"]
+        expected_binding_agent_ids = case.get("active_binding_agent_ids", set())
         active_agent_ids = {
             binding.get("validator_agent", {}).get("agent_id")
             for binding in active_bindings
         }
 
-        assert case["active_binding_agent_ids"] <= active_agent_ids
+        assert expected_binding_agent_ids <= active_agent_ids
         for binding in active_bindings:
             agent_id = binding["validator_agent"]["agent_id"]
             agent = agents[agent_id]

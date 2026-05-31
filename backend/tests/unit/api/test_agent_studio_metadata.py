@@ -155,12 +155,12 @@ class TestGetRegistryMetadata:
         from src.api.agent_studio import get_registry_metadata
 
         result = asyncio.run(get_registry_metadata())
-        chemical_extractor = result.agents.get("chemical_extractor")
+        extraction_agent = result.agents.get("disease_extractor")
 
-        assert chemical_extractor is not None
-        assert chemical_extractor.validation_attachments
+        assert extraction_agent is not None
+        assert extraction_agent.validation_attachments
         assert {
-            option["state"] for option in chemical_extractor.validation_attachments
+            option["state"] for option in extraction_agent.validation_attachments
         }.issuperset({"active", "under_development"})
 
     def test_get_registry_metadata_projects_under_development_validator_bindings(self):

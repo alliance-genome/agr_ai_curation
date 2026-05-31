@@ -749,50 +749,6 @@ def _chat_dispatch_domain_cases():
             id="disease",
         ),
         pytest.param(
-            "ask_chemical_extractor_specialist",
-            "chemical_extractor",
-            "chemical",
-            DomainEnvelope(
-                envelope_id="chat-chemical-env",
-                domain_pack_id="agr.alliance.chemical_condition",
-                objects=[
-                    CuratableObjectEnvelope(
-                        object_type="ChemicalCondition",
-                        pending_ref_id="chemical-condition-1",
-                        payload={
-                            "condition_chemical": {
-                                "curie": "CHEBI:23965",
-                                "name": "estradiol",
-                            },
-                            "condition_class": {
-                                "curie": "ZECO:0000101",
-                                "name": "chemical treatment",
-                            },
-                            "condition_relation_type": {
-                                "name": "has_condition",
-                            },
-                        },
-                    ),
-                    CuratableObjectEnvelope(
-                        object_type="ChemicalTerm",
-                        pending_ref_id="chemical-term-1",
-                        payload={
-                            "curie": "CHEBI:23965",
-                            "name": "estradiol",
-                        },
-                    ),
-                ],
-            ),
-            {
-                "chemical_condition.chebi_api_lookup",
-                "chemical_condition.term_chebi_api_lookup",
-                "chemical_condition.condition_ontology_lookup",
-                "chemical_condition.condition_relation_type_lookup",
-            },
-            0,
-            id="chemical",
-        ),
-        pytest.param(
             "ask_phenotype_extractor_specialist",
             "phenotype_extractor",
             "phenotype",

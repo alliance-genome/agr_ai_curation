@@ -34,9 +34,6 @@ agent_bundles:
   - name: chat_output
   - name: chemical
     has_schema: true
-  - name: chemical_extractor
-    has_schema: true
-    group_rules: [fb, hgnc, mgi, rgd, sgd, wb, zfin]
   - name: controlled_vocabulary
     has_schema: true
   - name: data_provider

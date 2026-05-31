@@ -27,7 +27,6 @@ BUILDER_REQUIRED_DOMAINS = frozenset(
         "allele",
         "gene",
         "disease",
-        "chemical_condition",
         "phenotype",
         "gene_expression",
         "cross_domain",
@@ -150,29 +149,6 @@ TRIALS: tuple[CorpusTrial, ...] = (
         ),
     ),
     CorpusTrial(
-        trial_id="chemical_zebrafish_estradiol_segmentation",
-        domain="chemical_condition",
-        agent_ids=("chemical_extractor",),
-        title="Small molecule screen in embryonic zebrafish using modular variations to target segmentation",
-        organism="Danio rerio",
-        pmcid="PMC5711842",
-        pmid="29196643",
-        doi="10.1038/s41467-017-01469-5",
-        pdf_url="https://www.nature.com/articles/s41467-017-01469-5.pdf",
-        prompt=(
-            "Read the loaded paper and extract exactly one chemical or experimental-condition "
-            "candidate: estradiol treatment in embryonic zebrafish segmentation experiments. "
-            "Preserve dose/timing/context and one record_evidence verified quote. Do not resolve "
-            "ChEBI or condition ontology IDs in the extractor."
-        ),
-        expected_validator_bindings=(
-            "chemical_condition.chebi_api_lookup",
-            "chemical_condition.term_chebi_api_lookup",
-            "chemical_condition.condition_ontology_lookup",
-            "chemical_condition.condition_relation_type_lookup",
-        ),
-    ),
-    CorpusTrial(
         trial_id="phenotype_celegans_mus81_reduced_brood",
         domain="phenotype",
         agent_ids=("phenotype_extractor",),
@@ -216,7 +192,7 @@ TRIALS: tuple[CorpusTrial, ...] = (
     CorpusTrial(
         trial_id="cross_domain_zebrafish_segmentation_screen",
         domain="cross_domain",
-        agent_ids=("chemical_extractor", "phenotype_extractor", "gene_extractor"),
+        agent_ids=("phenotype_extractor", "gene_extractor"),
         title="Small molecule screen in embryonic zebrafish using modular variations to target segmentation",
         organism="Danio rerio",
         pmcid="PMC5711842",
@@ -225,29 +201,21 @@ TRIALS: tuple[CorpusTrial, ...] = (
         pdf_url="https://www.nature.com/articles/s41467-017-01469-5.pdf",
         prompt=(
             "Run a compact cross-domain pass over this zebrafish segmentation paper. Extract "
-            "one chemical condition, one phenotype statement, and one central gene supported by "
+            "one phenotype statement and one central gene supported by "
             "the paper. Each extractor must use record_evidence for one exact supporting quote "
             "and must leave identity/ontology resolution to validators. Preserve the explicit "
             "zebrafish organism context as ZFIN/NCBITaxon:7955 selector hints for gene or "
             "phenotype candidates; those hints are not final identity resolution."
         ),
         expected_validator_bindings=(
-            "chemical_condition.chebi_api_lookup",
             "phenotype_term_ontology_validator",
             "alliance_gene_reference_lookup",
         ),
-        expected_builder_finalizations=3,
-        minimum_builder_stage_count=3,
-        minimum_builder_finalized_object_count=3,
-        minimum_builder_validator_target_count=3,
+        expected_builder_finalizations=2,
+        minimum_builder_stage_count=2,
+        minimum_builder_finalized_object_count=2,
+        minimum_builder_validator_target_count=2,
         agent_prompts={
-            "chemical_extractor": (
-                "Read the loaded paper and extract exactly one chemical or experimental-condition "
-                "candidate: SB225002 treatment in embryonic zebrafish segmentation experiments. "
-                "Preserve dose/timing/context when present and use record_evidence for one exact "
-                "supporting quote. Do not extract phenotype statements or genes in this step, and "
-                "do not resolve ChEBI or condition ontology IDs in the extractor."
-            ),
             "phenotype_extractor": (
                 "Read the loaded paper and extract exactly one phenotype assertion candidate: "
                 "mid-trunk myotome boundary or segmentation defects in embryonic zebrafish after "
@@ -742,8 +710,6 @@ def _summarize_flow_events(flow_result: dict[str, Any]) -> dict[str, Any]:
             or _event_tool_name(event) == "finalize_gene_extraction"
             or _event_tool_name(event) == "stage_disease_assertion_evidence"
             or _event_tool_name(event) == "finalize_disease_extraction"
-            or _event_tool_name(event) == "stage_chemical_condition_evidence"
-            or _event_tool_name(event) == "finalize_chemical_extraction"
             or _event_tool_name(event) == "stage_phenotype_assertion_evidence"
             or _event_tool_name(event) == "finalize_phenotype_extraction"
             or _event_tool_name(event) == "stage_gene_expression_evidence"

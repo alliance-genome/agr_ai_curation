@@ -50,28 +50,3 @@ phenotype:
       data_provider:
         abbreviation: MGI
       negated: false
-chemical_condition:
-  candidate:
-    candidate_id: chemical-candidate-1
-    adapter_key: chemical
-    display_label: sirolimus condition
-    envelope_id: chemical-envelope-1
-    envelope_revision: 1
-    domain_pack_id: agr.alliance.chemical_condition
-    object_id: chemical-condition-1
-    object_type: ChemicalCondition
-    payload:
-      host_annotation_type: PhenotypeAnnotation
-      host_annotation_id: "210270365"
-      source_reference:
-        reference_id: 296935
-      condition_relation_type:
-        name: has_condition
-      condition_class:
-        curie: ZECO:0000111
-        name: chemical treatment
-      condition_chemical:
-        curie: CHEBI:9168
-        name: sirolimus
-      condition_quantity: 3 pM
-      condition_summary: chemical:sirolimus

@@ -168,7 +168,6 @@ class TestAgentDocumentationCoverage:
         """Fallback Agent Studio docs must not say extractors own DB resolution."""
         extractor_ids = {
             "allele_extractor",
-            "chemical_extractor",
             "disease_extractor",
             "gene_expression_extraction",
             "gene_extractor",

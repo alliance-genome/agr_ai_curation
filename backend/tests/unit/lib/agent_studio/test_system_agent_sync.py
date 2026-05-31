@@ -270,17 +270,6 @@ def test_sync_skips_agent_with_missing_prompt(monkeypatch):
             ],
         ),
         (
-            "chemical_extractor",
-            "chemical_extractor",
-            "ChemicalExtractionResultEnvelope",
-            [
-                "search_document",
-                "read_section",
-                "read_subsection",
-                "agr_species_context_lookup",
-            ],
-        ),
-        (
             "phenotype_extractor",
             "phenotype_extractor",
             "PhenotypeResultEnvelope",

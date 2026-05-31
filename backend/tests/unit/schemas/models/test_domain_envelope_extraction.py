@@ -5,7 +5,6 @@ from pydantic import ValidationError
 
 from src.lib.openai_agents.models import (
     AlleleExtractionResultEnvelope,
-    ChemicalExtractionResultEnvelope,
     DiseaseExtractionResultEnvelope,
     GeneExpressionEnvelope,
     GeneExtractionResultEnvelope,
@@ -20,7 +19,6 @@ EXTRACTOR_ENVELOPE_CLASSES = (
     GeneExtractionResultEnvelope,
     AlleleExtractionResultEnvelope,
     DiseaseExtractionResultEnvelope,
-    ChemicalExtractionResultEnvelope,
     PhenotypeResultEnvelope,
 )
 

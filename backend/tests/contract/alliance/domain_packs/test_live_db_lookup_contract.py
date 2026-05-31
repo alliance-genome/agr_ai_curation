@@ -214,18 +214,6 @@ def test_live_db_representative_disease_chemical_and_phenotype_projection_rows(l
                 """
             )
         ).mappings().all()
-        chemical_condition = conn.execute(
-            text(
-                """
-                SELECT ec.id, chem.curie AS chemical_curie, chem.name AS chemical_name,
-                       class.curie AS class_curie, class.name AS class_name
-                FROM public.experimentalcondition ec
-                LEFT JOIN public.ontologyterm chem ON ec.conditionchemical_id = chem.id
-                LEFT JOIN public.ontologyterm class ON ec.conditionclass_id = class.id
-                WHERE ec.id = 200016096
-                """
-            )
-        ).mappings().one()
         condition_relation = conn.execute(
             text(
                 """
@@ -261,8 +249,6 @@ def test_live_db_representative_disease_chemical_and_phenotype_projection_rows(l
 
     assert {row["id"] for row in disease_rows} == {209127250, 209127267, 209127402}
     assert all(row["disease_curie"] and row["relation_name"] for row in disease_rows)
-    assert chemical_condition["chemical_curie"] == "CHEBI:9168"
-    assert chemical_condition["class_curie"] == "ZECO:0000111"
     assert condition_relation["condition_relation_type"] == "has_condition"
     assert condition_relation["condition_count"] >= 1
     assert phenotype_projection["curie"] == "MP:0003733"

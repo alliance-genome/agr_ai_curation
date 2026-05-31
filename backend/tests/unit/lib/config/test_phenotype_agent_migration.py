@@ -29,11 +29,6 @@ MIGRATION_SPECS = (
         "_load_agent_spec",
     ),
     (
-        "chemical_extractor",
-        REPO_ROOT / "backend" / "alembic" / "versions" / "f7a8b9c0d1e2_add_chemical_extractor_system_agent.py",
-        "_load_agent_spec",
-    ),
-    (
         "gene_extractor",
         REPO_ROOT / "backend" / "alembic" / "versions" / "08b9c0d1e2f3_add_gene_extractor_system_agent.py",
         "_load_agent_spec",

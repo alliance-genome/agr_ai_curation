@@ -14,7 +14,6 @@ PILOT_PROMPT_PATH = REPO_ROOT / "packages/alliance/agents/gene_expression/prompt
 
 EXTRACTOR_PROMPT_PATHS = [
     REPO_ROOT / "packages/alliance/agents/allele_extractor/prompt.yaml",
-    REPO_ROOT / "packages/alliance/agents/chemical_extractor/prompt.yaml",
     REPO_ROOT / "packages/alliance/agents/disease_extractor/prompt.yaml",
     REPO_ROOT / "packages/alliance/agents/gene_expression/prompt.yaml",
     REPO_ROOT / "packages/alliance/agents/gene_extractor/prompt.yaml",

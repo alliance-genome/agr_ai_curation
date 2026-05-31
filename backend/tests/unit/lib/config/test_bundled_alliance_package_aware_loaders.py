@@ -135,23 +135,6 @@ def test_bundled_alliance_disease_extractor_uses_narrow_context_tool(monkeypatch
     ]
 
 
-def test_bundled_alliance_chemical_extractor_uses_narrow_context_tool(monkeypatch):
-    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
-
-    agents = agent_loader.load_agent_definitions(force_reload=True)
-    chemical_extractor = agents["chemical_extractor"]
-
-    assert chemical_extractor.tools == [
-        "search_document",
-        "read_chunk",
-        "read_section",
-        "read_subsection",
-        "record_evidence",
-        "get_agent_contract",
-        "agr_species_context_lookup",
-    ]
-
-
 def test_bundled_alliance_phenotype_extractor_uses_narrow_context_tool(monkeypatch):
     monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
 
@@ -527,7 +510,6 @@ def test_bundled_alliance_extractors_use_extraction_result_schema(monkeypatch):
         "gene_extractor": "GeneExtractionResultEnvelope",
         "allele_extractor": "AlleleExtractionResultEnvelope",
         "disease_extractor": "DiseaseExtractionResultEnvelope",
-        "chemical_extractor": "ChemicalExtractionResultEnvelope",
         "phenotype_extractor": "PhenotypeResultEnvelope",
     }
     for agent_name, schema_name in expected.items():
@@ -556,7 +538,6 @@ def test_bundled_alliance_first_pass_extractors_still_register_domain_envelope_s
         "GeneExtractionResultEnvelope",
         "AlleleExtractionResultEnvelope",
         "DiseaseExtractionResultEnvelope",
-        "ChemicalExtractionResultEnvelope",
         "PhenotypeResultEnvelope",
     )
     for schema_name in expected:

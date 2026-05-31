@@ -3,10 +3,6 @@
 from __future__ import annotations
 
 from agr_ai_curation_alliance.domain_packs.allele import AllelePaperEvidenceExportAdapter
-from agr_ai_curation_alliance.domain_packs.chemical_condition import (
-    ChemicalConditionExportAdapter,
-    ChemicalConditionSubmissionBlockerAdapter,
-)
 from agr_ai_curation_alliance.domain_packs.disease import (
     DiseaseAnnotationExportAdapter,
     DiseaseAnnotationSubmissionBlockerAdapter,
@@ -37,7 +33,6 @@ from src.lib.curation_workspace.export_adapters.json_bundle import JsonBundleExp
 
 _STRUCTURED_ADAPTER_DOMAIN_PACKS = {
     "allele": "agr.alliance.allele",
-    "chemical": "agr.alliance.chemical_condition",
     "disease": "agr.alliance.disease",
     "gene": "gene",
     "gene_expression": "agr.alliance.gene_expression",
@@ -45,14 +40,12 @@ _STRUCTURED_ADAPTER_DOMAIN_PACKS = {
 }
 _DOMAIN_EXPORT_ADAPTERS = {
     "allele": AllelePaperEvidenceExportAdapter,
-    "chemical": ChemicalConditionExportAdapter,
     "disease": DiseaseAnnotationExportAdapter,
     "gene": GeneMentionEvidenceExportAdapter,
     "gene_expression": GeneExpressionExportAdapter,
     "phenotype": PhenotypeAnnotationExportAdapter,
 }
 _DOMAIN_SUBMISSION_TRANSPORTS = {
-    "chemical": ChemicalConditionSubmissionBlockerAdapter,
     "disease": DiseaseAnnotationSubmissionBlockerAdapter,
     "gene_expression": GeneExpressionSubmissionAdapter,
     "phenotype": PhenotypeAnnotationSubmissionBlockerAdapter,

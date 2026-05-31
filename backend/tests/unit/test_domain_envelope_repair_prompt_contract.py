@@ -15,7 +15,6 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 EXTRACTOR_PROMPTS = [
     "packages/alliance/agents/allele_extractor/prompt.yaml",
-    "packages/alliance/agents/chemical_extractor/prompt.yaml",
     "packages/alliance/agents/disease_extractor/prompt.yaml",
     "packages/alliance/agents/gene_expression/prompt.yaml",
     "packages/alliance/agents/gene_extractor/prompt.yaml",
@@ -24,7 +23,6 @@ EXTRACTOR_PROMPTS = [
 
 EXTRACTOR_OUTPUT_SCHEMAS = {
     "packages/alliance/agents/allele_extractor/agent.yaml": "AlleleExtractionResultEnvelope",
-    "packages/alliance/agents/chemical_extractor/agent.yaml": "ChemicalExtractionResultEnvelope",
     "packages/alliance/agents/disease_extractor/agent.yaml": "DiseaseExtractionResultEnvelope",
     "packages/alliance/agents/gene_expression/agent.yaml": None,
     "packages/alliance/agents/gene_extractor/agent.yaml": "GeneExtractionResultEnvelope",

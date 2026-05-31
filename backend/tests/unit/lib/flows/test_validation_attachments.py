@@ -20,7 +20,7 @@ from src.schemas.flows import FlowDefinition
 
 
 def _flow_definition(
-    agent_id: str = "chemical_extractor",
+    agent_id: str = "disease_extractor",
     attachments=None,
     *,
     extra_nodes=None,
@@ -111,13 +111,13 @@ def _option(
 def test_catalog_exposes_multiple_validation_options_for_extraction_agent():
     catalog = validation_attachment_catalog_by_agent()
 
-    options = catalog["chemical_extractor"]
+    options = catalog["disease_extractor"]
     states = {option["state"] for option in options}
     condition_ontology_options = [
         option
         for option in options
         if option.get("validator_binding_id")
-        == "chemical_condition.condition_ontology_lookup"
+        == "disease_ontology_term_lookup"
     ]
 
     assert len(options) >= 3
@@ -151,7 +151,7 @@ def test_apply_defaults_selects_active_and_keeps_under_development_visible():
 def test_apply_defaults_preserves_allowed_opt_out_selection():
     agent_registry = {
         "fixture_extractor": {
-            "curation": {"domain_pack_id": "agr" + ".alliance.chemical_condition"}
+            "curation": {"domain_pack_id": "agr" + ".alliance.disease"}
         }
     }
     initial = apply_flow_validation_attachment_defaults(

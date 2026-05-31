@@ -53,7 +53,6 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/test_config_loaders.py"),
     Path("backend/tests/unit/test_gene_allele_validator_result_contract.py"),
     Path("backend/tests/unit/test_subject_entity_validator_result_contract.py"),
-    Path("backend/tests/unit/test_chemical_extractor_domain_envelope_contract.py"),
     Path("backend/tests/unit/test_disease_extractor_domain_envelope_contract.py"),
     Path("backend/tests/unit/test_domain_envelope_repair_prompt_contract.py"),
     Path("backend/tests/unit/test_gene_extractor_domain_envelope_contract.py"),
@@ -149,7 +148,6 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     # Contract, integration, and live suites intentionally exercise shipped deployment data.
     Path("backend/tests/contract/alliance/domain_packs/test_allele_domain_pack.py"),
     Path("backend/tests/contract/alliance/domain_packs/test_alliance_gene_domain_pack.py"),
-    Path("backend/tests/contract/alliance/domain_packs/test_chemical_condition_domain_pack.py"),
     Path("backend/tests/contract/alliance/domain_packs/test_disease_domain_pack.py"),
     Path("backend/tests/contract/alliance/domain_packs/test_export_submission_adapters.py"),
     Path("backend/tests/contract/alliance/domain_packs/test_gene_expression_domain_pack.py"),

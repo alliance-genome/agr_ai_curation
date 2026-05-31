@@ -176,31 +176,6 @@ def _alliance_gate_case(case_key: str):
             },
         }
 
-    elif case_key == "chemical_condition":
-        from agr_ai_curation_alliance.domain_packs.chemical_condition import (
-            CHEMICAL_CONDITION_EXPORT_TARGET_ID,
-            CHEMICAL_CONDITION_OBJECT_TYPE,
-            build_pending_chemical_condition_envelope_from_tool_verified_output,
-        )
-
-        envelope = build_pending_chemical_condition_envelope_from_tool_verified_output(
-            _fixture_yaml("chemical_condition", "tool_verified_chemical_output.yaml")
-        )
-        return {
-            "adapter_key": "chemical",
-            "envelope": _retag_envelope(
-                envelope,
-                envelope_id="chemical-condition-alliance-e2e-envelope",
-            ),
-            "target_key": CHEMICAL_CONDITION_EXPORT_TARGET_ID,
-            "target_object_type": CHEMICAL_CONDITION_OBJECT_TYPE,
-            "expected_ready": False,
-            "expected_blocker_codes": {
-                "domain_envelope.missing_export_context",
-                "alliance.chemical_condition.export_context_missing",
-            },
-        }
-
     elif case_key == "phenotype":
         from agr_ai_curation_alliance.domain_packs.phenotype import (
             PHENOTYPE_EXPORT_TARGET_ID,
@@ -1104,7 +1079,6 @@ def test_submission_workflow_e2e_with_retry_and_history(
         "gene_expression",
         "allele",
         "disease",
-        "chemical_condition",
         "phenotype",
     ),
 )

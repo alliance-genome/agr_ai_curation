@@ -177,7 +177,6 @@ _DOCUMENT_CONTEXT_AGENT_IDS = (
     "disease",
     "disease_extractor",
     "chemical",
-    "chemical_extractor",
     "gene_expression",
     "phenotype_extractor",
 )
@@ -227,15 +226,6 @@ _RAW_FLOW_TEMPLATES: List[Dict[str, Any]] = [
         "steps": [
             {"agent_id": "pdf_extraction", "step_goal": "Extract chemical names"},
             {"agent_id": "chemical", "step_goal": "Map to ChEBI identifiers"},
-        ],
-    },
-    {
-        "name": "Chemical Extraction",
-        "description": "Extract experimentally supported chemical assertions from papers",
-        "steps": [
-            {"agent_id": "pdf_extraction", "step_goal": "Find chemical mentions and context"},
-            {"agent_id": "chemical_extractor", "step_goal": "Extract evidence-backed chemical assertions"},
-            {"agent_id": "chat_output", "step_goal": "Display extraction results"},
         ],
     },
     {

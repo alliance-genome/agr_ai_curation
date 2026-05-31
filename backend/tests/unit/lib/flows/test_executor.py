@@ -3149,19 +3149,19 @@ class TestExecuteFlowTermination:
         """A multi-step flow must not complete when the supervisor skips later tools."""
         flow = _make_flow([
             _task_input_node(),
-            _agent_node("n1", "chemical_extractor", step_goal="Extract chemical"),
+            _agent_node("n1", "disease_extractor", step_goal="Extract disease"),
             _agent_node("n2", "phenotype_extractor", step_goal="Extract phenotype"),
         ])
         completed_step = _make_completed_step(
-            agent_id="chemical_extractor",
-            agent_name="Chemical Extractor",
-            tool_name="ask_chemical_extractor_specialist",
+            agent_id="disease_extractor",
+            agent_name="Disease Extractor",
+            tool_name="ask_disease_extractor_specialist",
             step=1,
-            adapter_key="chemical",
+            adapter_key="disease",
             payload=_structured_step_output(
-                "SB225002",
-                actor="chemical_extractor",
-                destination="chemical_condition",
+                "DOID:0080600",
+                actor="disease_extractor",
+                destination="disease",
             ),
         )
 
@@ -3170,7 +3170,7 @@ class TestExecuteFlowTermination:
         supervisor._flow_execution_state = _make_flow_execution_state(
             completed_step,
             ordered_tool_names=[
-                "ask_chemical_extractor_specialist",
+                "ask_disease_extractor_specialist",
                 "ask_phenotype_extractor_specialist",
             ],
         )
@@ -3194,7 +3194,7 @@ class TestExecuteFlowTermination:
             yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
             yield {
                 "type": "TOOL_COMPLETE",
-                "details": {"toolName": "ask_chemical_extractor_specialist"},
+                "details": {"toolName": "ask_disease_extractor_specialist"},
             }
             yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
 

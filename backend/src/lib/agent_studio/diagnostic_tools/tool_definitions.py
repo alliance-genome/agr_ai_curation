@@ -763,7 +763,7 @@ answering validator-agent inspection questions from domain-pack validation plans
   tsv_formatter, json_formatter.
 - Document/general extraction: pdf_extraction.
 - Domain-envelope extractors: gene_extractor, allele_extractor,
-  disease_extractor, chemical_extractor, phenotype_extractor, gene_expression
+  disease_extractor, phenotype_extractor, gene_expression
   (flow/prompt alias for the packaged gene_expression_extraction agent).
 - Validator/resolver agents: gene_validation (also available as gene),
   allele_validation (allele), disease_validation (disease),

@@ -29,17 +29,6 @@ REFERENCE_BINDING_CASES = {
         },
         "state": ValidationBindingState.UNDER_DEVELOPMENT,
     },
-    "agr.alliance.chemical_condition": {
-        "binding_id": "source_reference_validation",
-        "object_types": ("Reference",),
-        "field_paths": ("reference_id", "curie", "title"),
-        "expected_result_fields": {
-            "reference_id": "Reference.reference_id",
-            "curie": "Reference.curie",
-            "title": "Reference.title",
-        },
-        "state": ValidationBindingState.UNDER_DEVELOPMENT,
-    },
     "agr.alliance.disease": {
         "binding_id": "disease_reference_materialization",
         "object_types": ("DiseaseAnnotation",),

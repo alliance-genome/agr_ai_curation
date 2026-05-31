@@ -115,10 +115,6 @@ def _builder_events(
 def _cross_domain_builder_events() -> list[dict]:
     return [
         *_builder_events(
-            stage_tool="stage_chemical_condition_evidence",
-            finalize_tool="finalize_chemical_extraction",
-        ),
-        *_builder_events(
             stage_tool="stage_phenotype_assertion_evidence",
             finalize_tool="finalize_phenotype_extraction",
         ),
@@ -207,7 +203,6 @@ def test_tightened_trial_gate_requires_all_cross_domain_expected_bindings():
             trial=trial,
             flow_result={
                 "events": [
-                    _validator_lookup_event("chemical_condition.chebi_api_lookup"),
                     _validator_lookup_event("phenotype_term_ontology_validator"),
                     *_cross_domain_builder_events(),
                 ]
@@ -216,7 +211,7 @@ def test_tightened_trial_gate_requires_all_cross_domain_expected_bindings():
             allow_specialist_text_fallback=False,
         )
 
-    assert checks[-1]["payload"]["minimum_expected_validator_bindings"] == 3
+    assert checks[-1]["payload"]["minimum_expected_validator_bindings"] == 2
     assert checks[-1]["payload"]["missing_expected_validator_bindings"] == [
         "alliance_gene_reference_lookup"
     ]
@@ -237,7 +232,6 @@ def test_tightened_trial_gate_requires_all_cross_domain_builder_finalizers():
             trial=trial,
             flow_result={
                 "events": [
-                    _validator_lookup_event("chemical_condition.chebi_api_lookup"),
                     _validator_lookup_event("phenotype_term_ontology_validator"),
                     _validator_lookup_event("alliance_gene_reference_lookup"),
                     *_builder_events(),
@@ -247,7 +241,7 @@ def test_tightened_trial_gate_requires_all_cross_domain_builder_finalizers():
             allow_specialist_text_fallback=False,
         )
 
-    assert checks[-1]["payload"]["expected_builder_finalizations"] == 3
+    assert checks[-1]["payload"]["expected_builder_finalizations"] == 2
     assert checks[-1]["payload"]["builder_observations"]["finalize_tool_complete_count"] == 1
     assert checks[-1]["ok"] is False
 
@@ -334,17 +328,14 @@ def test_build_trial_flow_uses_agent_specific_cross_domain_prompts():
     ]
 
     assert [node["data"]["agent_id"] for node in agent_nodes] == [
-        "chemical_extractor",
         "phenotype_extractor",
         "gene_extractor",
     ]
     assert all(node["data"]["input_source"] == "custom" for node in agent_nodes)
-    assert "SB225002 treatment" in agent_nodes[0]["data"]["custom_input"]
-    assert "mid-trunk myotome boundary" in agent_nodes[1]["data"]["custom_input"]
-    assert "zebrafish her1" in agent_nodes[2]["data"]["custom_input"]
-    assert "Do not extract phenotype statements or genes" in agent_nodes[0]["data"]["step_goal"]
-    assert "Do not extract chemicals or genes" in agent_nodes[1]["data"]["step_goal"]
-    assert "Do not extract chemicals or phenotype statements" in agent_nodes[2]["data"]["step_goal"]
+    assert "mid-trunk myotome boundary" in agent_nodes[0]["data"]["custom_input"]
+    assert "zebrafish her1" in agent_nodes[1]["data"]["custom_input"]
+    assert "Do not extract chemicals or genes" in agent_nodes[0]["data"]["step_goal"]
+    assert "Do not extract chemicals or phenotype statements" in agent_nodes[1]["data"]["step_goal"]
 
 
 def test_flow_summary_keeps_domain_validator_lookup_events():

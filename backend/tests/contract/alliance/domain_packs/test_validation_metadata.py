@@ -59,7 +59,6 @@ def test_alliance_domain_pack_validation_metadata_states_are_discoverable():
         "gene",
         "agr.alliance.allele",
         "agr.alliance.disease",
-        "agr.alliance.chemical_condition",
         "agr.alliance.phenotype",
     }
 
@@ -87,15 +86,6 @@ def test_alliance_domain_pack_validation_metadata_states_are_discoverable():
         binding.state
         for binding in validation_registries["agr.alliance.disease"].bindings
     } >= {
-        ValidationBindingState.ACTIVE,
-        ValidationBindingState.UNDER_DEVELOPMENT,
-    }
-    assert {
-        binding.state
-        for binding in validation_registries[
-            "agr.alliance.chemical_condition"
-        ].bindings
-    } == {
         ValidationBindingState.ACTIVE,
         ValidationBindingState.UNDER_DEVELOPMENT,
     }
@@ -132,7 +122,6 @@ def test_alliance_active_validator_bindings_have_dispatch_contracts():
         "gene",
         "agr.alliance.allele",
         "agr.alliance.disease",
-        "agr.alliance.chemical_condition",
         "agr.alliance.phenotype",
     }
 
@@ -155,7 +144,6 @@ def test_active_bindings_have_active_capability_metadata():
     alliance_registry = load_alliance_domain_pack_registry()
     pack_ids = {
         "agr.alliance.allele",
-        "agr.alliance.chemical_condition",
         "agr.alliance.disease",
         "agr.alliance.gene_expression",
         "agr.alliance.phenotype",
@@ -190,7 +178,6 @@ def test_alliance_evidence_record_selectors_use_verified_quote_path():
         "gene",
         "agr.alliance.allele",
         "agr.alliance.disease",
-        "agr.alliance.chemical_condition",
         "agr.alliance.phenotype",
     }
 
@@ -218,7 +205,6 @@ def test_alliance_validator_metadata_has_curator_facing_display_names():
         "gene",
         "agr.alliance.allele",
         "agr.alliance.disease",
-        "agr.alliance.chemical_condition",
         "agr.alliance.phenotype",
     }
 
@@ -270,7 +256,6 @@ def test_alliance_validator_binding_capability_groups_have_explicit_policies():
         "agr.alliance.gene_expression",
         "agr.alliance.allele",
         "agr.alliance.disease",
-        "agr.alliance.chemical_condition",
         "agr.alliance.phenotype",
     }
 
@@ -309,7 +294,6 @@ def test_alliance_active_and_under_development_capabilities_have_distinct_visibi
         "agr.alliance.gene_expression",
         "agr.alliance.allele",
         "agr.alliance.disease",
-        "agr.alliance.chemical_condition",
         "agr.alliance.phenotype",
     }
 
@@ -355,7 +339,6 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
             "agr.alliance.gene_expression",
             "gene",
             "agr.alliance.disease",
-            "agr.alliance.chemical_condition",
             "agr.alliance.phenotype",
         )
     }
@@ -457,10 +440,6 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         "single_reference.curie",
     ) in disease_match_targets
 
-    chemical_condition_bindings = {
-        binding.binding_id: binding
-        for binding in registries["agr.alliance.chemical_condition"].bindings
-    }
     gene_expression_bindings = {
         binding.binding_id: binding
         for binding in registries["agr.alliance.gene_expression"].bindings
@@ -675,92 +654,6 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         .value[0]["ontology_term_type"]
         == "WBPhenotypeTerm"
     )
-
-    assert chemical_condition_bindings[
-        "chemical_condition.chebi_api_lookup"
-    ].object_types == ("ChemicalCondition",)
-    assert chemical_condition_bindings[
-        "chemical_condition.chebi_api_lookup"
-    ].field_paths == (
-        "condition_chemical.curie",
-        "condition_chemical.name",
-    )
-    chemical_condition_chebi_binding = chemical_condition_bindings[
-        "chemical_condition.chebi_api_lookup"
-    ]
-    assert chemical_condition_chebi_binding.input_fields["curie"].required is False
-    assert chemical_condition_chebi_binding.input_fields["name"].required is False
-    assert chemical_condition_bindings[
-        "chemical_condition.condition_ontology_lookup"
-    ].object_types == ("ChemicalCondition",)
-    assert (
-        chemical_condition_bindings["chemical_condition.condition_ontology_lookup"].state
-        is ValidationBindingState.ACTIVE
-    )
-    assert chemical_condition_bindings[
-        "chemical_condition.condition_ontology_lookup"
-    ].field_paths == (
-        "condition_class.curie",
-    )
-    chemical_condition_ontology_binding = chemical_condition_bindings[
-        "chemical_condition.condition_ontology_lookup"
-    ]
-    assert chemical_condition_ontology_binding.validator_agent is not None
-    assert (
-        chemical_condition_ontology_binding.validator_agent.agent_id
-        == "ontology_term_validation"
-    )
-    assert chemical_condition_ontology_binding.input_fields["curie"].path == (
-        "condition_class.curie"
-    )
-    assert chemical_condition_ontology_binding.input_fields["curie"].required is False
-    assert chemical_condition_ontology_binding.input_fields["label"].path == (
-        "condition_class.name"
-    )
-    assert chemical_condition_ontology_binding.input_fields["label"].required is False
-    assert (
-        chemical_condition_ontology_binding.input_fields["ontology_term_type"].value
-        == "ZECOTerm"
-    )
-    assert chemical_condition_ontology_binding.input_fields[
-        "accepted_prefixes"
-    ].value == ["ZECO"]
-    assert chemical_condition_ontology_binding.input_fields["exact_match"].value is True
-    assert chemical_condition_ontology_binding.expected_result_fields == {
-        "condition_class_curie": "condition_class.curie",
-    }
-    assert "chemical_condition.chebi_api_lookup" in registries[
-        "agr.alliance.chemical_condition"
-    ].policy_for(
-        "ChemicalCondition",
-        "condition_chemical.name",
-    ).validator_binding_ids
-    assert "chemical_condition.condition_ontology_lookup" in registries[
-        "agr.alliance.chemical_condition"
-    ].policy_for(
-        "ChemicalCondition",
-        "condition_class.curie",
-    ).validator_binding_ids
-    chemical_relation_binding = chemical_condition_bindings[
-        "chemical_condition.condition_relation_type_lookup"
-    ]
-    assert chemical_relation_binding.validator_agent is not None
-    assert (
-        chemical_relation_binding.validator_agent.agent_id
-        == "controlled_vocabulary_validation"
-    )
-    assert chemical_relation_binding.state is ValidationBindingState.ACTIVE
-    assert chemical_relation_binding.object_types == ("ChemicalCondition",)
-    assert chemical_relation_binding.field_paths == ("condition_relation_type.name",)
-    assert chemical_relation_binding.input_fields["vocabulary"].value == (
-        "Condition Relation Type"
-    )
-    assert "chemical_condition.condition_relation_type_lookup" in registries[
-        "agr.alliance.chemical_condition"
-    ].policy_for(
-        "ChemicalCondition",
-        "condition_relation_type.name",
-    ).validator_binding_ids
 
 
 def test_subject_entity_selectors_require_type_and_omit_absent_optional_context():
@@ -983,18 +876,6 @@ def test_representative_ontology_term_bindings_target_generic_validator():
                 },
             }
         },
-        "agr.alliance.chemical_condition": {
-            "chemical_condition.condition_ontology_lookup": {
-                "state": ValidationBindingState.ACTIVE,
-                "ontology_family": "condition",
-                "ontology_term_type": "ZECOTerm",
-                "accepted_prefixes": ["ZECO"],
-                "optional_inputs": ["curie", "label"],
-                "expected_result_fields": {
-                    "condition_class_curie": "condition_class.curie",
-                },
-            }
-        },
         "agr.alliance.gene_expression": {
             "expression_stage_ontology_validation": {
                 "state": ValidationBindingState.ACTIVE,
@@ -1119,35 +1000,6 @@ def test_representative_alliance_active_validators_dispatch_unresolved_results()
                             "verified_quote": "ninaE",
                             "page": 1,
                             "section": "Results",
-                        },
-                    )
-                ],
-            ),
-        ),
-        (
-            "agr.alliance.chemical_condition",
-            DomainEnvelope(
-                envelope_id="chemical-env",
-                domain_pack_id="agr.alliance.chemical_condition",
-                objects=[
-                    CuratableObjectEnvelope(
-                        object_type="ChemicalCondition",
-                        pending_ref_id="condition-1",
-                        payload={
-                            "condition_chemical": {
-                                "curie": "BAD:1",
-                                "name": "bad chemical",
-                            },
-                            "condition_class": {
-                                "curie": "ZECO:0000101",
-                                "name": "chemical treatment",
-                            },
-                            "condition_relation_type": {
-                                "name": "has_condition",
-                            },
-                            "source_chemical_mention": "bad chemical",
-                            "evidence_record_ids": ["evidence-1"],
-                            "confidence": "high",
                         },
                     )
                 ],

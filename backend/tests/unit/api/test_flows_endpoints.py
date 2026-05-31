@@ -196,8 +196,8 @@ async def test_create_flow_hydrates_metadata_validation_attachments(monkeypatch)
             _obj.updated_at = now
 
     flow_definition = _flow_definition()
-    flow_definition["nodes"][1]["data"]["agent_id"] = "chemical_extractor"
-    flow_definition["nodes"][1]["data"]["agent_display_name"] = "Chemical Extractor"
+    flow_definition["nodes"][1]["data"]["agent_id"] = "disease_extractor"
+    flow_definition["nodes"][1]["data"]["agent_display_name"] = "Disease Extractor"
 
     db = _DB()
     monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_args, **_kwargs: SimpleNamespace(id=17))

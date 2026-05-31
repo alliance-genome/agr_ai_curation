@@ -653,56 +653,6 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
             "Does not perform disease ontology or provider lookup itself; unresolved or conflicting identity remains visible as validator findings",
         ],
     },
-    "chemical_extractor": {
-        "summary": "Extracts experimentally relevant chemical and compound mentions from uploaded PDFs, classifying roles (treatment, reagent, control) and capturing dosage/timing context.",
-        "capabilities": [
-            {
-                "name": "Chemical candidate harvesting",
-                "description": "Scans the paper for chemical names, drug names, compound identifiers, and treatment descriptions across methods, results, and figure legends",
-                "example_query": "Extract all chemicals from this paper",
-                "example_result": "Returns chemical candidates with exact name as written, concentration, timing, and experimental role",
-            },
-            {
-                "name": "Role classification",
-                "description": "Categorizes each chemical as treatment (experimental variable), assay reagent, buffer/media, vehicle control, or other biologically relevant compound",
-                "example_query": "Extract chemicals from this drug treatment study",
-                "example_result": "Classifies rapamycin as 'treatment' at 10 nM for 24h, DMSO as 'control', and DAPI as 'assay_reagent'",
-            },
-            {
-                "name": "Dosage and context extraction",
-                "description": "Captures concentration, timing, and route of administration for retained chemicals exactly as written in the paper",
-                "example_query": "What treatments were used and at what doses?",
-                "example_result": "Returns concentration (e.g., '10 μM'), timing (e.g., '24 hours'), and route (e.g., 'i.p. injection')",
-            },
-            {
-                "name": "Validator-ready chemical selectors",
-                "description": "Preserves chemical names/CURIE hints, condition class labels, relation names, quantities, timing, and evidence records for active chemical-condition validators; ChEBI and vocabulary lookup remain validator-owned.",
-                "example_query": "Extract chemicals with validator-ready context",
-                "example_result": "Returns chemical-condition envelopes with ChEBI, condition ontology, and relation selector inputs for validator materialization",
-            },
-        ],
-        "data_sources": [
-            {
-                "name": "PDF Document Search (Weaviate)",
-                "description": "Hybrid semantic/keyword plus lexical-heavy search modes over uploaded PDF documents",
-                "species_supported": None,
-                "data_types": ["PDF text chunks", "Section content", "Subsection content"],
-            },
-            {
-                "name": "Chemical-condition validator bindings",
-                "description": "Active validators resolve ChEBI identity, condition ontology terms, and condition-relation vocabulary values after extraction.",
-                "species_supported": None,
-                "data_types": ["Chemical name/CURIE hints", "Condition labels", "Relation names", "Validator lookup results"],
-            },
-        ],
-        "limitations": [
-            "Requires an uploaded PDF document — cannot extract chemicals from chat text alone",
-            "Standard lab buffers and media (PBS, DMEM, etc.) are excluded unless they are the experimental variable",
-            "Trade names may be ambiguous if they map to multiple compounds — these go to ambiguities[]",
-            "Cannot provide chemical-gene interaction data — only extracts chemical mentions and their experimental context",
-            "Does not perform ChEBI, ontology, or vocabulary lookup itself; unresolved or conflicting identity remains visible as validator findings",
-        ],
-    },
     "phenotype_extractor": {
         "summary": "Extracts experimentally supported phenotype assertions from uploaded PDFs, capturing genotype-phenotype links, polarity, severity, and supporting evidence.",
         "capabilities": [

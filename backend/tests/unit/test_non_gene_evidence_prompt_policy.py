@@ -81,7 +81,6 @@ def _listed_reason_codes(content: str) -> set[str]:
     [
         ("allele_extractor", "Strong allele evidence usually does one or more of the following:"),
         ("disease_extractor", "The disease is mentioned only as motivation, background, or population context"),
-        ("chemical_extractor", "Vehicle/control mentions without a chemical-specific biological result"),
         ("phenotype_extractor", "A phenotype term appears only in a heading, keyword list, or background sentence"),
         ("gene_expression", "Rescue or ectopic overexpression statements where \"expression\" is only the experimental tool"),
     ],

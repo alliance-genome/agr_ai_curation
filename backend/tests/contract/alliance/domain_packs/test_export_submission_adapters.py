@@ -1,4 +1,4 @@
-"""Contract tests for Alliance disease/phenotype/chemical export and submit adapters."""
+"""Contract tests for Alliance disease/phenotype export and submit adapters."""
 
 from __future__ import annotations
 
@@ -25,12 +25,6 @@ ALLIANCE_PYTHON_SRC = REPO_ROOT / "packages" / "alliance" / "python" / "src"
 if str(ALLIANCE_PYTHON_SRC) not in sys.path:
     sys.path.insert(0, str(ALLIANCE_PYTHON_SRC))
 
-from agr_ai_curation_alliance.domain_packs.chemical_condition import (  # noqa: E402
-    CHEMICAL_CONDITION_EXPORT_TARGET_ID,
-    ChemicalConditionExportAdapter,
-    ChemicalConditionSubmissionBlockerAdapter,
-    build_chemical_condition_export_payload,
-)
 from agr_ai_curation_alliance.domain_packs.disease import (  # noqa: E402
     DISEASE_EXPORT_TARGET_ID,
     DiseaseAnnotationExportAdapter,
@@ -143,10 +137,6 @@ def test_alliance_default_registries_expose_domain_export_and_submission_adapter
         PhenotypeAnnotationExportAdapter,
     )
     assert isinstance(
-        export_registry.require("chemical"),
-        ChemicalConditionExportAdapter,
-    )
-    assert isinstance(
         export_registry.require(GENE_EXPRESSION_ADAPTER_KEY),
         GeneExpressionExportAdapter,
     )
@@ -157,10 +147,6 @@ def test_alliance_default_registries_expose_domain_export_and_submission_adapter
     assert isinstance(
         submission_registry.require(PHENOTYPE_EXPORT_TARGET_ID),
         PhenotypeAnnotationSubmissionBlockerAdapter,
-    )
-    assert isinstance(
-        submission_registry.require(CHEMICAL_CONDITION_EXPORT_TARGET_ID),
-        ChemicalConditionSubmissionBlockerAdapter,
     )
     assert isinstance(
         submission_registry.require(GENE_EXPRESSION_TARGET_KEY),
@@ -267,45 +253,6 @@ def test_phenotype_export_adapter_projects_complete_envelope_to_target_payload()
     }
 
 
-def test_chemical_export_adapter_projects_complete_envelope_to_target_payload():
-    candidate = _fixtures()["chemical_condition"]["candidate"]
-
-    payload = build_chemical_condition_export_payload(
-        domain_envelope_candidates=[candidate],
-    )
-
-    assert payload["payload_status"] == "ready"
-    relation = payload["condition_relations"][0]
-    assert relation["target_class"] == "ConditionRelation"
-    assert relation["linkml_payload"]["host_annotation"] == {
-        "id": "210270365",
-        "type": "PhenotypeAnnotation",
-    }
-    assert relation["linkml_payload"]["condition_relation"]["single_reference"] == {
-        "reference_id": 296935
-    }
-    assert relation["db_projection"]["join_tables"] == [
-        "public.conditionrelation_experimentalcondition",
-        "public.phenotypeannotation_conditionrelation",
-    ]
-
-
-def test_chemical_export_blocks_incomplete_host_context_with_field_details():
-    candidate = deepcopy(_fixtures()["chemical_condition"]["candidate"])
-    del candidate["payload"]["host_annotation_id"]
-
-    payload = build_chemical_condition_export_payload(
-        domain_envelope_candidates=[candidate],
-    )
-
-    assert payload["payload_status"] == "blocked"
-    assert payload["condition_relations"] == []
-    assert payload["adapter_blockers"][0]["field_path"] == "host_annotation_id"
-    assert payload["adapter_blockers"][0]["code"] == (
-        "alliance.chemical_condition.export.required_context_missing"
-    )
-
-
 def test_disease_export_blocks_incomplete_subject_context_with_field_details():
     candidate = deepcopy(_fixtures()["disease"]["candidate"])
     del candidate["payload"]["disease_annotation_subject"]["subject_identifier"]
@@ -334,11 +281,6 @@ def test_disease_export_blocks_incomplete_subject_context_with_field_details():
             build_phenotype_annotation_export_payload,
             "alliance.phenotype.export.payload_malformed",
         ),
-        (
-            "chemical_condition",
-            build_chemical_condition_export_payload,
-            "alliance.chemical_condition.export.payload_malformed",
-        ),
     ),
 )
 def test_export_blocks_malformed_candidate_payload_with_object_details(
@@ -349,10 +291,7 @@ def test_export_blocks_malformed_candidate_payload_with_object_details(
     candidate = deepcopy(_fixtures()[fixture_key]["candidate"])
     candidate["payload"] = "not-a-mapping"
 
-    if fixture_key == "chemical_condition":
-        payload = builder(domain_envelope_candidates=[candidate], domain_envelopes=[])
-    else:
-        payload = builder(domain_envelope_candidates=[candidate])
+    payload = builder(domain_envelope_candidates=[candidate])
 
     assert payload["payload_status"] == "blocked"
     assert payload["adapter_blockers"][0]["field_path"] == "payload"
@@ -376,12 +315,6 @@ def test_export_blocks_malformed_candidate_payload_with_object_details(
             PHENOTYPE_EXPORT_TARGET_ID,
             PhenotypeAnnotationSubmissionBlockerAdapter(),
             "phenotype",
-        ),
-        (
-            ChemicalConditionExportAdapter(),
-            CHEMICAL_CONDITION_EXPORT_TARGET_ID,
-            ChemicalConditionSubmissionBlockerAdapter(),
-            "chemical_condition",
         ),
     ),
 )
