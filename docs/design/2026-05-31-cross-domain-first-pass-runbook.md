@@ -295,7 +295,7 @@ clean (or issues resolved); Status Table updated; committed + pushed to main.
 | pre | validator_materialization_invalid fix (baseline cleanup) | Claude | n/a | 16/16 | 8→0 | clean | DONE (eb59c04e) | (made the 0-struct gate genuine) |
 | 1 | gene | Claude | done | done | 172+8 | 0 struct | clean | DONE (39663f46) |
 | 2 | disease | Claude | done | ☐ | ☐ | ☐ | ☐ | grounded; impl pending open-Qs + test PDF |
-| 3 | phenotype | Claude | done | ☐ | ☐ | ☐ | ☐ | grounded; impl pending open-Qs + test PDF |
+| 3 | phenotype | Claude | done | done | 10 new | 33 units, 0 struct | clean | DONE (b42cdea1) |
 | 4 | allele | Claude | done | ☐ | ☐ | ☐ | ☐ | grounded; impl pending open-Qs + test PDF |
 | 5 | chemical_condition | Claude | done | ☐ | ☐ | ☐ | ☐ | grounded; impl pending open-Qs + test PDF |
 
@@ -371,3 +371,20 @@ clean (or issues resolved); Status Table updated; committed + pushed to main.
     processed PDF (a31b1ff3, gene-expression) — no representative disease/phenotype/allele/chemical
     test document. Implementation of phases 2-5 awaits Chris's open-question decisions + test PDFs;
     structural correctness is otherwise coverable via gene_expression-style unit/contract fixtures.
+- 2026-05-31 (afternoon cont.): PHASE 3 (phenotype) LANDED (commit b42cdea1). Migrated phenotype
+  envelope→builder mirroring gene/gene_expression: per-domain materialize_phenotype_builder_state
+  (one PhenotypeAnnotation curatable_unit + pending PhenotypeSubject/PhenotypeTerm/Reference/
+  EvidenceQuote sub-objects, RELATIVE metadata_refs), phenotype_builder_tools.py over the generic
+  finalize_builder_extraction, bindings flags (builder_finalization + builder_run_state), agent
+  output_schema dropped, builder-loop prompt, golden fixture, contract test (10 new; 157 suite pass).
+  NO backend/src edits. E2E on a31b1ff3: routed to phenotype_extractor, 33 PhenotypeAnnotation units
+  materialized (172 objects), inline validation dispatched 33 bindings in the chat turn, 0 structural
+  findings (validator_unresolved x33 = expected pending posture for free-text labels the active
+  WB/MGI ontology validator doesn't resolve). Opus review CLEAN. ALL 6 approach-doc open questions
+  resolved as PRESERVE-EXISTING-POSTURE (did NOT activate new ontology/provider pairs, did NOT expand
+  scope) — the namespace-coverage + term-required-ness decisions remain open for Chris. Phenotype
+  also addressed the gene-review watch-item (treats EvidenceRecord section/chunk_id as Optional).
+  STATUS: phases done = pre(validator fix), 0, 1(gene), 3(phenotype). Remaining: allele (attempting;
+  e2e feasibility on a31b1ff3 uncertain), disease + chemical_condition (no representative test PDF in
+  sandbox → grounded-only, awaiting Chris's open-Q decisions + test data; will not commit
+  prompt-unverified builders for types that can't be exercised e2e).
