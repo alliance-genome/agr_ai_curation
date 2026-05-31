@@ -48,7 +48,35 @@ Observations worth your eye:
 - 70 findings include the `object_not_pending` / `metadata_refs_missing` structural gaps we saw
   earlier — separate materialization-quality work, not part of this.
 
-### HELD for your call (not done overnight, on purpose)
+### UPDATE (midday 2026-05-31): A1 approved by Chris; Parts 2-4 implemented
+
+- **Part 4 (double-persist source fix): DONE + TESTED.** `_build_extraction_candidate_from_tool_event`
+  now accepts ONLY `INTERNAL_EXTRACTION_RESULT` (dropped the supervisor `TOOL_COMPLETE` source);
+  the dedupe band-aid in `_persist_extraction_candidates` is deleted. ge-test12 persisted exactly
+  ONE extraction_results row (was two).
+- **Part 2 (durable save): NO chat-time write needed.** The validated payload is already a
+  `DomainEnvelope` with `validation_findings` embedded (70 on ge-test11), and
+  `_domain_envelope_from_extraction_result` (curation_prep_service.py:325-326) takes the
+  `DomainEnvelope.model_validate` fast path for it, so `ensure_domain_envelope_materialization`
+  writes the durable envelope WITH the inline findings. The transient `chat-runtime` envelope_id is
+  used self-consistently (the `_extraction_envelope_id` re-key path at :340 is only reached for the
+  raw-extraction shape, which we skip). Re-keying is an optional cosmetic cleanup, not required.
+- **Part 3 (reuse / skip re-validation): IMPLEMENTED (A1).** The chat inline dispatch sets
+  `envelope.metadata["inline_validator_dispatch_complete"] = True`
+  (streaming_tools `_dispatch_domain_envelope_validators_for_chat`). The curation bootstrap
+  `_refresh_domain_envelope_validation_for_ref` (pipeline.py) checks that flag and SKIPS
+  `dispatch_active_validator_bindings` (the ~46s validator-agent pass), running only the cheap
+  structural checks and reusing the saved findings. Structural checks preserve existing findings
+  (`append_validation_findings_to_envelope` starts from `list(envelope.validation_findings)`), so
+  the inline findings survive. Curator edits still re-validate via the session validation service
+  (a separate path, unchanged). Verifying on ge-test13 (extract once, bootstrap, confirm the
+  validator dispatch runs only in the chat turn, not at bootstrap).
+
+So the flow is now: extract -> validate (chat turn) -> save (validated envelope + findings) ->
+reply -> curate (reads saved findings, no re-validation). Part 1 was committed
+(42b978c1); Parts 2-4 are in the working tree pending the ge-test13 confirmation, then commit.
+
+### HELD for your call (not done overnight, on purpose) [now resolved per A1 above]
 
 - **Part 2 — durable DomainEnvelope + findings save in the chat turn.** Right now the *validated
   extraction* is saved, but the durable `DomainEnvelope` + `domain_validation_findings` are still
@@ -340,6 +368,35 @@ symbols that do not exist in the tree (`stage_allele_paper_evidence`, `finalize_
 `DomainPackExtractionBuilder`, `extraction_staging.py`, `tools/extraction_builder.py` — all zero
 grep hits). The code followed the 2026-05-29 design (gene-expression first). Do not drive
 sequencing from the 2026-05-21 docs.
+
+## Held-question mechanics (investigated 2026-05-31, for the decisions below)
+
+- **project_key is NOT a blocker.** `_checkpoint_project_key` (curation_prep_service.py:403)
+  derives it from `extraction_result.metadata["project_key"]` else `domain_pack_id.split(".")[0]`
+  (-> `agr`) else adapter_key. The chat durable save can use the same logic; no new context needed.
+- **The validated payload IS already a `DomainEnvelope`.** Verified on `ge-test11`:
+  `DomainEnvelope.model_validate(extraction_results.payload_json)` succeeds (7 objects,
+  domain_pack `agr.alliance.gene_expression`). So the durable save is just
+  `write_domain_envelope_checkpoint(db, DomainEnvelopeCheckpointRequest(project_key="agr",
+  envelope=DomainEnvelope.model_validate(payload), expected_revision=0, document_id, session_id))`
+  in the endpoint — no re-conversion needed.
+- **BUT the envelope_id is transient: `extraction-result:chat-runtime:<uuid>`.** The Part-1 inline
+  dispatch runs through `_dispatch_domain_envelope_validators_for_chat`, which builds its candidate
+  against a `document_id="chat-runtime"` record, so the envelope_id bakes in `chat-runtime`.
+  Bootstrap/curation-prep key the envelope by the REAL extraction_result_id
+  (`_extraction_envelope_id` -> `extraction-result:<extraction_result_id>`). For the durable save
+  to align with bootstrap reuse, the endpoint must RE-KEY the envelope_id to the real
+  extraction_result_id at save time (the endpoint has the real document_id + extraction_result_id;
+  the runtime does not). This is the concrete wiring detail Part 2 turns on.
+- **Bootstrap already has reuse machinery** (`find_reusable_prepared_session`,
+  bootstrap_service.py:158) but `_refresh_domain_envelope_validation_for_ref` (pipeline.py:433)
+  re-dispatches validators regardless. Making it skip re-validation needs an "already validated at
+  revision N" gate keyed off the inline-saved envelope.
+- **Part 4 is safe.** `INTERNAL_EXTRACTION_RESULT` is emitted for every extraction specialist that
+  finalizes (builder, 3506) or returns a domain envelope (3516); the supervisor `TOOL_COMPLETE`
+  only ever produced a duplicate candidate (or, for non-envelope output, nothing). Dropping the
+  `TOOL_COMPLETE` source from `_build_extraction_candidate_from_tool_event` leaves
+  `INTERNAL_EXTRACTION_RESULT` as the single source and lets the dedupe band-aid be deleted.
 
 ## Open decisions
 
