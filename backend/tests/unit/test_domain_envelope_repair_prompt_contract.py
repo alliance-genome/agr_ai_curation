@@ -21,14 +21,23 @@ EXTRACTOR_PROMPTS = [
     "packages/alliance/agents/phenotype_extractor/prompt.yaml",
 ]
 
+# Builder-pattern extractors (gene/allele/phenotype/gene_expression) carry no
+# envelope output schema; the backend builds their envelope from staged builder
+# state. Envelope-pattern extractors (disease, until it migrates) still bind a
+# plain extraction-result envelope schema. ``None`` here means "builder agent",
+# and the test below resolves the bound schema only when one is declared.
 EXTRACTOR_OUTPUT_SCHEMAS = {
-    "packages/alliance/agents/allele_extractor/agent.yaml": "AlleleExtractionResultEnvelope",
+    "packages/alliance/agents/allele_extractor/agent.yaml": None,
     "packages/alliance/agents/disease_extractor/agent.yaml": "DiseaseExtractionResultEnvelope",
     "packages/alliance/agents/gene_expression/agent.yaml": None,
-    "packages/alliance/agents/gene_extractor/agent.yaml": "GeneExtractionResultEnvelope",
-    "packages/alliance/agents/phenotype_extractor/agent.yaml": "PhenotypeResultEnvelope",
+    "packages/alliance/agents/gene_extractor/agent.yaml": None,
+    "packages/alliance/agents/phenotype_extractor/agent.yaml": None,
 }
 
+# Non-builder, extraction-only tools every extractor may declare regardless of
+# pattern. Builder verbs (stage_/patch_/discard_/list_staged_/finalize_*) are
+# validated separately by shape so a newly migrated domain stays in scope
+# without editing this set.
 EXTRACTION_SAFE_TOOLS = {
     "search_document",
     "read_chunk",
@@ -46,12 +55,24 @@ EXTRACTION_SAFE_TOOLS = {
     "search_domain_field_terms",
     "inspect_ontology_term",
     "resolve_domain_field_term",
-    "stage_gene_expression_observation",
-    "patch_gene_expression_observation",
-    "discard_gene_expression_observation",
-    "list_staged_gene_expression_observations",
-    "finalize_gene_expression_extraction",
 }
+
+# Builder tool-loop verb prefixes. Any tool matching one of these prefixes is an
+# in-scope builder verb for an extraction agent; matching on prefix (rather than
+# a hardcoded per-domain noun) keeps the contract builder-generic.
+BUILDER_TOOL_VERB_PREFIXES = (
+    "stage_",
+    "patch_",
+    "discard_",
+    "list_staged_",
+    "finalize_",
+)
+
+
+def _is_extraction_scoped_tool(tool_id: str) -> bool:
+    if tool_id in EXTRACTION_SAFE_TOOLS:
+        return True
+    return any(tool_id.startswith(prefix) for prefix in BUILDER_TOOL_VERB_PREFIXES)
 
 FORBIDDEN_EXTRACTOR_METADATA_PHRASES = (
     "database-assisted normalization",
@@ -211,6 +232,8 @@ def test_extractor_prompts_delegate_unresolved_state_to_validators():
 def test_extractor_agents_use_plain_extraction_result_schemas():
     for relative_path, schema_name in EXTRACTOR_OUTPUT_SCHEMAS.items():
         agent_payload = _yaml(relative_path)
+        # Builder agents bind no output schema (None); envelope agents bind a
+        # plain extraction-result schema that must never be a repair response.
         assert agent_payload["output_schema"] == schema_name
         if schema_name is None:
             continue
@@ -228,7 +251,12 @@ def test_extractor_agent_metadata_and_tools_stay_extraction_scoped():
     for relative_path in EXTRACTOR_OUTPUT_SCHEMAS:
         agent_payload = _yaml(relative_path)
         tools = set(agent_payload.get("tools") or [])
-        assert tools <= EXTRACTION_SAFE_TOOLS
+        # Every declared tool is either an extraction-only tool or a builder
+        # tool-loop verb (stage_/patch_/discard_/list_staged_/finalize_*). This
+        # stays builder-generic: a newly migrated domain's verbs are accepted by
+        # shape rather than needing to be enumerated here.
+        out_of_scope = {tool for tool in tools if not _is_extraction_scoped_tool(tool)}
+        assert out_of_scope == set(), f"{relative_path} declares non-extraction tools: {out_of_scope}"
         assert tools.isdisjoint(FORBIDDEN_EXTRACTOR_TOOLS)
 
         supervisor_description = (

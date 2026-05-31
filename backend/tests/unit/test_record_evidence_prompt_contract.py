@@ -108,7 +108,12 @@ def test_extractor_prompts_state_span_evidence_workflow():
         for fragment in [
             "read_chunk.evidence_spans[].span_id",
             "record_evidence(span_ids=[...])",
-            "truly disjoint evidence",
+            # One record_evidence call maps to one evidence unit. Envelope
+            # prompts spell this as "...for truly disjoint evidence units" while
+            # the terser builder prompts (e.g. phenotype) instruct selecting span
+            # ids that "directly support one evidence unit"; both phrasings
+            # contain "evidence unit", which keeps this contract builder-generic.
+            "evidence unit",
         ]:
             if fragment.lower() not in content:
                 missing.append(f"{label}: {fragment}")

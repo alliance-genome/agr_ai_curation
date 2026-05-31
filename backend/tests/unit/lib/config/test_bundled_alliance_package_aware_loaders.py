@@ -20,6 +20,66 @@ REPO_ROOT = find_repo_root(Path(__file__))
 REPO_PACKAGES_DIR = REPO_ROOT / "packages"
 REPO_LEGACY_AGENTS_DIR = REPO_ROOT / "alliance_agents"
 
+# Span-evidence workspace tools that every builder-pattern extractor shares, in
+# load order, before its domain-specific builder verbs. Keeping this shared and
+# pattern-based (rather than a per-extractor literal list) means the next domain
+# to migrate to the builder pattern is covered automatically.
+BUILDER_EVIDENCE_TOOL_PREFIX = [
+    "search_document",
+    "read_chunk",
+    "read_section",
+    "read_subsection",
+    "record_evidence",
+    "list_recorded_evidence",
+    "get_recorded_evidence",
+    "attach_evidence_to_object",
+    "detach_evidence_from_object",
+    "discard_recorded_evidence",
+    "update_recorded_evidence_metadata",
+    "get_agent_contract",
+    "agr_species_context_lookup",
+]
+
+# Tools an envelope-pattern (pre-builder) extractor still declares, in load order.
+ENVELOPE_EXTRACTOR_TOOLS = [
+    "search_document",
+    "read_chunk",
+    "read_section",
+    "read_subsection",
+    "record_evidence",
+    "get_agent_contract",
+    "agr_species_context_lookup",
+]
+
+
+def _assert_builder_extractor_tools(tools, *, domain: str):
+    """Assert a migrated extractor carries the shared span-evidence workspace
+    tools followed by exactly its five domain builder verbs.
+
+    Builder-generic on purpose: only the ``stage_/patch_/discard_/list_staged_/
+    finalize_*`` *shape* is enforced, not a hardcoded verb list, so a newly
+    migrated domain (e.g. disease) is covered without editing this test again.
+    """
+
+    prefix = tools[: len(BUILDER_EVIDENCE_TOOL_PREFIX)]
+    suffix = tools[len(BUILDER_EVIDENCE_TOOL_PREFIX) :]
+
+    assert prefix == BUILDER_EVIDENCE_TOOL_PREFIX, (
+        f"{domain} extractor lost the shared span-evidence workspace tools: {prefix}"
+    )
+
+    # Exactly the five builder verbs, in canonical stage -> finalize order. The
+    # concrete object noun differs per domain (e.g. gene uses
+    # ``gene_mention_evidence`` while allele/phenotype use ``*_observation``), so
+    # match on the verb prefixes rather than spelling the noun out.
+    assert len(suffix) == 5, f"{domain} extractor builder verbs: {suffix}"
+    stage, patch, discard, list_staged, finalize = suffix
+    assert stage.startswith("stage_"), suffix
+    assert patch.startswith("patch_"), suffix
+    assert discard.startswith("discard_"), suffix
+    assert list_staged.startswith("list_staged_"), suffix
+    assert finalize.startswith("finalize_") and finalize.endswith("_extraction"), suffix
+
 
 def _iter_dict_nodes(value):
     if isinstance(value, dict):
@@ -58,15 +118,11 @@ def test_bundled_alliance_gene_extractor_declares_record_evidence(monkeypatch):
     agents = agent_loader.load_agent_definitions(force_reload=True)
     gene_extractor = agents["gene_extractor"]
 
-    assert gene_extractor.tools == [
-        "search_document",
-        "read_chunk",
-        "read_section",
-        "read_subsection",
-        "record_evidence",
-        "get_agent_contract",
-        "agr_species_context_lookup",
-    ]
+    # gene_extractor is migrated to the builder pattern: no envelope output
+    # schema, plus the shared span-evidence workspace tools and its gene builder
+    # verbs.
+    assert gene_extractor.output_schema is None
+    _assert_builder_extractor_tools(gene_extractor.tools, domain="gene")
 
 
 def test_bundled_alliance_gene_expression_declares_record_evidence(monkeypatch):
@@ -107,15 +163,9 @@ def test_bundled_alliance_allele_extractor_declares_record_evidence(monkeypatch)
     agents = agent_loader.load_agent_definitions(force_reload=True)
     allele_extractor = agents["allele_extractor"]
 
-    assert allele_extractor.tools == [
-        "search_document",
-        "read_chunk",
-        "read_section",
-        "read_subsection",
-        "record_evidence",
-        "get_agent_contract",
-        "agr_species_context_lookup",
-    ]
+    # allele_extractor is migrated to the builder pattern.
+    assert allele_extractor.output_schema is None
+    _assert_builder_extractor_tools(allele_extractor.tools, domain="allele")
 
 
 def test_bundled_alliance_disease_extractor_uses_narrow_context_tool(monkeypatch):
@@ -124,15 +174,15 @@ def test_bundled_alliance_disease_extractor_uses_narrow_context_tool(monkeypatch
     agents = agent_loader.load_agent_definitions(force_reload=True)
     disease_extractor = agents["disease_extractor"]
 
-    assert disease_extractor.tools == [
-        "search_document",
-        "read_chunk",
-        "read_section",
-        "read_subsection",
-        "record_evidence",
-        "get_agent_contract",
-        "agr_species_context_lookup",
-    ]
+    # disease_extractor has not migrated to the builder pattern yet, so it still
+    # declares the narrow envelope-era tool set. This test is written to follow
+    # the migration automatically: when disease flips to the builder pattern
+    # (output_schema -> None) it should assert the builder tool contract instead,
+    # exactly like its already-migrated siblings.
+    if disease_extractor.output_schema is None:
+        _assert_builder_extractor_tools(disease_extractor.tools, domain="disease")
+    else:
+        assert disease_extractor.tools == ENVELOPE_EXTRACTOR_TOOLS
 
 
 def test_bundled_alliance_phenotype_extractor_uses_narrow_context_tool(monkeypatch):
@@ -141,15 +191,9 @@ def test_bundled_alliance_phenotype_extractor_uses_narrow_context_tool(monkeypat
     agents = agent_loader.load_agent_definitions(force_reload=True)
     phenotype_extractor = agents["phenotype_extractor"]
 
-    assert phenotype_extractor.tools == [
-        "search_document",
-        "read_chunk",
-        "read_section",
-        "read_subsection",
-        "record_evidence",
-        "get_agent_contract",
-        "agr_species_context_lookup",
-    ]
+    # phenotype_extractor is migrated to the builder pattern.
+    assert phenotype_extractor.output_schema is None
+    _assert_builder_extractor_tools(phenotype_extractor.tools, domain="phenotype")
 
 
 def test_bundled_alliance_owns_agr_curation_tool_policy(monkeypatch):
