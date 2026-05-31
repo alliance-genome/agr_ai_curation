@@ -441,3 +441,51 @@ alignment now — the validators are ready. Each decision below resolves the mat
   (and `chemical_condition` is being removed — see that doc). Capture the straightforward optional disease
   slots (negated, genetic_sex, annotation_type, etc.) as full alignment allows; do NOT build the
   condition→host linkage now.
+
+---
+
+## Implementation landed (2026-05-31) — builder migration + FULL LinkML alignment
+
+The `disease_extractor` is migrated envelope -> builder (mirroring gene/phenotype/allele) AND brought
+to full LinkML alignment per D1-D6. New files: `domain_packs/disease/builder_conversion.py`
+(`materialize_disease_builder_state`), `tools/disease_builder_tools.py` (stage/patch/discard/list/
+finalize), the `alzheimers_builder_pending.yaml` golden fixture, and
+`test_disease_builder_domain_pack.py`. The envelope-legacy `conversion.py` +
+`DiseaseExtractionResultEnvelope` path is left intact alongside the builder path.
+
+- **D1 DONE** — `materialize_disease_builder_state` emits the CONCRETE GeneDiseaseAnnotation /
+  AlleleDiseaseAnnotation / AGMDiseaseAnnotation selected by staged `subject_type` (abstract
+  DiseaseAnnotation only on unknown subject -> validator_unresolved, non-structural). The pack
+  declares concrete-subtype object_definitions so validators dispatch on them. No write/export-blocked
+  posture on the concrete annotation. **e2e proof**: the Drosophila Alzheimer's paper materialized a
+  concrete `AGMDiseaseAnnotation` (subject "elav; APP; BACE heterozygous flies").
+- **D2 DONE** — `stage_disease_observation` captures the subject; `subject_entity_validation` activated
+  (under_development -> active). The subject selects the D1 subtype.
+- **D3 DONE** — `evidence_code_curies[]` staged + snapshotted; `disease_evidence_code_lookup` activated.
+- **D4 BLOCKED (documented, not faked)** — single_reference stays PENDING. INVESTIGATED: at
+  chat-extraction time the inline validator dispatch builds its candidate against a transient
+  `document_id="chat-runtime"` record (streaming_tools.py:1751), and `pdf_documents` has NO durable
+  Alliance reference identity column (no AGRKB/PMID/DOI/curie). So there is genuinely no durable
+  reference to bind. `disease_reference_materialization` stays under_development; the reference validator
+  returns validator_unresolved (non-structural). The SAME gap exists for phenotype + allele; a uniform
+  "bind Reference from the resolved workspace-document identity" fix is the proper future home (see
+  open question R1 below).
+- **D5 DONE** — per-subtype relation CV subsets declared on each concrete subtype field
+  (`relation_subsets`); `disease_relation_cv_lookup` validates the staged relation. e2e resolved
+  `is_model_of` for the AGM subject.
+- **D6 DEFERRED** — condition_relations out of scope (intentionally not built; the legacy condition
+  fields remain declared in the pack as under_development).
+
+### Open questions (genuine, for Chris)
+
+- **R1 (D4 reference binding infra)** — To bind `single_reference` durably, the chat inline-validation
+  path needs the REAL document identity (not `chat-runtime`) AND a document->Alliance-reference
+  resolution (PMID/DOI/AGRKB) at extraction time. Today neither exists: `pdf_documents` stores no
+  reference identity, and the inline dispatch runs against the transient chat-runtime document record.
+  Proposed: resolve the workspace document to a literature reference and thread the real document_id
+  into the inline dispatch, then bind it uniformly across disease + phenotype + allele. Until then
+  single_reference is honestly pending.
+- **subject_identifier `selector_missing_field`** — when a paper names an AGM/subject with no durable
+  identifier, the active subject binding emits `selector_missing_field` (non-structural, severity error)
+  rather than resolving. That is the accurate curation gap (curator must supply the AGM id). Left as-is;
+  relaxing the binding to optional would mask a real gap.

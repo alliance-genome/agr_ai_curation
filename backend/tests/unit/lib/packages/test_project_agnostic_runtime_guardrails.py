@@ -148,6 +148,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     # Contract, integration, and live suites intentionally exercise shipped deployment data.
     Path("backend/tests/contract/alliance/domain_packs/test_allele_domain_pack.py"),
     Path("backend/tests/contract/alliance/domain_packs/test_alliance_gene_domain_pack.py"),
+    Path("backend/tests/contract/alliance/domain_packs/test_disease_builder_domain_pack.py"),
     Path("backend/tests/contract/alliance/domain_packs/test_disease_domain_pack.py"),
     Path("backend/tests/contract/alliance/domain_packs/test_export_submission_adapters.py"),
     Path("backend/tests/contract/alliance/domain_packs/test_gene_domain_pack.py"),

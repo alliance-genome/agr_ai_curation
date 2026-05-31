@@ -37,19 +37,36 @@ supervisor_routing:
 # -----------------------------------------------------------------------------
 # TOOLS
 # -----------------------------------------------------------------------------
+# Builder tool-loop: record evidence -> stage disease observations -> finalize. Mirrors the
+# phenotype builder tool set. The active validator bindings resolve the staged DOID/subject/relation/
+# ECO/data-provider inputs inline, so there is no controlled-field resolver loop here.
 tools:
   - search_document
   - read_chunk
   - read_section
   - read_subsection
   - record_evidence
+  - list_recorded_evidence
+  - get_recorded_evidence
+  - attach_evidence_to_object
+  - detach_evidence_from_object
+  - discard_recorded_evidence
+  - update_recorded_evidence_metadata
   - get_agent_contract
   - agr_species_context_lookup
+  - stage_disease_observation
+  - patch_disease_observation
+  - discard_disease_observation
+  - list_staged_disease_observations
+  - finalize_disease_extraction
 
 # -----------------------------------------------------------------------------
 # OUTPUT SCHEMA
 # -----------------------------------------------------------------------------
-output_schema: DiseaseExtractionResultEnvelope
+# Builder-pattern agents are FORBIDDEN an output schema; the backend materializes
+# DiseaseExtractionResultEnvelope from staged builder state (see streaming_tools forbid-output-schema
+# guard + builder-materializer detection).
+output_schema: null
 
 # -----------------------------------------------------------------------------
 # MODEL CONFIGURATION

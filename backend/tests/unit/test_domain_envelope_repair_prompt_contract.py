@@ -21,14 +21,13 @@ EXTRACTOR_PROMPTS = [
     "packages/alliance/agents/phenotype_extractor/prompt.yaml",
 ]
 
-# Builder-pattern extractors (gene/allele/phenotype/gene_expression) carry no
-# envelope output schema; the backend builds their envelope from staged builder
-# state. Envelope-pattern extractors (disease, until it migrates) still bind a
-# plain extraction-result envelope schema. ``None`` here means "builder agent",
-# and the test below resolves the bound schema only when one is declared.
+# Builder-pattern extractors (gene/allele/disease/phenotype/gene_expression) carry
+# no envelope output schema; the backend builds their envelope from staged builder
+# state. ``None`` here means "builder agent", and the test below resolves the bound
+# schema only when one is declared.
 EXTRACTOR_OUTPUT_SCHEMAS = {
     "packages/alliance/agents/allele_extractor/agent.yaml": None,
-    "packages/alliance/agents/disease_extractor/agent.yaml": "DiseaseExtractionResultEnvelope",
+    "packages/alliance/agents/disease_extractor/agent.yaml": None,
     "packages/alliance/agents/gene_expression/agent.yaml": None,
     "packages/alliance/agents/gene_extractor/agent.yaml": None,
     "packages/alliance/agents/phenotype_extractor/agent.yaml": None,

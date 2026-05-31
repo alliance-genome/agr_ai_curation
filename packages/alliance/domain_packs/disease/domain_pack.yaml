@@ -339,6 +339,12 @@ object_definitions:
           definition_state_category: complete
           editable: true
           source_of_truth: alliance_linkml
+          # FULL LinkML alignment: the validated DOID snapshot mirrors onto the payload's
+          # disease_annotation_object so the embedded DOTerm matches the validated ontology lookup
+          # (LinkML "X must match Y"). Domain-pack-driven (materialization._propagate_materialized_mirror_paths),
+          # not code special-casing (invariant §5.4).
+          materializes_to_field_paths:
+            - disease_annotation_object.curie
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -362,6 +368,8 @@ object_definitions:
           definition_state_category: complete
           editable: true
           source_of_truth: alliance_linkml
+          materializes_to_field_paths:
+            - disease_annotation_object.name
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -390,15 +398,27 @@ object_definitions:
       - field_path: disease_relation_name
         field_type: string
         display_name: Disease relation name
-        description: Name of the Disease Relation vocabulary term when the relation can be determined from evidence.
-        definition_state: in_development
+        description: Name of the Disease Relation vocabulary term, validated against the subject-type CV subset (D5).
         metadata:
           validatable: true
           validator_binding_id: disease_relation_cv_lookup
           validator_state: active
-          definition_state_category: under_development
-          protected: true
-          curator_action_note: Disease relation validation remains under development until the relation contract is complete.
+          definition_state_category: complete
+          editable: true
+          # FULL LinkML alignment (D5): per-subtype Disease Relation CV subsets. VERIFIED that LinkML,
+          # the formal CV subsets, and curator usage agree.
+          relation_subsets:
+            gene:
+              - is_implicated_in
+              - is_marker_for
+              - is_implicated_via_orthology
+              - is_marker_via_orthology
+            allele:
+              - is_implicated_in
+            agm:
+              - is_model_of
+              - is_ameliorated_model_of
+              - is_exacerbated_model_of
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -413,17 +433,14 @@ object_definitions:
         field_type: object
         display_name: Disease annotation subject
         model_ref: DiseaseSubjectSnapshotPayload
-        definition_state: in_development
         definition_notes:
-          - Required for concrete LinkML disease annotations, but blocked until extractor output emits a verified Gene, Allele, or AGM subject.
+          - The subject biological entity selects the concrete GeneDiseaseAnnotation, AlleleDiseaseAnnotation, or AGMDiseaseAnnotation subtype (D1/D2). Concrete identity is resolved by the active subject_entity_validation binding.
         metadata:
           validatable: true
           validator_binding_id: disease_subject_materialization
-          validator_state: under_development
-          definition_state_category: blocked
-          blocked_by: ALL-410
-          protected: true
-          curator_action_note: Disease subject materialization remains blocked until a verified Gene, Allele, or AGM subject is available.
+          validator_state: active
+          definition_state_category: complete
+          editable: true
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -436,29 +453,24 @@ object_definitions:
         field_type: enum
         display_name: Subject type
         enum_ref: DiseaseSubjectType
-        definition_state: in_development
         metadata:
-          definition_state_category: blocked
-          blocked_by: ALL-410
+          definition_state_category: complete
+          editable: true
       - field_path: disease_annotation_subject.subject_label
         field_type: string
         display_name: Subject label
-        definition_state: in_development
         metadata:
-          definition_state_category: blocked
-          blocked_by: ALL-410
+          definition_state_category: complete
+          editable: true
       - field_path: disease_annotation_subject.subject_identifier
         field_type: string
         display_name: Subject identifier
-        definition_state: in_development
         metadata:
           validatable: true
           validator_binding_id: disease_subject_materialization
-          validator_state: under_development
-          definition_state_category: blocked
-          blocked_by: ALL-410
-          protected: true
-          curator_action_note: Disease subject materialization remains blocked until a verified subject identifier is available.
+          validator_state: active
+          definition_state_category: complete
+          editable: true
       - field_path: single_reference
         field_type: object
         display_name: Source reference
@@ -507,15 +519,12 @@ object_definitions:
       - field_path: evidence_code_curies[0]
         field_type: string
         display_name: First evidence code CURIE
-        definition_state: in_development
         metadata:
           validatable: true
           validator_binding_id: disease_evidence_code_lookup
-          validator_state: under_development
-          definition_state_category: blocked
-          blocked_by: ALL-425
-          protected: true
-          curator_action_note: Evidence-code lookup remains blocked until source reference projection is verified.
+          validator_state: active
+          definition_state_category: complete
+          editable: true
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -790,6 +799,294 @@ object_definitions:
               range: string
               db_table: experimentalcondition
               db_column: conditionsummary
+  # ---------------------------------------------------------------------------------------------
+  # Concrete LinkML subtypes (D1 FULL alignment). The builder materializes one of these per
+  # candidate, selected by subject kind. Each declares the validatable fields the active bindings
+  # target so validator dispatch fires on the concrete object (validator dispatch matches a binding
+  # field only when the object_type's object_definition declares that field path).
+  # ---------------------------------------------------------------------------------------------
+  - object_type: GeneDiseaseAnnotation
+    display_name: Gene disease annotation
+    description: Concrete disease annotation associating a Gene with a Disease Ontology term.
+    model_ref: PendingDiseaseAssertionPayload
+    schema_ref:
+      schema_id: alliance.linkml.GeneDiseaseAnnotation
+      provider: alliance_linkml
+      name: GeneDiseaseAnnotation
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/phenotypeAndDiseaseAnnotation.yaml
+      definition_state: in_development
+    definition_state: in_development
+    metadata:
+      object_role: curatable_unit
+      assertion_kind: disease_assertion
+      curatable_unit_object_type: GeneDiseaseAnnotation
+    fields:
+      - field_path: disease_annotation_object.curie
+        field_type: string
+        display_name: Disease term CURIE
+        required: false
+        metadata:
+          validatable: true
+          validator_binding_id: disease_ontology_term_lookup
+          validator_state: active
+          validation_result_field: curie
+          materializes_to_field_paths:
+            - disease_annotation_object.curie
+      - field_path: disease_annotation_object.name
+        field_type: string
+        display_name: Disease term name
+        required: true
+        metadata:
+          validatable: true
+          validator_binding_id: disease_ontology_term_lookup
+          validator_state: active
+          validation_result_field: name
+          materializes_to_field_paths:
+            - disease_annotation_object.name
+      - field_path: disease_annotation_subject.subject_identifier
+        field_type: string
+        display_name: Subject identifier
+        metadata:
+          validatable: true
+          validator_binding_id: disease_subject_materialization
+          validator_state: active
+      - field_path: disease_annotation_subject.subject_type
+        field_type: enum
+        display_name: Subject type
+        enum_ref: DiseaseSubjectType
+        metadata:
+          validatable: true
+          validator_binding_id: disease_subject_materialization
+          validator_state: active
+      - field_path: disease_annotation_subject.subject_label
+        field_type: string
+        display_name: Subject label
+        metadata:
+          definition_state_category: complete
+          editable: true
+      - field_path: disease_relation_name
+        field_type: string
+        display_name: Disease relation name
+        metadata:
+          validatable: true
+          validator_binding_id: disease_relation_cv_lookup
+          validator_state: active
+          relation_subsets:
+            gene:
+              - is_implicated_in
+              - is_marker_for
+              - is_implicated_via_orthology
+              - is_marker_via_orthology
+      - field_path: data_provider.abbreviation
+        field_type: string
+        display_name: Data provider abbreviation
+        metadata:
+          validatable: true
+          validator_binding_id: disease_data_provider_lookup
+          validator_state: active
+      - field_path: evidence_code_curies[0]
+        field_type: string
+        display_name: First evidence code CURIE
+        metadata:
+          validatable: true
+          validator_binding_id: disease_evidence_code_lookup
+          validator_state: active
+  - object_type: AlleleDiseaseAnnotation
+    display_name: Allele disease annotation
+    description: Concrete disease annotation associating an Allele with a Disease Ontology term.
+    model_ref: PendingDiseaseAssertionPayload
+    schema_ref:
+      schema_id: alliance.linkml.AlleleDiseaseAnnotation
+      provider: alliance_linkml
+      name: AlleleDiseaseAnnotation
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/phenotypeAndDiseaseAnnotation.yaml
+      definition_state: in_development
+    definition_state: in_development
+    metadata:
+      object_role: curatable_unit
+      assertion_kind: disease_assertion
+      curatable_unit_object_type: AlleleDiseaseAnnotation
+    fields:
+      - field_path: disease_annotation_object.curie
+        field_type: string
+        display_name: Disease term CURIE
+        required: false
+        metadata:
+          validatable: true
+          validator_binding_id: disease_ontology_term_lookup
+          validator_state: active
+          validation_result_field: curie
+          materializes_to_field_paths:
+            - disease_annotation_object.curie
+      - field_path: disease_annotation_object.name
+        field_type: string
+        display_name: Disease term name
+        required: true
+        metadata:
+          validatable: true
+          validator_binding_id: disease_ontology_term_lookup
+          validator_state: active
+          validation_result_field: name
+          materializes_to_field_paths:
+            - disease_annotation_object.name
+      - field_path: disease_annotation_subject.subject_identifier
+        field_type: string
+        display_name: Subject identifier
+        metadata:
+          validatable: true
+          validator_binding_id: disease_subject_materialization
+          validator_state: active
+      - field_path: disease_annotation_subject.subject_type
+        field_type: enum
+        display_name: Subject type
+        enum_ref: DiseaseSubjectType
+        metadata:
+          validatable: true
+          validator_binding_id: disease_subject_materialization
+          validator_state: active
+      - field_path: disease_annotation_subject.subject_label
+        field_type: string
+        display_name: Subject label
+        metadata:
+          definition_state_category: complete
+          editable: true
+      - field_path: disease_relation_name
+        field_type: string
+        display_name: Disease relation name
+        metadata:
+          validatable: true
+          validator_binding_id: disease_relation_cv_lookup
+          validator_state: active
+          relation_subsets:
+            allele:
+              - is_implicated_in
+      - field_path: data_provider.abbreviation
+        field_type: string
+        display_name: Data provider abbreviation
+        metadata:
+          validatable: true
+          validator_binding_id: disease_data_provider_lookup
+          validator_state: active
+      - field_path: evidence_code_curies[0]
+        field_type: string
+        display_name: First evidence code CURIE
+        metadata:
+          validatable: true
+          validator_binding_id: disease_evidence_code_lookup
+          validator_state: active
+  - object_type: AGMDiseaseAnnotation
+    display_name: AGM disease annotation
+    description: Concrete disease annotation associating an Affected Genomic Model with a Disease Ontology term.
+    model_ref: PendingDiseaseAssertionPayload
+    schema_ref:
+      schema_id: alliance.linkml.AGMDiseaseAnnotation
+      provider: alliance_linkml
+      name: AGMDiseaseAnnotation
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/phenotypeAndDiseaseAnnotation.yaml
+      definition_state: in_development
+    definition_state: in_development
+    metadata:
+      object_role: curatable_unit
+      assertion_kind: disease_assertion
+      curatable_unit_object_type: AGMDiseaseAnnotation
+    fields:
+      - field_path: disease_annotation_object.curie
+        field_type: string
+        display_name: Disease term CURIE
+        required: false
+        metadata:
+          validatable: true
+          validator_binding_id: disease_ontology_term_lookup
+          validator_state: active
+          validation_result_field: curie
+          materializes_to_field_paths:
+            - disease_annotation_object.curie
+      - field_path: disease_annotation_object.name
+        field_type: string
+        display_name: Disease term name
+        required: true
+        metadata:
+          validatable: true
+          validator_binding_id: disease_ontology_term_lookup
+          validator_state: active
+          validation_result_field: name
+          materializes_to_field_paths:
+            - disease_annotation_object.name
+      - field_path: disease_annotation_subject.subject_identifier
+        field_type: string
+        display_name: Subject identifier
+        metadata:
+          validatable: true
+          validator_binding_id: disease_subject_materialization
+          validator_state: active
+      - field_path: disease_annotation_subject.subject_type
+        field_type: enum
+        display_name: Subject type
+        enum_ref: DiseaseSubjectType
+        metadata:
+          validatable: true
+          validator_binding_id: disease_subject_materialization
+          validator_state: active
+      - field_path: disease_annotation_subject.subject_label
+        field_type: string
+        display_name: Subject label
+        metadata:
+          definition_state_category: complete
+          editable: true
+      - field_path: disease_relation_name
+        field_type: string
+        display_name: Disease relation name
+        metadata:
+          validatable: true
+          validator_binding_id: disease_relation_cv_lookup
+          validator_state: active
+          relation_subsets:
+            agm:
+              - is_model_of
+              - is_ameliorated_model_of
+              - is_exacerbated_model_of
+      - field_path: data_provider.abbreviation
+        field_type: string
+        display_name: Data provider abbreviation
+        metadata:
+          validatable: true
+          validator_binding_id: disease_data_provider_lookup
+          validator_state: active
+      - field_path: evidence_code_curies[0]
+        field_type: string
+        display_name: First evidence code CURIE
+        metadata:
+          validatable: true
+          validator_binding_id: disease_evidence_code_lookup
+          validator_state: active
+  # Pending sub-objects materialized alongside the concrete annotation (structural object_refs).
+  - object_type: DiseaseAnnotationSubject
+    display_name: Disease annotation subject
+    description: Pending subject reference; concrete Gene/Allele/AGM identity is resolved by the active subject validator.
+    definition_state: in_development
+    metadata:
+      object_role: validated_reference
+  - object_type: DOTerm
+    display_name: Disease ontology term
+    description: Pending Disease Ontology term reference resolved by the active ontology validator.
+    definition_state: in_development
+    metadata:
+      object_role: validated_reference
+  - object_type: Reference
+    display_name: Source reference
+    description: Pending source reference; resolution is deferred (D4 blocked — no durable reference identity at extraction time).
+    definition_state: in_development
+    metadata:
+      object_role: validated_reference
+  - object_type: EvidenceQuote
+    display_name: Evidence quote
+    description: Verified evidence quote snapshot supporting the disease assertion.
+    definition_state: in_development
+    metadata:
+      object_role: metadata_only
 fixture_packs:
   - fixture_pack_id: tool_verified
     display_name: Tool-verified disease assertion fixtures
@@ -797,6 +1094,12 @@ fixture_packs:
     description: Pending disease assertion domain envelopes converted from verified disease extraction fixtures.
     object_types:
       - DiseaseAnnotation
+  - fixture_pack_id: alzheimers_builder_pending
+    display_name: Builder concrete GeneDiseaseAnnotation fixtures
+    path: fixtures/alzheimers_builder_pending.yaml
+    description: Concrete GeneDiseaseAnnotation domain envelope produced by the disease builder materializer (FULL LinkML alignment) with RELATIVE metadata_refs.
+    object_types:
+      - GeneDiseaseAnnotation
 metadata:
   object_role_key: object_role
   curatable_unit_object_type: DiseaseAnnotation
@@ -830,22 +1133,23 @@ metadata:
       - validator_id: disease_data_provider_lookup
         display_name: Data provider lookup
         description: Validate disease data-provider abbreviations through the active data-provider package validator binding.
+      - validator_id: disease_subject_materialization
+        display_name: Disease subject lookup
+        description: Resolve the staged disease_annotation_subject to concrete Gene, Allele, or AGM identity through the active subject-entity package validator binding (D2 full LinkML alignment).
+      - validator_id: disease_evidence_code_lookup
+        display_name: Evidence code lookup
+        description: Validate ECO evidence-code curies through the active ontology-term package validator binding (D3 full LinkML alignment).
     under_development:
       - validator_id: experimental_condition_validation
         display_name: Experimental condition validation
         description: Compose disease condition relation, experimental condition ontology, chemical, taxon, and data-provider component checks into one auditable condition decision.
-      - validator_id: disease.subject_materialization
-        display_name: Disease subject lookup
-        blocked_by: ALL-410
-        description: Concrete Gene, Allele, or AGM subject validation waits for the disease extractor output migration.
       - validator_id: disease.export_submission_projection
         display_name: Disease ready for export
         blocked_by: ALL-425
         description: Export/submission validation waits for verified disease phenotype and chemical export/submission adapters.
-      - validator_id: disease.reference_and_evidence_code_materialization
-        display_name: Reference and evidence code lookup
-        blocked_by: ALL-425
-        description: Durable reference IDs and ECO evidence-code mapping must be verified before writes can be enabled.
+      - validator_id: disease_reference_materialization
+        display_name: Reference lookup
+        description: Durable reference IDs (AGRKB/PMID/DOI) are not available at chat-extraction time (D4 blocked); single_reference resolution is deferred.
   validator_bindings:
     active:
       - binding_id: disease_ontology_term_lookup
@@ -857,6 +1161,9 @@ metadata:
           domain_pack_id: agr.alliance.disease
           object_types:
             - DiseaseAnnotation
+            - GeneDiseaseAnnotation
+            - AlleleDiseaseAnnotation
+            - AGMDiseaseAnnotation
           field_paths:
             - disease_annotation_object.curie
             - disease_annotation_object.name
@@ -896,6 +1203,9 @@ metadata:
           domain_pack_id: agr.alliance.disease
           object_types:
             - DiseaseAnnotation
+            - GeneDiseaseAnnotation
+            - AlleleDiseaseAnnotation
+            - AGMDiseaseAnnotation
           field_paths:
             - disease_relation_name
         input_fields:
@@ -951,6 +1261,9 @@ metadata:
           domain_pack_id: agr.alliance.disease
           object_types:
             - DiseaseAnnotation
+            - GeneDiseaseAnnotation
+            - AlleleDiseaseAnnotation
+            - AGMDiseaseAnnotation
           field_paths:
             - data_provider.abbreviation
         input_fields:
@@ -959,6 +1272,82 @@ metadata:
             path: data_provider.abbreviation
         expected_result_fields:
           abbreviation: data_provider.abbreviation
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
+      # FULL LinkML alignment (D2): subject_entity_validation activated. The staged subject
+      # (subject_type + subject_identifier) is resolved to concrete Gene/Allele/AGM identity, and
+      # selects the concrete DiseaseAnnotation subtype materialized by the builder.
+      - binding_id: disease_subject_materialization
+        display_name: Disease subject lookup
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: subject_entity_validation
+        applies_to:
+          domain_pack_id: agr.alliance.disease
+          object_types:
+            - DiseaseAnnotation
+            - GeneDiseaseAnnotation
+            - AlleleDiseaseAnnotation
+            - AGMDiseaseAnnotation
+          field_paths:
+            - disease_annotation_subject.subject_identifier
+            - disease_annotation_subject.subject_type
+        input_fields:
+          subject_type:
+            source: payload
+            path: disease_annotation_subject.subject_type
+          subject_identifier:
+            source: payload
+            path: disease_annotation_subject.subject_identifier
+          subject_label:
+            source: payload
+            path: disease_annotation_subject.subject_label
+            required: false
+        expected_result_fields:
+          subject_identifier: disease_annotation_subject.subject_identifier
+          subject_type: disease_annotation_subject.subject_type
+          subject_label: disease_annotation_subject.subject_label
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
+      # FULL LinkML alignment (D3): ECO evidence-code lookup activated. evidence_codes is
+      # LinkML-required + multivalued; ECO CURIEs are validated through the ontology-term validator.
+      - binding_id: disease_evidence_code_lookup
+        display_name: Evidence code lookup
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: ontology_term_validation
+        applies_to:
+          domain_pack_id: agr.alliance.disease
+          object_types:
+            - DiseaseAnnotation
+            - GeneDiseaseAnnotation
+            - AlleleDiseaseAnnotation
+            - AGMDiseaseAnnotation
+          field_paths:
+            - evidence_code_curies[0]
+        input_fields:
+          curie:
+            source: payload
+            path: evidence_code_curies[0]
+            required: false
+          ontology_family:
+            source: literal
+            value: evidence
+          ontology_term_type:
+            source: literal
+            value: ECOTerm
+          accepted_prefixes:
+            source: literal
+            value:
+              - ECO
+        expected_result_fields:
+          curie: evidence_code_curies[0]
         required: true
         blocking: false
         allow_opt_out: true
@@ -1043,45 +1432,12 @@ metadata:
           condition_id: ExperimentalCondition.condition_id
           normalized_components: ExperimentalCondition.components
         definition_state: in_development
-      - binding_id: disease_subject_materialization
-        display_name: Disease subject lookup
-        validator_agent:
-          package_id: agr.alliance
-          agent_id: subject_entity_validation
-        state_explanation: Disease subject lookup routes explicit disease_annotation_subject.subject_type values to gene, allele, or AGM validation paths; materialization remains under development until extractor and export targets are reviewed end to end.
-        applies_to:
-          domain_pack_id: agr.alliance.disease
-          object_types:
-            - DiseaseAnnotation
-          field_paths:
-            - disease_annotation_subject.subject_identifier
-            - disease_annotation_subject.subject_type
-        input_fields:
-          subject_type:
-            source: payload
-            path: disease_annotation_subject.subject_type
-          subject_identifier:
-            source: payload
-            path: disease_annotation_subject.subject_identifier
-          subject_label:
-            source: payload
-            path: disease_annotation_subject.subject_label
-            required: false
-          taxon:
-            source: payload
-            path: data_provider.taxon
-            required: false
-        expected_result_fields:
-          subject_identifier: disease_annotation_subject.subject_identifier
-          subject_type: disease_annotation_subject.subject_type
-          subject_label: disease_annotation_subject.subject_label
-          taxon: disease_annotation_subject.taxon
       - binding_id: disease_reference_materialization
         display_name: Reference lookup
         validator_agent:
           package_id: agr.alliance
           agent_id: reference_validation
-        state_explanation: Reference validation is prepared around the API-backed package tool but remains metadata-only until dependent disease materialization and export flows are activated.
+        state_explanation: D4 BLOCKED — no durable Alliance reference identity (AGRKB/PMID/DOI) is available at chat-extraction time (the inline dispatch builds against a transient document_id=chat-runtime record and pdf_documents carries no reference identity), so single_reference stays pending. See disease-approach.md open questions; the reference validator returns validator_unresolved (non-structural).
         applies_to:
           domain_pack_id: agr.alliance.disease
           object_types:
@@ -1120,35 +1476,6 @@ metadata:
           reference_id: single_reference.reference_id
           curie: single_reference.curie
           title: single_reference.title
-      - binding_id: disease_evidence_code_lookup
-        display_name: Evidence code lookup
-        state_explanation: ECO evidence-code mapping is blocked by ALL-425.
-        validator_agent:
-          package_id: agr.alliance
-          agent_id: ontology_term_validation
-        applies_to:
-          domain_pack_id: agr.alliance.disease
-          object_types:
-            - DiseaseAnnotation
-          field_paths:
-            - evidence_code_curies[0]
-        input_fields:
-          curie:
-            source: payload
-            path: evidence_code_curies[0]
-            required: false
-          ontology_family:
-            source: literal
-            value: evidence
-          ontology_term_type:
-            source: literal
-            value: ECOTerm
-          accepted_prefixes:
-            source: literal
-            value:
-              - ECO
-        expected_result_fields:
-          curie: evidence_code_curies[0]
   provider_refs:
     alliance_linkml:
       schema_ref: alliance.linkml

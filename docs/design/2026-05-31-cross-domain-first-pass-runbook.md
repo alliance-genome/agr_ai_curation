@@ -294,7 +294,7 @@ clean (or issues resolved); Status Table updated; committed + pushed to main.
 | 0 | generic builder infra + gene_expression refactor (canary) | Claude | n/a | done | 84/84 | 0 struct | clean | DONE (7d891dbe) |
 | pre | validator_materialization_invalid fix (baseline cleanup) | Claude | n/a | 16/16 | 8→0 | clean | DONE (eb59c04e) | (made the 0-struct gate genuine) |
 | 1 | gene | Claude | done | done | 172+8 | 0 struct | clean | DONE (39663f46) |
-| 2 | disease | Claude | done | ☐ | ☐ | ☐ | ☐ | DECIDED (full LinkML alignment — see approach doc Decisions); build pending test PDF |
+| 2 | disease | Claude | done | done | 12 new | AGMDiseaseAnnotation, 0 struct | pending | FULL LinkML alignment landed (D1/D2/D3/D5 done; D4 reference blocked+documented; D6 deferred) |
 | 3 | phenotype | Claude | done | done | 10 new | 33 units, 0 struct | clean | DONE (b42cdea1) |
 | 4 | allele | Claude | done | done | 10 new | 6 assoc, 0 struct | clean | DONE (eca78ad8) |
 | 5 | chemical_condition | — | n/a | n/a | n/a | n/a | n/a | REMOVED for now (placeholder; redo later with host-annotation work) |

@@ -375,8 +375,13 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         binding.binding_id: binding
         for binding in registries["agr.alliance.disease"].bindings
     }
+    # Disease FULL LinkML alignment (D1): the ontology binding now also targets the concrete
+    # Gene/Allele/AGMDiseaseAnnotation subtypes the builder materializes by subject kind.
     assert disease_bindings["disease_ontology_term_lookup"].object_types == (
         "DiseaseAnnotation",
+        "GeneDiseaseAnnotation",
+        "AlleleDiseaseAnnotation",
+        "AGMDiseaseAnnotation",
     )
     assert disease_bindings["disease_ontology_term_lookup"].field_paths == (
         "disease_annotation_object.curie",
@@ -583,13 +588,16 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         "abbreviation": "data_provider.abbreviation",
     }
 
+    # D2 full LinkML alignment: subject_entity_validation is now ACTIVE; the staged subject selects
+    # the concrete Gene/Allele/AGM subtype. (The prior under-development binding carried a
+    # context-only data_provider.taxon input that is dropped now the field isn't declared.)
     disease_subject_binding = disease_bindings["disease_subject_materialization"]
     assert disease_subject_binding.validator_agent is not None
     assert (
         disease_subject_binding.validator_agent.agent_id
         == "subject_entity_validation"
     )
-    assert disease_subject_binding.state is ValidationBindingState.UNDER_DEVELOPMENT
+    assert disease_subject_binding.state is ValidationBindingState.ACTIVE
     assert disease_subject_binding.field_paths == (
         "disease_annotation_subject.subject_identifier",
         "disease_annotation_subject.subject_type",
@@ -597,12 +605,10 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     assert (
         disease_subject_binding.input_fields["subject_label"].required is False
     )
-    assert disease_subject_binding.input_fields["taxon"].required is False
     assert disease_subject_binding.expected_result_fields == {
         "subject_identifier": "disease_annotation_subject.subject_identifier",
         "subject_type": "disease_annotation_subject.subject_type",
         "subject_label": "disease_annotation_subject.subject_label",
-        "taxon": "disease_annotation_subject.taxon",
     }
 
     phenotype_bindings = {
@@ -846,7 +852,8 @@ def test_representative_ontology_term_bindings_target_generic_validator():
                 },
             },
             "disease_evidence_code_lookup": {
-                "state": ValidationBindingState.UNDER_DEVELOPMENT,
+                # D3 full LinkML alignment: ECO evidence-code lookup is now ACTIVE.
+                "state": ValidationBindingState.ACTIVE,
                 "ontology_family": "evidence",
                 "accepted_prefixes": ["ECO"],
                 "optional_inputs": ["curie"],

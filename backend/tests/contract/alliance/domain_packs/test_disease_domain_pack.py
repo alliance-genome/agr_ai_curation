@@ -126,9 +126,16 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
     object_metadata = disease_object.metadata
 
     assert metadata.pack_id == DISEASE_DOMAIN_PACK_ID
-    assert [item.object_type for item in metadata.object_definitions] == [
-        DISEASE_OBJECT_TYPE
-    ]
+    # FULL LinkML alignment (D1): the pack now also declares the concrete Gene/Allele/AGM subtypes
+    # the builder materializes by subject kind, plus the pending sub-object types. The abstract
+    # DiseaseAnnotation curatable_unit (with its legacy blocked-posture metadata) is retained.
+    object_types = [item.object_type for item in metadata.object_definitions]
+    assert DISEASE_OBJECT_TYPE in object_types
+    assert {
+        "GeneDiseaseAnnotation",
+        "AlleleDiseaseAnnotation",
+        "AGMDiseaseAnnotation",
+    } <= set(object_types)
     assert disease_object.model_ref == DISEASE_MODEL_ID
     assert disease_object.definition_state.value == "in_development"
     assert object_metadata[OBJECT_ROLE_METADATA_KEY] == "curatable_unit"
@@ -196,13 +203,17 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
         "disease_condition_relation_lookup",
         "disease_data_provider_lookup",
     }.issubset(active_binding_ids)
+    # D2 + D3 full LinkML alignment: subject + ECO evidence-code bindings moved to active.
+    # D4 (reference) stays under_development (blocked: no durable reference identity at extraction).
     assert {
         "disease_pending_envelope_validator",
         "experimental_condition_validation",
-        "disease_subject_materialization",
         "disease_reference_materialization",
-        "disease_evidence_code_lookup",
     } == {binding["binding_id"] for binding in validator_bindings["under_development"]}
+    assert {
+        "disease_subject_materialization",
+        "disease_evidence_code_lookup",
+    }.issubset(active_binding_ids)
     disease_term_binding = next(
         binding
         for binding in validator_bindings["active"]
@@ -238,9 +249,10 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
         "curie": "disease_annotation_object.curie",
         "label": "disease_annotation_object.name",
     }
+    # D3 full LinkML alignment: ECO evidence-code lookup is now ACTIVE.
     evidence_code_binding = next(
         binding
-        for binding in validator_bindings["under_development"]
+        for binding in validator_bindings["active"]
         if binding["binding_id"] == "disease_evidence_code_lookup"
     )
     assert evidence_code_binding["input_fields"]["curie"] == {
@@ -403,10 +415,9 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
         "normalized_components": "ExperimentalCondition.components",
     }
 
+    # D4 stays blocked: no durable reference identity is available at chat-extraction time.
     blocked_fields = {
-        "disease_annotation_subject",
         "single_reference",
-        "evidence_code_curies[0]",
     }
     for field_path in blocked_fields:
         field = fields_by_path[field_path]
@@ -415,6 +426,18 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
         assert field.metadata["definition_state_category"] == "blocked"
         binding = validator_bindings[field.metadata["validator_binding_id"]]
         assert binding["state_explanation"]
+
+    # D2 + D3 full LinkML alignment: subject and ECO evidence-code fields are now ACTIVE (unblocked).
+    activated_fields = {
+        "disease_annotation_subject.subject_identifier": "disease_subject_materialization",
+        "evidence_code_curies[0]": "disease_evidence_code_lookup",
+    }
+    for field_path, binding_id in activated_fields.items():
+        field = fields_by_path[field_path]
+        assert field.metadata["validatable"] is True
+        assert field.metadata["validator_state"] == "active"
+        assert field.metadata["validator_binding_id"] == binding_id
+        assert binding_id in validator_bindings
 
     for field_path in ("data_provider", "data_provider.abbreviation"):
         field = fields_by_path[field_path]

@@ -20,10 +20,80 @@ DISEASE_DOMAIN_PACK_CONVERTER_ID = "agr_ai_curation_alliance.domain_packs.diseas
 DISEASE_LINKML_SCHEMA_ID = "alliance.linkml.DiseaseAnnotation"
 DISEASE_LINKML_SCHEMA_NAME = "DiseaseAnnotation"
 DISEASE_LINKML_SCHEMA_SOURCE_FILE = "model/schema/phenotypeAndDiseaseAnnotation.yaml"
+DISEASE_CORE_SCHEMA_SOURCE_FILE = "model/schema/core.yaml"
+DISEASE_ONTOLOGY_TERM_SCHEMA_SOURCE_FILE = "model/schema/ontologyTerm.yaml"
+DISEASE_REFERENCE_SCHEMA_SOURCE_FILE = "model/schema/reference.yaml"
 DISEASE_LINKML_SCHEMA_URI = (
     "https://github.com/alliance-genome/agr_curation_schema/blob/"
     f"{ALLIANCE_LINKML_COMMIT}/{DISEASE_LINKML_SCHEMA_SOURCE_FILE}"
 )
+
+# ---------------------------------------------------------------------------------------------
+# Builder-pattern (Phase 2 envelope -> builder migration) identity + FULL LinkML alignment.
+#
+# Unlike phenotype/allele (which preserved the existing pack's pending/abstract/blocked posture),
+# disease is brought to FULL LinkML alignment per the approach-doc Decisions (D1-D5):
+#   * D1: materialize the CONCRETE GeneDiseaseAnnotation / AlleleDiseaseAnnotation /
+#         AGMDiseaseAnnotation subtype chosen by the staged subject kind (the abstract
+#         DiseaseAnnotation is emitted ONLY when the subject kind is unknown -> validator_unresolved,
+#         which is NOT a structural finding).
+#   * D2: stage + resolve the subject (subject_entity_validation activated).
+#   * D3: stage ECO evidence_code_curies[] (disease_evidence_code_lookup activated).
+#   * D5: per-subtype relation CV subsets.
+# D4 (bind single_reference from the loaded workspace document) is BLOCKED: there is no durable
+# Alliance reference identity available at chat-extraction time (see approach-doc open questions);
+# single_reference stays pending -> reference validator returns validator_unresolved (non-structural).
+# D6 (condition_relations) is deferred.
+# ---------------------------------------------------------------------------------------------
+DISEASE_MATERIALIZER_ID = "agr.alliance.disease.builder_materializer.v1"
+
+# Concrete LinkML subtypes selected by subject kind (D1). The abstract DiseaseAnnotation object_type
+# is retained for the unknown-subject fallback only.
+DISEASE_GENE_OBJECT_TYPE = "GeneDiseaseAnnotation"
+DISEASE_ALLELE_OBJECT_TYPE = "AlleleDiseaseAnnotation"
+DISEASE_AGM_OBJECT_TYPE = "AGMDiseaseAnnotation"
+
+DISEASE_GENE_LINKML_SCHEMA_ID = "alliance.linkml.GeneDiseaseAnnotation"
+DISEASE_ALLELE_LINKML_SCHEMA_ID = "alliance.linkml.AlleleDiseaseAnnotation"
+DISEASE_AGM_LINKML_SCHEMA_ID = "alliance.linkml.AGMDiseaseAnnotation"
+
+# subject_type (staged enum) -> (concrete object_type, concrete schema_id, LinkML class name).
+DISEASE_SUBJECT_SUBTYPES = {
+    "gene": (DISEASE_GENE_OBJECT_TYPE, DISEASE_GENE_LINKML_SCHEMA_ID, "GeneDiseaseAnnotation"),
+    "allele": (DISEASE_ALLELE_OBJECT_TYPE, DISEASE_ALLELE_LINKML_SCHEMA_ID, "AlleleDiseaseAnnotation"),
+    "agm": (DISEASE_AGM_OBJECT_TYPE, DISEASE_AGM_LINKML_SCHEMA_ID, "AGMDiseaseAnnotation"),
+}
+
+# Per-subtype relation CV subset members (D5; VERIFIED no divergence between LinkML, the formal CV
+# subsets, and curator usage). is_implicated_via_orthology / is_marker_via_orthology belong to the
+# 'Via Orthology Disease Relation' subset and are permitted for gene-subject orthology inferences.
+DISEASE_RELATION_SUBSETS = {
+    "gene": ("is_implicated_in", "is_marker_for", "is_implicated_via_orthology", "is_marker_via_orthology"),
+    "allele": ("is_implicated_in",),
+    "agm": ("is_model_of", "is_ameliorated_model_of", "is_exacerbated_model_of"),
+}
+
+# Pending sub-object identity (subject reference + DOID term + reference) materialized alongside the
+# concrete annotation, mirroring the phenotype/allele multi-object graph shape.
+DISEASE_SUBJECT_OBJECT_TYPE = "DiseaseAnnotationSubject"
+DISEASE_TERM_OBJECT_TYPE = "DOTerm"
+DISEASE_REFERENCE_OBJECT_TYPE = "Reference"
+DISEASE_EVIDENCE_QUOTE_OBJECT_TYPE = "EvidenceQuote"
+
+DISEASE_SUBJECT_LINKML_SCHEMA_ID = "alliance.linkml.BiologicalEntity"
+DISEASE_TERM_LINKML_SCHEMA_ID = "alliance.linkml.DOTerm"
+DISEASE_REFERENCE_LINKML_SCHEMA_ID = "alliance.linkml.Reference"
+
+# Validator binding ids (activated by this migration; declared in domain_pack.yaml).
+DISEASE_ONTOLOGY_TERM_VALIDATOR_BINDING_ID = "disease_ontology_term_lookup"
+DISEASE_RELATION_VALIDATOR_BINDING_ID = "disease_relation_cv_lookup"
+DISEASE_DATA_PROVIDER_VALIDATOR_BINDING_ID = "disease_data_provider_lookup"
+DISEASE_SUBJECT_VALIDATOR_BINDING_ID = "disease_subject_materialization"
+DISEASE_REFERENCE_VALIDATOR_BINDING_ID = "disease_reference_materialization"
+DISEASE_EVIDENCE_CODE_VALIDATOR_BINDING_ID = "disease_evidence_code_lookup"
+
+DISEASE_ANNOTATION_OBJECT_ROLE = "curatable_unit"
+DISEASE_ANNOTATION_KIND = "disease_assertion"
 
 DISEASE_DEFINITION_NOTES = (
     "Pending assertion payload grounded to abstract LinkML DiseaseAnnotation metadata.",
@@ -72,19 +142,46 @@ def get_disease_domain_pack_metadata_path() -> Path:
 
 
 __all__ = [
+    "DISEASE_AGM_LINKML_SCHEMA_ID",
+    "DISEASE_AGM_OBJECT_TYPE",
+    "DISEASE_ALLELE_LINKML_SCHEMA_ID",
+    "DISEASE_ALLELE_OBJECT_TYPE",
+    "DISEASE_ANNOTATION_KIND",
+    "DISEASE_ANNOTATION_OBJECT_ROLE",
+    "DISEASE_CORE_SCHEMA_SOURCE_FILE",
+    "DISEASE_DATA_PROVIDER_VALIDATOR_BINDING_ID",
     "DISEASE_DEFINITION_NOTES",
     "DISEASE_DOMAIN_PACK_CONVERTER_ID",
     "DISEASE_DOMAIN_PACK_DIR_NAME",
     "DISEASE_DOMAIN_PACK_ID",
     "DISEASE_DOMAIN_PACK_VERSION",
+    "DISEASE_EVIDENCE_CODE_VALIDATOR_BINDING_ID",
+    "DISEASE_EVIDENCE_QUOTE_OBJECT_TYPE",
     "DISEASE_FIXTURE_PACK_ID",
+    "DISEASE_GENE_LINKML_SCHEMA_ID",
+    "DISEASE_GENE_OBJECT_TYPE",
     "DISEASE_LINKML_SCHEMA_ID",
     "DISEASE_LINKML_SCHEMA_NAME",
     "DISEASE_LINKML_SCHEMA_SOURCE_FILE",
     "DISEASE_LINKML_SCHEMA_URI",
+    "DISEASE_MATERIALIZER_ID",
     "DISEASE_MODEL_ID",
     "DISEASE_OBJECT_TYPE",
+    "DISEASE_ONTOLOGY_TERM_SCHEMA_SOURCE_FILE",
+    "DISEASE_ONTOLOGY_TERM_VALIDATOR_BINDING_ID",
     "DISEASE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID",
+    "DISEASE_REFERENCE_LINKML_SCHEMA_ID",
+    "DISEASE_REFERENCE_OBJECT_TYPE",
+    "DISEASE_REFERENCE_SCHEMA_SOURCE_FILE",
+    "DISEASE_REFERENCE_VALIDATOR_BINDING_ID",
+    "DISEASE_RELATION_SUBSETS",
+    "DISEASE_RELATION_VALIDATOR_BINDING_ID",
+    "DISEASE_SUBJECT_LINKML_SCHEMA_ID",
+    "DISEASE_SUBJECT_OBJECT_TYPE",
+    "DISEASE_SUBJECT_SUBTYPES",
+    "DISEASE_SUBJECT_VALIDATOR_BINDING_ID",
+    "DISEASE_TERM_LINKML_SCHEMA_ID",
+    "DISEASE_TERM_OBJECT_TYPE",
     "DISEASE_VALIDATOR_STATES",
     "FORBIDDEN_LEGACY_COLLECTIONS",
     "REQUIRED_DISEASE_PAYLOAD_FIELDS",
