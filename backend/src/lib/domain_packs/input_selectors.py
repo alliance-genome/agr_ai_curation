@@ -66,17 +66,18 @@ def build_domain_validation_request(
 
     for input_name, selector in binding.input_fields.items():
         selectors[input_name] = _selector_payload(selector)
-        if selector.source != "literal" and not selector.context_only:
+        counts_as_non_literal = not _is_literal_like(selector) and not selector.context_only
+        if counts_as_non_literal:
             declared_non_literal_inputs = True
         value, problem = _resolve_selector(match, input_name, selector)
         if problem is not None:
             problems.append(problem)
             continue
         if value is _OPTIONAL_INPUT_MISSING:
-            if selector.source != "literal" and not selector.context_only:
+            if counts_as_non_literal:
                 missing_optional_non_literal_inputs = True
             continue
-        if selector.source != "literal" and not selector.context_only:
+        if counts_as_non_literal:
             selected_non_literal_inputs = True
         selected_inputs[input_name] = value
 
@@ -150,6 +151,15 @@ def _selector_payload(selector: DomainPackInputSelector) -> dict[str, Any]:
     return selector.model_dump(mode="json", exclude_none=True)
 
 
+# Sources that produce a fixed/derived value rather than reading the validation
+# target's identity. They never gate the "no target field selected -> skip" decision.
+_LITERAL_LIKE_SOURCES = frozenset({"literal", "payload_keyed_literal"})
+
+
+def _is_literal_like(selector: DomainPackInputSelector) -> bool:
+    return selector.source in _LITERAL_LIKE_SOURCES
+
+
 def _resolve_selector(
     match: ValidatorBindingMatch,
     input_name: str,
@@ -157,6 +167,9 @@ def _resolve_selector(
 ) -> tuple[Any, _SelectorProblem | None]:
     if selector.source == "literal":
         return selector.value, None
+
+    if selector.source == "payload_keyed_literal":
+        return _resolve_payload_keyed_literal(match, input_name, selector)
 
     if selector.source == "payload":
         if match.object_envelope is None:
@@ -212,6 +225,45 @@ def _resolve_selector(
     return _missing(
         input_name, selector, f"Unsupported selector source '{selector.source}'"
     )
+
+
+def _resolve_payload_keyed_literal(
+    match: ValidatorBindingMatch,
+    input_name: str,
+    selector: DomainPackInputSelector,
+) -> tuple[Any, _SelectorProblem | None]:
+    """Map a sibling payload value through ``key_map`` to a fixed literal input.
+
+    Generic mechanism for an input (e.g. a CV ``subset``) whose value depends on
+    another staged field on the same object. The sibling value is read from the
+    object payload at ``selector.path``, normalized to a case-insensitive string
+    key, and mapped through ``selector.key_map``. A key with no mapping resolves to
+    the optional-missing sentinel (the input is simply omitted) so that an
+    unrecognized sibling value never invents an unintended literal.
+    """
+
+    if match.object_envelope is None:
+        return _missing(
+            input_name,
+            selector,
+            "payload_keyed_literal selectors require an object target",
+        )
+    key_value, exists = _value_at_path(
+        match.object_envelope.payload, selector.path or ""
+    )
+    if not exists or key_value is None:
+        return _OPTIONAL_INPUT_MISSING, None
+    key = str(key_value).strip().lower()
+    key_map = selector.key_map or {}
+    mapped = None
+    for raw_key, mapped_value in key_map.items():
+        if str(raw_key).strip().lower() == key:
+            mapped = mapped_value
+            break
+    if mapped is None:
+        # Unknown sibling value -> omit the keyed input rather than guess a literal.
+        return _OPTIONAL_INPUT_MISSING, None
+    return mapped, None
 
 
 def _resolve_evidence_record_selector(

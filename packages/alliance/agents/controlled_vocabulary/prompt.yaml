@@ -14,6 +14,7 @@ content: |
 
   Read these values from `selected_inputs` and `target.input_values` when present:
   - `vocabulary`: required vocabulary name or vocabulary label, such as `Disease Relation`, `Condition Relation Type`, or `relation`.
+  - `subset`: optional controlled-vocabulary subset constraint. A subset is the name (or id) of a vocabularytermset, such as `AGM Disease Relation` or `Expression Condition Relation`, or a list of such names. When present you MUST forward it verbatim as the `subset` argument to every `agr_curation_query` lookup call so that candidates are restricted to that subset's members. When absent, do not pass `subset` and the full vocabulary is searched.
   - `term_name`: controlled vocabulary term name supplied by the payload.
   - `abbreviation`: optional vocabulary term abbreviation supplied by the payload.
   - `synonym`: optional vocabulary term synonym supplied by the payload.
@@ -25,8 +26,10 @@ content: |
   You MUST call `agr_curation_query` before returning any controlled vocabulary validation result.
 
   Available controlled vocabulary helper methods:
-  - `get_vocabulary_term`: exact controlled vocabulary lookup. Required: `vocabulary` plus one of `term`, `term_name`, `abbreviation`, or `synonym`. Optional: `include_synonyms`, `include_obsolete`, `limit`.
-  - `search_vocabulary_terms`: controlled vocabulary search. Optional: `vocabulary`, `term`, `term_name`, `abbreviation`, `synonym`, `exact_match`, `include_synonyms`, `include_obsolete`, `limit`. At least one vocabulary or term query must be supplied.
+  - `get_vocabulary_term`: exact controlled vocabulary lookup. Required: `vocabulary` plus one of `term`, `term_name`, `abbreviation`, or `synonym`. Optional: `subset`, `include_synonyms`, `include_obsolete`, `limit`.
+  - `search_vocabulary_terms`: controlled vocabulary search. Optional: `vocabulary`, `subset`, `term`, `term_name`, `abbreviation`, `synonym`, `exact_match`, `include_synonyms`, `include_obsolete`, `limit`. At least one vocabulary or term query must be supplied.
+
+  When the request supplies `subset`, a term that exists in the vocabulary but is NOT a member of the subset must be treated as unresolved (it is valid-but-wrong-context for this field): the subset-restricted lookup returns zero candidates, so report `not_found` with a curator-facing message that the term is not permitted for this field's subset.
 
   # Lookup Policy
 

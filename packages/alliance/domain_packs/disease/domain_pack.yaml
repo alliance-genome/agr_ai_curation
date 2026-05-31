@@ -406,7 +406,12 @@ object_definitions:
           definition_state_category: complete
           editable: true
           # FULL LinkML alignment (D5): per-subtype Disease Relation CV subsets. VERIFIED that LinkML,
-          # the formal CV subsets, and curator usage agree.
+          # the formal CV subsets, and curator usage agree. R2 CLOSED: this per-subtype restriction is
+          # now ENFORCED (not LLM-only) by the disease_relation_cv_lookup binding's payload_keyed_literal
+          # `subset` input (below), which maps the staged subject_type to the matching vocabularytermset
+          # so the controlled_vocabulary validator restricts the lookup to subset members. The term-name
+          # lists here are the reference allowlist (kept in sync with the binding's termset selection);
+          # the enforcement source of truth is the binding `subset` config.
           relation_subsets:
             gene:
               - is_implicated_in
@@ -1212,6 +1217,26 @@ metadata:
           vocabulary:
             source: literal
             value: Disease Relation
+          # D5 ENFORCEMENT: the per-subtype Disease Relation CV subset is selected by the
+          # staged subject_type (Gene/Allele/AGM), which is established before the relation
+          # resolves (D1/D2). payload_keyed_literal reads the sibling subject_type and maps it
+          # to the matching vocabularytermset name; the controlled_vocabulary validator forwards
+          # this `subset` to agr_curation_query so the lookup is restricted to that subset's
+          # members. A wrong-subtype relation (e.g. is_model_of on a Gene subject) is therefore
+          # rejected/unresolved instead of passing against the umbrella vocabulary. The subset
+          # names below are the live curation-DB vocabularytermset names.
+          subset:
+            source: payload_keyed_literal
+            path: disease_annotation_subject.subject_type
+            key_map:
+              # gene spans two named termsets (union): direct Gene Disease Relation plus
+              # the Via Orthology Disease Relation terms permitted for orthology inferences.
+              gene:
+                - Gene Disease Relation
+                - Via Orthology Disease Relation
+              allele: Allele Disease Relation
+              agm: AGM Disease Relation
+            required: false
           term_name:
             source: payload
             path: disease_relation_name
@@ -1239,6 +1264,16 @@ metadata:
           vocabulary:
             source: literal
             value: Condition Relation Type
+          # STATIC CV subset: condition relations on annotations use the
+          # 'Expression Condition Relation' subset of Condition Relation Type
+          # (members: has_condition, induced_by). NOTE: disease condition_relations are
+          # under_development/deferred (D6) and the builder does not yet stage this field,
+          # so this binding does not fire today; the subset wiring is in place for when
+          # condition handling returns with the host-annotation work.
+          subset:
+            source: literal
+            value: Expression Condition Relation
+            required: false
           term_name:
             source: payload
             path: condition_relations[0].condition_relation_type.name

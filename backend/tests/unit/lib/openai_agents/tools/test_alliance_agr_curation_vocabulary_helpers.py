@@ -1264,3 +1264,203 @@ def test_resolve_domain_field_term_blocks_slim_terms_outside_allowlist(monkeypat
     assert result.data["debug"]["policy_blocker"] == (
         "candidate_not_in_allowed_slim_terms"
     )
+
+
+# =============================================================================
+# Subset-aware controlled-vocabulary lookups (Part A: data-type-axis subsets).
+# =============================================================================
+
+
+class _FakeSubsetSession:
+    """Fake SQLAlchemy session resolving vocabularytermset members by subset name."""
+
+    def __init__(self, members_by_subset):
+        # members_by_subset: {subset_name_upper: [term_name, ...]}
+        self._members_by_subset = {
+            key.upper(): list(values) for key, values in members_by_subset.items()
+        }
+        self.executed = []
+        self.closed = False
+
+    def execute(self, _query, params):
+        subset_name = params.get("subset_name")
+        self.executed.append(subset_name)
+        members = self._members_by_subset.get(str(subset_name).upper(), [])
+        # The member-resolution query selects LOWER(vt.name); mirror that here.
+        return SimpleNamespace(
+            fetchall=lambda: [(name.lower(),) for name in members]
+        )
+
+    def close(self):
+        self.closed = True
+
+
+class _SubsetDb:
+    """Fake curation DB exposing search_vocabulary_terms + a subset-member session."""
+
+    def __init__(self, *, terms, members_by_subset):
+        self._terms = terms
+        self._members_by_subset = members_by_subset
+        self.session = None
+
+    def search_vocabulary_terms(self, **kwargs):
+        # Honor the term filter so get_vocabulary_term exact lookups return only the
+        # requested term, mirroring the real DB search (the subset filter then applies
+        # on top of that result set).
+        term = kwargs.get("term")
+        if term:
+            term_lower = str(term).strip().lower()
+            return [t for t in self._terms if t.name.lower() == term_lower]
+        return list(self._terms)
+
+    def create_session(self):
+        self.session = _FakeSubsetSession(self._members_by_subset)
+        return self.session
+
+
+_DISEASE_RELATION_TERMS = [
+    _term(internal_id=1, name="is_implicated_in"),
+    _term(internal_id=2, name="is_marker_for"),
+    _term(internal_id=3, name="is_model_of"),
+    _term(internal_id=4, name="is_ameliorated_model_of"),
+    _term(internal_id=5, name="is_exacerbated_model_of"),
+    _term(internal_id=6, name="is_implicated_via_orthology"),
+    _term(internal_id=7, name="is_marker_via_orthology"),
+]
+
+_DISEASE_RELATION_SUBSET_MEMBERS = {
+    "AGM Disease Relation": [
+        "is_model_of",
+        "is_ameliorated_model_of",
+        "is_exacerbated_model_of",
+    ],
+    "Gene Disease Relation": ["is_implicated_in", "is_marker_for"],
+    "Allele Disease Relation": ["is_implicated_in"],
+    "Via Orthology Disease Relation": [
+        "is_implicated_via_orthology",
+        "is_marker_via_orthology",
+    ],
+}
+
+
+def _subset_resolver(monkeypatch):
+    db = _SubsetDb(
+        terms=_DISEASE_RELATION_TERMS,
+        members_by_subset=_DISEASE_RELATION_SUBSET_MEMBERS,
+    )
+    monkeypatch.setattr(
+        agr_curation,
+        "get_curation_resolver",
+        lambda: _Resolver(db),
+    )
+    return db
+
+
+def test_search_vocabulary_terms_without_subset_returns_full_vocabulary(monkeypatch):
+    _subset_resolver(monkeypatch)
+    result = _query_fn()(
+        method="search_vocabulary_terms",
+        vocabulary="Disease Relation",
+        limit=100,
+    )
+    assert result.status == "ok"
+    assert result.count == 7
+    names = {item["term_name"] for item in result.data}
+    assert names == {
+        "is_implicated_in",
+        "is_marker_for",
+        "is_model_of",
+        "is_ameliorated_model_of",
+        "is_exacerbated_model_of",
+        "is_implicated_via_orthology",
+        "is_marker_via_orthology",
+    }
+    # No subset -> no subset-applied warning.
+    assert not any(
+        str(w).startswith("vocabulary_subset_applied")
+        for w in (result.warnings or [])
+    )
+
+
+def test_search_vocabulary_terms_with_agm_subset_restricts_members(monkeypatch):
+    _subset_resolver(monkeypatch)
+    result = _query_fn()(
+        method="search_vocabulary_terms",
+        vocabulary="Disease Relation",
+        subset="AGM Disease Relation",
+        limit=100,
+    )
+    assert result.status == "ok"
+    assert result.count == 3
+    names = {item["term_name"] for item in result.data}
+    assert names == {
+        "is_model_of",
+        "is_ameliorated_model_of",
+        "is_exacerbated_model_of",
+    }
+    assert "vocabulary_subset_applied:AGM Disease Relation" in (result.warnings or [])
+
+
+def test_search_vocabulary_terms_with_gene_union_subset(monkeypatch):
+    _subset_resolver(monkeypatch)
+    result = _query_fn()(
+        method="search_vocabulary_terms",
+        vocabulary="Disease Relation",
+        subset=["Gene Disease Relation", "Via Orthology Disease Relation"],
+        limit=100,
+    )
+    assert result.status == "ok"
+    names = {item["term_name"] for item in result.data}
+    assert names == {
+        "is_implicated_in",
+        "is_marker_for",
+        "is_implicated_via_orthology",
+        "is_marker_via_orthology",
+    }
+
+
+def test_get_vocabulary_term_wrong_subtype_relation_is_rejected(monkeypatch):
+    """is_model_of resolves under the AGM subset but is rejected under the gene subset."""
+    _subset_resolver(monkeypatch)
+
+    resolved = _query_fn()(
+        method="get_vocabulary_term",
+        vocabulary="Disease Relation",
+        subset="AGM Disease Relation",
+        term_name="is_model_of",
+    )
+    assert resolved.status == "ok"
+    assert resolved.count == 1
+    assert resolved.data[0]["term_name"] == "is_model_of"
+
+    rejected = _query_fn()(
+        method="get_vocabulary_term",
+        vocabulary="Disease Relation",
+        subset=["Gene Disease Relation", "Via Orthology Disease Relation"],
+        term_name="is_model_of",
+    )
+    assert rejected.status == "ok"
+    assert rejected.count == 0
+    assert "Vocabulary term not found" in (rejected.message or "")
+
+    # Without the subset, the umbrella vocabulary still resolves is_model_of.
+    umbrella = _query_fn()(
+        method="get_vocabulary_term",
+        vocabulary="Disease Relation",
+        term_name="is_model_of",
+    )
+    assert umbrella.status == "ok"
+    assert umbrella.count == 1
+
+
+def test_vocabulary_subset_unknown_name_yields_empty(monkeypatch):
+    _subset_resolver(monkeypatch)
+    result = _query_fn()(
+        method="search_vocabulary_terms",
+        vocabulary="Disease Relation",
+        subset="Nonexistent Subset",
+        limit=100,
+    )
+    assert result.status == "ok"
+    assert result.count == 0
+    assert "subset_not_found_or_empty:Nonexistent Subset" in (result.warnings or [])

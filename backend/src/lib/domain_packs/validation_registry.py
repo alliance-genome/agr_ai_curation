@@ -1345,7 +1345,7 @@ def _validate_active_selector_against_targets(
         f"'{binding.binding_id}' input_fields.{input_name}"
     )
 
-    if selector.source == "payload":
+    if selector.source in {"payload", "payload_keyed_literal"}:
         if not target_definitions:
             return
         for object_definition in target_definitions:

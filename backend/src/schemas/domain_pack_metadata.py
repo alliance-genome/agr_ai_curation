@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from enum import Enum
 from pathlib import PurePosixPath
-from typing import Any, ClassVar, Literal, Optional
+from typing import Any, ClassVar, Dict, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -206,6 +206,19 @@ class DomainPackInputSelector(DomainPackMetadataBaseModel):
             "allow_multiple",
             "context_only",
         },
+        # Value-dependent literal: reads a sibling field value at ``path`` and maps it
+        # through ``key_map`` to produce a fixed literal input. Generic mechanism for a
+        # subset (or any input) that depends on a sibling field's staged value — e.g. the
+        # disease relation CV subset selected by the staged subject_type. Stays entirely in
+        # binding config; no domain names in code.
+        "payload_keyed_literal": {
+            "source",
+            "path",
+            "key_map",
+            "required",
+            "allow_multiple",
+            "context_only",
+        },
     }
 
     source: Literal[
@@ -215,12 +228,14 @@ class DomainPackInputSelector(DomainPackMetadataBaseModel):
         "evidence_record",
         "object_ref",
         "literal",
+        "payload_keyed_literal",
     ]
     path: Optional[str] = None
     field_path: Optional[str] = None
     object_type: Optional[str] = None
     record_id: Optional[str] = None
     value: Any = None
+    key_map: Optional[Dict[str, Any]] = None
     required: bool = True
     allow_multiple: Optional[bool] = None
     context_only: bool = Field(default=False, exclude_if=lambda value: value is False)
@@ -274,6 +289,13 @@ class DomainPackInputSelector(DomainPackMetadataBaseModel):
             raise ValueError(f"{self.source} selectors must provide path")
         if self.source == "literal" and "value" not in self.model_fields_set:
             raise ValueError("literal selectors must provide value")
+        if self.source == "payload_keyed_literal":
+            if self.path is None:
+                raise ValueError("payload_keyed_literal selectors must provide path")
+            if not self.key_map:
+                raise ValueError(
+                    "payload_keyed_literal selectors must provide a non-empty key_map"
+                )
         if (
             self.source == "object_ref"
             and self.field_path is None

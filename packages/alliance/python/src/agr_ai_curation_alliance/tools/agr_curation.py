@@ -14,7 +14,7 @@ from collections import defaultdict
 from collections.abc import Mapping
 from copy import deepcopy
 from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any, Tuple, Literal, Annotated, Sequence
+from typing import Optional, List, Dict, Any, Tuple, Literal, Annotated, Sequence, Union
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError, field_validator, model_validator
 from agents import function_tool
@@ -620,6 +620,145 @@ def _vocabulary_term_query(
     return None, None
 
 
+def _normalize_subset_constraints(subset: Optional[Union[str, List[str]]]) -> List[str]:
+    """Normalize the optional subset parameter into a de-duplicated name list.
+
+    Accepts a single subset name/id or a list of them. The list is a UNION of named
+    vocabularytermset subsets along ONE axis (the data-type axis) — see
+    ``_vocabulary_term_set_members``. Returns ``[]`` when no subset is supplied
+    (full-vocabulary behavior, unchanged).
+
+    # FUTURE — group/MOD-login composition point.
+    # Today the supplied `subset` is only the data-type-axis constraint (e.g.
+    # 'AGM Disease Relation', selected by the staged subject_type via per-field binding
+    # config; or the gene case 'Gene Disease Relation' + 'Via Orthology Disease Relation'
+    # as a union). The future group/MOD axis composes by INTERSECTION (not by adding more
+    # union members here): the resolved data-type member set is intersected with the
+    # logged-in curator's group member set at request time. The intersection lives in
+    # ``_vocabulary_term_set_members`` (see its FUTURE comment), so the public `subset`
+    # parameter needs no reshape when the group layer lands. See
+    # docs/design/2026-05-31-subset-aware-vocabulary-and-ontology-search.md
+    # ("FUTURE — group/MOD-login subset layer").
+    """
+
+    if subset is None:
+        return []
+    raw = subset if isinstance(subset, (list, tuple)) else [subset]
+    names: List[str] = []
+    for item in raw:
+        if item is None:
+            continue
+        normalized = str(item).strip()
+        if normalized and normalized not in names:
+            names.append(normalized)
+    return names
+
+
+def _vocabulary_term_set_members(
+    db: Any,
+    subsets: List[str],
+) -> Tuple[Optional[frozenset], List[str]]:
+    """Resolve the member term-name set for the supplied subset constraint(s).
+
+    Each element of ``subsets`` is a vocabularytermset name (or numeric id). The
+    returned set is the UNION of the members of every supplied subset — i.e. "any term
+    that belongs to at least one of these subsets". This lets a single data-type-axis
+    constraint span more than one named termset where the LinkML/curation reality
+    legitimately does (e.g. the gene Disease Relation subset = the 'Gene Disease
+    Relation' termset together with the 'Via Orthology Disease Relation' termset).
+    Returns ``(None, warnings)`` when ``subsets`` is empty (no restriction).
+
+    Member resolution joins vocabularytermset -> vocabularytermset_vocabularyterm ->
+    vocabularyterm and returns the (case-folded) member term names. A subset name that
+    resolves to zero members contributes nothing to the union and is surfaced via a
+    warning so the caller can explain a restricted/empty result.
+
+    # FUTURE — group/MOD-login composition.
+    # This resolves only the DATA-TYPE axis (the union supplied via per-field binding
+    # config). The future group/MOD axis is a SEPARATE constraint: the effective search
+    # set becomes the INTERSECTION of this data-type member set and the logged-in
+    # curator's group member set (sourced at request time). That intersection slots in
+    # right here — e.g. ``return (data_type_members & group_members), warnings`` — and
+    # needs no change to the tool's public `subset` parameter. See the design doc's
+    # "FUTURE — group/MOD-login subset layer" section.
+    """
+
+    if not subsets:
+        return None, []
+
+    warnings: List[str] = []
+    session = None
+    try:
+        from sqlalchemy import text
+
+        session = create_db_session(db)
+        if session is None:
+            warnings.append("subset_restriction_unavailable:no_db_session")
+            return frozenset(), warnings
+    except Exception as exc:  # pragma: no cover - defensive import/setup guard
+        logger.debug("Subset member resolution setup failed: %s", exc)
+        warnings.append("subset_restriction_unavailable:setup_error")
+        return frozenset(), warnings
+
+    try:
+        sql_query = text(
+            """
+            SELECT LOWER(vt.name) AS member_name
+            FROM vocabularytermset vts
+            JOIN vocabularytermset_vocabularyterm m
+                ON m.vocabularytermsets_id = vts.id
+            JOIN vocabularyterm vt
+                ON vt.id = m.memberterms_id
+            WHERE (
+                UPPER(vts.name) = UPPER(:subset_name)
+                OR (:subset_id IS NOT NULL AND vts.id = :subset_id)
+            )
+            """
+        )
+        union: set = set()
+        for subset_name in subsets:
+            try:
+                subset_id = int(subset_name)
+            except (TypeError, ValueError):
+                subset_id = None
+            rows = session.execute(
+                sql_query,
+                {"subset_name": subset_name, "subset_id": subset_id},
+            ).fetchall()
+            members = {str(row[0]) for row in rows if row[0] is not None}
+            if not members:
+                warnings.append(f"subset_not_found_or_empty:{subset_name}")
+            union |= members
+        return frozenset(union), warnings
+    except Exception as exc:
+        logger.debug("Subset member resolution failed for %s: %s", subsets, exc)
+        warnings.append("subset_restriction_unavailable:query_error")
+        return frozenset(), warnings
+    finally:
+        if session is not None:
+            session.close()
+
+
+def _restrict_vocabulary_results_to_subset(
+    results_data: List[Dict[str, Any]],
+    member_names: Optional[frozenset],
+) -> List[Dict[str, Any]]:
+    """Filter resolved vocabulary-term rows to the subset member set.
+
+    ``member_names`` is None -> no restriction (full vocabulary, unchanged). Otherwise
+    keep only rows whose case-folded term name is a subset member.
+    """
+
+    if member_names is None:
+        return results_data
+    return [
+        row
+        for row in results_data
+        if str(row.get("term_name") or row.get("name") or "").strip().lower()
+        in member_names
+    ]
+
+
 def _entity_mapping_result(result: Dict[str, Any]) -> Dict[str, Any]:
     row = dict(result)
     if row.get("entity_curie") is not None:
@@ -970,6 +1109,7 @@ def agr_curation_query(
     term: Optional[str] = None,
     terms: Optional[List[str]] = None,
     vocabulary: Optional[str] = None,
+    subset: Optional[Union[str, List[str]]] = None,
     term_name: Optional[str] = None,
     abbreviation: Optional[str] = None,
     synonym: Optional[str] = None,
@@ -1008,6 +1148,17 @@ def agr_curation_query(
         term: Search term for ontology searches
         terms: CURIE list for bulk ontology term helper paths
         vocabulary: Controlled vocabulary name or label filter
+        subset: Optional controlled-vocabulary subset constraint(s) for the
+            get_vocabulary_term / search_vocabulary_terms methods. A subset is the
+            name (or id) of a vocabularytermset (e.g. 'AGM Disease Relation'). When
+            supplied, candidate terms are restricted to that subset's members
+            (vocabularytermset_vocabularyterm). Accepts a single subset name or a
+            list of subset names; with a list the restriction is the UNION of the
+            named subsets' members (a single data-type-axis constraint may legitimately
+            span more than one termset, e.g. gene = 'Gene Disease Relation' plus
+            'Via Orthology Disease Relation'). When omitted, behavior is unchanged
+            (the full vocabulary is searched). A future group/MOD subset will compose
+            with this set by intersection — see _vocabulary_term_set_members.
         term_name: Controlled vocabulary term name to search or resolve
         abbreviation: Controlled vocabulary term abbreviation to search or resolve
         synonym: Controlled vocabulary synonym to search or resolve
@@ -1056,6 +1207,7 @@ def agr_curation_query(
             return _attempt_query(
                 method,
                 vocabulary=vocabulary,
+                subset=_normalize_subset_constraints(subset) or None,
                 term=vocabulary_query,
                 query_field=query_field,
                 exact_match=True if method == "get_vocabulary_term" else exact_match,
@@ -2785,6 +2937,7 @@ def agr_curation_query(
             attempted_query = _attempt_query(
                 method,
                 vocabulary=vocabulary,
+                subset=_normalize_subset_constraints(subset) or None,
                 term=vocabulary_query,
                 query_field=query_field,
                 exact_match=True,
@@ -2816,6 +2969,18 @@ def agr_curation_query(
                 limit=limit_value,
             )
             results_data = [_vocabulary_term_result(result) for result in results]
+            subset_constraints = _normalize_subset_constraints(subset)
+            if subset_constraints:
+                member_names, subset_warnings = _vocabulary_term_set_members(
+                    db, subset_constraints
+                )
+                results_data = _restrict_vocabulary_results_to_subset(
+                    results_data, member_names
+                )
+                warnings.append(
+                    "vocabulary_subset_applied:" + "|".join(subset_constraints)
+                )
+                warnings.extend(subset_warnings)
             obsolete_count = sum(1 for result in results_data if result.get("obsolete"))
             if obsolete_count:
                 warnings.append(f"obsolete_vocabulary_terms:{obsolete_count}")
@@ -2847,6 +3012,7 @@ def agr_curation_query(
             attempted_query = _attempt_query(
                 method,
                 vocabulary=vocabulary,
+                subset=_normalize_subset_constraints(subset) or None,
                 term=vocabulary_query,
                 query_field=query_field,
                 exact_match=exact_match,
@@ -2878,6 +3044,18 @@ def agr_curation_query(
                 limit=limit_value,
             )
             results_data = [_vocabulary_term_result(result) for result in results]
+            subset_constraints = _normalize_subset_constraints(subset)
+            if subset_constraints:
+                member_names, subset_warnings = _vocabulary_term_set_members(
+                    db, subset_constraints
+                )
+                results_data = _restrict_vocabulary_results_to_subset(
+                    results_data, member_names
+                )
+                warnings.append(
+                    "vocabulary_subset_applied:" + "|".join(subset_constraints)
+                )
+                warnings.extend(subset_warnings)
             obsolete_count = sum(1 for result in results_data if result.get("obsolete"))
             if obsolete_count:
                 warnings.append(f"obsolete_vocabulary_terms:{obsolete_count}")

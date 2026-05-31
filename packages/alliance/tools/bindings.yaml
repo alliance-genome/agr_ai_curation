@@ -280,18 +280,19 @@ tools:
             curies: [GO:0003674]
         get_vocabulary_term:
           name: Get Vocabulary Term
-          description: Exact controlled vocabulary term lookup by vocabulary and term name, abbreviation, or synonym.
+          description: Exact controlled vocabulary term lookup by vocabulary and term name, abbreviation, or synonym. Optional subset (a vocabularytermset name/id, or a list of them) restricts candidates to that subset's members; omit subset for the full vocabulary.
           required_params: [vocabulary]
-          optional_params: [term, term_name, abbreviation, synonym, include_synonyms, include_obsolete, limit]
+          optional_params: [term, term_name, abbreviation, synonym, subset, include_synonyms, include_obsolete, limit]
           example:
             method: get_vocabulary_term
             vocabulary: Disease Relation
-            term_name: is_implicated_in
+            subset: AGM Disease Relation
+            term_name: is_model_of
         search_vocabulary_terms:
           name: Search Vocabulary Terms
-          description: Search controlled vocabulary terms by vocabulary name/label and term name, abbreviation, or synonym.
+          description: Search controlled vocabulary terms by vocabulary name/label and term name, abbreviation, or synonym. Optional subset (a vocabularytermset name/id, or a list of them) restricts candidates to that subset's members; omit subset for the full vocabulary.
           required_params: []
-          optional_params: [vocabulary, term, term_name, abbreviation, synonym, exact_match, include_synonyms, include_obsolete, limit]
+          optional_params: [vocabulary, term, term_name, abbreviation, synonym, subset, exact_match, include_synonyms, include_obsolete, limit]
           example:
             method: search_vocabulary_terms
             vocabulary: relation

@@ -146,12 +146,108 @@ def _assertion_envelope(
             "path": "curie",
         },
         {"source": "literal", "value": "constant"},
+        {
+            "source": "payload_keyed_literal",
+            "path": "value",
+            "key_map": {"gene": "Gene Disease Relation"},
+        },
     ],
 )
 def test_input_selector_parser_accepts_every_source(selector: dict):
     parsed = DomainPackInputSelector.model_validate(selector)
 
     assert parsed.source == selector["source"]
+
+
+@pytest.mark.parametrize(
+    "selector",
+    [
+        # missing path
+        {"source": "payload_keyed_literal", "key_map": {"gene": "x"}},
+        # missing/empty key_map
+        {"source": "payload_keyed_literal", "path": "value"},
+        {"source": "payload_keyed_literal", "path": "value", "key_map": {}},
+    ],
+)
+def test_input_selector_parser_rejects_malformed_payload_keyed_literal(selector: dict):
+    with pytest.raises(ValidationError):
+        DomainPackInputSelector.model_validate(selector)
+
+
+def test_payload_keyed_literal_maps_sibling_value_to_subset(tmp_path: Path):
+    result = _run_selector(
+        tmp_path,
+        """
+          subset:
+            source: payload_keyed_literal
+            path: value
+            key_map:
+              gene:
+                - Gene Disease Relation
+                - Via Orthology Disease Relation
+              agm: AGM Disease Relation
+            required: false
+          selected:
+            source: payload
+            path: value
+""",
+        _assertion_envelope(payload={"value": "agm"}),
+    )
+
+    assert result.findings == ()
+    assert result.request is not None
+    assert result.selected_inputs["subset"] == "AGM Disease Relation"
+    assert result.selected_inputs["selected"] == "agm"
+
+
+def test_payload_keyed_literal_unknown_value_is_omitted(tmp_path: Path):
+    result = _run_selector(
+        tmp_path,
+        """
+          subset:
+            source: payload_keyed_literal
+            path: value
+            key_map:
+              agm: AGM Disease Relation
+            required: false
+          selected:
+            source: payload
+            path: value
+""",
+        _assertion_envelope(payload={"value": "gene"}),
+    )
+
+    assert result.findings == ()
+    assert result.request is not None
+    # Unknown sibling value -> the keyed input is simply omitted (no guessed literal).
+    assert "subset" not in result.selected_inputs
+    assert result.selected_inputs["selected"] == "gene"
+
+
+def test_payload_keyed_literal_list_value_unions_subsets(tmp_path: Path):
+    result = _run_selector(
+        tmp_path,
+        """
+          subset:
+            source: payload_keyed_literal
+            path: value
+            key_map:
+              gene:
+                - Gene Disease Relation
+                - Via Orthology Disease Relation
+            required: false
+          selected:
+            source: payload
+            path: value
+""",
+        _assertion_envelope(payload={"value": "gene"}),
+    )
+
+    assert result.findings == ()
+    assert result.selected_inputs["subset"] == [
+        "Gene Disease Relation",
+        "Via Orthology Disease Relation",
+    ]
 
 
 @pytest.mark.parametrize(
