@@ -294,7 +294,7 @@ clean (or issues resolved); Status Table updated; committed + pushed to main.
 | 0 | generic builder infra + gene_expression refactor (canary) | Claude | n/a | done | 84/84 | 0 struct | clean | DONE (7d891dbe) |
 | pre | validator_materialization_invalid fix (baseline cleanup) | Claude | n/a | 16/16 | 8→0 | clean | DONE (eb59c04e) | (made the 0-struct gate genuine) |
 | 1 | gene | Claude | done | done | 172+8 | 0 struct | clean | DONE (39663f46) |
-| 2 | disease | Claude | done | done | 12 new | AGMDiseaseAnnotation, 0 struct | pending | FULL LinkML alignment landed (D1/D2/D3/D5 done; D4 reference blocked+documented; D6 deferred) |
+| 2 | disease | Claude | done | done | 12 new | AGMDiseaseAnnotation, 0 struct | clean | DONE (1842f968) — D1/D2/D3 wired+e2e; D5 declared+LLM-enforced (validator=umbrella CV); D4 reference BLOCKED (R1); D6 deferred |
 | 3 | phenotype | Claude | done | done | 10 new | 33 units, 0 struct | clean | DONE (b42cdea1) |
 | 4 | allele | Claude | done | done | 10 new | 6 assoc, 0 struct | clean | DONE (eca78ad8) |
 | 5 | chemical_condition | — | n/a | n/a | n/a | n/a | n/a | REMOVED for now (placeholder; redo later with host-annotation work) |
@@ -440,3 +440,55 @@ clean (or issues resolved); Status Table updated; committed + pushed to main.
     open-access model-organism disease-annotation paper); (3) build disease to FULL alignment via the
     proven per-type workflow; (4) fold the uniform "bind Reference from workspace document" fix into
     disease + retrofit phenotype + allele.
+- 2026-05-31 (late, autonomous) — PER-TYPE PASS COMPLETE. All 6 envelope extractors are now migrated
+  or removed. The earlier "SESSION CLOSE" entry above was a mid-run checkpoint and is SUPERSEDED by this.
+  Commits, in order: validator_materialization_invalid fix (eb59c04e) -> Phase 0 generic builder tools
+  (7d891dbe) -> gene (39663f46) -> phenotype (b42cdea1) -> allele (eca78ad8) -> chemical_extractor +
+  chemical_condition REMOVED (b144f0e5) -> broad-suite test-debt fix (becec317) -> disease full
+  alignment (1842f968), plus doc commits. Final state:
+  * gene_expression (reference), gene, phenotype, allele, disease = on the BUILDER pattern; e2e at 0
+    structural findings each; Opus-4.8-reviewed clean. chemical_condition = REMOVED (placeholder; returns
+    later with host-annotation/condition work).
+  * Platform is fully generic for builders: detection via `builder_finalization` + run-state via
+    `builder_run_state` binding-metadata flags; a new type needs only domain-pack/adapter files + those
+    flags. NO backend/src platform edits after gene's run-state generalization.
+  * main is genuinely green: the only remaining test failures (22) are PROVEN pre-my-work — 17
+    SDK-introspection (test_gene_expression_builder_tools / vocabulary_helpers, reproduced at f4a24b7e),
+    4 trace_context env-artifacts (TRACE_CONTEXT_SOURCE in the live container; pass in a clean container),
+    1 order-dependent export-adapter. The builder migration's broad-suite tests are builder-generic.
+  * Disease HONEST status (per Opus review of 1842f968): D1 concrete Gene/Allele/AGM subtypes, D2 subject
+    + subject_entity_validation (activated), D3 ECO codes (activated) are genuinely wired end-to-end and
+    e2e-proven (a concrete AGMDiseaseAnnotation: DOID:10652 + is_model_of + FlyBase, 0 structural). D5 is
+    DECLARED-ONLY: `relation_subsets` is declared but consumed by no code; the active relation binding
+    validates against the FULL umbrella 'Disease Relation' CV and the per-subtype subsetting is enforced
+    only by the LLM/prompt (the controlled_vocabulary validator has no subset concept). D4 (single_reference)
+    is GENUINELY BLOCKED (verified, not faked) and D6 is deferred.
+
+  OPEN QUESTIONS FOR CHRIS (post-pass):
+  * R1 — reference-binding infrastructure (D4), affects disease + phenotype + allele uniformly. Binding
+    `single_reference` durably needs (a) the REAL workspace document identity threaded into the inline
+    validator dispatch instead of the transient document_id=chat-runtime (streaming_tools.py:1751), and
+    (b) a document -> Alliance-reference resolution (PMID/DOI/AGRKB) at chat-extraction time. Neither exists
+    today (the pdf_documents/PDFDocument model has no reference-identity column). Until built, the paper
+    reference is honestly pending and the reference validator returns validator_unresolved (non-structural).
+    This is the single biggest remaining infra item and the right fix is uniform across the three types.
+  * R2 — per-subtype relation subset ENFORCEMENT (disease D5). To actually reject e.g. is_model_of on a
+    GeneDiseaseAnnotation, the controlled_vocabulary_validation agent/schema/dispatch need a `subset`
+    concept. Today the relation is validated against the umbrella CV and the LLM does the subsetting via
+    prompt. Decide: build a subset-aware CV validator, or accept umbrella+LLM enforcement (and then either
+    consume or remove the currently-dead `relation_subsets` / DISEASE_RELATION_SUBSETS config).
+  * R3 — subject with no durable identifier: when a paper names a subject/AGM with no MOD identifier (e.g.
+    the e2e AGM "elav; APP; BACE heterozygous flies"), the active subject binding emits selector_missing_field
+    (severity error, non-structural) — an accurate curation gap. Curators may want a softer finding.
+  * R4 — optional disease slots not yet staged (genetic_sex, annotation_type, with_or_from,
+    disease_qualifiers; negated IS captured). Sparsely filled; deferred. Stage them when desired.
+  * D6 / chemical conditions: experimental conditions (ZECO + ChEBI + relation types incl WBMol and
+    ameliorated_by/induced_by/exacerbated_by) return LATER as condition_relations on host annotations, not
+    as a standalone extractor (chemical_validation + experimental_condition validators were kept for this).
+  * Phase 6 (delete envelope-legacy machinery) remains explicitly out of scope — every type still keeps
+    its envelope conversion path + *ExtractionResultEnvelope alongside the builder path.
+
+  MINOR LINT FOLLOW-UPS (harmless; tidy anytime): unused imports + BuilderFinalizationOutcome.finalization
+  Optional-access + str|None Pyright nits across the per-domain builder modules (gene/phenotype/allele/
+  disease); dead `relation_subsets` config + dead reference-field scrape path in disease builder_conversion;
+  verbose materializer trace payloads. None affect tests/e2e.
