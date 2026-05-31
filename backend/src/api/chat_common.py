@@ -150,7 +150,12 @@ def _build_extraction_candidate_from_tool_event(
 ) -> Optional[ExtractionEnvelopeCandidate]:
     """Parse a backend-only extraction event into a persistable candidate."""
 
-    if event.get("type") not in {"TOOL_COMPLETE", INTERNAL_EXTRACTION_RESULT_EVENT_TYPE}:
+    # Extraction candidates come ONLY from the purpose-built INTERNAL_EXTRACTION_RESULT event.
+    # The supervisor's ask_*_specialist TOOL_COMPLETE event carries the same canonical payload as
+    # its tool output, so accepting it too persisted every extraction twice. Every extraction
+    # specialist (builder and envelope) emits INTERNAL_EXTRACTION_RESULT, so it is the single
+    # authoritative source.
+    if event.get("type") != INTERNAL_EXTRACTION_RESULT_EVENT_TYPE:
         return None
 
     details = event.get("details", {}) or {}
@@ -340,26 +345,6 @@ def _persist_extraction_candidates(
     if not candidates or not document_id:
         return
 
-    # A single extraction can surface on more than one stream event: a
-    # builder/materializer specialist emits its canonical payload on the
-    # INTERNAL_EXTRACTION_RESULT event and again as the supervisor tool-call output, so
-    # the same extraction would otherwise persist twice. Collapse candidates that are
-    # identical in (agent_key, adapter_key, payload_json), keeping the first occurrence
-    # (the purpose-built INTERNAL_EXTRACTION_RESULT candidate precedes the tool-call copy
-    # in the event stream).
-    deduped_candidates: List[ExtractionEnvelopeCandidate] = []
-    seen_candidate_keys: set[tuple[str, str, str]] = set()
-    for candidate in candidates:
-        candidate_key = (
-            str(candidate.agent_key or ""),
-            str(candidate.adapter_key or ""),
-            json.dumps(candidate.payload_json, sort_keys=True, default=str),
-        )
-        if candidate_key in seen_candidate_keys:
-            continue
-        seen_candidate_keys.add(candidate_key)
-        deduped_candidates.append(candidate)
-
     persist_extraction_results(
         [
             CurationExtractionPersistenceRequest(
@@ -376,7 +361,7 @@ def _persist_extraction_candidates(
                 payload_json=candidate.payload_json,
                 metadata=dict(candidate.metadata),
             )
-            for candidate in deduped_candidates
+            for candidate in candidates
         ],
         db=db,
     )
