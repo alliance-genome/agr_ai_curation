@@ -462,16 +462,25 @@ def _refresh_domain_envelope_validation_for_ref(
                 actor_id=f"{envelope.domain_pack_id}.domain_envelope_validator",
             )
         )
-    dispatch_result = dispatch_active_validator_bindings(
-        validator_envelope,
-        domain_pack,
-        registry=structural_result.registry,
-        source_envelope_revision=envelope_row.revision,
-    )
+    if envelope.metadata.get("inline_validator_dispatch_complete"):
+        # A1: the chat turn already dispatched the active validators and the findings are saved
+        # on this envelope. Reuse them; run only the cheap structural checks here, do NOT re-run
+        # the validator agents. (Curator edits re-validate via the session validation service.)
+        dispatch_appended_findings: tuple = ()
+        result_envelope = validator_envelope
+    else:
+        dispatch_result = dispatch_active_validator_bindings(
+            validator_envelope,
+            domain_pack,
+            registry=structural_result.registry,
+            source_envelope_revision=envelope_row.revision,
+        )
+        dispatch_appended_findings = dispatch_result.appended_findings
+        result_envelope = dispatch_result.envelope
     appended_findings = (
         *structural_result.appended_findings,
         *package_appended_findings,
-        *dispatch_result.appended_findings,
+        *dispatch_appended_findings,
     )
     if not appended_findings:
         return envelope_row.revision
@@ -480,7 +489,7 @@ def _refresh_domain_envelope_validation_for_ref(
         db,
         DomainEnvelopeCheckpointRequest(
             project_key=envelope_row.project_key,
-            envelope=dispatch_result.envelope,
+            envelope=result_envelope,
             expected_revision=envelope_row.revision,
             document_id=envelope_row.document_id,
             session_id=envelope_row.session_id,

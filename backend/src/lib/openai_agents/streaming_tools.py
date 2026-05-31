@@ -1882,6 +1882,11 @@ async def _dispatch_domain_envelope_validators_for_chat(
                 "operation": "chat_domain_envelope_validation",
             },
         )
+        # A1: mark the envelope so the curation-stage validator pass reuses these findings
+        # instead of re-running the validator agents. Validation happens once, in the chat turn;
+        # the curation bootstrap reads the saved findings. (Curator edits re-validate via the
+        # session validation service, a separate path.) In-place dict mutation, safe on frozen models.
+        dispatch_result.envelope.metadata["inline_validator_dispatch_complete"] = True
         serialization_started_at = time.monotonic()
         serialized_envelope = json.dumps(dispatch_result.envelope.model_dump(mode="json"))
         dispatch_phase_timings_ms["result_serialization_ms"] = _elapsed_ms(
