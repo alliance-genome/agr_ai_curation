@@ -347,6 +347,9 @@ mirrors). Reuse the existing validator bindings (§4) unchanged.
 
 ---
 
+> RESOLVED 2026-05-31 (Chris) — see the "## Decisions" section at the END of this file. The questions
+> below are kept for context; the directive is FULL LinkML alignment ("nothing is blocked").
+
 ## Open questions for Chris (genuine design decisions — not guessed)
 
 1. **Abstract-class / blocked-write posture under the builder.** The existing pack
@@ -396,3 +399,45 @@ mirrors). Reuse the existing validator bindings (§4) unchanged.
    `experimental_condition_validation` is metadata-only. Are condition relations in
    scope for the first builder pass (staged + materialized as optional context), or
    explicitly deferred so the builder ignores them this pass?
+
+---
+
+## Decisions (2026-05-31, Chris) — these supersede the open questions above
+
+**Directive: nothing is "blocked."** The existing pack's pending / abstract / write-blocked /
+under-development posture is a PLACEHOLDER, not a constraint. Bring disease into FULL LinkML-model
+alignment now — the validators are ready. Each decision below resolves the matching open question.
+
+- **D1 — Write posture → UNBLOCK.** Do NOT preserve the pending/abstract/write-blocked posture.
+  Materialize the concrete subtype (GeneDiseaseAnnotation / AlleleDiseaseAnnotation /
+  AGMDiseaseAnnotation) selected by subject kind, per LinkML. The ALL-410 / ALL-425 "blocked" flags are
+  retired for disease.
+- **D2 — Subject → STAGE + RESOLVE.** `stage_disease_observation` captures the subject
+  (subject_type + identifier/label); activate `subject_entity_validation` to resolve concrete
+  Gene/Allele/AGM identity. The subject is required by every concrete subtype and selects which subtype
+  is written, so it drives D1.
+- **D3 — ECO evidence codes → EXTRACT.** Stage `evidence_code_curies[]` (ECO; LinkML-required,
+  multivalued, 100% present in curated data) and activate the evidence-code lookup binding.
+- **D4 — single_reference → BIND FROM THE LOADED DOCUMENT.** Source the reference from the curation
+  workspace document identity (the paper under curation), not from free text. Implementation note:
+  confirm a durable reference_id / AGRKB is available at chat-extraction time. The SAME pending-Reference
+  gap exists in phenotype + allele — solve reference binding UNIFORMLY across all three.
+- **D5 — Relation vocabulary → PER-SUBTYPE SUBSETS (verified; no divergence).** Validate the relation
+  against the subject-type's subset. VERIFIED 2026-05-31 that LinkML, the formal CV subsets, and curator
+  usage ALL AGREE (the §2 "shared umbrella" grounding note was WRONG — it read the base `diseaseannotation`
+  table without splitting by subtype). Per-subtype membership = de-facto usage:
+
+  | Subtype | CV subset | Members (= curator usage, counts) |
+  |---|---|---|
+  | Gene | 'Gene Disease Relation' | `is_implicated_in` (25,290), `is_marker_for` (17,858) |
+  | Allele | 'Allele Disease Relation' | `is_implicated_in` (5,551) |
+  | AGM | 'AGM Disease Relation' | `is_model_of` (23,238), `is_ameliorated_model_of` (5,863), `is_exacerbated_model_of` (3,427) |
+
+  Also `'Via Orthology Disease Relation'` (`is_implicated_via_orthology`, `is_marker_via_orthology`) for
+  orthology-inferred relations. No Chris-Grove ticket (premise disproven).
+- **D6 — Condition relations → DEFER.** Experimental-condition context (`condition_relations`) is OUT of
+  scope this pass. Conditions are not standalone in the model (ExperimentalCondition → ConditionRelation →
+  host annotation); the condition→host linkage will be reintroduced later with the host-annotation work
+  (and `chemical_condition` is being removed — see that doc). Capture the straightforward optional disease
+  slots (negated, genetic_sex, annotation_type, etc.) as full alignment allows; do NOT build the
+  condition→host linkage now.

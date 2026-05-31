@@ -294,10 +294,10 @@ clean (or issues resolved); Status Table updated; committed + pushed to main.
 | 0 | generic builder infra + gene_expression refactor (canary) | Claude | n/a | done | 84/84 | 0 struct | clean | DONE (7d891dbe) |
 | pre | validator_materialization_invalid fix (baseline cleanup) | Claude | n/a | 16/16 | 8→0 | clean | DONE (eb59c04e) | (made the 0-struct gate genuine) |
 | 1 | gene | Claude | done | done | 172+8 | 0 struct | clean | DONE (39663f46) |
-| 2 | disease | Claude | done | ☐ | ☐ | ☐ | ☐ | grounded; impl pending open-Qs + test PDF |
+| 2 | disease | Claude | done | ☐ | ☐ | ☐ | ☐ | DECIDED (full LinkML alignment — see approach doc Decisions); build pending test PDF |
 | 3 | phenotype | Claude | done | done | 10 new | 33 units, 0 struct | clean | DONE (b42cdea1) |
 | 4 | allele | Claude | done | done | 10 new | 6 assoc, 0 struct | clean | DONE (eca78ad8) |
-| 5 | chemical_condition | Claude | done | ☐ | ☐ | ☐ | ☐ | grounded; impl pending open-Qs + test PDF |
+| 5 | chemical_condition | — | n/a | n/a | n/a | n/a | n/a | REMOVED for now (placeholder; redo later with host-annotation work) |
 
 (gene_expression = reference, already done + structurally clean as of ge17.)
 
@@ -420,3 +420,23 @@ clean (or issues resolved); Status Table updated; committed + pushed to main.
   * Minor follow-ups (non-blocking): trim verbose materializer trace payloads; the per-type builder-tools
     Optional-access (BuilderFinalizationOutcome.finalization) + str|None Pyright nits are type-checker
     strictness only (all tests + e2e green) but could be tidied.
+- 2026-05-31 (Chris decisions on the remaining 2 types — recorded BEFORE implementing): the 12 open
+  questions (disease 6 + chemical 6) are now resolved.
+  * **chemical_condition: REMOVED.** Rip out the `chemical_extractor` agent + the `experimental_condition`
+    validator + the chemical_condition domain pack — placeholder test, not in use. Conditions are not
+    standalone (ExperimentalCondition → ConditionRelation → host annotation); condition handling returns
+    later with the host-annotation work. C1–C6 moot. (Details in chemical_condition-approach.md header.)
+  * **disease: FULL LinkML ALIGNMENT — "nothing is blocked."** The pack's blocked/pending/under-dev
+    posture is a placeholder, not a constraint; the validators are ready. D1 unblock → materialize
+    concrete Gene/Allele/AGM subtypes by subject kind; D2 stage + resolve the subject
+    (activate subject_entity_validation); D3 extract ECO evidence codes; D4 bind single_reference from the
+    loaded workspace document (same fix applies to phenotype + allele's pending Reference — do it once,
+    uniformly); D5 per-subtype relation subsets (VERIFIED no divergence: LinkML + formal CV subsets +
+    curator usage all agree — Gene{is_implicated_in,is_marker_for}, Allele{is_implicated_in},
+    AGM{is_model_of,is_ameliorated_model_of,is_exacerbated_model_of}; no Grove ticket); D6 defer
+    condition_relations (returns with the host-annotation/condition work). Full detail in the
+    disease-approach.md "Decisions" section.
+  * NEXT (when we resume): (1) rip out chemical extraction; (2) source a disease test PDF (any
+    open-access model-organism disease-annotation paper); (3) build disease to FULL alignment via the
+    proven per-type workflow; (4) fold the uniform "bind Reference from workspace document" fix into
+    disease + retrofit phenotype + allele.

@@ -1,5 +1,22 @@
 # chemical_condition — Builder-Migration Approach (GROUNDING)
 
+> ## DECISION (2026-05-31, Chris): chemical extraction is being REMOVED for now.
+> The standalone `chemical_extractor` agent, the `experimental_condition` validator agent, and the
+> `chemical_condition` domain pack are being ripped out — it was a placeholder test, not in production
+> use. Experimental conditions are NOT standalone in the model: an `ExperimentalCondition` attaches via
+> `ConditionRelation` to a host disease/phenotype/gene-expression annotation. So condition handling will
+> be reintroduced LATER as part of the host-annotation work, not as a standalone extractor. The grounding
+> below is retained for that future effort. All open questions C1–C6 are MOOT for now:
+> - **C1 (WBMol coverage)** — when reintroduced, build a WBMol lookup (60 real `WB:WBMol:` chemicals).
+> - **C2 (relation types beyond `has_condition`)** — when reintroduced, support `ameliorated_by` /
+>   `induced_by` / `exacerbated_by` / negated.
+> - **C3 (host-annotation linkage)** — THE core design task for the future reintroduction (how a
+>   condition links to its host annotation during extraction).
+> - **C4 (`condition_id` ZECO/XCO)** — revisit on reintroduction.
+> - **C5 (resolver-selection strictness)** — moot (no chemical extraction).
+> - **C6 (test document)** — moot.
+
+
 Phase 5 of the cross-domain builder migration (`docs/design/2026-05-31-cross-domain-first-pass-runbook.md`).
 This is the LinkML + curation-DB + existing-pack grounding that justifies the code. gene_expression
 is the proven reference shape (§2 of the runbook); copy it. No code is written here.
