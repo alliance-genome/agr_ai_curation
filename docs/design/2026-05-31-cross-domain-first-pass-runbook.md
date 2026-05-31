@@ -43,6 +43,43 @@ builders and green — see companion doc step 7). Add builder paths alongside; l
 
 ---
 
+## 1A. Phase plan (the backbone — strictly in order)
+
+The migration runs as explicit phases. **gene_expression is the source-of-truth example** every
+phase copies for structure (§2); every phase is grounded in the **LinkML model** (§3) and ENDS
+with a mandatory **Opus 4.8 code review (§8)** + green sandbox e2e (§7) before its commit lands.
+**Do not start any per-type phase until Phase 0 is merged.**
+
+- **Phase 0 — Make the builder tools/engine GENERIC (prerequisite; blocks all per-type phases).**
+  So per-type phases add thin domain adapters, not platform edits:
+  1. Generalize builder detection — replace the hardcoded
+     `_BUILDER_MATERIALIZER_FINALIZATION_TOOLS` / `_is_builder_materializer_agent`
+     (`streaming_tools.py:547/554`) with a domain-pack/registry-derived set of finalize-tool
+     names; keep the forbid-output-schema guard (~2366).
+  2. Factor the generic staging/finalize tool surface over `ExtractionBuilderWorkspace` into a
+     reusable **per-domain builder-tools module** pattern (thin adapter), pulling shared logic out
+     of `_finalize_gene_expression_extraction_impl`.
+  3. **Refactor gene_expression onto the generic tools as the proof/canary** — it must stay
+     structurally clean after the refactor (ge17 baseline: 0 structural findings). This makes
+     gene_expression both the source-of-truth example AND Phase 0's regression guard.
+  - Gate: gene_expression unit/contract + e2e still green; Opus 4.8 review of the Phase-0 diff.
+
+- **Phase 1 — gene (canary type):** first real per-type migration; proves the generic infra on a
+  fresh type. Ground in `gene.yaml` + curation DB `gene`.
+- **Phase 2 — disease:** `phenotypeAndDiseaseAnnotation.yaml` (`*DiseaseAnnotation`) + curation DB
+  `genediseaseannotation` / `diseaseannotation_*`.
+- **Phase 3 — phenotype:** `*PhenotypeAnnotation` + curation DB phenotype tables.
+- **Phase 4 — allele:** `allele.yaml` (`Allele`) + curation DB `allele*`.
+- **Phase 5 — chemical_condition:** `ExperimentalCondition` + chemical CV + the existing pack.
+- **Phase 6 — (LATER, NOT this pass) delete envelope legacy** once ALL types are builders and
+  green (companion doc step 7+). Out of scope now.
+
+Per-phase gate (all required before the phase's commit lands): LinkML-grounded approach doc →
+gene_expression-shaped implementation → §7 sandbox unit + e2e green (0 structural findings) → §8
+Opus 4.8 review clean → §6 git-safe commit → Status Table (§10) updated.
+
+---
+
 ## 2. Reference anatomy — the gene_expression files to copy
 
 | Concern | File | Notes |
@@ -252,14 +289,14 @@ clean (or issues resolved); Status Table updated; committed + pushed to main.
 
 ## 10. Status table (claim your type here — edit + commit first)
 
-| Type | Owner | Approach doc | Code | Unit | E2E | Review | Status |
-|---|---|---|---|---|---|---|---|
-| Phase 0 (detection + per-domain tool module) | — | n/a | ☐ | ☐ | n/a | ☐ | pending |
-| gene | — | ☐ | ☐ | ☐ | ☐ | ☐ | pending |
-| disease | — | ☐ | ☐ | ☐ | ☐ | ☐ | pending |
-| phenotype | — | ☐ | ☐ | ☐ | ☐ | ☐ | pending |
-| allele | — | ☐ | ☐ | ☐ | ☐ | ☐ | pending |
-| chemical_condition | — | ☐ | ☐ | ☐ | ☐ | ☐ | pending |
+| Phase | Type | Owner | Approach doc | Code | Unit | E2E | Opus review | Status |
+|---|---|---|---|---|---|---|---|---|
+| 0 | generic builder infra + gene_expression refactor (canary) | — | n/a | ☐ | ☐ | ☐ | ☐ | pending |
+| 1 | gene | — | ☐ | ☐ | ☐ | ☐ | ☐ | blocked by P0 |
+| 2 | disease | — | ☐ | ☐ | ☐ | ☐ | ☐ | blocked by P0 |
+| 3 | phenotype | — | ☐ | ☐ | ☐ | ☐ | ☐ | blocked by P0 |
+| 4 | allele | — | ☐ | ☐ | ☐ | ☐ | ☐ | blocked by P0 |
+| 5 | chemical_condition | — | ☐ | ☐ | ☐ | ☐ | ☐ | blocked by P0 |
 
 (gene_expression = reference, already done + structurally clean as of ge17.)
 
