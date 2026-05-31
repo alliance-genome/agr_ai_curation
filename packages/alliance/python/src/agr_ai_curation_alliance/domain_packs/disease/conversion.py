@@ -806,12 +806,9 @@ def _validation_finding(pending_ref_id: str) -> ValidationFinding:
 def _pending_object_from_extraction_object(
     obj: CuratableObjectEnvelope,
 ) -> CuratableObjectEnvelope:
-    metadata_refs = [
-        ref.model_copy(
-            update={"metadata_path": f"extraction_metadata.{ref.metadata_path}"}
-        )
-        for ref in obj.metadata_refs
-    ]
+    # metadata_refs are relative to the extraction-metadata namespace; resolvers look under
+    # envelope.metadata.extraction_metadata, so do not rewrite them to absolute envelope paths.
+    metadata_refs = list(obj.metadata_refs)
     return CuratableObjectEnvelope(
         object_type=DISEASE_OBJECT_TYPE,
         object_role=_DISEASE_OBJECT_ROLE,

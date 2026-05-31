@@ -99,15 +99,15 @@ fixtures:
           evidence_record_ids:
             - evidence-flcn-pronephric-duct-1
           metadata_refs:
-            - metadata_path: extraction_metadata.raw_mentions[0]
+            - metadata_path: raw_mentions[0]
               role: source_mention
-            - metadata_path: extraction_metadata.evidence_records[0]
+            - metadata_path: evidence_records[0]
               role: verified_evidence
-            - metadata_path: extraction_metadata.reagent_context[0]
+            - metadata_path: reagent_context[0]
               role: reagent_context
-            - metadata_path: extraction_metadata.specimen_context[0]
+            - metadata_path: specimen_context[0]
               role: specimen_context
-            - metadata_path: extraction_metadata.condition_context[0]
+            - metadata_path: condition_context[0]
               role: condition_context
           metadata:
             expected_context_payload_paths:
@@ -175,9 +175,9 @@ fixtures:
           evidence_record_ids:
             - evidence-flcn-nucleus-1
           metadata_refs:
-            - metadata_path: extraction_metadata.raw_mentions[1]
+            - metadata_path: raw_mentions[1]
               role: source_mention
-            - metadata_path: extraction_metadata.evidence_records[1]
+            - metadata_path: evidence_records[1]
               role: verified_evidence
         - object_type: GeneExpressionAnnotation
           object_role: curatable_unit
@@ -239,11 +239,11 @@ fixtures:
           evidence_record_ids:
             - evidence-flcn-retina-cytoplasm-negated-1
           metadata_refs:
-            - metadata_path: extraction_metadata.raw_mentions[2]
+            - metadata_path: raw_mentions[2]
               role: source_mention
-            - metadata_path: extraction_metadata.evidence_records[2]
+            - metadata_path: evidence_records[2]
               role: verified_evidence
-            - metadata_path: extraction_metadata.ambiguities[0]
+            - metadata_path: ambiguities[0]
               role: curator_context
       validation_findings:
         - severity: info

@@ -142,11 +142,17 @@ def _iter_mapping_keys(value: Any):
 
 
 def _assert_metadata_refs_resolve(envelope: Any) -> None:
+    extraction_metadata = envelope.metadata.get("extraction_metadata")
+    metadata_root = (
+        extraction_metadata
+        if isinstance(extraction_metadata, Mapping)
+        else envelope.metadata
+    )
     unresolved = [
         metadata_ref.metadata_path
         for annotation in envelope.objects
         for metadata_ref in annotation.metadata_refs
-        if not field_path_exists(envelope.metadata, metadata_ref.metadata_path)
+        if not field_path_exists(metadata_root, metadata_ref.metadata_path)
     ]
     assert unresolved == []
 
@@ -1497,12 +1503,8 @@ def test_tmem67_fixture_validates_as_pending_gene_expression_annotation():
     assert annotation.object_refs == []
     assert annotation.field_refs == []
     assert annotation.evidence_record_ids == ["evidence-tmem67-metanephros-1"]
-    assert annotation.metadata_refs[0].metadata_path == (
-        "extraction_metadata.raw_mentions[0]"
-    )
-    assert annotation.metadata_refs[1].metadata_path == (
-        "extraction_metadata.evidence_records[0]"
-    )
+    assert annotation.metadata_refs[0].metadata_path == "raw_mentions[0]"
+    assert annotation.metadata_refs[1].metadata_path == "evidence_records[0]"
     _assert_metadata_refs_resolve(envelope)
     assert annotation.payload["expression_annotation_subject"] == {
         "primary_external_id": "MGI:1923928",
@@ -1587,17 +1589,17 @@ def test_multi_annotation_fixture_projects_one_review_row_per_expression_stateme
     ]
     assert rows[1].metadata["metadata_refs"] == [
         {
-            "metadata_path": "extraction_metadata.raw_mentions[1]",
+            "metadata_path": "raw_mentions[1]",
             "role": "source_mention",
             "description": None,
         },
         {
-            "metadata_path": "extraction_metadata.evidence_records[1]",
+            "metadata_path": "evidence_records[1]",
             "role": "verified_evidence",
             "description": None,
         },
         {
-            "metadata_path": "extraction_metadata.ambiguities[0]",
+            "metadata_path": "ambiguities[0]",
             "role": "curator_context",
             "description": None,
         },
@@ -1863,12 +1865,8 @@ def test_tmem67_extractor_output_converts_to_pending_gene_expression_envelope():
     assert annotation.object_type == GENE_EXPRESSION_OBJECT_TYPE
     assert annotation.status is CuratableObjectStatus.PENDING
     assert annotation.evidence_record_ids == ["evidence-tmem67-metanephros-1"]
-    assert annotation.metadata_refs[0].metadata_path == (
-        "extraction_metadata.raw_mentions[0]"
-    )
-    assert annotation.metadata_refs[1].metadata_path == (
-        "extraction_metadata.evidence_records[0]"
-    )
+    assert annotation.metadata_refs[0].metadata_path == "raw_mentions[0]"
+    assert annotation.metadata_refs[1].metadata_path == "evidence_records[0]"
     assert converted.metadata["source_document_id"] == "document-tmem67-expression-fixture"
     assert converted.metadata["extraction_metadata"]["evidence_records"][0][
         "verified_quote"

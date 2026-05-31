@@ -239,7 +239,7 @@ def test_evidence_anchor_projection_reads_nested_extraction_metadata_records():
                 evidence_record_ids=["evidence-nested-1"],
                 metadata_refs=[
                     {
-                        "metadata_path": "extraction_metadata.evidence_records[0]",
+                        "metadata_path": "evidence_records[0]",
                         "role": "verified_evidence",
                     }
                 ],
@@ -292,7 +292,7 @@ def test_evidence_anchor_projection_resolves_object_metadata_refs():
                 payload={"gene": {"symbol": "abc-1"}},
                 metadata_refs=[
                     {
-                        "metadata_path": "extraction_metadata.evidence_records[0]",
+                        "metadata_path": "evidence_records[0]",
                         "role": "verified_evidence",
                     }
                 ],

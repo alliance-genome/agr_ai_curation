@@ -941,7 +941,7 @@ def test_execute_post_curation_pipeline_materializes_envelope_rows_without_norma
                         "evidence_record_ids": ["evidence-1"],
                         "metadata_refs": [
                             {
-                                "metadata_path": "extraction_metadata.evidence_records[0]",
+                                "metadata_path": "evidence_records[0]",
                                 "role": "verified_evidence",
                             }
                         ],
@@ -1036,7 +1036,7 @@ def test_execute_post_curation_pipeline_materializes_envelope_rows_without_norma
         "evidence_record_ids": ["evidence-1"],
         "metadata_refs": [
             {
-                "metadata_path": "extraction_metadata.evidence_records[0]",
+                "metadata_path": "evidence_records[0]",
                 "role": "verified_evidence",
             }
         ],

@@ -586,12 +586,10 @@ def _object_ref(obj: CuratableObjectEnvelope) -> ObjectRef:
 def _pending_object_from_extraction_object(
     obj: CuratableObjectEnvelope,
 ) -> CuratableObjectEnvelope:
-    metadata_refs = [
-        ref.model_copy(
-            update={"metadata_path": f"extraction_metadata.{ref.metadata_path}"}
-        )
-        for ref in obj.metadata_refs
-    ]
+    # metadata_refs are relative to the extraction-metadata namespace. They are resolved against
+    # envelope.metadata.extraction_metadata (see _metadata_ref_findings and the evidence resolver),
+    # so they must NOT be rewritten to absolute envelope paths here.
+    metadata_refs = list(obj.metadata_refs)
     return CuratableObjectEnvelope(
         object_type=GENE_EXPRESSION_OBJECT_TYPE,
         object_role=GENE_EXPRESSION_OBJECT_ROLE,
@@ -1646,10 +1644,19 @@ def _metadata_ref_findings(
     expression_object: CuratableObjectEnvelope,
     object_ref: ObjectRef,
 ) -> list[ValidationFinding]:
+    # metadata_refs are relative to the extraction-metadata namespace. The converter nests the
+    # extractor's structured metadata under envelope.metadata.extraction_metadata, so resolve refs
+    # there; fall back to top-level for envelopes that were never nested.
+    extraction_metadata = envelope.metadata.get("extraction_metadata")
+    metadata_root = (
+        extraction_metadata
+        if isinstance(extraction_metadata, Mapping)
+        else envelope.metadata
+    )
     missing_metadata_refs = [
         metadata_ref.metadata_path
         for metadata_ref in expression_object.metadata_refs
-        if not field_path_exists(envelope.metadata, metadata_ref.metadata_path)
+        if not field_path_exists(metadata_root, metadata_ref.metadata_path)
     ]
     if not missing_metadata_refs:
         return []

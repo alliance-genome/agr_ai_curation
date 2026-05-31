@@ -1727,21 +1727,17 @@ def _evidence_record_indexes(
 def _metadata_evidence_record_lists(
     metadata: Mapping[str, Any],
 ) -> list[tuple[str, list[Any]]]:
-    evidence_record_lists: list[tuple[str, list[Any]]] = []
-
-    raw_records = metadata.get("evidence_records")
-    if isinstance(raw_records, list):
-        evidence_record_lists.append(("evidence_records", raw_records))
-
+    # metadata_refs are relative to the extraction-metadata namespace. Index evidence records from
+    # there (falling back to top-level for envelopes that were never nested) under the relative
+    # "evidence_records" key so refs like "evidence_records[N]" resolve regardless of nesting.
     extraction_metadata = metadata.get("extraction_metadata")
-    if isinstance(extraction_metadata, Mapping):
-        raw_nested_records = extraction_metadata.get("evidence_records")
-        if isinstance(raw_nested_records, list):
-            evidence_record_lists.append(
-                ("extraction_metadata.evidence_records", raw_nested_records)
-            )
-
-    return evidence_record_lists
+    namespace = (
+        extraction_metadata if isinstance(extraction_metadata, Mapping) else metadata
+    )
+    raw_records = namespace.get("evidence_records")
+    if isinstance(raw_records, list):
+        return [("evidence_records", raw_records)]
+    return []
 
 
 def _object_evidence_record_ids(
