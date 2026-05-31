@@ -340,6 +340,26 @@ def _persist_extraction_candidates(
     if not candidates or not document_id:
         return
 
+    # A single extraction can surface on more than one stream event: a
+    # builder/materializer specialist emits its canonical payload on the
+    # INTERNAL_EXTRACTION_RESULT event and again as the supervisor tool-call output, so
+    # the same extraction would otherwise persist twice. Collapse candidates that are
+    # identical in (agent_key, adapter_key, payload_json), keeping the first occurrence
+    # (the purpose-built INTERNAL_EXTRACTION_RESULT candidate precedes the tool-call copy
+    # in the event stream).
+    deduped_candidates: List[ExtractionEnvelopeCandidate] = []
+    seen_candidate_keys: set[tuple[str, str, str]] = set()
+    for candidate in candidates:
+        candidate_key = (
+            str(candidate.agent_key or ""),
+            str(candidate.adapter_key or ""),
+            json.dumps(candidate.payload_json, sort_keys=True, default=str),
+        )
+        if candidate_key in seen_candidate_keys:
+            continue
+        seen_candidate_keys.add(candidate_key)
+        deduped_candidates.append(candidate)
+
     persist_extraction_results(
         [
             CurationExtractionPersistenceRequest(
@@ -356,7 +376,7 @@ def _persist_extraction_candidates(
                 payload_json=candidate.payload_json,
                 metadata=dict(candidate.metadata),
             )
-            for candidate in candidates
+            for candidate in deduped_candidates
         ],
         db=db,
     )
