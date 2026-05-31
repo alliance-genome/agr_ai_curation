@@ -2236,26 +2236,33 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
     db_agent = _get_db_agent_row(agent_id, dict(kwargs))
     curation_definition = agent_definition
     if curation_definition is None and db_agent is not None:
+        # The agent has no definition under its own (routing) key. This happens for
+        # builder/materializer agents whose routing key differs from their definition
+        # agent_id (e.g. gene_expression -> gene_expression_extraction). Such agents
+        # legitimately have no output_schema_key -- the builder owns the canonical
+        # output -- so an output schema cannot be the signal for "inherits curation".
+        # Instead, follow the link the agent record already carries (template_source /
+        # group_rules_component) and adopt that definition's curation only when the
+        # parent definition explicitly declares itself launchable for curation. This is
+        # data-driven (no hard-coded name table) and authoritative, and stays scoped to
+        # document-context extraction agents.
         tool_ids = list(getattr(db_agent, "tool_ids", []) or [])
-        can_inherit_curation = (
-            bool(str(getattr(db_agent, "output_schema_key", "") or "").strip())
-            and "document_id" in _required_context_for_tool_ids(tool_ids)
-        )
-        if not can_inherit_curation:
-            curation_definition = None
-        for candidate_key in (
-            getattr(db_agent, "template_source", None),
-            getattr(db_agent, "group_rules_component", None),
-        ):
-            if not can_inherit_curation:
-                break
-            normalized_candidate = str(candidate_key or "").strip()
-            if not normalized_candidate:
-                continue
-            inherited_definition = get_agent_definition(normalized_candidate)
-            if inherited_definition is not None:
-                curation_definition = inherited_definition
-                break
+        operates_on_document = "document_id" in _required_context_for_tool_ids(tool_ids)
+        if operates_on_document:
+            for candidate_key in (
+                getattr(db_agent, "template_source", None),
+                getattr(db_agent, "group_rules_component", None),
+            ):
+                normalized_candidate = str(candidate_key or "").strip()
+                if not normalized_candidate:
+                    continue
+                inherited_definition = get_agent_definition(normalized_candidate)
+                if inherited_definition is None:
+                    continue
+                inherited_curation = inherited_definition.curation
+                if inherited_curation is not None and inherited_curation.launchable:
+                    curation_definition = inherited_definition
+                    break
 
     curation_metadata = {
         "adapter_key": curation_definition.curation.adapter_key,
