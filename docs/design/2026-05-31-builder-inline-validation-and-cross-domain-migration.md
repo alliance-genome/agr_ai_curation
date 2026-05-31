@@ -444,11 +444,13 @@ sequencing from the 2026-05-21 docs.
 ## Open decisions
 
 - **`object_not_pending`: should validator materialization advance object `status` to `VALIDATED`,
-  or keep objects `PENDING` until the curator acts?** (see Afternoon Update). Cross-pack core
-  behavior in `materialize_validator_results_into_envelope`.
-- **Inline-validation error policy: should a validator execution error abort the chat turn (current
-  behavior, loses the extraction) or be recorded as a finding while the extraction still persists?**
-  (see Afternoon Update — `streaming_tools.py:1857`). Recommended: persist + record finding.
+  or keep objects `PENDING` until the curator acts?** RESOLVED (Chris, 2026-05-31): PENDING means
+  "not yet validated by the automated validator"; validation legitimately removes PENDING and is
+  unrelated to curator review. The `object_not_pending` check was removed (commit `91f7a784`).
+- **Inline-validation error policy: abort vs persist + record a finding?** RESOLVED (Chris,
+  2026-05-31): persist + record a finding, and distinguish a validator that *errored* (a distinct
+  `validator_error`, shown to curators and logged) from one that *ran but found no match*
+  (`validator_unresolved`). Implemented in commit `abfe55ed`.
 - Inline validation should SEED the persisted `DomainEnvelope` so bootstrap reuses it (this
   doc's chosen direction, matching the requirement). Confirm the bootstrap/curation-prep path
   reuse logic and idempotency.
