@@ -22,7 +22,25 @@ from src.schemas.domain_envelope import (
     ValidationFinding,
     ValidationFindingSeverity,
 )
-from .constants import ALLELE_DOMAIN_PACK_ID, ALLELE_DOMAIN_PACK_VERSION
+from .constants import (
+    ALLELE_ASSOCIATION_KIND,
+    ALLELE_ASSOCIATION_MODEL_ID,
+    ALLELE_ASSOCIATION_OBJECT_ROLE,
+    ALLELE_ASSOCIATION_OBJECT_TYPE,
+    ALLELE_DOMAIN_PACK_ID,
+    ALLELE_DOMAIN_PACK_VERSION,
+    ALLELE_EVIDENCE_QUOTE_OBJECT_TYPE,
+    ALLELE_MATERIALIZER_ID,
+    ALLELE_MENTION_OBJECT_TYPE,
+    ALLELE_MENTION_REFERENCE_VALIDATOR_BINDING_ID,
+    ALLELE_REFERENCE_OBJECT_TYPE,
+)
+from .conversion import (
+    AlleleBuilderExtractionOutput,
+    AlleleMaterializationResult,
+    materialize_allele_builder_state,
+    validate_allele_builder_objects,
+)
 from .export import (
     AllelePaperEvidenceExportAdapter,
     build_allele_association_export,
@@ -697,13 +715,26 @@ def _required_string(value: Any, field_name: str) -> str:
 
 
 __all__ = [
+    "ALLELE_ASSOCIATION_KIND",
+    "ALLELE_ASSOCIATION_MODEL_ID",
+    "ALLELE_ASSOCIATION_OBJECT_ROLE",
+    "ALLELE_ASSOCIATION_OBJECT_TYPE",
     "ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY",
     "ALLELE_DOMAIN_PACK_ID",
     "ALLELE_DOMAIN_PACK_VERSION",
+    "ALLELE_EVIDENCE_QUOTE_OBJECT_TYPE",
+    "ALLELE_MATERIALIZER_ID",
+    "ALLELE_MENTION_OBJECT_TYPE",
+    "ALLELE_MENTION_REFERENCE_VALIDATOR_BINDING_ID",
+    "ALLELE_REFERENCE_OBJECT_TYPE",
+    "AlleleBuilderExtractionOutput",
+    "AlleleMaterializationResult",
     "AllelePaperEvidenceExportAdapter",
     "VERIFIED_ALLELE_ASSOCIATION_TARGETS",
     "build_allele_association_export",
     "build_allele_association_submission_plan",
     "build_pending_allele_envelope_from_tool_verified_fixture",
+    "materialize_allele_builder_state",
+    "validate_allele_builder_objects",
     "validate_pending_allele_envelope",
 ]

@@ -381,6 +381,16 @@ fixture_packs:
       - AlleleMention
       - EvidenceQuote
     definition_state: in_development
+  - fixture_pack_id: allele_builder_pending
+    display_name: Builder-materialized allele paper/evidence fixtures
+    path: fixtures/allele_builder_pending.yaml
+    description: Production-like pending allele paper/evidence association graph produced by the allele builder materializer with RELATIVE metadata_refs.
+    object_types:
+      - AllelePaperEvidenceAssociation
+      - Reference
+      - AlleleMention
+      - EvidenceQuote
+    definition_state: in_development
 metadata:
   semantic_source: domain_envelope.objects
   object_role_key: object_role

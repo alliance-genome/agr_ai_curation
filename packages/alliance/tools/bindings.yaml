@@ -918,6 +918,90 @@ tools:
       documentation:
         summary: Materializes staged gene_mention_evidence candidates into the GeneExtractionResultEnvelope payload, then finalizes through the project-agnostic builder handoff.
   # ---------------------------------------------------------------------------------------
+  # Allele extractor builder tools (Phase 4 envelope -> builder migration). Per-domain module
+  # allele_builder_tools.py over the project-agnostic ExtractionBuilderWorkspace. Allele is
+  # mention-only: the active allele_mention_reference_validation binding owns allele identity, so
+  # there are NO resolver-backed controlled fields here (preserve the existing-pack posture). The
+  # materializer emits the 4-object pending association graph with BLOCKED write/export metadata.
+  # ---------------------------------------------------------------------------------------
+  - tool_id: stage_allele_observation
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.allele_builder_tools:stage_allele_observation
+    required_context: []
+    description: Stage one retained, evidence-backed Alliance allele mention candidate with paper-backed validator selector hints
+    source_file: python/src/agr_ai_curation_alliance/tools/allele_builder_tools.py
+    metadata:
+      name: Stage Allele Observation
+      category: Database
+      # Run-state builder tool: the platform closure-binds the active builder workspace +
+      # evidence records into this tool per run (streaming_tools._bind_run_state_into_tools).
+      builder_run_state: true
+      audit:
+        display_name: Stage Allele Observation
+      documentation:
+        summary: Stages one allele paper/evidence association candidate from verified evidence and the exact paper mention. The active allele validator owns final allele identity.
+  - tool_id: patch_allele_observation
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.allele_builder_tools:patch_allele_observation
+    required_context: []
+    description: Patch enumerated fields on a staged Alliance allele mention candidate
+    source_file: python/src/agr_ai_curation_alliance/tools/allele_builder_tools.py
+    metadata:
+      name: Patch Allele Observation
+      category: Database
+      builder_run_state: true
+      audit:
+        display_name: Patch Allele Observation
+      documentation:
+        summary: Applies bounded repairs to a staged allele observation candidate.
+  - tool_id: discard_allele_observation
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.allele_builder_tools:discard_allele_observation
+    required_context: []
+    description: Discard one staged Alliance allele mention candidate
+    source_file: python/src/agr_ai_curation_alliance/tools/allele_builder_tools.py
+    metadata:
+      name: Discard Allele Observation
+      category: Database
+      builder_run_state: true
+      audit:
+        display_name: Discard Allele Observation
+      documentation:
+        summary: Marks one staged allele observation candidate as discarded without deleting the builder trace.
+  - tool_id: list_staged_allele_observations
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.allele_builder_tools:list_staged_allele_observations
+    required_context: []
+    description: List compact summaries for staged Alliance allele mention candidates
+    source_file: python/src/agr_ai_curation_alliance/tools/allele_builder_tools.py
+    metadata:
+      name: List Staged Allele Observations
+      category: Database
+      builder_run_state: true
+      audit:
+        display_name: List Staged Allele Observations
+      documentation:
+        summary: Returns compact builder state summaries for staged allele observation candidates.
+  - tool_id: finalize_allele_extraction
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.allele_builder_tools:finalize_allele_extraction
+    required_context: []
+    description: Finalize staged Alliance allele mentions through the extraction builder handoff
+    source_file: python/src/agr_ai_curation_alliance/tools/allele_builder_tools.py
+    metadata:
+      name: Finalize Allele Extraction
+      category: Database
+      # Marks this tool as a builder-materializer finalize tool. The platform runtime derives
+      # the set of builder finalize-tool names from this flag
+      # (streaming_tools._builder_finalization_tool_names) so this is a domain-pack edit, not a
+      # platform edit.
+      builder_finalization: true
+      builder_run_state: true
+      audit:
+        display_name: Finalize Allele Extraction
+      documentation:
+        summary: Materializes staged allele candidates into the 4-object pending AlleleExtractionResultEnvelope payload (BLOCKED write/export), then finalizes through the project-agnostic builder handoff.
+  # ---------------------------------------------------------------------------------------
   # Phenotype extractor builder tools (Phase 3 envelope -> builder migration). Per-domain module
   # phenotype_builder_tools.py over the project-agnostic ExtractionBuilderWorkspace. The active
   # phenotype_term_ontology_validator resolves the staged term inline, so there are NO
