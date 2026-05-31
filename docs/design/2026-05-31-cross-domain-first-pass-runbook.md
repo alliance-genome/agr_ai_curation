@@ -1,175 +1,272 @@
-# Cross-Domain Extractor Migration — Autonomous First-Pass Runbook
+# Cross-Domain Builder Migration — Multi-Agent Guide (LIVING DOC)
 
-Date: 2026-05-31. Author: Claude (for Chris, to execute autonomously while he drives ~2h).
-Status: ACTIVE autonomous runbook. This is the document I (Claude) follow when no one is
-watching. It is self-contained on purpose so it survives a context reset.
+Date: 2026-05-31. For a detached multi-agent workflow doing a FIRST REAL CODE PASS that migrates
+each envelope-pattern data type to the gene_expression builder pattern. gene_expression is the
+proven, structurally-clean reference. First pass — we iterate later; getting boots on the ground
+is the point, but the invariants in §5 and the safety/test/review gates in §6–§8 are mandatory.
 
-Related: `2026-05-31-builder-inline-validation-and-cross-domain-migration.md` (the migration
-sequence + audit). That doc is the architecture plan; THIS doc is the safe, do-it-now task.
+Companion: `2026-05-31-builder-inline-validation-and-cross-domain-migration.md` (architecture +
+9-step sequence + "what NOT to touch"). Read its §"What NOT to touch" before any change.
 
----
-
-## 0. Autonomy contract (read this first, every time)
-
-**Goal of this autonomous session:** produce, for each curation data type that still uses the
-envelope pattern (gene, disease, chemical_condition, allele, phenotype), a **first-pass
-"approach" design doc** — the use-case spec we are missing because there is no Daniela-style
-document for these types. Each doc is grounded in three real sources, NOT invented:
-
-1. the **LinkML model** (`temp_agr_curation_schema/model/schema/*.yaml`),
-2. the **AWS curation database** (readonly) — what curators *actually* produce,
-3. the **literature** (PMID references / evidence), where reachable.
-
-**This session is DOCS + READ-ONLY DB QUERIES ONLY.** It is the "come up with the best
-approach for a first pass" work Chris asked for — the prerequisite for any code migration.
-
-### HARD STOPPING CONDITIONS — pause and leave a note, do NOT proceed past these
-- **Do NOT change extractor/runtime CODE** (no edits under `backend/src`, `packages/.../python`,
-  `packages/.../domain_packs/*/domain_pack.yaml`, agent schemas/prompts). Code migration is a
-  separate, reviewed step. This session writes ONLY under `docs/design/`.
-- **Read-only DB access only.** Only `SELECT`. Light queries (LIMITs, counts). Never write to
-  the curation or literature DBs. Never print DB credentials.
-- **Stop on any genuine design decision** (ambiguous LinkML, conflicting curation reality vs
-  schema, a required field with no obvious extraction source). Write it under `## Open
-  questions for Chris` in that type's doc and move on — do not guess and bake it in as settled.
-- **Stop if a grounding source is unavailable** (e.g., literature DB tunnel down). Note it in
-  the doc, proceed with the sources you do have.
-- **Commit each approach doc as you finish it** (one commit per type) so work is saved and Chris
-  can review async from git. Use explicit `git add <file>`; never `-A`/`.`. Push to `main`.
-- If anything here conflicts with a newer instruction from Chris, Chris wins.
-
-When all five type docs exist + are committed, STOP. Do not begin code migration. Leave a
-summary in `## Progress log` below and wait.
+> SUPERSEDES the earlier docs-only scope of this file. This is now a CODE-migration guide.
 
 ---
 
-## 1. Grounding sources (how to query them)
+## 0. How to use this doc (every agent reads this first)
 
-**LinkML model** (already cloned, read-only reference @ commit 1b11d088):
-`temp_agr_curation_schema/model/schema/`. Type → primary schema file:
-- gene → `gene.yaml` (class `Gene`); shared identity in `core.yaml` (`BiologicalEntity`,
-  `primary_external_id`, slot annotations).
-- disease → `phenotypeAndDiseaseAnnotation.yaml` (class `DiseaseAnnotation` / `*DiseaseAnnotation`).
-- phenotype → `phenotypeAndDiseaseAnnotation.yaml` (class `PhenotypeAnnotation`).
-- allele → `allele.yaml` (class `Allele`).
-- chemical_condition → `controlledVocabulary.yaml` / `core.yaml` ExperimentalCondition +
-  chemical (ZECO/ChEBI); confirm exact classes from the pack + schema.
-- (reference: gene_expression → `expression.yaml`, already migrated — the template.)
+1. This is a LIVING doc. **Claim a data type** in the Status Table (§10) by editing this file
+   (set Owner + status `in_progress`), commit that one-line change first so others see it.
+2. Follow the **recipe (§4)** for your type, grounded in **LinkML + the curation DB (§3)**.
+3. **COPY gene_expression** (§2). Do not invent shapes; mirror the reference.
+4. Obey the **invariants (§5)** — they are today's hard-won bug fixes; violating them re-introduces
+   known bugs.
+5. After any code change: **git safety (§6) → sandbox deploy+test (§7) → Opus 4.8 code review (§8)**.
+6. Update the Status Table + Progress Log (§10/§11) as you go. One commit per meaningful step.
+7. **Stop and write an `## Open questions` entry** (in your type's approach notes) instead of
+   guessing on any genuine design decision (ambiguous LinkML, conflicting curation reality, a
+   required slot with no extraction source). Leave it for Chris; keep moving on the rest.
 
-**AWS curation DB** (readonly, CONFIRMED reachable from the backend container; 189 public
-tables). Query via the backend container using the env var (do NOT hardcode/print the URL):
+---
+
+## 1. Mission & scope
+
+Migrate `gene` (gene_extractor), `disease`, `phenotype`, `allele`, `chemical_condition` from the
+**envelope pattern** (agent has `output_schema`, one-shot structured output) to the **builder
+pattern** (agent stages candidates via tools, then a `finalize_<type>_extraction` tool materializes
+the envelope; inline validation runs in the chat turn). Target end state per type: a fresh sandbox
+extraction persists a structurally-clean envelope — zero `entity_assayed_mismatch`,
+`object_not_pending`, `metadata_refs_missing`, `validator_materialization_invalid`; only
+`validator_resolved` (INFO) and genuine `validator_unresolved`/`validator_error` remain.
+
+DO NOT delete envelope-legacy machinery in this pass (that is the final phase, after ALL types are
+builders and green — see companion doc step 7). Add builder paths alongside; leave envelope code.
+
+---
+
+## 2. Reference anatomy — the gene_expression files to copy
+
+| Concern | File | Notes |
+|---|---|---|
+| Agent def | `packages/alliance/agents/gene_expression/agent.yaml` | NO `output_schema`; builder tool list (stage/patch/discard/list/finalize + evidence + selector-resolution tools) |
+| Prompt | `packages/alliance/agents/gene_expression/prompt.yaml` | builder tool-loop instructions |
+| Group rules | `packages/alliance/agents/gene_expression/group_rules/{wb,zfin}.yaml` | per-MOD overrides (optional) |
+| Builder tools + finalize impl | `packages/alliance/python/src/agr_ai_curation_alliance/tools/agr_curation.py` | `_finalize_gene_expression_extraction_impl` (~5957), candidate helpers (~5354), event emitters (~5412) |
+| Tool registration | `packages/alliance/tools/bindings.yaml` | wires tool names → impls |
+| Per-domain materializer | `packages/alliance/python/.../domain_packs/gene_expression/conversion.py` | `materialize_gene_expression_builder_state` (builder state → extraction-output payload), `_metadata_ref_findings`, projection/contract checks |
+| Domain pack metadata | `packages/alliance/domain_packs/gene_expression/domain_pack.yaml` | objects, fields, validator bindings, `materializes_to_field_paths`, workspace_display |
+| Golden fixtures | `packages/alliance/domain_packs/gene_expression/fixtures/tmem67_pending.yaml` | expected pending envelope (RELATIVE metadata_refs) |
+| Builder detection | `backend/src/lib/openai_agents/streaming_tools.py:547` `_BUILDER_MATERIALIZER_FINALIZATION_TOOLS` + `_is_builder_materializer_agent` (554); forbid-output-schema guard (~2366) | generalize in Phase 0 |
+| Shared engine | `backend/src/lib/openai_agents/extraction_builder_workspace.py` `ExtractionBuilderWorkspace` | generic stage/finalize/discard — REUSE, do not clone |
+| Curation resolution for builders | `backend/src/lib/agent_studio/catalog_service.py` `get_agent_metadata` (~2236) | already follows template_source to inherit curation |
+
+Contract: the agent emits an `INTERNAL_EXTRACTION_RESULT` whose payload is the extraction-output
+shape `{summary, curatable_objects, metadata: ExtractionEnvelopeMetadata}`. The generic converter
+`_domain_envelope_from_extraction_result` (curation_prep_service.py) turns it into a DomainEnvelope,
+nesting `metadata` under `metadata.extraction_metadata` and stamping platform keys at top level.
+
+---
+
+## 3. Grounding per data type (no Daniela doc — derive it)
+
+For each type, ground the design in three real sources before writing code:
+
+**LinkML** (`temp_agr_curation_schema/model/schema/`, read-only clone @ 1b11d088):
+- gene → `gene.yaml` (`Gene`), identity in `core.yaml`.
+- disease → `phenotypeAndDiseaseAnnotation.yaml` (`*DiseaseAnnotation`).
+- phenotype → `phenotypeAndDiseaseAnnotation.yaml` (`*PhenotypeAnnotation`).
+- allele → `allele.yaml` (`Allele`).
+- chemical_condition → `core.yaml` `ExperimentalCondition` + chemical CV (ChEBI/ZECO); confirm
+  from the existing `chemical_condition` pack.
+- reference: gene_expression → `expression.yaml` (already done).
+
+**AWS curation DB** (readonly, reachable from the backend container; 189 tables). Read 5–20 real
+curated rows per type to learn what curators actually fill, the real CURIE namespaces, reliably-
+present slots. SELECT-only, light queries, never print the URL:
 ```
 incus exec symphony-main -- bash -lc 'docker exec agrmainsandbox-backend-1 bash -lc '"'"'python3 -c "
 import os, psycopg2
 c=psycopg2.connect(os.environ[\"CURATION_DB_URL\"]); cur=c.cursor()
-cur.execute(\"<SELECT ... LIMIT 5>\")
-for r in cur.fetchall(): print(r)
-c.close()"'"'"''
+cur.execute(\"select table_name from information_schema.tables where table_schema=%s and table_name ilike %s order by 1\", (\"public\",\"%disease%\"))
+print([r[0] for r in cur.fetchall()]); c.close()"'"'"''
 ```
-Useful tables seen: `geneexpressionannotation`, `geneexpressionexperiment`, `expressionpattern`
-(gene_expression). For others, discover with:
-`select table_name from information_schema.tables where table_schema='public' and table_name ilike '%disease%'` (etc.).
-Goal: read 5–20 real curated rows per type to learn the fields curators actually fill, the
-controlled-vocabulary CURIEs used, and which slots are reliably present.
+Discovered tables include `gene`, `genediseaseannotation`, `diseaseannotation_*`, `allele*`,
+`geneexpressionannotation`. Literature DB (`LITERATURE_DB_URL`) tunnel may be DOWN — note + skip;
+`ELASTICSEARCH` `references_index` is the PMID search index.
 
-**Literature**: `LITERATURE_DB_URL` (readonly postgres) — tunnel may be DOWN this session
-(host.docker.internal:6286). If `psycopg2.connect` fails, note it and skip. ELASTICSEARCH
-`references_index` (`ELASTICSEARCH_HOST`, port 443) is the reference search index used by
-`reference_validation`. Only needed to confirm how PMIDs/evidence are sourced.
+**Existing pack** (`packages/alliance/domain_packs/<type>/domain_pack.yaml` + any
+`.../domain_packs/<type>/conversion.py`): the current envelope objects, fields, and validator
+bindings — reuse the bindings; you're changing the extraction mechanism, not the curation target.
 
-**The reference implementation** (gene_expression, now structurally clean — copy its shape):
-- pack metadata: `packages/alliance/domain_packs/gene_expression/domain_pack.yaml`
-- conversion + builder materializer: `.../gene_expression/conversion.py`
-  (`materialize_gene_expression_builder_state`, `_metadata_ref_findings`, projection checks)
-- golden fixtures: `.../gene_expression/fixtures/tmem67_pending.yaml`
+Capture the grounding for your type in `docs/design/data-type-approaches/<type>-approach.md`
+(target class+slots → curation-DB reality → curatable objects/fields → validators → evidence →
+builder mapping → open questions). Commit it; it justifies the code.
 
 ---
 
-## 2. Lessons from today (bake these into every approach doc as constraints)
+## 4. Per-type migration recipe (copy gene_expression, file by file)
 
-These are the gene_expression bugs we just fixed; the other types will need the same handling.
-1. **`metadata_refs` are relative to the extraction-metadata namespace** (`raw_mentions[N]`,
-   `evidence_records[N]`), resolved against `envelope.metadata.extraction_metadata`. Never write
-   absolute `extraction_metadata.<path>` refs. (commit 98a9b3d3)
-2. **Object status lifecycle**: `PENDING` = "not yet validated by the automated validator".
-   Automated validation legitimately advances a resolved object to `VALIDATED`; that is unrelated
-   to curator review. Do NOT add an "objects must be pending" contract check. (commit 91f7a784)
-3. **Validator execution errors are non-fatal**: a validator that can't run becomes a distinct
-   `domain_pack.validator_error` OPEN finding (vs `validator_unresolved` = ran, no match); the
-   extraction still persists. (commit abfe55ed)
-4. **Mirror fields use declared `materializes_to_field_paths`**: when the LinkML model requires
-   one field to mirror another (gene_expression: `entity_assayed` must equal the subject gene),
-   declare it as field metadata so the resolved value propagates automatically — do NOT special-
-   case it in code. (commit 2ec6b3b9)
-5. **The extraction-output → DomainEnvelope seam**: the extractor emits structured
-   `ExtractionEnvelopeMetadata` (raw_mentions, evidence_records, …); the generic converter nests
-   it under `metadata.extraction_metadata` and stamps platform keys (source_kind, run_summary…)
-   at top level. Refs/evidence resolve against the `extraction_metadata` namespace.
+1. **Approach doc** (§3): write + commit `docs/design/data-type-approaches/<type>-approach.md`.
+2. **Per-domain materializer**: add `materialize_<type>_builder_state` in
+   `packages/alliance/python/.../domain_packs/<type>/conversion.py`, mirroring
+   `materialize_gene_expression_builder_state`. It reads the builder workspace candidates and emits
+   the extraction-output payload (`curatable_objects` + `metadata` with RELATIVE `metadata_refs`).
+3. **Builder tools**: add `stage_<type>_observation`, `patch_*`, `discard_*`,
+   `list_staged_*`, and `finalize_<type>_extraction` (calls the materializer) — mirror
+   `_finalize_gene_expression_extraction_impl`. PREFER a per-domain module over piling into
+   `agr_curation.py` (avoids the shared-file conflict; see §9). Register in `bindings.yaml`.
+4. **Agent**: in `packages/alliance/agents/<type>/agent.yaml` REMOVE `output_schema`; swap the tool
+   list to the builder set (evidence + selector-resolution + the new stage/finalize tools). Rewrite
+   `prompt.yaml` into a builder tool-loop (record evidence → stage observations → resolve selectors
+   → finalize), copying gene_expression's prompt structure and adapting the domain specifics.
+5. **Domain pack metadata** (`domain_pack.yaml`): ensure object definitions, fields,
+   `validatable`/`validator_binding_id`, and any `materializes_to_field_paths` mirrors (LinkML
+   "X must match Y") are declared. Reuse existing validator bindings where present.
+6. **Detection**: register `finalize_<type>_extraction` so `_is_builder_materializer_agent` sees
+   it. PREFER the Phase-0 generalized (domain-pack-derived) detection over editing the hardcoded
+   frozenset (§9).
+7. **Fixtures + tests**: add a golden pending fixture (RELATIVE metadata_refs) and unit/contract
+   tests mirroring `test_gene_expression_domain_pack.py`. Run them (§7).
+8. **Sandbox e2e** (§7): drive a real extraction; confirm structural findings are 0.
+9. **Code review (§8)** → fix → commit (§6) → update Status Table.
 
 ---
 
-## 3. Per-type approach-doc template
+## 5. Invariants (today's bug fixes — NON-NEGOTIABLE)
 
-Write each as `docs/design/data-type-approaches/<type>-first-pass-approach.md` with sections:
+1. **`metadata_refs` are RELATIVE** to the extraction-metadata namespace (`raw_mentions[N]`,
+   `evidence_records[N]`, `ambiguities[N]`, …) and resolved against
+   `envelope.metadata.extraction_metadata`. NEVER write absolute `extraction_metadata.<path>` refs
+   and NEVER rewrite refs in a converter. (commit 98a9b3d3)
+2. **Object status**: `PENDING` = "not yet validated by the automated validator". Validation
+   legitimately advances a resolved object to `VALIDATED`; this is unrelated to curator review. Do
+   NOT add an "objects must be pending" check. (commit 91f7a784)
+3. **Validator errors are NON-FATAL**: a validator that cannot run → distinct
+   `domain_pack.validator_error` OPEN finding (vs `validator_unresolved` = ran/no-match); the
+   extraction still persists. Never let a validator error abort the chat turn. (commit abfe55ed)
+4. **Mirror fields via declared `materializes_to_field_paths`** metadata, not code special-casing
+   (gene_expression: subject gene → `entity_assayed`). (commit 2ec6b3b9)
+5. **Inline validation happens in the chat turn** on the builder-finalized envelope (extraction →
+   validation → reply), and the validated envelope + findings persist so bootstrap reuses them.
+   Builder output DOES run validators (do not skip). (Parts 1–3, design doc)
+6. **Project-agnostic core**: domain-specific behavior lives in the domain pack / per-domain
+   adapter / config — never hardcoded in `backend/src` platform services. **No fallback/compat
+   shims** (forward-only).
 
+---
+
+## 6. Git safety (MANDATORY)
+
+- Repo: `alliance-genome/agr_ai_curation`, branch `main` (agr_ai_curation lands on main directly,
+  no PR). Verify before every commit: `git rev-parse --show-toplevel` (this repo) and
+  `git remote get-url origin` (the alliance remote).
+- `/secure-repo` git hooks (gitleaks + TruffleHog + parent-dir protection) are installed and
+  **must never be bypassed**. NEVER `--no-verify`. If a hook errors, STOP and surface it; do not
+  work around it.
+- Stage with **explicit file paths only** — never `git add -A`/`git add .`. Confirm
+  `git diff --cached --name-only` is exactly your intended files before committing.
+- Pull/rebase `main` immediately before committing (parallel agents are merging).
+- Never print secrets / DB URLs.
+
+---
+
+## 7. Sandbox deploy + test (the proven loop)
+
+Sandbox = Incus VM `symphony-main`, compose project `agrmainsandbox`, backend `127.0.0.1:8900`
+(inside VM), worktree `WT=/home/ctabone/.symphony/sandboxes/agr_ai_curation/main` with uvicorn
+`--reload`. Backend mounts `backend/src`, `packages`, `backend/tests` (tests read-only) from WT.
+
+**Deploy a changed file** (uvicorn reloads on any `backend/src` change, re-importing packages too):
 ```
-# <Type> extraction — first-pass approach (derived, no use-case doc)
-
-## Target LinkML
-- Primary class(es) + file; required slots; key relations; controlled-vocab ranges (CURIE prefixes).
-- Identity/provenance slots (primary_external_id, data_provider, single_reference, evidence).
-
-## What curators actually produce (AWS curation DB grounding)
-- Table(s) queried + row counts; 5–20 sampled rows summarized.
-- Which fields are reliably present; the real CURIE namespaces; common shapes/edge cases.
-- Anything in the DB that the LinkML alone wouldn't tell you.
-
-## Curatable objects to extract (the envelope)
-- Object type(s), per-object fields (payload paths), required vs optional.
-- Subject entities (gene/allele) and how they resolve.
-- Mirror constraints -> materializes_to_field_paths (if any LinkML "X must match Y").
-
-## Validators needed
-- Gene/allele resolution, ontology-term resolution (which ontologies), reference (PMID).
-- Map each validatable field -> validator binding (mirror gene_expression's bindings).
-
-## Evidence & provenance
-- raw_mentions / evidence_records; how PMID + verified quotes attach.
-
-## Builder-pattern mapping
-- Candidate staging shape; finalize tool; per-domain materializer responsibilities.
-- What differs from gene_expression; what can reuse the shared engine.
-
-## Open questions for Chris
-- Every genuine decision/ambiguity. Do not guess these.
-
-## Sources
-- LinkML files + classes read; curation DB tables + query date; literature status.
+incus file push <relpath> symphony-main$WT/<relpath> --uid 1000 --gid 1000
 ```
+**Run unit/contract tests** (push test files first; tests dir is mounted read-only from WT):
+```
+incus exec symphony-main -- bash -lc 'docker exec -w /app/backend agrmainsandbox-backend-1 \
+  python -m pytest tests/contract/alliance/domain_packs/test_<type>_domain_pack.py -q'
+```
+**End-to-end** (one real extraction → findings). Harness pattern (adapt SID/DOC per type; each
+type needs a representative processed PDF — gene_expression used `DOC=a31b1ff3`; find/confirm a
+test doc per type and record it in the approach doc):
+```
+BASE=http://127.0.0.1:8900; DOC=<doc_id>; SID=<type>-testNN-$(date +%s)
+curl -s -X POST $BASE/api/chat/document/load -d "{\"document_id\":\"$DOC\"}" -H 'Content-Type: application/json'
+curl -s -m600 -X POST $BASE/api/chat -d "{\"message\":\"Extract all <type> from this publication\",\"session_id\":\"$SID\"}" -H 'Content-Type: application/json'
+curl -s -m300 -X POST "$BASE/api/curation-workspace/documents/$DOC/bootstrap" -d "{\"origin_session_id\":\"$SID\"}" -H 'Content-Type: application/json'
+```
+**Findings by code** (confirm structural findings are 0) — `/tmp/findings_by_code.sql` queries the
+latest envelope's revision, grouped by `code`, against `agrmainsandbox-postgres-1`:
+```
+incus exec symphony-main -- bash -lc 'docker exec -i agrmainsandbox-postgres-1 \
+  psql -U postgres -d ai_curation -At -F"  " < /tmp/findings_by_code.sql'
+```
+PASS = no `entity_assayed_mismatch` / `object_not_pending` / `metadata_refs_missing` /
+`validator_materialization_invalid`; only `validator_resolved`/`validator_unresolved`/(maybe)
+`validator_error`. Builder workspace can be "finalized" if a doc was already extracted — use a
+fresh SID or a fresh document.
 
 ---
 
-## 4. Execution order + the loop
+## 8. Code review with Opus 4.8 (after every major code addition)
 
-Order (simplest/most-similar first → hardest): **gene → disease → phenotype → allele →
-chemical_condition.** (gene is the canary: it's the simplest entity and the basis the others
-reference.)
-
-For each type, the loop:
-1. Read the LinkML class(es) for the type (section 1 mapping).
-2. Discover + query the curation DB table(s) for that type; sample real rows (read-only).
-3. Read the existing envelope pack (`packages/alliance/domain_packs/<type>/domain_pack.yaml`
-   + any `packages/alliance/python/.../domain_packs/<type>/conversion.py`) to see the current
-   approach and existing validator bindings.
-4. Write the approach doc from the template, grounded in 1–3, with explicit open questions.
-5. `git add` that one doc + commit + push. Update `## Progress log` below.
-6. Move to the next type. Honor every stopping condition.
-
-Do NOT touch code. Do NOT migrate. This session ends with five committed approach docs.
+After a type's materializer + builder tools + agent are in and unit-green, BEFORE final commit,
+run a review with Opus 4.8. Spawn the `code-review` agent (or a general agent, model `opus`) on
+the diff:
+```
+Agent(subagent_type="code-review", model="opus",
+  prompt="Review the <type> builder-migration diff vs main. Check: invariants in
+  docs/design/2026-05-31-cross-domain-first-pass-runbook.md §5 (metadata_refs relative; status
+  semantics; non-fatal validator errors; materializes_to_field_paths; project-agnostic, no
+  fallbacks); parity with the gene_expression reference; debug code / leftover scaffolding;
+  test coverage. Report only high-confidence issues with file:line.")
+```
+Address blockers before committing. Record the review verdict in the Status Table.
 
 ---
 
-## 5. Progress log (update as you go)
+## 9. Multi-agent coordination
 
-- 2026-05-31: Runbook created. Confirmed curation DB readonly access (189 tables) + LinkML
-  clone present; literature DB tunnel down this session. Starting with `gene`.
+**Phase 0 (ONE agent, FIRST, lands on main before any per-type work):**
+- Generalize builder detection: replace the hardcoded
+  `_BUILDER_MATERIALIZER_FINALIZATION_TOOLS` / `_is_builder_materializer_agent`
+  (`streaming_tools.py:547/554`) with a domain-pack/registry-derived set of finalize-tool names
+  (keep the forbid-output-schema guard ~2366). This removes the only forced per-type edit to a
+  shared platform file.
+- Establish the **per-domain builder-tools module** pattern (thin adapter over
+  `ExtractionBuilderWorkspace`) so each type adds its tools in its OWN module, not the monolithic
+  `agr_curation.py`. Factor shared helpers from `_finalize_gene_expression_extraction_impl`.
+- Unit-test + commit Phase 0. Only then unblock per-type agents.
+
+**Per-type agents (parallel after Phase 0):** each OWNS a disjoint file set — its
+`agents/<type>/`, `domain_packs/<type>/conversion.py`, `domain_pack.yaml`, fixtures, per-type
+tests, and its per-domain builder-tools module. No two agents edit the same file. If you must
+touch a shared file, rebase `main` first, make the minimal append, commit immediately, re-rebase.
+Use worktree isolation if the workflow provides it.
+
+**Order:** gene (canary, simplest) → disease → phenotype → allele → chemical_condition.
+
+**Definition of done per type:** approach doc committed; materializer + builder tools + agent in;
+unit/contract tests green in sandbox; e2e extraction shows 0 structural findings; Opus 4.8 review
+clean (or issues resolved); Status Table updated; committed + pushed to main.
+
+---
+
+## 10. Status table (claim your type here — edit + commit first)
+
+| Type | Owner | Approach doc | Code | Unit | E2E | Review | Status |
+|---|---|---|---|---|---|---|---|
+| Phase 0 (detection + per-domain tool module) | — | n/a | ☐ | ☐ | n/a | ☐ | pending |
+| gene | — | ☐ | ☐ | ☐ | ☐ | ☐ | pending |
+| disease | — | ☐ | ☐ | ☐ | ☐ | ☐ | pending |
+| phenotype | — | ☐ | ☐ | ☐ | ☐ | ☐ | pending |
+| allele | — | ☐ | ☐ | ☐ | ☐ | ☐ | pending |
+| chemical_condition | — | ☐ | ☐ | ☐ | ☐ | ☐ | pending |
+
+(gene_expression = reference, already done + structurally clean as of ge17.)
+
+---
+
+## 11. Progress log (append; newest last)
+
+- 2026-05-31: Guide created. gene_expression reference is structurally clean (ge17: 0 structural
+  findings). Curation DB readonly confirmed (189 tables); LinkML clone present; literature DB
+  tunnel down. Builder anatomy mapped (§2). Awaiting Chris's go to launch the workflow.
