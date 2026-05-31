@@ -743,6 +743,135 @@ def test_validator_result_materialization_patches_target_payload_from_resolved_v
     )
 
 
+def test_validator_result_materialization_propagates_materializes_to_field_paths():
+    """A resolved value also lands on the field's declared ``materializes_to_field_paths``.
+
+    Mirrors the gene-expression case where the resolved subject gene must propagate to
+    ``entity_assayed`` so the LinkML "entity_assayed must match subject" contract sees a match.
+    The mirror targets are declared metadata, so the materializer stays domain-agnostic.
+    """
+    metadata = DomainPackMetadata(
+        pack_id="fixture.mirror_patch",
+        display_name="Fixture Mirror Patch Pack",
+        version="0.1.0",
+        metadata_api_version="1.0.0",
+        metadata={
+            "validator_bindings": {
+                "active": [
+                    {
+                        "binding_id": "fixture.subject_lookup",
+                        "display_name": "Subject lookup",
+                        "validator_agent": {
+                            "package_id": "fixture.validators",
+                            "agent_id": "gene_validator",
+                        },
+                        "applies_to": {
+                            "domain_pack_id": "fixture.mirror_patch",
+                            "object_types": ["Annotation"],
+                        },
+                        "input_fields": {
+                            "mention": {
+                                "source": "payload",
+                                "path": "mention",
+                            }
+                        },
+                        "expected_result_fields": {
+                            "curie": "subject.primary_external_id",
+                            "symbol": "subject.gene_symbol",
+                        },
+                    }
+                ],
+                "under_development": [],
+            }
+        },
+        object_definitions=[
+            DomainPackObjectDefinition(
+                object_type="Annotation",
+                display_name="Annotation",
+                metadata={"object_role": "validated_reference"},
+                fields=[
+                    DomainPackFieldDefinition(
+                        field_path="mention",
+                        field_type=DomainPackFieldType.STRING,
+                        required=True,
+                    ),
+                    DomainPackFieldDefinition(
+                        field_path="subject.primary_external_id",
+                        field_type=DomainPackFieldType.STRING,
+                        metadata={
+                            "materializes_to_field_paths": [
+                                "experiment.entity_assayed.primary_external_id",
+                            ],
+                        },
+                    ),
+                    DomainPackFieldDefinition(
+                        field_path="subject.gene_symbol",
+                        field_type=DomainPackFieldType.STRING,
+                        metadata={
+                            "materializes_to_field_paths": [
+                                "experiment.entity_assayed.gene_symbol",
+                            ],
+                        },
+                    ),
+                    DomainPackFieldDefinition(
+                        field_path="experiment.entity_assayed.primary_external_id",
+                        field_type=DomainPackFieldType.STRING,
+                    ),
+                    DomainPackFieldDefinition(
+                        field_path="experiment.entity_assayed.gene_symbol",
+                        field_type=DomainPackFieldType.STRING,
+                    ),
+                ],
+            )
+        ],
+    )
+    envelope = DomainEnvelope(
+        envelope_id="mirror-patch-env",
+        domain_pack_id="fixture.mirror_patch",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="Annotation",
+                pending_ref_id="annotation-1",
+                status=CuratableObjectStatus.PENDING,
+                payload={
+                    "mention": "pef-1",
+                    "experiment": {
+                        "entity_assayed": {
+                            "primary_external_id": "UNRESOLVED:pef-1",
+                            "gene_symbol": "STALE",
+                        }
+                    },
+                },
+            )
+        ],
+    )
+    item = _validator_item(
+        metadata,
+        envelope,
+        resolved_values={
+            "curie": "WB:WBGene00003969",
+            "symbol": "pef-1",
+        },
+        resolved_objects=[
+            {
+                "gene_id": "WB:WBGene00003969",
+                "symbol": "pef-1",
+            }
+        ],
+    )
+
+    result = materialize_validator_results_into_envelope(envelope, metadata, [item])
+
+    patched = result.envelope.objects[0]
+    assert patched.payload["subject"]["primary_external_id"] == "WB:WBGene00003969"
+    assert patched.payload["subject"]["gene_symbol"] == "pef-1"
+    # The declared materializes_to mirrors must receive the same resolved values so the
+    # entity_assayed-must-match-subject contract sees a match instead of the stale values.
+    entity_assayed = patched.payload["experiment"]["entity_assayed"]
+    assert entity_assayed["primary_external_id"] == "WB:WBGene00003969"
+    assert entity_assayed["gene_symbol"] == "pef-1"
+
+
 def test_validator_result_materialization_merges_multiple_target_payload_patches():
     metadata = DomainPackMetadata(
         pack_id="fixture.target_patch",

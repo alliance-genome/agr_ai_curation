@@ -442,6 +442,12 @@ def _patch_target_object_from_resolved_values(
         if current_value is not _MISSING and current_value == resolved_value:
             continue
         _set_payload_value(payload, materialized_field_path, resolved_value)
+        _propagate_materialized_mirror_paths(
+            payload,
+            materialized_field_path,
+            resolved_value,
+            declared_fields=declared_fields,
+        )
         changed = True
     if not changed:
         return envelope, None
@@ -690,6 +696,12 @@ def _validated_reference_payload(
         if materialized_field_path is None:
             continue
         _set_payload_value(payload, materialized_field_path, resolved_value)
+        _propagate_materialized_mirror_paths(
+            payload,
+            materialized_field_path,
+            resolved_value,
+            declared_fields=declared_fields,
+        )
 
     missing_required_fields = [
         field.field_path
@@ -724,6 +736,39 @@ def _materialized_field_path(
     if suffix in declared_fields:
         return suffix
     return None
+
+
+def _propagate_materialized_mirror_paths(
+    payload: dict[str, Any],
+    materialized_field_path: str,
+    resolved_value: Any,
+    *,
+    declared_fields: Mapping[str, DomainPackFieldDefinition],
+) -> None:
+    """Copy a resolved value into the field's declared ``materializes_to_field_paths`` mirrors.
+
+    The gene-expression domain pack declares that
+    ``expression_annotation_subject.primary_external_id`` materializes to
+    ``expression_experiment.entity_assayed.primary_external_id`` (and the gene_symbol pair), so a
+    resolved subject gene must also land on ``entity_assayed`` to satisfy the LinkML
+    "entity_assayed must match expression_annotation_subject" contract. The mirror targets are
+    declared metadata, so this is domain-pack-driven, not gene-expression-specific code.
+    """
+    field_def = declared_fields.get(materialized_field_path)
+    if field_def is None:
+        return
+    mirror_paths = field_def.metadata.get("materializes_to_field_paths")
+    if not isinstance(mirror_paths, list):
+        return
+    for mirror_raw in mirror_paths:
+        if not isinstance(mirror_raw, str) or not mirror_raw.strip():
+            continue
+        mirror_path = (
+            _materialized_field_path(mirror_raw, declared_fields=declared_fields)
+            or mirror_raw.strip()
+        )
+        if _payload_value(payload, mirror_path) != resolved_value:
+            _set_payload_value(payload, mirror_path, resolved_value)
 
 
 def _append_materialized_objects(
