@@ -9,6 +9,49 @@ Builds on `2026-05-29-piecewise-extraction-builder-and-trace-diagnostics.md` and
 
 Date: 2026-05-31.
 
+## AFTERNOON UPDATE (2026-05-31) — materialization-quality work + a fragility to decide
+
+Committed + pushed to `main` this session:
+
+- **`entity_assayed_mismatch` FIXED** (commit `2ec6b3b9`). The materializer now copies a resolved
+  value to the field's declared `materializes_to_field_paths` mirrors, so a resolved subject gene
+  also lands on `expression_experiment.entity_assayed.{primary_external_id,gene_symbol}` and the
+  LinkML "entity_assayed must match expression_annotation_subject" contract passes. Driven entirely
+  by domain-pack metadata (no gene-expression-specific code), in both
+  `materialize_validator_results_into_envelope` and `_validated_reference_payload`
+  (`backend/src/lib/domain_packs/materialization.py`). New helper
+  `_propagate_materialized_mirror_paths`. Verified four ways: new unit test; 92 materialization/
+  contract/dispatch tests; **end-to-end sandbox run ge15: 9 → 0** `entity_assayed_mismatch`
+  findings; and direct payload inspection (subject == entity_assayed for every object,
+  e.g. WB:WBGene00003969/pef-1, WB:WBGene00001675/gpa-13).
+
+Remaining gene_expression materialization-quality findings (root causes now characterized, NOT yet
+fixed — counts from ge15 envelope `2e5664d2`):
+
+- **`object_not_pending` (5)** — DESIGN DECISION. `materialize_validator_results_into_envelope`
+  advances the object to `status=CuratableObjectStatus.VALIDATED` (materialization.py:487), but the
+  gene_expression contract (`conversion.py:1778`) requires objects stay `PENDING` after conversion.
+  Lifecycle order is PENDING→EXTRACTED→NEEDS_REVIEW→VALIDATING→VALIDATED→READY_FOR_EXPORT. Either the
+  materializer should not advance status (keep PENDING; validation lives in findings/metadata) or
+  the contract should accept VALIDATED. This is cross-pack core behavior — needs Chris.
+- **`validator_materialization_invalid` (8)** — validator results returned `resolved_objects` with no
+  `canonical_id` ("resolved_objects[0].canonical_id is required"). Validator-output-quality / schema
+  issue; needs to find which validators omit canonical_id and why.
+- **`metadata_refs_missing` (5)** — objects carry `metadata_refs` to `raw_mentions[N]`/
+  `evidence_records[N]` that don't exist under `envelope.metadata`. Builder-side metadata-index gap:
+  finalization sets per-object refs but the envelope-level `raw_mentions`/`evidence_records` arrays
+  aren't populated. Needs tracing builder finalize → `envelope.metadata`.
+
+**FRAGILITY discovered (separate from the fix, NEEDS A DECISION):** A1 inline validation makes any
+validator execution error fatal to the chat turn. `streaming_tools.py:1857` raises
+`SpecialistOutputError` when `has_validator_error` (any validator lookup attempt with
+`outcome=="error"`, e.g. a flaky `get_data_provider` call). That aborts the turn and the extraction
+is never persisted — ge14 finalized 10 observations and lost them all (bootstrap 422). In the old
+pre-A1 flow the extraction was saved before validation, so a validator hiccup only produced a
+finding. This is flaky (ge13/ge15 succeeded on the same paper, ge14 did not). Recommended direction:
+a validator execution error should be recorded as a finding and the extraction still persisted — do
+not lose curated data because one LLM validator made a bad tool call.
+
 ## MORNING HANDOFF (overnight 2026-05-31, for Chris)
 
 What I did while you slept, and what's waiting on you. Nothing is committed — it's all on the
@@ -400,6 +443,12 @@ sequencing from the 2026-05-21 docs.
 
 ## Open decisions
 
+- **`object_not_pending`: should validator materialization advance object `status` to `VALIDATED`,
+  or keep objects `PENDING` until the curator acts?** (see Afternoon Update). Cross-pack core
+  behavior in `materialize_validator_results_into_envelope`.
+- **Inline-validation error policy: should a validator execution error abort the chat turn (current
+  behavior, loses the extraction) or be recorded as a finding while the extraction still persists?**
+  (see Afternoon Update — `streaming_tools.py:1857`). Recommended: persist + record finding.
 - Inline validation should SEED the persisted `DomainEnvelope` so bootstrap reuses it (this
   doc's chosen direction, matching the requirement). Confirm the bootstrap/curation-prep path
   reuse logic and idempotency.
