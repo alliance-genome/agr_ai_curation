@@ -657,13 +657,24 @@ def _materialized_objects_for_result(
 
 
 def _looks_like_materializable_object(raw_object: Any) -> bool:
-    """Return whether a resolved object is an envelope materialization payload."""
+    """Return whether a resolved object is an envelope materialization payload.
+
+    Materialization payloads are identified by the materialization-specific keys
+    ``canonical_id``/``payload`` -- NOT by ``object_type`` alone. Validators also
+    report raw lookup hits in ``resolved_objects`` as diagnostic context (e.g. the
+    gene validator's ``{object_type, resolved_id, provider_data, projection_type}``
+    projection); those carry ``object_type`` but no ``canonical_id``/``payload`` and
+    must be treated as diagnostic context and skipped, not force-materialized into a
+    spurious ``validator_materialization_invalid`` finding. A genuine
+    validated_reference payload always carries ``canonical_id`` (and ``payload``), so
+    it still flows through the full role/structure validation below.
+    """
 
     if not isinstance(raw_object, Mapping):
         return True
     return any(
         key in raw_object
-        for key in ("object_type", "canonical_id", "payload")
+        for key in ("canonical_id", "payload")
     )
 
 

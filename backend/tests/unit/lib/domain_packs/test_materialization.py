@@ -1117,6 +1117,51 @@ def test_invalid_resolved_object_materializes_open_finding_without_reference():
     assert "not a validated_reference" in finding.details["materialization_error"]
 
 
+def test_diagnostic_resolved_object_without_canonical_id_is_skipped():
+    """Diagnostic lookup projections in resolved_objects must be skipped, not errored.
+
+    A scalar validator binding (e.g. gene_expression's subject_gene_validation)
+    resolves scalar values into resolved_values and reports the raw lookup hit in
+    resolved_objects as *diagnostic context only* -- a projection shaped like
+    ``{object_type, resolved_id, provider_data, projection_type}`` with no
+    ``canonical_id``/``payload``. The materializer must treat that as diagnostic and
+    skip it, NOT force-materialize it into a spurious validator_materialization_invalid
+    finding ("resolved_objects[0].canonical_id is required").
+    """
+    metadata = _validator_metadata()
+    envelope = _validator_envelope()
+    item = _validator_item(
+        metadata,
+        envelope,
+        resolved_objects=[
+            {
+                "source": {"method": "search_genes", "tool_name": "agr_curation_query"},
+                "provider": "alliance_curation_db",
+                "object_type": "Gene",
+                "resolved_id": "WB:WBGene00001675",
+                "provider_data": {
+                    "curie": "WB:WBGene00001675",
+                    "symbol": "gpa-13",
+                    "name": "G Protein, Alpha subunit 13",
+                },
+                "projection_key": "WB:WBGene00001675",
+                "projection_type": "gene_reference",
+                "projection_status": "resolved",
+            }
+        ],
+    )
+
+    result = materialize_validator_results_into_envelope(envelope, metadata, [item])
+
+    # Diagnostic projection: nothing materialized from resolved_objects, and no
+    # spurious materialization-invalid finding.
+    assert result.materialized_objects == ()
+    assert not any(
+        finding.code == "domain_pack.validator_materialization_invalid"
+        for finding in result.appended_findings
+    )
+
+
 def test_validator_materialization_rejects_invalid_source_revision():
     metadata = _validator_metadata()
     envelope = _validator_envelope()
