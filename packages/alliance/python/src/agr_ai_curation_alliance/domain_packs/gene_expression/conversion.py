@@ -1775,21 +1775,10 @@ def validate_pending_gene_expression_envelope(
 
     for expression_object in expression_objects:
         object_ref = _object_ref(expression_object)
-        if expression_object.status != CuratableObjectStatus.PENDING:
-            findings.append(
-                _validation_finding(
-                    object_ref=object_ref,
-                    field_path=None,
-                    severity=ValidationFindingSeverity.BLOCKER,
-                    code="alliance.gene_expression.object_not_pending",
-                    message="GeneExpressionAnnotation objects must be pending after conversion.",
-                    details=_diagnostic_details(
-                        submitted_value=expression_object.status.value,
-                        expected_value=CuratableObjectStatus.PENDING.value,
-                    ),
-                )
-            )
-
+        # NOTE: status is intentionally NOT asserted here. PENDING means "not yet validated by
+        # the automated validator"; automated validation legitimately advances resolved objects to
+        # VALIDATED. That is unrelated to downstream curator review, so a non-PENDING object is not
+        # an error. (Do not re-add an object_not_pending check.)
         findings.extend(
             _required_payload_field_findings(expression_object, object_ref)
         )
