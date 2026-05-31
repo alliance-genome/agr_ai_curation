@@ -818,6 +818,11 @@ tools:
     metadata:
       name: Finalize Gene Expression Extraction
       category: Database
+      # Marks this tool as a builder-materializer finalize tool. The platform
+      # runtime derives the set of builder finalize-tool names from this flag
+      # (see streaming_tools._builder_finalization_tool_names) so adding a new
+      # builder data type is a domain-pack edit, not a platform edit.
+      builder_finalization: true
       audit:
         display_name: Finalize Gene Expression Extraction
       documentation:

@@ -544,17 +544,34 @@ def _extract_tool_name(tool: Any) -> str:
     ).strip()
 
 
-_BUILDER_MATERIALIZER_FINALIZATION_TOOLS = frozenset(
-    {
-        "finalize_gene_expression_extraction",
-    }
-)
+# Tool-binding metadata flag (in each domain pack's bindings.yaml) that marks a
+# tool as a builder-materializer finalize tool. The runtime derives the set of
+# finalize-tool names from this flag instead of a hardcoded literal, so adding a
+# new builder data type is a domain-pack edit, not a platform edit.
+_BUILDER_FINALIZATION_METADATA_KEY = "builder_finalization"
+
+
+@lru_cache(maxsize=1)
+def _builder_finalization_tool_names() -> frozenset[str]:
+    """Return the registry-derived set of builder-materializer finalize-tool names.
+
+    A tool is a builder finalize tool when its package tool-binding metadata
+    declares ``builder_finalization: true``. This makes builder detection a
+    domain-pack/registry concern (project-agnostic core) rather than a hardcoded
+    per-type literal in the platform runtime.
+    """
+    return frozenset(
+        tool_id
+        for tool_id, metadata in _tool_metadata_by_name().items()
+        if bool(metadata.get(_BUILDER_FINALIZATION_METADATA_KEY))
+    )
 
 
 def _is_builder_materializer_agent(agent: Agent) -> bool:
     """Return whether an agent finalizes backend-materialized builder output."""
+    finalization_tool_names = _builder_finalization_tool_names()
     return any(
-        _extract_tool_name(tool) in _BUILDER_MATERIALIZER_FINALIZATION_TOOLS
+        _extract_tool_name(tool) in finalization_tool_names
         for tool in (getattr(agent, "tools", None) or [])
     )
 
