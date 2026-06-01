@@ -492,7 +492,41 @@ clean (or issues resolved); Status Table updated; committed + pushed to main.
     ontology slims REVERTED — slims are display-only, ontology curation always uses the FULL ontology).
   * R3 — subject with no durable identifier: when a paper names a subject/AGM with no MOD identifier (e.g.
     the e2e AGM "elav; APP; BACE heterozygous flies"), the active subject binding emits selector_missing_field
-    (severity error, non-structural) — an accurate curation gap. Curators may want a softer finding.
+    (severity error, non-structural) — an accurate curation gap. RESOLVED (Chris, 2026-06-01): a missing
+    REQUIRED selector input should READ as "Required" and FORCE the curator to deal with it at the final
+    submission-review step, while the extraction/materialization run still completes (non-fatal). Chose
+    Option A (uniform: every required-missing input is a submission blocker), WAIVABLE for the subject case.
+    NOT yet implemented — plan + mechanism captured here so it isn't lost:
+
+    -- CORRECTED MECHANISM (verified in code, 2026-06-01): the submission gate does NOT key on the severity
+       enum. session_submission_service._validation_finding_blockers (session_submission_service.py:739) walks
+       every envelope finding; _finding_blocks_readiness -> _policy_metadata_blocks_readiness (:785-818) blocks
+       iff the finding's validation_metadata has binding_state=="active" AND blocking is True AND required is
+       True. Severity (finding.severity.value) is DISPLAY/SORT only (SEVERITY_RANK, materialization.py:76).
+       binding.identity_details() (validation_registry.py:142-152) already stamps binding_state/blocking/
+       required into every finding's validation_metadata, and :855-856 only honors blocking/required for ACTIVE
+       bindings. So "required in the YAML -> forced at submission" ALREADY EXISTS; the lever is the validator
+       binding's blocking:true + required:true policy, not the severity word.
+
+    -- DO NOT rename the BLOCKER severity. BLOCKER is load-bearing and means "blocks submission/export":
+       structural_checks.py:97 (blocking field policy -> BLOCKER else ERROR), the whole
+       session_submission_service readiness subsystem, the frontend CurationSubmissionReadinessBlocker +
+       "Resolve readiness blockers before submission" copy, and SEVERITY_RANK (info<warn<error<blocker).
+
+    -- IMPLEMENTATION (Option A, waivable):
+       1. input_selectors.py:_problem_finding (~:552) stops hard-coding severity=ERROR; derive it like
+          structural_checks.py:97 — BLOCKER when the binding is active+blocking, else ERROR — so the displayed
+          severity reflects the real gate instead of reading like a DB error. (Binding flags are on
+          match.binding: .blocking / .required.)
+       2. Ensure the disease subject binding carries blocking:true + required:true (verify current flags — if
+          already set, gating happens TODAY and only the severity label was wrong) and curator_override_allowed:
+          true (waivable: the curator sees the blocker but can override when a genotype legitimately has no MOD
+          ID yet — checked at session_submission_service.py:755-758 / validation_registry.py:132).
+       3. Optional curator-facing nicety: render selector_missing* blockers with a "Required" label in the UI
+          (no enum change).
+       4. Gate: a missing required subject surfaces as a waivable submission blocker; the run still completes;
+          existing required-missing findings that belong to active+blocking bindings now show BLOCKER instead of
+          ERROR; non-blocking bindings stay ERROR; unit + broad suite green; Opus review.
   * R4 — optional disease slots not yet staged (genetic_sex, annotation_type, with_or_from,
     disease_qualifiers; negated IS captured). Sparsely filled; deferred. Stage them when desired.
   * D6 / chemical conditions: experimental conditions (ZECO + ChEBI + relation types incl WBMol and
