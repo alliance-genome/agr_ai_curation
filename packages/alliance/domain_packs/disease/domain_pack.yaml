@@ -606,14 +606,14 @@ object_definitions:
         metadata:
           definition_state_category: complete
           editable: false
-      # R4 SLOT 3: disease_qualifiers — MULTIVALUED Disease Qualifier CV. Resolves in place like
-      # evidence_code_curies: [0] is validated/snapshotted; elements [1:] are carried in the payload
-      # but are NOT independently validated this pass (no sibling vocabulary/id snapshot).
-      - field_path: disease_qualifier_names[0]
+      # R4 SLOT 3: disease_qualifiers — MULTIVALUED Disease Qualifier CV. Every staged
+      # qualifier name is validated per-element against the Disease Qualifier vocabulary.
+      - field_path: disease_qualifier_names
         field_type: string
-        display_name: First disease qualifier name
+        display_name: Disease qualifier names
         metadata:
           validatable: true
+          multivalued: true
           validator_binding_id: disease_qualifier_cv_lookup
           validator_state: active
           definition_state_category: complete
@@ -626,14 +626,14 @@ object_definitions:
               class: DiseaseAnnotationDTO
               slot: disease_qualifier_names
               range: string
-      # R4 SLOT 4: with_or_from — MULTIVALUED Gene reference via with_gene_identifiers. [0] is
-      # validated against gene_validation; elements [1:] are carried but NOT independently validated
-      # this pass (no new multivalued entity-resolution binding machinery).
-      - field_path: with_gene_identifiers[0]
+      # R4 SLOT 4: with_or_from — MULTIVALUED Gene reference via with_gene_identifiers. Every
+      # staged gene identifier is validated per-element against gene_validation.
+      - field_path: with_gene_identifiers
         field_type: string
-        display_name: First with/from gene identifier
+        display_name: With/from gene identifiers
         metadata:
           validatable: true
+          multivalued: true
           validator_binding_id: disease_with_gene_validation
           validator_state: active
           definition_state_category: complete
@@ -1047,21 +1047,21 @@ object_definitions:
         metadata:
           definition_state_category: complete
           editable: false
-      # [1:] carried but not independently validated this pass.
-      - field_path: disease_qualifier_names[0]
+      - field_path: disease_qualifier_names
         field_type: string
-        display_name: First disease qualifier name
+        display_name: Disease qualifier names
         metadata:
           validatable: true
+          multivalued: true
           validator_binding_id: disease_qualifier_cv_lookup
           validator_state: active
           editable: true
-      # [1:] carried but not independently validated this pass.
-      - field_path: with_gene_identifiers[0]
+      - field_path: with_gene_identifiers
         field_type: string
-        display_name: First with/from gene identifier
+        display_name: With/from gene identifiers
         metadata:
           validatable: true
+          multivalued: true
           validator_binding_id: disease_with_gene_validation
           validator_state: active
           editable: true
@@ -1191,21 +1191,21 @@ object_definitions:
         metadata:
           definition_state_category: complete
           editable: false
-      # [1:] carried but not independently validated this pass.
-      - field_path: disease_qualifier_names[0]
+      - field_path: disease_qualifier_names
         field_type: string
-        display_name: First disease qualifier name
+        display_name: Disease qualifier names
         metadata:
           validatable: true
+          multivalued: true
           validator_binding_id: disease_qualifier_cv_lookup
           validator_state: active
           editable: true
-      # [1:] carried but not independently validated this pass.
-      - field_path: with_gene_identifiers[0]
+      - field_path: with_gene_identifiers
         field_type: string
-        display_name: First with/from gene identifier
+        display_name: With/from gene identifiers
         metadata:
           validatable: true
+          multivalued: true
           validator_binding_id: disease_with_gene_validation
           validator_state: active
           editable: true
@@ -1337,21 +1337,21 @@ object_definitions:
         metadata:
           definition_state_category: complete
           editable: false
-      # [1:] carried but not independently validated this pass.
-      - field_path: disease_qualifier_names[0]
+      - field_path: disease_qualifier_names
         field_type: string
-        display_name: First disease qualifier name
+        display_name: Disease qualifier names
         metadata:
           validatable: true
+          multivalued: true
           validator_binding_id: disease_qualifier_cv_lookup
           validator_state: active
           editable: true
-      # [1:] carried but not independently validated this pass.
-      - field_path: with_gene_identifiers[0]
+      - field_path: with_gene_identifiers
         field_type: string
-        display_name: First with/from gene identifier
+        display_name: With/from gene identifiers
         metadata:
           validatable: true
+          multivalued: true
           validator_binding_id: disease_with_gene_validation
           validator_state: active
           editable: true
@@ -1440,10 +1440,10 @@ metadata:
         description: Validate the optional genetic_sex_name against the Genetic Sex vocabulary through the active controlled-vocabulary package validator binding (R4).
       - validator_id: disease_qualifier_cv_lookup
         display_name: Disease qualifier lookup
-        description: Validate the first disease_qualifier_names term against the Disease Qualifier vocabulary through the active controlled-vocabulary package validator binding (R4).
+        description: Validate the disease_qualifier_names terms against the Disease Qualifier vocabulary through the active controlled-vocabulary package validator binding (R4).
       - validator_id: disease_with_gene_validation
         display_name: With/from gene lookup
-        description: Validate the first with_gene_identifiers gene through the active gene_validation package validator binding (R4).
+        description: Validate the with_gene_identifiers genes through the active gene_validation package validator binding (R4).
     under_development:
       - validator_id: experimental_condition_validation
         display_name: Experimental condition validation
@@ -1760,9 +1760,9 @@ metadata:
         allow_opt_out: true
         curator_override:
           allowed: false
-      # R4 SLOT 3: disease_qualifiers — MULTIVALUED Disease Qualifier CV. Validates/snapshots the
-      # FIRST element only (disease_qualifier_names[0]) per the evidence_code_curies convention;
-      # elements [1:] are carried in the payload but not independently validated this pass.
+      # R4 SLOT 3: disease_qualifiers — MULTIVALUED Disease Qualifier CV. The field is declared
+      # `multivalued: true`, so every staged qualifier name fans out to its own per-element
+      # validation against the Disease Qualifier vocabulary.
       - binding_id: disease_qualifier_cv_lookup
         display_name: Disease qualifier lookup
         validator_agent:
@@ -1776,25 +1776,25 @@ metadata:
             - AlleleDiseaseAnnotation
             - AGMDiseaseAnnotation
           field_paths:
-            - disease_qualifier_names[0]
+            - disease_qualifier_names
         input_fields:
           vocabulary:
             source: literal
             value: Disease Qualifier
           term_name:
             source: payload
-            path: disease_qualifier_names[0]
+            path: disease_qualifier_names
             required: false
         expected_result_fields:
-          term_name: disease_qualifier_names[0]
+          term_name: disease_qualifier_names
         required: true
         blocking: false
         allow_opt_out: true
         curator_override:
           allowed: false
-      # R4 SLOT 4: with_or_from — MULTIVALUED Gene reference via with_gene_identifiers. Validates
-      # the FIRST element only (with_gene_identifiers[0]) through gene_validation, mirroring the
-      # subject_gene_validation binding; elements [1:] are carried but not independently validated.
+      # R4 SLOT 4: with_or_from — MULTIVALUED Gene reference via with_gene_identifiers. The field is
+      # declared `multivalued: true`, so every staged gene identifier fans out to its own per-element
+      # validation through gene_validation, mirroring the subject_gene_validation binding.
       - binding_id: disease_with_gene_validation
         display_name: With/from gene lookup
         validator_agent:
@@ -1808,11 +1808,11 @@ metadata:
             - AlleleDiseaseAnnotation
             - AGMDiseaseAnnotation
           field_paths:
-            - with_gene_identifiers[0]
+            - with_gene_identifiers
         input_fields:
           gene_id:
             source: payload
-            path: with_gene_identifiers[0]
+            path: with_gene_identifiers
             required: false
           data_provider:
             source: payload
@@ -1820,7 +1820,7 @@ metadata:
             required: false
             context_only: true
         expected_result_fields:
-          primary_external_id: with_gene_identifiers[0]
+          primary_external_id: with_gene_identifiers
         required: true
         blocking: false
         allow_opt_out: true

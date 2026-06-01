@@ -157,5 +157,19 @@ the remaining fields and retire `[0]`.
     (`field[i]` not in declared_fields). Harmless today (no multivalued field declares
     `materializes_to_field_paths`), but a future multivalued field WITH mirrors would silently skip per-element
     mirroring — generalize the mirror writer if/when that case arises.
-- NEXT: land the proof pass, then EXPAND — migrate `disease_qualifier_names` + `with_gene_identifiers` (and any
-  other DB-validated `[0]` field), enable batching per binding, retire `[0]` everywhere.
+- 2026-06-01: EXPANSION LANDED — `disease_qualifier_names` + `with_gene_identifiers` migrated to bare +
+  `multivalued: true` (abstract + 3 subtypes + their bindings), mirroring the evidence_code_curies proof. ALL
+  three DB-validated disease list fields now get full per-element validation; the `[0]` convention is retired
+  for them (source_mentions/evidence_record_ids are NOT DB-validated and stay; phenotype_terms is single-staged,
+  out of scope). Config-only (no engine change); broad suite 570 (+2, 0 regressions); fan-out proven live for
+  both fields; boot clean. Gated as a config mirror of the already-reviewed engine (no separate full
+  review/agentic-e2e — proportionate).
+- REMAINING (the one production-required follow-up): **BATCHING**. Discovered it is bigger than a one-line
+  block: `validator_dispatch.py:835` gates batching on the agent declaring `domain_validator_batch` in
+  `batch_capabilities` — only the `gene` agent does; `ontology_term` + `controlled_vocabulary` have
+  `batch_capabilities: []`, and NO binding has batch `enabled: true` anywhere (even gene_expression's is false).
+  So enabling batching needs: add `domain_validator_batch` to the ontology/CV agent `batch_capabilities`, add a
+  `batch: {enabled: true, family: ...}` block per binding, AND verify the batched-validator response path
+  (one result per item) actually works — it has NEVER been exercised end-to-end. Treat as its own carefully
+  gated pass (start with ontology/evidence_codes — the field where multi-element is common). Interim cost is
+  bounded: multi-element fields fan out to N deduped+parallel calls; the disease list fields are sparse.

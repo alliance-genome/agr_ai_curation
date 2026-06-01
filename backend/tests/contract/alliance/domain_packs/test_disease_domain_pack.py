@@ -454,11 +454,17 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
         assert field.metadata["validator_binding_id"] == binding_id
         assert binding_id in validator_bindings
 
-    # Per-element validation: ECO evidence codes are declared multivalued (bare
-    # field_path + multivalued: true), so every staged code is validated, not just [0].
-    evidence_field = fields_by_path["evidence_code_curies"]
-    assert evidence_field.metadata["multivalued"] is True
-    assert evidence_field.multivalued is True
+    # Per-element validation: ECO evidence codes, disease qualifier names, and
+    # with/from gene identifiers are declared multivalued (bare field_path +
+    # multivalued: true), so every staged element is validated, not just [0].
+    for multivalued_path in (
+        "evidence_code_curies",
+        "disease_qualifier_names",
+        "with_gene_identifiers",
+    ):
+        multivalued_field = fields_by_path[multivalued_path]
+        assert multivalued_field.metadata["multivalued"] is True
+        assert multivalued_field.multivalued is True
 
     for field_path in ("data_provider", "data_provider.abbreviation"):
         field = fields_by_path[field_path]
@@ -647,4 +653,110 @@ def test_disease_evidence_code_lookup_validates_every_staged_element():
         "evidence_code_curies[0]",
         "evidence_code_curies[1]",
         "evidence_code_curies[2]",
+    ]
+
+
+def test_disease_qualifier_cv_lookup_validates_every_staged_element():
+    """A 2+-element disease_qualifier_names payload fans out to one validator target
+    per element — every qualifier name is validated, not just ``[0]``."""
+
+    pack = _disease_pack()
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+    qualifier_names = ["severe", "early-onset", "progressive"]
+    envelope = DomainEnvelope(
+        envelope_id="disease-qualifier-multivalued-env",
+        domain_pack_id=DISEASE_DOMAIN_PACK_ID,
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneDiseaseAnnotation",
+                pending_ref_id="gene-disease-1",
+                payload={"disease_qualifier_names": qualifier_names},
+            )
+        ],
+    )
+
+    matches = registry.match_bindings(
+        envelope, states=[ValidationBindingState.ACTIVE]
+    )
+    qualifier_matches = [
+        match
+        for match in matches
+        if match.binding.binding_id == "disease_qualifier_cv_lookup"
+        and match.field_definition is not None
+    ]
+
+    # One match per staged element, each indexed.
+    assert [match.element_index for match in qualifier_matches] == [0, 1, 2]
+    assert [match.field_path for match in qualifier_matches] == [
+        "disease_qualifier_names[0]",
+        "disease_qualifier_names[1]",
+        "disease_qualifier_names[2]",
+    ]
+
+    # Each element resolves its own term_name into the validator request and write-back.
+    requests = [
+        build_domain_validation_request(match).request for match in qualifier_matches
+    ]
+    assert [
+        request.selected_inputs["term_name"] for request in requests
+    ] == qualifier_names
+    assert [
+        request.expected_result_fields["term_name"] for request in requests
+    ] == [
+        "disease_qualifier_names[0]",
+        "disease_qualifier_names[1]",
+        "disease_qualifier_names[2]",
+    ]
+
+
+def test_disease_with_gene_validation_validates_every_staged_element():
+    """A 2+-element with_gene_identifiers payload fans out to one validator target
+    per element — every with/from gene is validated, not just ``[0]``."""
+
+    pack = _disease_pack()
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+    gene_identifiers = ["FB:FBgn0000001", "FB:FBgn0000002", "FB:FBgn0000003"]
+    envelope = DomainEnvelope(
+        envelope_id="disease-with-gene-multivalued-env",
+        domain_pack_id=DISEASE_DOMAIN_PACK_ID,
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneDiseaseAnnotation",
+                pending_ref_id="gene-disease-1",
+                payload={"with_gene_identifiers": gene_identifiers},
+            )
+        ],
+    )
+
+    matches = registry.match_bindings(
+        envelope, states=[ValidationBindingState.ACTIVE]
+    )
+    with_gene_matches = [
+        match
+        for match in matches
+        if match.binding.binding_id == "disease_with_gene_validation"
+        and match.field_definition is not None
+    ]
+
+    # One match per staged element, each indexed.
+    assert [match.element_index for match in with_gene_matches] == [0, 1, 2]
+    assert [match.field_path for match in with_gene_matches] == [
+        "with_gene_identifiers[0]",
+        "with_gene_identifiers[1]",
+        "with_gene_identifiers[2]",
+    ]
+
+    # Each element resolves its own gene_id into the validator request and write-back.
+    requests = [
+        build_domain_validation_request(match).request for match in with_gene_matches
+    ]
+    assert [
+        request.selected_inputs["gene_id"] for request in requests
+    ] == gene_identifiers
+    assert [
+        request.expected_result_fields["primary_external_id"] for request in requests
+    ] == [
+        "with_gene_identifiers[0]",
+        "with_gene_identifiers[1]",
+        "with_gene_identifiers[2]",
     ]

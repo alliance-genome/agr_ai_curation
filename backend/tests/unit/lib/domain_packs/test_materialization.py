@@ -1185,8 +1185,8 @@ def _multivalued_declared_fields() -> dict[str, DomainPackFieldDefinition]:
             field_type=DomainPackFieldType.STRING,
             metadata={"multivalued": True},
         ),
-        "disease_qualifier_names": DomainPackFieldDefinition(
-            field_path="disease_qualifier_names",
+        "legacy_scalar_list": DomainPackFieldDefinition(
+            field_path="legacy_scalar_list",
             field_type=DomainPackFieldType.STRING,
         ),
         "object.curie": DomainPackFieldDefinition(
@@ -1253,11 +1253,11 @@ def test_materialized_field_path_resolves_index_for_declared_multivalued_field()
 def test_materialized_field_path_rejects_index_for_non_multivalued_field():
     declared_fields = _multivalued_declared_fields()
 
-    # disease_qualifier_names stays on the legacy [0] convention (not multivalued),
-    # so an indexed write path is not materialized here.
+    # A field that is not declared `multivalued: true` does not materialize an indexed
+    # write path (the legacy [0] convention writes its scalar slot in place instead).
     assert (
         _materialized_field_path(
-            "disease_qualifier_names[0]", declared_fields=declared_fields
+            "legacy_scalar_list[0]", declared_fields=declared_fields
         )
         is None
     )

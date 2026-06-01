@@ -441,24 +441,24 @@ def test_disease_r4_optional_slot_bindings_are_active():
     assert genetic_sex["input_fields"]["term_name"]["path"] == "genetic_sex_name"
     assert genetic_sex["input_fields"]["term_name"]["required"] is False
 
-    # SLOT 3: disease_qualifiers — controlled_vocabulary, Disease Qualifier, [0] convention.
+    # SLOT 3: disease_qualifiers — controlled_vocabulary, Disease Qualifier, multivalued bare path.
     qualifier = bindings_by_id["disease_qualifier_cv_lookup"]
     assert qualifier["validator_agent"]["agent_id"] == "controlled_vocabulary_validation"
     assert qualifier["input_fields"]["vocabulary"]["value"] == "Disease Qualifier"
-    assert qualifier["input_fields"]["term_name"]["path"] == "disease_qualifier_names[0]"
-    assert qualifier["applies_to"]["field_paths"] == ["disease_qualifier_names[0]"]
+    assert qualifier["input_fields"]["term_name"]["path"] == "disease_qualifier_names"
+    assert qualifier["applies_to"]["field_paths"] == ["disease_qualifier_names"]
     assert qualifier["expected_result_fields"] == {
-        "term_name": "disease_qualifier_names[0]"
+        "term_name": "disease_qualifier_names"
     }
 
-    # SLOT 4: with_or_from — gene_validation, [0] convention, primary_external_id result key.
+    # SLOT 4: with_or_from — gene_validation, multivalued bare path, primary_external_id result key.
     with_gene = bindings_by_id["disease_with_gene_validation"]
     assert with_gene["validator_agent"]["agent_id"] == "gene_validation"
-    assert with_gene["input_fields"]["gene_id"]["path"] == "with_gene_identifiers[0]"
+    assert with_gene["input_fields"]["gene_id"]["path"] == "with_gene_identifiers"
     assert with_gene["input_fields"]["data_provider"]["context_only"] is True
-    assert with_gene["applies_to"]["field_paths"] == ["with_gene_identifiers[0]"]
+    assert with_gene["applies_to"]["field_paths"] == ["with_gene_identifiers"]
     assert with_gene["expected_result_fields"] == {
-        "primary_external_id": "with_gene_identifiers[0]"
+        "primary_external_id": "with_gene_identifiers"
     }
 
     # Each new active binding has matching active capability metadata + the right policy posture.
