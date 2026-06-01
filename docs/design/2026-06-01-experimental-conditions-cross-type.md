@@ -120,6 +120,27 @@ Net: same shared lookup tool on BOTH sides (extractor grounds with it; validator
 validator always sees the most-important source chunk for what it's validating — exactly the symmetry +
 evidence-grounding Chris described.
 
+## EVIDENCE CONTRACT (REQUIRED — and consistent across EVERYTHING validated)
+
+The model must NEVER hand us free-text quotes for validation (hallucination risk). The active builder path
+already enforces this and conditions MUST follow it identically:
+- The extractor provides **hints** (`mention` / `normalized_hint` / `source_mentions`) it owns, plus
+  **`span_ids`** (pointers copied from `read_chunk(...).chunk.evidence_spans[].span_id`) via `record_evidence`.
+  MULTIPLE span_ids are allowed in one call.
+- The BACKEND resolves `span_ids` and **copies the EXACT source text** into `verified_quote` (backend-owned,
+  span-provenance preserved). The model never types the quote. `verified_quote` is a backend artifact despite
+  the misleading name.
+- Builder staging references evidence by **`evidence_record_ids`** (pointers), never a quote string. So a staged
+  `ExperimentalCondition` carries `evidence_record_ids` → the per-condition composite validator receives the
+  backend-resolved exact source text for the spans the condition came from.
+- REQUIREMENT for conditions: stage each `ExperimentalCondition` WITH its `evidence_record_ids` (the spans the
+  condition was read from) so the composite validator validates the `(class, chemical, quantity, …)` combo
+  against the real sentence(s). No condition-specific quote text from the LLM.
+- This is the SAME contract everywhere validated; the consistency audit (task b) confirms no active extractor/
+  validator path accepts a free-text quote. (The only `verified_quote`-as-LLM-output uses are the DEAD legacy
+  envelope schemas — gene/phenotype/allele `schema.py`, output_schema:null builders now — flagged for cleanup,
+  not a live risk.)
+
 ## KEY TECHNICAL RISK — two-level nested multivalued (the one real engineering question)
 
 Conditions are multivalued at TWO levels: `condition_relations[i].conditions[j].condition_class`. The
