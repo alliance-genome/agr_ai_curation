@@ -275,10 +275,19 @@ def test_alliance_validator_binding_capability_groups_have_explicit_policies():
             if binding["binding_id"] == "allele_mention_reference_validation":
                 assert binding["blocking"] is True
                 assert binding["allow_opt_out"] is False
+                assert binding["curator_override"] == {"allowed": False}
+            elif binding["binding_id"] == "disease_subject_materialization":
+                # R3: a disease annotation cannot be curated without a subject, so a
+                # missing required subject input gates submission (blocking+required) but
+                # is curator-WAIVABLE (curator_override.allowed) — e.g. a genotype/AGM that
+                # the paper names with no durable MOD identifier yet.
+                assert binding["blocking"] is True
+                assert binding["allow_opt_out"] is True
+                assert binding["curator_override"] == {"allowed": True}
             else:
                 assert binding["blocking"] is False
                 assert binding["allow_opt_out"] is True
-            assert binding["curator_override"] == {"allowed": False}
+                assert binding["curator_override"] == {"allowed": False}
 
         for binding in raw_bindings["under_development"]:
             assert binding["state_explanation"]

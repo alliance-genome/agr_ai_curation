@@ -1345,11 +1345,16 @@ metadata:
           subject_identifier: disease_annotation_subject.subject_identifier
           subject_type: disease_annotation_subject.subject_type
           subject_label: disease_annotation_subject.subject_label
+        # R3: a disease annotation cannot be curated without a subject, so a missing required
+        # subject input (e.g. a paper naming a genotype/AGM with no MOD identifier) must force the
+        # curator to resolve it at the submission-review step. blocking+required makes the
+        # selector_missing finding gate submission readiness; curator_override.allowed makes it
+        # WAIVABLE — the curator can override when a genotype legitimately has no durable ID yet.
         required: true
-        blocking: false
+        blocking: true
         allow_opt_out: true
         curator_override:
-          allowed: false
+          allowed: true
       # FULL LinkML alignment (D3): ECO evidence-code lookup activated. evidence_codes is
       # LinkML-required + multivalued; ECO CURIEs are validated through the ontology-term validator.
       - binding_id: disease_evidence_code_lookup

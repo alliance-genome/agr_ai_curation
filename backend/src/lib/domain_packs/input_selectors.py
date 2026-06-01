@@ -548,8 +548,17 @@ def _problem_finding(
         if object_ref is not None and problem.field_path is not None
         else None
     )
+    # Mirror structural_checks: a blocking binding's selector failure is a submission
+    # BLOCKER (the displayed severity reflects the real readiness gate, which keys on the
+    # binding's blocking+required policy, not the severity word); non-blocking bindings stay
+    # ERROR. `blocking` is only ever true for active bindings (validation_registry).
+    severity = (
+        ValidationFindingSeverity.BLOCKER
+        if match.binding.blocking
+        else ValidationFindingSeverity.ERROR
+    )
     return ValidationFinding(
-        severity=ValidationFindingSeverity.ERROR,
+        severity=severity,
         code=problem.code,
         message=(
             f"Validator binding '{match.binding.binding_id}' input "

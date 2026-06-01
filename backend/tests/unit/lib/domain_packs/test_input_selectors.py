@@ -15,11 +15,17 @@ from src.lib.domain_packs.validation_registry import (
     ValidationBindingState,
     ValidationRegistryError,
 )
-from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
+from src.schemas.domain_envelope import (
+    CuratableObjectEnvelope,
+    DomainEnvelope,
+    ValidationFindingSeverity,
+)
 from src.schemas.domain_pack_metadata import DomainPackInputSelector
 
 
-def _selector_pack_text(input_selector_yaml: str) -> str:
+def _selector_pack_text(
+    input_selector_yaml: str, *, binding_policy_yaml: str = ""
+) -> str:
     return f"""
 pack_id: fixture.selectors
 display_name: Fixture Selector Pack
@@ -74,14 +80,21 @@ metadata:
 {input_selector_yaml}
         expected_result_fields:
           selected: selected
-""".strip()
+{binding_policy_yaml}""".strip()
 
 
-def _loaded_pack(tmp_path: Path, input_selector_yaml: str) -> LoadedDomainPack:
+def _loaded_pack(
+    tmp_path: Path, input_selector_yaml: str, *, binding_policy_yaml: str = ""
+) -> LoadedDomainPack:
     pack_path = tmp_path / "fixture.selectors"
     pack_path.mkdir()
     metadata_path = pack_path / "domain_pack.yaml"
-    metadata_path.write_text(_selector_pack_text(input_selector_yaml), encoding="utf-8")
+    metadata_path.write_text(
+        _selector_pack_text(
+            input_selector_yaml, binding_policy_yaml=binding_policy_yaml
+        ),
+        encoding="utf-8",
+    )
     metadata = load_domain_pack_metadata(metadata_path)
     return LoadedDomainPack(
         pack_id=metadata.pack_id,
@@ -97,8 +110,12 @@ def _run_selector(
     tmp_path: Path,
     input_selector_yaml: str,
     envelope: DomainEnvelope,
+    *,
+    binding_policy_yaml: str = "",
 ):
-    pack = _loaded_pack(tmp_path, input_selector_yaml)
+    pack = _loaded_pack(
+        tmp_path, input_selector_yaml, binding_policy_yaml=binding_policy_yaml
+    )
     registry = DomainPackValidationRegistry.from_domain_pack(pack)
     match = registry.match_bindings(
         envelope,
@@ -464,6 +481,34 @@ def test_runtime_selector_missing_field_becomes_structured_finding(tmp_path: Pat
 
     assert {finding.code for finding in result.findings} == {"selector_missing_field"}
     assert result.request is None
+    # Default (non-blocking) binding: a missing required input is an ERROR, not a gate.
+    assert all(
+        finding.severity is ValidationFindingSeverity.ERROR
+        for finding in result.findings
+    )
+
+
+def test_blocking_binding_selector_missing_field_is_blocker_severity(tmp_path: Path):
+    # R3: a required input selector on a BLOCKING binding surfaces a submission BLOCKER, so the
+    # displayed severity matches the readiness gate (which keys on the binding's blocking+required
+    # policy, not the severity word). Mirrors structural_checks for required-field policies.
+    result = _run_selector(
+        tmp_path,
+        """
+          selected:
+            source: payload
+            path: value
+""",
+        _assertion_envelope(payload={}),
+        binding_policy_yaml="        required: true\n        blocking: true",
+    )
+
+    assert {finding.code for finding in result.findings} == {"selector_missing_field"}
+    assert result.findings
+    assert all(
+        finding.severity is ValidationFindingSeverity.BLOCKER
+        for finding in result.findings
+    )
 
 
 def test_runtime_selector_ambiguity_becomes_structured_finding(tmp_path: Path):
