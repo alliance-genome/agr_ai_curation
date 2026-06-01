@@ -537,8 +537,19 @@ clean (or issues resolved); Status Table updated; committed + pushed to main.
        4. Gate: a missing required subject surfaces as a waivable submission blocker; the run still completes;
           existing required-missing findings that belong to active+blocking bindings now show BLOCKER instead of
           ERROR; non-blocking bindings stay ERROR; unit + broad suite green; Opus review.
-  * R4 — optional disease slots not yet staged (genetic_sex, annotation_type, with_or_from,
-    disease_qualifiers; negated IS captured). Sparsely filled; deferred. Stage them when desired.
+  * R4 — optional disease slots. LANDED 2026-06-01 (commit 40db15c2): all four staged following the
+    CV-lookup pattern (no platform/backend-src changes, no subsets — small dedicated vocabs). annotation_type
+    fixed to the constant `manually_curated` (curation method, NOT extracted) resolved via a CV binding against
+    the "Annotation Type" vocabulary; genetic_sex (single "Genetic Sex" CV), disease_qualifiers (multivalued
+    "Disease Qualifier" CV), with_or_from (multivalued Gene ref via with_gene_identifiers) extracted only when
+    the paper explicitly states them. Multivalued slots use the evidence_code_curies[0] convention (validate/
+    snapshot the first element, carry the full list — platform write-back is scalar-only). 8 fields × (abstract
+    + 3 concrete subtypes); 4 new active bindings (blocking:false). Gated green: domain_packs unit+contract +
+    curation_workspace 552; disease e2e on the AD paper = 0 structural, annotation_type_name=manually_curated
+    resolved end-to-end (CV id 7662755); two Opus reviews clean. negated was already captured.
+    OPEN (deferred, needs a platform change): with_or_from validates only the FIRST with-gene this pass; full
+    per-element multivalued entity resolution requires new generic backend machinery (no multivalued
+    entity-resolution binding exists) — flagged to Chris, separate item if wanted.
   * D6 / chemical conditions: experimental conditions (ZECO + ChEBI + relation types incl WBMol and
     ameliorated_by/induced_by/exacerbated_by) return LATER as condition_relations on host annotations, not
     as a standalone extractor (chemical_validation + experimental_condition validators were kept for this).
