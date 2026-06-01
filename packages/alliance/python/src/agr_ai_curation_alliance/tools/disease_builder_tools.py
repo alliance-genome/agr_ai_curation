@@ -79,6 +79,9 @@ _DISEASE_PATCH_FIELD_PATHS = frozenset(
         "source_mentions",
         "evidence_record_ids",
         "evidence_code_curies",
+        "genetic_sex_name",
+        "disease_qualifier_names",
+        "with_gene_identifiers",
     }
 )
 
@@ -102,6 +105,11 @@ class DiseaseStageInput(_StrictToolModel):
     subject_label: Optional[StrictStr] = None
     disease_relation_name: Optional[StrictStr] = None
     evidence_code_curies: List[StrictStr] = Field(default_factory=list, max_length=20)
+    # R4 optional slots. genetic_sex_name is a single Genetic Sex CV term; disease_qualifier_names
+    # and with_gene_identifiers are multivalued (validated/snapshotted at [0], full list carried).
+    genetic_sex_name: Optional[StrictStr] = None
+    disease_qualifier_names: List[StrictStr] = Field(default_factory=list, max_length=20)
+    with_gene_identifiers: List[StrictStr] = Field(default_factory=list, max_length=20)
     negated: Optional[StrictBool] = None
 
     @field_validator("pending_ref_id", "mention", "disease_name", "role", "confidence", "data_provider")
@@ -244,12 +252,17 @@ def _stage_payload_from_disease_input(stage_input: DiseaseStageInput) -> dict[st
     }
     if stage_input.evidence_code_curies:
         payload["evidence_code_curies"] = list(stage_input.evidence_code_curies)
+    if stage_input.disease_qualifier_names:
+        payload["disease_qualifier_names"] = list(stage_input.disease_qualifier_names)
+    if stage_input.with_gene_identifiers:
+        payload["with_gene_identifiers"] = list(stage_input.with_gene_identifiers)
     for field_name in (
         "disease_curie",
         "subject_type",
         "subject_identifier",
         "subject_label",
         "disease_relation_name",
+        "genetic_sex_name",
     ):
         value = getattr(stage_input, field_name)
         if value is not None and value.strip():
@@ -272,6 +285,9 @@ def _stage_disease_observation_impl(
     subject_label: Optional[str] = None,
     disease_relation_name: Optional[str] = None,
     evidence_code_curies: Optional[List[str]] = None,
+    genetic_sex_name: Optional[str] = None,
+    disease_qualifier_names: Optional[List[str]] = None,
+    with_gene_identifiers: Optional[List[str]] = None,
     negated: Optional[bool] = None,
 ) -> AgrQueryResult:
     """Stage one retained, evidence-backed disease assertion through the builder workspace."""
@@ -301,6 +317,9 @@ def _stage_disease_observation_impl(
             subject_label=subject_label,
             disease_relation_name=disease_relation_name,
             evidence_code_curies=list(evidence_code_curies or []),
+            genetic_sex_name=genetic_sex_name,
+            disease_qualifier_names=list(disease_qualifier_names or []),
+            with_gene_identifiers=list(with_gene_identifiers or []),
             negated=negated,
         )
     except ValidationError as exc:
@@ -427,6 +446,13 @@ def _patch_disease_observation_impl(
                 payload["evidence_code_curies"] = new_codes
             else:
                 payload.pop("evidence_code_curies", None)
+            continue
+        if update.field_path in {"disease_qualifier_names", "with_gene_identifiers"}:
+            new_values = [str(item).strip() for item in (update.string_list_value or []) if str(item).strip()]
+            if new_values:
+                payload[update.field_path] = new_values
+            else:
+                payload.pop(update.field_path, None)
             continue
         if update.field_path == "negated":
             payload["negated"] = bool(update.bool_value)

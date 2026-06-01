@@ -92,6 +92,20 @@ DISEASE_SUBJECT_VALIDATOR_BINDING_ID = "disease_subject_materialization"
 DISEASE_REFERENCE_VALIDATOR_BINDING_ID = "disease_reference_materialization"
 DISEASE_EVIDENCE_CODE_VALIDATOR_BINDING_ID = "disease_evidence_code_lookup"
 
+# Optional-slot bindings (R4): annotation_type constant, genetic_sex CV, disease_qualifiers CV,
+# with_or_from gene reference. annotation_type is fixed to a constant and never extracted/staged;
+# the other three are optional, paper-supported extractor inputs validated through the active
+# CV / gene_validation agents and follow the existing `[0]` first-element convention for the
+# multivalued slots (disease_qualifier_names / with_gene_identifiers).
+DISEASE_ANNOTATION_TYPE_CV_BINDING_ID = "disease_annotation_type_cv_lookup"
+DISEASE_GENETIC_SEX_CV_BINDING_ID = "disease_genetic_sex_cv_lookup"
+DISEASE_QUALIFIER_CV_BINDING_ID = "disease_qualifier_cv_lookup"
+DISEASE_WITH_GENE_VALIDATION_BINDING_ID = "disease_with_gene_validation"
+
+# annotation_type is the curation method, fixed to manually_curated; it is NOT an extractor edit
+# target — the builder always materializes this constant onto every disease annotation payload.
+DISEASE_ANNOTATION_TYPE_CONSTANT = "manually_curated"
+
 DISEASE_ANNOTATION_OBJECT_ROLE = "curatable_unit"
 DISEASE_ANNOTATION_KIND = "disease_assertion"
 
@@ -148,6 +162,8 @@ __all__ = [
     "DISEASE_ALLELE_OBJECT_TYPE",
     "DISEASE_ANNOTATION_KIND",
     "DISEASE_ANNOTATION_OBJECT_ROLE",
+    "DISEASE_ANNOTATION_TYPE_CONSTANT",
+    "DISEASE_ANNOTATION_TYPE_CV_BINDING_ID",
     "DISEASE_CORE_SCHEMA_SOURCE_FILE",
     "DISEASE_DATA_PROVIDER_VALIDATOR_BINDING_ID",
     "DISEASE_DEFINITION_NOTES",
@@ -160,6 +176,7 @@ __all__ = [
     "DISEASE_FIXTURE_PACK_ID",
     "DISEASE_GENE_LINKML_SCHEMA_ID",
     "DISEASE_GENE_OBJECT_TYPE",
+    "DISEASE_GENETIC_SEX_CV_BINDING_ID",
     "DISEASE_LINKML_SCHEMA_ID",
     "DISEASE_LINKML_SCHEMA_NAME",
     "DISEASE_LINKML_SCHEMA_SOURCE_FILE",
@@ -170,6 +187,7 @@ __all__ = [
     "DISEASE_ONTOLOGY_TERM_SCHEMA_SOURCE_FILE",
     "DISEASE_ONTOLOGY_TERM_VALIDATOR_BINDING_ID",
     "DISEASE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID",
+    "DISEASE_QUALIFIER_CV_BINDING_ID",
     "DISEASE_REFERENCE_LINKML_SCHEMA_ID",
     "DISEASE_REFERENCE_OBJECT_TYPE",
     "DISEASE_REFERENCE_SCHEMA_SOURCE_FILE",
@@ -183,6 +201,7 @@ __all__ = [
     "DISEASE_TERM_LINKML_SCHEMA_ID",
     "DISEASE_TERM_OBJECT_TYPE",
     "DISEASE_VALIDATOR_STATES",
+    "DISEASE_WITH_GENE_VALIDATION_BINDING_ID",
     "FORBIDDEN_LEGACY_COLLECTIONS",
     "REQUIRED_DISEASE_PAYLOAD_FIELDS",
     "get_disease_domain_pack_metadata_path",

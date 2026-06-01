@@ -83,6 +83,10 @@ def _staged_fields(subject_type: str = "gene", subject_identifier: str = "FB:FBg
         "subject_label": "Appl",
         "disease_relation_name": "is_implicated_in",
         "evidence_code_curies": ["ECO:0000315"],
+        # R4 optional slots.
+        "genetic_sex_name": "male",
+        "disease_qualifier_names": ["severity_of", "onset_of"],
+        "with_gene_identifiers": ["FB:FBgn0000108", "FB:FBgn0003089"],
         "source_mentions": ["a transgenic Drosophila model of Alzheimer's disease"],
         "negated": False,
     }
@@ -180,6 +184,12 @@ def test_disease_builder_materializes_concrete_gene_subtype():
     # D5: relation rides on the concrete object.
     assert payload_obj["disease_relation_name"] == "is_implicated_in"
     assert payload_obj["data_provider"]["abbreviation"] == "FB"
+    # R4: annotation_type is the constant curation method (always materialized).
+    assert payload_obj["annotation_type_name"] == "manually_curated"
+    # R4: the 3 optional extracted slots pass through to the concrete annotation payload.
+    assert payload_obj["genetic_sex_name"] == "male"
+    assert payload_obj["disease_qualifier_names"] == ["severity_of", "onset_of"]
+    assert payload_obj["with_gene_identifiers"] == ["FB:FBgn0000108", "FB:FBgn0003089"]
     # FULL alignment: NO blocked write/export posture on the concrete annotation metadata.
     assert "write_behavior" not in annotation["metadata"]
     assert "export_behavior" not in annotation["metadata"]
@@ -354,6 +364,123 @@ def test_disease_subject_and_evidence_code_bindings_are_active():
         for binding in metadata["metadata"]["validator_bindings"]["under_development"]
     }
     assert "disease_reference_materialization" in under_dev
+
+
+def test_disease_annotation_type_constant_is_always_materialized():
+    # R4 SLOT 1: annotation_type is fixed to manually_curated and is materialized even when the
+    # extractor stages nothing related to it (it is never an extractor edit target).
+    workspace = ExtractionBuilderWorkspace(
+        run_id="disease-builder-annotation-type",
+        domain_pack_id=DISEASE_DOMAIN_PACK_ID,
+        agent_id="disease_extractor",
+    )
+    staged = _staged_fields()
+    # Remove the optional extracted slots entirely; annotation_type must still be present.
+    for optional in ("genetic_sex_name", "disease_qualifier_names", "with_gene_identifiers"):
+        staged.pop(optional, None)
+    workspace.upsert_candidate(
+        candidate_id="disease-candidate-1",
+        staged_fields=staged,
+        pending_ref_ids=["disease-annotation-1"],
+        evidence_record_ids=["evidence-ad-1"],
+        resolver_selection_refs=[],
+        status=CANDIDATE_STATUS_VALID,
+    )
+    result = materialize_disease_builder_state(
+        workspace=workspace,
+        candidate_ids=["disease-candidate-1"],
+        evidence_records=_evidence_records(),
+        resolver_entry_lookup=None,
+    )
+    assert result.ok, result.summary()
+    annotation = next(
+        obj
+        for obj in result.payload["curatable_objects"]
+        if obj["object_type"] == DISEASE_GENE_OBJECT_TYPE
+    )
+    payload_obj = annotation["payload"]
+    # Constant present...
+    assert payload_obj["annotation_type_name"] == "manually_curated"
+    # ...and the omitted optional slots are NOT carried.
+    assert "genetic_sex_name" not in payload_obj
+    assert "disease_qualifier_names" not in payload_obj
+    assert "with_gene_identifiers" not in payload_obj
+
+
+def test_disease_r4_optional_slot_bindings_are_active():
+    # R4: the four new active bindings load with the expected agent + vocabulary/agent config.
+    metadata = yaml.safe_load(
+        (DISEASE_PACK_DIR / "domain_pack.yaml").read_text(encoding="utf-8")
+    )
+    bindings_by_id = {
+        binding["binding_id"]: binding
+        for binding in metadata["metadata"]["validator_bindings"]["active"]
+    }
+    active_validator_ids = {
+        item["validator_id"]
+        for item in metadata["metadata"]["validators"]["active"]
+    }
+
+    # SLOT 1: annotation_type — controlled_vocabulary, both vocabulary + term_name are literals.
+    annotation_type = bindings_by_id["disease_annotation_type_cv_lookup"]
+    assert annotation_type["validator_agent"]["agent_id"] == "controlled_vocabulary_validation"
+    assert annotation_type["input_fields"]["vocabulary"]["value"] == "Annotation Type"
+    assert annotation_type["input_fields"]["term_name"]["source"] == "literal"
+    assert annotation_type["input_fields"]["term_name"]["value"] == "manually_curated"
+    assert annotation_type["applies_to"]["field_paths"] == ["annotation_type_name"]
+    assert annotation_type["expected_result_fields"] == {
+        "term_name": "annotation_type_name",
+        "vocabulary": "annotation_type_vocabulary",
+        "internal_id": "annotation_type_id",
+    }
+
+    # SLOT 2: genetic_sex — controlled_vocabulary, Genetic Sex, optional payload term_name.
+    genetic_sex = bindings_by_id["disease_genetic_sex_cv_lookup"]
+    assert genetic_sex["validator_agent"]["agent_id"] == "controlled_vocabulary_validation"
+    assert genetic_sex["input_fields"]["vocabulary"]["value"] == "Genetic Sex"
+    assert genetic_sex["input_fields"]["term_name"]["path"] == "genetic_sex_name"
+    assert genetic_sex["input_fields"]["term_name"]["required"] is False
+
+    # SLOT 3: disease_qualifiers — controlled_vocabulary, Disease Qualifier, [0] convention.
+    qualifier = bindings_by_id["disease_qualifier_cv_lookup"]
+    assert qualifier["validator_agent"]["agent_id"] == "controlled_vocabulary_validation"
+    assert qualifier["input_fields"]["vocabulary"]["value"] == "Disease Qualifier"
+    assert qualifier["input_fields"]["term_name"]["path"] == "disease_qualifier_names[0]"
+    assert qualifier["applies_to"]["field_paths"] == ["disease_qualifier_names[0]"]
+    assert qualifier["expected_result_fields"] == {
+        "term_name": "disease_qualifier_names[0]"
+    }
+
+    # SLOT 4: with_or_from — gene_validation, [0] convention, primary_external_id result key.
+    with_gene = bindings_by_id["disease_with_gene_validation"]
+    assert with_gene["validator_agent"]["agent_id"] == "gene_validation"
+    assert with_gene["input_fields"]["gene_id"]["path"] == "with_gene_identifiers[0]"
+    assert with_gene["input_fields"]["data_provider"]["context_only"] is True
+    assert with_gene["applies_to"]["field_paths"] == ["with_gene_identifiers[0]"]
+    assert with_gene["expected_result_fields"] == {
+        "primary_external_id": "with_gene_identifiers[0]"
+    }
+
+    # Each new active binding has matching active capability metadata + the right policy posture.
+    for binding_id in (
+        "disease_annotation_type_cv_lookup",
+        "disease_genetic_sex_cv_lookup",
+        "disease_qualifier_cv_lookup",
+        "disease_with_gene_validation",
+    ):
+        assert binding_id in active_validator_ids
+        binding = bindings_by_id[binding_id]
+        assert binding["required"] is True
+        assert binding["blocking"] is False
+        assert binding["allow_opt_out"] is True
+        assert binding["curator_override"] == {"allowed": False}
+        # All 4 disease object types declare the binding so dispatch fires on the concrete subtypes.
+        assert binding["applies_to"]["object_types"] == [
+            "DiseaseAnnotation",
+            "GeneDiseaseAnnotation",
+            "AlleleDiseaseAnnotation",
+            "AGMDiseaseAnnotation",
+        ]
 
 
 def test_finalize_disease_extraction_tool_is_marked_builder_finalization():

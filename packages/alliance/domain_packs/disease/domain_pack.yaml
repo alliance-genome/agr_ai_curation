@@ -538,6 +538,113 @@ object_definitions:
               class: DiseaseAnnotationDTO
               slot: evidence_code_curies
               range: string
+      # R4 SLOT 1: annotation_type (curation method) — constant manually_curated, NOT extracted.
+      - field_path: annotation_type_name
+        field_type: string
+        display_name: Annotation type name
+        description: Curation-method vocabulary term; fixed to manually_curated by the backend (not an extractor edit target).
+        metadata:
+          validatable: true
+          validator_binding_id: disease_annotation_type_cv_lookup
+          validator_state: active
+          definition_state_category: complete
+          protected: true
+          curator_action_note: Annotation type is the curation method, fixed to manually_curated; not an extractor edit target.
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: DiseaseAnnotationDTO
+              slot: annotation_type_name
+              range: string
+              db_table: vocabularyterm
+              db_column: name
+      - field_path: annotation_type_vocabulary
+        field_type: string
+        display_name: Annotation type vocabulary
+        metadata:
+          definition_state_category: complete
+          editable: false
+      - field_path: annotation_type_id
+        field_type: string
+        display_name: Annotation type internal id
+        metadata:
+          definition_state_category: complete
+          editable: false
+      # R4 SLOT 2: genetic_sex — single Genetic Sex CV term, optional, extractor-supplied.
+      - field_path: genetic_sex_name
+        field_type: string
+        display_name: Genetic sex name
+        description: Name of the Genetic Sex vocabulary term; staged only when the paper states the model/cohort sex.
+        metadata:
+          validatable: true
+          validator_binding_id: disease_genetic_sex_cv_lookup
+          validator_state: active
+          definition_state_category: complete
+          editable: true
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: DiseaseAnnotationDTO
+              slot: genetic_sex_name
+              range: string
+              db_table: vocabularyterm
+              db_column: name
+      - field_path: genetic_sex_vocabulary
+        field_type: string
+        display_name: Genetic sex vocabulary
+        metadata:
+          definition_state_category: complete
+          editable: false
+      - field_path: genetic_sex_id
+        field_type: string
+        display_name: Genetic sex internal id
+        metadata:
+          definition_state_category: complete
+          editable: false
+      # R4 SLOT 3: disease_qualifiers — MULTIVALUED Disease Qualifier CV. Resolves in place like
+      # evidence_code_curies: [0] is validated/snapshotted; elements [1:] are carried in the payload
+      # but are NOT independently validated this pass (no sibling vocabulary/id snapshot).
+      - field_path: disease_qualifier_names[0]
+        field_type: string
+        display_name: First disease qualifier name
+        metadata:
+          validatable: true
+          validator_binding_id: disease_qualifier_cv_lookup
+          validator_state: active
+          definition_state_category: complete
+          editable: true
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: DiseaseAnnotationDTO
+              slot: disease_qualifier_names
+              range: string
+      # R4 SLOT 4: with_or_from — MULTIVALUED Gene reference via with_gene_identifiers. [0] is
+      # validated against gene_validation; elements [1:] are carried but NOT independently validated
+      # this pass (no new multivalued entity-resolution binding machinery).
+      - field_path: with_gene_identifiers[0]
+        field_type: string
+        display_name: First with/from gene identifier
+        metadata:
+          validatable: true
+          validator_binding_id: disease_with_gene_validation
+          validator_state: active
+          definition_state_category: complete
+          editable: true
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: DiseaseAnnotationDTO
+              slot: with_gene_identifiers
+              range: string
       - field_path: data_provider
         field_type: object
         display_name: Data provider
@@ -897,6 +1004,65 @@ object_definitions:
           validatable: true
           validator_binding_id: disease_evidence_code_lookup
           validator_state: active
+      # R4 optional slots (declared on the concrete subtype so validator dispatch fires).
+      - field_path: annotation_type_name
+        field_type: string
+        display_name: Annotation type name
+        metadata:
+          validatable: true
+          validator_binding_id: disease_annotation_type_cv_lookup
+          validator_state: active
+          protected: true
+      - field_path: annotation_type_vocabulary
+        field_type: string
+        display_name: Annotation type vocabulary
+        metadata:
+          definition_state_category: complete
+          editable: false
+      - field_path: annotation_type_id
+        field_type: string
+        display_name: Annotation type internal id
+        metadata:
+          definition_state_category: complete
+          editable: false
+      - field_path: genetic_sex_name
+        field_type: string
+        display_name: Genetic sex name
+        metadata:
+          validatable: true
+          validator_binding_id: disease_genetic_sex_cv_lookup
+          validator_state: active
+          editable: true
+      - field_path: genetic_sex_vocabulary
+        field_type: string
+        display_name: Genetic sex vocabulary
+        metadata:
+          definition_state_category: complete
+          editable: false
+      - field_path: genetic_sex_id
+        field_type: string
+        display_name: Genetic sex internal id
+        metadata:
+          definition_state_category: complete
+          editable: false
+      # [1:] carried but not independently validated this pass.
+      - field_path: disease_qualifier_names[0]
+        field_type: string
+        display_name: First disease qualifier name
+        metadata:
+          validatable: true
+          validator_binding_id: disease_qualifier_cv_lookup
+          validator_state: active
+          editable: true
+      # [1:] carried but not independently validated this pass.
+      - field_path: with_gene_identifiers[0]
+        field_type: string
+        display_name: First with/from gene identifier
+        metadata:
+          validatable: true
+          validator_binding_id: disease_with_gene_validation
+          validator_state: active
+          editable: true
   - object_type: AlleleDiseaseAnnotation
     display_name: Allele disease annotation
     description: Concrete disease annotation associating an Allele with a Disease Ontology term.
@@ -981,6 +1147,65 @@ object_definitions:
           validatable: true
           validator_binding_id: disease_evidence_code_lookup
           validator_state: active
+      # R4 optional slots (declared on the concrete subtype so validator dispatch fires).
+      - field_path: annotation_type_name
+        field_type: string
+        display_name: Annotation type name
+        metadata:
+          validatable: true
+          validator_binding_id: disease_annotation_type_cv_lookup
+          validator_state: active
+          protected: true
+      - field_path: annotation_type_vocabulary
+        field_type: string
+        display_name: Annotation type vocabulary
+        metadata:
+          definition_state_category: complete
+          editable: false
+      - field_path: annotation_type_id
+        field_type: string
+        display_name: Annotation type internal id
+        metadata:
+          definition_state_category: complete
+          editable: false
+      - field_path: genetic_sex_name
+        field_type: string
+        display_name: Genetic sex name
+        metadata:
+          validatable: true
+          validator_binding_id: disease_genetic_sex_cv_lookup
+          validator_state: active
+          editable: true
+      - field_path: genetic_sex_vocabulary
+        field_type: string
+        display_name: Genetic sex vocabulary
+        metadata:
+          definition_state_category: complete
+          editable: false
+      - field_path: genetic_sex_id
+        field_type: string
+        display_name: Genetic sex internal id
+        metadata:
+          definition_state_category: complete
+          editable: false
+      # [1:] carried but not independently validated this pass.
+      - field_path: disease_qualifier_names[0]
+        field_type: string
+        display_name: First disease qualifier name
+        metadata:
+          validatable: true
+          validator_binding_id: disease_qualifier_cv_lookup
+          validator_state: active
+          editable: true
+      # [1:] carried but not independently validated this pass.
+      - field_path: with_gene_identifiers[0]
+        field_type: string
+        display_name: First with/from gene identifier
+        metadata:
+          validatable: true
+          validator_binding_id: disease_with_gene_validation
+          validator_state: active
+          editable: true
   - object_type: AGMDiseaseAnnotation
     display_name: AGM disease annotation
     description: Concrete disease annotation associating an Affected Genomic Model with a Disease Ontology term.
@@ -1067,6 +1292,65 @@ object_definitions:
           validatable: true
           validator_binding_id: disease_evidence_code_lookup
           validator_state: active
+      # R4 optional slots (declared on the concrete subtype so validator dispatch fires).
+      - field_path: annotation_type_name
+        field_type: string
+        display_name: Annotation type name
+        metadata:
+          validatable: true
+          validator_binding_id: disease_annotation_type_cv_lookup
+          validator_state: active
+          protected: true
+      - field_path: annotation_type_vocabulary
+        field_type: string
+        display_name: Annotation type vocabulary
+        metadata:
+          definition_state_category: complete
+          editable: false
+      - field_path: annotation_type_id
+        field_type: string
+        display_name: Annotation type internal id
+        metadata:
+          definition_state_category: complete
+          editable: false
+      - field_path: genetic_sex_name
+        field_type: string
+        display_name: Genetic sex name
+        metadata:
+          validatable: true
+          validator_binding_id: disease_genetic_sex_cv_lookup
+          validator_state: active
+          editable: true
+      - field_path: genetic_sex_vocabulary
+        field_type: string
+        display_name: Genetic sex vocabulary
+        metadata:
+          definition_state_category: complete
+          editable: false
+      - field_path: genetic_sex_id
+        field_type: string
+        display_name: Genetic sex internal id
+        metadata:
+          definition_state_category: complete
+          editable: false
+      # [1:] carried but not independently validated this pass.
+      - field_path: disease_qualifier_names[0]
+        field_type: string
+        display_name: First disease qualifier name
+        metadata:
+          validatable: true
+          validator_binding_id: disease_qualifier_cv_lookup
+          validator_state: active
+          editable: true
+      # [1:] carried but not independently validated this pass.
+      - field_path: with_gene_identifiers[0]
+        field_type: string
+        display_name: First with/from gene identifier
+        metadata:
+          validatable: true
+          validator_binding_id: disease_with_gene_validation
+          validator_state: active
+          editable: true
   # Pending sub-objects materialized alongside the concrete annotation (structural object_refs).
   - object_type: DiseaseAnnotationSubject
     display_name: Disease annotation subject
@@ -1144,6 +1428,18 @@ metadata:
       - validator_id: disease_evidence_code_lookup
         display_name: Evidence code lookup
         description: Validate ECO evidence-code curies through the active ontology-term package validator binding (D3 full LinkML alignment).
+      - validator_id: disease_annotation_type_cv_lookup
+        display_name: Annotation type lookup
+        description: Validate the curation-method constant (manually_curated) against the Annotation Type vocabulary through the active controlled-vocabulary package validator binding (R4).
+      - validator_id: disease_genetic_sex_cv_lookup
+        display_name: Genetic sex lookup
+        description: Validate the optional genetic_sex_name against the Genetic Sex vocabulary through the active controlled-vocabulary package validator binding (R4).
+      - validator_id: disease_qualifier_cv_lookup
+        display_name: Disease qualifier lookup
+        description: Validate the first disease_qualifier_names term against the Disease Qualifier vocabulary through the active controlled-vocabulary package validator binding (R4).
+      - validator_id: disease_with_gene_validation
+        display_name: With/from gene lookup
+        description: Validate the first with_gene_identifiers gene through the active gene_validation package validator binding (R4).
     under_development:
       - validator_id: experimental_condition_validation
         display_name: Experimental condition validation
@@ -1388,6 +1684,139 @@ metadata:
               - ECO
         expected_result_fields:
           curie: evidence_code_curies[0]
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
+      # R4 SLOT 1: annotation_type — constant manually_curated. Both vocabulary and term_name are
+      # literals, so this binding always builds a request and validates the fixed constant against
+      # the Annotation Type vocabulary; the result snapshots back to the sibling vocabulary/id fields.
+      - binding_id: disease_annotation_type_cv_lookup
+        display_name: Annotation type lookup
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: controlled_vocabulary_validation
+        applies_to:
+          domain_pack_id: agr.alliance.disease
+          object_types:
+            - DiseaseAnnotation
+            - GeneDiseaseAnnotation
+            - AlleleDiseaseAnnotation
+            - AGMDiseaseAnnotation
+          field_paths:
+            - annotation_type_name
+        input_fields:
+          vocabulary:
+            source: literal
+            value: Annotation Type
+          term_name:
+            source: literal
+            value: manually_curated
+        expected_result_fields:
+          term_name: annotation_type_name
+          vocabulary: annotation_type_vocabulary
+          internal_id: annotation_type_id
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
+      # R4 SLOT 2: genetic_sex — single Genetic Sex CV term, optional. When genetic_sex_name is
+      # absent the optional payload selector skips the request (no finding); when present it
+      # validates and snapshots vocabulary/id back to the sibling fields.
+      - binding_id: disease_genetic_sex_cv_lookup
+        display_name: Genetic sex lookup
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: controlled_vocabulary_validation
+        applies_to:
+          domain_pack_id: agr.alliance.disease
+          object_types:
+            - DiseaseAnnotation
+            - GeneDiseaseAnnotation
+            - AlleleDiseaseAnnotation
+            - AGMDiseaseAnnotation
+          field_paths:
+            - genetic_sex_name
+        input_fields:
+          vocabulary:
+            source: literal
+            value: Genetic Sex
+          term_name:
+            source: payload
+            path: genetic_sex_name
+            required: false
+        expected_result_fields:
+          term_name: genetic_sex_name
+          vocabulary: genetic_sex_vocabulary
+          internal_id: genetic_sex_id
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
+      # R4 SLOT 3: disease_qualifiers — MULTIVALUED Disease Qualifier CV. Validates/snapshots the
+      # FIRST element only (disease_qualifier_names[0]) per the evidence_code_curies convention;
+      # elements [1:] are carried in the payload but not independently validated this pass.
+      - binding_id: disease_qualifier_cv_lookup
+        display_name: Disease qualifier lookup
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: controlled_vocabulary_validation
+        applies_to:
+          domain_pack_id: agr.alliance.disease
+          object_types:
+            - DiseaseAnnotation
+            - GeneDiseaseAnnotation
+            - AlleleDiseaseAnnotation
+            - AGMDiseaseAnnotation
+          field_paths:
+            - disease_qualifier_names[0]
+        input_fields:
+          vocabulary:
+            source: literal
+            value: Disease Qualifier
+          term_name:
+            source: payload
+            path: disease_qualifier_names[0]
+            required: false
+        expected_result_fields:
+          term_name: disease_qualifier_names[0]
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
+      # R4 SLOT 4: with_or_from — MULTIVALUED Gene reference via with_gene_identifiers. Validates
+      # the FIRST element only (with_gene_identifiers[0]) through gene_validation, mirroring the
+      # subject_gene_validation binding; elements [1:] are carried but not independently validated.
+      - binding_id: disease_with_gene_validation
+        display_name: With/from gene lookup
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: gene_validation
+        applies_to:
+          domain_pack_id: agr.alliance.disease
+          object_types:
+            - DiseaseAnnotation
+            - GeneDiseaseAnnotation
+            - AlleleDiseaseAnnotation
+            - AGMDiseaseAnnotation
+          field_paths:
+            - with_gene_identifiers[0]
+        input_fields:
+          gene_id:
+            source: payload
+            path: with_gene_identifiers[0]
+            required: false
+          data_provider:
+            source: payload
+            path: data_provider.abbreviation
+            required: false
+            context_only: true
+        expected_result_fields:
+          primary_external_id: with_gene_identifiers[0]
         required: true
         blocking: false
         allow_opt_out: true

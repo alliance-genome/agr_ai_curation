@@ -173,6 +173,11 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
         "disease_reference_materialization",
         "disease_evidence_code_lookup",
         "disease_data_provider_lookup",
+        # R4 optional-slot bindings.
+        "disease_annotation_type_cv_lookup",
+        "disease_genetic_sex_cv_lookup",
+        "disease_qualifier_cv_lookup",
+        "disease_with_gene_validation",
     } == binding_ids
 
     pending_validator = {

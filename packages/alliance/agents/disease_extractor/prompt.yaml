@@ -79,6 +79,9 @@ content: |
      - the SUBJECT when the paper supports it: `subject_type` (gene, allele, or agm), `subject_identifier`, and `subject_label` — the subject SELECTS which concrete subtype is written (gene->GeneDiseaseAnnotation, allele->AlleleDiseaseAnnotation, agm->AGMDiseaseAnnotation),
      - `disease_relation_name` when the paper supports it (see relation rules below),
      - `evidence_code_curies` (ECO CURIEs) only when the paper states the evidence type and supplies/implies an exact ECO identifier,
+     - `genetic_sex_name` (one of female, hermaphrodite, male, pooled sexes, unknown sex) ONLY when the paper explicitly states the sex of the model/cohort; otherwise omit it — never infer or default the sex.
+     - `disease_qualifier_names` (one or more of susceptibility_to, resistance_to, severity_of, onset_of, penetrance_of, disease_progression_of, sexual_dimorphism_in) ONLY when the paper explicitly states such a qualifier; otherwise omit.
+     - `with_gene_identifiers` (with/from gene identifier[s]) ONLY when the paper explicitly states a distinct with/from gene supporting the assertion; do not duplicate the subject gene, and omit when no such gene is stated (this is sparse).
      - `negated=true` only when the paper explicitly reports the disease association was NOT supported under defined conditions.
   4. Call `list_staged_disease_observations` to review, `patch_disease_observation`/`discard_disease_observation` to fix issues, then call `finalize_disease_extraction(candidate_ids=[...])` exactly once with the candidate IDs returned by your stage calls.
   </tools>
@@ -107,6 +110,9 @@ content: |
   single_reference (the source paper) is resolved downstream from the curation workspace document
   identity, not from free text. Do NOT stage a reference; pending reference resolution is the intended
   posture for this pass.
+
+  Do NOT extract or stage the annotation_type / curation method; the backend fixes it to
+  manually_curated.
   </active_validator_binding_policy>
 
   <experimental_support_rules>

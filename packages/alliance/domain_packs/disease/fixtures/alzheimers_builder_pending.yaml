@@ -127,6 +127,7 @@ fixtures:
       definition_state: in_development
       payload:
         annotation_kind: disease_assertion
+        annotation_type_name: manually_curated
         mention: Alzheimer's disease
         disease_annotation_object:
           curie: DOID:10652
@@ -146,6 +147,11 @@ fixtures:
         disease_relation_name: is_implicated_in
         evidence_code_curies:
         - ECO:0000315
+        genetic_sex_name: male
+        disease_qualifier_names:
+        - severity_of
+        with_gene_identifiers:
+        - FB:FBgn0000108
         evidence_record_ids:
         - evidence-ad-1
         evidence_records:

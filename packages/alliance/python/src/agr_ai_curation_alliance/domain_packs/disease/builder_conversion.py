@@ -60,6 +60,7 @@ from ..schema_refs import (
 from .constants import (
     DISEASE_ANNOTATION_KIND,
     DISEASE_ANNOTATION_OBJECT_ROLE,
+    DISEASE_ANNOTATION_TYPE_CONSTANT,
     DISEASE_CORE_SCHEMA_SOURCE_FILE,
     DISEASE_DATA_PROVIDER_VALIDATOR_BINDING_ID,
     DISEASE_DOMAIN_PACK_ID,
@@ -643,6 +644,11 @@ def materialize_disease_builder_state(
         negated = bool(staged_fields.get("negated"))
         relation_name = _clean_text(staged_fields.get("disease_relation_name"))
         evidence_code_curies = _unique_strings(staged_fields.get("evidence_code_curies"))
+        # R4 optional slots. genetic_sex is a single CV term; disease_qualifiers and with_or_from
+        # are multivalued (validated/snapshotted at [0], full list carried in the payload).
+        genetic_sex_name = _clean_text(staged_fields.get("genetic_sex_name"))
+        disease_qualifier_names = _unique_strings(staged_fields.get("disease_qualifier_names"))
+        with_gene_identifiers = _unique_strings(staged_fields.get("with_gene_identifiers"))
         subject_payload = _subject_payload(staged_fields)
         subject_resolution_state = subject_payload["resolution_state"]
         subject_type = subject_payload.get("subject_type")
@@ -757,6 +763,9 @@ def materialize_disease_builder_state(
 
         annotation_payload: dict[str, Any] = {
             "annotation_kind": DISEASE_ANNOTATION_KIND,
+            # R4: annotation_type is the curation method, fixed to manually_curated. It is NOT an
+            # extractor edit target; the backend always materializes this constant.
+            "annotation_type_name": DISEASE_ANNOTATION_TYPE_CONSTANT,
             "mention": mention,
             "disease_annotation_object": {"curie": disease_curie, "name": disease_name}
             if disease_curie
@@ -775,6 +784,13 @@ def materialize_disease_builder_state(
             annotation_payload["disease_relation_name"] = relation_name
         if evidence_code_curies:
             annotation_payload["evidence_code_curies"] = list(evidence_code_curies)
+        # R4 optional slots — only carried when the extractor staged them.
+        if genetic_sex_name is not None:
+            annotation_payload["genetic_sex_name"] = genetic_sex_name
+        if disease_qualifier_names:
+            annotation_payload["disease_qualifier_names"] = list(disease_qualifier_names)
+        if with_gene_identifiers:
+            annotation_payload["with_gene_identifiers"] = list(with_gene_identifiers)
 
         metadata_refs = [
             {"metadata_path": f"raw_mentions[{annotation_index}]", "role": "source_mention"}

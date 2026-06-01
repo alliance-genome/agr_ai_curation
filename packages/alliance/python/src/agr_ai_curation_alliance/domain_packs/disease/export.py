@@ -257,6 +257,22 @@ def _project_disease_candidate(
     ]
     condition_relations = list_value(payload, "condition_relations")
 
+    # R4 optional slots. annotation_type is the curation-method constant (manually_curated) the
+    # backend always materializes; it is NOT added to the required field paths. genetic_sex,
+    # disease_qualifiers, and with_or_from are only projected when the extractor staged them.
+    annotation_type_name = string_value(payload, "annotation_type_name")
+    genetic_sex_name = string_value(payload, "genetic_sex_name")
+    disease_qualifier_names = [
+        value.strip()
+        for value in list_value(payload, "disease_qualifier_names")
+        if isinstance(value, str) and value.strip()
+    ]
+    with_gene_identifiers = [
+        value.strip()
+        for value in list_value(payload, "with_gene_identifiers")
+        if isinstance(value, str) and value.strip()
+    ]
+
     linkml_payload = {
         "disease_annotation_subject": {
             "subject_type": subject_type,
@@ -270,6 +286,18 @@ def _project_disease_candidate(
         "evidence_codes": [{"curie": curie} for curie in evidence_code_curies],
         "data_provider": data_provider,
     }
+    if annotation_type_name:
+        linkml_payload["annotation_type"] = {"name": annotation_type_name}
+    if genetic_sex_name:
+        linkml_payload["genetic_sex"] = {"name": genetic_sex_name}
+    if disease_qualifier_names:
+        linkml_payload["disease_qualifiers"] = [
+            {"name": name} for name in disease_qualifier_names
+        ]
+    if with_gene_identifiers:
+        linkml_payload["with_or_from"] = [
+            {"gene": {"primary_external_id": gid}} for gid in with_gene_identifiers
+        ]
     if condition_relations:
         linkml_payload["condition_relations"] = condition_relations
 
