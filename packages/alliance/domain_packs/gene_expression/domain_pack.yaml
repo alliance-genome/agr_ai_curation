@@ -1352,6 +1352,9 @@ object_definitions:
                     kind: ontology
                     ontology_family: go
                     go_aspect: cellular_component
+                    # No `slim:` here — see expression_cellular_component_validation for why
+                    # the coarse 'Cellular Components Slim Terms Public Site' display slim
+                    # is NOT wired (it regressed ciliary CC extraction on doc a31b1ff3).
                   lookup:
                     package_tool: search_domain_field_terms
                     method: search_go_terms
@@ -1555,6 +1558,9 @@ object_definitions:
               kind: ontology
               ontology_family: go
               go_aspect: cellular_component
+              # No `slim:` here — see expression_cellular_component_validation for why the
+              # coarse 'Cellular Components Slim Terms Public Site' display slim is NOT
+              # wired (it regressed ciliary CC extraction on doc a31b1ff3).
             lookup:
               package_tool: search_domain_field_terms
               method: search_go_terms
@@ -2154,6 +2160,17 @@ metadata:
           go_aspect:
             source: literal
             value: cellular_component
+          # Part B ontology slim (NOT wired here — deliberate). The only curated
+          # vocabularytermset GO-CC slim in the curation DB is 'Cellular Components Slim
+          # Terms Public Site', a COARSE ~17-term Public-Site DISPLAY slim (nucleus,
+          # cytoplasm, membrane, ...). It does NOT contain the fine-grained ciliary CC
+          # terms (cilium GO:0005929, ciliary axoneme GO:0005930, periciliary membrane
+          # compartment GO:1990075) that the proven worm test doc a31b1ff3 actually
+          # curates. Wiring this slim regressed CC extraction to 0 findings in an e2e
+          # run, so it is intentionally left unrestricted. The generic `slim` parameter
+          # is available on every ontology search helper (see the ontology tool); a
+          # field-appropriate curation slim can be supplied here verbatim once one exists.
+          # See docs/design/2026-05-31-subset-aware-vocabulary-and-ontology-search.md.
           lookup_method:
             source: literal
             value: search_go_terms

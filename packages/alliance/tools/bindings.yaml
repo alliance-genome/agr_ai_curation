@@ -217,31 +217,32 @@ tools:
             allele_id: WB:WBVar00143949
         search_anatomy_terms:
           name: Search Anatomy Terms
-          description: Search species-specific anatomy ontology terms.
+          description: Search species-specific anatomy ontology terms. Optional slim (a vocabularytermset name/id, or a list of them, whose members are ontology CURIEs) restricts candidates to that slim's member CURIEs; omit slim for the full ontology.
           required_params: [term, data_provider]
-          optional_params: [exact_match, include_synonyms, limit]
+          optional_params: [slim, exact_match, include_synonyms, limit]
           example:
             method: search_anatomy_terms
             term: body wall muscle
             data_provider: WB
         search_life_stage_terms:
           name: Search Life Stage Terms
-          description: Search species-specific developmental stage ontology terms.
+          description: Search species-specific developmental stage ontology terms. Optional slim (a vocabularytermset name/id, or a list of them, whose members are ontology CURIEs) restricts candidates to that slim's member CURIEs; omit slim for the full ontology.
           required_params: [term, data_provider]
-          optional_params: [exact_match, include_synonyms, limit]
+          optional_params: [slim, exact_match, include_synonyms, limit]
           example:
             method: search_life_stage_terms
             term: adult
             data_provider: WB
         search_go_terms:
           name: Search GO Terms
-          description: Search Gene Ontology terms by name or keyword.
+          description: Search Gene Ontology terms by name or keyword. Optional slim (a vocabularytermset name/id, or a list of them, whose members are ontology CURIEs) restricts candidates to that slim's member CURIEs; omit slim for the full ontology.
           required_params: [term]
-          optional_params: [go_aspect, exact_match, include_synonyms, limit]
+          optional_params: [go_aspect, slim, exact_match, include_synonyms, limit]
           example:
             method: search_go_terms
-            term: kinase activity
-            go_aspect: molecular_function
+            term: nucleus
+            go_aspect: cellular_component
+            slim: Cellular Components Slim Terms Public Site
         get_ontology_term:
           name: Get Ontology Term
           description: Exact ontology term lookup by CURIE with optional ontologytermtype filtering.
@@ -261,9 +262,9 @@ tools:
             terms: [GO:0003674, ECO:0000314]
         search_ontology_terms:
           name: Search Ontology Terms
-          description: Search ontology terms by label within a required curation DB ontologytermtype.
+          description: Search ontology terms by label within a required curation DB ontologytermtype. Optional slim (a vocabularytermset name/id, or a list of them, whose members are ontology CURIEs) restricts candidates to that slim's member CURIEs; omit slim for the full ontology.
           required_params: [term, ontology_term_type]
-          optional_params: [exact_match, include_synonyms, limit]
+          optional_params: [slim, exact_match, include_synonyms, limit]
           example:
             method: search_ontology_terms
             term: abnormal locomotor behavior

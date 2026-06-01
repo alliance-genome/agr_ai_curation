@@ -19,6 +19,7 @@ content: |
   - `terms`: ordered repeated ontology term inputs for one array-valued field. Each item may be a CURIE string, label string, or object containing `curie`, `label`, or `name`.
   - `ontology_family`: request family such as `phenotype`, `evidence`, `taxon`, `anatomy`, `life_stage`, `go`, `disease`, `condition`, `mmo`, `zeco`, or `xco`.
   - `ontology_term_type`: curation DB ontologytermtype such as `DOTerm`, `ECOTerm`, `GOTerm`, `MPTerm`, or `WBPhenotypeTerm`.
+  - `slim`: optional ontology slim constraint. A slim is the name (or id) of a curated vocabularytermset whose members are ontology CURIEs (e.g. `Cellular Components Slim Terms Public Site`), or a list of such names. When present you MUST forward it verbatim as the `slim` argument to every ontology search call (`search_ontology_terms`, `search_go_terms`, `search_anatomy_terms`, `search_life_stage_terms`) so candidates are restricted to that slim's member CURIEs. When absent, do not pass `slim` and the full ontology is searched.
   - `accepted_prefixes`: allowed CURIE prefixes such as `DOID`, `ECO`, `GO`, `MP`, `WBPhenotype`, `ZP`, `NCBITaxon`, `MMO`, `ZECO`, or `XCO`.
   - `data_provider`, `taxon_id`, `organism`, or `provider_context`: organism/provider context for species-specific anatomy or life-stage searches.
   - `provider_taxon_ontology_mappings`: explicit supported provider/taxon-to-ontology-term-type mappings supplied by the domain pack.
@@ -36,11 +37,13 @@ content: |
   Available ontology helper methods:
   - `get_ontology_term`: exact CURIE lookup. Required: `term`. Optional: `ontology_term_type`.
   - `get_ontology_terms`: bulk exact CURIE lookup. Required: `terms`.
-  - `search_ontology_terms`: generic label search. Required: `term`, `ontology_term_type`. Optional: `exact_match`, `include_synonyms`, `limit`.
-  - `search_anatomy_terms`: species-specific anatomy label search. Required: `term`, `data_provider`. Optional: `exact_match`, `include_synonyms`, `limit`.
-  - `search_life_stage_terms`: species-specific developmental stage label search. Required: `term`, `data_provider`. Optional: `exact_match`, `include_synonyms`, `limit`.
-  - `search_go_terms`: Gene Ontology label search. Required: `term`. Optional: `go_aspect`, `exact_match`, `include_synonyms`, `limit`.
+  - `search_ontology_terms`: generic label search. Required: `term`, `ontology_term_type`. Optional: `slim`, `exact_match`, `include_synonyms`, `limit`.
+  - `search_anatomy_terms`: species-specific anatomy label search. Required: `term`, `data_provider`. Optional: `slim`, `exact_match`, `include_synonyms`, `limit`.
+  - `search_life_stage_terms`: species-specific developmental stage label search. Required: `term`, `data_provider`. Optional: `slim`, `exact_match`, `include_synonyms`, `limit`.
+  - `search_go_terms`: Gene Ontology label search. Required: `term`. Optional: `go_aspect`, `slim`, `exact_match`, `include_synonyms`, `limit`.
   - `map_curies_to_names`: bulk CURIE-to-name helper. Required: `category`, `curies`.
+
+  When the request supplies `slim`, forward it verbatim as the `slim` argument to whichever ontology search helper you call. A term that exists in the ontology but is NOT a member of the slim is out-of-slim for this field: the slim-restricted search returns zero candidates for it, so report `unresolved` with a curator-facing message that the term is not in the field's slim. When `slim` is absent, omit it and the full ontology is searched (behavior unchanged).
 
   # Lookup Policy
 
