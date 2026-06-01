@@ -483,11 +483,14 @@ clean (or issues resolved); Status Table updated; committed + pushed to main.
     layering the companion inline-validation doc flagged) and is an optional refinement so the chat reply shows
     the resolved reference. NOT blocking; the current pending/validator_unresolved reference is the honest
     non-structural placeholder until ABC.
-  * R2 — per-subtype relation subset ENFORCEMENT (disease D5). To actually reject e.g. is_model_of on a
-    GeneDiseaseAnnotation, the controlled_vocabulary_validation agent/schema/dispatch need a `subset`
-    concept. Today the relation is validated against the umbrella CV and the LLM does the subsetting via
-    prompt. Decide: build a subset-aware CV validator, or accept umbrella+LLM enforcement (and then either
-    consume or remove the currently-dead `relation_subsets` / DISEASE_RELATION_SUBSETS config).
+  * R2 — per-subtype relation subset ENFORCEMENT (disease D5). RESOLVED (Chris chose "build the
+    subset-aware tool"): commit 07207f1f added a generic config-driven `subset` param to the shared CV
+    lookup tool; disease_relation_cv_lookup now selects relation_subsets[subject_type], so e.g. is_model_of
+    on a GeneDiseaseAnnotation is rejected. relation_subsets / DISEASE_RELATION_SUBSETS are now LIVE. This
+    grew into the broader subset-aware-search initiative — see
+    docs/design/2026-05-31-subset-aware-vocabulary-and-ontology-search.md (Part A CV subsets DONE; Part B
+    ontology slims mechanism built but unwired pending field-appropriate extraction slims; open questions
+    S1-S3 + the future group/MOD layer).
   * R3 — subject with no durable identifier: when a paper names a subject/AGM with no MOD identifier (e.g.
     the e2e AGM "elav; APP; BACE heterozygous flies"), the active subject binding emits selector_missing_field
     (severity error, non-structural) — an accurate curation gap. Curators may want a softer finding.

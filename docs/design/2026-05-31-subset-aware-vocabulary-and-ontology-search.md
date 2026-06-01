@@ -75,3 +75,46 @@ composition. Bigger scope; documented here, not in this first pass.
 ## Open scope question for Chris
 - First implementation breadth: (a) disease relation only (closes R2), (b) all CV-subset fields across types,
   or (c) (b) + the ontology slims now. (b) is the natural "all data types, data-type axis, CV" target.
+
+---
+
+## Outcome (landed 2026-05-31/06-01)
+
+### Part A — controlled-vocabulary subsets: DONE + WIRED (commit 07207f1f)
+Generic optional `subset` (vocabularytermset) param on the shared Alliance CV lookup tool + a new generic
+`payload_keyed_literal` input-selector to supply it from per-field binding config (no domain logic in
+backend/src; full-vocabulary behavior unchanged when absent). **Disease per-subtype relation subsets are now
+ENFORCED** (closes R2): the `disease_relation_cv_lookup` binding selects `relation_subsets[subject_type]`
+(Gene/Allele/AGM, gene = Gene + Via-Orthology union), making the previously-dead `relation_subsets` live.
+Proven via direct tool API (AGM subset -> only the 3 model-of relations; `is_model_of` rejected under a gene
+subset) and a disease e2e trace (live CV call carried `subset:"AGM Disease Relation"`, 0 structural). Other CV
+fields: condition_relation_type wired but inert (conditions deferred, D6); Expression Relation has no subset;
+allele is mention-only (no association-relation field); spatial qualifiers are the ontology axis (Part B).
+
+### Part B — ontology slims: MECHANISM BUILT + PROVEN, NO FIELD WIRED (commit 21c56017)
+Generic optional `slim` param on the shared Alliance ontology lookup tool (search_ontology/go/anatomy/life_stage),
+restricting the search AT THE QUERY LEVEL to a slim vocabularytermset's member CURIEs; fail-OPEN on DB error
+(a transient failure never wrecks extraction); config-driven (binding `slim` input + field `term_source.slim`);
+zero backend/src changes. Proven via direct tool API (GO CC "nucleus" 8->1, "cytoplasm" 20->5, all slim members).
+**No gene_expression field is wired in the final state**, by evidence:
+- The only curated GO-CC vocabularytermset slim is the coarse ~17-term **"Public Site" DISPLAY slim**; wiring it
+  REGRESSED CC extraction to 0 on the proven worm doc (which curates fine-grained ciliary CC terms cilium
+  GO:0005929 / axoneme GO:0005930 / periciliary membrane GO:1990075, none in the display slim). Removed per the
+  no-regression rule. Final e2e: 0 structural, worm CC/anatomy/stage still resolve, slim inert (baseline).
+- Uberon anatomy/stage slims are ORGANISM-DEPENDENT (the proven doc is C. elegans = WBbt/WBls, not Uberon) ->
+  documented as the natural first consumer of the future MOD/group layer.
+- Disease (DOID) / phenotype (HP/MP) have NO curated vocabularytermset slim (only raw OBO ontologyterm_subsets
+  tags). N/A.
+
+### Open questions for Chris (post-subset-work)
+- S1 — **Curation vs display slims.** The vocabularytermset "Public Site" slims are DISPLAY slims (coarse), not
+  extraction-appropriate. To actually USE ontology-slim search we need field-appropriate EXTRACTION slims
+  (finer, curation-relevant term sets) — a data-curation task, not code. The generic mechanism is in place and
+  proven; it just needs the right slim data.
+- S2 — **Group/MOD layer is the natural next step for anatomy/stage.** A ZFIN/WB curator's login group should
+  supply the organism-appropriate ontology + slim at request time, composed (intersection) with the data-type
+  slim. The tools carry a comment marking this composition point. Designed-for; not built.
+- S3 — **Exact-CURIE consistency.** Part A applies the CV subset to BOTH search and the exact get_vocabulary_term
+  (so a wrong-subtype CURIE is rejected at validation). Part B restricts only the ontology SEARCH helpers, not
+  exact get_ontology_term (a curator-picked out-of-slim CURIE is not rejected). Decide whether the ontology slim
+  should also gate exact-CURIE validation for parity.
