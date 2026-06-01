@@ -350,6 +350,8 @@ class ValidatorBindingMatch:
     field_definition: DomainPackFieldDefinition | None = None
     policy: FieldValidationPolicy | None = None
     element_index: int | None = None
+    resolved_field_path: str | None = None
+    element_index_path: tuple[int, ...] | None = None
 
     @property
     def object_type(self) -> str | None:
@@ -363,12 +365,17 @@ class ValidatorBindingMatch:
     def field_path(self) -> str | None:
         """Return the validation target field path for this match.
 
-        For a fanned-out multivalued element match the path is resolved to the
-        concrete ``field[i]`` slot the engine is validating/materializing; for every
-        scalar or legacy ``[0]``-literal match it is the declared bare field path,
-        unchanged.
+        For a fanned-out multivalued element match the path is resolved to the concrete
+        indexed slot the engine is validating/materializing. When the field nests one or
+        more multivalued segments (e.g. ``a[i].b[j].c``), the fan-out precomputes the
+        fully-resolved path — it has the object definition/declared fields the property
+        cannot reach — and stores it on ``resolved_field_path``. A single-level multivalued
+        match carries only ``element_index`` and resolves to ``field[i]`` here, so legacy
+        and scalar matches are byte-identical (no ``resolved_field_path`` set).
         """
 
+        if self.resolved_field_path is not None:
+            return self.resolved_field_path
         if self.field_definition is None:
             return None
         base_field_path = self.field_definition.field_path
@@ -411,6 +418,8 @@ class ValidatorBindingMatch:
             details["field_required"] = self.field_definition.required
             if self.element_index is not None:
                 details["element_index"] = self.element_index
+            if self.element_index_path is not None:
+                details["element_index_path"] = list(self.element_index_path)
             if self.field_definition.model_ref is not None:
                 details["field_model_ref"] = self.field_definition.model_ref
             provider_refs = _metadata_provider_refs(self.field_definition.metadata)
@@ -553,7 +562,9 @@ class DomainPackValidationRegistry:
                                 field_definition.field_path,
                             )
                         )
-                        if field_definition.multivalued:
+                        if _field_has_multivalued_fanout(
+                            field_definition, object_definition
+                        ):
                             matches.extend(
                                 _multivalued_element_matches(
                                     binding=binding,
@@ -1855,31 +1866,166 @@ def _multivalued_element_matches(
     field_definition: DomainPackFieldDefinition,
     policy: FieldValidationPolicy | None,
 ) -> list[ValidatorBindingMatch]:
-    """Fan one multivalued-field match out into one match per present list element.
+    """Fan one multivalued-field match out into one match per leaf list element.
 
-    The bare ``field_path`` is read from the object payload; each present element
-    ``0..n-1`` yields a match carrying ``element_index``. An empty or absent list (or a
-    non-list staged value) yields zero matches — there is nothing to validate, and any
-    required-but-empty structural gate still fires on the base field elsewhere.
+    The fan-out enumerates the cartesian product of actual list lengths at every
+    multivalued segment the field's declared path traverses — any path prefix that is a
+    declared ``multivalued: true`` field, and/or the leaf field itself. A single-level
+    field (one multivalued segment at the leaf) yields the legacy ``field[i]`` matches
+    carrying ``element_index``. A nested field (e.g. ``a.b.c`` with ``a`` and ``a.b`` both
+    multivalued) fans both levels into one match per ``a[i].b[j]`` leaf, each carrying the
+    fully-resolved indexed ``resolved_field_path`` and the index tuple. An empty/absent/
+    non-list value at any level yields zero matches for that branch; any required-but-empty
+    structural gate still fires on the base field elsewhere.
     """
 
-    staged_value = _payload_field_value(
-        object_envelope.payload, field_definition.field_path
+    declared_fields = {
+        declared.field_path: declared for declared in object_definition.fields
+    }
+    fanout_boundaries = _multivalued_fanout_boundaries(
+        field_definition.field_path, declared_fields
     )
-    if not isinstance(staged_value, list):
-        return []
-    return [
-        ValidatorBindingMatch(
-            binding=binding,
-            envelope=envelope,
-            object_envelope=object_envelope,
-            object_definition=object_definition,
-            field_definition=field_definition,
-            policy=policy,
-            element_index=element_index,
+    field_segments = tuple(field_definition.field_path.split("."))
+    # The legacy single-level shape applies only when there is exactly one boundary AND it
+    # sits at the leaf field itself (the indexed slot is ``field[i]``). A lone multivalued
+    # ANCESTOR with a scalar leaf is NOT legacy-shaped — its index belongs on the ancestor,
+    # so it must carry the resolved path like any nested match.
+    legacy_single_level = (
+        len(fanout_boundaries) == 1 and fanout_boundaries[0] == len(field_segments)
+    )
+    matches: list[ValidatorBindingMatch] = []
+
+    def emit(resolved_field_path: str, index_path: tuple[int, ...]) -> None:
+        matches.append(
+            ValidatorBindingMatch(
+                binding=binding,
+                envelope=envelope,
+                object_envelope=object_envelope,
+                object_definition=object_definition,
+                field_definition=field_definition,
+                policy=policy,
+                # A single multivalued segment AT THE LEAF keeps the legacy
+                # ``element_index`` shape so those matches are byte-identical; every other
+                # fan-out (nested, or a lone multivalued ancestor) carries the resolved path
+                # + index tuple instead.
+                element_index=index_path[0] if legacy_single_level else None,
+                resolved_field_path=(
+                    None if legacy_single_level else resolved_field_path
+                ),
+                element_index_path=index_path,
+            )
         )
-        for element_index in range(len(staged_value))
-    ]
+
+    _enumerate_multivalued_elements(
+        payload=object_envelope.payload,
+        field_segments=field_segments,
+        fanout_boundaries=fanout_boundaries,
+        segment_cursor=0,
+        boundary_cursor=0,
+        resolved_parts=(),
+        index_path=(),
+        emit=emit,
+    )
+    return matches
+
+
+def _field_has_multivalued_fanout(
+    field_definition: DomainPackFieldDefinition,
+    object_definition: DomainPackObjectDefinition,
+) -> bool:
+    """Whether a matched field must fan out over one or more multivalued list levels.
+
+    Fan-out applies when the field is itself ``multivalued: true`` (the single-level case,
+    where the validatable leaf IS the list) OR when its declared path traverses a
+    multivalued ANCESTOR prefix (the nested case, where a scalar leaf such as
+    ``condition_relations.conditions.condition_class.curie`` gains multiplicity from the
+    ``condition_relations`` / ``condition_relations.conditions`` lists above it). Scalar
+    fields with no multivalued segment anywhere on their path never fan out.
+    """
+
+    declared_fields = {
+        declared.field_path: declared for declared in object_definition.fields
+    }
+    return bool(
+        _multivalued_fanout_boundaries(field_definition.field_path, declared_fields)
+    )
+
+
+def _multivalued_fanout_boundaries(
+    field_path: str,
+    declared_fields: Mapping[str, DomainPackFieldDefinition],
+) -> tuple[int, ...]:
+    """Return the segment counts at which ``field_path`` must enumerate a list.
+
+    Walks the field's declared path segment by segment; every accumulated prefix that is
+    itself a declared ``multivalued: true`` field marks a fan-out boundary, recorded as the
+    number of segments consumed at that point (so ``a`` -> 1, ``a.b`` -> 2). For a
+    single-level field (only the leaf multivalued) this returns one boundary equal to the
+    full segment count, preserving the legacy fan-out shape exactly.
+    """
+
+    segments = field_path.split(".")
+    boundaries: list[int] = []
+    prefix_parts: list[str] = []
+    for segment in segments:
+        prefix_parts.append(segment)
+        prefix = ".".join(prefix_parts)
+        declared = declared_fields.get(prefix)
+        if declared is not None and declared.multivalued:
+            boundaries.append(len(prefix_parts))
+    return tuple(boundaries)
+
+
+def _enumerate_multivalued_elements(
+    *,
+    payload: Mapping[str, Any],
+    field_segments: tuple[str, ...],
+    fanout_boundaries: tuple[int, ...],
+    segment_cursor: int,
+    boundary_cursor: int,
+    resolved_parts: tuple[str, ...],
+    index_path: tuple[int, ...],
+    emit: Callable[[str, tuple[int, ...]], None],
+) -> None:
+    """Recursively enumerate the cartesian product of multivalued list lengths.
+
+    ``fanout_boundaries`` are the segment counts at which a list must be indexed. The walk
+    consumes the bare dotted segments up to the next boundary, reads the list at that
+    resolved (indexed) path from the payload, and recurses once per present element,
+    appending ``[i]`` to the resolved path. After the final boundary the remaining trailing
+    segments (a scalar/object leaf such as ``.condition_class.curie``) are appended and
+    ``emit`` is called with the fully-resolved leaf path and the chosen index tuple. A
+    non-list/empty value at any level yields no matches for that branch.
+    """
+
+    if boundary_cursor >= len(fanout_boundaries):
+        # No more lists to enumerate: append any trailing scalar/object leaf segments.
+        trailing = field_segments[segment_cursor:]
+        leaf_parts = resolved_parts + trailing
+        emit(".".join(leaf_parts), index_path)
+        return
+
+    boundary = fanout_boundaries[boundary_cursor]
+    # Consume the bare segments up to (and including) the segment that names this list.
+    consumed = field_segments[segment_cursor:boundary]
+    base_parts = resolved_parts + consumed
+    bare_read_path = ".".join(base_parts)
+    staged_value = _payload_field_value(payload, bare_read_path)
+    if not isinstance(staged_value, list):
+        return
+    last_segment = consumed[-1]
+    for element_index in range(len(staged_value)):
+        indexed_parts = base_parts[:-1] + (f"{last_segment}[{element_index}]",)
+        _enumerate_multivalued_elements(
+            payload=payload,
+            field_segments=field_segments,
+            fanout_boundaries=fanout_boundaries,
+            segment_cursor=boundary,
+            boundary_cursor=boundary_cursor + 1,
+            resolved_parts=indexed_parts,
+            index_path=index_path + (element_index,),
+            emit=emit,
+        )
 
 
 def _payload_field_value(payload: Mapping[str, Any], field_path: str) -> Any:

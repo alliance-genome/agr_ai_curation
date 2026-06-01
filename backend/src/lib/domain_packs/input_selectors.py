@@ -155,20 +155,30 @@ def _selector_payload(selector: DomainPackInputSelector) -> dict[str, Any]:
 
 
 def _element_indexed_path(match: ValidatorBindingMatch, declared_path: str) -> str:
-    """Resolve a declared bare path to ``field[i]`` for a fanned-out element match.
+    """Resolve a declared bare path to its indexed element for a fanned-out match.
 
-    For a multivalued-element match (``element_index`` set) a declared path that names
-    the multivalued base field is rewritten to point at the element the engine is
-    validating. Every other path — and every scalar/legacy ``[0]`` match (no
-    ``element_index``) — is returned unchanged, so non-multivalued behavior is identical.
+    For a multivalued-element match a declared path that references the multivalued base
+    field is rewritten to point at the element the engine is validating: its bare base
+    prefix is substituted with the fully-resolved indexed base (``field[i]`` for a
+    single-level field, ``a[i].b[j]`` for a nested one). Any trailing keys beyond the base
+    are preserved. Every other path — and every scalar/legacy ``[0]`` match (no element
+    index) — is returned unchanged, so non-multivalued behavior is identical.
     """
 
-    if match.element_index is None or match.field_definition is None:
+    if match.field_definition is None:
+        return declared_path
+    if match.element_index is None and match.resolved_field_path is None:
         return declared_path
     base_field_path = match.field_definition.field_path
-    if declared_path != base_field_path:
+    resolved_base = match.field_path
+    if resolved_base is None:
         return declared_path
-    return f"{base_field_path}[{match.element_index}]"
+    if declared_path == base_field_path:
+        return resolved_base
+    prefix = f"{base_field_path}."
+    if declared_path.startswith(prefix):
+        return f"{resolved_base}.{declared_path[len(prefix):]}"
+    return declared_path
 
 
 def _element_expected_result_fields(
@@ -182,7 +192,9 @@ def _element_expected_result_fields(
     other fields are unchanged; for scalar/legacy matches the mapping is returned as-is.
     """
 
-    if match.element_index is None or match.field_definition is None:
+    if match.field_definition is None or (
+        match.element_index is None and match.resolved_field_path is None
+    ):
         return dict(expected_result_fields)
     return {
         result_field: (

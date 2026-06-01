@@ -758,27 +758,41 @@ def _multivalued_indexed_base(
     field_path: str,
     declared_fields: Mapping[str, DomainPackFieldDefinition],
 ) -> str | None:
-    """Return the bare base field for ``field[i]`` iff it is a declared multivalued field.
+    """Return the de-indexed declared field for an indexed multivalued write path.
 
-    Lets validator write-back target a per-element slot (``evidence_code_curies[2]``)
-    while keeping the legacy ``field[0]`` literal convention out of scope — only fields
-    that opted into ``multivalued: true`` accept an indexed write path here.
+    Lets validator write-back target a per-element slot while keeping the legacy
+    ``field[0]`` literal convention out of scope. A single-level slot like
+    ``evidence_code_curies[2]`` resolves to its multivalued base, and a nested slot like
+    ``condition_relations[0].conditions[1].condition_class.curie`` resolves to its bare
+    declared leaf — but only when every indexed segment corresponds to a declared
+    ``multivalued: true`` prefix, so only fields that opted in accept an indexed write
+    path here.
     """
 
     try:
         parts = parse_field_path(field_path)
     except ValueError:
         return None
-    if len(parts) < 2 or not isinstance(parts[-1], int):
+    if not any(isinstance(part, int) for part in parts):
         return None
-    base_parts = parts[:-1]
-    if any(not isinstance(part, str) for part in base_parts):
+
+    # Validate each indexed segment names a declared multivalued prefix, and build the
+    # de-indexed dotted base by dropping the list indices.
+    bare_parts: list[str] = []
+    prefix_parts: list[str] = []
+    for part in parts:
+        if isinstance(part, int):
+            prefix = ".".join(prefix_parts)
+            prefix_definition = declared_fields.get(prefix)
+            if prefix_definition is None or not prefix_definition.multivalued:
+                return None
+            continue
+        bare_parts.append(part)
+        prefix_parts.append(part)
+    bare_field_path = ".".join(bare_parts)
+    if bare_field_path not in declared_fields:
         return None
-    base_field_path = ".".join(str(part) for part in base_parts)
-    field_definition = declared_fields.get(base_field_path)
-    if field_definition is None or not field_definition.multivalued:
-        return None
-    return base_field_path
+    return bare_field_path
 
 
 def _propagate_materialized_mirror_paths(
