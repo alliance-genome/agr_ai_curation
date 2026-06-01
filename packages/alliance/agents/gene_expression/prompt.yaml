@@ -329,6 +329,49 @@ content: |
   - After finalization, return one short acknowledgement or minimal status. Do not
     include the materialized envelope in the final assistant message.
 
+  <experimental_condition_rules>
+  Experimental conditions describe the experimental variables under which an expression
+  observation holds (chemical treatments, temperature/radiation exposures, etc.). Extract
+  ALL experimental conditions the paper explicitly states for a retained expression
+  annotation, and ONLY those — never infer, default, or invent a condition. Conditions are
+  subtle and sparse; most annotations have none. When the paper states none, omit
+  `condition_relations` entirely.
+
+  Stage `condition_relations` on `stage_gene_expression_observation` as a list. Each entry
+  is one ConditionRelation:
+  - `condition_relation_type`: the relation between the condition and the observation, named
+    exactly as a Condition Relation Type vocabulary term — typically `has_condition` (the
+    expression holds under this condition), or `induced_by`, `ameliorated_by`,
+    `exacerbated_by` when the paper frames the condition that way. Use `has_condition` unless
+    the paper clearly states an inducing/ameliorating/exacerbating relationship.
+  - `conditions`: a list of the experimental conditions under that relation. For EACH
+    condition, set only the fields the paper states:
+    - `condition_class_curie`: the ZECO class naming the experimental-variable TYPE (e.g.
+      chemical treatment, temperature exposure). GROUND it to a real ZECO CURIE with the
+      lookup tools — call `search_domain_field_terms`/`resolve_domain_field_term` with
+      `field_path="condition_relations.conditions.condition_class.curie"` and the term
+      phrase; do NOT guess ZECO identifiers from memory.
+    - `condition_id_curie`: a more specific ZECO/XCO condition term when stated; GROUND it
+      via the same tools with `field_path="condition_relations.conditions.condition_id.curie"`.
+    - `condition_chemical_curie`: the ChEBI CURIE for the chemical when a chemical treatment
+      is stated (e.g. `CHEBI:6909`). Provide the exact ChEBI CURIE the paper supports; the
+      condition validator re-checks it against ChEBI.
+    - `condition_taxon_curie`: an NCBITaxon CURIE only when the condition explicitly involves
+      a distinct taxon (rare).
+    - `condition_free_text`: the quantity/dose/free-text qualifier as written (e.g. "3 pM",
+      "28 degrees C"), when stated.
+    - `condition_summary`: a short synthesized phrase describing the condition (the anchoring
+      source statement the condition was read from, e.g. "treated with 3 pM rapamycin").
+  A condition's MEANING is the COMBINATION of its fields (the class names the variable type;
+  the chemical/quantity fill it). Stage them together so the composite condition validator
+  can check both per-field existence AND cross-field coherence.
+
+  EVIDENCE CONTRACT: conditions carry NO quote text. They are read from the SAME evidence the
+  annotation already cites (`record_evidence(span_ids=[...])` -> `evidence_record_ids`); the
+  backend resolves the exact source text for the composite validator. Never type a condition
+  quote. The composite condition validator owns final condition identity and coherence.
+  </experimental_condition_rules>
+
   Staged field contract:
   - Use Alliance/LinkML field paths exposed by the builder tools, not legacy flat helper names.
   - Required staged values include a stable pending ref, non-empty evidence IDs,
@@ -372,13 +415,16 @@ content: |
     the same resolved reference selector as annotation-level `single_reference`,
     and set `expression_experiment.entity_assayed` to the same gene selector as
     `expression_annotation_subject`. Validators/materializers own final IDs.
-  - Preserve reagent, genotype, reporter, construct, strain, specimen, allele, and
-    condition context under the explicit LinkML-backed paths when a resolver-backed
-    selector or placeholder is available: `expression_experiment.detection_reagents`,
-    `expression_experiment.specimen_genomic_model`,
-    `expression_experiment.specimen_alleles`, and `condition_relations`. When no
-    resolver-backed identifier or safe placeholder exists, keep the exact paper text
-    in metadata with the relevant field_path and unresolved reason.
+  - Preserve reagent, genotype, reporter, construct, strain, specimen, and allele
+    context under the explicit LinkML-backed paths when a resolver-backed selector or
+    placeholder is available: `expression_experiment.detection_reagents`,
+    `expression_experiment.specimen_genomic_model`, and
+    `expression_experiment.specimen_alleles`. When no resolver-backed identifier or
+    safe placeholder exists, keep the exact paper text in metadata with the relevant
+    field_path and unresolved reason.
+  - Experimental conditions are now a fully-validated, structured staging input — stage
+    them via the `condition_relations` parameter of `stage_gene_expression_observation`
+    as described in `<experimental_condition_rules>`, NOT as field-addressed metadata.
   - Preserve reagent names, genotypes, strain strings, original anatomy/stage labels,
     normalization caveats, raw evidence text, page numbers, and figure references
     through verified evidence records and staged field context. Do not create helper
@@ -395,9 +441,11 @@ content: |
   <unresolved_validation>
   Active validator bindings currently own final relation, data-provider, subject
   gene, source reference, assay, anatomy, stage, cellular-component, and
-  UBERON/GO slim-term verification for this domain pack. Reagent, specimen,
-  allele, and condition context validators remain under development unless the
-  domain-pack metadata explicitly promotes them to active bindings.
+  UBERON/GO slim-term verification for this domain pack, plus condition relation
+  type and per-condition experimental-condition validation (see
+  `<experimental_condition_rules>`). Reagent, specimen, and allele context
+  validators remain under development unless the domain-pack metadata explicitly
+  promotes them to active bindings.
   When a required value is unresolved, keep the extraction envelope evidence-backed,
   preserve candidate context in `metadata.ambiguities[]`,
   `metadata.normalization_notes[]`, or `metadata.notes[]`, and do not describe

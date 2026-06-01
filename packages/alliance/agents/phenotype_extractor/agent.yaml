@@ -52,6 +52,13 @@ tools:
   - update_recorded_evidence_metadata
   - get_agent_contract
   - agr_species_context_lookup
+  # GROUNDING (experimental conditions): the same extractor-side lookup tools gene_expression uses.
+  # Used to ground condition terms to REAL CURIEs while reading — ZECO condition class/id via the
+  # ontology term helpers declared on condition_relations.conditions.* — rather than guessing
+  # obscure ontology CURIEs from memory.
+  - search_domain_field_terms
+  - inspect_ontology_term
+  - resolve_domain_field_term
   - stage_phenotype_observation
   - patch_phenotype_observation
   - discard_phenotype_observation

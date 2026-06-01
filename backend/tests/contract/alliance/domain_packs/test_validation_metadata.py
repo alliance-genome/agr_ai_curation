@@ -531,12 +531,14 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
             ).metadata.object_definitions[0].metadata["controlled_field_helper_gaps"]
         )
     }
+    # condition_relations[].condition_relation_type is no longer a helper gap — experimental
+    # conditions are now fully wired (active composite + relation-type CV bindings).
     assert {
-        "condition_relations[].condition_relation_type",
         "expression_experiment.detection_reagents",
         "expression_experiment.specimen_genomic_model",
         "expression_experiment.specimen_alleles",
     } <= helper_gaps
+    assert "condition_relations[].condition_relation_type" not in helper_gaps
 
     expression_provider_binding = gene_expression_bindings["data_provider_validation"]
     assert expression_provider_binding.validator_agent is not None

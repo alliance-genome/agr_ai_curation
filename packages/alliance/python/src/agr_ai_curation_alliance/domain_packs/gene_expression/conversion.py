@@ -6,7 +6,7 @@ import copy
 import hashlib
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -918,6 +918,15 @@ def _materialized_gene_expression_payload(
     payload.pop("pending_ref_id", None)
     payload.pop("metadata", None)
     payload.pop("evidence_record_ids", None)
+    # EXPERIMENTAL CONDITIONS: rewrite the flat staged condition_relations into the concrete nested
+    # annotation shape (condition_relations[].condition_relation_type.name +
+    # conditions[].condition_<x>.curie) the active bindings read. Only carried when the extractor
+    # staged conditions; each condition references the annotation's evidence_record_ids per the
+    # evidence contract (no condition-level quote text). The active experimental_condition_validation
+    # binding fans out one composite validation per condition_relations[i].conditions[j].
+    condition_relations = _condition_relations_payload(payload.pop("condition_relations", None))
+    if condition_relations:
+        payload["condition_relations"] = condition_relations
     if _value_missing_or_blank(payload.get("date_created")) and default_date_created is not None:
         payload["date_created"] = default_date_created
     payload.setdefault("internal", False)
@@ -1118,6 +1127,61 @@ def _mapping_payload(value: Any) -> dict[str, Any]:
 def _clean_text(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
+
+
+def _condition_relations_payload(raw_relations: Any) -> list[dict[str, Any]]:
+    """Materialize staged condition_relations into the concrete nested annotation shape.
+
+    Maps each staged ``{condition_relation_type, conditions: [{condition_*_curie, ...}]}`` into
+    ``{condition_relation_type: {name}, conditions: [{condition_class: {curie}, ...}]}`` — the exact
+    target paths the active bindings read (``condition_relations.condition_relation_type.name`` and
+    ``condition_relations.conditions.condition_<x>.curie``). Empty leaves are dropped; a relation
+    with no resolvable conditions is dropped entirely. Only invoked when conditions were staged, so
+    absent conditions leave the payload untouched (mirrors the optional-field pattern).
+    """
+
+    if not isinstance(raw_relations, Sequence) or isinstance(raw_relations, (str, bytes)):
+        return []
+    # The condition CURIE leaf is nested one object deep (e.g. condition_class.curie).
+    _curie_leaf = {
+        "condition_class_curie": "condition_class",
+        "condition_id_curie": "condition_id",
+        "condition_chemical_curie": "condition_chemical",
+        "condition_taxon_curie": "condition_taxon",
+    }
+    relations: list[dict[str, Any]] = []
+    for raw_relation in raw_relations:
+        if not isinstance(raw_relation, Mapping):
+            continue
+        relation_type = _clean_text(raw_relation.get("condition_relation_type"))
+        if not relation_type:
+            continue
+        conditions: list[dict[str, Any]] = []
+        raw_conditions = raw_relation.get("conditions")
+        if not isinstance(raw_conditions, Sequence) or isinstance(raw_conditions, (str, bytes)):
+            raw_conditions = []
+        for raw_condition in raw_conditions:
+            if not isinstance(raw_condition, Mapping):
+                continue
+            condition: dict[str, Any] = {}
+            for staged_key, leaf_key in _curie_leaf.items():
+                curie = _clean_text(raw_condition.get(staged_key))
+                if curie:
+                    condition[leaf_key] = {"curie": curie}
+            for text_key in ("condition_free_text", "condition_summary"):
+                value = _clean_text(raw_condition.get(text_key))
+                if value:
+                    condition[text_key] = value
+            if condition:
+                conditions.append(condition)
+        if conditions:
+            relations.append(
+                {
+                    "condition_relation_type": {"name": relation_type},
+                    "conditions": conditions,
+                }
+            )
+    return relations
 
 
 def _string_list(value: Any) -> list[str]:

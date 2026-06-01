@@ -151,6 +151,44 @@ class _StrictToolModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ExperimentalConditionInput(_StrictToolModel):
+    """One grounded ExperimentalCondition the extractor read from the paper.
+
+    All ontology/chemical/taxon CURIEs are GROUNDED by the extractor via the term-helper lookup
+    tools before staging (do not guess ZECO/ChEBI from memory). Every field is sparse — stage only
+    what the paper explicitly states. The condition carries no quote text: the validator reads the
+    annotation's evidence_record_ids (the spans the condition was read from) per the evidence
+    contract.
+
+    The gene_expression builder tools dispatch under strict tool schemas, which require every
+    property to be present (required-but-nullable). So each component is ``Optional[...]`` with NO
+    default — the model passes ``null`` for fields the paper does not state, and the staging helper
+    drops the empty leaves.
+    """
+
+    condition_class_curie: Optional[StrictStr]
+    condition_id_curie: Optional[StrictStr]
+    condition_chemical_curie: Optional[StrictStr]
+    condition_taxon_curie: Optional[StrictStr]
+    condition_free_text: Optional[StrictStr]
+    condition_summary: Optional[StrictStr]
+
+
+class ConditionRelationInput(_StrictToolModel):
+    """One ConditionRelation: a relation type plus its experimental conditions."""
+
+    condition_relation_type: StrictStr
+    conditions: List[ExperimentalConditionInput] = Field(min_length=1, max_length=20)
+
+    @field_validator("condition_relation_type")
+    @classmethod
+    def _non_empty_relation_type(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("condition_relation_type must be non-empty")
+        return cleaned
+
+
 class GeneExpressionSubjectInput(_StrictToolModel):
     source_phrase: StrictStr
     gene_symbol: StrictStr
@@ -196,6 +234,13 @@ class GeneExpressionStageInput(_StrictToolModel):
     subject: GeneExpressionSubjectInput
     reference: GeneExpressionReferenceInput
     controlled_fields: List[GeneExpressionControlledFieldInput] = Field(min_length=1, max_length=20)
+    # Nested experimental conditions. Each ConditionRelation carries a relation type plus its
+    # grounded ExperimentalCondition components; the engine fans out per condition and the composite
+    # validator decides each one. Sparse — pass null/[] when the paper states no conditions. Declared
+    # required-but-nullable (no default) for strict-schema compatibility (see ExperimentalConditionInput).
+    condition_relations: Optional[List[ConditionRelationInput]] = Field(
+        default=None, max_length=20
+    )
 
     @field_validator("pending_ref_id", "where_expressed_statement")
     @classmethod
@@ -5745,6 +5790,46 @@ def _append_dotted_payload_value(payload: Dict[str, Any], field_path: str, value
         current[parts[-1]].append(value)
 
 
+def _staged_condition_relations(
+    condition_relations: Optional[Sequence[ConditionRelationInput]],
+) -> List[Dict[str, Any]]:
+    """Serialize nested ConditionRelation inputs into staged-field dicts.
+
+    Drops empty leaves so a condition carries only the components the paper stated. A relation with
+    no resolvable conditions is dropped entirely. The structure mirrors the disease builder's staged
+    shape (condition_relation_type + conditions[].condition_*_curie/text); the gene_expression
+    materializer re-reads these into the concrete nested annotation payload.
+    """
+
+    staged: List[Dict[str, Any]] = []
+    for relation in condition_relations or []:
+        relation_type = relation.condition_relation_type.strip()
+        conditions: List[Dict[str, Any]] = []
+        for condition in relation.conditions:
+            component: Dict[str, Any] = {}
+            for field_name in (
+                "condition_class_curie",
+                "condition_id_curie",
+                "condition_chemical_curie",
+                "condition_taxon_curie",
+                "condition_free_text",
+                "condition_summary",
+            ):
+                value = getattr(condition, field_name)
+                if value is not None and value.strip():
+                    component[field_name] = value.strip()
+            if component:
+                conditions.append(component)
+        if relation_type and conditions:
+            staged.append(
+                {
+                    "condition_relation_type": relation_type,
+                    "conditions": conditions,
+                }
+            )
+    return staged
+
+
 def _stage_payload_from_gene_expression_input(
     stage_input: GeneExpressionStageInput,
     resolver_entries: List[ResolverCallLedgerEntry],
@@ -5773,6 +5858,9 @@ def _stage_payload_from_gene_expression_input(
     }
     for entry in resolver_entries:
         _apply_resolver_selection(payload, entry=entry)
+    staged_condition_relations = _staged_condition_relations(stage_input.condition_relations)
+    if staged_condition_relations:
+        payload["condition_relations"] = staged_condition_relations
     return payload
 
 
@@ -5805,8 +5893,14 @@ def _stage_gene_expression_observation_impl(
     subject: GeneExpressionSubjectInput,
     reference: GeneExpressionReferenceInput,
     controlled_fields: Annotated[List[GeneExpressionControlledFieldInput], Field(min_length=1, max_length=20)],
+    condition_relations: Optional[List[ConditionRelationInput]],
 ) -> AgrQueryResult:
-    """Stage one gene-expression observation candidate through the builder workspace."""
+    """Stage one gene-expression observation candidate through the builder workspace.
+
+    ``condition_relations`` is required-but-nullable under the strict tool schema: pass ``null`` (or
+    ``[]``) when the paper states no experimental conditions; otherwise pass the grounded nested
+    ConditionRelation list (see ``<experimental_condition_rules>`` in the extractor prompt).
+    """
 
     attempted_query = _attempt_query(
         "stage_gene_expression_observation",
@@ -5833,6 +5927,7 @@ def _stage_gene_expression_observation_impl(
             subject=subject,
             reference=reference,
             controlled_fields=controlled_fields,
+            condition_relations=list(condition_relations or []),
         )
     except ValidationError as exc:
         return _gene_expression_validation_result(

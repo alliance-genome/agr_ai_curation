@@ -169,8 +169,11 @@ def test_phenotype_pack_declares_roles_and_validator_bindings():
 
     validator_bindings = metadata.metadata["validator_bindings"]
     active_bindings = validator_bindings["active"]
+    # Experimental conditions added two active bindings (composite + relation-type CV lookup).
     assert [binding["binding_id"] for binding in active_bindings] == [
-        PHENOTYPE_TERM_VALIDATOR_BINDING_ID
+        PHENOTYPE_TERM_VALIDATOR_BINDING_ID,
+        "phenotype_condition_relation_lookup",
+        "experimental_condition_validation",
     ]
     term_binding = active_bindings[0]
     assert term_binding["validator_agent"] == {
@@ -1002,3 +1005,166 @@ def test_tool_verified_phenotype_fixture_rejects_malformed_required_data():
 
 def test_phenotype_constants_include_fixture_id_for_contract_callers():
     assert PHENOTYPE_FIXTURE_PACK_ID == "tool_verified_pending"
+
+
+def _phenotype_condition_payload() -> dict[str, Any]:
+    """A phenotype annotation carrying one relation with TWO experimental conditions."""
+
+    return {
+        "annotation_kind": "phenotype_assertion",
+        "phenotype_annotation_object": "abnormal sensory cilia morphology",
+        "negated": False,
+        "data_provider": {"abbreviation": "WB"},
+        "evidence_record_ids": ["evidence-1"],
+        "evidence_records": [
+            {
+                "evidence_record_id": "evidence-1",
+                "verified_quote": "truncated cilia after 3 pM rapamycin at 28C",
+                "page": 6,
+                "section": "Results",
+                "chunk_id": "chunk-9",
+            }
+        ],
+        "condition_relations": [
+            {
+                "condition_relation_type": {"name": "has_condition"},
+                "conditions": [
+                    {
+                        "condition_class": {"curie": "ZECO:0000111"},
+                        "condition_chemical": {"curie": "CHEBI:9168"},
+                        "condition_summary": "treated with 3 pM rapamycin",
+                    },
+                    {
+                        "condition_class": {"curie": "ZECO:0000160"},
+                        "condition_summary": "reared at 28C",
+                    },
+                ],
+            }
+        ],
+    }
+
+
+def test_phenotype_pack_declares_condition_fields_multivalued_and_active():
+    object_def = _phenotype_object_definition()
+    fields_by_path = {field.field_path: field for field in object_def.fields}
+
+    # Bare nested condition paths are declared (no legacy [0] literals).
+    condition_fields = {
+        "condition_relations",
+        "condition_relations.conditions",
+        "condition_relations.conditions.condition_class.curie",
+        "condition_relations.conditions.condition_chemical.curie",
+        "condition_relations.conditions.condition_taxon.curie",
+        "condition_relations.condition_relation_type.name",
+    }
+    assert condition_fields.issubset(fields_by_path)
+    assert not any("condition_relations[0]" in path for path in fields_by_path)
+
+    # Both list levels are declared multivalued for nested fan-out.
+    for multivalued_path in ("condition_relations", "condition_relations.conditions"):
+        field = fields_by_path[multivalued_path]
+        assert field.metadata["multivalued"] is True
+        assert field.multivalued is True
+
+    # The ExperimentalCondition object is the ONE composite fan-out target.
+    conditions_field = fields_by_path["condition_relations.conditions"]
+    assert conditions_field.metadata["validatable"] is True
+    assert conditions_field.metadata["validator_state"] == "active"
+    assert (
+        conditions_field.metadata["validator_binding_id"]
+        == "experimental_condition_validation"
+    )
+    relation_field = fields_by_path["condition_relations.condition_relation_type.name"]
+    assert relation_field.metadata["validator_state"] == "active"
+    assert (
+        relation_field.metadata["validator_binding_id"]
+        == "phenotype_condition_relation_lookup"
+    )
+
+
+def test_phenotype_condition_binding_scoped_and_shaped():
+    raw_validator_bindings = _phenotype_pack().metadata.metadata["validator_bindings"]
+    bindings = {
+        binding["binding_id"]: binding
+        for binding in [
+            *raw_validator_bindings["active"],
+            *raw_validator_bindings["under_development"],
+        ]
+    }
+    composite = bindings["experimental_condition_validation"]
+    assert composite["validator_agent"]["agent_id"] == "experimental_condition_validation"
+    # Scoped to the SINGLE curatable object type for this pack.
+    assert composite["applies_to"]["object_types"] == [PHENOTYPE_OBJECT_TYPE]
+    assert composite["applies_to"]["field_paths"] == ["condition_relations.conditions"]
+    # Per-condition input_fields use BARE nested paths; relation is context_only.
+    assert composite["input_fields"]["condition_class_curie"]["path"] == (
+        "condition_relations.conditions.condition_class.curie"
+    )
+    assert composite["input_fields"]["condition_relation_type"]["path"] == (
+        "condition_relations.condition_relation_type.name"
+    )
+    assert composite["input_fields"]["condition_relation_type"]["context_only"] is True
+    # expected_result_fields = condition_class_curie (NOT condition_id, which is optional/sparse).
+    assert composite["expected_result_fields"] == {
+        "condition_class_curie": "condition_relations.conditions.condition_class.curie"
+    }
+    assert "condition_id" not in composite["expected_result_fields"]
+    assert composite["batch"]["enabled"] is True
+    assert composite["batch"]["family"] == "experimental_condition_validation"
+
+    relation = bindings["phenotype_condition_relation_lookup"]
+    assert relation["applies_to"]["object_types"] == [PHENOTYPE_OBJECT_TYPE]
+    assert relation["applies_to"]["field_paths"] == [
+        "condition_relations.condition_relation_type.name"
+    ]
+
+
+def test_phenotype_condition_binding_fans_out_one_composite_per_condition():
+    pack = _phenotype_pack()
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+    envelope = DomainEnvelope(
+        envelope_id="phenotype-conditions-env",
+        domain_pack_id=PHENOTYPE_DOMAIN_PACK_ID,
+        objects=[
+            CuratableObjectEnvelope(
+                object_type=PHENOTYPE_OBJECT_TYPE,
+                pending_ref_id="phenotype-conditions-1",
+                payload=_phenotype_condition_payload(),
+            )
+        ],
+    )
+
+    matches = registry.match_bindings(envelope, states=[ValidationBindingState.ACTIVE])
+
+    composite_matches = [
+        match for match in matches
+        if match.binding.binding_id == "experimental_condition_validation"
+    ]
+    # 2 conditions -> 2 composite validations, each a distinct nested ExperimentalCondition.
+    assert len(composite_matches) == 2
+    assert [match.field_path for match in composite_matches] == [
+        "condition_relations[0].conditions[0]",
+        "condition_relations[0].conditions[1]",
+    ]
+
+    # The relation-type CV lookup fans out PER RELATION (1 relation -> 1 match).
+    relation_matches = [
+        match for match in matches
+        if match.binding.binding_id == "phenotype_condition_relation_lookup"
+    ]
+    assert len(relation_matches) == 1
+    assert relation_matches[0].field_path == (
+        "condition_relations[0].condition_relation_type.name"
+    )
+
+    requests = [build_domain_validation_request(match) for match in composite_matches]
+    assert all(result.request is not None for result in requests)
+    first, second = (result.request for result in requests)
+    assert first.selected_inputs["condition_class_curie"] == "ZECO:0000111"
+    assert first.selected_inputs["condition_chemical_curie"] == "CHEBI:9168"
+    assert first.selected_inputs["condition_relation_type"] == "has_condition"
+    assert second.selected_inputs["condition_class_curie"] == "ZECO:0000160"
+    assert "condition_chemical_curie" not in second.selected_inputs
+    assert second.selected_inputs["condition_relation_type"] == "has_condition"
+    # Both carry the annotation's backend-resolved evidence (evidence contract: no LLM quote).
+    assert first.evidence and first.evidence[0]["verified_quote"]

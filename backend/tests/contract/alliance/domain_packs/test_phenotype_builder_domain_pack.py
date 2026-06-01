@@ -320,4 +320,89 @@ def test_phenotype_extractor_agent_has_no_output_schema_and_builder_tools():
     tools = set(agent["tools"])
     assert "stage_phenotype_observation" in tools
     assert "finalize_phenotype_extraction" in tools
+    # Experimental-condition grounding tools (same as gene_expression's extractor).
+    assert {
+        "search_domain_field_terms",
+        "inspect_ontology_term",
+        "resolve_domain_field_term",
+    } <= tools
     assert "PhenotypeResultEnvelope" not in str(agent.get("output_schema"))
+
+
+def _staged_fields_with_conditions(**overrides: Any) -> dict[str, Any]:
+    staged = _staged_fields()
+    staged["condition_relations"] = [
+        {
+            "condition_relation_type": "has_condition",
+            "conditions": [
+                {
+                    "condition_class_curie": "ZECO:0000111",
+                    "condition_chemical_curie": "CHEBI:9168",
+                    "condition_summary": "treated with 3 pM rapamycin",
+                },
+                {
+                    "condition_class_curie": "ZECO:0000160",
+                    "condition_free_text": "28 degrees C",
+                },
+            ],
+        }
+    ]
+    staged.update(overrides)
+    return staged
+
+
+def test_phenotype_builder_materializes_staged_condition_relations():
+    """Staged nested condition_relations land on the PhenotypeAnnotation in validator shape."""
+
+    workspace = ExtractionBuilderWorkspace(
+        run_id="phenotype-builder-conditions-run",
+        domain_pack_id=PHENOTYPE_DOMAIN_PACK_ID,
+        agent_id="phenotype_extractor",
+    )
+    workspace.upsert_candidate(
+        candidate_id="phenotype-candidate-1",
+        staged_fields=_staged_fields_with_conditions(),
+        pending_ref_ids=["phenotype-annotation-1"],
+        evidence_record_ids=["evidence-cilia-1"],
+        resolver_selection_refs=[],
+        status=CANDIDATE_STATUS_VALID,
+    )
+    result = materialize_phenotype_builder_state(
+        workspace=workspace,
+        candidate_ids=["phenotype-candidate-1"],
+        evidence_records=_evidence_records(),
+        resolver_entry_lookup=None,
+    )
+    assert result.ok, result.summary()
+
+    annotation = next(
+        obj
+        for obj in result.payload["curatable_objects"]
+        if obj["object_type"] == PHENOTYPE_OBJECT_TYPE
+    )
+    relations = annotation["payload"]["condition_relations"]
+    assert len(relations) == 1
+    relation = relations[0]
+    # Materialized in the exact target shape the bindings read.
+    assert relation["condition_relation_type"] == {"name": "has_condition"}
+    conditions = relation["conditions"]
+    assert len(conditions) == 2
+    assert conditions[0]["condition_class"] == {"curie": "ZECO:0000111"}
+    assert conditions[0]["condition_chemical"] == {"curie": "CHEBI:9168"}
+    assert conditions[0]["condition_summary"] == "treated with 3 pM rapamycin"
+    assert conditions[1]["condition_class"] == {"curie": "ZECO:0000160"}
+    assert conditions[1]["condition_free_text"] == "28 degrees C"
+    # Empty leaves are dropped (condition 2 had no chemical).
+    assert "condition_chemical" not in conditions[1]
+
+
+def test_phenotype_builder_omits_condition_relations_when_unstaged():
+    """No conditions staged -> the annotation payload carries no condition_relations key."""
+
+    result = _materialize_one_candidate()
+    annotation = next(
+        obj
+        for obj in result.payload["curatable_objects"]
+        if obj["object_type"] == PHENOTYPE_OBJECT_TYPE
+    )
+    assert "condition_relations" not in annotation["payload"]
