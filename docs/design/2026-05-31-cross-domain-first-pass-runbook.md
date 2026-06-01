@@ -496,7 +496,17 @@ clean (or issues resolved); Status Table updated; committed + pushed to main.
     REQUIRED selector input should READ as "Required" and FORCE the curator to deal with it at the final
     submission-review step, while the extraction/materialization run still completes (non-fatal). Chose
     Option A (uniform: every required-missing input is a submission blocker), WAIVABLE for the subject case.
-    NOT yet implemented — plan + mechanism captured here so it isn't lost:
+    LANDED 2026-06-01 (commit e5111bea). Implemented exactly as the plan below: _problem_finding now derives
+    severity from the binding's blocking flag (BLOCKER if active+blocking else ERROR, mirroring
+    structural_checks.py); disease_subject_materialization set blocking:true + curator_override.allowed:true
+    (required:true already). Gated green: input_selectors unit (incl 2 new severity tests), domain_packs
+    contract+unit (333), curation_workspace submission-readiness (221), release-gate matrix; disease e2e on the
+    Drosophila AD paper = 0 structural with the missing AGM subject ("elav; APP; BACE flies") now
+    selector_missing_field at severity=blocker + curator_override.allowed; Opus 4.8 review clean. (Also removed
+    a dangling release-gate path ref to the deleted chemical contract test.) NOTE: disease candidates are
+    currently also definition_state_blocked because the disease pack is still definition_state:in_development,
+    so the subject blocker only dominates submission-preview once the pack is promoted to export-stable — the
+    R3 mechanism is in place for that. Plan + mechanism (as implemented):
 
     -- CORRECTED MECHANISM (verified in code, 2026-06-01): the submission gate does NOT key on the severity
        enum. session_submission_service._validation_finding_blockers (session_submission_service.py:739) walks
