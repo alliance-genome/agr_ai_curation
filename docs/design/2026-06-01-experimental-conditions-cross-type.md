@@ -211,7 +211,17 @@ first build step (engine extension), gated + reviewed like the one-level engine 
   expected_result_fields = condition_class_curie (always present) NOT condition_id (optional, absent in ~74%).
   587 broad suite, 0 regressions; my review + independent Opus review clean; live proof: 2 conditions resolve
   incl. ChEBI:9168->sirolimus, no condition_id required.
-- NEXT: GE + phenotype conditions — replicate the proven disease pattern. GE already has the field structure
-  (currently inert/"field-addressed"); phenotype from scratch (LinkML: condition_relations on abstract
-  Annotation that PhenotypeAnnotation inherits). Same composite agent + nested engine — mostly pack wiring +
-  staging + materialization + prompt per pack, gated + live-proven each.
+- 2026-06-01: GE + PHENOTYPE CONDITIONS LANDED (e6c39bc2). Replicated the disease pattern (reusing the composite
+  agent + nested engine unchanged); each scoped to its single curatable type (GeneExpressionAnnotation /
+  PhenotypeAnnotation — no subtype split). 595 broad suite, 0 regressions; my review + independent Opus review
+  clean; LIVE-PROVEN on BOTH real object types (each: composite fires, 2 conditions resolve incl CHEBI:9168, relation
+  resolved). Tidy-later: 2 GE materialization tests in an SDK-coupled unit file (pass in CI; covered SDK-free too).
+
+## OUTCOME: COMPLETE (2026-06-01)
+Cross-type experimental conditions is DONE. All three host annotation types (disease, gene-expression,
+phenotype) extract experimental conditions and validate EVERY validate-able condition field PER CONDITION
+(nested fan-out), composing per-field ontology/CV lookups into a condition-level decision, batched, evidence-
+grounded (span_ids/evidence_record_ids; no LLM quotes). Built on the nested multivalued engine (f2c609a0) +
+the composite experimental_condition agent. Commits: engine f2c609a0; disease 0fa7afda; GE+phenotype e6c39bc2.
+Remaining/optional: negation handling (not_ameliorated_by etc.); anatomy/GO/taxon are validate-able via the
+same agr_curation_query ontology path if a condition stages them; the 2 GE tests' placement tidy.
