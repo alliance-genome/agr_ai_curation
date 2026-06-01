@@ -550,9 +550,13 @@ clean (or issues resolved); Status Table updated; committed + pushed to main.
     OPEN (deferred, needs a platform change): with_or_from validates only the FIRST with-gene this pass; full
     per-element multivalued entity resolution requires new generic backend machinery (no multivalued
     entity-resolution binding exists) — flagged to Chris, separate item if wanted.
-  * D6 / chemical conditions: experimental conditions (ZECO + ChEBI + relation types incl WBMol and
-    ameliorated_by/induced_by/exacerbated_by) return LATER as condition_relations on host annotations, not
-    as a standalone extractor (chemical_validation + experimental_condition validators were kept for this).
+  * D6 / experimental conditions: REOPENED + GOING BIG (Chris 2026-06-01) — full cross-type condition_relations
+    on ALL host annotations (disease + phenotype + gene-expression), validating EVERY validate-able field
+    (relation-type CV + ZECO class/id + ChEBI chemical + GO + anatomy + taxon), extracting ALL conditions, via
+    the per-field validator bindings + the multivalued engine + an extractor-side grounding lookup tool. Full
+    design + curation-DB survey + decisions in docs/design/2026-06-01-experimental-conditions-cross-type.md. Key
+    open engineering item: conditions are TWO-LEVEL nested multivalued (condition_relations[] x conditions[]) —
+    the one-level fan-out engine may need a nested-fan-out extension (survey nesting depth first).
   * Phase 6 (delete envelope-legacy machinery) remains explicitly out of scope — every type still keeps
     its envelope conversion path + *ExtractionResultEnvelope alongside the builder path.
   * MULTIVALUED-FIELD VALIDATION (NEW, approved Chris 2026-06-01, HIGH priority): validatable LIST fields are
