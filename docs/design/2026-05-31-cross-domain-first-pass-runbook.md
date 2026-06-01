@@ -555,6 +555,12 @@ clean (or issues resolved); Status Table updated; committed + pushed to main.
     as a standalone extractor (chemical_validation + experimental_condition validators were kept for this).
   * Phase 6 (delete envelope-legacy machinery) remains explicitly out of scope — every type still keeps
     its envelope conversion path + *ExtractionResultEnvelope alongside the builder path.
+  * MULTIVALUED-FIELD VALIDATION (NEW, approved Chris 2026-06-01, HIGH priority): validatable LIST fields are
+    only validated at index [0] today (the `field[0]` convention) — elements [1:] pass UNVALIDATED. Already
+    bites evidence_code_curies (multi-ECO findings). Fix = generic per-element validation in the engine
+    (match fan-out + index-capable write-back + per-element findings + batch), retire the [0] convention.
+    Full design + decisions in docs/design/2026-06-01-multivalued-field-validation.md. Plan: engine +
+    evidence_codes first (proof), then expand to all multivalued DB-validated fields.
 
   MINOR LINT FOLLOW-UPS (harmless; tidy anytime): unused imports + BuilderFinalizationOutcome.finalization
   Optional-access + str|None Pyright nits across the per-domain builder modules (gene/phenotype/allele/
