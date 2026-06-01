@@ -82,12 +82,46 @@ _DISEASE_PATCH_FIELD_PATHS = frozenset(
         "genetic_sex_name",
         "disease_qualifier_names",
         "with_gene_identifiers",
+        "condition_relations",
     }
 )
 
 
 class _StrictToolModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class ExperimentalConditionInput(_StrictToolModel):
+    """One grounded ExperimentalCondition the extractor read from the paper.
+
+    All ontology/chemical/taxon CURIEs are GROUNDED by the extractor via the term-helper
+    lookup tools before staging (do not guess ZECO/ChEBI from memory). Every field is
+    optional and sparse — stage only what the paper explicitly states. The condition carries
+    no quote text: the validator reads the annotation's evidence_record_ids (the spans the
+    condition was read from) per the evidence contract.
+    """
+
+    condition_class_curie: Optional[StrictStr] = None
+    condition_id_curie: Optional[StrictStr] = None
+    condition_chemical_curie: Optional[StrictStr] = None
+    condition_taxon_curie: Optional[StrictStr] = None
+    condition_free_text: Optional[StrictStr] = None
+    condition_summary: Optional[StrictStr] = None
+
+
+class ConditionRelationInput(_StrictToolModel):
+    """One ConditionRelation: a relation type plus its experimental conditions."""
+
+    condition_relation_type: StrictStr
+    conditions: List[ExperimentalConditionInput] = Field(min_length=1, max_length=20)
+
+    @field_validator("condition_relation_type")
+    @classmethod
+    def _non_empty_relation_type(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("condition_relation_type must be non-empty")
+        return cleaned
 
 
 class DiseaseStageInput(_StrictToolModel):
@@ -110,6 +144,13 @@ class DiseaseStageInput(_StrictToolModel):
     genetic_sex_name: Optional[StrictStr] = None
     disease_qualifier_names: List[StrictStr] = Field(default_factory=list, max_length=20)
     with_gene_identifiers: List[StrictStr] = Field(default_factory=list, max_length=20)
+    # Nested experimental conditions. Each ConditionRelation carries a relation type plus
+    # its grounded ExperimentalCondition components; the engine fans out per condition and the
+    # composite validator decides each one. Optional + sparse — staged only when the paper
+    # explicitly states experimental conditions.
+    condition_relations: List[ConditionRelationInput] = Field(
+        default_factory=list, max_length=20
+    )
     negated: Optional[StrictBool] = None
 
     @field_validator("pending_ref_id", "mention", "disease_name", "role", "confidence", "data_provider")
@@ -134,6 +175,10 @@ class DiseasePatchUpdateInput(_StrictToolModel):
     string_value: Optional[StrictStr] = None
     bool_value: Optional[StrictBool] = None
     string_list_value: Optional[List[StrictStr]] = Field(default=None, max_length=20)
+    # Nested ConditionRelation patch payload (only used when field_path == condition_relations).
+    condition_relations_value: Optional[List[ConditionRelationInput]] = Field(
+        default=None, max_length=20
+    )
 
     @field_validator("field_path")
     @classmethod
@@ -237,6 +282,46 @@ def _disease_candidate_id(workspace: Any, pending_ref_id: str) -> str:
     return f"disease-candidate-{len(workspace.candidates) + 1}"
 
 
+def _staged_condition_relations(
+    condition_relations: Sequence[ConditionRelationInput],
+) -> List[dict[str, Any]]:
+    """Serialize nested ConditionRelation inputs into staged-field dicts.
+
+    Drops empty leaves so a condition carries only the components the paper stated. A relation
+    with no resolvable conditions is dropped entirely. The structure mirrors the materialized
+    annotation shape (condition_relation_type.name + conditions[].condition_*); materialization
+    re-reads these to build the concrete nested payload.
+    """
+
+    staged: List[dict[str, Any]] = []
+    for relation in condition_relations:
+        relation_type = relation.condition_relation_type.strip()
+        conditions: List[dict[str, Any]] = []
+        for condition in relation.conditions:
+            component: dict[str, Any] = {}
+            for field_name in (
+                "condition_class_curie",
+                "condition_id_curie",
+                "condition_chemical_curie",
+                "condition_taxon_curie",
+                "condition_free_text",
+                "condition_summary",
+            ):
+                value = getattr(condition, field_name)
+                if value is not None and value.strip():
+                    component[field_name] = value.strip()
+            if component:
+                conditions.append(component)
+        if relation_type and conditions:
+            staged.append(
+                {
+                    "condition_relation_type": relation_type,
+                    "conditions": conditions,
+                }
+            )
+    return staged
+
+
 def _stage_payload_from_disease_input(stage_input: DiseaseStageInput) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "domain_pack_id": DISEASE_DOMAIN_PACK_ID,
@@ -256,6 +341,9 @@ def _stage_payload_from_disease_input(stage_input: DiseaseStageInput) -> dict[st
         payload["disease_qualifier_names"] = list(stage_input.disease_qualifier_names)
     if stage_input.with_gene_identifiers:
         payload["with_gene_identifiers"] = list(stage_input.with_gene_identifiers)
+    staged_condition_relations = _staged_condition_relations(stage_input.condition_relations)
+    if staged_condition_relations:
+        payload["condition_relations"] = staged_condition_relations
     for field_name in (
         "disease_curie",
         "subject_type",
@@ -288,6 +376,7 @@ def _stage_disease_observation_impl(
     genetic_sex_name: Optional[str] = None,
     disease_qualifier_names: Optional[List[str]] = None,
     with_gene_identifiers: Optional[List[str]] = None,
+    condition_relations: Optional[List[Mapping[str, Any]]] = None,
     negated: Optional[bool] = None,
 ) -> AgrQueryResult:
     """Stage one retained, evidence-backed disease assertion through the builder workspace."""
@@ -320,6 +409,7 @@ def _stage_disease_observation_impl(
             genetic_sex_name=genetic_sex_name,
             disease_qualifier_names=list(disease_qualifier_names or []),
             with_gene_identifiers=list(with_gene_identifiers or []),
+            condition_relations=list(condition_relations or []),
             negated=negated,
         )
     except ValidationError as exc:
@@ -453,6 +543,15 @@ def _patch_disease_observation_impl(
                 payload[update.field_path] = new_values
             else:
                 payload.pop(update.field_path, None)
+            continue
+        if update.field_path == "condition_relations":
+            staged_conditions = _staged_condition_relations(
+                update.condition_relations_value or []
+            )
+            if staged_conditions:
+                payload["condition_relations"] = staged_conditions
+            else:
+                payload.pop("condition_relations", None)
             continue
         if update.field_path == "negated":
             payload["negated"] = bool(update.bool_value)

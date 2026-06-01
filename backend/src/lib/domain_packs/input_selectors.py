@@ -158,27 +158,17 @@ def _element_indexed_path(match: ValidatorBindingMatch, declared_path: str) -> s
     """Resolve a declared bare path to its indexed element for a fanned-out match.
 
     For a multivalued-element match a declared path that references the multivalued base
-    field is rewritten to point at the element the engine is validating: its bare base
-    prefix is substituted with the fully-resolved indexed base (``field[i]`` for a
-    single-level field, ``a[i].b[j]`` for a nested one). Any trailing keys beyond the base
-    are preserved. Every other path — and every scalar/legacy ``[0]`` match (no element
-    index) — is returned unchanged, so non-multivalued behavior is identical.
+    field — OR a sibling path that shares an outer multivalued prefix of the base — is
+    rewritten to point at the element the engine is validating: each shared multivalued
+    segment carries the index the engine chose for that level (``field[i]`` for a single-
+    level field, ``a[i].b[j]`` for a nested one, ``a[i].sibling`` for a sibling under the
+    same outer list). Any path that shares no multivalued-boundary prefix with the base —
+    and every scalar/legacy match (no element index) — is returned unchanged, so non-
+    multivalued behavior is identical. Delegates to the match so the boundary→index mapping
+    lives where the fan-out was computed.
     """
 
-    if match.field_definition is None:
-        return declared_path
-    if match.element_index is None and match.resolved_field_path is None:
-        return declared_path
-    base_field_path = match.field_definition.field_path
-    resolved_base = match.field_path
-    if resolved_base is None:
-        return declared_path
-    if declared_path == base_field_path:
-        return resolved_base
-    prefix = f"{base_field_path}."
-    if declared_path.startswith(prefix):
-        return f"{resolved_base}.{declared_path[len(prefix):]}"
-    return declared_path
+    return match.resolve_input_path(declared_path)
 
 
 def _element_expected_result_fields(

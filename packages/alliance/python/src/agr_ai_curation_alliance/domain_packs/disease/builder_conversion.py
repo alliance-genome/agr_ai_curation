@@ -306,6 +306,61 @@ def _disease_term_payload(
     }
 
 
+def _condition_relations_payload(raw_relations: Any) -> list[dict[str, Any]]:
+    """Materialize staged condition_relations into the concrete nested annotation shape.
+
+    Maps each staged ``{condition_relation_type, conditions: [{condition_*_curie, ...}]}`` into
+    ``{condition_relation_type: {name}, conditions: [{condition_class: {curie}, ...}]}`` — the
+    exact target paths the active bindings read (``condition_relations.condition_relation_type.name``
+    and ``condition_relations.conditions.condition_<x>.curie``). Empty leaves are dropped; a
+    relation with no resolvable conditions is dropped entirely. Only invoked when conditions were
+    staged, so absent conditions leave the payload untouched (mirrors the optional-field pattern).
+    """
+
+    if not isinstance(raw_relations, Sequence) or isinstance(raw_relations, (str, bytes)):
+        return []
+    # The condition CURIE leaf is nested one object deep (e.g. condition_class.curie).
+    _curie_leaf = {
+        "condition_class_curie": "condition_class",
+        "condition_id_curie": "condition_id",
+        "condition_chemical_curie": "condition_chemical",
+        "condition_taxon_curie": "condition_taxon",
+    }
+    relations: list[dict[str, Any]] = []
+    for raw_relation in raw_relations:
+        if not isinstance(raw_relation, Mapping):
+            continue
+        relation_type = _clean_text(raw_relation.get("condition_relation_type"))
+        if not relation_type:
+            continue
+        conditions: list[dict[str, Any]] = []
+        raw_conditions = raw_relation.get("conditions")
+        if not isinstance(raw_conditions, Sequence) or isinstance(raw_conditions, (str, bytes)):
+            raw_conditions = []
+        for raw_condition in raw_conditions:
+            if not isinstance(raw_condition, Mapping):
+                continue
+            condition: dict[str, Any] = {}
+            for staged_key, leaf_key in _curie_leaf.items():
+                curie = _clean_text(raw_condition.get(staged_key))
+                if curie:
+                    condition[leaf_key] = {"curie": curie}
+            for text_key in ("condition_free_text", "condition_summary"):
+                value = _clean_text(raw_condition.get(text_key))
+                if value:
+                    condition[text_key] = value
+            if condition:
+                conditions.append(condition)
+        if conditions:
+            relations.append(
+                {
+                    "condition_relation_type": {"name": relation_type},
+                    "conditions": conditions,
+                }
+            )
+    return relations
+
+
 def _evidence_quote_payload(evidence_record: Mapping[str, Any]) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "evidence_record_id": _clean_text(evidence_record.get("evidence_record_id")),
@@ -649,6 +704,7 @@ def materialize_disease_builder_state(
         genetic_sex_name = _clean_text(staged_fields.get("genetic_sex_name"))
         disease_qualifier_names = _unique_strings(staged_fields.get("disease_qualifier_names"))
         with_gene_identifiers = _unique_strings(staged_fields.get("with_gene_identifiers"))
+        condition_relations = _condition_relations_payload(staged_fields.get("condition_relations"))
         subject_payload = _subject_payload(staged_fields)
         subject_resolution_state = subject_payload["resolution_state"]
         subject_type = subject_payload.get("subject_type")
@@ -791,6 +847,13 @@ def materialize_disease_builder_state(
             annotation_payload["disease_qualifier_names"] = list(disease_qualifier_names)
         if with_gene_identifiers:
             annotation_payload["with_gene_identifiers"] = list(with_gene_identifiers)
+        # EXPERIMENTAL CONDITIONS: nested condition_relations[].conditions[]. Only carried when
+        # the extractor staged them. Each condition references the annotation's evidence
+        # (evidence_record_ids on the annotation) per the evidence contract — no condition-level
+        # quote text is materialized. The active experimental_condition_validation binding fans
+        # out one composite validation per condition_relations[i].conditions[j].
+        if condition_relations:
+            annotation_payload["condition_relations"] = condition_relations
 
         metadata_refs = [
             {"metadata_path": f"raw_mentions[{annotation_index}]", "role": "source_mention"}

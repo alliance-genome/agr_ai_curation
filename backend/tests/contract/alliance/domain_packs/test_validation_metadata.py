@@ -398,9 +398,12 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     )
     assert disease_bindings["disease_condition_relation_lookup"].object_types == (
         "DiseaseAnnotation",
+        "GeneDiseaseAnnotation",
+        "AlleleDiseaseAnnotation",
+        "AGMDiseaseAnnotation",
     )
     assert disease_bindings["disease_condition_relation_lookup"].field_paths == (
-        "condition_relations[0].condition_relation_type.name",
+        "condition_relations.condition_relation_type.name",
     )
     assert (
         disease_bindings["disease_reference_materialization"].state
@@ -421,7 +424,7 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         "agr.alliance.disease"
     ].policy_for(
         "DiseaseAnnotation",
-        "condition_relations[0].condition_relation_type.name",
+        "condition_relations.condition_relation_type.name",
     ).validator_binding_ids
     assert "disease_reference_materialization" in registries[
         "agr.alliance.disease"

@@ -225,9 +225,9 @@ object_definitions:
           - confidence
           - evidence_record_ids
           - evidence_records
+          - condition_relations
         under_development:
           - disease_relation_name
-          - condition_relations
         blocked:
           - disease_annotation_subject
           - single_reference
@@ -737,14 +737,13 @@ object_definitions:
         field_type: array
         display_name: Condition relations
         model_ref: ConditionRelationPayload
-        definition_state: in_development
         metadata:
-          validatable: true
-          validator_binding_id: experimental_condition_validation
-          validator_state: under_development
-          definition_state_category: under_development
-          protected: true
-          curator_action_note: Condition relation validation remains under development until the validation contract is complete.
+          # condition_relations is the OUTER multivalued list: one ConditionRelation per
+          # entry (relation_type + its conditions[]). Declared multivalued so the nested
+          # fan-out engine indexes condition_relations[i] when fanning the inner conditions[j]
+          # and when fanning the relation-type lookup per relation.
+          multivalued: true
+          definition_state_category: complete
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -754,17 +753,14 @@ object_definitions:
               slot: condition_relations
               range: ConditionRelation
               db_table: diseaseannotation_conditionrelation
-      - field_path: condition_relations[0].condition_relation_type.name
+      - field_path: condition_relations.condition_relation_type.name
         field_type: string
         display_name: Condition relation type
-        definition_state: in_development
         metadata:
           validatable: true
           validator_binding_id: disease_condition_relation_lookup
           validator_state: active
-          definition_state_category: under_development
-          protected: true
-          curator_action_note: Condition relation validation remains under development until the validation contract is complete.
+          definition_state_category: complete
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -775,18 +771,21 @@ object_definitions:
               range: string
               db_table: vocabularyterm
               db_column: name
-      - field_path: condition_relations[0].conditions
+      - field_path: condition_relations.conditions
         field_type: array
         display_name: Experimental conditions
         model_ref: ExperimentalConditionPayload
-        definition_state: in_development
         metadata:
+          # condition_relations.conditions is the INNER multivalued list AND the composite
+          # fan-out target: the experimental_condition_validation binding targets this path so
+          # the nested engine emits ONE composite validation per ExperimentalCondition object
+          # (condition_relations[i].conditions[j]), composing every per-field component check
+          # into one condition-level decision.
+          multivalued: true
           validatable: true
           validator_binding_id: experimental_condition_validation
-          validator_state: under_development
-          definition_state_category: under_development
-          protected: true
-          curator_action_note: Experimental condition validation remains under development until the validation contract is complete.
+          validator_state: active
+          definition_state_category: complete
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -796,17 +795,37 @@ object_definitions:
               slot: conditions
               range: ExperimentalCondition
               db_table: conditionrelation_experimentalcondition
-      - field_path: condition_relations[0].conditions[0].condition_class.curie
+      - field_path: condition_relations.conditions.condition_class.curie
         field_type: string
         display_name: Condition class CURIE
-        definition_state: in_development
         metadata:
-          validatable: true
-          validator_binding_id: experimental_condition_validation
-          validator_state: under_development
-          definition_state_category: under_development
-          protected: true
-          curator_action_note: Experimental condition validation remains under development until the validation contract is complete.
+          # Per-condition component (ZECO). Grounded by the extractor via the term helper and
+          # composed (not separately bound) by experimental_condition_validation at the
+          # condition grain.
+          term_helper:
+            field_path: condition_relations.conditions.condition_class.curie
+            authority: hint_only
+            resolver:
+              primary_tool: resolve_domain_field_term
+              search_tool: search_domain_field_terms
+              inspect_tool: inspect_ontology_term
+              accepted_provenance_tools:
+                - resolve_domain_field_term
+              search_channels:
+                - exact_label
+                - exact_synonym
+                - trigram_label
+                - trigram_synonym
+                - definition
+              unresolved_metadata_path: metadata.normalization_notes
+            term_source:
+              kind: ontology
+              ontology_family: zeco
+              ontology_term_type: ZECOTerm
+            lookup:
+              package_tool: search_domain_field_terms
+              method: search_ontology_terms
+              candidate_authority: hint_only
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -817,17 +836,36 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
-      - field_path: condition_relations[0].conditions[0].condition_id.curie
+      - field_path: condition_relations.conditions.condition_id.curie
         field_type: string
         display_name: Condition ID CURIE
-        definition_state: in_development
         metadata:
-          validatable: true
-          validator_binding_id: experimental_condition_validation
-          validator_state: under_development
-          definition_state_category: under_development
-          protected: true
-          curator_action_note: Experimental condition validation remains under development until the validation contract is complete.
+          # Per-condition component (ZECO/XCO). Grounded by the extractor; composed by the
+          # condition-grain composite validator.
+          term_helper:
+            field_path: condition_relations.conditions.condition_id.curie
+            authority: hint_only
+            resolver:
+              primary_tool: resolve_domain_field_term
+              search_tool: search_domain_field_terms
+              inspect_tool: inspect_ontology_term
+              accepted_provenance_tools:
+                - resolve_domain_field_term
+              search_channels:
+                - exact_label
+                - exact_synonym
+                - trigram_label
+                - trigram_synonym
+                - definition
+              unresolved_metadata_path: metadata.normalization_notes
+            term_source:
+              kind: ontology
+              ontology_family: zeco
+              ontology_term_type: ZECOTerm
+            lookup:
+              package_tool: search_domain_field_terms
+              method: search_ontology_terms
+              candidate_authority: hint_only
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -838,17 +876,15 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
-      - field_path: condition_relations[0].conditions[0].condition_chemical.curie
+      - field_path: condition_relations.conditions.condition_chemical.curie
         field_type: string
         display_name: Chemical CURIE
-        definition_state: in_development
         metadata:
-          validatable: true
-          validator_binding_id: experimental_condition_validation
-          validator_state: under_development
-          definition_state_category: under_development
-          protected: true
-          curator_action_note: Experimental condition validation remains under development until the validation contract is complete.
+          # Per-condition ChEBI component. FIX 3 — ChEBI is an ontology term in the curation DB
+          # (db_table: ontologyterm, ontologytermtype CHEBITerm), so the composite validator
+          # resolves the ChEBI identity via agr_curation_query get_ontology_term (like ZECO/taxon),
+          # NOT the broken chebi_api_call REST endpoint. The extractor stages the CHEBI CURIE it reads.
+          definition_state_category: complete
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -859,17 +895,13 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
-      - field_path: condition_relations[0].conditions[0].condition_taxon.curie
+      - field_path: condition_relations.conditions.condition_taxon.curie
         field_type: string
         display_name: Taxon CURIE
-        definition_state: in_development
         metadata:
-          validatable: true
-          validator_binding_id: experimental_condition_validation
-          validator_state: under_development
-          definition_state_category: under_development
-          protected: true
-          curator_action_note: Experimental condition validation remains under development until the validation contract is complete.
+          # Per-condition NCBITaxon component. Sparse; the composite validator re-checks the
+          # taxon identity. The extractor stages the NCBITaxon CURIE when explicitly stated.
+          definition_state_category: complete
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -880,12 +912,11 @@ object_definitions:
               range: string
               db_table: ontologyterm
               db_column: curie
-      - field_path: condition_relations[0].conditions[0].condition_free_text
+      - field_path: condition_relations.conditions.condition_free_text
         field_type: string
         display_name: Condition free text
-        definition_state: in_development
         metadata:
-          definition_state_category: under_development
+          definition_state_category: complete
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -896,12 +927,11 @@ object_definitions:
               range: string
               db_table: experimentalcondition
               db_column: conditionfreetext
-      - field_path: condition_relations[0].conditions[0].condition_summary
+      - field_path: condition_relations.conditions.condition_summary
         field_type: string
         display_name: Condition summary
-        definition_state: in_development
         metadata:
-          definition_state_category: under_development
+          definition_state_category: complete
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -1065,6 +1095,202 @@ object_definitions:
           validator_binding_id: disease_with_gene_validation
           validator_state: active
           editable: true
+      # FIX 1 — Experimental condition field block. The materializer emits the CONCRETE subtype
+      # (GeneDiseaseAnnotation) when the subject is known, and _matching_objects matches strictly,
+      # so the condition bindings only fire when the concrete subtype declares these paths. This
+      # block is copied from the abstract DiseaseAnnotation so the experimental_condition_validation
+      # and disease_condition_relation_lookup bindings dispatch on the concrete subtype too.
+      - field_path: condition_relations
+        field_type: array
+        display_name: Condition relations
+        model_ref: ConditionRelationPayload
+        metadata:
+          multivalued: true
+          definition_state_category: complete
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: Annotation
+              slot: condition_relations
+              range: ConditionRelation
+              db_table: diseaseannotation_conditionrelation
+      - field_path: condition_relations.condition_relation_type.name
+        field_type: string
+        display_name: Condition relation type
+        metadata:
+          validatable: true
+          validator_binding_id: disease_condition_relation_lookup
+          validator_state: active
+          definition_state_category: complete
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ConditionRelationDTO
+              slot: condition_relation_type_name
+              range: string
+              db_table: vocabularyterm
+              db_column: name
+      - field_path: condition_relations.conditions
+        field_type: array
+        display_name: Experimental conditions
+        model_ref: ExperimentalConditionPayload
+        metadata:
+          multivalued: true
+          validatable: true
+          validator_binding_id: experimental_condition_validation
+          validator_state: active
+          definition_state_category: complete
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ConditionRelation
+              slot: conditions
+              range: ExperimentalCondition
+              db_table: conditionrelation_experimentalcondition
+      - field_path: condition_relations.conditions.condition_class.curie
+        field_type: string
+        display_name: Condition class CURIE
+        metadata:
+          term_helper:
+            field_path: condition_relations.conditions.condition_class.curie
+            authority: hint_only
+            resolver:
+              primary_tool: resolve_domain_field_term
+              search_tool: search_domain_field_terms
+              inspect_tool: inspect_ontology_term
+              accepted_provenance_tools:
+                - resolve_domain_field_term
+              search_channels:
+                - exact_label
+                - exact_synonym
+                - trigram_label
+                - trigram_synonym
+                - definition
+              unresolved_metadata_path: metadata.normalization_notes
+            term_source:
+              kind: ontology
+              ontology_family: zeco
+              ontology_term_type: ZECOTerm
+            lookup:
+              package_tool: search_domain_field_terms
+              method: search_ontology_terms
+              candidate_authority: hint_only
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ExperimentalConditionDTO
+              slot: condition_class_curie
+              range: string
+              db_table: ontologyterm
+              db_column: curie
+      - field_path: condition_relations.conditions.condition_id.curie
+        field_type: string
+        display_name: Condition ID CURIE
+        metadata:
+          term_helper:
+            field_path: condition_relations.conditions.condition_id.curie
+            authority: hint_only
+            resolver:
+              primary_tool: resolve_domain_field_term
+              search_tool: search_domain_field_terms
+              inspect_tool: inspect_ontology_term
+              accepted_provenance_tools:
+                - resolve_domain_field_term
+              search_channels:
+                - exact_label
+                - exact_synonym
+                - trigram_label
+                - trigram_synonym
+                - definition
+              unresolved_metadata_path: metadata.normalization_notes
+            term_source:
+              kind: ontology
+              ontology_family: zeco
+              ontology_term_type: ZECOTerm
+            lookup:
+              package_tool: search_domain_field_terms
+              method: search_ontology_terms
+              candidate_authority: hint_only
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ExperimentalConditionDTO
+              slot: condition_id_curie
+              range: string
+              db_table: ontologyterm
+              db_column: curie
+      - field_path: condition_relations.conditions.condition_chemical.curie
+        field_type: string
+        display_name: Chemical CURIE
+        metadata:
+          # FIX 3 — ChEBI is an ontology term in the curation DB (db_table: ontologyterm); the
+          # composite validator resolves it via agr_curation_query get_ontology_term, not chebi_api_call.
+          definition_state_category: complete
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ExperimentalConditionDTO
+              slot: condition_chemical_curie
+              range: string
+              db_table: ontologyterm
+              db_column: curie
+      - field_path: condition_relations.conditions.condition_taxon.curie
+        field_type: string
+        display_name: Taxon CURIE
+        metadata:
+          definition_state_category: complete
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ExperimentalConditionDTO
+              slot: condition_taxon_curie
+              range: string
+              db_table: ontologyterm
+              db_column: curie
+      - field_path: condition_relations.conditions.condition_free_text
+        field_type: string
+        display_name: Condition free text
+        metadata:
+          definition_state_category: complete
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ExperimentalCondition
+              slot: condition_free_text
+              range: string
+              db_table: experimentalcondition
+              db_column: conditionfreetext
+      - field_path: condition_relations.conditions.condition_summary
+        field_type: string
+        display_name: Condition summary
+        metadata:
+          definition_state_category: complete
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ExperimentalCondition
+              slot: condition_summary
+              range: string
+              db_table: experimentalcondition
+              db_column: conditionsummary
   - object_type: AlleleDiseaseAnnotation
     display_name: Allele disease annotation
     description: Concrete disease annotation associating an Allele with a Disease Ontology term.
@@ -1209,6 +1435,198 @@ object_definitions:
           validator_binding_id: disease_with_gene_validation
           validator_state: active
           editable: true
+      # FIX 1 — Experimental condition field block (copied from abstract DiseaseAnnotation) so the
+      # condition bindings dispatch on the concrete AlleleDiseaseAnnotation subtype.
+      - field_path: condition_relations
+        field_type: array
+        display_name: Condition relations
+        model_ref: ConditionRelationPayload
+        metadata:
+          multivalued: true
+          definition_state_category: complete
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: Annotation
+              slot: condition_relations
+              range: ConditionRelation
+              db_table: diseaseannotation_conditionrelation
+      - field_path: condition_relations.condition_relation_type.name
+        field_type: string
+        display_name: Condition relation type
+        metadata:
+          validatable: true
+          validator_binding_id: disease_condition_relation_lookup
+          validator_state: active
+          definition_state_category: complete
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ConditionRelationDTO
+              slot: condition_relation_type_name
+              range: string
+              db_table: vocabularyterm
+              db_column: name
+      - field_path: condition_relations.conditions
+        field_type: array
+        display_name: Experimental conditions
+        model_ref: ExperimentalConditionPayload
+        metadata:
+          multivalued: true
+          validatable: true
+          validator_binding_id: experimental_condition_validation
+          validator_state: active
+          definition_state_category: complete
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ConditionRelation
+              slot: conditions
+              range: ExperimentalCondition
+              db_table: conditionrelation_experimentalcondition
+      - field_path: condition_relations.conditions.condition_class.curie
+        field_type: string
+        display_name: Condition class CURIE
+        metadata:
+          term_helper:
+            field_path: condition_relations.conditions.condition_class.curie
+            authority: hint_only
+            resolver:
+              primary_tool: resolve_domain_field_term
+              search_tool: search_domain_field_terms
+              inspect_tool: inspect_ontology_term
+              accepted_provenance_tools:
+                - resolve_domain_field_term
+              search_channels:
+                - exact_label
+                - exact_synonym
+                - trigram_label
+                - trigram_synonym
+                - definition
+              unresolved_metadata_path: metadata.normalization_notes
+            term_source:
+              kind: ontology
+              ontology_family: zeco
+              ontology_term_type: ZECOTerm
+            lookup:
+              package_tool: search_domain_field_terms
+              method: search_ontology_terms
+              candidate_authority: hint_only
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ExperimentalConditionDTO
+              slot: condition_class_curie
+              range: string
+              db_table: ontologyterm
+              db_column: curie
+      - field_path: condition_relations.conditions.condition_id.curie
+        field_type: string
+        display_name: Condition ID CURIE
+        metadata:
+          term_helper:
+            field_path: condition_relations.conditions.condition_id.curie
+            authority: hint_only
+            resolver:
+              primary_tool: resolve_domain_field_term
+              search_tool: search_domain_field_terms
+              inspect_tool: inspect_ontology_term
+              accepted_provenance_tools:
+                - resolve_domain_field_term
+              search_channels:
+                - exact_label
+                - exact_synonym
+                - trigram_label
+                - trigram_synonym
+                - definition
+              unresolved_metadata_path: metadata.normalization_notes
+            term_source:
+              kind: ontology
+              ontology_family: zeco
+              ontology_term_type: ZECOTerm
+            lookup:
+              package_tool: search_domain_field_terms
+              method: search_ontology_terms
+              candidate_authority: hint_only
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ExperimentalConditionDTO
+              slot: condition_id_curie
+              range: string
+              db_table: ontologyterm
+              db_column: curie
+      - field_path: condition_relations.conditions.condition_chemical.curie
+        field_type: string
+        display_name: Chemical CURIE
+        metadata:
+          # FIX 3 — ChEBI resolved as an ontology term via agr_curation_query get_ontology_term.
+          definition_state_category: complete
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ExperimentalConditionDTO
+              slot: condition_chemical_curie
+              range: string
+              db_table: ontologyterm
+              db_column: curie
+      - field_path: condition_relations.conditions.condition_taxon.curie
+        field_type: string
+        display_name: Taxon CURIE
+        metadata:
+          definition_state_category: complete
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ExperimentalConditionDTO
+              slot: condition_taxon_curie
+              range: string
+              db_table: ontologyterm
+              db_column: curie
+      - field_path: condition_relations.conditions.condition_free_text
+        field_type: string
+        display_name: Condition free text
+        metadata:
+          definition_state_category: complete
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ExperimentalCondition
+              slot: condition_free_text
+              range: string
+              db_table: experimentalcondition
+              db_column: conditionfreetext
+      - field_path: condition_relations.conditions.condition_summary
+        field_type: string
+        display_name: Condition summary
+        metadata:
+          definition_state_category: complete
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ExperimentalCondition
+              slot: condition_summary
+              range: string
+              db_table: experimentalcondition
+              db_column: conditionsummary
   - object_type: AGMDiseaseAnnotation
     display_name: AGM disease annotation
     description: Concrete disease annotation associating an Affected Genomic Model with a Disease Ontology term.
@@ -1355,6 +1773,198 @@ object_definitions:
           validator_binding_id: disease_with_gene_validation
           validator_state: active
           editable: true
+      # FIX 1 — Experimental condition field block (copied from abstract DiseaseAnnotation) so the
+      # condition bindings dispatch on the concrete AGMDiseaseAnnotation subtype.
+      - field_path: condition_relations
+        field_type: array
+        display_name: Condition relations
+        model_ref: ConditionRelationPayload
+        metadata:
+          multivalued: true
+          definition_state_category: complete
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: Annotation
+              slot: condition_relations
+              range: ConditionRelation
+              db_table: diseaseannotation_conditionrelation
+      - field_path: condition_relations.condition_relation_type.name
+        field_type: string
+        display_name: Condition relation type
+        metadata:
+          validatable: true
+          validator_binding_id: disease_condition_relation_lookup
+          validator_state: active
+          definition_state_category: complete
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ConditionRelationDTO
+              slot: condition_relation_type_name
+              range: string
+              db_table: vocabularyterm
+              db_column: name
+      - field_path: condition_relations.conditions
+        field_type: array
+        display_name: Experimental conditions
+        model_ref: ExperimentalConditionPayload
+        metadata:
+          multivalued: true
+          validatable: true
+          validator_binding_id: experimental_condition_validation
+          validator_state: active
+          definition_state_category: complete
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ConditionRelation
+              slot: conditions
+              range: ExperimentalCondition
+              db_table: conditionrelation_experimentalcondition
+      - field_path: condition_relations.conditions.condition_class.curie
+        field_type: string
+        display_name: Condition class CURIE
+        metadata:
+          term_helper:
+            field_path: condition_relations.conditions.condition_class.curie
+            authority: hint_only
+            resolver:
+              primary_tool: resolve_domain_field_term
+              search_tool: search_domain_field_terms
+              inspect_tool: inspect_ontology_term
+              accepted_provenance_tools:
+                - resolve_domain_field_term
+              search_channels:
+                - exact_label
+                - exact_synonym
+                - trigram_label
+                - trigram_synonym
+                - definition
+              unresolved_metadata_path: metadata.normalization_notes
+            term_source:
+              kind: ontology
+              ontology_family: zeco
+              ontology_term_type: ZECOTerm
+            lookup:
+              package_tool: search_domain_field_terms
+              method: search_ontology_terms
+              candidate_authority: hint_only
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ExperimentalConditionDTO
+              slot: condition_class_curie
+              range: string
+              db_table: ontologyterm
+              db_column: curie
+      - field_path: condition_relations.conditions.condition_id.curie
+        field_type: string
+        display_name: Condition ID CURIE
+        metadata:
+          term_helper:
+            field_path: condition_relations.conditions.condition_id.curie
+            authority: hint_only
+            resolver:
+              primary_tool: resolve_domain_field_term
+              search_tool: search_domain_field_terms
+              inspect_tool: inspect_ontology_term
+              accepted_provenance_tools:
+                - resolve_domain_field_term
+              search_channels:
+                - exact_label
+                - exact_synonym
+                - trigram_label
+                - trigram_synonym
+                - definition
+              unresolved_metadata_path: metadata.normalization_notes
+            term_source:
+              kind: ontology
+              ontology_family: zeco
+              ontology_term_type: ZECOTerm
+            lookup:
+              package_tool: search_domain_field_terms
+              method: search_ontology_terms
+              candidate_authority: hint_only
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ExperimentalConditionDTO
+              slot: condition_id_curie
+              range: string
+              db_table: ontologyterm
+              db_column: curie
+      - field_path: condition_relations.conditions.condition_chemical.curie
+        field_type: string
+        display_name: Chemical CURIE
+        metadata:
+          # FIX 3 — ChEBI resolved as an ontology term via agr_curation_query get_ontology_term.
+          definition_state_category: complete
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ExperimentalConditionDTO
+              slot: condition_chemical_curie
+              range: string
+              db_table: ontologyterm
+              db_column: curie
+      - field_path: condition_relations.conditions.condition_taxon.curie
+        field_type: string
+        display_name: Taxon CURIE
+        metadata:
+          definition_state_category: complete
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ExperimentalConditionDTO
+              slot: condition_taxon_curie
+              range: string
+              db_table: ontologyterm
+              db_column: curie
+      - field_path: condition_relations.conditions.condition_free_text
+        field_type: string
+        display_name: Condition free text
+        metadata:
+          definition_state_category: complete
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ExperimentalCondition
+              slot: condition_free_text
+              range: string
+              db_table: experimentalcondition
+              db_column: conditionfreetext
+      - field_path: condition_relations.conditions.condition_summary
+        field_type: string
+        display_name: Condition summary
+        metadata:
+          definition_state_category: complete
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ExperimentalCondition
+              slot: condition_summary
+              range: string
+              db_table: experimentalcondition
+              db_column: conditionsummary
   # Pending sub-objects materialized alongside the concrete annotation (structural object_refs).
   - object_type: DiseaseAnnotationSubject
     display_name: Disease annotation subject
@@ -1444,10 +2054,10 @@ metadata:
       - validator_id: disease_with_gene_validation
         display_name: With/from gene lookup
         description: Validate the with_gene_identifiers genes through the active gene_validation package validator binding (R4).
-    under_development:
       - validator_id: experimental_condition_validation
         display_name: Experimental condition validation
-        description: Compose disease condition relation, experimental condition ontology, chemical, taxon, and data-provider component checks into one auditable condition decision.
+        description: Compose disease condition relation, experimental condition ontology, chemical, taxon, and data-provider component checks into one auditable per-condition decision. Fans out one composite validation per ExperimentalCondition via the nested multivalued engine.
+    under_development:
       - validator_id: disease.export_submission_projection
         display_name: Disease ready for export
         blocked_by: ALL-425
@@ -1555,33 +2165,39 @@ metadata:
           package_id: agr.alliance
           agent_id: controlled_vocabulary_validation
         applies_to:
+          # FIX 1 — the materializer emits CONCRETE subtypes when the subject is known, and the
+          # condition field block is now declared on all three concrete subtypes (mirroring
+          # disease_relation_cv_lookup / R4), so this binding scopes to all four object types.
           domain_pack_id: agr.alliance.disease
           object_types:
             - DiseaseAnnotation
+            - GeneDiseaseAnnotation
+            - AlleleDiseaseAnnotation
+            - AGMDiseaseAnnotation
           field_paths:
-            - condition_relations[0].condition_relation_type.name
+            - condition_relations.condition_relation_type.name
         input_fields:
           vocabulary:
             source: literal
             value: Condition Relation Type
           # STATIC CV subset: condition relations on annotations use the
           # 'Expression Condition Relation' subset of Condition Relation Type
-          # (members: has_condition, induced_by). NOTE: disease condition_relations are
-          # under_development/deferred (D6) and the builder does not yet stage this field,
-          # so this binding does not fire today; the subset wiring is in place for when
-          # condition handling returns with the host-annotation work.
+          # (members: has_condition, induced_by). condition_relations is now declared
+          # multivalued, so this binding fans out per relation: one CV validation per
+          # condition_relations[i].condition_relation_type.name (the engine substitutes the
+          # relation index into the bare input/expected paths below).
           subset:
             source: literal
             value: Expression Condition Relation
             required: false
           term_name:
             source: payload
-            path: condition_relations[0].condition_relation_type.name
+            path: condition_relations.condition_relation_type.name
             required: false
         expected_result_fields:
-          term_name: condition_relations[0].condition_relation_type.name
-          vocabulary: condition_relations[0].condition_relation_type.vocabulary
-          internal_id: condition_relations[0].condition_relation_type.id
+          term_name: condition_relations.condition_relation_type.name
+          vocabulary: condition_relations.condition_relation_type.vocabulary
+          internal_id: condition_relations.condition_relation_type.id
         required: true
         blocking: false
         allow_opt_out: true
@@ -1838,6 +2454,105 @@ metadata:
           enabled: true
           family: disease_with_gene_validation
           max_size: 25
+      # EXPERIMENTAL CONDITIONS: composite validation at the CONDITION grain. The single
+      # fan-out target is condition_relations.conditions (the ExperimentalCondition object,
+      # declared multivalued under the multivalued condition_relations). The nested engine
+      # fans out the cartesian product and emits ONE composite validation per
+      # condition_relations[i].conditions[j]; the experimental_condition agent composes the
+      # per-field ontology/CV/chemical/taxon existence checks AND the cross-field coherence
+      # into a single condition-level decision. Per-condition input_fields are declared with
+      # bare nested paths; the engine substitutes the resolved (i, j) indexes so each
+      # composite request carries that condition's own components plus its relation context.
+      - binding_id: experimental_condition_validation
+        display_name: Experimental condition validation
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: experimental_condition_validation
+        applies_to:
+          # FIX 1 — the condition field block is now declared on all three concrete subtypes too
+          # (the materializer emits the concrete subtype when the subject is known, and
+          # _matching_objects matches strictly). Mirroring disease_relation_cv_lookup, this binding
+          # scopes to all four object types so the composite fires on the concrete subtype.
+          domain_pack_id: agr.alliance.disease
+          object_types:
+            - DiseaseAnnotation
+            - GeneDiseaseAnnotation
+            - AlleleDiseaseAnnotation
+            - AGMDiseaseAnnotation
+          field_paths:
+            - condition_relations.conditions
+        input_fields:
+          # condition_statement = the per-condition source summary (the anchoring text the
+          # condition was read from). Rewritten to condition_relations[i].conditions[j].condition_summary.
+          condition_statement:
+            source: payload
+            path: condition_relations.conditions.condition_summary
+            required: false
+          # Relation context for THIS condition's parent relation. Shares the OUTER multivalued
+          # prefix (condition_relations[i]) with the fan-out base, so the engine substitutes the
+          # relation index i into this sibling path.
+          # FIX 2 — context_only: the dedicated disease_condition_relation_lookup binding OWNS
+          # relation validation (it already resolves has_condition in vocabulary
+          # "Condition Relation Type"). The composite agent must NOT re-look-up the relation (it
+          # previously guessed the non-existent vocabulary "Condition Relation" and false-negatived);
+          # it uses the relation purely as coherence context (does the class fit the relation?).
+          condition_relation_type:
+            source: payload
+            path: condition_relations.condition_relation_type.name
+            required: false
+            context_only: true
+          # The whole ExperimentalCondition object for this element (component bundle).
+          condition_components:
+            source: payload
+            path: condition_relations.conditions
+            required: false
+          condition_class_curie:
+            source: payload
+            path: condition_relations.conditions.condition_class.curie
+            required: false
+          condition_id_curie:
+            source: payload
+            path: condition_relations.conditions.condition_id.curie
+            required: false
+          condition_chemical_curie:
+            source: payload
+            path: condition_relations.conditions.condition_chemical.curie
+            required: false
+          condition_taxon_curie:
+            source: payload
+            path: condition_relations.conditions.condition_taxon.curie
+            required: false
+          condition_free_text:
+            source: payload
+            path: condition_relations.conditions.condition_free_text
+            required: false
+          data_provider_abbreviation:
+            source: payload
+            path: data_provider.abbreviation
+            required: false
+            context_only: true
+          # EVIDENCE CONTRACT: the validator sees the backend-resolved exact source text for the
+          # spans the condition was read from; the model never types the quote.
+          evidence_quote:
+            source: evidence_record
+            path: verified_quote
+            required: false
+            context_only: true
+        # The composite resolves on the always-present condition_class (the experimental-variable
+        # TYPE every condition carries); condition_id (a more specific ZECO term) is OPTIONAL and
+        # absent in ~74% of curated conditions, so requiring it would false-negative the majority.
+        # The agent still reports unresolved if any PRESENT component (class/chemical/...) fails.
+        expected_result_fields:
+          condition_class_curie: condition_relations.conditions.condition_class.curie
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
+        batch:
+          enabled: true
+          family: experimental_condition_validation
+          max_size: 25
     under_development:
       - binding_id: disease_pending_envelope_validator
         display_name: Data check
@@ -1851,71 +2566,6 @@ metadata:
             - DiseaseAnnotation
         input_fields: {}
         expected_result_fields: {}
-        definition_state: in_development
-      - binding_id: experimental_condition_validation
-        display_name: Experimental condition validation
-        validator_agent:
-          package_id: agr.alliance
-          agent_id: experimental_condition_validation
-        state_explanation: Composite experimental-condition validation remains metadata-only until condition relation, condition ontology, chemical, taxon, provider, and quantity/unit component readiness is proven end to end.
-        applies_to:
-          domain_pack_id: agr.alliance.disease
-          object_types:
-            - DiseaseAnnotation
-          field_paths:
-            - condition_relations[0].conditions
-            - condition_relations[0].condition_relation_type.name
-            - condition_relations[0].conditions[0].condition_class.curie
-            - condition_relations[0].conditions[0].condition_id.curie
-            - condition_relations[0].conditions[0].condition_chemical.curie
-            - condition_relations[0].conditions[0].condition_taxon.curie
-            - condition_relations[0].conditions[0].condition_free_text
-            - condition_relations[0].conditions[0].condition_summary
-        input_fields:
-          condition_statement:
-            source: payload
-            path: condition_relations[0].conditions[0].condition_summary
-            required: false
-          condition_relation_type:
-            source: payload
-            path: condition_relations[0].condition_relation_type.name
-            required: false
-          condition_components:
-            source: payload
-            path: condition_relations[0].conditions
-            required: false
-          condition_class_curie:
-            source: payload
-            path: condition_relations[0].conditions[0].condition_class.curie
-            required: false
-          condition_id_curie:
-            source: payload
-            path: condition_relations[0].conditions[0].condition_id.curie
-            required: false
-          condition_chemical_curie:
-            source: payload
-            path: condition_relations[0].conditions[0].condition_chemical.curie
-            required: false
-          condition_taxon_curie:
-            source: payload
-            path: condition_relations[0].conditions[0].condition_taxon.curie
-            required: false
-          condition_free_text:
-            source: payload
-            path: condition_relations[0].conditions[0].condition_free_text
-            required: false
-          data_provider_abbreviation:
-            source: payload
-            path: data_provider.abbreviation
-            required: false
-          evidence_quote:
-            source: evidence_record
-            path: verified_quote
-            required: false
-            context_only: true
-        expected_result_fields:
-          condition_id: ExperimentalCondition.condition_id
-          normalized_components: ExperimentalCondition.components
         definition_state: in_development
       - binding_id: disease_reference_materialization
         display_name: Reference lookup

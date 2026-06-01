@@ -82,6 +82,7 @@ content: |
      - `genetic_sex_name` (one of female, hermaphrodite, male, pooled sexes, unknown sex) ONLY when the paper explicitly states the sex of the model/cohort; otherwise omit it — never infer or default the sex.
      - `disease_qualifier_names` (one or more of susceptibility_to, resistance_to, severity_of, onset_of, penetrance_of, disease_progression_of, sexual_dimorphism_in) ONLY when the paper explicitly states such a qualifier; otherwise omit.
      - `with_gene_identifiers` (with/from gene identifier[s]) ONLY when the paper explicitly states a distinct with/from gene supporting the assertion; do not duplicate the subject gene, and omit when no such gene is stated (this is sparse).
+     - `condition_relations` (experimental conditions) ONLY when the paper explicitly states the experimental conditions under which the disease assertion holds — see `<experimental_condition_rules>` below; omit entirely when no conditions are stated.
      - `negated=true` only when the paper explicitly reports the disease association was NOT supported under defined conditions.
   4. Call `list_staged_disease_observations` to review, `patch_disease_observation`/`discard_disease_observation` to fix issues, then call `finalize_disease_extraction(candidate_ids=[...])` exactly once with the candidate IDs returned by your stage calls.
   </tools>
@@ -95,6 +96,46 @@ content: |
   If the paper does not identify a durable gene/allele/AGM subject, stage the disease without a subject; the backend materializes the abstract DiseaseAnnotation and the active subject validator records that the subject is unresolved.
   </subject_and_relation_rules>
 
+  <experimental_condition_rules>
+  Experimental conditions describe the experimental variables under which a disease assertion was
+  observed (chemical treatments, temperature/radiation exposures, etc.). Extract ALL experimental
+  conditions the paper explicitly states for a retained disease assertion, and ONLY those — never
+  infer, default, or invent a condition. Conditions are subtle and sparse; most assertions have
+  none. When the paper states none, omit `condition_relations` entirely.
+
+  Stage `condition_relations` as a list. Each entry is one ConditionRelation:
+  - `condition_relation_type`: the relation between the condition and the assertion, named exactly
+    as a Condition Relation Type vocabulary term — typically `has_condition` (the dominant case:
+    the assertion holds under this condition), or `induced_by`, `ameliorated_by`, `exacerbated_by`
+    when the paper frames the condition that way. Use `has_condition` unless the paper clearly
+    states an inducing/ameliorating/exacerbating relationship.
+  - `conditions`: a list of the experimental conditions under that relation. For EACH condition,
+    set only the fields the paper states:
+    - `condition_class_curie`: the ZECO class naming the experimental-variable TYPE (e.g. chemical
+      treatment, temperature exposure). GROUND it to a real ZECO CURIE with the lookup tools — call
+      `search_domain_field_terms`/`resolve_domain_field_term` with
+      `field_path="condition_relations.conditions.condition_class.curie"` and the term phrase; do
+      NOT guess ZECO identifiers from memory.
+    - `condition_id_curie`: a more specific ZECO/XCO condition term when stated; GROUND it via the
+      same tools with `field_path="condition_relations.conditions.condition_id.curie"`.
+    - `condition_chemical_curie`: the ChEBI CURIE for the chemical when a chemical treatment is
+      stated (e.g. `CHEBI:6909` for a named drug). Provide the exact ChEBI CURIE the paper supports;
+      the condition validator re-checks it against ChEBI.
+    - `condition_taxon_curie`: an NCBITaxon CURIE only when the condition explicitly involves a
+      distinct taxon (rare).
+    - `condition_free_text`: the quantity/dose/free-text qualifier as written (e.g. "3 pM",
+      "37 degrees C"), when stated.
+    - `condition_summary`: a short synthesized phrase describing the condition (the anchoring source
+      statement the condition was read from, e.g. "treated with 3 pM rapamycin").
+  A condition's MEANING is the COMBINATION of its fields (the class names the variable type; the
+  chemical/quantity fill it). Stage them together so the composite condition validator can check
+  both per-field existence AND cross-field coherence.
+
+  EVIDENCE CONTRACT: conditions carry NO quote text. They are read from the SAME evidence the
+  annotation already cites (`record_evidence(span_ids=[...])` -> `evidence_record_ids`); the backend
+  resolves the exact source text for the composite validator. Never type a condition quote.
+  </experimental_condition_rules>
+
   <active_validator_binding_policy>
   Active validator bindings declared by the disease domain pack own final disease ontology term
   identity, subject entity identity, relation vocabulary, ECO evidence codes, and data-provider
@@ -104,8 +145,12 @@ content: |
   lookup hints as validated results. Keep `disease_curie` unset when the paper supports a disease
   label but does not provide an exact DOID — the active ontology validator resolves the candidate. Do
   not call broad curation lookup tools to resolve disease terms, subjects, relations, evidence codes,
-  or providers; extraction-time lookup is limited to provider/species/taxon context through
-  `agr_species_context_lookup`.
+  or providers; extraction-time lookup for those is limited to provider/species/taxon context through
+  `agr_species_context_lookup`. The ONE exception is experimental-condition grounding: use
+  `search_domain_field_terms` / `resolve_domain_field_term` / `inspect_ontology_term` to ground ZECO
+  condition class/id CURIEs as described in `<experimental_condition_rules>` (obscure ontology terms
+  must be looked up, not guessed). The composite condition validator still owns final condition
+  identity and coherence.
 
   single_reference (the source paper) is resolved downstream from the curation workspace document
   identity, not from free text. Do NOT stage a reference; pending reference resolution is the intended

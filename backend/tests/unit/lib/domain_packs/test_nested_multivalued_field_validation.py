@@ -95,6 +95,148 @@ metadata:
 """.strip()
 
 
+def _object_grain_pack_text() -> str:
+    """A pack whose binding fans out on the OBJECT (condition_relations.conditions) and reads
+    a SIBLING input under the OUTER multivalued list (the relation type) — mirroring the disease
+    composite experimental_condition_validation binding."""
+
+    return """
+pack_id: fixture.object_grain_composite
+display_name: Fixture Object-Grain Composite Pack
+version: 0.1.0
+metadata_api_version: 1.0.0
+status: active
+object_definitions:
+  - object_type: Annotation
+    display_name: Annotation
+    fields:
+      - field_path: condition_relations
+        field_type: array
+        display_name: Condition relations
+        metadata:
+          multivalued: true
+      - field_path: condition_relations.condition_relation_type.name
+        field_type: string
+        display_name: Relation type
+      - field_path: condition_relations.conditions
+        field_type: array
+        display_name: Conditions
+        metadata:
+          multivalued: true
+          validatable: true
+          validator_binding_id: composite_condition
+          validator_state: active
+      - field_path: condition_relations.conditions.condition_class.curie
+        field_type: string
+        display_name: Condition class CURIE
+metadata:
+  validator_bindings:
+    active:
+      - binding_id: composite_condition
+        display_name: Composite condition
+        validator_agent:
+          package_id: org.validators
+          agent_id: composite_validator
+        applies_to:
+          domain_pack_id: fixture.object_grain_composite
+          object_types:
+            - Annotation
+          field_paths:
+            - condition_relations.conditions
+        input_fields:
+          class_curie:
+            source: payload
+            path: condition_relations.conditions.condition_class.curie
+            required: false
+          relation_type:
+            source: payload
+            path: condition_relations.condition_relation_type.name
+            required: false
+        expected_result_fields:
+          class_curie: condition_relations.conditions.condition_class.curie
+        required: true
+""".strip()
+
+
+def _loaded_object_grain_pack(tmp_path: Path) -> LoadedDomainPack:
+    pack_path = tmp_path / "fixture.object_grain_composite"
+    pack_path.mkdir()
+    metadata_path = pack_path / "domain_pack.yaml"
+    metadata_path.write_text(_object_grain_pack_text(), encoding="utf-8")
+    metadata = load_domain_pack_metadata(metadata_path)
+    return LoadedDomainPack(
+        pack_id=metadata.pack_id,
+        display_name=metadata.display_name,
+        version=metadata.version,
+        pack_path=pack_path,
+        metadata_path=metadata_path,
+        metadata=metadata,
+    )
+
+
+def test_object_grain_fan_out_emits_one_match_per_condition_with_relation_context(
+    tmp_path: Path,
+):
+    payload = {
+        "condition_relations": [
+            {
+                "condition_relation_type": {"name": "has_condition"},
+                "conditions": [
+                    {"condition_class": {"curie": "ZECO:0"}},
+                    {"condition_class": {"curie": "ZECO:1"}},
+                ],
+            },
+            {
+                "condition_relation_type": {"name": "induced_by"},
+                "conditions": [
+                    {"condition_class": {"curie": "ZECO:2"}},
+                ],
+            },
+        ]
+    }
+    pack = _loaded_object_grain_pack(tmp_path)
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+    envelope = DomainEnvelope(
+        envelope_id="object-grain-env",
+        domain_pack_id="fixture.object_grain_composite",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="Annotation",
+                pending_ref_id="annotation-1",
+                payload=payload,
+            )
+        ],
+    )
+    matches = [
+        match
+        for match in registry.match_bindings(
+            envelope, states=[ValidationBindingState.ACTIVE]
+        )
+        if match.binding.binding_id == "composite_condition"
+    ]
+    # ONE composite match per condition object (2 + 1 = 3).
+    assert [match.field_path for match in matches] == [
+        "condition_relations[0].conditions[0]",
+        "condition_relations[0].conditions[1]",
+        "condition_relations[1].conditions[0]",
+    ]
+
+    requests = [build_domain_validation_request(match).request for match in matches]
+    # The per-condition class curie is read from the matched element.
+    assert [req.selected_inputs.get("class_curie") for req in requests] == [
+        "ZECO:0",
+        "ZECO:1",
+        "ZECO:2",
+    ]
+    # The sibling relation_type resolves via the OUTER multivalued index — conditions in
+    # relation 0 see has_condition; the condition in relation 1 sees induced_by.
+    assert [req.selected_inputs.get("relation_type") for req in requests] == [
+        "has_condition",
+        "has_condition",
+        "induced_by",
+    ]
+
+
 def _loaded_pack(tmp_path: Path) -> LoadedDomainPack:
     pack_path = tmp_path / "fixture.nested_multivalued"
     pack_path.mkdir()

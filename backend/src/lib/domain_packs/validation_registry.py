@@ -383,6 +383,87 @@ class ValidatorBindingMatch:
             return base_field_path
         return f"{base_field_path}[{self.element_index}]"
 
+    def resolve_input_path(self, declared_path: str) -> str:
+        """Resolve a declared bare input/result path to this match's indexed element.
+
+        For a fanned-out match, a declared path is rewritten so each multivalued segment it
+        shares with the fan-out base field carries the index the engine chose for that level.
+        Two cases are handled generically:
+
+        * Paths under the base field (``condition_relations.conditions.condition_class.curie``
+          for base ``condition_relations.conditions``) get the full nested index tuple, so the
+          request reads the element being validated.
+        * SIBLING paths that share only an OUTER multivalued prefix of the base (e.g.
+          ``condition_relations.condition_relation_type.name`` while the base is
+          ``condition_relations.conditions``) get the outer index substituted, so the per-
+          condition composite request carries that condition's parent relation context.
+
+        Any path that shares no multivalued-boundary prefix with the base — and every scalar/
+        legacy match (no element index) — is returned unchanged, so non-multivalued behavior
+        is identical.
+        """
+
+        if self.field_definition is None:
+            return declared_path
+        if self.element_index is None and self.resolved_field_path is None:
+            return declared_path
+        index_path = self.element_index_path
+        if not index_path:
+            # Legacy single-level match: substitute the lone base prefix with ``field[i]``.
+            return self._substitute_base_prefix(declared_path)
+        if self.object_definition is None:
+            return self._substitute_base_prefix(declared_path)
+
+        base_field_path = self.field_definition.field_path
+        declared_fields = {
+            declared.field_path: declared
+            for declared in self.object_definition.fields
+        }
+        boundaries = _multivalued_fanout_boundaries(base_field_path, declared_fields)
+        if not boundaries:
+            return self._substitute_base_prefix(declared_path)
+
+        base_segments = base_field_path.split(".")
+        declared_segments = declared_path.split(".")
+        # Walk the base's multivalued boundaries from most specific to least specific and
+        # rewrite at the longest boundary prefix the declared path shares with the base.
+        for boundary_index in range(len(boundaries) - 1, -1, -1):
+            boundary = boundaries[boundary_index]
+            prefix_segments = tuple(base_segments[:boundary])
+            shared = tuple(declared_segments[:boundary]) == prefix_segments and (
+                len(declared_segments) >= boundary
+            )
+            if not shared:
+                continue
+            indexed_prefix_parts: list[str] = []
+            for segment_position, segment in enumerate(prefix_segments, start=1):
+                indexed_prefix_parts.append(segment)
+                if segment_position in boundaries:
+                    level = boundaries.index(segment_position)
+                    indexed_prefix_parts[-1] = f"{segment}[{index_path[level]}]"
+            indexed_prefix = ".".join(indexed_prefix_parts)
+            trailing = declared_segments[boundary:]
+            if trailing:
+                return ".".join((indexed_prefix, *trailing))
+            return indexed_prefix
+        return declared_path
+
+    def _substitute_base_prefix(self, declared_path: str) -> str:
+        base_field_path = (
+            self.field_definition.field_path
+            if self.field_definition is not None
+            else None
+        )
+        resolved_base = self.field_path
+        if base_field_path is None or resolved_base is None:
+            return declared_path
+        if declared_path == base_field_path:
+            return resolved_base
+        prefix = f"{base_field_path}."
+        if declared_path.startswith(prefix):
+            return f"{resolved_base}.{declared_path[len(prefix):]}"
+        return declared_path
+
     def target_details(self) -> dict[str, Any]:
         """Return stable structured target metadata."""
 

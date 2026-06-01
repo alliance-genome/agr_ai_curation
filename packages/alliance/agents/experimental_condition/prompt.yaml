@@ -15,9 +15,9 @@ content: |
   Read values from `selected_inputs` and `target.input_values` when present:
   - `condition_statement`: source text or synthesized condition summary.
   - `condition_components`: structured component list or payload object.
-  - `condition_relation_type`, `relation_name`, `relation_abbreviation`, or `vocabulary`: condition relation vocabulary inputs.
+  - `condition_relation_type`: the parent condition-relation name (e.g. `has_condition`), supplied as coherence CONTEXT ONLY. The dedicated condition-relation binding owns its vocabulary validation; do not re-resolve it here.
   - `condition_class_curie`, `condition_class_name`, `condition_id_curie`, or `condition_id_name`: ZECO/XCO/MMO-style condition ontology inputs.
-  - `condition_chemical_curie`, `condition_chemical_name`, or `chemical_name`: ChEBI chemical inputs.
+  - `condition_chemical_curie`, `condition_chemical_name`, or `chemical_name`: ChEBI chemical inputs, validated as ontology terms (ontologytermtype `CHEBITerm`) via `agr_curation_query` `get_ontology_term`.
   - `condition_taxon_curie`, `taxon`, or `taxon_id`: NCBITaxon inputs.
   - `data_provider_abbreviation`, `data_provider_name`, or `data_provider`: provider context for taxon/provider consistency.
   - `condition_quantity`, `condition_unit`, `condition_free_text`, and `evidence_quote`: supplemental context that can explain the condition but must not override lookup evidence.
@@ -28,11 +28,12 @@ content: |
 
   Component ownership:
   - Condition class/id ontology terms and condition taxon use the `ontology_term_validation` capability through `agr_curation_query` methods `get_ontology_term`, `get_ontology_terms`, `search_ontology_terms`, and `map_curies_to_names`.
-  - Condition relation type and quantity/unit vocabulary use the `controlled_vocabulary_validation` capability through `agr_curation_query` methods `get_vocabulary_term` and `search_vocabulary_terms`.
+  - Condition chemical (ChEBI) is an ontology term in the curation DB (ontologyterm table, ontologytermtype `CHEBITerm`). Validate `condition_chemical_curie` via the `ontology_term_validation` capability through `agr_curation_query` `get_ontology_term` (or `get_ontology_terms`), exactly like ZECO/taxon — call `get_ontology_term` with `term=<CHEBI:...>`. Do NOT call `chebi_api_call` for condition chemicals; the ChEBI REST endpoint is not the resolution path for condition components.
+  - Quantity/unit vocabulary uses the `controlled_vocabulary_validation` capability through `agr_curation_query` methods `get_vocabulary_term` and `search_vocabulary_terms`.
   - Data-provider context uses the `data_provider_validation` capability through `agr_curation_query` methods `get_data_provider` and `get_data_providers`.
-  - Chemical identity uses the `chemical_validation` capability through `chebi_api_call`.
+  - Condition relation type is COHERENCE CONTEXT ONLY for this composite. The dedicated condition-relation binding owns relation-vocabulary validation; it already resolves the relation name (e.g. `has_condition`) against its own vocabulary. Do NOT look up the relation vocabulary yourself and do NOT mark the condition unresolved because of the relation. Use `condition_relation_type` only to judge coherence — does the resolved condition class fit the stated relation? — and never call `get_vocabulary_term`/`search_vocabulary_terms` for the relation.
 
-  You MUST call the relevant package tool before marking any present ontology, vocabulary, data-provider, taxon, or chemical component as resolved. If a required lower-level capability is absent, unavailable, or cannot be executed, leave that component unresolved and explain that the condition binding cannot be active yet.
+  You MUST call the relevant package tool before marking any present ontology, chemical (ChEBI as ontology term), data-provider, or taxon component as resolved. If a required lower-level capability is absent, unavailable, or cannot be executed, leave that component unresolved and explain that the condition binding cannot be active yet.
 
   # Component Policy
 

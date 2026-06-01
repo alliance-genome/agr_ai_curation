@@ -159,7 +159,8 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
 
     definition_state_summary = object_metadata["definition_state_summary"]
     assert "disease_annotation_object" in definition_state_summary["complete"]
-    assert "condition_relations" in definition_state_summary["under_development"]
+    # Experimental conditions are now fully wired (multivalued + active composite binding).
+    assert "condition_relations" in definition_state_summary["complete"]
     assert "disease_annotation_subject" in definition_state_summary["blocked"]
     assert "single_reference" in definition_state_summary["blocked"]
 
@@ -218,12 +219,14 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
         "disease_relation_cv_lookup",
         "disease_condition_relation_lookup",
         "disease_data_provider_lookup",
+        # Composite experimental-condition validation is now ACTIVE (condition grain).
+        "experimental_condition_validation",
     }.issubset(active_binding_ids)
     # D2 + D3 full LinkML alignment: subject + ECO evidence-code bindings moved to active.
+    # Experimental conditions activated (composite validation at the condition grain).
     # D4 (reference) stays under_development (blocked: no durable reference identity at extraction).
     assert {
         "disease_pending_envelope_validator",
-        "experimental_condition_validation",
         "disease_reference_materialization",
     } == {binding["binding_id"] for binding in validator_bindings["under_development"]}
     assert {
@@ -393,22 +396,40 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
     )
     assert disease_curie.metadata["validator_state"] == "active"
 
+    # Experimental conditions are declared with BARE nested paths now (the [0] literals are
+    # retired); the nested fan-out engine indexes condition_relations[i].conditions[j].
     condition_fields = {
         "condition_relations",
-        "condition_relations[0].conditions[0].condition_class.curie",
-        "condition_relations[0].conditions[0].condition_chemical.curie",
-        "condition_relations[0].conditions[0].condition_taxon.curie",
+        "condition_relations.conditions",
+        "condition_relations.conditions.condition_class.curie",
+        "condition_relations.conditions.condition_chemical.curie",
+        "condition_relations.conditions.condition_taxon.curie",
     }
     assert condition_fields.issubset(fields_by_path)
-    for field_path in condition_fields:
-        field = fields_by_path[field_path]
-        assert field.definition_state.value == "in_development"
-        assert field.metadata["validatable"] is True
-        assert field.metadata["validator_state"] == "under_development"
-        binding = validator_bindings[field.metadata["validator_binding_id"]]
-        assert binding["state_explanation"]
+    # No legacy [0] condition field_paths remain.
+    assert not any(
+        "condition_relations[0]" in path for path in fields_by_path
+    )
+    # Both list levels are declared multivalued so the engine fans the cartesian product.
+    for multivalued_path in ("condition_relations", "condition_relations.conditions"):
+        field = fields_by_path[multivalued_path]
+        assert field.metadata["multivalued"] is True
+        assert field.multivalued is True
+        # Conditions are now wired (no longer under_development gated metadata).
+        assert field.metadata["definition_state_category"] == "complete"
+        assert "protected" not in field.metadata
+    # The ExperimentalCondition object (condition_relations.conditions) is the ONE composite
+    # fan-out target and is ACTIVE.
+    conditions_field = fields_by_path["condition_relations.conditions"]
+    assert conditions_field.metadata["validatable"] is True
+    assert conditions_field.metadata["validator_state"] == "active"
+    assert (
+        conditions_field.metadata["validator_binding_id"]
+        == "experimental_condition_validation"
+    )
+    # The relation type fans per relation through the (already active) CV lookup.
     condition_relation_type = fields_by_path[
-        "condition_relations[0].condition_relation_type.name"
+        "condition_relations.condition_relation_type.name"
     ]
     assert condition_relation_type.metadata["validator_state"] == "active"
     assert (
@@ -420,16 +441,27 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
         "package_id": "agr.alliance",
         "agent_id": "experimental_condition_validation",
     }
+    # The ONE fan-out target is the ExperimentalCondition object.
+    assert composite_binding["applies_to"]["field_paths"] == [
+        "condition_relations.conditions"
+    ]
+    # Per-condition component input_fields use BARE nested paths (the engine substitutes (i, j)).
+    assert composite_binding["input_fields"]["condition_class_curie"]["path"] == (
+        "condition_relations.conditions.condition_class.curie"
+    )
+    # The relation context is a sibling under the OUTER multivalued list.
+    assert composite_binding["input_fields"]["condition_relation_type"]["path"] == (
+        "condition_relations.condition_relation_type.name"
+    )
     assert composite_binding["input_fields"]["evidence_quote"] == {
         "source": "evidence_record",
         "path": "verified_quote",
         "required": False,
         "context_only": True,
     }
-    assert composite_binding["expected_result_fields"] == {
-        "condition_id": "ExperimentalCondition.condition_id",
-        "normalized_components": "ExperimentalCondition.components",
-    }
+    # Composite binding is batchable.
+    assert composite_binding["batch"]["enabled"] is True
+    assert composite_binding["batch"]["family"] == "experimental_condition_validation"
 
     # D4 stays blocked: no durable reference identity is available at chat-extraction time.
     blocked_fields = {
@@ -912,3 +944,185 @@ def test_evidence_code_multivalued_field_groups_into_one_batch():
     )
     assert resolved_curies == sorted(evidence_codes)
     assert len({item.request_id for item in evidence_results}) == 2
+
+
+def _two_condition_payload() -> dict[str, Any]:
+    """A disease annotation carrying one relation with TWO experimental conditions."""
+
+    return {
+        "mention": "rapamycin-modulated disease model",
+        "disease_annotation_object": {"curie": "DOID:0050730", "name": "x"},
+        "role": "primary",
+        "confidence": "high",
+        "data_provider": {"abbreviation": "MGI"},
+        "evidence_record_ids": ["evidence-1"],
+        "evidence_records": [
+            {
+                "evidence_record_id": "evidence-1",
+                "verified_quote": "treated with 3 pM rapamycin at 37C",
+                "page": 2,
+                "section": "Results",
+                "chunk_id": "chunk-9",
+            }
+        ],
+        "condition_relations": [
+            {
+                "condition_relation_type": {"name": "has_condition"},
+                "conditions": [
+                    {
+                        "condition_class": {"curie": "ZECO:0000111"},
+                        "condition_chemical": {"curie": "CHEBI:9168"},
+                        "condition_summary": "treated with 3 pM rapamycin",
+                    },
+                    {
+                        "condition_class": {"curie": "ZECO:0000160"},
+                        "condition_summary": "incubated at 37C",
+                    },
+                ],
+            }
+        ],
+    }
+
+
+def test_experimental_condition_binding_fans_out_one_composite_per_condition():
+    pack = _disease_pack()
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+    envelope = DomainEnvelope(
+        envelope_id="disease-conditions-env",
+        domain_pack_id=DISEASE_DOMAIN_PACK_ID,
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="DiseaseAnnotation",
+                pending_ref_id="disease-conditions-1",
+                payload=_two_condition_payload(),
+            )
+        ],
+    )
+
+    matches = registry.match_bindings(
+        envelope, states=[ValidationBindingState.ACTIVE]
+    )
+
+    # The composite binding fans out ONE match per ExperimentalCondition (2 conditions -> 2).
+    composite_matches = [
+        match
+        for match in matches
+        if match.binding.binding_id == "experimental_condition_validation"
+    ]
+    assert len(composite_matches) == 2
+    # Each composite target is a distinct nested ExperimentalCondition object.
+    assert [match.field_path for match in composite_matches] == [
+        "condition_relations[0].conditions[0]",
+        "condition_relations[0].conditions[1]",
+    ]
+    assert [match.element_index_path for match in composite_matches] == [(0, 0), (0, 1)]
+
+    # The relation-type CV lookup fans out PER RELATION (1 relation -> 1 match).
+    relation_matches = [
+        match
+        for match in matches
+        if match.binding.binding_id == "disease_condition_relation_lookup"
+    ]
+    assert len(relation_matches) == 1
+    assert relation_matches[0].field_path == (
+        "condition_relations[0].condition_relation_type.name"
+    )
+
+    # Each per-condition composite request resolves THIS condition's own components AND the
+    # shared relation context (the sibling under the outer multivalued list).
+    requests = [build_domain_validation_request(match) for match in composite_matches]
+    assert all(result.request is not None for result in requests)
+    first, second = (result.request for result in requests)
+
+    assert first.selected_inputs["condition_class_curie"] == "ZECO:0000111"
+    assert first.selected_inputs["condition_chemical_curie"] == "CHEBI:9168"
+    assert first.selected_inputs["condition_statement"] == "treated with 3 pM rapamycin"
+    # Relation context substituted from the OUTER multivalued index (relation 0).
+    assert first.selected_inputs["condition_relation_type"] == "has_condition"
+
+    assert second.selected_inputs["condition_class_curie"] == "ZECO:0000160"
+    # The second condition stated no chemical -> that optional component is absent.
+    assert "condition_chemical_curie" not in second.selected_inputs
+    assert second.selected_inputs["condition_statement"] == "incubated at 37C"
+    assert second.selected_inputs["condition_relation_type"] == "has_condition"
+
+    # The two composite requests are distinct and target their own indexed condition.
+    assert first.target.field_path == "condition_relations[0].conditions[0]"
+    assert second.target.field_path == "condition_relations[0].conditions[1]"
+    assert first.request_id != second.request_id
+    # Both carry the annotation's backend-resolved evidence (evidence contract: no LLM quote).
+    assert first.evidence and first.evidence[0]["verified_quote"]
+
+
+def test_two_relations_fan_out_per_relation_and_per_condition():
+    """Two condition_relations, each with conditions, exercise BOTH fan-out levels."""
+
+    pack = _disease_pack()
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+    payload = _two_condition_payload()
+    # Add a SECOND relation holding one condition.
+    payload["condition_relations"].append(
+        {
+            "condition_relation_type": {"name": "induced_by"},
+            "conditions": [
+                {
+                    "condition_class": {"curie": "ZECO:0000240"},
+                    "condition_summary": "exposed to ionizing radiation",
+                }
+            ],
+        }
+    )
+    envelope = DomainEnvelope(
+        envelope_id="disease-conditions-2rel-env",
+        domain_pack_id=DISEASE_DOMAIN_PACK_ID,
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="DiseaseAnnotation",
+                pending_ref_id="disease-conditions-2rel-1",
+                payload=payload,
+            )
+        ],
+    )
+
+    matches = registry.match_bindings(
+        envelope, states=[ValidationBindingState.ACTIVE]
+    )
+    composite_matches = [
+        match
+        for match in matches
+        if match.binding.binding_id == "experimental_condition_validation"
+    ]
+    # 2 conditions in relation 0 + 1 condition in relation 1 = 3 composite validations.
+    assert [match.field_path for match in composite_matches] == [
+        "condition_relations[0].conditions[0]",
+        "condition_relations[0].conditions[1]",
+        "condition_relations[1].conditions[0]",
+    ]
+    # The relation-type CV lookup fans out per relation (2 relations -> 2 matches).
+    relation_matches = [
+        match
+        for match in matches
+        if match.binding.binding_id == "disease_condition_relation_lookup"
+    ]
+    assert [match.field_path for match in relation_matches] == [
+        "condition_relations[0].condition_relation_type.name",
+        "condition_relations[1].condition_relation_type.name",
+    ]
+
+    # The condition in relation 1 resolves relation 1's relation type (outer index substituted).
+    requests = {
+        match.field_path: build_domain_validation_request(match).request
+        for match in composite_matches
+    }
+    assert (
+        requests["condition_relations[1].conditions[0]"].selected_inputs[
+            "condition_relation_type"
+        ]
+        == "induced_by"
+    )
+    assert (
+        requests["condition_relations[0].conditions[0]"].selected_inputs[
+            "condition_relation_type"
+        ]
+        == "has_condition"
+    )

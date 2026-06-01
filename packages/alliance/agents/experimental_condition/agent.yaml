@@ -31,8 +31,10 @@ supervisor_routing:
 
 tools:
   - get_agent_contract
+  # FIX 3 — condition chemicals (ChEBI) are ontology terms in the curation DB and are validated via
+  # agr_curation_query get_ontology_term (ontologytermtype CHEBITerm), like ZECO/taxon. The broken
+  # chebi_api_call REST path (https://www.ebi.ac.uk/chebi/ws/rest/<id> -> 404) is no longer used.
   - agr_curation_query
-  - chebi_api_call
 
 output_schema: ExperimentalConditionValidationResult
 
@@ -44,7 +46,11 @@ model_config:
 requires_document: false
 required_params: []
 
-batch_capabilities: []
+# Opted into domain-validator batching so the experimental_condition_validation binding's
+# batch block can group multiple per-condition composite validations into one request
+# (mirrors ontology_term_validation / controlled_vocabulary_validation).
+batch_capabilities:
+  - domain_validator_batch
 
 frontend:
   icon: "🧪"
@@ -66,8 +72,8 @@ documentation:
         decision.
     - name: "Chemical and ontology checks"
       description: >
-        Uses lower-level lookup evidence for ChEBI chemicals and typed ontology
-        condition terms when those fields are present.
+        Uses curation-DB ontology-term lookups for ChEBI chemicals (CHEBITerm) and
+        typed ontology condition terms when those fields are present.
       example_query: "Check whether this condition ID and chemical term match the submitted condition"
       example_result: >
         Returns matched ontology or chemical identifiers plus unresolved or
@@ -99,13 +105,7 @@ documentation:
         - "data providers"
         - "taxon identifiers"
         - "ontology-backed condition terms"
-    - name: "ChEBI API"
-      description: "External chemical ontology lookup for chemical condition components."
-      species_supported: null
-      data_types:
-        - "ChEBI identifiers"
-        - "chemical labels"
-        - "chemical synonyms"
+        - "ChEBI chemical ontology terms (CHEBITerm)"
   limitations:
     - "Validates submitted condition payloads; it does not extract experimental conditions from PDFs."
     - "Component-level ambiguity can make the overall condition require curator review."
