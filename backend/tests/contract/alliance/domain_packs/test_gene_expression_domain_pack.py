@@ -33,6 +33,10 @@ from src.schemas.domain_envelope import (
 )
 from src.schemas.domain_envelope import DefinitionState
 from src.schemas.domain_pack_metadata import DomainPackFieldType
+from src.lib.openai_agents.extraction_builder_workspace import (
+    CANDIDATE_STATUS_VALID,
+    ExtractionBuilderWorkspace,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -56,6 +60,7 @@ from agr_ai_curation_alliance.domain_packs.gene_expression import (  # noqa: E40
     VALID_GENE_EXPRESSION_RELATION_NAMES,
     gene_expression_extraction_output_to_pending_envelope,
     get_gene_expression_domain_pack_metadata_path,
+    materialize_gene_expression_builder_state,
     validate_pending_gene_expression_envelope,
 )
 
@@ -2392,3 +2397,214 @@ def test_gene_expression_condition_binding_fans_out_one_composite_per_condition(
     assert "condition_chemical_curie" not in second.selected_inputs
     assert second.selected_inputs["condition_relation_type"] == "has_condition"
     assert first.evidence and first.evidence[0]["verified_quote"]
+
+
+def _gene_expression_builder_evidence_records() -> list[dict[str, Any]]:
+    return [
+        {
+            "evidence_record_id": "evidence-67598e5688f123c8",
+            "entity": "pef-1",
+            "verified_quote": "PEF-1::GFP expression was detected in the cilium.",
+            "page": 3,
+            "section": "Results",
+            "chunk_id": "chunk-1",
+        }
+    ]
+
+
+def _resolver_helper_selection(
+    *,
+    field_path: str,
+    source_phrase: str,
+    selected_value: str,
+    term_source: dict[str, Any],
+    selected_name: str | None = None,
+    selected_curie: str | None = None,
+) -> dict[str, Any]:
+    """A resolve_domain_field_term provenance entry in the shape staging copies into staged state.
+
+    Mirrors ``agr_curation._resolver_helper_selection`` so the materializer's resolver-provenance
+    guard (``_has_helper_selection``) accepts the grounded controlled fields.
+    """
+
+    selection = {
+        "field_path": field_path,
+        "source_tool": "resolve_domain_field_term",
+        "authority": "selector_evidence",
+        "lookup_status": "success",
+        "source_phrase": source_phrase,
+        "term_source": term_source,
+        "selected_value": selected_value,
+        "selected_name": selected_name or selected_value,
+    }
+    if selected_curie:
+        selection["selected_curie"] = selected_curie
+    return selection
+
+
+def _gene_expression_builder_staged_fields(**overrides: Any) -> dict[str, Any]:
+    """Grounded staged-field shape the gene_expression builder writes after staging.
+
+    Mirrors what ``_stage_payload_from_gene_expression_input`` produces: subject/reference plus the
+    grounded controlled fields (relation / assay / stage / anatomy) and the matching
+    ``metadata.provenance.helper_selections[]`` evidence the materializer's resolver-provenance guard
+    requires. Tests append the flat staged ``condition_relations`` via overrides; the materializer
+    rewrites those into the concrete nested annotation payload the active bindings read.
+    """
+
+    staged: dict[str, Any] = {
+        "domain_pack_id": GENE_EXPRESSION_DOMAIN_PACK_ID,
+        "object_type": GENE_EXPRESSION_OBJECT_TYPE,
+        "pending_ref_id": "gene-expression-annotation-pef-1",
+        "where_expressed_statement": "PEF-1::GFP expression in the cilium",
+        "relation": {"name": "is_expressed_in"},
+        "when_expressed_stage_name": "L2 larva",
+        "expression_annotation_subject": {
+            "source_phrase": "PEF-1::GFP",
+            "gene_symbol": "pef-1",
+            "primary_external_id": "WB:WBGene00000001",
+        },
+        "single_reference": {
+            "source_phrase": "PMID 39550471",
+            "reference_id": "PMID:39550471",
+        },
+        "expression_experiment": {
+            "expression_assay_used": {"curie": "MMO:0000655", "name": "GFP reporter assay"},
+        },
+        "expression_pattern": {
+            "where_expressed": {
+                "anatomical_structure": {"curie": "WBbt:0001234", "name": "cilium"},
+            },
+        },
+        "metadata": {
+            "provenance": {
+                "helper_selections": [
+                    _resolver_helper_selection(
+                        field_path="relation.name",
+                        source_phrase="is_expressed_in",
+                        selected_value="is_expressed_in",
+                        term_source={
+                            "kind": "controlled_vocabulary",
+                            "vocabulary": "Expression Relation",
+                        },
+                    ),
+                    _resolver_helper_selection(
+                        field_path="expression_experiment.expression_assay_used",
+                        source_phrase="GFP reporter assay",
+                        selected_value="MMO:0000655",
+                        selected_name="GFP reporter assay",
+                        selected_curie="MMO:0000655",
+                        term_source={"kind": "ontology", "ontology_family": "assay"},
+                    ),
+                    _resolver_helper_selection(
+                        field_path="when_expressed_stage_name",
+                        source_phrase="L2 larva",
+                        selected_value="L2 larva",
+                        term_source={"kind": "ontology", "ontology_family": "life_stage"},
+                    ),
+                    _resolver_helper_selection(
+                        field_path="expression_pattern.where_expressed.anatomical_structure",
+                        source_phrase="cilium",
+                        selected_value="WBbt:0001234",
+                        selected_name="cilium",
+                        selected_curie="WBbt:0001234",
+                        term_source={"kind": "ontology", "ontology_family": "anatomy"},
+                    ),
+                ]
+            }
+        },
+    }
+    staged.update(overrides)
+    return staged
+
+
+def _staged_gene_expression_condition_relations() -> list[dict[str, Any]]:
+    return [
+        {
+            "condition_relation_type": "has_condition",
+            "conditions": [
+                {
+                    "condition_class_curie": "ZECO:0000111",
+                    "condition_chemical_curie": "CHEBI:9168",
+                    "condition_summary": "treated with 3 pM rapamycin",
+                },
+                {
+                    "condition_class_curie": "ZECO:0000160",
+                    "condition_free_text": "28 degrees C",
+                },
+            ],
+        }
+    ]
+
+
+def _materialize_gene_expression_candidate(staged_fields: dict[str, Any]) -> Any:
+    workspace = ExtractionBuilderWorkspace(
+        run_id="gene-expression-builder-conditions-run",
+        domain_pack_id=GENE_EXPRESSION_DOMAIN_PACK_ID,
+        agent_id="gene_expression_extraction",
+    )
+    workspace.upsert_candidate(
+        candidate_id="gex-candidate-1",
+        staged_fields=staged_fields,
+        pending_ref_ids=["gene-expression-annotation-pef-1"],
+        evidence_record_ids=["evidence-67598e5688f123c8"],
+        resolver_selection_refs=[],
+        status=CANDIDATE_STATUS_VALID,
+    )
+    return materialize_gene_expression_builder_state(
+        workspace=workspace,
+        candidate_ids=["gex-candidate-1"],
+        evidence_records=_gene_expression_builder_evidence_records(),
+        resolver_entry_lookup=None,
+    )
+
+
+def test_gene_expression_builder_materializes_staged_condition_relations():
+    """Staged condition_relations land on the GeneExpressionAnnotation in validator shape.
+
+    SDK-free: calls ``materialize_gene_expression_builder_state`` directly (mirrors the disease /
+    phenotype builder materialization contract tests) rather than driving the strict stage tool
+    through the SDK ``function_tool`` unwrap.
+    """
+
+    staged_fields = _gene_expression_builder_staged_fields(
+        condition_relations=_staged_gene_expression_condition_relations(),
+    )
+    result = _materialize_gene_expression_candidate(staged_fields)
+    assert result.ok, result.summary()
+
+    annotation = next(
+        obj
+        for obj in result.payload["curatable_objects"]
+        if obj["object_type"] == GENE_EXPRESSION_OBJECT_TYPE
+    )
+    relations = annotation["payload"]["condition_relations"]
+    assert len(relations) == 1
+    relation = relations[0]
+    # Materialized in the exact target shape the active bindings read.
+    assert relation["condition_relation_type"] == {"name": "has_condition"}
+    conditions = relation["conditions"]
+    assert len(conditions) == 2
+    assert conditions[0]["condition_class"] == {"curie": "ZECO:0000111"}
+    assert conditions[0]["condition_chemical"] == {"curie": "CHEBI:9168"}
+    assert conditions[0]["condition_summary"] == "treated with 3 pM rapamycin"
+    assert conditions[1]["condition_class"] == {"curie": "ZECO:0000160"}
+    assert conditions[1]["condition_free_text"] == "28 degrees C"
+    # Empty leaves are dropped (condition 2 had no chemical).
+    assert "condition_chemical" not in conditions[1]
+
+
+def test_gene_expression_builder_omits_condition_relations_when_unstaged():
+    """No conditions staged -> the annotation payload carries no condition_relations key."""
+
+    result = _materialize_gene_expression_candidate(
+        _gene_expression_builder_staged_fields()
+    )
+    assert result.ok, result.summary()
+
+    annotation = next(
+        obj
+        for obj in result.payload["curatable_objects"]
+        if obj["object_type"] == GENE_EXPRESSION_OBJECT_TYPE
+    )
+    assert "condition_relations" not in annotation["payload"]

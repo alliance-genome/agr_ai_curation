@@ -343,7 +343,12 @@ content: |
     exactly as a Condition Relation Type vocabulary term — typically `has_condition` (the
     expression holds under this condition), or `induced_by`, `ameliorated_by`,
     `exacerbated_by` when the paper frames the condition that way. Use `has_condition` unless
-    the paper clearly states an inducing/ameliorating/exacerbating relationship.
+    the paper clearly states an inducing/ameliorating/exacerbating relationship. The negated
+    forms `not_induced_by`, `not_ameliorated_by`, `not_exacerbated_by` are also valid Condition
+    Relation Type terms; use one ONLY when the paper explicitly states the condition did NOT
+    induce/ameliorate/exacerbate the expression (a rare, explicit negative result). Never infer
+    a negated relation from the absence of an effect — if the paper does not assert the
+    negative, use `has_condition`.
   - `conditions`: a list of the experimental conditions under that relation. For EACH
     condition, set only the fields the paper states:
     - `condition_class_curie`: the ZECO class naming the experimental-variable TYPE (e.g.
