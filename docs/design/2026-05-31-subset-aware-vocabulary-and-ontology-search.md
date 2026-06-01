@@ -91,7 +91,16 @@ subset) and a disease e2e trace (live CV call carried `subset:"AGM Disease Relat
 fields: condition_relation_type wired but inert (conditions deferred, D6); Expression Relation has no subset;
 allele is mention-only (no association-relation field); spatial qualifiers are the ontology axis (Part B).
 
-### Part B — ontology slims: MECHANISM BUILT + PROVEN, NO FIELD WIRED (commit 21c56017)
+### Part B — ontology slims: BUILT, THEN REVERTED (commit 21c56017, reverted 2026-06-01)
+
+> DECISION (Chris, 2026-06-01): **Part B was REVERTED — ontology curation always searches the FULL ontology.**
+> Slims are DISPLAY artifacts, not curation sets. Part B's own empirical finding confirmed it (wiring the coarse
+> "Public Site" GO display slim regressed CC extraction to 0 — the specific terms curators use aren't in it). The
+> ontology-slim mechanism was removed to avoid confusing future LLM agents into restricting ontology search. The
+> build record below is kept as rationale. **Part A is a SEPARATE thing and is KEPT** — the disease-relation subset
+> is a LinkML model-correctness rule (a gene literally can't be `is_model_of`), not a display slim.
+
+The (now-reverted) build, for the record:
 Generic optional `slim` param on the shared Alliance ontology lookup tool (search_ontology/go/anatomy/life_stage),
 restricting the search AT THE QUERY LEVEL to a slim vocabularytermset's member CURIEs; fail-OPEN on DB error
 (a transient failure never wrecks extraction); config-driven (binding `slim` input + field `term_source.slim`);
@@ -106,15 +115,13 @@ zero backend/src changes. Proven via direct tool API (GO CC "nucleus" 8->1, "cyt
 - Disease (DOID) / phenotype (HP/MP) have NO curated vocabularytermset slim (only raw OBO ontologyterm_subsets
   tags). N/A.
 
-### Open questions for Chris (post-subset-work)
-- S1 — **Curation vs display slims.** The vocabularytermset "Public Site" slims are DISPLAY slims (coarse), not
-  extraction-appropriate. To actually USE ontology-slim search we need field-appropriate EXTRACTION slims
-  (finer, curation-relevant term sets) — a data-curation task, not code. The generic mechanism is in place and
-  proven; it just needs the right slim data.
-- S2 — **Group/MOD layer is the natural next step for anatomy/stage.** A ZFIN/WB curator's login group should
-  supply the organism-appropriate ontology + slim at request time, composed (intersection) with the data-type
-  slim. The tools carry a comment marking this composition point. Designed-for; not built.
-- S3 — **Exact-CURIE consistency.** Part A applies the CV subset to BOTH search and the exact get_vocabulary_term
-  (so a wrong-subtype CURIE is rejected at validation). Part B restricts only the ontology SEARCH helpers, not
-  exact get_ontology_term (a curator-picked out-of-slim CURIE is not rejected). Decide whether the ontology slim
-  should also gate exact-CURIE validation for parity.
+### Final state / open items
+- **Ontology term search: CLOSED — always use the FULL ontology.** Slims are display-only; Part B reverted. No
+  ontology-slim restriction in the codebase. (Lesson: the curated "Public Site" vocabularytermset slims are too
+  coarse for extraction; a curator needs the most specific correct term.)
+- **CV per-context subsets: KEPT (Part A).** This is model-correctness, not display — disease relations are
+  restricted to the subject-type subset (R2). If any other CV field ever needs the same model-correctness
+  restriction, the generic Part A `subset` param + `payload_keyed_literal` selector are there to reuse.
+- **Organism scoping (if ever wanted):** restricting a curator's ontology search to their MOD's organism (e.g.
+  ZFA for a ZFIN curator) is better served by the EXISTING `ontology_term_type` filter than by a slim — noted, not
+  a current need.

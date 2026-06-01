@@ -488,9 +488,8 @@ clean (or issues resolved); Status Table updated; committed + pushed to main.
     lookup tool; disease_relation_cv_lookup now selects relation_subsets[subject_type], so e.g. is_model_of
     on a GeneDiseaseAnnotation is rejected. relation_subsets / DISEASE_RELATION_SUBSETS are now LIVE. This
     grew into the broader subset-aware-search initiative — see
-    docs/design/2026-05-31-subset-aware-vocabulary-and-ontology-search.md (Part A CV subsets DONE; Part B
-    ontology slims mechanism built but unwired pending field-appropriate extraction slims; open questions
-    S1-S3 + the future group/MOD layer).
+    docs/design/2026-05-31-subset-aware-vocabulary-and-ontology-search.md (Part A CV subsets DONE/KEPT; Part B
+    ontology slims REVERTED — slims are display-only, ontology curation always uses the FULL ontology).
   * R3 — subject with no durable identifier: when a paper names a subject/AGM with no MOD identifier (e.g.
     the e2e AGM "elav; APP; BACE heterozygous flies"), the active subject binding emits selector_missing_field
     (severity error, non-structural) — an accurate curation gap. Curators may want a softer finding.

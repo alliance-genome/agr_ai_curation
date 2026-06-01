@@ -759,198 +759,6 @@ def _restrict_vocabulary_results_to_subset(
     ]
 
 
-# =============================================================================
-# Ontology slim restriction (Part B: data-type-axis slims for ONTOLOGY search).
-#
-# Parallel of the controlled-vocabulary subset mechanism above, for the ontology
-# lookup methods (search_ontology_terms / search_go_terms / search_anatomy_terms /
-# search_life_stage_terms). A "slim" is a curated vocabularytermset whose member
-# term NAMES are ontology CURIEs (e.g. 'Cellular Components Slim Terms Public Site'
-# whose members are GO:0005634, GO:0005829, ...). When a slim is supplied, the
-# ontology search is restricted AT THE QUERY LEVEL to those member CURIEs
-# (WHERE curie IN members) — the slim is a bounded curated set, so this is correct
-# and efficient and does NOT post-filter a relevance-truncated page. When absent,
-# behavior is IDENTICAL to today (the full ontology is searched).
-# =============================================================================
-
-
-def _normalize_slim_constraints(slim: Optional[Union[str, List[str]]]) -> List[str]:
-    """Normalize the optional ontology ``slim`` parameter into a de-duplicated name list.
-
-    Accepts a single slim name/id or a list of them; returns ``[]`` when no slim is
-    supplied (full-ontology behavior, unchanged). Normalization is identical to the
-    controlled-vocabulary ``subset`` parameter (see ``_normalize_subset_constraints``);
-    a slim is just a vocabularytermset whose members are ontology CURIEs.
-    """
-
-    return _normalize_subset_constraints(slim)
-
-
-def _ontology_slim_member_curies(
-    db: Any,
-    slims: List[str],
-) -> Tuple[Optional[frozenset], List[str]]:
-    """Resolve the member CURIE set for the supplied ontology slim constraint(s).
-
-    Each element of ``slims`` is a vocabularytermset name (or numeric id) whose member
-    term names are ontology CURIEs. The returned set is the UNION of the members of every
-    supplied slim (UPPER-cased for case-insensitive ``ontologyterm.curie`` comparison).
-    Non-CURIE placeholder members that some slims carry (e.g. 'otherLocations', 'Other',
-    'post embryonic, pre-adult') are kept in the set but simply never match a real
-    ``ontologyterm.curie``, which is the desired behavior. Returns ``(None, warnings)``
-    when ``slims`` is empty (no restriction).
-
-    FAIL-OPEN (deliberately the opposite of the controlled-vocabulary subset helper).
-    The ontology search feeds the EXTRACTOR's term resolution; if a transient DB error
-    prevented us from resolving the slim members, returning an empty set would silently
-    drop every candidate and wreck extraction. So on any setup/query failure we return
-    ``None`` (no restriction -> unrestricted full-ontology search) plus a warning. A
-    slim that genuinely resolves to zero CURIE members (e.g. an unknown slim name) is a
-    real curated answer and DOES restrict (the caller surfaces the warning), but a
-    failure to resolve at all must not regress extraction.
-
-    # FUTURE — group/MOD-login composition.
-    # This resolves only the DATA-TYPE axis (the slim supplied via per-field binding
-    # config). The future group/MOD axis is a SEPARATE constraint: the effective search
-    # set becomes the INTERSECTION of this data-type CURIE set and the logged-in
-    # curator's group CURIE set (sourced at request time). The effective ontology search
-    # set = (data-type slim ∩ group/MOD slim). That intersection slots in right here —
-    # e.g. ``return (data_type_curies & group_curies), warnings`` — and needs no change to
-    # the tool's public ``slim`` parameter. See the design doc's
-    # "FUTURE — group/MOD-login subset layer" section.
-    """
-
-    if not slims:
-        return None, []
-
-    warnings: List[str] = []
-    session = None
-    try:
-        from sqlalchemy import text
-
-        session = create_db_session(db)
-        if session is None:
-            # Fail OPEN: no DB session -> do not restrict (full ontology), warn.
-            warnings.append("slim_restriction_unavailable:no_db_session")
-            return None, warnings
-    except Exception as exc:  # pragma: no cover - defensive import/setup guard
-        logger.debug("Ontology slim member resolution setup failed: %s", exc)
-        warnings.append("slim_restriction_unavailable:setup_error")
-        return None, warnings
-
-    try:
-        sql_query = text(
-            """
-            SELECT UPPER(vt.name) AS member_curie
-            FROM vocabularytermset vts
-            JOIN vocabularytermset_vocabularyterm m
-                ON m.vocabularytermsets_id = vts.id
-            JOIN vocabularyterm vt
-                ON vt.id = m.memberterms_id
-            WHERE (
-                UPPER(vts.name) = UPPER(:slim_name)
-                OR (:slim_id IS NOT NULL AND vts.id = :slim_id)
-            )
-            """
-        )
-        union: set = set()
-        for slim_name in slims:
-            try:
-                slim_id = int(slim_name)
-            except (TypeError, ValueError):
-                slim_id = None
-            rows = session.execute(
-                sql_query,
-                {"slim_name": slim_name, "slim_id": slim_id},
-            ).fetchall()
-            members = {str(row[0]) for row in rows if row[0] is not None}
-            if not members:
-                warnings.append(f"slim_not_found_or_empty:{slim_name}")
-            union |= members
-        return frozenset(union), warnings
-    except Exception as exc:
-        logger.debug("Ontology slim member resolution failed for %s: %s", slims, exc)
-        # Fail OPEN: query error -> do not restrict (full ontology), warn.
-        warnings.append("slim_restriction_unavailable:query_error")
-        return None, warnings
-    finally:
-        if session is not None:
-            session.close()
-
-
-def _restrict_ontology_results_to_slim(
-    results_data: List[Dict[str, Any]],
-    member_curies: Optional[frozenset],
-) -> List[Dict[str, Any]]:
-    """Filter resolved ontology-term rows to the slim member CURIE set.
-
-    ``member_curies`` is None -> no restriction (full ontology, unchanged). Otherwise
-    keep only rows whose CURIE is a slim member (compared case-insensitively). This is a
-    safety backstop applied on top of the query-level restriction below; the bounded
-    slim makes both correct.
-    """
-
-    if member_curies is None:
-        return results_data
-    return [
-        row
-        for row in results_data
-        if str(row.get("curie") or "").strip().upper() in member_curies
-    ]
-
-
-# When a slim is applied, the underlying DB label search is run with this large
-# effective limit so the bounded slim intersection is NOT starved by a small
-# user-facing limit (the DB returns up to `limit` relevance-ranked rows; a generic
-# query could fill that page with non-slim terms and miss in-slim matches that rank
-# just below). The slim is bounded (tens of CURIEs), so over-fetching here is cheap;
-# the user's limit is re-applied AFTER the slim restriction. This is what makes the
-# restriction query-level over the bounded curated set rather than a post-filter of a
-# relevance-truncated page (the Part A review's concern for large vocabularies).
-_SLIM_SEARCH_EFFECTIVE_LIMIT = 500
-
-
-def _slim_effective_limit(
-    limit_value: Optional[int], slims: List[str]
-) -> Optional[int]:
-    """Effective DB-search limit: large when a slim is applied, else the caller's limit."""
-
-    if not slims:
-        return limit_value
-    if limit_value is None:
-        return _SLIM_SEARCH_EFFECTIVE_LIMIT
-    return max(int(limit_value), _SLIM_SEARCH_EFFECTIVE_LIMIT)
-
-
-def _apply_ontology_slim_to_results(
-    db: Any,
-    results_data: List[Dict[str, Any]],
-    slims: List[str],
-    warnings: List[str],
-    limit_value: Optional[int] = None,
-) -> List[Dict[str, Any]]:
-    """Resolve the slim member CURIEs and restrict ``results_data`` to them.
-
-    The slim is a bounded curated CURIE set, so restricting the candidate rows to the
-    slim members is the query-level restriction the design calls for (WHERE curie IN
-    members applied to a bounded set). The caller over-fetches (see
-    ``_slim_effective_limit``) so the bounded slim intersection is complete; the user's
-    ``limit_value`` is re-applied here AFTER restriction. Appends ``ontology_slim_applied``
-    plus any resolution warnings; when slim resolution fails (fail-open), ``member_curies``
-    is None and the full result set is returned unchanged.
-    """
-
-    if not slims:
-        return results_data
-    member_curies, slim_warnings = _ontology_slim_member_curies(db, slims)
-    restricted = _restrict_ontology_results_to_slim(results_data, member_curies)
-    if limit_value is not None and member_curies is not None:
-        restricted = restricted[: int(limit_value)]
-    warnings.append("ontology_slim_applied:" + "|".join(slims))
-    warnings.extend(slim_warnings)
-    return restricted
-
-
 def _entity_mapping_result(result: Dict[str, Any]) -> Dict[str, Any]:
     row = dict(result)
     if row.get("entity_curie") is not None:
@@ -1302,7 +1110,6 @@ def agr_curation_query(
     terms: Optional[List[str]] = None,
     vocabulary: Optional[str] = None,
     subset: Optional[Union[str, List[str]]] = None,
-    slim: Optional[Union[str, List[str]]] = None,
     term_name: Optional[str] = None,
     abbreviation: Optional[str] = None,
     synonym: Optional[str] = None,
@@ -1352,18 +1159,6 @@ def agr_curation_query(
             'Via Orthology Disease Relation'). When omitted, behavior is unchanged
             (the full vocabulary is searched). A future group/MOD subset will compose
             with this set by intersection — see _vocabulary_term_set_members.
-        slim: Optional ontology slim constraint(s) for the ontology search methods
-            (search_ontology_terms / search_go_terms / search_anatomy_terms /
-            search_life_stage_terms). A slim is the name (or id) of a vocabularytermset
-            whose member term names are ontology CURIEs (e.g. 'Cellular Components Slim
-            Terms Public Site'). When supplied, the ontology search is restricted AT THE
-            QUERY LEVEL to that slim's member CURIEs (the slim is a bounded curated set).
-            Accepts a single slim name or a list; with a list the restriction is the
-            UNION of the named slims' members. When omitted, behavior is unchanged (the
-            full ontology is searched). Slim resolution fails OPEN: a transient DB error
-            falls back to an unrestricted search (with a warning) rather than dropping
-            every candidate. A future group/MOD slim will compose with this set by
-            intersection — see _ontology_slim_member_curies.
         term_name: Controlled vocabulary term name to search or resolve
         abbreviation: Controlled vocabulary term abbreviation to search or resolve
         synonym: Controlled vocabulary synonym to search or resolve
@@ -1433,7 +1228,6 @@ def agr_curation_query(
                 method,
                 term=term,
                 ontology_term_type=ontology_term_type,
-                slim=_normalize_slim_constraints(slim) or None,
                 exact_match=exact_match,
                 include_synonyms=include_synonyms,
                 limit=limit_value,
@@ -3103,21 +2897,17 @@ def agr_curation_query(
                     ),
                 )
 
-            slim_constraints = _normalize_slim_constraints(slim)
             results = db.search_ontology_terms(
                 term=term,
                 ontology_type=ontology_term_type,
                 exact_match=exact_match,
                 include_synonyms=include_synonyms,
-                limit=_slim_effective_limit(limit_value, slim_constraints),
+                limit=limit_value,
             )
             results_data = [
                 _ontology_term_result(result)
                 for result in results
             ]
-            results_data = _apply_ontology_slim_to_results(
-                db, results_data, slim_constraints, warnings, limit_value
-            )
             results_data, invalid_curie_count = _validate_curie_list(results_data)
             if invalid_curie_count > 0:
                 warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
@@ -3130,7 +2920,6 @@ def agr_curation_query(
                     method,
                     term=term,
                     ontology_term_type=ontology_term_type,
-                    slim=slim_constraints or None,
                     exact_match=exact_match,
                     include_synonyms=include_synonyms,
                     limit=limit_value,
@@ -3415,22 +3204,16 @@ def agr_curation_query(
                     ),
                 )
 
-            slim_constraints = _normalize_slim_constraints(slim)
             results = db.search_anatomy_terms(
                 term=term,
                 data_provider=data_provider,
                 exact_match=exact_match,
                 include_synonyms=include_synonyms,
-                limit=_slim_effective_limit(limit_value, slim_constraints)
+                limit=limit_value
             )
             results_data = [{"curie": r.curie, "name": r.name, "ontology_type": r.ontology_type} for r in results]
-            validation_warnings: List[str] = []
-            results_data = _apply_ontology_slim_to_results(
-                db, results_data, slim_constraints, validation_warnings, limit_value
-            )
             results_data, invalid_curie_count = _validate_curie_list(results_data)
-            if invalid_curie_count > 0:
-                validation_warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
+            validation_warnings = [f"invalid_curie_prefixes:{invalid_curie_count}"] if invalid_curie_count > 0 else []
 
             return _lookup_response(
                 method=method,
@@ -3441,7 +3224,6 @@ def agr_curation_query(
                     method,
                     term=term,
                     data_provider=data_provider,
-                    slim=slim_constraints or None,
                     exact_match=exact_match,
                     include_synonyms=include_synonyms,
                     limit=limit_value,
@@ -3461,22 +3243,16 @@ def agr_curation_query(
                     ),
                 )
 
-            slim_constraints = _normalize_slim_constraints(slim)
             results = db.search_life_stage_terms(
                 term=term,
                 data_provider=data_provider,
                 exact_match=exact_match,
                 include_synonyms=include_synonyms,
-                limit=_slim_effective_limit(limit_value, slim_constraints)
+                limit=limit_value
             )
             results_data = [{"curie": r.curie, "name": r.name, "ontology_type": r.ontology_type} for r in results]
-            validation_warnings: List[str] = []
-            results_data = _apply_ontology_slim_to_results(
-                db, results_data, slim_constraints, validation_warnings, limit_value
-            )
             results_data, invalid_curie_count = _validate_curie_list(results_data)
-            if invalid_curie_count > 0:
-                validation_warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
+            validation_warnings = [f"invalid_curie_prefixes:{invalid_curie_count}"] if invalid_curie_count > 0 else []
 
             return _lookup_response(
                 method=method,
@@ -3487,7 +3263,6 @@ def agr_curation_query(
                     method,
                     term=term,
                     data_provider=data_provider,
-                    slim=slim_constraints or None,
                     exact_match=exact_match,
                     include_synonyms=include_synonyms,
                     limit=limit_value,
@@ -3503,22 +3278,16 @@ def agr_curation_query(
                     attempted_query=_attempt_query(method, term=term),
                 )
 
-            slim_constraints = _normalize_slim_constraints(slim)
             results = db.search_go_terms(
                 term=term,
                 go_aspect=go_aspect,
                 exact_match=exact_match,
                 include_synonyms=include_synonyms,
-                limit=_slim_effective_limit(limit_value, slim_constraints)
+                limit=limit_value
             )
             results_data = [{"curie": r.curie, "name": r.name, "namespace": r.namespace} for r in results]
-            validation_warnings: List[str] = []
-            results_data = _apply_ontology_slim_to_results(
-                db, results_data, slim_constraints, validation_warnings, limit_value
-            )
             results_data, invalid_curie_count = _validate_curie_list(results_data)
-            if invalid_curie_count > 0:
-                validation_warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
+            validation_warnings = [f"invalid_curie_prefixes:{invalid_curie_count}"] if invalid_curie_count > 0 else []
 
             return _lookup_response(
                 method=method,
@@ -3529,7 +3298,6 @@ def agr_curation_query(
                     method,
                     term=term,
                     go_aspect=go_aspect,
-                    slim=slim_constraints or None,
                     exact_match=exact_match,
                     include_synonyms=include_synonyms,
                     limit=limit_value,
@@ -4318,17 +4086,11 @@ def _ontology_lookup_result(
 ) -> AgrQueryResult:
     # term_source is the canonical field-scoped selector metadata. lookup declares
     # which package-owned method may be called, but must not override term filters.
-    # An optional `slim` on term_source (a curated vocabularytermset whose members are
-    # ontology CURIEs) restricts the EXTRACTOR-side search to the slim's members, the
-    # same query-level restriction the validator uses — config-driven, no domain names.
-    # When absent, behavior is unchanged (full ontology). See _ontology_slim_member_curies.
-    slim = _normalize_slim_constraints(term_source.get("slim")) or None
     if lookup_method == "search_anatomy_terms":
         return _AGR_QUERY_CALLABLE(
             method="search_anatomy_terms",
             term=normalized_phrase,
             data_provider=data_provider,
-            slim=slim,
             exact_match=exact_match,
             include_synonyms=True,
             limit=limit_value,
@@ -4338,7 +4100,6 @@ def _ontology_lookup_result(
             method="search_life_stage_terms",
             term=normalized_phrase,
             data_provider=data_provider,
-            slim=slim,
             exact_match=exact_match,
             include_synonyms=True,
             limit=limit_value,
@@ -4355,7 +4116,6 @@ def _ontology_lookup_result(
             method="search_go_terms",
             term=normalized_phrase,
             go_aspect=go_aspect,
-            slim=slim,
             exact_match=exact_match,
             include_synonyms=True,
             limit=limit_value,
@@ -4372,7 +4132,6 @@ def _ontology_lookup_result(
             method="search_ontology_terms",
             term=normalized_phrase,
             ontology_term_type=ontology_term_type,
-            slim=slim,
             exact_match=exact_match,
             include_synonyms=True,
             limit=limit_value,
@@ -4679,10 +4438,6 @@ def get_domain_field_term_options(
             ):
                 continue
             lookup_method = lookup.get("method")
-            # Optional config-driven slim on the routed candidate's term_source restricts
-            # the search to the slim's member CURIEs (see _ontology_slim_member_curies);
-            # absent -> full ontology (unchanged).
-            candidate_slim = _normalize_slim_constraints(candidate_source.get("slim")) or None
             if lookup_method == "search_anatomy_terms":
                 if not data_provider:
                     warnings.append("anatomy_lookup_skipped:data_provider_required")
@@ -4691,7 +4446,6 @@ def get_domain_field_term_options(
                     method="search_anatomy_terms",
                     term=normalized_phrase,
                     data_provider=data_provider,
-                    slim=candidate_slim,
                     exact_match=exact_match,
                     include_synonyms=True,
                     limit=limit_value,
@@ -4701,7 +4455,6 @@ def get_domain_field_term_options(
                     method="search_go_terms",
                     term=normalized_phrase,
                     go_aspect=candidate_source.get("go_aspect"),
-                    slim=candidate_slim,
                     exact_match=exact_match,
                     include_synonyms=True,
                     limit=limit_value,
