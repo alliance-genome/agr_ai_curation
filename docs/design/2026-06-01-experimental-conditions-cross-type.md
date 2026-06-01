@@ -195,6 +195,23 @@ first build step (engine extension), gated + reviewed like the one-level engine 
   (same anti-hallucination rule as R4), especially for the sparse anatomy/GO/taxon fields.
 
 ## Status log
-- 2026-06-01: design written (go-big / all-host-types / validate-everything per Chris). NEXT: survey nesting
-  depth + validator I/O, resolve D-D/D-E + nested-multivalued, then build disease-first gated, then GE +
-  phenotype.
+- 2026-06-01: design written (go-big / all-host-types / validate-everything per Chris).
+- 2026-06-01: NESTED FAN-OUT ENGINE landed (f2c609a0) — generic N-level fan-out (condition_relations[i].conditions[j]).
+- 2026-06-01: DISEASE CONDITIONS LANDED (0fa7afda). Composite per-condition validation (the kept
+  experimental_condition agent, one fan-out per ExperimentalCondition, batched) + full nested extraction +
+  staging (grounded CURIEs, evidence via evidence_record_ids) + materialization. Engine got a 2nd refinement
+  (ValidatorBindingMatch.resolve_input_path — sibling input_field index resolution across relation/condition
+  depths). LIVE-PROVEN on a concrete GeneDiseaseAnnotation (the gate that caught the bugs). Defects found via
+  the live proof + my review, all FIXED + re-proven: (1) both condition bindings now scope to all 4 object_types
+  + condition fields declared on the 3 concrete subtypes (materializer emits concrete subtypes; abstract-only
+  scoping fired on 0 real objects — a silent-no-validation bug the tests + static review missed); (2) relation
+  is context_only in the composite (was guessing a non-existent 'Condition Relation' vocab; the dedicated
+  disease_condition_relation_lookup owns it, vocab 'Condition Relation Type'); (3) chemical validated via
+  agr_curation_query ontology lookup (ChEBI is in the curation DB; was a 404 ChEBI REST URL); (4)
+  expected_result_fields = condition_class_curie (always present) NOT condition_id (optional, absent in ~74%).
+  587 broad suite, 0 regressions; my review + independent Opus review clean; live proof: 2 conditions resolve
+  incl. ChEBI:9168->sirolimus, no condition_id required.
+- NEXT: GE + phenotype conditions — replicate the proven disease pattern. GE already has the field structure
+  (currently inert/"field-addressed"); phenotype from scratch (LinkML: condition_relations on abstract
+  Annotation that PhenotypeAnnotation inherits). Same composite agent + nested engine — mostly pack wiring +
+  staging + materialization + prompt per pack, gated + live-proven each.
