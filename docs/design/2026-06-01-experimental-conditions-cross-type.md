@@ -67,14 +67,19 @@ over vocabularies), so it covers ZECO / anatomy / taxon by an ontology parameter
   validated against its ontology (table above). (Chris: "validate everything that is validate-able, always.")
 - **D-C Extract ALL conditions.** The extractor stages the full nested structure for every condition stated
   in the paper. (Chris: "extraction lets do all conditions.")
-- **D-D Per-field validators, NOT a single composite.** PROPOSED: validate each condition field with its
-  specialist validator (the table above) rather than one opaque `experimental_condition_validation` composite.
-  Rationale: reuses the proven per-ontology validators (DOID/ECO/CV/gene all already work this way), each field
-  gets the right specialist + ontology scoping, it composes naturally with the multivalued engine + batching,
-  and it avoids inventing the undefined composite "validation contract." The kept `experimental_condition`
-  composite agent is then retired/unused (note it; don't delete envelope-legacy per Phase-6 scope). ALTERNATIVE
-  if you prefer: one composite call per condition (fewer calls, but a complex new agent contract). **Need your
-  call.**
+- **D-D COMPOSITE at the CONDITION grain — REVISED 2026-06-01 (Chris).** First chose per-field; Chris then
+  raised that the MEANING of a condition is the COMBINATION of fields, not each field alone — confirmed by the
+  data: `condition_class` names the experimental-variable TYPE ("chemical treatment", "temperature exposure",
+  "radiation", …) and the companion fields fill it (chemical+quantity / dose / etc.). Per-field validation
+  passes incoherent combinations (e.g. class="temperature exposure" + a ChEBI chemical — each field valid, the
+  condition is nonsense) and misses missing-companion cases. So the UNIT of validation is the `ExperimentalCondition`,
+  not the field. Use the KEPT `experimental_condition` agent (one binding per condition object), which its prompt
+  already defines as: "validate one composite ExperimentalCondition target by COMPOSING lower-level validator and
+  package-tool evidence into a SINGLE CONDITION-LEVEL DECISION" — i.e. it does the per-field ontology/CV/chemical
+  existence lookups (composing the lower-level validators) AND the cross-field coherence in one verdict. So we
+  get per-field existence + cross-field meaning together, and the contract is substantially already written (the
+  agent exists; it's only `under_development` because the binding isn't activated). Still fans out per-condition
+  via the multivalued engine + batches. (The per-field-only option is rejected: it can't see the combination.)
 - **D-E Generic, replicated per host pack.** The condition field block + the per-field bindings are identical
   across the three host packs (same model_ref `ExperimentalConditionPayload`, same validator agents). Define
   once, replicate consistently (the pack architecture is self-contained per pack; confirm there is no
@@ -95,13 +100,25 @@ Conditions, like every field, pass through two distinct layers:
    (relation-type CV, ZECO class/id, ChEBI chemical, GO, anatomy, taxon) to REAL CURIEs while reading. This
    matters MORE for conditions than for DOID/ECO because ZECO/ChEBI terms are obscure — the LLM should look
    them up, not guess from memory. So: extractor uses the lookup tool to stage grounded conditions →
-2. **Validation (the binding layer).** The per-field validator bindings (table above) re-validate every staged
-   condition field against its ontology/CV, deterministically, exactly like DOID/ECO/relation/qualifiers are
-   validated today — using the multivalued engine so EVERY condition (and every field) is checked, batched per
-   binding. This is the "validate later just like the other tools" layer.
+2. **Validation (the binding layer) — composite per condition, EVIDENCE-GROUNDED.** One `experimental_condition`
+   validation per `ExperimentalCondition` (D-D), fanned out per-condition by the multivalued engine + batched. It
+   composes the per-field ontology/CV/chemical lookups + a condition-level coherence verdict. CRITICALLY it
+   validates against the SOURCE TEXT, not just the ontologies: the validation request already carries the matched
+   object's evidence records (verified quotes + `source_chunk_id`/`source_section`), and the validators are
+   prompted to "resolve only from tool evidence" using `evidence_quote`/`evidence[]` as source context (verified:
+   ontology_term + controlled_vocabulary + experimental_condition prompts all do this TODAY, for every validated
+   field — so this discipline is already universal, not new). The `experimental_condition` agent specifically takes
+   `condition_statement` (source text / synthesized summary) + `evidence_quote`.
 
-Net: same shared lookup tool on BOTH sides (extractor grounds with it; validator re-checks with it) — which is
-exactly the symmetry Chris described.
+   **Builder requirement (so the chunk reaches the right condition):** the extractor must STAGE each
+   `ExperimentalCondition` WITH its anchoring source text — the verified quote / `condition_free_text` /
+   `condition_statement` it came from — so the per-condition composite validator sees "the paper said: *treated
+   with 3 pM sirolimus*" beside the `(chemical treatment, sirolimus, 3 pM)` it is checking. This is the same
+   per-element evidence discipline we want everywhere; conditions make it explicit.
+
+Net: same shared lookup tool on BOTH sides (extractor grounds with it; validator re-checks with it), and the
+validator always sees the most-important source chunk for what it's validating — exactly the symmetry +
+evidence-grounding Chris described.
 
 ## KEY TECHNICAL RISK — two-level nested multivalued (the one real engineering question)
 
@@ -120,9 +137,17 @@ fan-out. Options:
    fan-out on `conditions[]` suffices. NEED A DB CHECK: how often does one annotation have >1 condition_relation
    vs >1 condition within a relation? (Survey before deciding.)
 
-RESOLUTION: survey the nesting depth; if >1 condition_relation per annotation is real, extend the engine to
-nested fan-out (option 1) as part of this work. Either way, every CONDITION gets validated; the question is
-whether the outer `condition_relations` list also needs fan-out.
+RESOLVED 2026-06-01 (survey): BOTH levels have real multiplicity, so OPTION 1 (extend the engine to nested
+two-level fan-out) is REQUIRED for the go-big "validate everything always" scope:
+- `conditions[]` per condition_relation: 19,549 relations; 3,379 (17%) hold >1 condition (up to 9). Inner list
+  is COMMONLY multi -> must fan out.
+- `condition_relations[]` per annotation: ~97-99% have exactly 1, BUT a real tail has 2+ — phenotype 13,975
+  annotations, disease 51. So a "condition_relations is always length-1" shortcut would MISS validating the
+  conditions in the 2nd+ relation for ~14k phenotype annotations. Outer list must fan out too.
+So the engine needs nested fan-out: fan `condition_relations[i]`, and within each fan `conditions[j]`, producing
+per-condition targets `condition_relations[i].conditions[j]`. The index-capable write-back already handles
+`a[i].b[j].c` paths; the gap is the match FAN-OUT recursing into a nested multivalued field. This becomes the
+first build step (engine extension), gated + reviewed like the one-level engine was.
 
 ## Build plan (phased, gated like multivalued/R3/R4)
 1. **Survey** the nesting depth (DB) + confirm the per-field ontology/validator mapping end-to-end (does
