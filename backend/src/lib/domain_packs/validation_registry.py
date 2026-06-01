@@ -15,6 +15,7 @@ from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     DefinitionState,
     DomainEnvelope,
+    parse_field_path,
     validate_field_path_syntax,
 )
 from src.schemas.domain_pack_metadata import (
@@ -348,6 +349,7 @@ class ValidatorBindingMatch:
     object_definition: DomainPackObjectDefinition | None = None
     field_definition: DomainPackFieldDefinition | None = None
     policy: FieldValidationPolicy | None = None
+    element_index: int | None = None
 
     @property
     def object_type(self) -> str | None:
@@ -359,9 +361,20 @@ class ValidatorBindingMatch:
 
     @property
     def field_path(self) -> str | None:
-        if self.field_definition is not None:
-            return self.field_definition.field_path
-        return None
+        """Return the validation target field path for this match.
+
+        For a fanned-out multivalued element match the path is resolved to the
+        concrete ``field[i]`` slot the engine is validating/materializing; for every
+        scalar or legacy ``[0]``-literal match it is the declared bare field path,
+        unchanged.
+        """
+
+        if self.field_definition is None:
+            return None
+        base_field_path = self.field_definition.field_path
+        if self.element_index is None:
+            return base_field_path
+        return f"{base_field_path}[{self.element_index}]"
 
     def target_details(self) -> dict[str, Any]:
         """Return stable structured target metadata."""
@@ -393,9 +406,11 @@ class ValidatorBindingMatch:
             if provider_refs:
                 details["object_provider_refs"] = provider_refs
         if self.field_definition is not None:
-            details["field_path"] = self.field_definition.field_path
+            details["field_path"] = self.field_path
             details["field_type"] = self.field_definition.field_type.value
             details["field_required"] = self.field_definition.required
+            if self.element_index is not None:
+                details["element_index"] = self.element_index
             if self.field_definition.model_ref is not None:
                 details["field_model_ref"] = self.field_definition.model_ref
             provider_refs = _metadata_provider_refs(self.field_definition.metadata)
@@ -532,6 +547,24 @@ class DomainPackValidationRegistry:
                 matched_fields = _matching_fields(binding, object_definition)
                 if matched_fields:
                     for field_definition in matched_fields:
+                        policy = policies_by_key.get(
+                            (
+                                object_envelope.object_type,
+                                field_definition.field_path,
+                            )
+                        )
+                        if field_definition.multivalued:
+                            matches.extend(
+                                _multivalued_element_matches(
+                                    binding=binding,
+                                    envelope=envelope,
+                                    object_envelope=object_envelope,
+                                    object_definition=object_definition,
+                                    field_definition=field_definition,
+                                    policy=policy,
+                                )
+                            )
+                            continue
                         matches.append(
                             ValidatorBindingMatch(
                                 binding=binding,
@@ -539,12 +572,7 @@ class DomainPackValidationRegistry:
                                 object_envelope=object_envelope,
                                 object_definition=object_definition,
                                 field_definition=field_definition,
-                                policy=policies_by_key.get(
-                                    (
-                                        object_envelope.object_type,
-                                        field_definition.field_path,
-                                    )
-                                ),
+                                policy=policy,
                             )
                         )
                     continue
@@ -1816,6 +1844,62 @@ def _matching_objects(
                 continue
         matches.append((object_envelope, object_definition))
     return tuple(matches)
+
+
+def _multivalued_element_matches(
+    *,
+    binding: ValidatorBinding,
+    envelope: DomainEnvelope,
+    object_envelope: CuratableObjectEnvelope,
+    object_definition: DomainPackObjectDefinition,
+    field_definition: DomainPackFieldDefinition,
+    policy: FieldValidationPolicy | None,
+) -> list[ValidatorBindingMatch]:
+    """Fan one multivalued-field match out into one match per present list element.
+
+    The bare ``field_path`` is read from the object payload; each present element
+    ``0..n-1`` yields a match carrying ``element_index``. An empty or absent list (or a
+    non-list staged value) yields zero matches — there is nothing to validate, and any
+    required-but-empty structural gate still fires on the base field elsewhere.
+    """
+
+    staged_value = _payload_field_value(
+        object_envelope.payload, field_definition.field_path
+    )
+    if not isinstance(staged_value, list):
+        return []
+    return [
+        ValidatorBindingMatch(
+            binding=binding,
+            envelope=envelope,
+            object_envelope=object_envelope,
+            object_definition=object_definition,
+            field_definition=field_definition,
+            policy=policy,
+            element_index=element_index,
+        )
+        for element_index in range(len(staged_value))
+    ]
+
+
+def _payload_field_value(payload: Mapping[str, Any], field_path: str) -> Any:
+    """Return the staged value at ``field_path`` within a payload, or ``None``."""
+
+    current: Any = payload
+    for part in parse_field_path(field_path):
+        if isinstance(part, str):
+            if not isinstance(current, Mapping) or part not in current:
+                return None
+            current = current[part]
+            continue
+        if (
+            not isinstance(current, (list, tuple))
+            or isinstance(current, (str, bytes, bytearray))
+            or part >= len(current)
+        ):
+            return None
+        current = current[part]
+    return current
 
 
 def _matching_fields(

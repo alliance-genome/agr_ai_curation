@@ -13,6 +13,7 @@ from .domain_envelope import (
     DefinitionState,
     DomainEnvelope,
     SchemaRef,
+    parse_field_path,
     validate_field_path_syntax,
 )
 
@@ -550,8 +551,32 @@ class DomainPackFieldDefinition(DomainPackMetadataBaseModel):
             return None
         return _validate_symbolic_name(value, info.field_name)
 
+    @property
+    def multivalued(self) -> bool:
+        """Whether this field declares per-element validation fan-out.
+
+        A ``multivalued: true`` field holds a list whose every present element is
+        validated/materialized at ``field[i]`` (rather than only the legacy ``field[0]``
+        slot). The flag lives in the freeform field ``metadata`` mapping so packs opt in
+        per field; the validation engine reads it to fan a single binding match out into
+        one match per list element.
+        """
+
+        return bool(self.metadata.get("multivalued"))
+
     @model_validator(mode="after")
     def _validate_ref_shape(self) -> "DomainPackFieldDefinition":
+        raw_multivalued = self.metadata.get("multivalued")
+        if raw_multivalued is not None:
+            if not isinstance(raw_multivalued, bool):
+                raise ValueError("field metadata 'multivalued' must be a boolean")
+            if raw_multivalued and any(
+                isinstance(part, int) for part in parse_field_path(self.field_path)
+            ):
+                raise ValueError(
+                    "multivalued fields must declare a bare field_path without a list "
+                    f"index; got {self.field_path!r}"
+                )
         if self.field_type is DomainPackFieldType.ENUM and self.enum_ref is None:
             raise ValueError("enum fields must provide enum_ref")
         if (

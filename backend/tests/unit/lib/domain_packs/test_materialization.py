@@ -16,6 +16,8 @@ from src.lib.domain_packs.materialization import (
     DomainEnvelopeMaterializationError,
     DomainPackMetadataReviewRowMaterializer,
     ValidatorResultMaterializationInput,
+    _materialized_field_path,
+    _set_payload_value,
     materialize_validator_results_into_envelope,
 )
 from src.lib.domain_packs.registry import LoadedDomainPack
@@ -1174,3 +1176,99 @@ def test_validator_materialization_rejects_invalid_source_revision():
             [item],
             source_envelope_revision=0,
         )
+
+
+def _multivalued_declared_fields() -> dict[str, DomainPackFieldDefinition]:
+    return {
+        "evidence_code_curies": DomainPackFieldDefinition(
+            field_path="evidence_code_curies",
+            field_type=DomainPackFieldType.STRING,
+            metadata={"multivalued": True},
+        ),
+        "disease_qualifier_names": DomainPackFieldDefinition(
+            field_path="disease_qualifier_names",
+            field_type=DomainPackFieldType.STRING,
+        ),
+        "object.curie": DomainPackFieldDefinition(
+            field_path="object.curie",
+            field_type=DomainPackFieldType.STRING,
+        ),
+    }
+
+
+def test_set_payload_value_writes_scalar_paths_unchanged():
+    payload: dict[str, object] = {}
+
+    _set_payload_value(payload, "object.curie", "DOID:1")
+
+    assert payload == {"object": {"curie": "DOID:1"}}
+
+
+def test_set_payload_value_overwrites_existing_indexed_slot():
+    payload = {"evidence_code_curies": ["ECO:0000315", "wrong"]}
+
+    _set_payload_value(payload, "evidence_code_curies[1]", "ECO:0000316")
+
+    assert payload == {
+        "evidence_code_curies": ["ECO:0000315", "ECO:0000316"]
+    }
+
+
+def test_set_payload_value_extends_list_to_reach_index():
+    payload = {"evidence_code_curies": ["ECO:0000315"]}
+
+    _set_payload_value(payload, "evidence_code_curies[2]", "ECO:0000501")
+
+    assert payload == {
+        "evidence_code_curies": ["ECO:0000315", None, "ECO:0000501"]
+    }
+
+
+def test_set_payload_value_creates_indexed_list_when_absent():
+    payload: dict[str, object] = {}
+
+    _set_payload_value(payload, "evidence_code_curies[0]", "ECO:0000315")
+
+    assert payload == {"evidence_code_curies": ["ECO:0000315"]}
+
+
+def test_set_payload_value_raises_for_index_into_non_list_value():
+    payload = {"evidence_code_curies": "not-a-list"}
+
+    with pytest.raises(DomainEnvelopeMaterializationError):
+        _set_payload_value(payload, "evidence_code_curies[0]", "ECO:0000315")
+
+
+def test_materialized_field_path_resolves_index_for_declared_multivalued_field():
+    declared_fields = _multivalued_declared_fields()
+
+    assert (
+        _materialized_field_path(
+            "evidence_code_curies[2]", declared_fields=declared_fields
+        )
+        == "evidence_code_curies[2]"
+    )
+
+
+def test_materialized_field_path_rejects_index_for_non_multivalued_field():
+    declared_fields = _multivalued_declared_fields()
+
+    # disease_qualifier_names stays on the legacy [0] convention (not multivalued),
+    # so an indexed write path is not materialized here.
+    assert (
+        _materialized_field_path(
+            "disease_qualifier_names[0]", declared_fields=declared_fields
+        )
+        is None
+    )
+
+
+def test_materialized_field_path_resolves_bare_field_unchanged():
+    declared_fields = _multivalued_declared_fields()
+
+    assert (
+        _materialized_field_path(
+            "evidence_code_curies", declared_fields=declared_fields
+        )
+        == "evidence_code_curies"
+    )

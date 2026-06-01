@@ -112,13 +112,16 @@ def build_domain_validation_request(
             evidence=_evidence_records_for_target(match),
         )
 
+    expected_result_fields = _element_expected_result_fields(
+        match, binding.expected_result_fields
+    )
     target = _validation_target(match, selected_inputs)
     request_payload = {
         "validator_binding_id": binding.binding_id,
         "validator_agent": binding.validator_agent.to_dict(),
         "target": target.model_dump(mode="json", exclude_none=True),
         "selected_inputs": selected_inputs,
-        "expected_result_fields": binding.expected_result_fields,
+        "expected_result_fields": expected_result_fields,
     }
     request_id = (
         "domain-validation:"
@@ -138,7 +141,7 @@ def build_domain_validation_request(
             selected_inputs=selected_inputs,
             input_selectors=selectors,
             evidence=_evidence_records_for_target(match),
-            expected_result_fields=dict(binding.expected_result_fields),
+            expected_result_fields=expected_result_fields,
         ),
         findings=(),
         selected_inputs=selected_inputs,
@@ -149,6 +152,46 @@ def build_domain_validation_request(
 
 def _selector_payload(selector: DomainPackInputSelector) -> dict[str, Any]:
     return selector.model_dump(mode="json", exclude_none=True)
+
+
+def _element_indexed_path(match: ValidatorBindingMatch, declared_path: str) -> str:
+    """Resolve a declared bare path to ``field[i]`` for a fanned-out element match.
+
+    For a multivalued-element match (``element_index`` set) a declared path that names
+    the multivalued base field is rewritten to point at the element the engine is
+    validating. Every other path — and every scalar/legacy ``[0]`` match (no
+    ``element_index``) — is returned unchanged, so non-multivalued behavior is identical.
+    """
+
+    if match.element_index is None or match.field_definition is None:
+        return declared_path
+    base_field_path = match.field_definition.field_path
+    if declared_path != base_field_path:
+        return declared_path
+    return f"{base_field_path}[{match.element_index}]"
+
+
+def _element_expected_result_fields(
+    match: ValidatorBindingMatch,
+    expected_result_fields: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Retarget ``expected_result_fields`` write-back paths to the matched element.
+
+    Each value that names the multivalued base field is rewritten to ``field[i]`` so a
+    resolved value materializes onto the element the engine validated. Values that name
+    other fields are unchanged; for scalar/legacy matches the mapping is returned as-is.
+    """
+
+    if match.element_index is None or match.field_definition is None:
+        return dict(expected_result_fields)
+    return {
+        result_field: (
+            _element_indexed_path(match, raw_path)
+            if isinstance(raw_path, str)
+            else raw_path
+        )
+        for result_field, raw_path in expected_result_fields.items()
+    }
 
 
 # Sources that produce a fixed/derived value rather than reading the validation
@@ -176,17 +219,18 @@ def _resolve_selector(
             return _missing(
                 input_name, selector, "payload selectors require an object target"
             )
+        resolved_path = _element_indexed_path(match, selector.path or "")
         value, exists = _value_at_path(
-            match.object_envelope.payload, selector.path or ""
+            match.object_envelope.payload, resolved_path
         )
         if not exists:
             return _missing_field(
                 input_name,
                 selector,
-                f"Payload path '{selector.path}' is missing from the target object.",
-                field_path=selector.path,
+                f"Payload path '{resolved_path}' is missing from the target object.",
+                field_path=resolved_path,
             )
-        return _single_value(input_name, selector, value, field_path=selector.path)
+        return _single_value(input_name, selector, value, field_path=resolved_path)
 
     if selector.source == "object_metadata":
         if match.object_envelope is None:

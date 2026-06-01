@@ -741,12 +741,44 @@ def _materialized_field_path(
     field_path = raw_field_path.strip()
     if field_path in declared_fields:
         return field_path
+    indexed_base = _multivalued_indexed_base(field_path, declared_fields)
+    if indexed_base is not None:
+        return field_path
     if "." not in field_path:
         return None
     _, suffix = field_path.split(".", 1)
     if suffix in declared_fields:
         return suffix
+    if _multivalued_indexed_base(suffix, declared_fields) is not None:
+        return suffix
     return None
+
+
+def _multivalued_indexed_base(
+    field_path: str,
+    declared_fields: Mapping[str, DomainPackFieldDefinition],
+) -> str | None:
+    """Return the bare base field for ``field[i]`` iff it is a declared multivalued field.
+
+    Lets validator write-back target a per-element slot (``evidence_code_curies[2]``)
+    while keeping the legacy ``field[0]`` literal convention out of scope — only fields
+    that opted into ``multivalued: true`` accept an indexed write path here.
+    """
+
+    try:
+        parts = parse_field_path(field_path)
+    except ValueError:
+        return None
+    if len(parts) < 2 or not isinstance(parts[-1], int):
+        return None
+    base_parts = parts[:-1]
+    if any(not isinstance(part, str) for part in base_parts):
+        return None
+    base_field_path = ".".join(str(part) for part in base_parts)
+    field_definition = declared_fields.get(base_field_path)
+    if field_definition is None or not field_definition.multivalued:
+        return None
+    return base_field_path
 
 
 def _propagate_materialized_mirror_paths(
@@ -1040,7 +1072,10 @@ def _match_field_ref(match: ValidatorBindingMatch) -> FieldRef | None:
         return None
     return FieldRef(
         object_ref=match.object_envelope.to_object_ref(),
-        field_path=match.field_definition.field_path,
+        # ``match.field_path`` carries the element index for a fanned-out multivalued
+        # match (``field[i]``) so per-element findings point at the right element (D6);
+        # it equals the bare path for scalar/legacy matches.
+        field_path=match.field_path,
     )
 
 
@@ -1076,24 +1111,88 @@ def _find_existing_object(
 
 def _set_payload_value(payload: dict[str, Any], field_path: str, value: Any) -> None:
     parts = parse_field_path(field_path)
-    current: dict[str, Any] = payload
-    for part in parts[:-1]:
-        if not isinstance(part, str):
-            raise DomainEnvelopeMaterializationError(
-                "Materialized validator payload paths cannot create list indexes"
+    current: Any = payload
+    for index, part in enumerate(parts[:-1]):
+        next_part = parts[index + 1]
+        if isinstance(part, str):
+            if not isinstance(current, dict):
+                raise DomainEnvelopeMaterializationError(
+                    f"Cannot materialize nested value into non-object path {field_path!r}"
+                )
+            container = _container_for_next_part(
+                current.get(part), next_part, field_path
             )
-        next_value = current.setdefault(part, {})
-        if not isinstance(next_value, dict):
+            current[part] = container
+            current = container
+            continue
+        # ``part`` is a list index: extend/descend into the staged list.
+        current = _list_slot_container(current, part, next_part, field_path)
+    leaf = parts[-1]
+    if isinstance(leaf, str):
+        if not isinstance(current, dict):
             raise DomainEnvelopeMaterializationError(
                 f"Cannot materialize nested value into non-object path {field_path!r}"
             )
-        current = next_value
-    leaf = parts[-1]
-    if not isinstance(leaf, str):
+        current[leaf] = value
+        return
+    if not isinstance(current, list):
         raise DomainEnvelopeMaterializationError(
-            "Materialized validator payload paths cannot end with a list index"
+            f"Cannot materialize list index into non-list path {field_path!r}"
         )
+    _extend_list_to_index(current, leaf)
     current[leaf] = value
+
+
+def _container_for_next_part(
+    existing: Any, next_part: str | int, field_path: str
+) -> Any:
+    """Return a container at a dict key suited to the following path part.
+
+    A missing/``None`` slot is created as the right container type. An existing value of
+    the wrong shape (e.g. a scalar where a list is required) raises rather than silently
+    discarding staged curator data — preserving the original writer's safety guarantee.
+    """
+
+    if isinstance(next_part, int):
+        if existing is None:
+            return []
+        if not isinstance(existing, list):
+            raise DomainEnvelopeMaterializationError(
+                f"Cannot materialize list index into non-list path {field_path!r}"
+            )
+        return existing
+    if existing is None:
+        return {}
+    if not isinstance(existing, dict):
+        raise DomainEnvelopeMaterializationError(
+            f"Cannot materialize nested value into non-object path {field_path!r}"
+        )
+    return existing
+
+
+def _list_slot_container(
+    current: Any,
+    index: int,
+    next_part: str | int,
+    field_path: str,
+) -> Any:
+    """Descend into ``current[index]``, extending the list and slotting a container."""
+
+    if not isinstance(current, list):
+        raise DomainEnvelopeMaterializationError(
+            f"Cannot materialize list index into non-list path {field_path!r}"
+        )
+    _extend_list_to_index(current, index)
+    container = _container_for_next_part(current[index], next_part, field_path)
+    current[index] = container
+    return container
+
+
+def _extend_list_to_index(target: list[Any], index: int) -> None:
+    """Pad ``target`` with ``None`` placeholders so ``index`` is assignable."""
+
+    while len(target) <= index:
+        target.append(None)
 
 
 def project_evidence_anchor_projections(

@@ -521,11 +521,12 @@ object_definitions:
               range: string
               db_table: informationcontententity
               db_column: curie
-      - field_path: evidence_code_curies[0]
+      - field_path: evidence_code_curies
         field_type: string
-        display_name: First evidence code CURIE
+        display_name: Evidence code CURIEs
         metadata:
           validatable: true
+          multivalued: true
           validator_binding_id: disease_evidence_code_lookup
           validator_state: active
           definition_state_category: complete
@@ -997,11 +998,12 @@ object_definitions:
           validatable: true
           validator_binding_id: disease_data_provider_lookup
           validator_state: active
-      - field_path: evidence_code_curies[0]
+      - field_path: evidence_code_curies
         field_type: string
-        display_name: First evidence code CURIE
+        display_name: Evidence code CURIEs
         metadata:
           validatable: true
+          multivalued: true
           validator_binding_id: disease_evidence_code_lookup
           validator_state: active
       # R4 optional slots (declared on the concrete subtype so validator dispatch fires).
@@ -1140,11 +1142,12 @@ object_definitions:
           validatable: true
           validator_binding_id: disease_data_provider_lookup
           validator_state: active
-      - field_path: evidence_code_curies[0]
+      - field_path: evidence_code_curies
         field_type: string
-        display_name: First evidence code CURIE
+        display_name: Evidence code CURIEs
         metadata:
           validatable: true
+          multivalued: true
           validator_binding_id: disease_evidence_code_lookup
           validator_state: active
       # R4 optional slots (declared on the concrete subtype so validator dispatch fires).
@@ -1285,11 +1288,12 @@ object_definitions:
           validatable: true
           validator_binding_id: disease_data_provider_lookup
           validator_state: active
-      - field_path: evidence_code_curies[0]
+      - field_path: evidence_code_curies
         field_type: string
-        display_name: First evidence code CURIE
+        display_name: Evidence code CURIEs
         metadata:
           validatable: true
+          multivalued: true
           validator_binding_id: disease_evidence_code_lookup
           validator_state: active
       # R4 optional slots (declared on the concrete subtype so validator dispatch fires).
@@ -1666,11 +1670,11 @@ metadata:
             - AlleleDiseaseAnnotation
             - AGMDiseaseAnnotation
           field_paths:
-            - evidence_code_curies[0]
+            - evidence_code_curies
         input_fields:
           curie:
             source: payload
-            path: evidence_code_curies[0]
+            path: evidence_code_curies
             required: false
           ontology_family:
             source: literal
@@ -1683,7 +1687,7 @@ metadata:
             value:
               - ECO
         expected_result_fields:
-          curie: evidence_code_curies[0]
+          curie: evidence_code_curies
         required: true
         blocking: false
         allow_opt_out: true

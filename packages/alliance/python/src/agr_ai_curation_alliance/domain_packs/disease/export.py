@@ -62,7 +62,9 @@ _REQUIRED_DISEASE_FIELD_PATHS = (
     "disease_annotation_subject.subject_type",
     "disease_annotation_subject.subject_identifier",
     "single_reference.reference_id",
-    "evidence_code_curies[0]",
+    # evidence_code_curies is now a `multivalued: true` field; the bare path requires a
+    # non-empty list (bool([]) is False), identical to the retired `[0]` presence check.
+    "evidence_code_curies",
     "data_provider.abbreviation",
 )
 

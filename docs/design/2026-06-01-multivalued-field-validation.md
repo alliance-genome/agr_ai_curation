@@ -139,5 +139,23 @@ proving multi-element validation end-to-end → independent Opus review → repo
 the remaining fields and retire `[0]`.
 
 ## Status log
-- 2026-06-01: design approved by Chris; doc written. NEXT: implement engine + migrate `evidence_code_curies`
-  (test implementation), gate, then expand to all multivalued DB-validated fields.
+- 2026-06-01: design approved by Chris; doc written.
+- 2026-06-01: FIRST PASS (proof) LANDED — generic engine (all 5 pieces) + `evidence_code_curies` migrated.
+  Broad suite 568 passed (+16, 0 regressions); my review + an independent Opus review both CLEAN; sandbox e2e
+  PASS (0 structural regression; fan-out proven against the LIVE deployed pack/engine: 1/2/3-element lists ->
+  1/2/3 per-element matches + requests at evidence_code_curies[0..n-1], 0->0; in-container unit suite 6/6). The
+  AD paper yielded 0 ECO codes that run, so the live LLM->ontology multi-code path is covered by the deployed
+  pack/engine run + the dispatch->materialize unit test, not a real 2-code PDF. Also flipped export.py
+  `_REQUIRED_DISEASE_FIELD_PATHS` `evidence_code_curies[0]` -> bare (semantically identical; `bool([])` False).
+- FOLLOW-UPS for the EXPANSION pass (review-confirmed, not blocking the proof):
+  * BATCHING (D5): `disease_evidence_code_lookup` is NOT batch-enabled, so a multi-ECO finding currently fans
+    out to N ontology calls, not one batched call. The ontology validator DOES support batch
+    (agent.yaml batchable:true); enabling is a one-line `batch: {enabled: true, family: ...}` block on the
+    binding. MUST wire before production use (else fan-out multiplies validator calls). Do it when migrating
+    each field.
+  * PER-ELEMENT MIRRORS: `_propagate_materialized_mirror_paths` no-ops for an indexed path
+    (`field[i]` not in declared_fields). Harmless today (no multivalued field declares
+    `materializes_to_field_paths`), but a future multivalued field WITH mirrors would silently skip per-element
+    mirroring — generalize the mirror writer if/when that case arises.
+- NEXT: land the proof pass, then EXPAND — migrate `disease_qualifier_names` + `with_gene_identifiers` (and any
+  other DB-validated `[0]` field), enable batching per binding, retire `[0]` everywhere.

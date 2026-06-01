@@ -13,7 +13,17 @@ import yaml
 from pydantic import ValidationError
 
 from src.lib.domain_packs.loader import load_domain_fixture_pack
-from src.schemas.domain_envelope import CuratableObjectStatus, field_path_exists
+from src.lib.domain_packs.input_selectors import build_domain_validation_request
+from src.lib.domain_packs.validation_registry import (
+    DomainPackValidationRegistry,
+    ValidationBindingState,
+)
+from src.schemas.domain_envelope import (
+    CuratableObjectEnvelope,
+    CuratableObjectStatus,
+    DomainEnvelope,
+    field_path_exists,
+)
 from src.schemas.domain_pack_metadata import DomainPackFieldType
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -262,7 +272,7 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
     )
     assert evidence_code_binding["input_fields"]["curie"] == {
         "source": "payload",
-        "path": "evidence_code_curies[0]",
+        "path": "evidence_code_curies",
         "required": False,
     }
     assert evidence_code_binding["input_fields"]["ontology_term_type"]["source"] == (
@@ -278,7 +288,7 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
         "ECO"
     ]
     assert evidence_code_binding["expected_result_fields"] == {
-        "curie": "evidence_code_curies[0]",
+        "curie": "evidence_code_curies",
     }
 
 
@@ -435,7 +445,7 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
     # D2 + D3 full LinkML alignment: subject and ECO evidence-code fields are now ACTIVE (unblocked).
     activated_fields = {
         "disease_annotation_subject.subject_identifier": "disease_subject_materialization",
-        "evidence_code_curies[0]": "disease_evidence_code_lookup",
+        "evidence_code_curies": "disease_evidence_code_lookup",
     }
     for field_path, binding_id in activated_fields.items():
         field = fields_by_path[field_path]
@@ -443,6 +453,12 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
         assert field.metadata["validator_state"] == "active"
         assert field.metadata["validator_binding_id"] == binding_id
         assert binding_id in validator_bindings
+
+    # Per-element validation: ECO evidence codes are declared multivalued (bare
+    # field_path + multivalued: true), so every staged code is validated, not just [0].
+    evidence_field = fields_by_path["evidence_code_curies"]
+    assert evidence_field.metadata["multivalued"] is True
+    assert evidence_field.multivalued is True
 
     for field_path in ("data_provider", "data_provider.abbreviation"):
         field = fields_by_path[field_path]
@@ -581,3 +597,54 @@ def test_tool_verified_disease_fixture_rejects_malformed_required_data():
     missing_subject_type["disease_assertions"][0]["subject"].pop("subject_type")
     with pytest.raises(ValidationError, match="subject_type"):
         tool_verified_disease_output_to_pending_envelope(missing_subject_type)
+
+
+def test_disease_evidence_code_lookup_validates_every_staged_element():
+    """A 2+-element evidence_code_curies payload fans out to one validator target
+    per element — every ECO code is validated, not just ``[0]``."""
+
+    pack = _disease_pack()
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+    evidence_codes = ["ECO:0000315", "ECO:0000316", "ECO:0000501"]
+    envelope = DomainEnvelope(
+        envelope_id="disease-multivalued-env",
+        domain_pack_id=DISEASE_DOMAIN_PACK_ID,
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneDiseaseAnnotation",
+                pending_ref_id="gene-disease-1",
+                payload={"evidence_code_curies": evidence_codes},
+            )
+        ],
+    )
+
+    matches = registry.match_bindings(
+        envelope, states=[ValidationBindingState.ACTIVE]
+    )
+    evidence_matches = [
+        match
+        for match in matches
+        if match.binding.binding_id == "disease_evidence_code_lookup"
+        and match.field_definition is not None
+    ]
+
+    # One match per staged element, each indexed.
+    assert [match.element_index for match in evidence_matches] == [0, 1, 2]
+    assert [match.field_path for match in evidence_matches] == [
+        "evidence_code_curies[0]",
+        "evidence_code_curies[1]",
+        "evidence_code_curies[2]",
+    ]
+
+    # Each element resolves its own curie into the validator request and write-back.
+    requests = [
+        build_domain_validation_request(match).request for match in evidence_matches
+    ]
+    assert [request.selected_inputs["curie"] for request in requests] == evidence_codes
+    assert [
+        request.expected_result_fields["curie"] for request in requests
+    ] == [
+        "evidence_code_curies[0]",
+        "evidence_code_curies[1]",
+        "evidence_code_curies[2]",
+    ]

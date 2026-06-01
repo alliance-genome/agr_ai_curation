@@ -1954,3 +1954,121 @@ def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
     assert "gene_symbols" in payload["instructions"]
     assert payload["requests"][0]["request_id"] == request.request_id
     assert captured["kwargs"]["max_turns"] == 4
+
+
+def _multivalued_dispatch_pack(tmp_path: Path) -> LoadedDomainPack:
+    """Pack with a ``multivalued: true`` field validated by an active binding.
+
+    Mirrors the disease ``evidence_code_curies`` migration shape: a bare field_path with
+    ``multivalued: true``, and a binding whose payload selector + expected_result_fields
+    reference the bare field (the engine supplies each element index).
+    """
+
+    pack_path = tmp_path / "fixture.multivalued_dispatch"
+    pack_path.mkdir()
+    metadata_path = pack_path / "domain_pack.yaml"
+    metadata_path.write_text(
+        """
+pack_id: fixture.multivalued_dispatch
+display_name: Fixture Multivalued Dispatch Pack
+version: 0.1.0
+metadata_api_version: 1.0.0
+status: active
+object_definitions:
+  - object_type: Annotation
+    display_name: Annotation
+    fields:
+      - field_path: evidence_code_curies
+        field_type: string
+        metadata:
+          multivalued: true
+metadata:
+  validator_bindings:
+    active:
+      - binding_id: fixture.evidence_lookup
+        display_name: Evidence lookup
+        validator_agent:
+          package_id: fixture.validators
+          agent_id: evidence_validator
+        applies_to:
+          domain_pack_id: fixture.multivalued_dispatch
+          object_types:
+            - Annotation
+          field_paths:
+            - evidence_code_curies
+        required: true
+        blocking: false
+        input_fields:
+          curie:
+            source: payload
+            path: evidence_code_curies
+            required: false
+        expected_result_fields:
+          curie: evidence_code_curies
+""".strip(),
+        encoding="utf-8",
+    )
+    metadata = load_domain_pack_metadata(metadata_path)
+    return LoadedDomainPack(
+        pack_id=metadata.pack_id,
+        display_name=metadata.display_name,
+        version=metadata.version,
+        pack_path=pack_path,
+        metadata_path=metadata_path,
+        metadata=metadata,
+    )
+
+
+def test_dispatch_validates_and_materializes_every_multivalued_element(tmp_path: Path):
+    pack = _multivalued_dispatch_pack(tmp_path)
+    envelope = DomainEnvelope(
+        envelope_id="multivalued-dispatch-env",
+        domain_pack_id="fixture.multivalued_dispatch",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="Annotation",
+                pending_ref_id="annotation-1",
+                # Lowercase staged values so the validator canonicalizes each element to a
+                # value that DIFFERS from what was staged (exercises per-element write-back
+                # past the equality guard).
+                payload={"evidence_code_curies": ["eco:0000315", "eco:0000316"]},
+            )
+        ],
+    )
+
+    dispatched_curies: list[str] = []
+
+    def _runner(request, *, binding):
+        curie = request.selected_inputs["curie"]
+        dispatched_curies.append(curie)
+        # Echo a canonicalized (uppercased) value back into the element's write-back slot
+        # so the resolved value DIFFERS from the staged value (exercises write-back past
+        # the per-element equality guard). No resolved_objects: the element is a scalar.
+        payload = _result_payload(request, resolved_values={"curie": curie.upper()})
+        payload["resolved_objects"] = []
+        return payload
+
+    result = dispatch_active_validator_bindings(envelope, pack, runner=_runner)
+
+    # EVERY element was sent to the validator, not just [0].
+    assert sorted(dispatched_curies) == ["eco:0000315", "eco:0000316"]
+
+    # Both elements were written back per-element at field[0] and field[1].
+    annotation = result.envelope.objects[0]
+    assert annotation.payload["evidence_code_curies"] == [
+        "ECO:0000315",
+        "ECO:0000316",
+    ]
+
+    # Per-element findings carry the element index (D6).
+    resolved_findings = [
+        finding
+        for finding in result.appended_findings
+        if finding.code == "domain_pack.validator_resolved"
+    ]
+    indexed_paths = sorted(
+        finding.field_ref.field_path
+        for finding in resolved_findings
+        if finding.field_ref is not None
+    )
+    assert indexed_paths == ["evidence_code_curies[0]", "evidence_code_curies[1]"]
