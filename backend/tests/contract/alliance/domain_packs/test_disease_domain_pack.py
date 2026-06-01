@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from src.lib.domain_packs.loader import load_domain_fixture_pack
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
+from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
     ValidationBindingState,
@@ -760,3 +761,154 @@ def test_disease_with_gene_validation_validates_every_staged_element():
         "with_gene_identifiers[1]",
         "with_gene_identifiers[2]",
     ]
+
+
+# ---------------------------------------------------------------------------
+# Per-element validator BATCHING for the three multivalued disease fields.
+#
+# These guard the batch optimization: a multivalued field fans out to one
+# validation request per element, and the three opted-in bindings must group
+# those per-element requests into a SINGLE batch run (not N individual runs)
+# while still mapping each result back to its own request_id (resolved stays
+# resolved — batching must not regress the working N-individual-call path).
+# ---------------------------------------------------------------------------
+
+_BATCH_ENABLED_DISEASE_BINDINGS = {
+    "disease_evidence_code_lookup",
+    "disease_qualifier_cv_lookup",
+    "disease_with_gene_validation",
+}
+
+
+def _disease_result_payload(request, *, resolved_values: dict[str, Any]):
+    """A minimal resolved DomainValidatorResultBase-compatible payload."""
+
+    return {
+        "status": "resolved",
+        "request_id": request.request_id,
+        "validator_binding_id": request.validator_binding_id,
+        "validator_agent": request.validator_agent.model_dump(mode="json"),
+        "target": request.target.model_dump(mode="json"),
+        "resolved_values": resolved_values,
+        "resolved_objects": [
+            {
+                "object_type": "DiseaseAnnotationInput",
+                "canonical_id": next(iter(resolved_values.values()), None),
+                "payload": dict(resolved_values),
+            }
+        ],
+        "missing_expected_fields": [],
+        "candidates": [],
+        "lookup_attempts": [
+            {
+                "provider": "deterministic_contract_lookup",
+                "method": "exact_match",
+                "query": dict(resolved_values),
+                "result_count": 1,
+                "outcome": "success",
+            }
+        ],
+        "curator_message": None,
+        "explanation": "Deterministic batch contract result.",
+    }
+
+
+def test_three_multivalued_disease_bindings_are_batch_enabled():
+    """The three multivalued disease bindings must opt into batch execution with
+    a unique family so per-element requests for one field group into one batch."""
+
+    pack = _disease_pack()
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+    by_id = {
+        binding.binding_id: binding
+        for binding in registry.bindings
+        if binding.binding_id in _BATCH_ENABLED_DISEASE_BINDINGS
+    }
+
+    assert set(by_id) == _BATCH_ENABLED_DISEASE_BINDINGS
+
+    families = set()
+    for binding_id, binding in by_id.items():
+        assert binding.batch_enabled is True, binding_id
+        assert binding.batch_family, binding_id
+        assert binding.batch_max_size and binding.batch_max_size >= 2, binding_id
+        families.add(binding.batch_family)
+
+    # Distinct families keep the three bindings in separate batch groups.
+    assert len(families) == len(by_id)
+
+
+def test_evidence_code_multivalued_field_groups_into_one_batch():
+    """A 2-element evidence_code_curies field drives EXACTLY ONE batch run that
+    receives both jobs and maps each result back to its own request_id resolved
+    — proving the batched-agent path resolves the same elements the individual
+    path would, with no regression to unresolved."""
+
+    pack = _disease_pack()
+    evidence_codes = ["ECO:0000315", "ECO:0000316"]
+    envelope = DomainEnvelope(
+        envelope_id="disease-evidence-batch-env",
+        domain_pack_id=DISEASE_DOMAIN_PACK_ID,
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneDiseaseAnnotation",
+                pending_ref_id="gene-disease-batch-1",
+                payload={"evidence_code_curies": evidence_codes},
+            )
+        ],
+    )
+
+    batch_calls: list[list[str]] = []
+
+    def _single_runner(request, *, binding):
+        # The evidence-code binding is batch-enabled; it must NOT fall back to
+        # the single runner. Other always-on bindings (e.g. the constant
+        # annotation_type CV lookup) legitimately resolve via the single runner.
+        if binding.binding_id == "disease_evidence_code_lookup":
+            raise AssertionError(
+                "batch-enabled evidence_code binding must use the batch runner, "
+                "not the single runner"
+            )
+        return _disease_result_payload(
+            request,
+            resolved_values=dict(request.selected_inputs),
+        )
+
+    def _batch_runner(jobs, *, binding):
+        batch_calls.append(
+            [job.request.selected_inputs.get("curie") for job in jobs]
+        )
+        return [
+            _disease_result_payload(
+                job.request,
+                resolved_values={"curie": job.request.selected_inputs["curie"]},
+            )
+            for job in jobs
+        ]
+
+    result = dispatch_active_validator_bindings(
+        envelope,
+        pack,
+        runner=_single_runner,
+        batch_runner=_batch_runner,
+        max_parallel_validators=1,
+    )
+
+    evidence_results = [
+        item
+        for item in result.validator_results
+        if item.validator_binding_id == "disease_evidence_code_lookup"
+    ]
+
+    # Exactly one batch run handled both elements.
+    assert batch_calls == [evidence_codes]
+    assert result.batch_validator_run_count >= 1
+
+    # Both elements resolved, mapped back to their own request_id + curie.
+    assert len(evidence_results) == 2
+    assert {item.status for item in evidence_results} == {"resolved"}
+    resolved_curies = sorted(
+        item.resolved_values.get("curie") for item in evidence_results
+    )
+    assert resolved_curies == sorted(evidence_codes)
+    assert len({item.request_id for item in evidence_results}) == 2

@@ -1693,6 +1693,10 @@ metadata:
         allow_opt_out: true
         curator_override:
           allowed: false
+        batch:
+          enabled: true
+          family: disease_evidence_code_lookup
+          max_size: 25
       # R4 SLOT 1: annotation_type — constant manually_curated. Both vocabulary and term_name are
       # literals, so this binding always builds a request and validates the fixed constant against
       # the Annotation Type vocabulary; the result snapshots back to the sibling vocabulary/id fields.
@@ -1792,6 +1796,10 @@ metadata:
         allow_opt_out: true
         curator_override:
           allowed: false
+        batch:
+          enabled: true
+          family: disease_qualifier_cv_lookup
+          max_size: 25
       # R4 SLOT 4: with_or_from — MULTIVALUED Gene reference via with_gene_identifiers. The field is
       # declared `multivalued: true`, so every staged gene identifier fans out to its own per-element
       # validation through gene_validation, mirroring the subject_gene_validation binding.
@@ -1826,6 +1834,10 @@ metadata:
         allow_opt_out: true
         curator_override:
           allowed: false
+        batch:
+          enabled: true
+          family: disease_with_gene_validation
+          max_size: 25
     under_development:
       - binding_id: disease_pending_envelope_validator
         display_name: Data check

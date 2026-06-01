@@ -164,12 +164,26 @@ the remaining fields and retire `[0]`.
   out of scope). Config-only (no engine change); broad suite 570 (+2, 0 regressions); fan-out proven live for
   both fields; boot clean. Gated as a config mirror of the already-reviewed engine (no separate full
   review/agentic-e2e — proportionate).
-- REMAINING (the one production-required follow-up): **BATCHING**. Discovered it is bigger than a one-line
-  block: `validator_dispatch.py:835` gates batching on the agent declaring `domain_validator_batch` in
-  `batch_capabilities` — only the `gene` agent does; `ontology_term` + `controlled_vocabulary` have
-  `batch_capabilities: []`, and NO binding has batch `enabled: true` anywhere (even gene_expression's is false).
-  So enabling batching needs: add `domain_validator_batch` to the ontology/CV agent `batch_capabilities`, add a
-  `batch: {enabled: true, family: ...}` block per binding, AND verify the batched-validator response path
-  (one result per item) actually works — it has NEVER been exercised end-to-end. Treat as its own carefully
-  gated pass (start with ontology/evidence_codes — the field where multi-element is common). Interim cost is
-  bounded: multi-element fields fan out to N deduped+parallel calls; the disease list fields are sparse.
+- 2026-06-01: BATCHING LANDED — the initiative is COMPLETE. Added `domain_validator_batch` to the
+  `ontology_term` + `controlled_vocabulary` agent `batch_capabilities` (gene already had it) and a
+  `batch: {enabled: true, family: <binding_id>, max_size: 25}` block to all three disease bindings
+  (disease_evidence_code_lookup / disease_qualifier_cv_lookup / disease_with_gene_validation). The previously
+  UNEXERCISED batched-agent path was rigorously verified LIVE in the sandbox for ALL THREE families: 2 real
+  elements each -> exactly ONE batch run -> 2/2 RESOLVED with correct request_id mapping and resolved values
+  (ontology ECO:0000315+0000316; CV susceptibility_to+severity_of; gene dpp+Ras85D), matching the individual
+  (non-batch) path exactly (no regression). A deterministic CI test
+  (test_evidence_code_multivalued_field_groups_into_one_batch) proves a 2-element field routes to ONE batch
+  call (asserts the single runner is NOT used) and maps both results back by request_id. The fail-safe was also
+  confirmed: a transient sandbox infra gap downgraded to non-fatal `unresolved` (never silent mis-validation),
+  identical on both paths. Broad suite 572 (+2, 0 regressions); boot clean.
+  - LATENT FOLLOW-UP (non-blocking; irrelevant for the sparse disease fields): `batch_max_size` is parsed onto
+    the binding but NOT enforced as a chunk cap in `_plan_validator_run_groups` — a >25-element field would form
+    one oversized batch. Enforce chunking if/when a multivalued field can hold many elements (disease fields are
+    1-3, so it never triggers today).
+
+## OUTCOME: COMPLETE (2026-06-01)
+The `[0]`-only under-validation is fully resolved. Generic per-element validation engine + all three
+DB-validated disease list fields (evidence_code_curies, disease_qualifier_names, with_gene_identifiers)
+migrated + batching enabled and live-proven across ontology/CV/gene. Every element of every multivalued
+DB-validated field is now validated, in one batched call per field. Remaining items are non-blocking latent
+hardening (max_size chunk enforcement; per-element mirrors only if a multivalued field ever declares them).
