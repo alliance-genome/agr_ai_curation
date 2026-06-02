@@ -49,6 +49,10 @@ class AgentDocumentation(BaseModel):
     limitations: List[str] = Field(
         default_factory=list, description="Known limitations as simple strings"
     )
+    tips: List[str] = Field(
+        default_factory=list,
+        description="Curator-friendly 'tips for best results', plain-language strings",
+    )
 
 
 # ============================================================================
