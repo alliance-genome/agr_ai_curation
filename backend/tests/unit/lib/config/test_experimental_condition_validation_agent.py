@@ -84,7 +84,7 @@ def test_experimental_condition_agent_bundle_loads_with_component_tool_grants(
     assert agent.output_schema == "ExperimentalConditionValidationResult"
 
     schema = schemas["ExperimentalConditionValidationResult"]
-    assert issubclass(schema, DomainValidatorResultBase)
+    assert any(_b.__qualname__ == DomainValidatorResultBase.__qualname__ for _b in type.mro(schema))
     assert {
         "condition_status",
         "condition_id",

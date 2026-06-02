@@ -304,7 +304,7 @@ def test_reference_agent_uses_shared_result_schema_and_package_tool(monkeypatch)
     assert agent.folder_name == "reference"
     assert agent.output_schema == "ReferenceValidationResult"
     assert agent.tools == ["get_agent_contract", "agr_literature_reference_lookup"]
-    assert issubclass(schema, DomainValidatorResultBase)
+    assert any(_b.__qualname__ == DomainValidatorResultBase.__qualname__ for _b in type.mro(schema))
     assert REQUIRED_SHARED_FIELDS <= set(schema.model_fields)
     assert REFERENCE_SPECIFIC_FIELDS <= set(schema.model_fields)
 

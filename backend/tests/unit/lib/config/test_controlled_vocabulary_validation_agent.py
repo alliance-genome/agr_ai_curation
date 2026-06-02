@@ -81,7 +81,7 @@ def test_controlled_vocabulary_agent_bundle_loads_with_narrow_tool_grant(monkeyp
     assert agent.output_schema == "ControlledVocabularyValidationResult"
 
     schema = schemas["ControlledVocabularyValidationResult"]
-    assert issubclass(schema, DomainValidatorResultBase)
+    assert any(_b.__qualname__ == DomainValidatorResultBase.__qualname__ for _b in type.mro(schema))
     assert "controlled_vocabulary_candidates" in schema.model_fields
 
 

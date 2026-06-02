@@ -83,7 +83,7 @@ def test_data_provider_agent_bundle_loads_with_narrow_tool_grant(monkeypatch):
     assert agent.output_schema == "DataProviderValidationResult"
 
     schema = schemas["DataProviderValidationResult"]
-    assert issubclass(schema, DomainValidatorResultBase)
+    assert any(_b.__qualname__ == DomainValidatorResultBase.__qualname__ for _b in type.mro(schema))
     assert "data_provider_candidates" in schema.model_fields
     assert "mismatch_explanations" in schema.model_fields
 

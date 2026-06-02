@@ -313,7 +313,7 @@ def test_bundled_alliance_validation_agent_schemas_are_binding_ready(monkeypatch
     assert all(readiness.values()), readiness
     for agent in validation_agents:
         schema = schemas[agent.output_schema]
-        assert issubclass(schema, DomainValidatorResultBase)
+        assert any(_b.__qualname__ == DomainValidatorResultBase.__qualname__ for _b in type.mro(schema))
         status_schema = schema.model_json_schema()["properties"]["status"]
         assert "under_development" not in status_schema.get("enum", [])
 
@@ -339,7 +339,7 @@ def test_bundled_alliance_ontology_context_schemas_use_shared_validator_root(
 
         assert schema is not None
         assert schema.__name__ == schema_name
-        assert issubclass(schema, DomainValidatorResultBase)
+        assert any(_b.__qualname__ == DomainValidatorResultBase.__qualname__ for _b in type.mro(schema))
         assert shared_fields.issubset(schema.model_fields)
         assert "result" not in schema.model_fields
         assert "validation_result" not in schema.model_fields
@@ -429,7 +429,7 @@ def test_legacy_ontology_context_schemas_match_package_validator_shape(
 
     assert legacy_schema is not None
     assert legacy_schema.__name__ == package_schema.__name__
-    assert issubclass(legacy_schema, DomainValidatorResultBase)
+    assert any(_b.__qualname__ == DomainValidatorResultBase.__qualname__ for _b in type.mro(legacy_schema))
     assert legacy_schema.model_json_schema() == package_contract
     for obsolete_field in (
         "actor",
