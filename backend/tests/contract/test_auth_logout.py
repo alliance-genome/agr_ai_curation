@@ -38,13 +38,13 @@ def client(monkeypatch):
     from src.api import auth as auth_module
 
     # Reset cached provider singleton between tests so env changes are respected.
-    auth_module._provider = None
+    auth_module.reset_auth_provider_cache()
     app.dependency_overrides.clear()
 
     yield TestClient(app)
 
     app.dependency_overrides.clear()
-    auth_module._provider = None
+    auth_module.reset_auth_provider_cache()
 
 
 def _override_authenticated_user():
