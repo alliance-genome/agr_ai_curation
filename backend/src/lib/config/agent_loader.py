@@ -325,12 +325,26 @@ def _load_agent_definition_indexes(
                 logger.warning('Empty agent.yaml in %s', source.folder_name)
                 continue
 
+            docs_yaml_path = source.agent_dir / "docs.yaml"
+            docs_data = None
+            if docs_yaml_path.exists():
+                if data.get("documentation"):
+                    raise ValueError(
+                        f"Agent '{source.folder_name}' declares both an inline "
+                        f"'documentation' block in agent.yaml and a docs.yaml; "
+                        f"keep curator docs only in docs.yaml."
+                    )
+                with open(docs_yaml_path, "r", encoding="utf-8") as docs_file:
+                    docs_data = yaml.safe_load(docs_file)
+
             agent = AgentDefinition.from_yaml(
                 source.folder_name,
                 data,
                 package_id=source.package_id,
                 package_path=source.package_path,
             )
+            if docs_data is not None:
+                agent.documentation = docs_data
             agent_registry[agent.agent_id] = agent
             agents_by_folder[source.folder_name] = agent
             if agent.package_id is not None:
