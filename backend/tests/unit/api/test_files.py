@@ -115,17 +115,13 @@ def client(temp_storage_dir):
     os.environ["TESTING_API_KEY"] = "test-key"
     os.environ["DEV_MODE"] = "true"
 
-    # Clear any cached imports
-    import sys
-    modules_to_remove = [
-        k for k in sys.modules.keys()
-        if k == "main"
-        or k.startswith("src.")
-    ]
-    for mod in modules_to_remove:
-        del sys.modules[mod]
-
-    # Now import the app fresh
+    # Import the app. FILE_OUTPUT_STORAGE_PATH (set above) is read at request time via
+    # paths.get_file_output_dir(), so the app does not bake the path at import and no
+    # module-cache clearing is needed. (Previously this fixture deleted main + every
+    # src.* module and re-imported them, which gave classes like
+    # DomainValidatorResultBase new identities that persisted for the rest of the
+    # session and broke later modules' issubclass / shared-schema contract tests --
+    # order-dependent pollution across the suite.)
     from main import app
 
     # Use an in-memory sqlite DB for unit tests instead of external postgres.

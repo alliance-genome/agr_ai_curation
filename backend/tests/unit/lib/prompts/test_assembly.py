@@ -172,10 +172,16 @@ def test_phenotype_editable_prompts_do_not_duplicate_generated_contract_facts():
         for prompt_path in editable_prompt_paths
     }
 
+    # Generated-contract INTERNALS that must never be hand-written into editable
+    # prompts (they are injected by the runtime contract). NOTE: ``<tools>``,
+    # ``<active_validator_binding_policy>``, ``PhenotypeResultEnvelope`` and the bare
+    # ``curatable_objects[]`` were intentionally dropped from this list -- the
+    # builder-pattern migration moved that domain guidance into the editable prompt
+    # (e.g. "Do not hand-author `curatable_objects[]`", which the disease contract
+    # test now *requires*), and the ``<tools>`` section predates extractors having
+    # tool access. This test still guards the truly generated-only fragments below.
     forbidden_fragments = [
         "<search_infrastructure>",
-        "<tools>",
-        "<active_validator_binding_policy>",
         "<output_contract>",
         "<evidence_record_contract>",
         "phenotype_term_ontology_validator",
@@ -183,10 +189,8 @@ def test_phenotype_editable_prompts_do_not_duplicate_generated_contract_facts():
         "schema_ref.schema_id",
         "alliance_linkml",
         "1b11d0888f19eba4ca72022200bb7d96b30d4a52",
-        "PhenotypeResultEnvelope",
         "curatable_objects[] is the only semantic object list",
         "Shared domain-envelope output contract",
-        "curatable_objects[]",
         "top-level `items[]`",
         "`annotations[]`",
         "PhenotypeAnnotation",
