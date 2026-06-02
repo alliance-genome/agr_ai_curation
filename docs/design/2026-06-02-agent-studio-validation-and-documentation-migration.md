@@ -19,9 +19,12 @@ Two problems, one root cause.
    substantial and entirely real.
 2. **Curator-facing content is hardcoded in Python.** The descriptive content the browser shows today does
    not live with the thing it describes; it lives in two large Python dictionaries in the agent-studio
-   layer. Adding or changing an agent/tool means editing Python, and content drifts from the code it
-   documents (the dict already carries stale entries — e.g. `strain_validation`, `phenotype_validation` —
-   for agents that no longer exist in the live tree).
+   layer. Adding or changing an agent/tool means editing Python, and coverage is uneven: the
+   `AGENT_DOCUMENTATION` dict has exactly 20 entries, several live agents (the newer validators —
+   `agm_validation`, `controlled_vocabulary_validation`, `reference_validation`, `subject_entity_validation`,
+   `data_provider_validation`, `experimental_condition_validation`, `ontology_term_validation`) have **no
+   entry at all** and fall back to a one-line `{"summary": description}`, and the dict mixes real package
+   agents with synthetic flow nodes (`task_input`, `curation_prep`) that have no agent folder.
 
 Root cause: the agent-studio layer is the *author* of content rather than an *assembler* of content that
 lives with each agent, tool, and domain pack.
@@ -33,9 +36,16 @@ There are two agent directories. Only one is live.
 - `packages/alliance/agents/` — **LIVE.** Has the package manifest `packages/alliance/package.yaml`; loaded
   by `load_agent_definitions()` (`agent_loader.py:382-428`, via `resolve_agent_config_sources`), which scans
   runtime packages plus `config/agents/` overrides (`agent_loader.py:5-7`; `registry_builder.py:7`:
-  "Runtime packages are the primary source of truth"). 24 agents; all recent work lands here.
+  "Runtime packages are the primary source of truth"). 24 agents; all recent work lands here. It is not the
+  only live package — `supervisor` ships from `packages/core/agents/supervisor/`, so the migration is
+  per-package-bundle, not "alliance only." The loader is package-agnostic (a sibling `docs.yaml` works in
+  any package).
 - `alliance_agents/` — **LEGACY / DEAD.** No manifest, referenced nowhere in backend/package Python. Not
   loaded. Out of scope here (a separate cleanup could delete it later).
+
+Two `AGENT_DOCUMENTATION` keys are **synthetic flow nodes** with no agent folder — `task_input` and
+`curation_prep` (`task_input` is synthesized inline in `registry_builder.build_agent_registry`). Their prose
+needs a non-folder YAML home (see Phase 1).
 
 **Everything in this doc targets `packages/alliance/agents/`.** (An earlier draft pointed at the legacy
 tree; corrected here.)
@@ -173,10 +183,13 @@ Work:
 
 1. Add a `docs.yaml` loader (sibling read in the package-agent load path; populate
    `AgentDefinition.documentation`).
-2. Port every *live-agent* `AGENT_DOCUMENTATION` entry into the matching
-   `packages/alliance/agents/<agent>/docs.yaml`; drop stale dict-only entries. Porting is not just a
-   copy — review each entry against the curator-friendly standard (Audience and voice) and rewrite anything
-   that reads developer-first.
+2. Port each of the 18 folder-backed `AGENT_DOCUMENTATION` entries into the matching agent bundle's
+   `docs.yaml` (in whichever package owns it — `packages/alliance/agents/<folder>/` for most,
+   `packages/core/agents/supervisor/` for the supervisor). The 2 synthetic entries (`task_input`,
+   `curation_prep`) move to a small system-docs YAML loaded by `registry_builder` (no prose in Python).
+   Porting is not just a copy — review each entry against the curator-friendly standard (Audience and
+   voice) and rewrite anything that reads developer-first. Additionally, **author net-new `docs.yaml` for
+   live agents the dict never covered** (the newer validators) so the guard test can pass.
 3. **Delete** `AGENT_DOCUMENTATION` and the `or AGENT_DOCUMENTATION.get(...)` fallback in
    `registry_builder.py`.
 4. Move the frontend "Tips for Best Results" content into `docs.yaml` `tips[]`; the frontend renders
