@@ -10,7 +10,6 @@ from src.lib.config import agent_loader, agent_sources, prompt_loader, schema_di
 from src.lib.config.tool_policy_defaults_loader import load_tool_policy_defaults
 from src.schemas.domain_validator import (
     DomainValidatorResultBase,
-    is_domain_validator_result_schema,
 )
 from src.schemas.models import DomainEnvelopeExtractionResult
 
@@ -252,7 +251,6 @@ def test_bundled_alliance_load_prompts_tracks_package_paths(monkeypatch):
     captured_calls = []
 
     monkeypatch.setattr(prompt_loader, "_acquire_advisory_lock", lambda _db: (True, True))
-    monkeypatch.setattr(prompt_loader, "_release_advisory_lock", lambda _db: None)
 
     def _capture_upsert(**kwargs):
         captured_calls.append(kwargs)

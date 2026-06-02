@@ -8,7 +8,6 @@ import os
 import sys
 from collections.abc import Mapping
 from pathlib import Path
-from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import pytest

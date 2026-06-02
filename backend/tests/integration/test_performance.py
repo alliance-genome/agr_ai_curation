@@ -226,7 +226,7 @@ class TestPerformance:
         assert max_duration < 1000, \
             f"Maximum request time should be < 1s, got {max_duration:.2f}ms"
 
-        print(f"✓ Sequential requests (n=20):")
+        print("✓ Sequential requests (n=20):")
         print(f"  Average: {avg_duration:.2f}ms")
         print(f"  Min: {min_duration:.2f}ms")
         print(f"  Max: {max_duration:.2f}ms")
@@ -333,7 +333,7 @@ class TestPerformance:
         assert batch_3_avg <= max_degradation, \
             f"Batch 3 degraded: {batch_3_avg:.2f}ms > {max_degradation:.2f}ms"
 
-        print(f"✓ No performance degradation detected:")
+        print("✓ No performance degradation detected:")
         print(f"  Batch 1 (1-10): {batch_1_avg:.2f}ms")
         print(f"  Batch 2 (11-20): {batch_2_avg:.2f}ms")
         print(f"  Batch 3 (21-30): {batch_3_avg:.2f}ms")
@@ -431,6 +431,6 @@ class TestPerformance:
         assert user2_avg < 500, \
             f"User 2 requests should be < 500ms, got {user2_avg:.2f}ms"
 
-        print(f"✓ Multi-user performance:")
+        print("✓ Multi-user performance:")
         print(f"  User 1 average: {user1_avg:.2f}ms")
         print(f"  User 2 average: {user2_avg:.2f}ms")

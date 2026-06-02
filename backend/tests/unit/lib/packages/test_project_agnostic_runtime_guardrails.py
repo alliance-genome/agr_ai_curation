@@ -443,7 +443,6 @@ def test_org_custom_prompts_load_with_neutral_sources_and_group_ids(monkeypatch,
         return (True, 1)
 
     monkeypatch.setattr(prompt_loader, "_acquire_advisory_lock", lambda _db: (True, True))
-    monkeypatch.setattr(prompt_loader, "_release_advisory_lock", lambda _db: None)
     monkeypatch.setattr(prompt_loader, "_upsert_prompt", _capture_upsert)
 
     result = prompt_loader.load_prompts(packages_dir, db=db, force_reload=True)

@@ -363,19 +363,6 @@ def _acquire_advisory_lock(db: Session) -> tuple[bool, bool]:
         return (True, True)
 
 
-def _release_advisory_lock(db: Session) -> None:
-    """Best-effort compatibility release for PostgreSQL advisory lock.
-
-    Args:
-        db: Database session
-    """
-    try:
-        db.execute(text(f"SELECT pg_advisory_unlock({PROMPT_LOADER_LOCK_ID})"))
-    except Exception:
-        # Ignore errors on unlock (lock may not exist in non-PostgreSQL)
-        pass
-
-
 def load_prompts(
     agents_path: Optional[Path] = None,
     db: Session = None,
@@ -434,7 +421,6 @@ def load_prompts(
         if not is_loader:
             # We waited for another worker to finish loading
             # End the transaction-scoped lock and skip - prompts are already loaded
-            _release_advisory_lock(db)
             db.commit()
             _initialized = True  # Mark as initialized since other worker loaded
             logger.info("Prompts loaded by another worker, skipping")
@@ -472,9 +458,10 @@ def load_prompts(
 
             return {"base_prompts": base_prompt_count, "group_rules": group_rules_count}
 
-        finally:
-            # Always release advisory lock
-            _release_advisory_lock(db)
+        except Exception:
+            # Release the transaction-scoped advisory lock if loading fails before commit.
+            db.rollback()
+            raise
 
 
 def is_initialized() -> bool:

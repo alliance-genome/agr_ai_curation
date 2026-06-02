@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import os
-import sys
-from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import pytest

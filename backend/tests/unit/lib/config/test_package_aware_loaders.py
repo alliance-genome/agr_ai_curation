@@ -392,7 +392,6 @@ def test_default_runtime_packages_dir_must_contain_package_manifests(tmp_path, m
 
     monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(packages_dir))
     monkeypatch.setattr(prompt_loader, "_acquire_advisory_lock", lambda _db: (True, True))
-    monkeypatch.setattr(prompt_loader, "_release_advisory_lock", lambda _db: None)
 
     match = "No runtime packages with package manifests were found"
 
@@ -632,7 +631,6 @@ def test_load_prompts_defaults_to_runtime_config_override_without_repo_root(
     monkeypatch.setattr(agent_sources, "get_runtime_config_dir", lambda: runtime_config_dir)
     monkeypatch.setattr(agent_sources, "_find_project_root", lambda: None)
     monkeypatch.setattr(prompt_loader, "_acquire_advisory_lock", lambda _db: (True, True))
-    monkeypatch.setattr(prompt_loader, "_release_advisory_lock", lambda _db: None)
 
     def _capture_upsert(**kwargs):
         captured_calls.append(kwargs)
@@ -696,7 +694,6 @@ def test_env_override_allows_legacy_agent_directory_loading(tmp_path, monkeypatc
     monkeypatch.setenv("AGENTS_CONFIG_PATH", str(agents_dir))
     monkeypatch.delenv("AGR_RUNTIME_PACKAGES_DIR", raising=False)
     monkeypatch.setattr(prompt_loader, "_acquire_advisory_lock", lambda _db: (True, True))
-    monkeypatch.setattr(prompt_loader, "_release_advisory_lock", lambda _db: None)
 
     def _capture_upsert(**kwargs):
         captured_calls.append(kwargs)

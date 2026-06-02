@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from contextlib import contextmanager
 from uuid import uuid4
 from unittest.mock import patch
