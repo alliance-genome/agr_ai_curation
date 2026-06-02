@@ -1,0 +1,43 @@
+# Curator-facing docs for synthetic flow nodes that have no agent bundle folder.
+# Voice: curator-friendly, plain language (no developer jargon).
+# task_input and curation_prep are the only AGENT_DOCUMENTATION entries with no
+# agent folder; their prose lives here so it stays out of Python.
+task_input:
+  summary: "The starting point for curation workflows - defines what task the AI should perform."
+  capabilities:
+    - name: "Define extraction tasks"
+      description: "Tell the AI what data to extract from the paper"
+      example_query: "Extract all gene names and their expression patterns from this paper"
+      example_result: "The flow begins processing your request through the configured agents"
+    - name: "Set curation context"
+      description: "Provide background information about what you're looking for"
+      example_query: "This paper describes insulin signaling in C. elegans. Find all relevant genes."
+      example_result: "Context is passed to downstream agents to improve accuracy"
+  data_sources: []
+  limitations:
+    - "Instructions should be clear and specific for best results"
+    - "Complex multi-part requests may need to be broken into separate flows"
+curation_prep:
+  summary: "Collects upstream extraction envelopes, creates a curator review session, carries verified evidence into deterministic anchor resolution, and performs structural validation before curator review."
+  capabilities:
+    - name: "Upstream extraction intake"
+      description: "Collects prior extraction envelopes, scope confirmations, and evidence records into a single curation-prep request"
+      example_query: "Prepare the confirmed extraction findings for curator review"
+      example_result: "Creates a curation review session seeded from upstream extraction output instead of re-reading the paper from scratch"
+    - name: "Evidence-backed review session prep"
+      description: "Carries verified evidence references forward so the deterministic anchor-resolution pipeline starts from the same evidence the extractor kept"
+      example_query: "Create curation prep candidates with the supporting quotes attached"
+      example_result: "Returns structured candidates whose field values stay linked to upstream evidence records and ambiguity notes"
+    - name: "Structural validation before handoff"
+      description: "Checks adapter/profile structure and flags incomplete or uncertain payloads before the curator sees the review session"
+      example_query: "Validate the candidate structure before opening the curation workspace"
+      example_result: "Returns only in-scope candidates plus warnings when fields still need curator attention"
+    - name: "Flow-final curation handoff"
+      description: "Works best as the last step after extraction/validation agents have already gathered the evidence that should enter curation review"
+      example_query: "Use this as the final step after gene extraction and validation"
+      example_result: "Hands the curator a review-ready session rather than acting like a standalone extractor or summarizer"
+  limitations:
+    - "Requires upstream extraction output and evidence records; it does not discover new evidence on its own"
+    - "Should not be used as a standalone extraction, PDF reading, or summarization step"
+    - "Does not replace curator review or approval; it prepares the review session but does not submit final curation"
+    - "Downstream deterministic services still own anchor resolution, normalization, and persistence"
