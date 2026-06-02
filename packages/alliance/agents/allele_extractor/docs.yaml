@@ -1,0 +1,33 @@
+# Curator-facing documentation for the Allele Extractor Agent.
+summary: "Extracts experimentally supported allele and variant mentions from uploaded PDFs, distinguishing alleles from strains, transgenes, and balancers."
+capabilities:
+  - name: "Allele/variant candidate harvesting"
+    description: "Scans the paper for allele symbols, variant notations, HGVS strings, and genotype descriptions across all sections"
+    example_query: "Extract all alleles from this paper"
+    example_result: "Returns allele candidates with exact notation as written, associated gene, and organism context"
+  - name: "Entity classification"
+    description: "Distinguishes alleles from strains, transgene constructs, balancer chromosomes, and chromosomal deficiencies using organism-specific nomenclature rules"
+    example_query: "Extract alleles from this C. elegans genetics paper"
+    example_result: "Correctly classifies daf-2(e1370) as an allele while excluding N2 (strain) and muEx225 (transgene array)"
+  - name: "Genotype string parsing"
+    description: "Parses composite genotype strings into individual alleles (e.g., 'daf-2(e1370); daf-16(mu86)' becomes two separate entries)"
+    example_query: "Parse the genotypes in this paper's strain table"
+    example_result: "Returns individual alleles with gene associations and allele type classification"
+  - name: "Validator-ready allele hints"
+    description: "Preserves exact allele notation, associated-gene hints, organism context, and evidence records for the active allele validator; the extractor does not materialize final allele IDs."
+    example_query: "Extract alleles with validator-ready context"
+    example_result: "Returns allele mention envelopes with exact notation and evidence for downstream validator materialization"
+data_sources:
+  - name: "PDF Document Search (Weaviate)"
+    description: "Hybrid semantic/keyword plus lexical-heavy search modes over uploaded PDF documents"
+    species_supported: null
+    data_types: ["PDF text chunks", "Section content", "Subsection content"]
+  - name: "Allele validator binding"
+    description: "The active allele validator checks retained mentions against Alliance allele rows after extraction and materializes allele identifier, symbol, and taxon fields when resolved."
+    species_supported: ["C. elegans (WB)", "D. melanogaster (FB)", "D. rerio (ZFIN)", "H. sapiens (HGNC)", "M. musculus (MGI)", "R. norvegicus (RGD)", "S. cerevisiae (SGD)"]
+    data_types: ["Allele mention hints", "Associated-gene hints", "Taxon hints", "Validator lookup results"]
+limitations:
+  - "Requires an uploaded PDF document — cannot extract alleles from chat text alone"
+  - "Transgene constructs (e.g., GFP reporters, Cre drivers) are excluded unless they are the experimental variable"
+  - "Balancer chromosomes and chromosomal deficiencies are classified as tools, not alleles"
+  - "Does not perform allele identity lookup itself; unresolved or conflicting identity remains visible as validator findings"

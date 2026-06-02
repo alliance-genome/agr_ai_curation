@@ -1,0 +1,33 @@
+# Curator-facing documentation for the Disease Extractor Agent.
+summary: "Extracts experimentally supported disease associations from uploaded PDFs, classifying disease roles and gene-disease relationship types for Alliance curation."
+capabilities:
+  - name: "Disease mention harvesting"
+    description: "Scans the paper for disease names, condition descriptions, and disease model references across all sections"
+    example_query: "Extract all disease mentions from this paper"
+    example_result: "Returns disease candidates with the name as written, role classification, and experimental context"
+  - name: "Role classification"
+    description: "Categorizes each disease mention as primary subject, background context, comparative reference, or model context"
+    example_query: "Extract diseases from this Alzheimer's model paper"
+    example_result: "Classifies 'Alzheimer's disease' as primary and 'diabetes' as comparative, with supporting evidence"
+  - name: "Gene-disease association typing"
+    description: "Determines the relationship type between genes and diseases using Alliance annotation types: is_implicated_in, is_marker_for, contributes_to, is_model_of"
+    example_query: "What gene-disease relationships are reported?"
+    example_result: "Returns association types with evidence (e.g., LRRK2 is_implicated_in Parkinson's disease)"
+  - name: "Validator-ready disease selectors"
+    description: "Preserves disease label/CURIE hints, relation names, data-provider selectors, subject context, and evidence records for active disease validators; ontology and vocabulary lookup remain validator-owned."
+    example_query: "Extract disease assertions with validator-ready context"
+    example_result: "Returns pending disease annotation envelopes with disease, relation, provider, subject, and evidence selector inputs"
+data_sources:
+  - name: "PDF Document Search (Weaviate)"
+    description: "Hybrid semantic/keyword plus lexical-heavy search modes over uploaded PDF documents"
+    species_supported: null
+    data_types: ["PDF text chunks", "Section content", "Subsection content"]
+  - name: "Disease validator bindings"
+    description: "Active disease validators resolve Disease Ontology terms, relation vocabulary, condition relation vocabulary, and data-provider selectors after extraction."
+    species_supported: null
+    data_types: ["Disease labels/CURIE hints", "Relation names", "Data-provider abbreviations", "Validator lookup results"]
+limitations:
+  - "Requires an uploaded PDF document — cannot extract diseases from chat text alone"
+  - "Distinguishes diseases from phenotypes — observable traits in model organisms are phenotypes, not diseases"
+  - "Diseases mentioned only in introduction/background without new experimental findings are excluded"
+  - "Does not perform disease ontology or provider lookup itself; unresolved or conflicting identity remains visible as validator findings"

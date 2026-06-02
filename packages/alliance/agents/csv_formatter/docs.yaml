@@ -1,0 +1,9 @@
+# Curator-facing documentation for the CSV Output Formatter Agent.
+summary: "Formats structured extraction results as a downloadable CSV file for spreadsheet workflows."
+capabilities:
+  - name: "CSV export"
+    description: "Converts normalized extraction output into comma-separated tabular rows"
+    example_query: "Export extracted genes and evidence as CSV"
+    example_result: "Returns a downloadable CSV with one record per row"
+limitations:
+  - "Nested structures may be flattened for tabular compatibility"

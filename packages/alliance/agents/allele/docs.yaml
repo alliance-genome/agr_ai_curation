@@ -1,0 +1,29 @@
+# Curator-facing documentation for the Allele Validation Agent.
+summary: "Validates allele/variant identifiers against the Alliance Curation Database by symbol, ID, or gene association."
+capabilities:
+  - name: "Allele search (partial match)"
+    description: "Search for alleles by symbol using LIKE matching - supports partial matches, synonyms, and case-insensitive search"
+    example_query: "Find all Ulk1 alleles in mouse"
+    example_result: "Returns all alleles matching 'Ulk1' (e.g., Ulk1<sup>tm1Thsn</sup>) with IDs, symbols, names, and species"
+  - name: "Exact symbol lookup"
+    description: "Find an allele by its exact official symbol, with automatic conversion from paper notation (Gene<allele>) to database format (Gene<sup>allele</sup>)"
+    example_query: "Find the allele Ulk1<tm1Thsn>"
+    example_result: "Returns the exact matching allele with full details including MGI:3689906"
+  - name: "Allele ID lookup"
+    description: "Retrieve allele details directly by Alliance CURIE"
+    example_query: "Tell me about MGI:3689906"
+    example_result: "Returns allele symbol, name, species, and status for the given ID"
+  - name: "Batch validation"
+    description: "Look up multiple alleles in a single request"
+    example_query: "Look up these alleles: e1370, n765, tm1234"
+    example_result: "Returns validation results for each allele, with not_found list for any missing"
+data_sources:
+  - name: "Alliance Curation Database (AGR)"
+    description: "Comprehensive allele/variant data from all Model Organism Databases, including symbols, names, synonyms, obsolete status, and extinction status"
+    species_supported: ["C. elegans (WB)", "D. melanogaster (FB)", "D. rerio (ZFIN)", "H. sapiens (HGNC)", "M. musculus (MGI)", "R. norvegicus (RGD)", "S. cerevisiae (SGD)"]
+    data_types: ["allele symbols", "allele IDs (CURIEs)", "full names", "synonyms", "gene associations", "obsolete/extinct status"]
+limitations:
+  - "Only validates against Alliance group data - newly published alleles may not be in the database yet"
+  - "Searches alleles only - genes, diseases, and phenotypes are handled by separate agents"
+  - "Angle bracket notation in symbols must be converted to <sup> format for exact matches (handled automatically)"
+  - "Very large result sets are capped at 500 results (default 100)"

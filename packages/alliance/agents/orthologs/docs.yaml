@@ -1,0 +1,29 @@
+# Curator-facing documentation for the Orthologs Lookup Agent.
+summary: "Retrieves ortholog relationships across species using the Alliance of Genome Resources API with DIOPT-based confidence scoring."
+capabilities:
+  - name: "Find gene orthologs"
+    description: "Query orthologs for a given gene ID across all supported species (human, mouse, fly, worm, zebrafish, yeast, rat)"
+    example_query: "Find orthologs for WB:WBGene00000898 (daf-16)"
+    example_result: "Returns human FOXO3 (HGNC:3821) with high confidence, mouse Foxo3 (MGI:1890077) with high confidence, plus orthologs in other species"
+  - name: "Get orthology confidence scores"
+    description: "Retrieve confidence levels (high, moderate, low) based on agreement between multiple prediction algorithms"
+    example_query: "What is the confidence for the daf-16 to FOXO3 orthology?"
+    example_result: "High confidence - 8 of 10 algorithms agree (Ensembl Compara, InParanoid, OMA, OrthoFinder, etc.)"
+  - name: "Identify best-scoring orthologs"
+    description: "Find the best-scoring ortholog in each species using the isBestScore flag"
+    example_query: "What is the best human ortholog for daf-2?"
+    example_result: "INSR (HGNC:6091) - isBestScore: Yes"
+  - name: "List prediction methods"
+    description: "Show which orthology prediction algorithms support or do not support each relationship"
+    example_query: "Which algorithms predict the daf-16/FOXO3 orthology?"
+    example_result: "Matched: Ensembl Compara, InParanoid, OMA, PANTHER; Not matched: Xenbase, Hieranoid"
+data_sources:
+  - name: "Alliance of Genome Resources Orthology API"
+    description: "Public REST API providing DIOPT-aggregated orthology predictions from multiple algorithms"
+    species_supported: ["C. elegans (WB)", "D. melanogaster (FB)", "M. musculus (MGI)", "H. sapiens (HGNC)", "D. rerio (ZFIN)", "S. cerevisiae (SGD)", "R. norvegicus (RGD)"]
+    data_types: ["ortholog relationships", "confidence scores", "prediction methods", "gene identifiers"]
+limitations:
+  - "Gene ID must be in Alliance format with prefix (e.g., WB:WBGene00000898, not just WBGene00000898)"
+  - "Cannot search by gene symbol alone - requires resolved gene ID from Gene Validation Agent first"
+  - "Does not find paralogs (within-species gene duplications)"
+  - "Some genes have no orthologs in certain species (this is valid biological data, not an error)"

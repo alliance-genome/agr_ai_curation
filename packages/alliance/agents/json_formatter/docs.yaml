@@ -1,0 +1,9 @@
+# Curator-facing documentation for the JSON Output Formatter Agent.
+summary: "Formats structured extraction results as downloadable JSON while preserving nested data."
+capabilities:
+  - name: "Structured JSON export"
+    description: "Preserves nested objects and arrays for downstream programmatic use"
+    example_query: "Export extraction results as JSON"
+    example_result: "Returns hierarchical JSON matching extracted structure"
+limitations:
+  - "File is optimized for machine consumption over spreadsheet readability"

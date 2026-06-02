@@ -1,0 +1,30 @@
+# Curator-facing documentation for the Disease Validation Agent.
+summary: "Maps disease terms to Disease Ontology (DOID) identifiers through package-owned AGR curation lookup helpers."
+capabilities:
+  - name: "Disease name lookup"
+    description: "Find DOID identifiers for disease names using case-insensitive search"
+    example_query: "Look up Alzheimer's disease"
+    example_result: "Returns DOID:10652, name, definition, and synonyms"
+  - name: "DOID lookup"
+    description: "Retrieve disease information by DOID identifier"
+    example_query: "What is DOID:14330?"
+    example_result: "Returns Parkinson's disease with definition and relationships"
+  - name: "Synonym search"
+    description: "Find diseases by synonym names when the exact term is not found"
+    example_query: "Look up Alzheimers dementia"
+    example_result: "Finds DOID:10652 via synonym match"
+  - name: "Hierarchy boundary"
+    description: "Reports that direct hierarchy traversal is outside the package lookup contract for this validator path"
+    example_query: "What are the parent terms of Alzheimer's disease?"
+    example_result: "Returns an unresolved, curator-facing explanation instead of using direct SQL"
+data_sources:
+  - name: "AGR curation lookup helpers"
+    description: "Structured package helper methods for exact DOID lookup and typed Disease Ontology label or synonym search"
+    species_supported: null
+    data_types: ["disease terms", "DOIDs", "definitions", "synonyms"]
+limitations:
+  - "Only queries Disease Ontology (DOID) terms - does not include other disease vocabularies"
+  - "Does not provide gene-disease associations (use Gene Specialist for that)"
+  - "Disease prevalence and statistics are not available from this validator path"
+  - "Direct hierarchy traversal and obsolete-history analysis are not exposed by the package lookup contract"
+  - "All responses must come from package lookup evidence - cannot answer from general knowledge"

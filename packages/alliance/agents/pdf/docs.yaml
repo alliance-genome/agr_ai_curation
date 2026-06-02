@@ -1,0 +1,24 @@
+# Curator-facing documentation for the PDF Extraction Agent.
+summary: "Extracts text, tables, and structured data from scientific papers using hybrid and lexical document search modes."
+capabilities:
+  - name: "Full-text search"
+    description: "Find specific content within the PDF using semantic, keyword, or exact-token lexical search"
+    example_query: "Find all mentions of insulin signaling pathway"
+    example_result: "Returns relevant passages with page numbers"
+  - name: "Table extraction"
+    description: "Extract data tables and convert to structured format"
+    example_query: "Extract the gene expression table from results section"
+    example_result: "Returns structured data with headers and values"
+  - name: "Section navigation"
+    description: "Read specific sections of the paper"
+    example_query: "Read the Methods section"
+    example_result: "Returns full text of the specified section"
+data_sources:
+  - name: "PDF Documents"
+    description: "Scientific papers indexed in Weaviate"
+    species_supported: null
+    data_types: ["text", "tables", "figures", "references"]
+limitations:
+  - "Document must be loaded in Weaviate before use"
+  - "Very large tables may be truncated"
+  - "Figure analysis is limited to captions only"
