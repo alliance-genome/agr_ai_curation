@@ -175,6 +175,31 @@ def test_chat_stream_extraction_persistence_failure_emits_turn_failed(client, mo
     async def _run_agent_streamed(**_kwargs):
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-extraction-failed"}}
         yield {
+            "type": chat_common.INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
+            "details": {"toolName": "ask_gene_expression_specialist"},
+            "internal": {
+                "tool_output": json.dumps(
+                    {
+                        "actor": "gene_expression_specialist",
+                        "destination": "gene_expression",
+                        "confidence": 0.9,
+                        "reasoning": "done",
+                        "items": [{"label": "notch"}],
+                        "raw_mentions": [],
+                        "exclusions": [],
+                        "ambiguities": [],
+                        "run_summary": {
+                            "candidate_count": 1,
+                            "kept_count": 1,
+                            "excluded_count": 0,
+                            "ambiguous_count": 0,
+                            "warnings": [],
+                        },
+                    }
+                )
+            },
+        }
+        yield {
             "type": "TOOL_COMPLETE",
             "details": {"toolName": "ask_gene_expression_specialist"},
             "internal": {
@@ -271,6 +296,31 @@ def test_chat_stream_turn_save_failed_then_assistant_rescue_is_idempotent(
 
     async def _run_agent_streamed(**_kwargs):
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-save-failed"}}
+        yield {
+            "type": chat_common.INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
+            "details": {"toolName": "ask_gene_expression_specialist"},
+            "internal": {
+                "tool_output": json.dumps(
+                    {
+                        "actor": "gene_expression_specialist",
+                        "destination": "gene_expression",
+                        "confidence": 0.9,
+                        "reasoning": "done",
+                        "items": [{"label": "notch"}],
+                        "raw_mentions": [],
+                        "exclusions": [],
+                        "ambiguities": [],
+                        "run_summary": {
+                            "candidate_count": 1,
+                            "kept_count": 1,
+                            "excluded_count": 0,
+                            "ambiguous_count": 0,
+                            "warnings": [],
+                        },
+                    }
+                )
+            },
+        }
         yield {
             "type": "TOOL_COMPLETE",
             "details": {"toolName": "ask_gene_expression_specialist"},

@@ -546,6 +546,31 @@ def test_chat_stream_endpoint_persists_extraction_envelopes_after_success(monkey
     async def _run_agent_streamed(**_kwargs):
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-123"}}
         yield {
+            "type": chat_common.INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
+            "details": {"toolName": "ask_gene_expression_specialist"},
+            "internal": {
+                "tool_output": json.dumps(
+                    {
+                        "actor": "gene_expression_specialist",
+                        "destination": "gene_expression",
+                        "confidence": 0.9,
+                        "reasoning": "done",
+                        "items": [{"label": "notch"}],
+                        "raw_mentions": [],
+                        "exclusions": [],
+                        "ambiguities": [],
+                        "run_summary": {
+                            "candidate_count": 1,
+                            "kept_count": 1,
+                            "excluded_count": 0,
+                            "ambiguous_count": 0,
+                            "warnings": [],
+                        },
+                    }
+                )
+            },
+        }
+        yield {
             "type": "TOOL_COMPLETE",
             "details": {"toolName": "ask_gene_expression_specialist"},
             "internal": {
@@ -1078,6 +1103,28 @@ def test_chat_stream_endpoint_infers_scope_for_scope_free_extraction_envelopes(m
     async def _run_agent_streamed(**_kwargs):
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-456"}}
         yield {
+            "type": chat_common.INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
+            "details": {"toolName": "ask_gene_extractor_specialist"},
+            "internal": {
+                "tool_output": json.dumps(
+                    {
+                        "genes": [{"mention": "tinman"}],
+                        "items": [{"label": "tinman"}],
+                        "raw_mentions": [{"mention": "tinman", "evidence": []}],
+                        "exclusions": [],
+                        "ambiguities": [],
+                        "run_summary": {
+                            "candidate_count": 4,
+                            "kept_count": 1,
+                            "excluded_count": 0,
+                            "ambiguous_count": 0,
+                            "warnings": [],
+                        },
+                    }
+                )
+            },
+        }
+        yield {
             "type": "TOOL_COMPLETE",
             "details": {"toolName": "ask_gene_extractor_specialist"},
             "internal": {
@@ -1175,6 +1222,31 @@ def test_chat_stream_endpoint_emits_turn_failed_when_completion_side_effect_pers
 
     async def _run_agent_streamed(**_kwargs):
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-123"}}
+        yield {
+            "type": chat_common.INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
+            "details": {"toolName": "ask_gene_expression_specialist"},
+            "internal": {
+                "tool_output": json.dumps(
+                    {
+                        "actor": "gene_expression_specialist",
+                        "destination": "gene_expression",
+                        "confidence": 0.9,
+                        "reasoning": "done",
+                        "items": [{"label": "notch"}],
+                        "raw_mentions": [],
+                        "exclusions": [],
+                        "ambiguities": [],
+                        "run_summary": {
+                            "candidate_count": 1,
+                            "kept_count": 1,
+                            "excluded_count": 0,
+                            "ambiguous_count": 0,
+                            "warnings": [],
+                        },
+                    }
+                )
+            },
+        }
         yield {
             "type": "TOOL_COMPLETE",
             "details": {"toolName": "ask_gene_expression_specialist"},

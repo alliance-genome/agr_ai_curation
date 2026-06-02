@@ -15,6 +15,7 @@ from fastapi import Security
 from fastapi.testclient import TestClient
 
 from conftest import MOCK_USERS
+from src.lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 from tests.chat_api_test_support import patch_chat_impl
 from tests.fixtures.evidence.harness import (
     DEFAULT_FIXTURE_NAME,
@@ -330,6 +331,7 @@ def make_fixture_runner(evidence_fixture: dict[str, object]):
             tool_output = {
                 "status": "verified",
                 "verified_quote": evidence_record["verified_quote"],
+                "chunk_id": evidence_record["chunk_id"],
                 "page": evidence_record["page"],
                 "section": evidence_record["section"],
             }
@@ -361,6 +363,13 @@ def make_fixture_runner(evidence_fixture: dict[str, object]):
                 },
             }
 
+        yield {
+            "type": INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
+            "details": {"toolName": extraction["tool_name"]},
+            "internal": {
+                "tool_output": json.dumps(extraction_payload),
+            },
+        }
         yield {
             "type": "TOOL_COMPLETE",
             "details": {"toolName": extraction["tool_name"]},
