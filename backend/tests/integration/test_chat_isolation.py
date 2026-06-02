@@ -111,22 +111,14 @@ def client_as_curator1(get_auth_mock, test_db):
     # Configure shared auth mock for chat1 user
     get_auth_mock.set_user("chat1")
 
-    import sys
-
-    modules_to_clear = [
-        name for name in list(sys.modules.keys())
-        if name == "main" or name.startswith("src.")
-    ]
-    for module_name in modules_to_clear:
-        del sys.modules[module_name]
-
-    from main import app
+    from main import create_app
     from src.api.auth import _get_user_from_cookie_impl
     from src.models.sql.database import get_db
 
     def override_get_db():
         yield test_db
 
+    app = create_app()
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[_get_user_from_cookie_impl] = get_auth_mock.get_user
 

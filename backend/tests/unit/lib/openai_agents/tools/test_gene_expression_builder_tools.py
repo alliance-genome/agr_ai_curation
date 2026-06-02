@@ -122,7 +122,6 @@ def _stage_valid_observation(ledger: resolver_call_ledger.ResolverCallLedger):
         controlled_fields=[
             {
                 "field_path": "relation.name",
-                "resolver_call_id": "call_relation",
                 "selected_value": "is_expressed_in",
             }
         ],
@@ -180,22 +179,18 @@ def _stage_materializable_observation(ledger: resolver_call_ledger.ResolverCallL
         controlled_fields=[
             {
                 "field_path": "relation.name",
-                "resolver_call_id": "call_relation",
                 "selected_value": "is_expressed_in",
             },
             {
                 "field_path": "expression_experiment.expression_assay_used",
-                "resolver_call_id": "call_assay",
                 "selected_value": "MMO:0000655",
             },
             {
                 "field_path": "when_expressed_stage_name",
-                "resolver_call_id": "call_stage",
                 "selected_value": "L2 larva",
             },
             {
                 "field_path": "expression_pattern.where_expressed.anatomical_structure",
-                "resolver_call_id": "call_anatomy",
                 "selected_value": "WBbt:0001234",
             },
         ],
@@ -297,7 +292,6 @@ def test_stage_rejects_missing_resolver_provenance(active_builder_context):
         controlled_fields=[
             {
                 "field_path": "relation.name",
-                "resolver_call_id": "call_missing",
                 "selected_value": "is_expressed_in",
             }
         ],
@@ -305,7 +299,7 @@ def test_stage_rejects_missing_resolver_provenance(active_builder_context):
 
     assert result.status == "error"
     assert result.failure_classification == "validation_failed"
-    assert result.data["validation_issues"][0]["reason"] == "unknown_resolver_call_id"
+    assert result.data["validation_issues"][0]["reason"] == "unresolved_selected_value"
     assert any(
         event["event_type"] == "gene_expression_builder.missing_provenance_rejected"
         for event in events
@@ -336,7 +330,6 @@ def test_stage_rejects_missing_evidence_ids(active_builder_context):
         controlled_fields=[
             {
                 "field_path": "relation.name",
-                "resolver_call_id": "call_relation",
                 "selected_value": "is_expressed_in",
             }
         ],
@@ -369,7 +362,6 @@ def test_stage_rejects_placeholder_reference(active_builder_context):
         controlled_fields=[
             {
                 "field_path": "relation.name",
-                "resolver_call_id": "call_relation",
                 "selected_value": "is_expressed_in",
             }
         ],
@@ -396,13 +388,11 @@ def test_patch_rejects_free_form_field_and_requires_resolver_for_controlled_patc
             {
                 "field_path": "free_form.path",
                 "string_value": "nope",
-                "resolver_call_id": None,
                 "evidence_record_ids": None,
             },
             {
                 "field_path": "relation.name",
                 "string_value": None,
-                "resolver_call_id": None,
                 "evidence_record_ids": None,
             },
         ],
@@ -432,13 +422,11 @@ def test_patch_updates_reference_and_controlled_field_from_ledger(active_builder
             {
                 "field_path": "reference.reference_id",
                 "string_value": "PMID:39550471",
-                "resolver_call_id": None,
                 "evidence_record_ids": None,
             },
             {
                 "field_path": "relation.name",
-                "string_value": None,
-                "resolver_call_id": "call_relation_part_of",
+                "string_value": "is_not_expressed_in",
                 "evidence_record_ids": None,
             },
         ],

@@ -16,8 +16,7 @@ import pytest
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -109,24 +108,14 @@ def valid_session_id():
 @pytest.fixture(scope="module")
 def client(temp_storage_dir):
     """Create test client with storage path set before app import."""
-    # Set environment variable BEFORE importing the app
     os.environ["FILE_OUTPUT_STORAGE_PATH"] = str(temp_storage_dir)
     os.environ["OPENAI_API_KEY"] = "test-key"
     os.environ["TESTING_API_KEY"] = "test-key"
     os.environ["DEV_MODE"] = "true"
 
-    # Clear any cached imports
-    import sys
-    modules_to_remove = [
-        k for k in sys.modules.keys()
-        if k == "main"
-        or k.startswith("src.")
-    ]
-    for mod in modules_to_remove:
-        del sys.modules[mod]
+    from main import create_app
 
-    # Now import the app fresh
-    from main import app
+    app = create_app()
 
     # Use an in-memory sqlite DB for unit tests instead of external postgres.
     engine = create_engine(

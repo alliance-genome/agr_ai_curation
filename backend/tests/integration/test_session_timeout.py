@@ -81,31 +81,23 @@ def client_with_expired_token(monkeypatch, mock_expired_auth):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("UNSTRUCTURED_API_URL", "http://test-unstructured")
 
-    import sys
     import os
-    from fastapi import Security
 
+    import sys
     sys.path.insert(
         0,
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     )
 
-    modules_to_clear = []
-    for module_name in list(sys.modules.keys()):
-        if module_name == "main" or module_name.startswith("src."):
-            modules_to_clear.append(module_name)
-    for module_name in modules_to_clear:
-        del sys.modules[module_name]
+    from main import create_app
+    from src.api.auth import _get_user_from_cookie_impl
 
-    # Patch get_auth_dependency BEFORE importing app
-    with patch("src.api.auth.get_auth_dependency") as mock_get_auth_dep:
-        mock_get_auth_dep.return_value = Security(mock_expired_auth.get_user)
+    app = create_app()
+    app.dependency_overrides[_get_user_from_cookie_impl] = mock_expired_auth.get_user
 
-        from main import app
+    yield TestClient(app)
 
-        yield TestClient(app)
-
-        app.dependency_overrides.clear()
+    app.dependency_overrides.clear()
 
 
 @pytest.fixture
@@ -158,33 +150,26 @@ def client_with_valid_token(monkeypatch, mock_valid_auth):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("UNSTRUCTURED_API_URL", "http://test-unstructured")
 
-    import sys
     import os
-    from fastapi import Security
 
+    import sys
     sys.path.insert(
         0,
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     )
 
-    modules_to_clear = []
-    for module_name in list(sys.modules.keys()):
-        if module_name == "main" or module_name.startswith("src."):
-            modules_to_clear.append(module_name)
-    for module_name in modules_to_clear:
-        del sys.modules[module_name]
+    from main import create_app
+    from src.api.auth import _get_user_from_cookie_impl
 
-    with patch("src.api.auth.get_auth_dependency") as mock_get_auth_dep:
-        mock_get_auth_dep.return_value = Security(mock_valid_auth.get_user)
+    app = create_app()
+    app.dependency_overrides[_get_user_from_cookie_impl] = mock_valid_auth.get_user
 
-        # Also mock provisioning side effects to keep timeout tests focused on auth.
-        with patch("src.services.user_service.provision_weaviate_tenants", return_value=True):
-            with patch("src.services.user_service.get_connection"):
-                from main import app
+    # Also mock provisioning side effects to keep timeout tests focused on auth.
+    with patch("src.services.user_service.provision_weaviate_tenants", return_value=True):
+        with patch("src.services.user_service.get_connection"):
+            yield TestClient(app)
 
-                yield TestClient(app)
-
-                app.dependency_overrides.clear()
+            app.dependency_overrides.clear()
 
 
 class TestSessionTimeout:

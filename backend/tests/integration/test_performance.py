@@ -52,13 +52,6 @@ def authenticated_client(performance_user, test_db, mock_weaviate):
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     )
 
-    modules_to_clear = []
-    for module_name in list(sys.modules.keys()):
-        if module_name == "main" or module_name.startswith("src."):
-            modules_to_clear.append(module_name)
-    for module_name in modules_to_clear:
-        del sys.modules[module_name]
-
     # Create user in database
     user = User(
         auth_sub=performance_user.uid,
@@ -75,13 +68,14 @@ def authenticated_client(performance_user, test_db, mock_weaviate):
     async def get_mock_user():
         return performance_user
 
-    from main import app
+    from main import create_app
     from src.models.sql.database import get_db
     from src.api.auth import _get_user_from_cookie_impl
 
     def override_get_db():
         yield test_db
 
+    app = create_app()
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[_get_user_from_cookie_impl] = get_mock_user
 
@@ -103,19 +97,13 @@ def unauthenticated_client():
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     )
 
-    modules_to_clear = []
-    for module_name in list(sys.modules.keys()):
-        if module_name == "main" or module_name.startswith("src."):
-            modules_to_clear.append(module_name)
-    for module_name in modules_to_clear:
-        del sys.modules[module_name]
-
     async def _raise_unauthenticated():
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    from main import app
+    from main import create_app
     from src.api.auth import _get_user_from_cookie_impl
 
+    app = create_app()
     app.dependency_overrides[_get_user_from_cookie_impl] = _raise_unauthenticated
 
     yield TestClient(app)
@@ -238,7 +226,7 @@ class TestPerformance:
         assert max_duration < 1000, \
             f"Maximum request time should be < 1s, got {max_duration:.2f}ms"
 
-        print(f"✓ Sequential requests (n=20):")
+        print("✓ Sequential requests (n=20):")
         print(f"  Average: {avg_duration:.2f}ms")
         print(f"  Min: {min_duration:.2f}ms")
         print(f"  Max: {max_duration:.2f}ms")
@@ -345,7 +333,7 @@ class TestPerformance:
         assert batch_3_avg <= max_degradation, \
             f"Batch 3 degraded: {batch_3_avg:.2f}ms > {max_degradation:.2f}ms"
 
-        print(f"✓ No performance degradation detected:")
+        print("✓ No performance degradation detected:")
         print(f"  Batch 1 (1-10): {batch_1_avg:.2f}ms")
         print(f"  Batch 2 (11-20): {batch_2_avg:.2f}ms")
         print(f"  Batch 3 (21-30): {batch_3_avg:.2f}ms")
@@ -392,35 +380,28 @@ class TestPerformance:
         def create_client_for_user(cognito_user):
             import sys
             import os
-            from fastapi import Depends
 
             sys.path.insert(
                 0,
                 os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
             )
 
-            modules_to_clear = []
-            for module_name in list(sys.modules.keys()):
-                if module_name == "main" or module_name.startswith("src."):
-                    modules_to_clear.append(module_name)
-            for module_name in modules_to_clear:
-                del sys.modules[module_name]
-
             def get_mock_user():
                 return cognito_user
 
-            with patch("src.api.auth.get_auth_dependency") as mock_get_auth_dep:
-                mock_get_auth_dep.return_value = Depends(get_mock_user)
+            from main import create_app
+            from src.api.auth import _get_user_from_cookie_impl
+            from src.models.sql.database import get_db
 
-                from main import app
-                from src.models.sql.database import get_db
+            app = create_app()
 
-                def override_get_db():
-                    yield test_db
+            def override_get_db():
+                yield test_db
 
-                app.dependency_overrides[get_db] = override_get_db
+            app.dependency_overrides[get_db] = override_get_db
+            app.dependency_overrides[_get_user_from_cookie_impl] = get_mock_user
 
-                return TestClient(app)
+            return TestClient(app)
 
         client1 = create_client_for_user(user1)
         client2 = create_client_for_user(user2)
@@ -450,6 +431,6 @@ class TestPerformance:
         assert user2_avg < 500, \
             f"User 2 requests should be < 500ms, got {user2_avg:.2f}ms"
 
-        print(f"✓ Multi-user performance:")
+        print("✓ Multi-user performance:")
         print(f"  User 1 average: {user1_avg:.2f}ms")
         print(f"  User 2 average: {user2_avg:.2f}ms")

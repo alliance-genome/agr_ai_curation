@@ -23,8 +23,13 @@ config.set_main_option("sqlalchemy.url", get_app_database_url())
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
+# disable_existing_loggers=False: the default (True) would disable every logger
+# already created before alembic runs. In-process callers (the test suite running
+# migrations, or app code invoking command.upgrade) would then lose all logging on
+# their existing loggers for the rest of the process, which silently breaks log
+# capture and any expected log output. Migration logging setup must be additive.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # add your model's MetaData object here
 # for 'autogenerate' support

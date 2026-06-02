@@ -452,15 +452,6 @@ async def lifespan(app: FastAPI):
         logger.error("Error during shutdown: %s", e)
 
 
-app = FastAPI(
-    title="AI Curation Platform API",
-    description="Unified API for AI Chat (OpenAI Agents SDK) and Weaviate Control Panel",
-    version="2.0.0",
-    lifespan=lifespan
-)
-
-
-@app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Convert Pydantic 422 validation errors to 400 with ErrorResponse shape.
 
@@ -512,75 +503,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=os.getenv(
-        "CORS_ALLOWED_ORIGINS",
-        "http://localhost:3000,http://localhost:5173",
-    ).split(","),
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Request correlation middleware - adds request_id to all log lines.
-create_request_context_middleware(app)
-
-# Include routers
-# Authentication endpoints (under /auth)
-app.include_router(auth.router, tags=["Authentication"])
-
-# User profile endpoints (under /users)
-app.include_router(users.router, tags=["Users"])
-
-# Chat API endpoints (under /api) - OpenAI Agents SDK
-app.include_router(chat.router, tags=["Chat"])
-
-# Feedback API endpoints (under /api/feedback)
-app.include_router(feedback.router, tags=["Feedback"])
-
-# Maintenance message API endpoint (under /api/maintenance)
-app.include_router(maintenance.router, tags=["Maintenance"])
-
-# Agent Studio API endpoints (under /api/agent-studio)
-app.include_router(agent_studio.router, tags=["Agent Studio"])
-app.include_router(agent_studio_custom.router, tags=["Agent Studio"])
-
-# Flow CRUD API endpoints (under /api/flows)
-app.include_router(flows.router, tags=["Flows"])
-
-# Batch processing API endpoints (under /api/batches)
-app.include_router(batch.router, tags=["Batches"])
-# Flow validation for batch compatibility (under /api/flows/{id}/validate-batch)
-app.include_router(batch.flow_validation_router, tags=["Batches"])
-
-# File output API endpoints (under /api/files)
-app.include_router(files.router, tags=["Files"])
-app.include_router(curation_workspace.router, tags=["Curation Workspace"])
-
-# Weaviate Control Panel endpoints (already have /weaviate prefix in router definitions)
-app.include_router(documents.router, tags=["Documents"])
-app.include_router(pdf_jobs.router, tags=["PDF Jobs"])
-app.include_router(chunks.router, tags=["Chunks"])
-app.include_router(processing.router, tags=["Processing"])
-app.include_router(strategies.router, tags=["Strategies"])
-app.include_router(settings.router, tags=["Settings"])
-app.include_router(schema.router, tags=["Schema"])
-app.include_router(health.router, tags=["Health"])
-app.include_router(pdf_viewer.router, tags=["PDF Viewer"])
-app.include_router(logs.router, prefix="/api", tags=["Logs"])
-
-# Admin endpoints (privileged operations - requires ADMIN_EMAILS allowlist)
-app.include_router(admin_prompts_router, tags=["Admin - Prompts"])
-app.include_router(admin_connections_router, tags=["Admin - Health"])
-
-# Static mount for original PDF storage
-pdf_storage_path = get_pdf_storage_path()
-ensure_writable_directory(pdf_storage_path)
-app.mount("/uploads", StaticFiles(directory=pdf_storage_path), name="uploads")
-
-
-@app.get("/")
 async def root():
     """Root endpoint."""
     return {
@@ -606,14 +528,11 @@ def _build_liveness_health_status() -> dict[str, object]:
     }
 
 
-@app.get("/health")
-@app.get("/health/live")
 async def health_check():
     """Cheap liveness endpoint for Docker and load-balancer probes."""
     return _build_liveness_health_status()
 
 
-@app.get("/health/deep")
 async def deep_health_check():
     """Comprehensive dependency health check endpoint."""
     health_status = {
@@ -660,3 +579,69 @@ async def deep_health_check():
         health_status["status"] = "degraded"
 
     return health_status
+
+
+def create_app() -> FastAPI:
+    """Create a FastAPI application instance."""
+    application = FastAPI(
+        title="AI Curation Platform API",
+        description="Unified API for AI Chat (OpenAI Agents SDK) and Weaviate Control Panel",
+        version="2.0.0",
+        lifespan=lifespan,
+    )
+
+    application.add_exception_handler(
+        RequestValidationError,
+        validation_exception_handler,
+    )
+
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=os.getenv(
+            "CORS_ALLOWED_ORIGINS",
+            "http://localhost:3000,http://localhost:5173",
+        ).split(","),
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    create_request_context_middleware(application)
+
+    application.include_router(auth.router, tags=["Authentication"])
+    application.include_router(users.router, tags=["Users"])
+    application.include_router(chat.router, tags=["Chat"])
+    application.include_router(feedback.router, tags=["Feedback"])
+    application.include_router(maintenance.router, tags=["Maintenance"])
+    application.include_router(agent_studio.router, tags=["Agent Studio"])
+    application.include_router(agent_studio_custom.router, tags=["Agent Studio"])
+    application.include_router(flows.router, tags=["Flows"])
+    application.include_router(batch.router, tags=["Batches"])
+    application.include_router(batch.flow_validation_router, tags=["Batches"])
+    application.include_router(files.router, tags=["Files"])
+    application.include_router(curation_workspace.router, tags=["Curation Workspace"])
+    application.include_router(documents.router, tags=["Documents"])
+    application.include_router(pdf_jobs.router, tags=["PDF Jobs"])
+    application.include_router(chunks.router, tags=["Chunks"])
+    application.include_router(processing.router, tags=["Processing"])
+    application.include_router(strategies.router, tags=["Strategies"])
+    application.include_router(settings.router, tags=["Settings"])
+    application.include_router(schema.router, tags=["Schema"])
+    application.include_router(health.router, tags=["Health"])
+    application.include_router(pdf_viewer.router, tags=["PDF Viewer"])
+    application.include_router(logs.router, prefix="/api", tags=["Logs"])
+    application.include_router(admin_prompts_router, tags=["Admin - Prompts"])
+    application.include_router(admin_connections_router, tags=["Admin - Health"])
+
+    pdf_storage_path = get_pdf_storage_path()
+    ensure_writable_directory(pdf_storage_path)
+    application.mount("/uploads", StaticFiles(directory=pdf_storage_path), name="uploads")
+
+    application.add_api_route("/", root, methods=["GET"])
+    application.add_api_route("/health", health_check, methods=["GET"])
+    application.add_api_route("/health/live", health_check, methods=["GET"])
+    application.add_api_route("/health/deep", deep_health_check, methods=["GET"])
+    return application
+
+
+app = create_app()

@@ -1170,8 +1170,9 @@ def test_resolve_domain_field_term_returns_builder_resolver_call_instruction(mon
     assert selection["selected_name"] == "reverse transcription polymerase chain reaction assay"
     assert selection["authority"] == "selector_evidence"
     instructions = " ".join(result.data["instructions"])
-    assert "resolver_call_id" in instructions
-    assert "do not author metadata.provenance.helper_selections" in instructions
+    normalized_instructions = instructions.casefold()
+    assert "provenance is verified automatically" in instructions
+    assert "do not author metadata.provenance.helper_selections" in normalized_instructions
     assert "Copy helper_selection into metadata.provenance.helper_selections[]" not in instructions
     assert result.data["payload_field_instructions"] == {
         "set": [

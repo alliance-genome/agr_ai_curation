@@ -450,13 +450,31 @@ def test_phenotype_extractor_prompt_agent_and_group_rules_name_domain_contract()
         "read_section",
         "read_subsection",
         "record_evidence",
+        "list_recorded_evidence",
+        "get_recorded_evidence",
+        "attach_evidence_to_object",
+        "detach_evidence_from_object",
+        "discard_recorded_evidence",
+        "update_recorded_evidence_metadata",
         "get_agent_contract",
         "agr_species_context_lookup",
+        "search_domain_field_terms",
+        "inspect_ontology_term",
+        "resolve_domain_field_term",
+        "stage_phenotype_observation",
+        "patch_phenotype_observation",
+        "discard_phenotype_observation",
+        "list_staged_phenotype_observations",
+        "finalize_phenotype_extraction",
     ]
     assert "curatable_objects[]" in agent_data["supervisor_routing"]["description"]
-    assert "locked generated runtime contract owns deterministic tool inventory" in prompt_content
+    # Builder-pattern contract (phenotype migration): the editable prompt stages
+    # observations with the builder tools and defers identity to validators.
+    assert "Do not hand-author `curatable_objects[]`" in prompt_content
+    assert "stage_phenotype_observation" in prompt_content
+    assert "finalize_phenotype_extraction" in prompt_content
     assert "agr_species_context_lookup" in prompt_content
-    assert "Do not perform extraction-time phenotype ontology lookup" in prompt_content
+    assert "active validator bindings own" in prompt_content
     assert "agr_curation_query" not in agent_data["tools"]
     assert "broad curation lookup tools" in prompt_content
     assert "PhenotypeAnnotation(PhenotypeAnnotationPayload role=curatable_unit" in generated_content
@@ -464,7 +482,10 @@ def test_phenotype_extractor_prompt_agent_and_group_rules_name_domain_contract()
     assert "PhenotypeSubject" in generated_content
     assert "PhenotypeTerm" in generated_content
     assert "taxon" in generated_content
-    assert "PhenotypeSubject.taxon->phenotype_subject_entity_validator" in generated_content
+    assert (
+        "PhenotypeSubject.subject_identifier->phenotype_subject_entity_validator"
+        in generated_content
+    )
     assert "Active validator bindings own validator result fields" in generated_content
     assert "repair_mode" not in prompt_content
     assert "repair_notes" not in prompt_content

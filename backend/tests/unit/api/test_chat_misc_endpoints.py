@@ -1641,6 +1641,31 @@ async def test_chat_endpoint_raises_500_when_extraction_persistence_fails(monkey
     async def _stream(**_kwargs):
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
         yield {
+            "type": chat_common.INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
+            "details": {"toolName": "ask_gene_expression_specialist"},
+            "internal": {
+                "tool_output": json.dumps(
+                    {
+                        "actor": "gene_expression_specialist",
+                        "destination": "gene_expression",
+                        "confidence": 0.9,
+                        "reasoning": "done",
+                        "items": [{"label": "notch"}],
+                        "raw_mentions": [],
+                        "exclusions": [],
+                        "ambiguities": [],
+                        "run_summary": {
+                            "candidate_count": 1,
+                            "kept_count": 1,
+                            "excluded_count": 0,
+                            "ambiguous_count": 0,
+                            "warnings": [],
+                        },
+                    }
+                )
+            },
+        }
+        yield {
             "type": "TOOL_COMPLETE",
             "details": {"toolName": "ask_gene_expression_specialist"},
             "internal": {

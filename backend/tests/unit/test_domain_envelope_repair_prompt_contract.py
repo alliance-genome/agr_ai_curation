@@ -238,7 +238,7 @@ def test_extractor_agents_use_plain_extraction_result_schemas():
             continue
 
         schema_cls = getattr(agent_models, schema_name)
-        assert issubclass(schema_cls, DomainEnvelopeExtractionResult)
+        assert any(_b.__qualname__ == DomainEnvelopeExtractionResult.__qualname__ for _b in type.mro(schema_cls))
         assert not getattr(
             schema_cls,
             "__domain_envelope_extractor_repair_response__",

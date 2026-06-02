@@ -11,13 +11,12 @@ from __future__ import annotations
 
 import json
 import os
-import sys
+from contextlib import contextmanager
 from uuid import uuid4
 from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
-from fastapi import Security
 
 
 def _flow_definition(*, agent_id: str, agent_display_name: str, output_key: str = "final_output") -> dict:
@@ -61,7 +60,10 @@ def _sse_events(response) -> list[dict]:
         if not line:
             continue
         if line.startswith("data: "):
-            events.append(json.loads(line[6:]))
+            event = json.loads(line[6:])
+            events.append(event)
+            if event.get("type") in {"FLOW_FINISHED", "RUN_ERROR"}:
+                break
     return events
 
 
@@ -97,6 +99,14 @@ def _mark_fake_streaming_tool_complete(agent, *, output: str = "done") -> None:
     execution_state["next_tool_index"] = next_tool_index + 1
 
 
+@contextmanager
+def _patched_flow_runner(run_agent_streamed):
+    with patch("src.api.chat_execute_flow.run_agent_streamed", run_agent_streamed), \
+         patch("src.api.chat_common.run_agent_streamed", run_agent_streamed), \
+         patch("src.lib.openai_agents.runner.run_agent_streamed", run_agent_streamed):
+        yield
+
+
 @pytest.fixture
 def client(test_db, get_auth_mock, monkeypatch):
     """Create isolated app client with explicit auth + DB dependency overrides."""
@@ -106,64 +116,54 @@ def client(test_db, get_auth_mock, monkeypatch):
 
     get_auth_mock.set_user("valid_user")
 
-    modules_to_clear = [
-        name for name in list(sys.modules.keys())
-        if name == "main" or name.startswith("src.")
-    ]
-    for module_name in modules_to_clear:
-        del sys.modules[module_name]
+    from main import create_app
+    from src.api.auth import _get_user_from_cookie_impl
+    from src.lib.config.prompt_loader import load_prompts
+    from src.lib.agent_studio.system_agent_sync import sync_system_agents
+    from src.lib.prompts import cache as prompt_cache
+    from src.models.sql.agent import Agent as UnifiedAgent
+    from src.models.sql.agent import Project
+    from src.models.sql.agent import ProjectMember
+    from src.models.sql.chat_message import ChatMessage
+    from src.models.sql.chat_session import ChatSession
+    from src.models.sql.curation_flow import CurationFlow
+    from src.models.sql.database import Base
+    from src.models.sql.database import get_db
+    from src.models.sql.prompts import PromptExecutionLog, PromptTemplate
+    from src.models.sql.user import User
 
-    # Ensure auth dependency is patched before importing app, following existing
-    # integration patterns in this repository.
-    with patch("src.api.auth.get_auth_dependency") as mock_get_auth_dep:
-        mock_get_auth_dep.return_value = Security(get_auth_mock.get_user)
+    # Flow execution now resolves every step through the unified agents table
+    # before the runner is invoked. Seed system agents in this isolated DB.
+    Base.metadata.create_all(
+        bind=test_db.get_bind(),
+        tables=[
+            User.__table__,
+            Project.__table__,
+            ProjectMember.__table__,
+            UnifiedAgent.__table__,
+            CurationFlow.__table__,
+            ChatSession.__table__,
+            ChatMessage.__table__,
+            PromptTemplate.__table__,
+            PromptExecutionLog.__table__,
+        ],
+    )
+    load_prompts(db=test_db, force_reload=True)
+    prompt_cache.initialize(test_db)
+    sync_system_agents(test_db, force_reload=True)
+    test_db.commit()
 
-        from main import app
-        from src.lib.config.prompt_loader import load_prompts
-        from src.lib.agent_studio.system_agent_sync import sync_system_agents
-        from src.lib.prompts import cache as prompt_cache
-        from src.models.sql.agent import Agent as UnifiedAgent
-        from src.models.sql.agent import Project
-        from src.models.sql.agent import ProjectMember
-        from src.models.sql.chat_message import ChatMessage
-        from src.models.sql.chat_session import ChatSession
-        from src.models.sql.curation_flow import CurationFlow
-        from src.models.sql.database import Base
-        from src.models.sql.database import get_db
-        from src.models.sql.prompts import PromptExecutionLog, PromptTemplate
-        from src.models.sql.user import User
+    app = create_app()
 
-        # Flow execution now resolves every step through the unified agents
-        # table before the runner is invoked. Seed system agents in this
-        # isolated integration DB so the tests keep exercising streaming flow
-        # behavior instead of failing earlier on missing catalog rows.
-        Base.metadata.create_all(
-            bind=test_db.get_bind(),
-            tables=[
-                User.__table__,
-                Project.__table__,
-                ProjectMember.__table__,
-                UnifiedAgent.__table__,
-                CurationFlow.__table__,
-                ChatSession.__table__,
-                ChatMessage.__table__,
-                PromptTemplate.__table__,
-                PromptExecutionLog.__table__,
-            ],
-        )
-        load_prompts(db=test_db, force_reload=True)
-        prompt_cache.initialize(test_db)
-        sync_system_agents(test_db, force_reload=True)
-        test_db.commit()
+    def override_get_db():
+        yield test_db
 
-        def override_get_db():
-            yield test_db
-
-        app.dependency_overrides[get_db] = override_get_db
-        try:
-            yield TestClient(app)
-        finally:
-            app.dependency_overrides.clear()
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[_get_user_from_cookie_impl] = get_auth_mock.get_user
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_flow_lifecycle_create_update_execute_stream_and_stats(client: TestClient):
@@ -207,7 +207,7 @@ def test_flow_lifecycle_create_update_execute_stream_and_stats(client: TestClien
         "session_id": f"session-{uuid4().hex[:10]}",
         "user_query": "Run this flow end-to-end",
     }
-    with patch("src.lib.openai_agents.runner.run_agent_streamed", _fake_run_agent_streamed):
+    with _patched_flow_runner(_fake_run_agent_streamed):
         with client.stream("POST", "/api/chat/execute-flow", json=execute_payload) as stream_resp:
             events = _sse_events(stream_resp)
             assert stream_resp.status_code == 200
@@ -274,7 +274,7 @@ def test_execute_flow_persists_durable_history_and_replays_completed_turn(client
         "user_query": "Run this flow end-to-end",
     }
 
-    with patch("src.lib.openai_agents.runner.run_agent_streamed", _fake_run_agent_streamed):
+    with _patched_flow_runner(_fake_run_agent_streamed):
         with client.stream("POST", "/api/chat/execute-flow", json=execute_payload) as stream_resp:
             events = _sse_events(stream_resp)
             assert stream_resp.status_code == 200
@@ -302,7 +302,7 @@ def test_execute_flow_persists_durable_history_and_replays_completed_turn(client
         raise AssertionError("run_agent_streamed should not run for a completed replayed flow turn")
         yield  # pragma: no cover
 
-    with patch("src.lib.openai_agents.runner.run_agent_streamed", _unexpected_run_agent_streamed):
+    with _patched_flow_runner(_unexpected_run_agent_streamed):
         with client.stream("POST", "/api/chat/execute-flow", json=execute_payload) as stream_resp:
             replay_events = _sse_events(stream_resp)
             assert stream_resp.status_code == 200

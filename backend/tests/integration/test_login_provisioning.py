@@ -100,53 +100,37 @@ def client(test_db, mock_cognito_user, monkeypatch):
     """Create test client with mocked Cognito authentication.
 
     This client bypasses Cognito OAuth flow and directly provides a mock user.
-    We patch get_auth_dependency at import time to avoid the 503 error.
     """
     # Set required environment variables
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("UNSTRUCTURED_API_URL", "http://test-unstructured")
 
-    import sys
     import os
-    from fastapi import Depends
 
+    import sys
     sys.path.insert(
         0,
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     )
 
-    # Ensure fixture gets a fresh app instance with patched auth dependency.
-    modules_to_clear = []
-    for module_name in list(sys.modules.keys()):
-        if module_name == "main" or module_name.startswith("src."):
-            modules_to_clear.append(module_name)
-    for module_name in modules_to_clear:
-        del sys.modules[module_name]
-
-    # Create a simple dependency that returns our mock user
     def get_mock_user():
         return mock_cognito_user
 
-    # Patch get_auth_dependency BEFORE importing the app
-    # This ensures the users router registers with our mocked dependency
-    with patch("src.api.auth.get_auth_dependency") as mock_get_auth_dep:
-        # Make get_auth_dependency() return a Depends that yields our mock user
-        mock_get_auth_dep.return_value = Depends(get_mock_user)
+    from main import create_app
+    from src.api.auth import _get_user_from_cookie_impl
+    from src.models.sql.database import get_db
 
-        # Now import the app (which will load routes with our patched dependency)
-        from main import app
-        from src.models.sql.database import get_db
+    app = create_app()
 
-        # Override database dependency to use test database
-        def override_get_db():
-            yield test_db
+    def override_get_db():
+        yield test_db
 
-        app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[_get_user_from_cookie_impl] = get_mock_user
 
-        yield TestClient(app)
+    yield TestClient(app)
 
-        # Clean up dependency overrides
-        app.dependency_overrides.clear()
+    app.dependency_overrides.clear()
 
 
 class TestLoginProvisioning:

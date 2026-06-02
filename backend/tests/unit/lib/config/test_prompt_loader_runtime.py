@@ -154,13 +154,6 @@ def test_acquire_advisory_lock_falls_back_on_error():
     assert (lock_acquired, is_loader) == (True, True)
 
 
-def test_release_advisory_lock_swallows_errors():
-    db = MagicMock()
-    db.execute.side_effect = RuntimeError("unlock failed")
-    prompt_loader._release_advisory_lock(db)
-    assert db.execute.call_count == 1
-
-
 def test_load_prompts_skips_when_already_initialized(tmp_path):
     prompt_loader._initialized = True
     db = MagicMock()
@@ -174,14 +167,12 @@ def test_load_prompts_skips_when_another_worker_loaded(tmp_path, monkeypatch):
     agents_path = tmp_path / "agents"
     agents_path.mkdir()
     db = MagicMock()
-    calls = {"released": 0}
 
     monkeypatch.setattr(prompt_loader, "_acquire_advisory_lock", lambda _db: (True, False))
-    monkeypatch.setattr(prompt_loader, "_release_advisory_lock", lambda _db: calls.__setitem__("released", calls["released"] + 1))
 
     result = prompt_loader.load_prompts(agents_path=agents_path, db=db)
     assert result["skipped"] is True
-    assert calls["released"] == 1
+    db.commit.assert_called_once_with()
     assert prompt_loader.is_initialized() is True
 
 
@@ -192,19 +183,34 @@ def test_load_prompts_loader_path_counts_and_commits(tmp_path, monkeypatch):
     (agents_path / "_ignored").mkdir(parents=True)
     (agents_path / "not_a_dir.txt").write_text("x")
     db = MagicMock()
-    calls = {"released": 0}
 
     monkeypatch.setattr(prompt_loader, "_acquire_advisory_lock", lambda _db: (True, True))
-    monkeypatch.setattr(prompt_loader, "_release_advisory_lock", lambda _db: calls.__setitem__("released", calls["released"] + 1))
     monkeypatch.setattr(prompt_loader, "_load_base_prompt", lambda source, _db: source.folder_name if source.folder_name == "gene" else None)
     monkeypatch.setattr(prompt_loader, "_load_group_rules", lambda _source, _agent_name, _db: 2)
 
     result = prompt_loader.load_prompts(agents_path=agents_path, db=db)
 
     assert result == {"base_prompts": 1, "group_rules": 2}
-    assert db.commit.called
-    assert calls["released"] == 1
+    db.commit.assert_called_once_with()
+    db.rollback.assert_not_called()
     assert prompt_loader.is_initialized() is True
+
+
+def test_load_prompts_rolls_back_loader_transaction_on_error(tmp_path, monkeypatch):
+    agents_path = tmp_path / "agents"
+    (agents_path / "gene").mkdir(parents=True)
+    (agents_path / "gene" / "agent.yaml").write_text("agent_id: gene\n")
+    db = MagicMock()
+
+    monkeypatch.setattr(prompt_loader, "_acquire_advisory_lock", lambda _db: (True, True))
+    monkeypatch.setattr(prompt_loader, "_load_base_prompt", MagicMock(side_effect=RuntimeError("load failed")))
+
+    with pytest.raises(RuntimeError, match="load failed"):
+        prompt_loader.load_prompts(agents_path=agents_path, db=db)
+
+    db.rollback.assert_called_once_with()
+    db.commit.assert_not_called()
+    assert prompt_loader.is_initialized() is False
 
 
 def test_load_prompts_force_reload_even_if_initialized(tmp_path, monkeypatch):
@@ -215,7 +221,6 @@ def test_load_prompts_force_reload_even_if_initialized(tmp_path, monkeypatch):
     db = MagicMock()
 
     monkeypatch.setattr(prompt_loader, "_acquire_advisory_lock", lambda _db: (True, True))
-    monkeypatch.setattr(prompt_loader, "_release_advisory_lock", lambda _db: None)
     monkeypatch.setattr(prompt_loader, "_load_base_prompt", lambda _source, _db: "gene")
     monkeypatch.setattr(prompt_loader, "_load_group_rules", lambda *_args, **_kwargs: 0)
 
@@ -247,7 +252,6 @@ def test_load_prompts_uses_resolved_sources(monkeypatch):
     sources = (MagicMock(folder_name="gene"),)
 
     monkeypatch.setattr(prompt_loader, "_acquire_advisory_lock", lambda _db: (True, True))
-    monkeypatch.setattr(prompt_loader, "_release_advisory_lock", lambda _db: None)
     monkeypatch.setattr(prompt_loader, "_resolve_prompt_sources", lambda _agents_path: (Path("/tmp/runtime-packages"), sources))
     monkeypatch.setattr(prompt_loader, "_load_base_prompt", lambda source, _db: source.folder_name)
     monkeypatch.setattr(prompt_loader, "_load_group_rules", lambda *_args, **_kwargs: 0)
@@ -267,7 +271,6 @@ def test_load_prompts_supports_core_only_runtime_packages(tmp_path, monkeypatch)
     captured_calls = []
 
     monkeypatch.setattr(prompt_loader, "_acquire_advisory_lock", lambda _db: (True, True))
-    monkeypatch.setattr(prompt_loader, "_release_advisory_lock", lambda _db: None)
     monkeypatch.setattr(
         prompt_loader,
         "_upsert_prompt",

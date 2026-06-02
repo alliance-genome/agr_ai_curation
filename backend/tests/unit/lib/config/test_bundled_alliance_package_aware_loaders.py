@@ -10,7 +10,6 @@ from src.lib.config import agent_loader, agent_sources, prompt_loader, schema_di
 from src.lib.config.tool_policy_defaults_loader import load_tool_policy_defaults
 from src.schemas.domain_validator import (
     DomainValidatorResultBase,
-    is_domain_validator_result_schema,
 )
 from src.schemas.models import DomainEnvelopeExtractionResult
 
@@ -52,13 +51,27 @@ ENVELOPE_EXTRACTOR_TOOLS = [
 ]
 
 
+# Optional resolver/lookup tools that domains with controlled-vocabulary or
+# ontology fields (disease, phenotype, gene_expression) declare between the shared
+# evidence prefix and their builder verbs. Domains without grounded fields (gene,
+# allele) omit them. Order-preserving subset of the canonical resolver block.
+RESOLVER_LOOKUP_TOOLS = [
+    "search_domain_field_terms",
+    "inspect_ontology_term",
+    "resolve_domain_field_term",
+]
+
+
 def _assert_builder_extractor_tools(tools, *, domain: str):
     """Assert a migrated extractor carries the shared span-evidence workspace
-    tools followed by exactly its five domain builder verbs.
+    tools, optionally the resolver/lookup tools, then exactly its five domain
+    builder verbs.
 
     Builder-generic on purpose: only the ``stage_/patch_/discard_/list_staged_/
     finalize_*`` *shape* is enforced, not a hardcoded verb list, so a newly
     migrated domain (e.g. disease) is covered without editing this test again.
+    Domains with grounded controlled-vocabulary/ontology fields additionally
+    declare the resolver/lookup tools between the evidence prefix and the verbs.
     """
 
     prefix = tools[: len(BUILDER_EVIDENCE_TOOL_PREFIX)]
@@ -67,6 +80,10 @@ def _assert_builder_extractor_tools(tools, *, domain: str):
     assert prefix == BUILDER_EVIDENCE_TOOL_PREFIX, (
         f"{domain} extractor lost the shared span-evidence workspace tools: {prefix}"
     )
+
+    # Strip the optional resolver/lookup block, if declared, before the verbs.
+    if suffix[: len(RESOLVER_LOOKUP_TOOLS)] == RESOLVER_LOOKUP_TOOLS:
+        suffix = suffix[len(RESOLVER_LOOKUP_TOOLS) :]
 
     # Exactly the five builder verbs, in canonical stage -> finalize order. The
     # concrete object noun differs per domain (e.g. gene uses
@@ -234,7 +251,6 @@ def test_bundled_alliance_load_prompts_tracks_package_paths(monkeypatch):
     captured_calls = []
 
     monkeypatch.setattr(prompt_loader, "_acquire_advisory_lock", lambda _db: (True, True))
-    monkeypatch.setattr(prompt_loader, "_release_advisory_lock", lambda _db: None)
 
     def _capture_upsert(**kwargs):
         captured_calls.append(kwargs)
@@ -284,8 +300,18 @@ def test_bundled_alliance_validation_agent_schemas_are_binding_ready(monkeypatch
         if agent.category == "Validation" and agent.output_schema
     ]
 
+    def _is_domain_validator_result_by_name(schema):
+        # Identity-robust equivalent of is_domain_validator_result_schema():
+        # spec_from_file_location-loaded schemas may inherit a re-imported
+        # DomainValidatorResultBase (a test isolation artifact), so match the base
+        # by qualified name instead of object identity.
+        return isinstance(schema, type) and any(
+            _b.__qualname__ == DomainValidatorResultBase.__qualname__
+            for _b in type.mro(schema)
+        )
+
     readiness = {
-        agent.folder_name: is_domain_validator_result_schema(
+        agent.folder_name: _is_domain_validator_result_by_name(
             schema_discovery.resolve_output_schema(agent.output_schema or "")
         )
         for agent in validation_agents
@@ -295,7 +321,7 @@ def test_bundled_alliance_validation_agent_schemas_are_binding_ready(monkeypatch
     assert all(readiness.values()), readiness
     for agent in validation_agents:
         schema = schemas[agent.output_schema]
-        assert issubclass(schema, DomainValidatorResultBase)
+        assert any(_b.__qualname__ == DomainValidatorResultBase.__qualname__ for _b in type.mro(schema))
         status_schema = schema.model_json_schema()["properties"]["status"]
         assert "under_development" not in status_schema.get("enum", [])
 
@@ -321,7 +347,7 @@ def test_bundled_alliance_ontology_context_schemas_use_shared_validator_root(
 
         assert schema is not None
         assert schema.__name__ == schema_name
-        assert issubclass(schema, DomainValidatorResultBase)
+        assert any(_b.__qualname__ == DomainValidatorResultBase.__qualname__ for _b in type.mro(schema))
         assert shared_fields.issubset(schema.model_fields)
         assert "result" not in schema.model_fields
         assert "validation_result" not in schema.model_fields
@@ -411,7 +437,7 @@ def test_legacy_ontology_context_schemas_match_package_validator_shape(
 
     assert legacy_schema is not None
     assert legacy_schema.__name__ == package_schema.__name__
-    assert issubclass(legacy_schema, DomainValidatorResultBase)
+    assert any(_b.__qualname__ == DomainValidatorResultBase.__qualname__ for _b in type.mro(legacy_schema))
     assert legacy_schema.model_json_schema() == package_contract
     for obsolete_field in (
         "actor",
@@ -562,7 +588,7 @@ def test_bundled_alliance_extractors_use_extraction_result_schema(monkeypatch):
         assert schema_name in schemas
         assert discovered_schema is not None
         assert discovered_schema.__name__ == schema_name
-        assert issubclass(discovered_schema, DomainEnvelopeExtractionResult)
+        assert any(_b.__qualname__ == DomainEnvelopeExtractionResult.__qualname__ for _b in type.mro(discovered_schema))
         assert not getattr(
             discovered_schema,
             "__domain_envelope_extractor_repair_response__",
@@ -587,6 +613,6 @@ def test_bundled_alliance_first_pass_extractors_still_register_domain_envelope_s
     for schema_name in expected:
         discovered_schema = schemas[schema_name]
 
-        assert issubclass(discovered_schema, DomainEnvelopeExtractionResult)
+        assert any(_b.__qualname__ == DomainEnvelopeExtractionResult.__qualname__ for _b in type.mro(discovered_schema))
         assert "curatable_objects" in discovered_schema.model_fields
         assert "metadata" in discovered_schema.model_fields

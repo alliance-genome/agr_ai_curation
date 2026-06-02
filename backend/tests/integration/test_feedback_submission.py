@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -117,18 +116,12 @@ def cleanup_feedback_state():
 def client(get_auth_mock, monkeypatch):
     get_auth_mock.set_user("chat1")
 
-    modules_to_clear = [
-        name for name in list(sys.modules.keys())
-        if name == "main" or name.startswith("src.")
-    ]
-    for module_name in modules_to_clear:
-        del sys.modules[module_name]
-
-    from main import app
+    from main import create_app
     from src.api.auth import _get_user_from_cookie_impl
     from src.api import feedback as feedback_api
     from src.lib.feedback import service as feedback_service
 
+    app = create_app()
     app.dependency_overrides[_get_user_from_cookie_impl] = get_auth_mock.get_user
     monkeypatch.setattr(
         feedback_api,

@@ -95,9 +95,8 @@ def mock_weaviate():
 def client(test_db, monkeypatch):
     """Create test client with controllable authentication state.
 
-    This fixture implements the CORRECT pattern from test_login_provisioning.py:
+    This fixture uses a controllable auth dependency:
     - Creates mutable auth_state container
-    - Patches get_auth_dependency BEFORE importing main.py
     - Provides simulate_logout() and simulate_login() helper methods
     - Authentication state controlled via auth_state["authenticated"] flag
     """
@@ -135,17 +134,6 @@ def client(test_db, monkeypatch):
                 raise HTTPException(status_code=401, detail="Not authenticated")
             return auth_state["user"]
 
-    # CRITICAL: Clear module cache to prevent test contamination
-    # Each test needs a fresh app instance with its own auth dependency
-    # Clear main and ALL src.* modules to ensure complete isolation
-    modules_to_clear = []
-    for module_name in list(sys.modules.keys()):
-        if module_name == 'main' or module_name.startswith('src.'):
-            modules_to_clear.append(module_name)
-
-    for module_name in modules_to_clear:
-        del sys.modules[module_name]
-
     # Disable EC2 detection for test isolation.  Docker containers on EC2
     # can reach the instance metadata service (IMDSv2 hop-limit ≥ 2),
     # which causes is_running_on_ec2() → True.  That blocks DEV_MODE even
@@ -157,8 +145,7 @@ def client(test_db, monkeypatch):
 
     # Avoid real tenant provisioning/network calls in logout tests.
     with patch("src.services.user_service.provision_weaviate_tenants", return_value=True):
-        # Now import the app and override auth dependency at the callable level.
-        from main import app
+        from main import create_app
         from src.models.sql.database import get_db
         from src.api.auth import _get_user_from_cookie_impl
 
@@ -168,6 +155,7 @@ def client(test_db, monkeypatch):
         def override_get_db():
             yield test_db
 
+        app = create_app()
         app.dependency_overrides[get_db] = override_get_db
         app.dependency_overrides[_get_user_from_cookie_impl] = mock_auth_instance.get_user
 

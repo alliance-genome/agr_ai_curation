@@ -742,10 +742,14 @@ def _chat_dispatch_domain_cases():
             {
                 "disease_ontology_term_lookup",
                 "disease_relation_cv_lookup",
+                # R4 added annotation_type (manually_curated CV lookup) to the disease pack.
+                "disease_annotation_type_cv_lookup",
                 "disease_condition_relation_lookup",
                 "disease_data_provider_lookup",
             },
-            0,
+            # Conditions work adds context-only / selector-suppressed condition matches:
+            # matchedBindingCount (9) == validatorResultCount (6) + 3 suppressed.
+            3,
             id="disease",
         ),
         pytest.param(

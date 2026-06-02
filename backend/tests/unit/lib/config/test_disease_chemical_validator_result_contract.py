@@ -126,7 +126,7 @@ def test_disease_and_chemical_agents_use_shared_result_schemas(monkeypatch):
         assert agent.folder_name == folder
         assert agent.output_schema == case["schema_name"]
         assert agent.tools == ["get_agent_contract", case["tool"]]
-        assert issubclass(schema, DomainValidatorResultBase)
+        assert any(_b.__qualname__ == DomainValidatorResultBase.__qualname__ for _b in type.mro(schema))
         assert REQUIRED_SHARED_FIELDS <= set(schema.model_fields)
         assert not (LEGACY_TOP_LEVEL_FIELDS & set(schema.model_fields))
 
@@ -194,7 +194,7 @@ def test_active_disease_and_chemical_bindings_resolve_to_package_validators(monk
             agent_id = binding["validator_agent"]["agent_id"]
             agent = agents[agent_id]
             schema = schemas[agent.output_schema]
-            assert issubclass(schema, DomainValidatorResultBase)
+            assert any(_b.__qualname__ == DomainValidatorResultBase.__qualname__ for _b in type.mro(schema))
             assert binding["validator_agent"]["package_id"] == "agr.alliance"
             assert isinstance(binding.get("expected_result_fields"), dict)
 

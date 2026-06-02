@@ -4,17 +4,15 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import Security
 from fastapi.testclient import TestClient
 
 from conftest import MOCK_USERS
+from src.lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 from tests.chat_api_test_support import patch_chat_impl
 from tests.fixtures.evidence.harness import (
     DEFAULT_FIXTURE_NAME,
@@ -44,51 +42,44 @@ def client(test_db, get_auth_mock, monkeypatch):
 
     get_auth_mock.set_user("curator1")
 
-    modules_to_clear = [
-        name
-        for name in list(sys.modules.keys())
-        if name == "main" or name.startswith("src.")
-    ]
-    for module_name in modules_to_clear:
-        del sys.modules[module_name]
+    from main import create_app
+    from src.api.auth import _get_user_from_cookie_impl
+    from src.models.sql.chat_message import ChatMessage
+    from src.models.sql.chat_session import ChatSession
+    from src.models.sql.database import Base
+    from src.models.sql.database import get_db
+    from src.models.sql.pdf_document import PDFDocument
+    from src.models.sql.user import User
 
-    with patch("src.api.auth.get_auth_dependency") as mock_get_auth_dep:
-        mock_get_auth_dep.return_value = Security(get_auth_mock.get_user)
+    app = create_app()
 
-        from main import app
-        from src.models.sql.chat_message import ChatMessage
-        from src.models.sql.chat_session import ChatSession
-        from src.models.sql.database import Base
-        from src.models.sql.database import get_db
-        from src.models.sql.pdf_document import PDFDocument
-        from src.models.sql.user import User
+    def override_get_db():
+        yield test_db
 
-        def override_get_db():
-            yield test_db
+    Base.metadata.create_all(
+        bind=test_db.get_bind(),
+        tables=[
+            User.__table__,
+            PDFDocument.__table__,
+            ChatSession.__table__,
+            ChatMessage.__table__,
+        ],
+    )
+    test_db.query(ChatMessage).delete(synchronize_session=False)
+    test_db.query(ChatSession).delete(synchronize_session=False)
+    test_db.commit()
 
-        Base.metadata.create_all(
-            bind=test_db.get_bind(),
-            tables=[
-                User.__table__,
-                PDFDocument.__table__,
-                ChatSession.__table__,
-                ChatMessage.__table__,
-            ],
-        )
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[_get_user_from_cookie_impl] = get_auth_mock.get_user
+    try:
+        test_client = TestClient(app)
+        test_client.current_user_auth_sub = MOCK_USERS["curator1"]["sub"]
+        yield test_client
+    finally:
         test_db.query(ChatMessage).delete(synchronize_session=False)
         test_db.query(ChatSession).delete(synchronize_session=False)
         test_db.commit()
-
-        app.dependency_overrides[get_db] = override_get_db
-        try:
-            test_client = TestClient(app)
-            test_client.current_user_auth_sub = MOCK_USERS["curator1"]["sub"]
-            yield test_client
-        finally:
-            test_db.query(ChatMessage).delete(synchronize_session=False)
-            test_db.query(ChatSession).delete(synchronize_session=False)
-            test_db.commit()
-            app.dependency_overrides.clear()
+        app.dependency_overrides.clear()
 
 
 @pytest.fixture
@@ -330,6 +321,7 @@ def make_fixture_runner(evidence_fixture: dict[str, object]):
             tool_output = {
                 "status": "verified",
                 "verified_quote": evidence_record["verified_quote"],
+                "chunk_id": evidence_record["chunk_id"],
                 "page": evidence_record["page"],
                 "section": evidence_record["section"],
             }
@@ -361,6 +353,13 @@ def make_fixture_runner(evidence_fixture: dict[str, object]):
                 },
             }
 
+        yield {
+            "type": INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
+            "details": {"toolName": extraction["tool_name"]},
+            "internal": {
+                "tool_output": json.dumps(extraction_payload),
+            },
+        }
         yield {
             "type": "TOOL_COMPLETE",
             "details": {"toolName": extraction["tool_name"]},

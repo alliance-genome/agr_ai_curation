@@ -179,6 +179,8 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/integration/test_performance.py"),
     Path("backend/tests/integration/test_protected_endpoints.py"),
     Path("backend/tests/integration/test_session_timeout.py"),
+    # Alliance domain-pack contract tests (inherently Alliance-specific by location).
+    Path("backend/tests/contract/alliance/domain_packs/test_disease_relation_subset_enforcement.py"),
     Path("backend/tests/live_integration/test_backend_batch_live_processing.py"),
     Path("backend/tests/live_integration/test_backend_chat_live_pdf_qa.py"),
     Path("backend/tests/live_integration/test_backend_flow_live_llm.py"),
@@ -441,7 +443,6 @@ def test_org_custom_prompts_load_with_neutral_sources_and_group_ids(monkeypatch,
         return (True, 1)
 
     monkeypatch.setattr(prompt_loader, "_acquire_advisory_lock", lambda _db: (True, True))
-    monkeypatch.setattr(prompt_loader, "_release_advisory_lock", lambda _db: None)
     monkeypatch.setattr(prompt_loader, "_upsert_prompt", _capture_upsert)
 
     result = prompt_loader.load_prompts(packages_dir, db=db, force_reload=True)

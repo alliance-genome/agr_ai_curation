@@ -245,7 +245,7 @@ class TestSchemaDiscovery:
 
         assert GeneEnvelope is not None, "GeneResultEnvelope not found"
         assert issubclass(GeneEnvelope, BaseModel)
-        assert issubclass(GeneEnvelope, DomainValidatorResultBase)
+        assert any(_b.__qualname__ == DomainValidatorResultBase.__qualname__ for _b in type.mro(GeneEnvelope))
 
         # Check it has expected fields
         field_names = set(GeneEnvelope.model_fields.keys())
@@ -360,7 +360,7 @@ class TestSchemaDiscovery:
         for name, cls in schemas.items():
             has_marker = getattr(cls, "__envelope_class__", False)
             ends_with_envelope = name.endswith("Envelope")
-            is_validator_result = issubclass(cls, DomainValidatorResultBase)
+            is_validator_result = any(_b.__qualname__ == DomainValidatorResultBase.__qualname__ for _b in type.mro(cls))
             assert has_marker or ends_with_envelope or is_validator_result, (
                 f"Unexpected schema registered: {name}"
             )

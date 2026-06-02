@@ -46,16 +46,11 @@ def _assert_logout_cookies_expired(set_cookie_headers):
 
 @pytest.fixture(autouse=True)
 def _reset_auth_provider_state():
-    original_provider = auth_api._provider
-    original_provider_failed = auth_api._provider_failed
-
-    auth_api._provider = None
-    auth_api._provider_failed = False
+    auth_api.reset_auth_provider_cache()
     try:
         yield
     finally:
-        auth_api._provider = original_provider
-        auth_api._provider_failed = original_provider_failed
+        auth_api.reset_auth_provider_cache()
 
 
 def test_get_provider_or_503_caches_success(monkeypatch):

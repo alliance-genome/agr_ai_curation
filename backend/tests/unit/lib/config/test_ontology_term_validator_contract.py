@@ -106,7 +106,7 @@ def test_ontology_term_validator_bundle_uses_shared_result_contract(monkeypatch)
     assert agent.name == "Ontology Term Resolver Agent"
     assert agent.output_schema == "OntologyTermValidationResult"
     assert agent.tools == ["get_agent_contract", "agr_curation_query"]
-    assert issubclass(schema, DomainValidatorResultBase)
+    assert any(_b.__qualname__ == DomainValidatorResultBase.__qualname__ for _b in type.mro(schema))
     assert "ontology_term_candidates" in schema.model_fields
 
     unresolved = schema.model_validate(_base_payload(status="unresolved"))

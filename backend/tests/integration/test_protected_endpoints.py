@@ -26,7 +26,7 @@ Implementation Notes:
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch
-from fastapi import HTTPException, Security
+from fastapi import HTTPException
 
 from conftest import MockCognitoUser
 
@@ -46,9 +46,9 @@ def unauthenticated_client(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("UNSTRUCTURED_API_URL", "http://test-unstructured")
 
-    import sys
     import os
 
+    import sys
     sys.path.insert(
         0,
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -62,24 +62,16 @@ def unauthenticated_client(monkeypatch):
             """Raise 401 for unauthenticated requests."""
             raise HTTPException(status_code=401, detail="Not authenticated")
 
-    # Ensure each fixture gets a fresh app instance with patched dependencies.
-    modules_to_clear = []
-    for module_name in list(sys.modules.keys()):
-        if module_name == "main" or module_name.startswith("src."):
-            modules_to_clear.append(module_name)
-    for module_name in modules_to_clear:
-        del sys.modules[module_name]
+    from main import create_app
+    from src.api.auth import _get_user_from_cookie_impl
 
-    with patch("src.api.auth.get_auth_dependency") as mock_get_auth_dep:
+    app = create_app()
+    mock_auth = MockUnauthenticatedAuth()
+    app.dependency_overrides[_get_user_from_cookie_impl] = mock_auth.get_user
 
-        mock_auth = MockUnauthenticatedAuth()
-        mock_get_auth_dep.return_value = Security(mock_auth.get_user)
+    yield TestClient(app)
 
-        from main import app
-
-        yield TestClient(app)
-
-        app.dependency_overrides.clear()
+    app.dependency_overrides.clear()
 
 
 @pytest.fixture
@@ -88,9 +80,9 @@ def authenticated_client(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("UNSTRUCTURED_API_URL", "http://test-unstructured")
 
-    import sys
     import os
 
+    import sys
     sys.path.insert(
         0,
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -108,28 +100,19 @@ def authenticated_client(monkeypatch):
                 groups=[]
             )
 
-    # Ensure each fixture gets a fresh app instance with patched dependencies.
-    modules_to_clear = []
-    for module_name in list(sys.modules.keys()):
-        if module_name == "main" or module_name.startswith("src."):
-            modules_to_clear.append(module_name)
-    for module_name in modules_to_clear:
-        del sys.modules[module_name]
+    from main import create_app
+    from src.api.auth import _get_user_from_cookie_impl
 
-    with patch("src.api.auth.get_auth_dependency") as mock_get_auth_dep:
-        from fastapi import Security
+    app = create_app()
+    app.dependency_overrides[_get_user_from_cookie_impl] = MockValidAuth().get_user
 
-        mock_get_auth_dep.return_value = Security(MockValidAuth().get_user)
+    # Also mock provision_weaviate_tenants to prevent real tenant creation
+    with patch("src.services.user_service.provision_weaviate_tenants", return_value=True):
+        with patch("src.services.user_service.get_connection"):
+            _ensure_users_table_exists()
+            yield TestClient(app)
 
-        # Also mock provision_weaviate_tenants to prevent real tenant creation
-        with patch("src.services.user_service.provision_weaviate_tenants", return_value=True):
-            with patch("src.services.user_service.get_connection"):
-                from main import app
-
-                _ensure_users_table_exists()
-                yield TestClient(app)
-
-                app.dependency_overrides.clear()
+            app.dependency_overrides.clear()
 
 
 class TestProtectedEndpoints:

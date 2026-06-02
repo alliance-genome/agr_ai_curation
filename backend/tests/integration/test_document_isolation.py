@@ -27,6 +27,7 @@ import io
 import uuid
 from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, patch, MagicMock
+from types import SimpleNamespace
 
 from conftest import MockCognitoUser
 
@@ -56,12 +57,14 @@ def test_db():
 @pytest.fixture(autouse=True)
 def mock_weaviate():
     """Mock Weaviate client for document upload tests."""
-    # Patch get_connection in both user_service AND documents module
+    # Patch all connection entry points used by upload/list/phantom cleanup.
     with patch("src.services.user_service.get_connection") as mock_user_connection, \
-         patch("src.lib.weaviate_client.documents.get_connection") as mock_doc_connection:
+         patch("src.lib.weaviate_client.documents.get_connection") as mock_doc_connection, \
+         patch("src.lib.weaviate_helpers.get_connection") as mock_helper_connection:
         # Create mock client and collections
         mock_client = MagicMock()
         mock_session = MagicMock()
+        stored_pdf_documents: dict[str, dict[str, SimpleNamespace]] = {}
 
         # Mock DocumentChunk collection with tenant support
         mock_chunk_collection = MagicMock()
@@ -72,6 +75,12 @@ def mock_weaviate():
         mock_chunk_with_tenant = MagicMock()
         mock_chunk_with_tenant.data = MagicMock()  # For .data.insert() calls
         mock_chunk_with_tenant.data.insert = MagicMock(return_value="mock-chunk-uuid")
+        mock_chunk_with_tenant.data.delete_many = MagicMock(
+            return_value=SimpleNamespace(successful=0)
+        )
+        mock_chunk_with_tenant.query.fetch_objects = MagicMock(
+            return_value=SimpleNamespace(objects=[])
+        )
         mock_chunk_collection.with_tenant = MagicMock(return_value=mock_chunk_with_tenant)
 
         # Mock PDFDocument collection with tenant support
@@ -79,11 +88,43 @@ def mock_weaviate():
         mock_pdf_tenants = MagicMock()
         mock_pdf_collection.tenants = mock_pdf_tenants
 
-        # Create tenant-scoped version that returns itself
-        mock_pdf_with_tenant = MagicMock()
-        mock_pdf_with_tenant.data = MagicMock()  # For .data.insert() calls
-        mock_pdf_with_tenant.data.insert = MagicMock(return_value="mock-pdf-uuid")
-        mock_pdf_collection.with_tenant = MagicMock(return_value=mock_pdf_with_tenant)
+        def _pdf_collection_for_tenant(tenant_name: str):
+            tenant_docs = stored_pdf_documents.setdefault(tenant_name, {})
+            tenant_collection = MagicMock()
+
+            def _insert(*, properties, uuid):
+                doc_id = str(uuid)
+                tenant_docs[doc_id] = SimpleNamespace(
+                    uuid=uuid,
+                    properties=dict(properties),
+                )
+                return uuid
+
+            def _fetch_objects(*_args, **kwargs):
+                limit = kwargs.get("limit") or 20
+                offset = kwargs.get("offset") or 0
+                objects = list(tenant_docs.values())[offset:offset + limit]
+                return SimpleNamespace(objects=objects)
+
+            def _fetch_object_by_id(document_id):
+                return tenant_docs.get(str(document_id))
+
+            def _delete_by_id(document_id):
+                tenant_docs.pop(str(document_id), None)
+                return True
+
+            tenant_collection.data.insert = MagicMock(side_effect=_insert)
+            tenant_collection.data.delete_by_id = MagicMock(side_effect=_delete_by_id)
+            tenant_collection.query.fetch_objects = MagicMock(side_effect=_fetch_objects)
+            tenant_collection.query.fetch_object_by_id = MagicMock(
+                side_effect=_fetch_object_by_id
+            )
+            tenant_collection.aggregate.over_all = MagicMock(
+                side_effect=lambda **_kwargs: SimpleNamespace(total_count=len(tenant_docs))
+            )
+            return tenant_collection
+
+        mock_pdf_collection.with_tenant = MagicMock(side_effect=_pdf_collection_for_tenant)
 
         # Configure client to return base collections (without tenant)
         mock_client.collections.get.side_effect = lambda name: (
@@ -97,15 +138,18 @@ def mock_weaviate():
         # Configure both connection mocks to return same session
         mock_user_connection.return_value.session.return_value = mock_session
         mock_doc_connection.return_value.session.return_value = mock_session
+        mock_helper_connection.return_value.session.return_value = mock_session
 
         yield {
             "user_connection": mock_user_connection,
             "doc_connection": mock_doc_connection,
+            "helper_connection": mock_helper_connection,
             "client": mock_client,
             "chunk_collection": mock_chunk_collection,
             "chunk_tenants": mock_chunk_tenants,
             "pdf_collection": mock_pdf_collection,
             "pdf_tenants": mock_pdf_tenants,
+            "stored_pdf_documents": stored_pdf_documents,
         }
 
 
@@ -164,21 +208,9 @@ def client(test_db, monkeypatch, tmp_path):
             """Mock get_user that returns the current test user."""
             return current_user["user"]
 
-    # CRITICAL: Clear module cache to prevent test contamination
-    # Each test needs a fresh app instance with its own auth dependency
-    # Clear main and ALL src.* modules to ensure complete isolation
-    modules_to_clear = []
-    for module_name in list(sys.modules.keys()):
-        if module_name == 'main' or module_name.startswith('src.'):
-            modules_to_clear.append(module_name)
-
-    for module_name in modules_to_clear:
-        del sys.modules[module_name]
-
     mock_auth_instance = MockAuth()
 
-    # Now import the app
-    from main import app
+    from main import create_app
     from src.api import documents as documents_api
     from src.api.auth import _get_user_from_cookie_impl
     from src.models.sql.database import get_db
@@ -198,6 +230,7 @@ def client(test_db, monkeypatch, tmp_path):
     def override_get_db():
         yield test_db
 
+    app = create_app()
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[_get_user_from_cookie_impl] = mock_auth_instance.get_user
 
