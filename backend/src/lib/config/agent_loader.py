@@ -336,6 +336,8 @@ def _load_agent_definition_indexes(
                     )
                 with open(docs_yaml_path, "r", encoding="utf-8") as docs_file:
                     docs_data = yaml.safe_load(docs_file)
+                if not docs_data:
+                    logger.warning('Empty docs.yaml in %s', source.folder_name)
 
             agent = AgentDefinition.from_yaml(
                 source.folder_name,
