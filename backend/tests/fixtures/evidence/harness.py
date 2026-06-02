@@ -13,7 +13,6 @@ DEFAULT_FIXTURE_NAME = "tool_verified_gene_paper"
 NON_GENE_EVIDENCE_FIXTURE_NAMES = (
     "tool_verified_allele_paper",
     "tool_verified_disease_paper",
-    "tool_verified_chemical_paper",
     "tool_verified_phenotype_paper",
     "tool_verified_gene_expression_paper",
 )

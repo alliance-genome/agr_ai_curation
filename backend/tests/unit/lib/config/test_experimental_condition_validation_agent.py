@@ -77,7 +77,10 @@ def test_experimental_condition_agent_bundle_loads_with_component_tool_grants(
     agent = agents["experimental_condition_validation"]
     assert agent.folder_name == "experimental_condition"
     assert agent.category == "Validation"
-    assert agent.tools == ["get_agent_contract", "agr_curation_query", "chebi_api_call"]
+    # Condition chemicals (ChEBI) are validated as ontology terms via
+    # agr_curation_query get_ontology_term, not the broken chebi_api_call REST path,
+    # so chebi_api_call is no longer granted to this validator.
+    assert agent.tools == ["get_agent_contract", "agr_curation_query"]
     assert agent.output_schema == "ExperimentalConditionValidationResult"
 
     schema = schemas["ExperimentalConditionValidationResult"]
@@ -107,7 +110,6 @@ def test_experimental_condition_prompt_and_tool_grant_name_lower_level_methods()
     assert agent_payload["tools"] == [
         "get_agent_contract",
         "agr_curation_query",
-        "chebi_api_call",
     ]
     for method in methods:
         assert method in agr_tool["metadata"]["methods"]
@@ -117,7 +119,11 @@ def test_experimental_condition_prompt_and_tool_grant_name_lower_level_methods()
         "`ontology_term_validation`",
         "`controlled_vocabulary_validation`",
         "`data_provider_validation`",
-        "`chemical_validation`",
+        # Condition chemicals are validated as ChEBI ontology terms (ontologytermtype
+        # CHEBITerm) via agr_curation_query get_ontology_term, replacing the removed
+        # chemical_validation/chebi_api_call path. The prompt still names chebi_api_call
+        # in negative guidance ("do NOT call chebi_api_call for condition chemicals").
+        "ontologytermtype `CHEBITerm`",
         "`chebi_api_call`",
         'status: "resolved"',
         'status: "unresolved"',

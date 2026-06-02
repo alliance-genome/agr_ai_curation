@@ -52,13 +52,27 @@ ENVELOPE_EXTRACTOR_TOOLS = [
 ]
 
 
+# Optional resolver/lookup tools that domains with controlled-vocabulary or
+# ontology fields (disease, phenotype, gene_expression) declare between the shared
+# evidence prefix and their builder verbs. Domains without grounded fields (gene,
+# allele) omit them. Order-preserving subset of the canonical resolver block.
+RESOLVER_LOOKUP_TOOLS = [
+    "search_domain_field_terms",
+    "inspect_ontology_term",
+    "resolve_domain_field_term",
+]
+
+
 def _assert_builder_extractor_tools(tools, *, domain: str):
     """Assert a migrated extractor carries the shared span-evidence workspace
-    tools followed by exactly its five domain builder verbs.
+    tools, optionally the resolver/lookup tools, then exactly its five domain
+    builder verbs.
 
     Builder-generic on purpose: only the ``stage_/patch_/discard_/list_staged_/
     finalize_*`` *shape* is enforced, not a hardcoded verb list, so a newly
     migrated domain (e.g. disease) is covered without editing this test again.
+    Domains with grounded controlled-vocabulary/ontology fields additionally
+    declare the resolver/lookup tools between the evidence prefix and the verbs.
     """
 
     prefix = tools[: len(BUILDER_EVIDENCE_TOOL_PREFIX)]
@@ -67,6 +81,10 @@ def _assert_builder_extractor_tools(tools, *, domain: str):
     assert prefix == BUILDER_EVIDENCE_TOOL_PREFIX, (
         f"{domain} extractor lost the shared span-evidence workspace tools: {prefix}"
     )
+
+    # Strip the optional resolver/lookup block, if declared, before the verbs.
+    if suffix[: len(RESOLVER_LOOKUP_TOOLS)] == RESOLVER_LOOKUP_TOOLS:
+        suffix = suffix[len(RESOLVER_LOOKUP_TOOLS) :]
 
     # Exactly the five builder verbs, in canonical stage -> finalize order. The
     # concrete object noun differs per domain (e.g. gene uses

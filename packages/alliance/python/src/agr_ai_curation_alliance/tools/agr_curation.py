@@ -3392,7 +3392,16 @@ def _unwrap_function_tool_callable(tool: Any, target_name: str) -> Any:
             return
         visited_ids.add(obj_id)
 
-        if callable(candidate) and getattr(candidate, "__name__", "") == target_name:
+        candidate_name = getattr(candidate, "__name__", "") if callable(candidate) else ""
+        # Decorator-form tools (``@function_tool def name``) expose the original
+        # callable under its own ``__name__`` (== target_name). Call-form tools built
+        # via ``function_tool(name_override="name")(_name_impl)`` wrap an impl whose
+        # ``__name__`` is the impl symbol (``_name_impl``), which never equals the
+        # overridden tool name -- accept the ``_{name}_impl`` convention as well.
+        if candidate_name and (
+            candidate_name == target_name
+            or candidate_name.strip("_") in (target_name, f"{target_name}_impl")
+        ):
             found = candidate
             return
 
@@ -5893,7 +5902,7 @@ def _stage_gene_expression_observation_impl(
     subject: GeneExpressionSubjectInput,
     reference: GeneExpressionReferenceInput,
     controlled_fields: Annotated[List[GeneExpressionControlledFieldInput], Field(min_length=1, max_length=20)],
-    condition_relations: Optional[List[ConditionRelationInput]],
+    condition_relations: Optional[List[ConditionRelationInput]] = None,
 ) -> AgrQueryResult:
     """Stage one gene-expression observation candidate through the builder workspace.
 

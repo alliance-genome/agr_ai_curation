@@ -300,24 +300,47 @@ def test_disease_extractor_prompt_agent_and_group_rules_name_domain_contract():
         "read_section",
         "read_subsection",
         "record_evidence",
+        "list_recorded_evidence",
+        "get_recorded_evidence",
+        "attach_evidence_to_object",
+        "detach_evidence_from_object",
+        "discard_recorded_evidence",
+        "update_recorded_evidence_metadata",
         "get_agent_contract",
         "agr_species_context_lookup",
+        "search_domain_field_terms",
+        "inspect_ontology_term",
+        "resolve_domain_field_term",
+        "stage_disease_observation",
+        "patch_disease_observation",
+        "discard_disease_observation",
+        "list_staged_disease_observations",
+        "finalize_disease_extraction",
     ]
     assert "DiseaseAnnotation curatable_objects[]" in agent_data["supervisor_routing"][
         "description"
     ]
-    assert "`object_type`: `DiseaseAnnotation`" in prompt_content
-    assert "`object_role`: `curatable_unit`" in prompt_content
-    assert "`model_ref`: `PendingDiseaseAssertionPayload`" in prompt_content
-    assert "`disease_annotation_object.name`" in prompt_content
-    assert "`data_provider.abbreviation`" in prompt_content
-    assert "required for retained DiseaseAnnotation objects" in prompt_content
+    # Builder-pattern contract (Phase 2 disease migration): the agent stages
+    # evidence-backed observations with the builder tools; the backend builds the
+    # DiseaseExtractionResultEnvelope and materializes the concrete subtype.
+    assert "Do not hand-author `curatable_objects[]`" in prompt_content
+    assert "DiseaseExtractionResultEnvelope" in prompt_content
+    assert (
+        "GeneDiseaseAnnotation / AlleleDiseaseAnnotation / AGMDiseaseAnnotation"
+        in prompt_content
+    )
+    assert "stage_disease_observation" in prompt_content
+    assert "finalize_disease_extraction" in prompt_content
+    assert "subject SELECTS which concrete subtype is written" in prompt_content
     assert "`is_model_of`" in prompt_content
-    assert "LinkML requires disease relation and data-provider context" in prompt_content
-    assert "Do not use legacy flat payload fields" in prompt_content
-    assert "Active validator bindings own final disease identity" in prompt_content
+    assert (
+        "Active validator bindings declared by the disease domain pack own final "
+        "disease ontology" in prompt_content
+    )
     assert "agr_species_context_lookup" in prompt_content
-    assert "Do not perform extraction-time disease ontology lookup" in prompt_content
+    # Validators own ontology identity; the extractor does not perform broad
+    # extraction-time disease ontology lookup.
+    assert "active validator bindings own final disease ontology" in prompt_content
     assert "agr_curation_query" not in prompt_content
     assert "repair_mode" not in prompt_content
     assert "repair_notes" not in prompt_content

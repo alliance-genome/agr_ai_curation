@@ -202,7 +202,7 @@ class TestGetRegistryMetadata:
         assert {
             "single_reference.curie",
             "disease_annotation_subject.subject_identifier",
-            "condition_relations[0].conditions",
+            "condition_relations.conditions",
         }.issubset(affected_fields)
 
     def test_get_registry_metadata_includes_domain_envelope_authoring_metadata(self):

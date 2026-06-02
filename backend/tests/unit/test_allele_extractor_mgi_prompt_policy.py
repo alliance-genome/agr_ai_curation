@@ -46,22 +46,26 @@ def test_allele_extractor_mgi_overlay_includes_lab_code_disambiguation_workflow(
 def test_allele_extractor_prompt_declares_allele_domain_envelope_contract():
     content = _load_allele_extractor_prompt()
 
-    assert "`curatable_objects[]` is the only semantic object list" in content
+    # Builder-pattern contract: the agent stages observations and the backend
+    # materializes the 4-object AllelePaperEvidenceAssociation graph.
+    assert "Do not hand-author `curatable_objects[]`" in content
     assert "`AllelePaperEvidenceAssociation`" in content
-    assert '`object_role: "curatable_unit"`' in content
     assert "`AlleleMention`" in content
     assert "`EvidenceQuote`" in content
-    assert '`definition_state: "in_development"`' in content
-    assert '`metadata.write_behavior.status: "blocked"`' in content
-    assert "Do not emit any top-level helper list of retained alleles" in content
-    assert "`CurationPrepCandidate`" in content
+    assert "stage_allele_observation" in content
+    assert "finalize_allele_extraction" in content
+    assert "BLOCKED write/export behavior" in content
+    assert "AlleleExtractionResultEnvelope" in content
 
 
 def test_allele_extractor_prompt_uses_validator_dispatch_for_unresolved_values():
     content = _load_allele_extractor_prompt()
 
-    assert "# Unresolved validation" in content
-    assert "Active validator bindings own final allele identity" in content
-    assert "validator result fields and envelope validation findings" in content
+    assert (
+        "Active validator bindings declared by the allele domain pack are the "
+        "authority for final normalized allele identity" in content
+    )
+    assert "the active allele validator owns final allele identity" in content
+    assert "does not repair validator failures" in content
     assert "repair_mode" not in content
     assert "repair_notes" not in content
