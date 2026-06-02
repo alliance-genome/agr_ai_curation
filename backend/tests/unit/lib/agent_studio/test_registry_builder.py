@@ -10,7 +10,6 @@ from pathlib import Path
 from src.lib.config.agent_loader import ModelConfig, load_agent_definitions
 from src.lib.config import agent_loader
 from src.lib.agent_studio.registry_builder import (
-    AGENT_DOCUMENTATION,
     _build_config_defaults,
     build_agent_registry,
 )
@@ -132,7 +131,6 @@ class TestAgentDocumentationCoverage:
         agent_def = configured_agents["data_provider_validation"]
         entry = registry["data_provider_validation"]
 
-        assert "data_provider_validation" not in AGENT_DOCUMENTATION
         assert agent_def.documentation is not None
         assert entry["documentation"] == agent_def.documentation
 
@@ -164,8 +162,8 @@ class TestAgentDocumentationCoverage:
             "launchable": True,
         }
 
-    def test_static_extractor_documentation_keeps_validator_boundary_clear(self):
-        """Fallback Agent Studio docs must not say extractors own DB resolution."""
+    def test_extractor_documentation_keeps_validator_boundary_clear(self):
+        """Agent Studio docs must not say extractors own DB resolution."""
         extractor_ids = {
             "allele_extractor",
             "disease_extractor",
@@ -186,8 +184,10 @@ class TestAgentDocumentationCoverage:
             "resolves retained",
         }
 
+        registry = build_agent_registry()
+
         for agent_id in extractor_ids:
-            documentation = AGENT_DOCUMENTATION[agent_id]
+            documentation = registry[agent_id]["documentation"]
             text = " ".join(_flatten_strings(documentation)).lower()
 
             assert "validator" in text
