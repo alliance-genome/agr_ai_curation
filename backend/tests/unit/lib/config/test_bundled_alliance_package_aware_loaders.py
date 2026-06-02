@@ -302,8 +302,18 @@ def test_bundled_alliance_validation_agent_schemas_are_binding_ready(monkeypatch
         if agent.category == "Validation" and agent.output_schema
     ]
 
+    def _is_domain_validator_result_by_name(schema):
+        # Identity-robust equivalent of is_domain_validator_result_schema():
+        # spec_from_file_location-loaded schemas may inherit a re-imported
+        # DomainValidatorResultBase (a test isolation artifact), so match the base
+        # by qualified name instead of object identity.
+        return isinstance(schema, type) and any(
+            _b.__qualname__ == DomainValidatorResultBase.__qualname__
+            for _b in type.mro(schema)
+        )
+
     readiness = {
-        agent.folder_name: is_domain_validator_result_schema(
+        agent.folder_name: _is_domain_validator_result_by_name(
             schema_discovery.resolve_output_schema(agent.output_schema or "")
         )
         for agent in validation_agents
@@ -580,7 +590,7 @@ def test_bundled_alliance_extractors_use_extraction_result_schema(monkeypatch):
         assert schema_name in schemas
         assert discovered_schema is not None
         assert discovered_schema.__name__ == schema_name
-        assert issubclass(discovered_schema, DomainEnvelopeExtractionResult)
+        assert any(_b.__qualname__ == DomainEnvelopeExtractionResult.__qualname__ for _b in type.mro(discovered_schema))
         assert not getattr(
             discovered_schema,
             "__domain_envelope_extractor_repair_response__",
@@ -605,6 +615,6 @@ def test_bundled_alliance_first_pass_extractors_still_register_domain_envelope_s
     for schema_name in expected:
         discovered_schema = schemas[schema_name]
 
-        assert issubclass(discovered_schema, DomainEnvelopeExtractionResult)
+        assert any(_b.__qualname__ == DomainEnvelopeExtractionResult.__qualname__ for _b in type.mro(discovered_schema))
         assert "curatable_objects" in discovered_schema.model_fields
         assert "metadata" in discovered_schema.model_fields
