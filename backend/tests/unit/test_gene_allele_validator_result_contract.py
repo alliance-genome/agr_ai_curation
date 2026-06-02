@@ -90,7 +90,15 @@ def test_gene_and_allele_validator_schemas_expose_shared_root_fields():
         schema = schemas[schema_name]
         field_names = set(schema.model_fields)
 
-        assert issubclass(schema, DomainValidatorResultBase)
+        # Identity-robust subclass check: schema_discovery loads package schemas via
+        # spec_from_file_location, binding them to whatever src.schemas.domain_validator
+        # is current at load time. When an earlier test re-imported src.* (a test
+        # isolation artifact), that differs from this module's import identity, so a
+        # plain issubclass() spuriously fails. Match the base by qualified name.
+        assert any(
+            base.__qualname__ == DomainValidatorResultBase.__qualname__
+            for base in type.mro(schema)
+        ), f"{schema_name} must inherit DomainValidatorResultBase"
         assert REQUIRED_SHARED_FIELDS.issubset(field_names)
         assert domain_candidate_field in field_names
         assert CHAT_ERA_FIELDS.isdisjoint(field_names)
