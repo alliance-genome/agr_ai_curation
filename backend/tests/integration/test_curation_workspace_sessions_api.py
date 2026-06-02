@@ -9,7 +9,6 @@ from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import Security
 from fastapi.testclient import TestClient
 
 from conftest import MOCK_USERS
@@ -107,36 +106,24 @@ def client(test_db, get_auth_mock, monkeypatch):
 
     get_auth_mock.set_user("curator1")
 
-    modules_to_clear = [
-        name
-        for name in list(sys.modules.keys())
-        if (
-            name == "main"
-            or name.startswith("src.")
-            or name == "agr_ai_curation_alliance"
-            or name.startswith("agr_ai_curation_alliance.")
-        )
-    ]
-    for module_name in modules_to_clear:
-        del sys.modules[module_name]
+    from main import create_app
+    from src.api.auth import _get_user_from_cookie_impl
+    from src.models.sql.database import get_db
 
-    with patch("src.api.auth.get_auth_dependency") as mock_get_auth_dep:
-        mock_get_auth_dep.return_value = Security(get_auth_mock.get_user)
+    app = create_app()
 
-        from main import app
-        from src.models.sql.database import get_db
+    def override_get_db():
+        yield test_db
 
-        def override_get_db():
-            yield test_db
-
-        app.dependency_overrides[get_db] = override_get_db
-        try:
-            test_client = TestClient(app)
-            test_client.current_user_auth_sub = MOCK_USERS["curator1"]["sub"]
-            test_client.other_user_auth_sub = MOCK_USERS["curator2"]["sub"]
-            yield test_client
-        finally:
-            app.dependency_overrides.clear()
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[_get_user_from_cookie_impl] = get_auth_mock.get_user
+    try:
+        test_client = TestClient(app)
+        test_client.current_user_auth_sub = MOCK_USERS["curator1"]["sub"]
+        test_client.other_user_auth_sub = MOCK_USERS["curator2"]["sub"]
+        yield test_client
+    finally:
+        app.dependency_overrides.clear()
 
 
 @pytest.fixture

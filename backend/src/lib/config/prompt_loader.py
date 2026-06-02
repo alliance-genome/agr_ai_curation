@@ -318,10 +318,10 @@ def _acquire_advisory_lock(db: Session) -> tuple[bool, bool]:
     """Acquire PostgreSQL advisory lock for multi-worker safety.
 
     Strategy for multi-worker consistency:
-    1. Try non-blocking lock first (pg_try_advisory_lock)
+    1. Try non-blocking transaction lock first (pg_try_advisory_xact_lock)
     2. If lock acquired, we're the loader - return (True, True)
     3. If lock NOT acquired, another worker is loading - wait for them
-    4. Block on pg_advisory_lock until other worker releases
+    4. Block on pg_advisory_xact_lock until other worker commits/rolls back
     5. After acquiring, return (True, False) to indicate "waited for loader"
 
     This ensures ALL workers wait for loading to complete before
@@ -336,9 +336,11 @@ def _acquire_advisory_lock(db: Session) -> tuple[bool, bool]:
         - is_loader: True if we should load prompts, False if we waited for another loader
     """
     try:
-        # First, try non-blocking lock
+        # First, try non-blocking transaction-scoped lock. A session-scoped
+        # advisory lock can leak through SQLAlchemy's connection pool after
+        # commit; xact locks release with the load transaction.
         result = db.execute(
-            text(f"SELECT pg_try_advisory_lock({PROMPT_LOADER_LOCK_ID})")
+            text(f"SELECT pg_try_advisory_xact_lock({PROMPT_LOADER_LOCK_ID})")
         )
         got_lock = result.scalar()
 
@@ -348,7 +350,7 @@ def _acquire_advisory_lock(db: Session) -> tuple[bool, bool]:
 
         # Another worker is loading - wait for them to finish
         logger.info("Waiting for another worker to finish loading prompts...")
-        db.execute(text(f"SELECT pg_advisory_lock({PROMPT_LOADER_LOCK_ID})"))
+        db.execute(text(f"SELECT pg_advisory_xact_lock({PROMPT_LOADER_LOCK_ID})"))
         logger.info("Other worker finished, acquired lock")
 
         # We got the lock after waiting - we're NOT the loader
@@ -362,7 +364,7 @@ def _acquire_advisory_lock(db: Session) -> tuple[bool, bool]:
 
 
 def _release_advisory_lock(db: Session) -> None:
-    """Release PostgreSQL advisory lock.
+    """Best-effort compatibility release for PostgreSQL advisory lock.
 
     Args:
         db: Database session
@@ -431,8 +433,9 @@ def load_prompts(
 
         if not is_loader:
             # We waited for another worker to finish loading
-            # Release lock and skip - prompts are already loaded
+            # End the transaction-scoped lock and skip - prompts are already loaded
             _release_advisory_lock(db)
+            db.commit()
             _initialized = True  # Mark as initialized since other worker loaded
             logger.info("Prompts loaded by another worker, skipping")
             return {"base_prompts": 0, "group_rules": 0, "skipped": True}

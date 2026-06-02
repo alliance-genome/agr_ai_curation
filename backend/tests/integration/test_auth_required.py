@@ -23,7 +23,6 @@ without trying to contact Cognito JWKS (which would cause 503 errors).
 
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch
 
 
 @pytest.fixture
@@ -36,8 +35,8 @@ def client(monkeypatch):
     The approach:
     1. Mock auth class to create a fake auth object
     2. Mock auth.get_user to raise 401 (simulating missing/invalid token)
-    3. Patch get_auth_dependency() to return Security(mock_auth.get_user)
-    4. Import app (routes register with our mocked dependencies)
+    3. Override the captured auth dependency on a fresh app instance
+    4. All protected endpoints now raise 401 instead of 503
     5. All protected endpoints now raise 401 instead of 503
 
     This properly simulates authentication being configured but the user
@@ -47,23 +46,14 @@ def client(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("UNSTRUCTURED_API_URL", "http://test-unstructured")
 
-    import sys
     import os
-    from fastapi import HTTPException, Security
+    from fastapi import HTTPException
 
+    import sys
     sys.path.insert(
         0,
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     )
-
-    # Ensure patching get_auth_dependency takes effect even when another module
-    # imported `main` earlier in this pytest process.
-    modules_to_clear = [
-        name for name in list(sys.modules.keys())
-        if name == "main" or name.startswith("src.")
-    ]
-    for module_name in modules_to_clear:
-        del sys.modules[module_name]
 
     class MockUnauthenticatedAuth:
         def __init__(self, *args, **kwargs):
@@ -72,7 +62,7 @@ def client(monkeypatch):
         async def get_user(self):
             """Mock get_user that always raises 401.
 
-            Note: No parameters needed - the Security() wrapper handles dependency injection.
+            Note: No parameters needed; FastAPI handles dependency injection.
             Adding parameters here causes FastAPI to treat them as query params → 422 errors.
             """
             raise HTTPException(
@@ -80,19 +70,16 @@ def client(monkeypatch):
                 detail="Not authenticated"
             )
 
-    # Patch dependencies BEFORE importing the app so routes capture them
-    with patch("src.api.auth.get_auth_dependency") as mock_get_auth_dep:
+    from main import create_app
+    from src.api.auth import _get_user_from_cookie_impl
 
-        mock_auth_instance = MockUnauthenticatedAuth()
-        mock_get_auth_dep.return_value = Security(mock_auth_instance.get_user)
+    app = create_app()
+    mock_auth_instance = MockUnauthenticatedAuth()
+    app.dependency_overrides[_get_user_from_cookie_impl] = mock_auth_instance.get_user
 
-        # Now import the app (which will create routes with mocked auth)
-        from main import app
+    yield TestClient(app)
 
-        yield TestClient(app)
-
-        # Clean up dependency overrides
-        app.dependency_overrides.clear()
+    app.dependency_overrides.clear()
 
 
 class TestAuthenticationRequired:

@@ -268,6 +268,15 @@ def get_auth_dependency():
     return Depends(_get_user_from_cookie_impl)
 
 
+def reset_auth_provider_cache() -> None:
+    """Clear process-local auth provider initialization state."""
+    global _provider, _provider_failed
+
+    with _provider_lock:
+        _provider = None
+        _provider_failed = False
+
+
 def _build_logout_redirect_uri(request: Request, provider: AuthProvider) -> str:
     """Build post-logout redirect URI using provider config when available."""
     provider_redirect_uri = getattr(provider, "redirect_uri", None)
@@ -339,4 +348,10 @@ class _AuthCompat:
 
 auth = _AuthCompat()
 
-__all__ = ["router", "get_auth_dependency", "get_db", "auth"]
+__all__ = [
+    "router",
+    "get_auth_dependency",
+    "get_db",
+    "auth",
+    "reset_auth_provider_cache",
+]

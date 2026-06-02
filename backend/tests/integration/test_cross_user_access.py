@@ -176,14 +176,6 @@ def client_as_curator1(monkeypatch, curator1_user, test_db):
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     )
 
-    # Ensure fresh app/module state so auth patch is captured per-client fixture.
-    modules_to_clear = []
-    for module_name in list(sys.modules.keys()):
-        if module_name == "main" or module_name.startswith("src."):
-            modules_to_clear.append(module_name)
-    for module_name in modules_to_clear:
-        del sys.modules[module_name]
-
     async def override_user():
         return curator1_user
 
@@ -191,13 +183,14 @@ def client_as_curator1(monkeypatch, curator1_user, test_db):
     with patch("src.services.user_service.provision_weaviate_tenants", return_value=True):
         with patch("src.services.user_service.get_connection"):
             with patch("src.lib.weaviate_helpers.get_connection"):
-                from main import app
+                from main import create_app
                 from src.api.auth import _get_user_from_cookie_impl
                 from src.models.sql.database import get_db
 
                 def override_get_db():
                     yield test_db
 
+                app = create_app()
                 app.dependency_overrides[get_db] = override_get_db
                 app.dependency_overrides[_get_user_from_cookie_impl] = override_user
 
@@ -220,14 +213,6 @@ def client_as_curator2(monkeypatch, curator2_user, test_db):
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     )
 
-    # Ensure fresh app/module state so auth patch is captured per-client fixture.
-    modules_to_clear = []
-    for module_name in list(sys.modules.keys()):
-        if module_name == "main" or module_name.startswith("src."):
-            modules_to_clear.append(module_name)
-    for module_name in modules_to_clear:
-        del sys.modules[module_name]
-
     async def override_user():
         return curator2_user
 
@@ -235,13 +220,14 @@ def client_as_curator2(monkeypatch, curator2_user, test_db):
     with patch("src.services.user_service.provision_weaviate_tenants", return_value=True):
         with patch("src.services.user_service.get_connection"):
             with patch("src.lib.weaviate_helpers.get_connection"):
-                from main import app
+                from main import create_app
                 from src.api.auth import _get_user_from_cookie_impl
                 from src.models.sql.database import get_db
 
                 def override_get_db():
                     yield test_db
 
+                app = create_app()
                 app.dependency_overrides[get_db] = override_get_db
                 app.dependency_overrides[_get_user_from_cookie_impl] = override_user
 

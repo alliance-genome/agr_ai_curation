@@ -105,15 +105,9 @@ def live_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("PDFX_JSON_STORAGE_PATH", str(storage_root / "pdfx_json"))
     monkeypatch.setenv("PROCESSED_JSON_STORAGE_PATH", str(storage_root / "processed_json"))
 
-    # Ensure env changes are respected by a fresh app import.
-    modules_to_clear = [
-        name for name in list(sys.modules.keys())
-        if name == "main" or name.startswith("src.")
-    ]
-    for module_name in modules_to_clear:
-        del sys.modules[module_name]
+    from main import create_app
 
-    from main import app
+    app = create_app()
 
     try:
         with TestClient(app) as client:

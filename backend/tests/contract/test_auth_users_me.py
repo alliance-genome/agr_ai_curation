@@ -28,24 +28,16 @@ def client(monkeypatch):
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-    # Ensure each test gets a fresh app import (prevents auth override leakage).
-    modules_to_clear = []
-    for module_name in list(sys.modules.keys()):
-        if module_name == "main" or module_name.startswith("src."):
-            modules_to_clear.append(module_name)
-    for module_name in modules_to_clear:
-        del sys.modules[module_name]
-
     from main import app
     from src.api import auth as auth_module
 
-    auth_module._provider = None
+    auth_module.reset_auth_provider_cache()
     app.dependency_overrides.clear()
 
     yield TestClient(app)
 
     app.dependency_overrides.clear()
-    auth_module._provider = None
+    auth_module.reset_auth_provider_cache()
 
 
 def _override_authenticated_user():
