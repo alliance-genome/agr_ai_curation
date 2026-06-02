@@ -13,22 +13,21 @@ capabilities:
     description: "Associates each phenotype with the specific genotype, allele, or experimental condition that causes it, including conditional and negative results"
     example_query: "Which alleles cause which phenotypes?"
     example_result: "Returns phenotype-genotype pairs with experimental context (e.g., daf-2(e1370) → extended lifespan)"
-  - name: "Validator-ready phenotype term context"
-    description: "Preserves phenotype labels, organism/provider/taxon context, subject hints, and evidence for the active ontology validator; final ontology CURIEs are validator-owned."
-    example_query: "Extract phenotypes with validator-ready context"
-    example_result: "Returns phenotype assertion envelopes with label-backed term candidates and verified evidence for downstream validator materialization"
+  - name: "Hands phenotypes to the validator"
+    description: "Passes each proposed phenotype — with the trait as written, the organism, the subject, and the supporting quote — to the phenotype term validator, the stronger specialist that authoritatively confirms each one. The extractor proposes; the validator confirms and settles the official ontology term."
+    example_query: "Extract the phenotypes and pass them on for confirmation"
+    example_result: "Returns each proposed phenotype with its supporting quote, ready for the validator to confirm the official term"
 data_sources:
   - name: "PDF Document Search (Weaviate)"
     description: "Hybrid semantic/keyword plus lexical-heavy search modes over uploaded PDF documents"
     species_supported: null
     data_types: ["PDF text chunks", "Section content", "Subsection content", "Figure legends"]
-  - name: "Phenotype validator binding"
-    description: "The active phenotype validator resolves supported WB/MGI phenotype term labels or CURIEs after extraction and explicitly blocks unsupported provider/taxon mappings before lookup."
+  - name: "Phenotype term validator"
+    description: "The phenotype term validator confirms the official term for supported WormBase (WB) and Mouse Genome Informatics (MGI) phenotypes after extraction. Phenotypes from other databases aren't supported yet, so those are set aside rather than confirmed."
     species_supported: ["C. elegans (WB)", "M. musculus (MGI)"]
     data_types: ["Phenotype labels", "Provider/taxon hints", "Validator lookup results"]
 limitations:
   - "Requires an uploaded PDF document — cannot extract phenotypes from chat text alone"
   - "Distinguishes phenotypes from diseases — clinical conditions are handled by the Disease Extraction Agent"
   - "Wild-type/control observations are baselines, not phenotype assertions"
-  - "Ontology term labels and hints are selector inputs only; typed ontology validation is handled by active domain-pack validator bindings"
-  - "Does not use agr_curation_query directly; phenotype ontology validation is deferred to typed ontology term resolution"
+  - "The extractor proposes the trait wording only; confirming the official ontology term is the phenotype term validator's job after extraction."

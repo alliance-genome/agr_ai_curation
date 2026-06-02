@@ -2,11 +2,11 @@
 summary: "Validates allele/variant identifiers against the Alliance Curation Database by symbol, ID, or gene association."
 capabilities:
   - name: "Allele search (partial match)"
-    description: "Search for alleles by symbol using LIKE matching - supports partial matches, synonyms, and case-insensitive search"
+    description: "Search for alleles by symbol — partial symbols, synonyms, and any capitalization all work."
     example_query: "Find all Ulk1 alleles in mouse"
     example_result: "Returns all alleles matching 'Ulk1' (e.g., Ulk1<sup>tm1Thsn</sup>) with IDs, symbols, names, and species"
   - name: "Exact symbol lookup"
-    description: "Find an allele by its exact official symbol, with automatic conversion from paper notation (Gene<allele>) to database format (Gene<sup>allele</sup>)"
+    description: "Find an allele by its exact official symbol. You can paste it the way it appears in a paper (for example Ulk1<tm1Thsn>) and it is matched automatically to the official superscript form."
     example_query: "Find the allele Ulk1<tm1Thsn>"
     example_result: "Returns the exact matching allele with full details including MGI:3689906"
   - name: "Allele ID lookup"
@@ -25,5 +25,5 @@ data_sources:
 limitations:
   - "Only validates against Alliance group data - newly published alleles may not be in the database yet"
   - "Searches alleles only - genes, diseases, and phenotypes are handled by separate agents"
-  - "Angle bracket notation in symbols must be converted to <sup> format for exact matches (handled automatically)"
-  - "Very large result sets are capped at 500 results (default 100)"
+  - "Allele symbols written with angle brackets are matched to their superscript form automatically — you don't need to reformat them."
+  - "Very broad searches return at most 500 matches (100 by default), so narrow your search if you don't see the allele you expect."

@@ -1,5 +1,5 @@
 # Curator-facing documentation for the Gene Expression Extraction Agent.
-summary: "Extracts structured gene expression observations from uploaded PDFs, preserving relation and data-provider selector inputs for validator-owned verification."
+summary: "Reads an uploaded paper and pulls out where and when each gene is expressed — the tissues, cell types, developmental stages, and any sex-specific patterns — with the supporting quote, ready for the specialist validators to confirm."
 capabilities:
   - name: "Expression Pattern Extraction"
     description: "Identifies and extracts gene expression patterns from PDFs including anatomical locations (tissues, cell types, organs), developmental stages, temporal qualifiers, and sex-specific expression."
@@ -12,23 +12,23 @@ capabilities:
   - name: "Negative Evidence Capture"
     description: "Identifies and extracts negative expression evidence where genes are NOT expressed in specific locations or stages."
     example_query: "Find tissues where the gene is not expressed"
-    example_result: "Returns annotations with is_negative=true for statements like 'not detected in neurons'"
-  - name: "Validator-ready selector capture"
-    description: "Preserves expression relation, provider, taxon, gene, anatomy, stage, and reagent context as evidence-backed selector inputs while active validators own final controlled-vocabulary and provider verification."
-    example_query: "Extract expression observations with validator-ready context"
-    example_result: "Returns expression annotations with relation/provider hints and verified evidence; final normalized fields are materialized by validators when active"
+    example_result: "Flags these as negative results — for example 'not detected in neurons'."
+  - name: "Hands expression details to the validators"
+    description: "Passes each expression observation — the gene, the tissue or cell type, the developmental stage, the data provider, and the reagent used — to the specialist validators, each backed by its supporting quote. The extractor proposes; the validators authoritatively confirm the official terms and the data provider."
+    example_query: "Extract the expression observations and pass them on for confirmation"
+    example_result: "Returns each expression observation with its supporting quote, ready for the validators to confirm the official terms"
 data_sources:
   - name: "PDF Document Search (Weaviate)"
     description: "Hybrid semantic/keyword plus lexical-heavy search modes over uploaded PDF documents. Supports searching by query terms, filtering by section, and reading full sections or subsections."
     species_supported: null
     data_types: ["PDF text chunks", "Section content", "Subsection content"]
-  - name: "Domain-pack validators"
-    description: "Active validator bindings verify expression relation vocabulary and data-provider selectors after extraction. Planned gene/anatomy/stage/reference validation remains under-development metadata."
+  - name: "Expression validators"
+    description: "Specialist validators confirm the expression-relation vocabulary and the data provider after extraction. Confirming the gene, anatomy term, developmental stage, and reference against the database is still in development."
     species_supported: ["C. elegans (WB)", "D. melanogaster (FB)", "M. musculus (MGI)", "D. rerio (ZFIN)", "R. norvegicus (RGD)", "S. cerevisiae (SGD)", "H. sapiens (HGNC)"]
-    data_types: ["Relation selector hints", "Data-provider selector hints", "Evidence-backed expression context"]
+    data_types: ["Proposed expression relations", "Proposed data providers", "Evidence-backed expression observations"]
 limitations:
   - "Returns plain text output only - JSON conversion is handled by a separate Formatter Agent"
   - "Does NOT extract expression data from mutant phenotypes or experimental perturbations (heat shock, RNAi knockdown, drug treatment) - only baseline/wild-type expression"
   - "Does NOT annotate transgenic markers used solely for strain identification (e.g., rol-6, myo-2::GFP co-injection markers)"
-  - "Ontology term ID resolution is handled by typed validator attachments or the Ontology Term Resolver Agent; this extractor only extracts human-readable labels"
+  - "The extractor records the term wording it finds; turning that into an official ontology ID is the validators' or the Ontology Term Resolver's job."
   - "Requires at least one document search or read tool call before returning results"

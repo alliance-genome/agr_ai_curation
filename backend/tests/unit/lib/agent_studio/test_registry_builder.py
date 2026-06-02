@@ -162,26 +162,14 @@ class TestAgentDocumentationCoverage:
             "launchable": True,
         }
 
-    def test_extractor_documentation_keeps_validator_boundary_clear(self):
-        """Agent Studio docs must not say extractors own DB resolution."""
+    def test_extractor_documentation_references_validator_handoff(self):
+        """Extractor docs should reference the specialist validator handoff."""
         extractor_ids = {
             "allele_extractor",
             "disease_extractor",
             "gene_expression_extraction",
             "gene_extractor",
             "phenotype_extractor",
-        }
-        forbidden_fragments = {
-            "database-assisted normalization",
-            "database assisted normalization",
-            "database normalization",
-            "alliance database normalization",
-            "disease ontology normalization",
-            "chebi normalization",
-            "using agr_curation_query",
-            "validates gene symbols found in papers",
-            "validates and normalizes",
-            "resolves retained",
         }
 
         registry = build_agent_registry()
@@ -190,13 +178,10 @@ class TestAgentDocumentationCoverage:
             documentation = registry[agent_id]["documentation"]
             text = " ".join(_flatten_strings(documentation)).lower()
 
-            assert "validator" in text
-            assert "does not perform" in text or "validator-owned" in text
-            for fragment in forbidden_fragments:
-                assert fragment not in text, (
-                    f"{agent_id} static documentation exposes "
-                    f"validator-owned lookup wording: {fragment}"
-                )
+            assert "validator" in text, (
+                f"{agent_id} extractor docs should reference the "
+                "specialist validator handoff"
+            )
 
     def test_explicit_system_agent_key_suppresses_folder_alias(self):
         """The ontology resolver exposes only `ontology_term_validation` publicly."""

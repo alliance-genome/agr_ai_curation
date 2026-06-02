@@ -1,5 +1,5 @@
 # Curator-facing documentation for the Gene Ontology Lookup Agent.
-summary: "Queries the Gene Ontology (GO) database via the QuickGO REST API to retrieve GO term information, hierarchy, and relationships across the three aspects: Molecular Function (MF), Biological Process (BP), and Cellular Component (CC)."
+summary: "Looks up Gene Ontology (GO) terms — their definitions, broader and narrower terms, and how they relate — across the three GO categories: molecular function, biological process, and cellular component."
 capabilities:
   - name: "Search GO terms by name or keyword"
     description: "Search for GO terms using name keywords or partial matches. Results are ranked by relevance with obsolete terms flagged."
@@ -10,7 +10,7 @@ capabilities:
     example_query: "What is GO:0003677?"
     example_result: "GO:0003677 - DNA binding (molecular_function): Interacting selectively and non-covalently with DNA."
   - name: "Navigate GO term hierarchy (children)"
-    description: "Get direct child terms (more specific) of a GO term with relationship types (is_a, part_of, regulates)."
+    description: "Shows the more specific terms directly underneath a GO term, and how each one relates to it (for example \"is a kind of,\" \"is part of,\" or \"regulates\")."
     example_query: "What are the children of GO:0003677 (DNA binding)?"
     example_result: "Children include: GO:0003690 (double-stranded DNA binding) - is_a, GO:0003697 (single-stranded DNA binding) - is_a"
   - name: "Navigate GO term hierarchy (ancestors)"
@@ -30,5 +30,4 @@ limitations:
   - "Cannot retrieve gene-to-GO annotations (use GO Annotations Agent instead)"
   - "Cannot determine which genes have a specific GO term (use GO Annotations Agent instead)"
   - "Does not perform GO enrichment analysis"
-  - "All responses must come from live QuickGO API queries - does not use cached/trained knowledge"
-  - "API requests are restricted to ebi.ac.uk domain only"
+  - "Every answer comes from a fresh, live lookup against the Gene Ontology — it never answers from memory."

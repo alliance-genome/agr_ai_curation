@@ -2,7 +2,7 @@
 summary: "Extracts experimentally supported allele and variant mentions from uploaded PDFs, distinguishing alleles from strains, transgenes, and balancers."
 capabilities:
   - name: "Allele/variant candidate harvesting"
-    description: "Scans the paper for allele symbols, variant notations, HGVS strings, and genotype descriptions across all sections"
+    description: "Scans the whole paper for allele symbols, variant notations (including HGVS, the standard way of writing sequence variants), and genotype descriptions."
     example_query: "Extract all alleles from this paper"
     example_result: "Returns allele candidates with exact notation as written, associated gene, and organism context"
   - name: "Entity classification"
@@ -13,21 +13,21 @@ capabilities:
     description: "Parses composite genotype strings into individual alleles (e.g., 'daf-2(e1370); daf-16(mu86)' becomes two separate entries)"
     example_query: "Parse the genotypes in this paper's strain table"
     example_result: "Returns individual alleles with gene associations and allele type classification"
-  - name: "Validator-ready allele hints"
-    description: "Preserves exact allele notation, associated-gene hints, organism context, and evidence records for the active allele validator; the extractor does not materialize final allele IDs."
-    example_query: "Extract alleles with validator-ready context"
-    example_result: "Returns allele mention envelopes with exact notation and evidence for downstream validator materialization"
+  - name: "Hands alleles to the validator"
+    description: "Passes each proposed allele — with its exact notation, its likely gene, the organism, and the supporting quote — to the Allele Validation Agent, the stronger specialist that authoritatively confirms each one against the Alliance database. The extractor proposes; the validator confirms and settles the official allele ID."
+    example_query: "Extract the alleles and pass them on for confirmation"
+    example_result: "Returns each proposed allele with its exact notation and supporting quote, ready for the Allele Validation Agent to confirm"
 data_sources:
   - name: "PDF Document Search (Weaviate)"
     description: "Hybrid semantic/keyword plus lexical-heavy search modes over uploaded PDF documents"
     species_supported: null
     data_types: ["PDF text chunks", "Section content", "Subsection content"]
-  - name: "Allele validator binding"
-    description: "The active allele validator checks retained mentions against Alliance allele rows after extraction and materializes allele identifier, symbol, and taxon fields when resolved."
+  - name: "Allele Validation Agent"
+    description: "The specialist validator that takes the proposed alleles and authoritatively confirms each one against the Alliance database after extraction, filling in the official allele ID, symbol, and species when it finds a match."
     species_supported: ["C. elegans (WB)", "D. melanogaster (FB)", "D. rerio (ZFIN)", "H. sapiens (HGNC)", "M. musculus (MGI)", "R. norvegicus (RGD)", "S. cerevisiae (SGD)"]
     data_types: ["Allele mention hints", "Associated-gene hints", "Taxon hints", "Validator lookup results"]
 limitations:
   - "Requires an uploaded PDF document — cannot extract alleles from chat text alone"
   - "Transgene constructs (e.g., GFP reporters, Cre drivers) are excluded unless they are the experimental variable"
   - "Balancer chromosomes and chromosomal deficiencies are classified as tools, not alleles"
-  - "Does not perform allele identity lookup itself; unresolved or conflicting identity remains visible as validator findings"
+  - "Confirming each allele against the Alliance database is the Allele Validation Agent's job; any unconfirmed or conflicting alleles stay visible to you as validator findings."

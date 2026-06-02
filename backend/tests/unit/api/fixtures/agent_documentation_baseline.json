@@ -108,13 +108,13 @@
   "allele": {
     "capabilities": [
       {
-        "description": "Search for alleles by symbol using LIKE matching - supports partial matches, synonyms, and case-insensitive search",
+        "description": "Search for alleles by symbol \u2014 partial symbols, synonyms, and any capitalization all work.",
         "example_query": "Find all Ulk1 alleles in mouse",
         "example_result": "Returns all alleles matching 'Ulk1' (e.g., Ulk1<sup>tm1Thsn</sup>) with IDs, symbols, names, and species",
         "name": "Allele search (partial match)"
       },
       {
-        "description": "Find an allele by its exact official symbol, with automatic conversion from paper notation (Gene<allele>) to database format (Gene<sup>allele</sup>)",
+        "description": "Find an allele by its exact official symbol. You can paste it the way it appears in a paper (for example Ulk1<tm1Thsn>) and it is matched automatically to the official superscript form.",
         "example_query": "Find the allele Ulk1<tm1Thsn>",
         "example_result": "Returns the exact matching allele with full details including MGI:3689906",
         "name": "Exact symbol lookup"
@@ -158,8 +158,8 @@
     "limitations": [
       "Only validates against Alliance group data - newly published alleles may not be in the database yet",
       "Searches alleles only - genes, diseases, and phenotypes are handled by separate agents",
-      "Angle bracket notation in symbols must be converted to <sup> format for exact matches (handled automatically)",
-      "Very large result sets are capped at 500 results (default 100)"
+      "Allele symbols written with angle brackets are matched to their superscript form automatically \u2014 you don't need to reformat them.",
+      "Very broad searches return at most 500 matches (100 by default), so narrow your search if you don't see the allele you expect."
     ],
     "summary": "Validates allele/variant identifiers against the Alliance Curation Database by symbol, ID, or gene association.",
     "tips": []
@@ -167,7 +167,7 @@
   "allele_extractor": {
     "capabilities": [
       {
-        "description": "Scans the paper for allele symbols, variant notations, HGVS strings, and genotype descriptions across all sections",
+        "description": "Scans the whole paper for allele symbols, variant notations (including HGVS, the standard way of writing sequence variants), and genotype descriptions.",
         "example_query": "Extract all alleles from this paper",
         "example_result": "Returns allele candidates with exact notation as written, associated gene, and organism context",
         "name": "Allele/variant candidate harvesting"
@@ -185,10 +185,10 @@
         "name": "Genotype string parsing"
       },
       {
-        "description": "Preserves exact allele notation, associated-gene hints, organism context, and evidence records for the active allele validator; the extractor does not materialize final allele IDs.",
-        "example_query": "Extract alleles with validator-ready context",
-        "example_result": "Returns allele mention envelopes with exact notation and evidence for downstream validator materialization",
-        "name": "Validator-ready allele hints"
+        "description": "Passes each proposed allele \u2014 with its exact notation, its likely gene, the organism, and the supporting quote \u2014 to the Allele Validation Agent, the stronger specialist that authoritatively confirms each one against the Alliance database. The extractor proposes; the validator confirms and settles the official allele ID.",
+        "example_query": "Extract the alleles and pass them on for confirmation",
+        "example_result": "Returns each proposed allele with its exact notation and supporting quote, ready for the Allele Validation Agent to confirm",
+        "name": "Hands alleles to the validator"
       }
     ],
     "data_sources": [
@@ -209,8 +209,8 @@
           "Taxon hints",
           "Validator lookup results"
         ],
-        "description": "The active allele validator checks retained mentions against Alliance allele rows after extraction and materializes allele identifier, symbol, and taxon fields when resolved.",
-        "name": "Allele validator binding",
+        "description": "The specialist validator that takes the proposed alleles and authoritatively confirms each one against the Alliance database after extraction, filling in the official allele ID, symbol, and species when it finds a match.",
+        "name": "Allele Validation Agent",
         "species_supported": [
           "C. elegans (WB)",
           "D. melanogaster (FB)",
@@ -226,7 +226,7 @@
       "Requires an uploaded PDF document \u2014 cannot extract alleles from chat text alone",
       "Transgene constructs (e.g., GFP reporters, Cre drivers) are excluded unless they are the experimental variable",
       "Balancer chromosomes and chromosomal deficiencies are classified as tools, not alleles",
-      "Does not perform allele identity lookup itself; unresolved or conflicting identity remains visible as validator findings"
+      "Confirming each allele against the Alliance database is the Allele Validation Agent's job; any unconfirmed or conflicting alleles stay visible to you as validator findings."
     ],
     "summary": "Extracts experimentally supported allele and variant mentions from uploaded PDFs, distinguishing alleles from strains, transgenes, and balancers.",
     "tips": []
@@ -234,13 +234,13 @@
   "allele_validation": {
     "capabilities": [
       {
-        "description": "Search for alleles by symbol using LIKE matching - supports partial matches, synonyms, and case-insensitive search",
+        "description": "Search for alleles by symbol \u2014 partial symbols, synonyms, and any capitalization all work.",
         "example_query": "Find all Ulk1 alleles in mouse",
         "example_result": "Returns all alleles matching 'Ulk1' (e.g., Ulk1<sup>tm1Thsn</sup>) with IDs, symbols, names, and species",
         "name": "Allele search (partial match)"
       },
       {
-        "description": "Find an allele by its exact official symbol, with automatic conversion from paper notation (Gene<allele>) to database format (Gene<sup>allele</sup>)",
+        "description": "Find an allele by its exact official symbol. You can paste it the way it appears in a paper (for example Ulk1<tm1Thsn>) and it is matched automatically to the official superscript form.",
         "example_query": "Find the allele Ulk1<tm1Thsn>",
         "example_result": "Returns the exact matching allele with full details including MGI:3689906",
         "name": "Exact symbol lookup"
@@ -284,8 +284,8 @@
     "limitations": [
       "Only validates against Alliance group data - newly published alleles may not be in the database yet",
       "Searches alleles only - genes, diseases, and phenotypes are handled by separate agents",
-      "Angle bracket notation in symbols must be converted to <sup> format for exact matches (handled automatically)",
-      "Very large result sets are capped at 500 results (default 100)"
+      "Allele symbols written with angle brackets are matched to their superscript form automatically \u2014 you don't need to reformat them.",
+      "Very broad searches return at most 500 matches (100 by default), so narrow your search if you don't see the allele you expect."
     ],
     "summary": "Validates allele/variant identifiers against the Alliance Curation Database by symbol, ID, or gene association.",
     "tips": []
@@ -325,19 +325,19 @@
   "chemical": {
     "capabilities": [
       {
-        "description": "Search for chemical compounds by name and return their ChEBI identifiers. Uses Elasticsearch-powered text search that supports partial matching and synonyms.",
+        "description": "Search for a chemical by name and get its ChEBI ID. Handles partial names and synonyms, so you don't need the exact official spelling.",
         "example_query": "Look up the ChEBI ID for glucose",
         "example_result": "CHEBI:17234 (D-glucose) with formula C6H12O6",
         "name": "Chemical Name to ChEBI ID Lookup"
       },
       {
-        "description": "Get detailed information about a compound including definition, molecular formula, InChI, SMILES structure, and synonyms.",
+        "description": "Get the full details for a compound: its definition, molecular formula, standard chemical-structure codes (InChI and SMILES), and synonyms.",
         "example_query": "Get details for CHEBI:17234",
         "example_result": "D-glucose - An aldohexose used as a source of energy and metabolic intermediate. Formula: C6H12O6",
         "name": "Compound Detail Retrieval"
       },
       {
-        "description": "Retrieve parent classifications (is_a relationships) and child terms for a chemical compound in the ChEBI ontology hierarchy.",
+        "description": "Show the broader categories a compound belongs to, and the more specific compounds underneath it, within ChEBI.",
         "example_query": "What are the parent classifications of glucose?",
         "example_result": "is_a aldohexose (CHEBI:33917), is_a hexose (CHEBI:18133), is_a monosaccharide (CHEBI:35381)",
         "name": "Ontology Classification Navigation"
@@ -369,27 +369,27 @@
       "Cannot provide drug targets or mechanisms of action",
       "Cannot provide pathway information (pathways not in ChEBI)",
       "Multiple results for common names (e.g., 'glucose' matches many stereoisomers) - selects most biologically relevant form",
-      "Requires API call before every response - never answers from training data alone"
+      "Every answer comes from a fresh, live lookup against ChEBI \u2014 it never answers from memory."
     ],
-    "summary": "Maps chemical compound names to ChEBI (Chemical Entities of Biological Interest) ontology identifiers via the ChEBI REST API at EBI.",
+    "summary": "Confirms chemical compound names against ChEBI (Chemical Entities of Biological Interest) and gives you the matching official ChEBI term and ID for a chemical annotation.",
     "tips": []
   },
   "chemical_validation": {
     "capabilities": [
       {
-        "description": "Search for chemical compounds by name and return their ChEBI identifiers. Uses Elasticsearch-powered text search that supports partial matching and synonyms.",
+        "description": "Search for a chemical by name and get its ChEBI ID. Handles partial names and synonyms, so you don't need the exact official spelling.",
         "example_query": "Look up the ChEBI ID for glucose",
         "example_result": "CHEBI:17234 (D-glucose) with formula C6H12O6",
         "name": "Chemical Name to ChEBI ID Lookup"
       },
       {
-        "description": "Get detailed information about a compound including definition, molecular formula, InChI, SMILES structure, and synonyms.",
+        "description": "Get the full details for a compound: its definition, molecular formula, standard chemical-structure codes (InChI and SMILES), and synonyms.",
         "example_query": "Get details for CHEBI:17234",
         "example_result": "D-glucose - An aldohexose used as a source of energy and metabolic intermediate. Formula: C6H12O6",
         "name": "Compound Detail Retrieval"
       },
       {
-        "description": "Retrieve parent classifications (is_a relationships) and child terms for a chemical compound in the ChEBI ontology hierarchy.",
+        "description": "Show the broader categories a compound belongs to, and the more specific compounds underneath it, within ChEBI.",
         "example_query": "What are the parent classifications of glucose?",
         "example_result": "is_a aldohexose (CHEBI:33917), is_a hexose (CHEBI:18133), is_a monosaccharide (CHEBI:35381)",
         "name": "Ontology Classification Navigation"
@@ -421,9 +421,9 @@
       "Cannot provide drug targets or mechanisms of action",
       "Cannot provide pathway information (pathways not in ChEBI)",
       "Multiple results for common names (e.g., 'glucose' matches many stereoisomers) - selects most biologically relevant form",
-      "Requires API call before every response - never answers from training data alone"
+      "Every answer comes from a fresh, live lookup against ChEBI \u2014 it never answers from memory."
     ],
-    "summary": "Maps chemical compound names to ChEBI (Chemical Entities of Biological Interest) ontology identifiers via the ChEBI REST API at EBI.",
+    "summary": "Confirms chemical compound names against ChEBI (Chemical Entities of Biological Interest) and gives you the matching official ChEBI term and ID for a chemical annotation.",
     "tips": []
   },
   "controlled_vocabulary": {
@@ -551,21 +551,21 @@
   "curation_prep": {
     "capabilities": [
       {
-        "description": "Collects prior extraction envelopes, scope confirmations, and evidence records into a single curation-prep request",
+        "description": "Pulls together what the earlier agents extracted, what you confirmed was in scope, and the supporting quotes, into one review package.",
         "example_query": "Prepare the confirmed extraction findings for curator review",
         "example_result": "Creates a curation review session seeded from upstream extraction output instead of re-reading the paper from scratch",
         "name": "Upstream extraction intake"
       },
       {
-        "description": "Carries verified evidence references forward so the deterministic anchor-resolution pipeline starts from the same evidence the extractor kept",
+        "description": "Keeps the supporting quotes attached to each item, so the later automated steps work from exactly the evidence the extractor found.",
         "example_query": "Create curation prep candidates with the supporting quotes attached",
-        "example_result": "Returns structured candidates whose field values stay linked to upstream evidence records and ambiguity notes",
+        "example_result": "Returns the items for review, each still linked to its supporting quote and any notes about uncertainty.",
         "name": "Evidence-backed review session prep"
       },
       {
-        "description": "Checks adapter/profile structure and flags incomplete or uncertain payloads before the curator sees the review session",
+        "description": "Checks that each item is complete and well-formed, and flags anything incomplete or uncertain before you open the review session.",
         "example_query": "Validate the candidate structure before opening the curation workspace",
-        "example_result": "Returns only in-scope candidates plus warnings when fields still need curator attention",
+        "example_result": "Returns only the in-scope items, plus warnings where a field still needs your attention.",
         "name": "Structural validation before handoff"
       },
       {
@@ -580,9 +580,9 @@
       "Requires upstream extraction output and evidence records; it does not discover new evidence on its own",
       "Should not be used as a standalone extraction, PDF reading, or summarization step",
       "Does not replace curator review or approval; it prepares the review session but does not submit final curation",
-      "Downstream deterministic services still own anchor resolution, normalization, and persistence"
+      "The later automated steps still handle matching items to official records and saving them."
     ],
-    "summary": "Collects upstream extraction envelopes, creates a curator review session, carries verified evidence into deterministic anchor resolution, and performs structural validation before curator review.",
+    "summary": "Gathers everything the earlier agents found, checks that each item is complete and well-formed, and opens a ready-to-review session for you \u2014 keeping the supporting quotes attached to every item.",
     "tips": []
   },
   "data_provider": {
@@ -710,12 +710,6 @@
         "example_query": "Look up Alzheimers dementia",
         "example_result": "Finds DOID:10652 via synonym match",
         "name": "Synonym search"
-      },
-      {
-        "description": "Reports that direct hierarchy traversal is outside the package lookup contract for this validator path",
-        "example_query": "What are the parent terms of Alzheimer's disease?",
-        "example_result": "Returns an unresolved, curator-facing explanation instead of using direct SQL",
-        "name": "Hierarchy boundary"
       }
     ],
     "data_sources": [
@@ -726,8 +720,8 @@
           "definitions",
           "synonyms"
         ],
-        "description": "Structured package helper methods for exact DOID lookup and typed Disease Ontology label or synonym search",
-        "name": "AGR curation lookup helpers",
+        "description": "The Alliance's curated copy of the Disease Ontology \u2014 official disease names, their IDs, definitions, and synonyms.",
+        "name": "Alliance disease term records",
         "species_supported": null
       }
     ],
@@ -735,10 +729,10 @@
       "Only queries Disease Ontology (DOID) terms - does not include other disease vocabularies",
       "Does not provide gene-disease associations (use Gene Specialist for that)",
       "Disease prevalence and statistics are not available from this validator path",
-      "Direct hierarchy traversal and obsolete-history analysis are not exposed by the package lookup contract",
-      "All responses must come from package lookup evidence - cannot answer from general knowledge"
+      "Does not walk up or down the disease hierarchy (parent or child terms) and does not track a term's obsolete history \u2014 ask the Ontology Term Resolver for related terms.",
+      "Every answer comes from a live lookup against the Alliance's disease terms \u2014 it never answers from memory."
     ],
-    "summary": "Maps disease terms to Disease Ontology (DOID) identifiers through package-owned AGR curation lookup helpers.",
+    "summary": "Confirms disease names against the Disease Ontology (DOID) and gives you the matching official disease term and its ID, so a disease annotation can be submitted with confidence.",
     "tips": []
   },
   "disease_extractor": {
@@ -762,10 +756,10 @@
         "name": "Gene-disease association typing"
       },
       {
-        "description": "Preserves disease label/CURIE hints, relation names, data-provider selectors, subject context, and evidence records for active disease validators; ontology and vocabulary lookup remain validator-owned.",
-        "example_query": "Extract disease assertions with validator-ready context",
-        "example_result": "Returns pending disease annotation envelopes with disease, relation, provider, subject, and evidence selector inputs",
-        "name": "Validator-ready disease selectors"
+        "description": "Passes each proposed disease \u2014 with the name as written, the gene-disease relationship, the data provider, the subject, and the supporting quote \u2014 to the Disease Validation Agent, the stronger specialist that authoritatively confirms each one. The extractor proposes; the validator looks the disease up in the Disease Ontology, confirms the vocabulary, and settles the result.",
+        "example_query": "Extract the diseases and pass them on for confirmation",
+        "example_result": "Returns each proposed disease, its relationship, provider, and subject, with the supporting quote, ready for the Disease Validation Agent to confirm",
+        "name": "Hands diseases to the validator"
       }
     ],
     "data_sources": [
@@ -786,8 +780,8 @@
           "Data-provider abbreviations",
           "Validator lookup results"
         ],
-        "description": "Active disease validators resolve Disease Ontology terms, relation vocabulary, condition relation vocabulary, and data-provider selectors after extraction.",
-        "name": "Disease validator bindings",
+        "description": "The specialist validator that takes the proposed diseases and authoritatively confirms each one after extraction \u2014 matching the Disease Ontology term, the relationship vocabulary, and the data provider.",
+        "name": "Disease Validation Agent",
         "species_supported": null
       }
     ],
@@ -795,7 +789,7 @@
       "Requires an uploaded PDF document \u2014 cannot extract diseases from chat text alone",
       "Distinguishes diseases from phenotypes \u2014 observable traits in model organisms are phenotypes, not diseases",
       "Diseases mentioned only in introduction/background without new experimental findings are excluded",
-      "Does not perform disease ontology or provider lookup itself; unresolved or conflicting identity remains visible as validator findings"
+      "Looking each disease up in the Disease Ontology and confirming the provider is the Disease Validation Agent's job; any unconfirmed or conflicting diseases stay visible to you as validator findings."
     ],
     "summary": "Extracts experimentally supported disease associations from uploaded PDFs, classifying disease roles and gene-disease relationship types for Alliance curation.",
     "tips": []
@@ -819,12 +813,6 @@
         "example_query": "Look up Alzheimers dementia",
         "example_result": "Finds DOID:10652 via synonym match",
         "name": "Synonym search"
-      },
-      {
-        "description": "Reports that direct hierarchy traversal is outside the package lookup contract for this validator path",
-        "example_query": "What are the parent terms of Alzheimer's disease?",
-        "example_result": "Returns an unresolved, curator-facing explanation instead of using direct SQL",
-        "name": "Hierarchy boundary"
       }
     ],
     "data_sources": [
@@ -835,8 +823,8 @@
           "definitions",
           "synonyms"
         ],
-        "description": "Structured package helper methods for exact DOID lookup and typed Disease Ontology label or synonym search",
-        "name": "AGR curation lookup helpers",
+        "description": "The Alliance's curated copy of the Disease Ontology \u2014 official disease names, their IDs, definitions, and synonyms.",
+        "name": "Alliance disease term records",
         "species_supported": null
       }
     ],
@@ -844,10 +832,10 @@
       "Only queries Disease Ontology (DOID) terms - does not include other disease vocabularies",
       "Does not provide gene-disease associations (use Gene Specialist for that)",
       "Disease prevalence and statistics are not available from this validator path",
-      "Direct hierarchy traversal and obsolete-history analysis are not exposed by the package lookup contract",
-      "All responses must come from package lookup evidence - cannot answer from general knowledge"
+      "Does not walk up or down the disease hierarchy (parent or child terms) and does not track a term's obsolete history \u2014 ask the Ontology Term Resolver for related terms.",
+      "Every answer comes from a live lookup against the Alliance's disease terms \u2014 it never answers from memory."
     ],
-    "summary": "Maps disease terms to Disease Ontology (DOID) identifiers through package-owned AGR curation lookup helpers.",
+    "summary": "Confirms disease names against the Disease Ontology (DOID) and gives you the matching official disease term and its ID, so a disease annotation can be submitted with confidence.",
     "tips": []
   },
   "experimental_condition": {
@@ -1018,14 +1006,14 @@
       {
         "description": "Identifies and extracts negative expression evidence where genes are NOT expressed in specific locations or stages.",
         "example_query": "Find tissues where the gene is not expressed",
-        "example_result": "Returns annotations with is_negative=true for statements like 'not detected in neurons'",
+        "example_result": "Flags these as negative results \u2014 for example 'not detected in neurons'.",
         "name": "Negative Evidence Capture"
       },
       {
-        "description": "Preserves expression relation, provider, taxon, gene, anatomy, stage, and reagent context as evidence-backed selector inputs while active validators own final controlled-vocabulary and provider verification.",
-        "example_query": "Extract expression observations with validator-ready context",
-        "example_result": "Returns expression annotations with relation/provider hints and verified evidence; final normalized fields are materialized by validators when active",
-        "name": "Validator-ready selector capture"
+        "description": "Passes each expression observation \u2014 the gene, the tissue or cell type, the developmental stage, the data provider, and the reagent used \u2014 to the specialist validators, each backed by its supporting quote. The extractor proposes; the validators authoritatively confirm the official terms and the data provider.",
+        "example_query": "Extract the expression observations and pass them on for confirmation",
+        "example_result": "Returns each expression observation with its supporting quote, ready for the validators to confirm the official terms",
+        "name": "Hands expression details to the validators"
       }
     ],
     "data_sources": [
@@ -1041,12 +1029,12 @@
       },
       {
         "data_types": [
-          "Relation selector hints",
-          "Data-provider selector hints",
-          "Evidence-backed expression context"
+          "Proposed expression relations",
+          "Proposed data providers",
+          "Evidence-backed expression observations"
         ],
-        "description": "Active validator bindings verify expression relation vocabulary and data-provider selectors after extraction. Planned gene/anatomy/stage/reference validation remains under-development metadata.",
-        "name": "Domain-pack validators",
+        "description": "Specialist validators confirm the expression-relation vocabulary and the data provider after extraction. Confirming the gene, anatomy term, developmental stage, and reference against the database is still in development.",
+        "name": "Expression validators",
         "species_supported": [
           "C. elegans (WB)",
           "D. melanogaster (FB)",
@@ -1062,10 +1050,10 @@
       "Returns plain text output only - JSON conversion is handled by a separate Formatter Agent",
       "Does NOT extract expression data from mutant phenotypes or experimental perturbations (heat shock, RNAi knockdown, drug treatment) - only baseline/wild-type expression",
       "Does NOT annotate transgenic markers used solely for strain identification (e.g., rol-6, myo-2::GFP co-injection markers)",
-      "Ontology term ID resolution is handled by typed validator attachments or the Ontology Term Resolver Agent; this extractor only extracts human-readable labels",
+      "The extractor records the term wording it finds; turning that into an official ontology ID is the validators' or the Ontology Term Resolver's job.",
       "Requires at least one document search or read tool call before returning results"
     ],
-    "summary": "Extracts structured gene expression observations from uploaded PDFs, preserving relation and data-provider selector inputs for validator-owned verification.",
+    "summary": "Reads an uploaded paper and pulls out where and when each gene is expressed \u2014 the tissues, cell types, developmental stages, and any sex-specific patterns \u2014 with the supporting quote, ready for the specialist validators to confirm.",
     "tips": []
   },
   "gene_expression_extraction": {
@@ -1085,14 +1073,14 @@
       {
         "description": "Identifies and extracts negative expression evidence where genes are NOT expressed in specific locations or stages.",
         "example_query": "Find tissues where the gene is not expressed",
-        "example_result": "Returns annotations with is_negative=true for statements like 'not detected in neurons'",
+        "example_result": "Flags these as negative results \u2014 for example 'not detected in neurons'.",
         "name": "Negative Evidence Capture"
       },
       {
-        "description": "Preserves expression relation, provider, taxon, gene, anatomy, stage, and reagent context as evidence-backed selector inputs while active validators own final controlled-vocabulary and provider verification.",
-        "example_query": "Extract expression observations with validator-ready context",
-        "example_result": "Returns expression annotations with relation/provider hints and verified evidence; final normalized fields are materialized by validators when active",
-        "name": "Validator-ready selector capture"
+        "description": "Passes each expression observation \u2014 the gene, the tissue or cell type, the developmental stage, the data provider, and the reagent used \u2014 to the specialist validators, each backed by its supporting quote. The extractor proposes; the validators authoritatively confirm the official terms and the data provider.",
+        "example_query": "Extract the expression observations and pass them on for confirmation",
+        "example_result": "Returns each expression observation with its supporting quote, ready for the validators to confirm the official terms",
+        "name": "Hands expression details to the validators"
       }
     ],
     "data_sources": [
@@ -1108,12 +1096,12 @@
       },
       {
         "data_types": [
-          "Relation selector hints",
-          "Data-provider selector hints",
-          "Evidence-backed expression context"
+          "Proposed expression relations",
+          "Proposed data providers",
+          "Evidence-backed expression observations"
         ],
-        "description": "Active validator bindings verify expression relation vocabulary and data-provider selectors after extraction. Planned gene/anatomy/stage/reference validation remains under-development metadata.",
-        "name": "Domain-pack validators",
+        "description": "Specialist validators confirm the expression-relation vocabulary and the data provider after extraction. Confirming the gene, anatomy term, developmental stage, and reference against the database is still in development.",
+        "name": "Expression validators",
         "species_supported": [
           "C. elegans (WB)",
           "D. melanogaster (FB)",
@@ -1129,10 +1117,10 @@
       "Returns plain text output only - JSON conversion is handled by a separate Formatter Agent",
       "Does NOT extract expression data from mutant phenotypes or experimental perturbations (heat shock, RNAi knockdown, drug treatment) - only baseline/wild-type expression",
       "Does NOT annotate transgenic markers used solely for strain identification (e.g., rol-6, myo-2::GFP co-injection markers)",
-      "Ontology term ID resolution is handled by typed validator attachments or the Ontology Term Resolver Agent; this extractor only extracts human-readable labels",
+      "The extractor records the term wording it finds; turning that into an official ontology ID is the validators' or the Ontology Term Resolver's job.",
       "Requires at least one document search or read tool call before returning results"
     ],
-    "summary": "Extracts structured gene expression observations from uploaded PDFs, preserving relation and data-provider selector inputs for validator-owned verification.",
+    "summary": "Reads an uploaded paper and pulls out where and when each gene is expressed \u2014 the tissues, cell types, developmental stages, and any sex-specific patterns \u2014 with the supporting quote, ready for the specialist validators to confirm.",
     "tips": []
   },
   "gene_extractor": {
@@ -1156,10 +1144,10 @@
         "name": "Evidence-based validation"
       },
       {
-        "description": "Preserves paper-backed mention text, species/taxon/provider context, and optional proposed identifiers for active gene validator bindings; the extractor does not search gene symbols or materialize final IDs.",
-        "example_query": "Extract genes with validator-ready context",
-        "example_result": "Returns retained gene mention envelopes with proposed/hint fields and verified evidence for downstream validator materialization",
-        "name": "Validator-ready identity hints"
+        "description": "Passes each proposed gene \u2014 with its exact wording from the paper, the species, and the supporting quote \u2014 to the Gene Validation Agent, the stronger specialist that authoritatively confirms each one against the Alliance database. The extractor proposes; the validator confirms and settles the official gene ID.",
+        "example_query": "Extract the genes and pass them on for confirmation",
+        "example_result": "Returns each proposed gene with its supporting quote, ready for the Gene Validation Agent to confirm",
+        "name": "Hands genes to the validator"
       }
     ],
     "data_sources": [
@@ -1180,8 +1168,8 @@
           "Taxon/provider hints",
           "Validator lookup results"
         ],
-        "description": "The active gene validator resolves or rejects proposed identity hints with Alliance lookup tooling after extraction.",
-        "name": "Gene validator binding",
+        "description": "The specialist validator that takes the proposed genes and authoritatively confirms or rejects each one against the Alliance database after extraction.",
+        "name": "Gene Validation Agent",
         "species_supported": [
           "C. elegans (WB)",
           "D. melanogaster (FB)",
@@ -1196,10 +1184,10 @@
     "limitations": [
       "Requires an uploaded PDF document \u2014 cannot extract genes from chat text alone",
       "Genes mentioned only in references without experimental data in this paper are excluded",
-      "Multi-species disambiguation relies on context clues; ambiguous cases go to ambiguities[]",
-      "Does not perform gene identity lookup itself; unresolved or conflicting identity remains visible as validator findings"
+      "When a gene could belong to more than one species, it uses clues in the text; cases it can't settle are flagged for curator review.",
+      "Confirming each gene against the Alliance database is the Gene Validation Agent's job; any unconfirmed or conflicting genes stay visible to you as validator findings."
     ],
-    "summary": "Extracts experimentally supported gene mentions from uploaded PDFs with evidence-first filtering, disambiguation, and validator-ready identity hints.",
+    "summary": "Reads an uploaded paper and proposes the genes that have real experimental support in it, with the quote that backs each one \u2014 ready for the Gene Validation Agent to confirm against the Alliance database.",
     "tips": []
   },
   "gene_ontology": {
@@ -1217,7 +1205,7 @@
         "name": "Get GO term information by ID"
       },
       {
-        "description": "Get direct child terms (more specific) of a GO term with relationship types (is_a, part_of, regulates).",
+        "description": "Shows the more specific terms directly underneath a GO term, and how each one relates to it (for example \"is a kind of,\" \"is part of,\" or \"regulates\").",
         "example_query": "What are the children of GO:0003677 (DNA binding)?",
         "example_result": "Children include: GO:0003690 (double-stranded DNA binding) - is_a, GO:0003697 (single-stranded DNA binding) - is_a",
         "name": "Navigate GO term hierarchy (children)"
@@ -1254,10 +1242,9 @@
       "Cannot retrieve gene-to-GO annotations (use GO Annotations Agent instead)",
       "Cannot determine which genes have a specific GO term (use GO Annotations Agent instead)",
       "Does not perform GO enrichment analysis",
-      "All responses must come from live QuickGO API queries - does not use cached/trained knowledge",
-      "API requests are restricted to ebi.ac.uk domain only"
+      "Every answer comes from a fresh, live lookup against the Gene Ontology \u2014 it never answers from memory."
     ],
-    "summary": "Queries the Gene Ontology (GO) database via the QuickGO REST API to retrieve GO term information, hierarchy, and relationships across the three aspects: Molecular Function (MF), Biological Process (BP), and Cellular Component (CC).",
+    "summary": "Looks up Gene Ontology (GO) terms \u2014 their definitions, broader and narrower terms, and how they relate \u2014 across the three GO categories: molecular function, biological process, and cellular component.",
     "tips": []
   },
   "gene_ontology_lookup": {
@@ -1275,7 +1262,7 @@
         "name": "Get GO term information by ID"
       },
       {
-        "description": "Get direct child terms (more specific) of a GO term with relationship types (is_a, part_of, regulates).",
+        "description": "Shows the more specific terms directly underneath a GO term, and how each one relates to it (for example \"is a kind of,\" \"is part of,\" or \"regulates\").",
         "example_query": "What are the children of GO:0003677 (DNA binding)?",
         "example_result": "Children include: GO:0003690 (double-stranded DNA binding) - is_a, GO:0003697 (single-stranded DNA binding) - is_a",
         "name": "Navigate GO term hierarchy (children)"
@@ -1312,10 +1299,9 @@
       "Cannot retrieve gene-to-GO annotations (use GO Annotations Agent instead)",
       "Cannot determine which genes have a specific GO term (use GO Annotations Agent instead)",
       "Does not perform GO enrichment analysis",
-      "All responses must come from live QuickGO API queries - does not use cached/trained knowledge",
-      "API requests are restricted to ebi.ac.uk domain only"
+      "Every answer comes from a fresh, live lookup against the Gene Ontology \u2014 it never answers from memory."
     ],
-    "summary": "Queries the Gene Ontology (GO) database via the QuickGO REST API to retrieve GO term information, hierarchy, and relationships across the three aspects: Molecular Function (MF), Biological Process (BP), and Cellular Component (CC).",
+    "summary": "Looks up Gene Ontology (GO) terms \u2014 their definitions, broader and narrower terms, and how they relate \u2014 across the three GO categories: molecular function, biological process, and cellular component.",
     "tips": []
   },
   "gene_validation": {
@@ -1372,7 +1358,7 @@
       {
         "description": "Distinguish between manually curated annotations (IDA, IMP, IPI) and automatic/electronic annotations (IEA, IBA)",
         "example_query": "What manually curated annotations does daf-2 have?",
-        "example_result": "Returns annotations filtered by is_manual=True with counts of manual vs automatic annotations",
+        "example_result": "Returns only the manually curated annotations, plus a count of how many are manual versus automatic",
         "name": "Evidence code analysis"
       },
       {
@@ -1384,7 +1370,7 @@
       {
         "description": "Categorize annotations by GO aspect: Molecular Function (MF), Biological Process (BP), or Cellular Component (CC)",
         "example_query": "What molecular functions does this gene have?",
-        "example_result": "Returns annotations filtered by aspect with go_id, go_name, and evidence",
+        "example_result": "Returns the matching annotations grouped by GO category, each with its GO ID, term name, and evidence",
         "name": "GO aspect classification"
       }
     ],
@@ -1430,7 +1416,7 @@
       {
         "description": "Distinguish between manually curated annotations (IDA, IMP, IPI) and automatic/electronic annotations (IEA, IBA)",
         "example_query": "What manually curated annotations does daf-2 have?",
-        "example_result": "Returns annotations filtered by is_manual=True with counts of manual vs automatic annotations",
+        "example_result": "Returns only the manually curated annotations, plus a count of how many are manual versus automatic",
         "name": "Evidence code analysis"
       },
       {
@@ -1442,7 +1428,7 @@
       {
         "description": "Categorize annotations by GO aspect: Molecular Function (MF), Biological Process (BP), or Cellular Component (CC)",
         "example_query": "What molecular functions does this gene have?",
-        "example_result": "Returns annotations filtered by aspect with go_id, go_name, and evidence",
+        "example_result": "Returns the matching annotations grouped by GO category, each with its GO ID, term name, and evidence",
         "name": "GO aspect classification"
       }
     ],
@@ -1586,9 +1572,9 @@
         "name": "Get orthology confidence scores"
       },
       {
-        "description": "Find the best-scoring ortholog in each species using the isBestScore flag",
+        "description": "Find the single best-scoring ortholog in each species.",
         "example_query": "What is the best human ortholog for daf-2?",
-        "example_result": "INSR (HGNC:6091) - isBestScore: Yes",
+        "example_result": "INSR (HGNC:6091) \u2014 flagged as the best match for human",
         "name": "Identify best-scoring orthologs"
       },
       {
@@ -1621,11 +1607,11 @@
     ],
     "limitations": [
       "Gene ID must be in Alliance format with prefix (e.g., WB:WBGene00000898, not just WBGene00000898)",
-      "Cannot search by gene symbol alone - requires resolved gene ID from Gene Validation Agent first",
+      "Needs a confirmed gene ID, not just a symbol \u2014 run the gene through the Gene Validation Agent first.",
       "Does not find paralogs (within-species gene duplications)",
       "Some genes have no orthologs in certain species (this is valid biological data, not an error)"
     ],
-    "summary": "Retrieves ortholog relationships across species using the Alliance of Genome Resources API with DIOPT-based confidence scoring.",
+    "summary": "Finds a gene's orthologs (the matching genes in other species) and tells you how confident the prediction is, based on how many ortholog-prediction methods agree (the DIOPT approach).",
     "tips": []
   },
   "orthologs_lookup": {
@@ -1643,9 +1629,9 @@
         "name": "Get orthology confidence scores"
       },
       {
-        "description": "Find the best-scoring ortholog in each species using the isBestScore flag",
+        "description": "Find the single best-scoring ortholog in each species.",
         "example_query": "What is the best human ortholog for daf-2?",
-        "example_result": "INSR (HGNC:6091) - isBestScore: Yes",
+        "example_result": "INSR (HGNC:6091) \u2014 flagged as the best match for human",
         "name": "Identify best-scoring orthologs"
       },
       {
@@ -1678,11 +1664,11 @@
     ],
     "limitations": [
       "Gene ID must be in Alliance format with prefix (e.g., WB:WBGene00000898, not just WBGene00000898)",
-      "Cannot search by gene symbol alone - requires resolved gene ID from Gene Validation Agent first",
+      "Needs a confirmed gene ID, not just a symbol \u2014 run the gene through the Gene Validation Agent first.",
       "Does not find paralogs (within-species gene duplications)",
       "Some genes have no orthologs in certain species (this is valid biological data, not an error)"
     ],
-    "summary": "Retrieves ortholog relationships across species using the Alliance of Genome Resources API with DIOPT-based confidence scoring.",
+    "summary": "Finds a gene's orthologs (the matching genes in other species) and tells you how confident the prediction is, based on how many ortholog-prediction methods agree (the DIOPT approach).",
     "tips": []
   },
   "pdf_extraction": {
@@ -1748,10 +1734,10 @@
         "name": "Genotype-phenotype linking"
       },
       {
-        "description": "Preserves phenotype labels, organism/provider/taxon context, subject hints, and evidence for the active ontology validator; final ontology CURIEs are validator-owned.",
-        "example_query": "Extract phenotypes with validator-ready context",
-        "example_result": "Returns phenotype assertion envelopes with label-backed term candidates and verified evidence for downstream validator materialization",
-        "name": "Validator-ready phenotype term context"
+        "description": "Passes each proposed phenotype \u2014 with the trait as written, the organism, the subject, and the supporting quote \u2014 to the phenotype term validator, the stronger specialist that authoritatively confirms each one. The extractor proposes; the validator confirms and settles the official ontology term.",
+        "example_query": "Extract the phenotypes and pass them on for confirmation",
+        "example_result": "Returns each proposed phenotype with its supporting quote, ready for the validator to confirm the official term",
+        "name": "Hands phenotypes to the validator"
       }
     ],
     "data_sources": [
@@ -1772,8 +1758,8 @@
           "Provider/taxon hints",
           "Validator lookup results"
         ],
-        "description": "The active phenotype validator resolves supported WB/MGI phenotype term labels or CURIEs after extraction and explicitly blocks unsupported provider/taxon mappings before lookup.",
-        "name": "Phenotype validator binding",
+        "description": "The phenotype term validator confirms the official term for supported WormBase (WB) and Mouse Genome Informatics (MGI) phenotypes after extraction. Phenotypes from other databases aren't supported yet, so those are set aside rather than confirmed.",
+        "name": "Phenotype term validator",
         "species_supported": [
           "C. elegans (WB)",
           "M. musculus (MGI)"
@@ -1784,8 +1770,7 @@
       "Requires an uploaded PDF document \u2014 cannot extract phenotypes from chat text alone",
       "Distinguishes phenotypes from diseases \u2014 clinical conditions are handled by the Disease Extraction Agent",
       "Wild-type/control observations are baselines, not phenotype assertions",
-      "Ontology term labels and hints are selector inputs only; typed ontology validation is handled by active domain-pack validator bindings",
-      "Does not use agr_curation_query directly; phenotype ontology validation is deferred to typed ontology term resolution"
+      "The extractor proposes the trait wording only; confirming the official ontology term is the phenotype term validator's job after extraction."
     ],
     "summary": "Extracts experimentally supported phenotype assertions from uploaded PDFs, capturing genotype-phenotype links, polarity, severity, and supporting evidence.",
     "tips": []
@@ -1995,13 +1980,13 @@
       {
         "description": "Automatically determines which specialist agent should handle your question",
         "example_query": "Find the gene daf-2",
-        "example_result": "Routes to Gene Validation Agent",
+        "example_result": "Hands the question to the Gene Validation Agent",
         "name": "Query routing"
       },
       {
         "description": "Coordinates complex queries that need multiple agents",
         "example_query": "Find all genes mentioned in the paper and validate them",
-        "example_result": "Routes to PDF Specialist first, then Gene Validation Agent",
+        "example_result": "Sends the paper to the PDF Specialist first, then passes the genes it finds to the Gene Validation Agent",
         "name": "Multi-step coordination"
       }
     ],

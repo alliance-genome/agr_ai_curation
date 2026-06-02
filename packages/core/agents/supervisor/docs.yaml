@@ -4,11 +4,11 @@ capabilities:
   - name: "Query routing"
     description: "Automatically determines which specialist agent should handle your question"
     example_query: "Find the gene daf-2"
-    example_result: "Routes to Gene Validation Agent"
+    example_result: "Hands the question to the Gene Validation Agent"
   - name: "Multi-step coordination"
     description: "Coordinates complex queries that need multiple agents"
     example_query: "Find all genes mentioned in the paper and validate them"
-    example_result: "Routes to PDF Specialist first, then Gene Validation Agent"
+    example_result: "Sends the paper to the PDF Specialist first, then passes the genes it finds to the Gene Validation Agent"
 data_sources: []
 limitations:
   - "Routing decisions are based on query keywords and context"

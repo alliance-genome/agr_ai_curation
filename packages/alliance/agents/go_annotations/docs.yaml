@@ -8,7 +8,7 @@ capabilities:
   - name: "Evidence code analysis"
     description: "Distinguish between manually curated annotations (IDA, IMP, IPI) and automatic/electronic annotations (IEA, IBA)"
     example_query: "What manually curated annotations does daf-2 have?"
-    example_result: "Returns annotations filtered by is_manual=True with counts of manual vs automatic annotations"
+    example_result: "Returns only the manually curated annotations, plus a count of how many are manual versus automatic"
   - name: "Batch annotation retrieval"
     description: "Retrieve GO annotations for multiple genes in a single request"
     example_query: "Get GO annotations for: WB:WBGene00000912, WB:WBGene00001234"
@@ -16,7 +16,7 @@ capabilities:
   - name: "GO aspect classification"
     description: "Categorize annotations by GO aspect: Molecular Function (MF), Biological Process (BP), or Cellular Component (CC)"
     example_query: "What molecular functions does this gene have?"
-    example_result: "Returns annotations filtered by aspect with go_id, go_name, and evidence"
+    example_result: "Returns the matching annotations grouped by GO category, each with its GO ID, term name, and evidence"
 data_sources:
   - name: "Gene Ontology Consortium API"
     description: "Official GO API at api.geneontology.org providing gene annotations with evidence codes"
