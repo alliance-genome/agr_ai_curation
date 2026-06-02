@@ -194,7 +194,7 @@ def test_inline_documentation_and_docs_yaml_conflict_raises(tmp_path):
         """,
     )
     reset_cache()
-    with pytest.raises(ValueError, match="both an inline 'documentation' block and a docs.yaml"):
+    with pytest.raises(ValueError, match=r"both an inline 'documentation' block"):
         load_agent_definitions(agents_path=tmp_path, force_reload=True)
     reset_cache()
 ```
