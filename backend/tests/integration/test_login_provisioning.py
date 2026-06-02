@@ -115,32 +115,38 @@ def client(test_db, mock_cognito_user, monkeypatch):
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     )
 
+    # Ensure fixture gets a fresh app instance with patched auth dependency.
+    modules_to_clear = []
+    for module_name in list(sys.modules.keys()):
+        if module_name == "main" or module_name.startswith("src."):
+            modules_to_clear.append(module_name)
+    for module_name in modules_to_clear:
+        del sys.modules[module_name]
+
     # Create a simple dependency that returns our mock user
     def get_mock_user():
         return mock_cognito_user
 
-    # Mock auth via dependency_overrides on the baked dependency callable
-    # (_get_user_from_cookie_impl, which routes reference through
-    # get_auth_dependency() = Depends(_get_user_from_cookie_impl)). No sys.modules
-    # clearing / app re-import is needed -- clearing main + src.* here used to
-    # re-import them with new class identities that persisted for the rest of the
-    # session and broke later modules' issubclass / schema-contract tests
-    # (order-dependent pollution across the suite).
-    from main import app
-    from src.models.sql.database import get_db
-    from src.api.auth import _get_user_from_cookie_impl
+    # Patch get_auth_dependency BEFORE importing the app
+    # This ensures the users router registers with our mocked dependency
+    with patch("src.api.auth.get_auth_dependency") as mock_get_auth_dep:
+        # Make get_auth_dependency() return a Depends that yields our mock user
+        mock_get_auth_dep.return_value = Depends(get_mock_user)
 
-    # Override database dependency to use test database
-    def override_get_db():
-        yield test_db
+        # Now import the app (which will load routes with our patched dependency)
+        from main import app
+        from src.models.sql.database import get_db
 
-    app.dependency_overrides[get_db] = override_get_db
-    app.dependency_overrides[_get_user_from_cookie_impl] = get_mock_user
+        # Override database dependency to use test database
+        def override_get_db():
+            yield test_db
 
-    yield TestClient(app)
+        app.dependency_overrides[get_db] = override_get_db
 
-    # Clean up dependency overrides
-    app.dependency_overrides.clear()
+        yield TestClient(app)
+
+        # Clean up dependency overrides
+        app.dependency_overrides.clear()
 
 
 class TestLoginProvisioning:

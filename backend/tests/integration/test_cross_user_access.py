@@ -176,11 +176,14 @@ def client_as_curator1(monkeypatch, curator1_user, test_db):
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     )
 
-    # Auth is mocked via app.dependency_overrides[_get_user_from_cookie_impl] below,
-    # so no sys.modules clearing / app re-import is needed. (Clearing main + src.* here
-    # used to re-import them with new class identities that persisted for the rest of
-    # the session and broke later modules' issubclass / schema-contract tests --
-    # order-dependent pollution across the suite.)
+    # Ensure fresh app/module state so auth patch is captured per-client fixture.
+    modules_to_clear = []
+    for module_name in list(sys.modules.keys()):
+        if module_name == "main" or module_name.startswith("src."):
+            modules_to_clear.append(module_name)
+    for module_name in modules_to_clear:
+        del sys.modules[module_name]
+
     async def override_user():
         return curator1_user
 
@@ -217,11 +220,14 @@ def client_as_curator2(monkeypatch, curator2_user, test_db):
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     )
 
-    # Auth is mocked via app.dependency_overrides[_get_user_from_cookie_impl] below,
-    # so no sys.modules clearing / app re-import is needed. (Clearing main + src.* here
-    # used to re-import them with new class identities that persisted for the rest of
-    # the session and broke later modules' issubclass / schema-contract tests --
-    # order-dependent pollution across the suite.)
+    # Ensure fresh app/module state so auth patch is captured per-client fixture.
+    modules_to_clear = []
+    for module_name in list(sys.modules.keys()):
+        if module_name == "main" or module_name.startswith("src."):
+            modules_to_clear.append(module_name)
+    for module_name in modules_to_clear:
+        del sys.modules[module_name]
+
     async def override_user():
         return curator2_user
 

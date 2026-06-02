@@ -135,11 +135,16 @@ def client(test_db, monkeypatch):
                 raise HTTPException(status_code=401, detail="Not authenticated")
             return auth_state["user"]
 
-    # Auth is mocked via app.dependency_overrides[_get_user_from_cookie_impl] below,
-    # so no module-cache clearing / app re-import is needed. (Clearing main + src.*
-    # here used to re-import them with new class identities that persisted for the
-    # rest of the session and broke later modules' issubclass / schema-contract tests
-    # -- order-dependent pollution across the suite.)
+    # CRITICAL: Clear module cache to prevent test contamination
+    # Each test needs a fresh app instance with its own auth dependency
+    # Clear main and ALL src.* modules to ensure complete isolation
+    modules_to_clear = []
+    for module_name in list(sys.modules.keys()):
+        if module_name == 'main' or module_name.startswith('src.'):
+            modules_to_clear.append(module_name)
+
+    for module_name in modules_to_clear:
+        del sys.modules[module_name]
 
     # Disable EC2 detection for test isolation.  Docker containers on EC2
     # can reach the instance metadata service (IMDSv2 hop-limit ≥ 2),
