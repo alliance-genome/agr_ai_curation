@@ -66,6 +66,51 @@ def test_inline_documentation_and_docs_yaml_conflict_raises(tmp_path):
     reset_cache()
 
 
+def test_merge_keeps_base_docs_yaml_when_override_absent(tmp_path):
+    """Regression: a docs-less override dir must not shadow the package docs.yaml.
+
+    Mirrors the agent_dir override quirk where ``config/agents/<folder>`` layers on
+    top of the package bundle. Because docs.yaml is now a merged asset (like
+    prompt.yaml), the merge must keep the base (package) docs.yaml when the
+    override layer supplies none.
+    """
+    from src.lib.config.agent_sources import (
+        AgentConfigSource,
+        _merge_agent_config_source,
+    )
+
+    base_dir = tmp_path / "pkg" / "gene"
+    base_dir.mkdir(parents=True)
+    base_docs = base_dir / "docs.yaml"
+    base_docs.write_text("summary: base\n")
+    base = AgentConfigSource(
+        folder_name="gene",
+        agent_dir=base_dir,
+        agent_yaml=base_dir / "agent.yaml",
+        prompt_yaml=base_dir / "prompt.yaml",
+        schema_py=None,
+        docs_yaml=base_docs,
+        group_rule_files=(),
+        package_id="alliance",
+        package_path=tmp_path / "pkg",
+    )
+    override_dir = tmp_path / "config" / "gene"
+    override_dir.mkdir(parents=True)
+    override = AgentConfigSource(
+        folder_name="gene",
+        agent_dir=override_dir,
+        agent_yaml=override_dir / "agent.yaml",
+        prompt_yaml=override_dir / "prompt.yaml",
+        schema_py=None,
+        docs_yaml=None,
+        group_rule_files=(),
+    )
+
+    merged = _merge_agent_config_source(base, override)
+
+    assert merged.docs_yaml == base_docs
+
+
 def test_empty_docs_yaml_logs_warning_and_no_documentation(tmp_path, caplog):
     import logging
     _write_agent_bundle(

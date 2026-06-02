@@ -325,9 +325,9 @@ def _load_agent_definition_indexes(
                 logger.warning('Empty agent.yaml in %s', source.folder_name)
                 continue
 
-            docs_yaml_path = source.agent_dir / "docs.yaml"
+            docs_yaml_path = source.docs_yaml
             docs_data = None
-            if docs_yaml_path.exists():
+            if docs_yaml_path is not None and docs_yaml_path.exists():
                 if data.get("documentation"):
                     raise ValueError(
                         f"Agent '{source.folder_name}' declares both an inline "
