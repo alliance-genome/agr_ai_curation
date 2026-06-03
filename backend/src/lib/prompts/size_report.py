@@ -15,7 +15,9 @@ def core_layer_sizes() -> dict[str, dict[str, int]]:
         agent_id = canonical_system_agent_key(agent)
         try:
             bundle = build_agent_core_prompt(agent_id)
-        except Exception:  # agents without resolvable core layers are skipped
+        except ValueError:
+            # Agent has no resolvable core-generated contract (e.g. unregistered
+            # output schema); skip it rather than masking real assembly errors.
             continue
         sizes = {layer.kind: len(layer.content) for layer in bundle.layers}
         sizes["total"] = sum(len(layer.content) for layer in bundle.layers)
