@@ -289,7 +289,6 @@ function resolveReasoningSelection(
 
 const MODEL_HELP_TEXT = [
   'Quick guide:',
-  '• openai/gpt-oss-120b (Groq): fastest for database lookups and validation loops.',
   '• gpt-5.5 (medium reasoning): default for complex PDF extraction and hard reasoning.',
   '• gpt-5-mini: balanced speed and quality for iterative drafting.',
 ].join('\n')
@@ -1379,14 +1378,17 @@ function PromptWorkshop({
 
   const handleAskClaudeAboutModels = () => {
     const targetName = selectedCustomAgent?.name || name.trim() || selectedTemplate?.name || parentAgent?.agent_name || 'this agent draft'
-    const modelLines = modelOptions.map((model) => {
-      const reasoning = model.reasoning_options.length > 0
-        ? `Reasoning: ${model.reasoning_options.join(', ')} (default: ${model.default_reasoning || 'none'})`
-        : 'Reasoning: n/a'
-      return `- ${model.name} [${model.model_id}] via ${model.provider}\n  Guidance: ${model.guidance || model.description || 'n/a'}\n  ${reasoning}`
-    }).join('\n')
+    const modelLines = modelOptions
+      // Only show Claude the models a curator can actually select in the picker.
+      .filter((model) => isWorkshopModel(model.model_id))
+      .map((model) => {
+        const reasoning = model.reasoning_options.length > 0
+          ? `Reasoning: ${model.reasoning_options.join(', ')} (default: ${model.default_reasoning || 'none'})`
+          : 'Reasoning: n/a'
+        return `- ${model.name} [${model.model_id}] via ${model.provider}\n  Guidance: ${model.guidance || model.description || 'n/a'}\n  ${reasoning}`
+      }).join('\n')
 
-    const message = `Help me choose the best model settings for my Agent Workshop draft.\n\nAgent draft: ${targetName}\nCurrent model: ${selectedModelId || 'none'}\nCurrent reasoning: ${selectedModelReasoning || 'none'}\nAttached tools: ${selectedToolIds.length > 0 ? selectedToolIds.join(', ') : 'none'}\n\nAvailable models:\n${modelLines}\n\nRecommendation policy to follow unless my use case says otherwise:\n- Prefer openai/gpt-oss-120b (Groq) for database lookup and validation workflows.\n- Prefer gpt-5.5 with medium reasoning for complex PDF extraction and deep thinking.\n- Use gpt-5-mini as a faster middle-ground for iterative drafting.\n\nPlease:\n1. Ask 1-3 focused questions to understand my use case\n2. Recommend a model and (if applicable) reasoning level\n3. Explain tradeoffs in plain curator-friendly language\n4. Give one backup model choice\n\n[Request ID: ${Date.now()}]`
+    const message = `Help me choose the best model settings for my Agent Workshop draft.\n\nAgent draft: ${targetName}\nCurrent model: ${selectedModelId || 'none'}\nCurrent reasoning: ${selectedModelReasoning || 'none'}\nAttached tools: ${selectedToolIds.length > 0 ? selectedToolIds.join(', ') : 'none'}\n\nAvailable models:\n${modelLines}\n\nRecommendation policy to follow unless my use case says otherwise:\n- Prefer gpt-5.5 with medium reasoning for complex PDF extraction and deep thinking.\n- Use gpt-5-mini as a faster middle-ground for iterative drafting.\n\nPlease:\n1. Ask 1-3 focused questions to understand my use case\n2. Recommend a model and (if applicable) reasoning level\n3. Explain tradeoffs in plain curator-friendly language\n4. Give one backup model choice\n\n[Request ID: ${Date.now()}]`
     onVerifyRequest?.(message)
     setStatus('Opened model-selection discussion with Claude')
   }
@@ -1898,7 +1900,7 @@ function PromptWorkshop({
               }}
             >
               <Typography variant="body2" color="text.secondary">
-                These are the built-in instruction layers that make up this agent. They're read-only here — shown so you can see what your own instructions (on the Prompt tab) build on. You don't need to change anything on this tab.
+                These are the built-in instruction layers that make up this agent. They&apos;re read-only here — shown so you can see what your own instructions (on the Prompt tab) build on. You don&apos;t need to change anything on this tab.
               </Typography>
             </Box>
             <Stack spacing={1}>
