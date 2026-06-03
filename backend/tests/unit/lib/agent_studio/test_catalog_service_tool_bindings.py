@@ -138,7 +138,7 @@ def test_search_document_documents_search_mode_parameter():
         "hybrid_lexical_first",
     ]
     assert parameters["search_mode"]["required"] is False
-    assert "exact symbols/IDs" in parameters["search_mode"]["description"]
+    assert "specific symbols and IDs" in parameters["search_mode"]["description"]
 
 
 def test_pdf_evidence_tools_document_span_contract():
@@ -152,10 +152,10 @@ def test_pdf_evidence_tools_document_span_contract():
         "documentation"
     ]["summary"]
 
-    assert "evidence span IDs" in read_chunk_summary
+    assert "snippets" in read_chunk_summary
     assert "span_ids" in record_parameters
     assert "claimed_quote" not in record_parameters
-    assert "source quote and provenance fields are immutable" in workspace_summary.lower()
+    assert "cannot be changed" in workspace_summary.lower()
 
 
 def test_required_context_for_tool_ids_includes_document_requirements(monkeypatch):

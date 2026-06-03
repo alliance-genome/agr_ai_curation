@@ -3,7 +3,7 @@
     "agent_methods": {
       "agm_validation": {
         "agent_name": "AGM Validation Agent",
-        "description": "The AGM Validation agent validates affected genomic model subjects with explicit identifier, label, and taxon context.",
+        "description": "The Affected Genomic Model (AGM) specialist confirms which modified organism a finding refers to, using its ID, name, and species.",
         "methods": [
           "map_entity_curies_to_info",
           "map_entity_names_to_curies"
@@ -11,7 +11,7 @@
       },
       "allele": {
         "agent_name": "Allele Validation Agent",
-        "description": "The Allele Agent uses these methods to validate allele/variant identifiers.",
+        "description": "The Allele specialist confirms allele and variant identities against the Alliance database.",
         "methods": [
           "search_alleles",
           "search_alleles_bulk",
@@ -21,7 +21,7 @@
       },
       "controlled_vocabulary_validation": {
         "agent_name": "Controlled Vocabulary Validation Agent",
-        "description": "The Controlled Vocabulary Validation agent validates vocabulary rows by vocabulary name, term name, abbreviation, and synonym.",
+        "description": "The Controlled Vocabulary specialist confirms terms by their list name, term name, abbreviation, and synonym.",
         "methods": [
           "get_vocabulary_term",
           "search_vocabulary_terms"
@@ -29,7 +29,7 @@
       },
       "data_provider_validation": {
         "agent_name": "Data Provider Validation Agent",
-        "description": "The Data Provider Validation agent validates provider abbreviations and provider-to-taxon consistency.",
+        "description": "The Member Group specialist confirms group codes and checks that the group and species line up.",
         "methods": [
           "get_data_provider",
           "get_data_providers"
@@ -37,7 +37,7 @@
       },
       "experimental_condition_validation": {
         "agent_name": "Experimental Condition Validation Agent",
-        "description": "The Experimental Condition Validation agent composes ontology, controlled vocabulary, data-provider, taxon, and chemical component validation evidence into one condition-level decision.",
+        "description": "The Experimental Condition specialist brings together ontology, controlled-vocabulary, member-group, species, and chemical checks into one decision for each condition.",
         "methods": [
           "get_ontology_term",
           "get_ontology_terms",
@@ -51,7 +51,7 @@
       },
       "gene": {
         "agent_name": "Gene Validation Agent",
-        "description": "The Gene Agent uses these methods to validate gene identifiers and retrieve gene information.",
+        "description": "The Gene specialist confirms gene identities and pulls full gene details against the Alliance database.",
         "methods": [
           "search_genes",
           "search_genes_bulk",
@@ -61,7 +61,7 @@
       },
       "gene_expression": {
         "agent_name": "Gene Expression Extractor",
-        "description": "The Gene Expression agent validates gene names found during PDF extraction.",
+        "description": "The Gene Expression agent confirms gene names it found while reading the PDF.",
         "methods": [
           "search_genes",
           "search_genes_bulk",
@@ -70,14 +70,14 @@
       },
       "gene_ontology": {
         "agent_name": "Gene Ontology Agent",
-        "description": "The GO Agent searches for Gene Ontology terms.",
+        "description": "The Gene Ontology agent looks up GO terms.",
         "methods": [
           "search_go_terms"
         ]
       },
       "ontology_term_validation": {
         "agent_name": "Ontology Term Resolver Agent",
-        "description": "The Ontology Term Resolver agent validates exact ontology CURIEs and resolves typed label or synonym lookups while preserving ambiguous or unresolved candidates.",
+        "description": "The Ontology Term specialist confirms exact ontology IDs and resolves term names or synonyms, keeping note of any cases that stayed unclear.",
         "methods": [
           "get_ontology_term",
           "get_ontology_terms",
@@ -90,7 +90,7 @@
       },
       "subject_entity_validation": {
         "agent_name": "Subject Entity Validation Agent",
-        "description": "The Subject Entity agent routes explicit subject_type values to gene, allele, or AGM validation paths.",
+        "description": "The Subject specialist confirms the affected entity \u2014 sending it to the gene, allele, or modified-organism path depending on what it is.",
         "methods": [
           "get_gene_by_id",
           "search_genes",
@@ -301,7 +301,7 @@
           "alliance"
         ]
       },
-      "prompt_description": "Structured API for Alliance curation database lookups. Filter by data_provider: MGI, FB, WB, ZFIN, RGD, SGD, HGNC."
+      "prompt_description": "Structured lookups in the Alliance Curation Database. Narrow results to a member group: MGI, FB, WB, ZFIN, RGD, SGD, HGNC."
     },
     "audit": {
       "display_name": "AGR Curation Query"
@@ -315,7 +315,7 @@
       "minimum_entities": 8
     },
     "category": "Database",
-    "description": "Structured AGR curation database queries with lookup attempts, candidate matches, classifications, provider projections, ontology term and controlled vocabulary lookup/search helpers, and flow validation attachment reference lookups",
+    "description": "Look things up in the Alliance Curation Database \u2014 genes, alleles, ontology terms, controlled-vocabulary terms, species, and member groups \u2014 through one tool with many specific lookup methods.",
     "documentation": {
       "example_queries": [
         "Find gene daf-2 in WormBase",
@@ -323,7 +323,7 @@
       ],
       "parameters": [
         {
-          "description": "The query method to execute. Determines what type of data to retrieve.",
+          "description": "Which lookup to run (for example, search for a gene or fetch an allele by ID). This decides what is looked up.",
           "name": "method",
           "required": true,
           "type": "string"
@@ -341,7 +341,7 @@
           "type": "array[string]"
         },
         {
-          "description": "Gene CURIE for direct lookup.",
+          "description": "A gene ID for a direct lookup.",
           "name": "gene_id",
           "required": false,
           "type": "string"
@@ -359,7 +359,7 @@
           "type": "array[string]"
         },
         {
-          "description": "Allele CURIE for direct lookup.",
+          "description": "An allele ID for a direct lookup.",
           "name": "allele_id",
           "required": false,
           "type": "string"
@@ -377,7 +377,7 @@
           "type": "array[string]"
         },
         {
-          "description": "Entity CURIEs for generic entity information lookup.",
+          "description": "A list of entity IDs to look up facts for.",
           "name": "entity_curies",
           "required": false,
           "type": "array[string]"
@@ -401,13 +401,13 @@
           "type": "integer"
         },
         {
-          "description": "Search term, CURIE, or controlled vocabulary term query.",
+          "description": "A search word, an ID, or a controlled-vocabulary term to look up.",
           "name": "term",
           "required": false,
           "type": "string"
         },
         {
-          "description": "CURIE list for bulk ontology term lookup.",
+          "description": "A list of term IDs to look up in bulk.",
           "name": "terms",
           "required": false,
           "type": "array[string]"
@@ -437,7 +437,7 @@
           "type": "string"
         },
         {
-          "description": "Curation DB ontologytermtype filter for ontology term lookup and generic ontology searches.",
+          "description": "Which kind of ontology term to limit the lookup to (for example, a GO term or a mouse phenotype term).",
           "name": "ontology_term_type",
           "required": false,
           "type": "string"
@@ -449,17 +449,17 @@
           "type": "string"
         },
         {
-          "description": "CURIE list for generic CURIE-to-name mapping.",
+          "description": "A list of IDs to map to display names.",
           "name": "curies",
           "required": false,
           "type": "array[string]"
         }
       ],
-      "summary": "A unified package-owned tool for querying the Alliance Curation Database. Different agents use different methods of this tool based on their specialization."
+      "summary": "A single tool for looking up Alliance curation data. It offers many specific methods \u2014 search for a gene, fetch an allele by ID, look up an ontology term, list member groups, and more. Different agents use the methods that fit their job."
     },
     "methods": {
       "get_allele_by_exact_symbol": {
-        "description": "Find an allele by its exact official symbol.",
+        "description": "Find the allele whose official symbol exactly matches.",
         "example": {
           "allele_symbol": "e1370",
           "data_provider": "WB",
@@ -474,7 +474,7 @@
         ]
       },
       "get_allele_by_id": {
-        "description": "Retrieve detailed allele information by CURIE.",
+        "description": "Get full details for one allele by its ID.",
         "example": {
           "allele_id": "WB:WBVar00143949",
           "method": "get_allele_by_id"
@@ -486,7 +486,7 @@
         ]
       },
       "get_data_provider": {
-        "description": "Resolve one Alliance data provider by abbreviation, provider display name, or taxon ID and preserve provider/taxon mismatch candidates.",
+        "description": "Look up one Alliance member group by its short code, full name, or species ID, and flag any cases where the group and species do not line up.",
         "example": {
           "abbreviation": "WB",
           "method": "get_data_provider",
@@ -502,7 +502,7 @@
         "required_params": []
       },
       "get_data_providers": {
-        "description": "List all Alliance group data providers with abbreviation, taxon, and display name when available.",
+        "description": "List every Alliance member group, with its short code, species ID, and full name where available.",
         "example": {
           "method": "get_data_providers"
         },
@@ -511,7 +511,7 @@
         "required_params": []
       },
       "get_gene_by_exact_symbol": {
-        "description": "Find a gene by its exact official symbol.",
+        "description": "Find the gene whose official symbol exactly matches.",
         "example": {
           "data_provider": "WB",
           "gene_symbol": "daf-2",
@@ -526,7 +526,7 @@
         ]
       },
       "get_gene_by_id": {
-        "description": "Retrieve detailed gene information by CURIE.",
+        "description": "Get full details for one gene by its ID.",
         "example": {
           "gene_id": "WB:WBGene00000898",
           "method": "get_gene_by_id"
@@ -538,7 +538,7 @@
         ]
       },
       "get_ontology_term": {
-        "description": "Exact ontology term lookup by CURIE with optional ontologytermtype filtering.",
+        "description": "Fetch one exact ontology term by its ID, optionally limited to a certain kind of term.",
         "example": {
           "method": "get_ontology_term",
           "ontology_term_type": "GOTerm",
@@ -553,7 +553,7 @@
         ]
       },
       "get_ontology_terms": {
-        "description": "Bulk exact ontology term lookup by CURIE.",
+        "description": "Fetch several exact ontology terms by their IDs at once.",
         "example": {
           "method": "get_ontology_terms",
           "terms": [
@@ -568,7 +568,7 @@
         ]
       },
       "get_species": {
-        "description": "List all supported species/organisms.",
+        "description": "List every supported species.",
         "example": {
           "method": "get_species"
         },
@@ -577,7 +577,7 @@
         "required_params": []
       },
       "get_vocabulary_term": {
-        "description": "Exact controlled vocabulary term lookup by vocabulary and term name, abbreviation, or synonym. Optional subset (a vocabularytermset name/id, or a list of them) restricts candidates to that subset's members; omit subset for the full vocabulary.",
+        "description": "Fetch one exact term from a controlled list by its name, abbreviation, or synonym. You can narrow the search to a named part of the list, or leave that out to search the whole list.",
         "example": {
           "method": "get_vocabulary_term",
           "subset": "AGM Disease Relation",
@@ -600,7 +600,7 @@
         ]
       },
       "map_curies_to_names": {
-        "description": "Bulk map CURIEs to display names for a supported helper category.",
+        "description": "Turn a list of IDs into their human-readable names.",
         "example": {
           "category": "ontology",
           "curies": [
@@ -616,7 +616,7 @@
         ]
       },
       "map_entity_curies_to_info": {
-        "description": "Retrieve generic Alliance biological entity facts by CURIE.",
+        "description": "Get facts about Alliance entities from their IDs.",
         "example": {
           "entity_curies": [
             "MGI:8308849"
@@ -632,7 +632,7 @@
         ]
       },
       "map_entity_names_to_curies": {
-        "description": "Resolve generic Alliance biological entity names or labels to CURIEs within explicit taxon context.",
+        "description": "Turn entity names or labels into their Alliance IDs, for a stated species.",
         "example": {
           "entity_names": [
             "Pax6<tm1>"
@@ -652,7 +652,7 @@
         ]
       },
       "search_alleles": {
-        "description": "Search for alleles by symbol using LIKE matching.",
+        "description": "Find alleles whose symbol contains the text you give.",
         "example": {
           "allele_symbol": "tm1",
           "data_provider": "WB",
@@ -670,7 +670,7 @@
         ]
       },
       "search_alleles_bulk": {
-        "description": "Bulk allele symbol search in one tool call.",
+        "description": "Search for many allele symbols at once in a single call.",
         "example": {
           "allele_symbols": [
             "tm1",
@@ -692,7 +692,7 @@
         ]
       },
       "search_anatomy_terms": {
-        "description": "Search species-specific anatomy ontology terms.",
+        "description": "Search anatomy terms for a specific species.",
         "example": {
           "data_provider": "WB",
           "method": "search_anatomy_terms",
@@ -710,7 +710,7 @@
         ]
       },
       "search_genes": {
-        "description": "Search for genes by symbol using LIKE matching.",
+        "description": "Find genes whose symbol contains the text you give.",
         "example": {
           "data_provider": "WB",
           "gene_symbol": "daf",
@@ -728,7 +728,7 @@
         ]
       },
       "search_genes_bulk": {
-        "description": "Bulk gene symbol search in one tool call.",
+        "description": "Search for many gene symbols at once in a single call.",
         "example": {
           "data_provider": "FB",
           "gene_symbols": [
@@ -750,7 +750,7 @@
         ]
       },
       "search_go_terms": {
-        "description": "Search Gene Ontology terms by name or keyword.",
+        "description": "Search Gene Ontology (GO) terms by name or keyword.",
         "example": {
           "go_aspect": "molecular_function",
           "method": "search_go_terms",
@@ -768,7 +768,7 @@
         ]
       },
       "search_life_stage_terms": {
-        "description": "Search species-specific developmental stage ontology terms.",
+        "description": "Search developmental-stage (life-stage) terms for a specific species.",
         "example": {
           "data_provider": "WB",
           "method": "search_life_stage_terms",
@@ -786,7 +786,7 @@
         ]
       },
       "search_ontology_terms": {
-        "description": "Search ontology terms by label within a required curation DB ontologytermtype.",
+        "description": "Search ontology terms by name within one chosen kind of term (for example, mouse phenotype terms).",
         "example": {
           "exact_match": true,
           "method": "search_ontology_terms",
@@ -805,7 +805,7 @@
         ]
       },
       "search_vocabulary_terms": {
-        "description": "Search controlled vocabulary terms by vocabulary name/label and term name, abbreviation, or synonym. Optional subset (a vocabularytermset name/id, or a list of them) restricts candidates to that subset's members; omit subset for the full vocabulary.",
+        "description": "Search a controlled list for terms by name, abbreviation, or synonym. You can narrow it to a named part of the list, or search the whole list.",
         "example": {
           "exact_match": true,
           "method": "search_vocabulary_terms",
@@ -849,7 +849,7 @@
     },
     "binding_kind": "static",
     "category": "Literature",
-    "description": "ES-backed Alliance literature reference lookup and fuzzy title/citation search through agr-curation-api-client",
+    "description": "Look up a paper in the Alliance literature collection by its ID, or find candidate papers by title or citation text.",
     "documentation": {
       "example_queries": [
         "Resolve PMID:27528223 to an Alliance reference",
@@ -857,41 +857,41 @@
       ],
       "parameters": [
         {
-          "description": "Use get_literature_reference for exact identifier/title lookup or search_literature_references for fuzzy title/citation search.",
+          "description": "Choose whether to fetch one exact paper by ID/title, or search for likely matches.",
           "name": "method",
           "required": true,
           "type": "string"
         },
         {
-          "description": "PMID, DOI, AGRKB reference CURIE, MOD reference ID, or title for exact lookup.",
+          "description": "A known ID or exact title for the paper you want \u2014 a PubMed ID, DOI, Alliance reference ID, or member-group reference ID.",
           "name": "identifier",
           "required": false,
           "type": "string"
         },
         {
-          "description": "Title, citation, AGRKB ID, PMID, DOI, or MOD reference ID for search.",
+          "description": "A title, citation, or identifier to search for when you do not have an exact match.",
           "name": "query",
           "required": false,
           "type": "string"
         },
         {
-          "description": "Require exact search semantics for search_literature_references.",
+          "description": "When searching, require an exact match instead of likely matches.",
           "name": "exact_match",
           "required": false,
           "type": "boolean"
         },
         {
-          "description": "Maximum candidate references to return for search_literature_references.",
+          "description": "The most candidate papers to return from a search.",
           "name": "limit",
           "required": false,
           "type": "integer"
         }
       ],
-      "summary": "Resolve literature references from the Alliance literature Elasticsearch index through the official agr-curation-api-client package. Returns lookup attempts, candidate references, ambiguity/no-match details, and safe curator-facing status messages."
+      "summary": "Finds papers in the Alliance literature collection. Give it a known ID (such as a PubMed ID or DOI) to fetch the exact paper, or a title/citation to search for likely matches. It reports what it tried, the candidate papers it found, any cases where the match was unclear or nothing matched, and a plain status message."
     },
     "methods": {
       "get_literature_reference": {
-        "description": "Exact lookup by PMID, DOI, AGRKB reference CURIE, MOD reference ID, or title using AGRCurationAPIClient(data_source=\"db\").get_literature_reference().",
+        "description": "Fetch one exact paper by a known identifier \u2014 a PubMed ID (PMID), DOI, Alliance reference ID, member-group reference ID, or exact title.",
         "example": {
           "identifier": "PMID:27528223",
           "method": "get_literature_reference"
@@ -904,7 +904,7 @@
         "source": "literature_es"
       },
       "search_literature_references": {
-        "description": "Fuzzy reference search by title, citation, AGRKB ID, PMID, DOI, or MOD reference ID using AGRCurationAPIClient(data_source=\"db\").search_literature_references().",
+        "description": "Search for likely-matching papers by title, citation text, or any known identifier when you do not have an exact match.",
         "example": {
           "exact_match": false,
           "limit": 20,
@@ -938,41 +938,41 @@
     },
     "binding_kind": "static",
     "category": "Database",
-    "description": "Resolve Alliance species, data provider, and NCBI taxon context without gene or allele lookup",
+    "description": "Work out the species, the Alliance group, and the standard species ID for a paper, without looking up any genes or alleles.",
     "documentation": {
       "parameters": [
         {
-          "description": "Species label from the paper, such as Drosophila melanogaster or C. elegans.",
+          "description": "A species name from the paper, such as Drosophila melanogaster or C. elegans.",
           "name": "species",
           "required": false,
           "type": "string"
         },
         {
-          "description": "Alliance provider abbreviation, such as FB, WB, MGI, HGNC, ZFIN, RGD, or SGD.",
+          "description": "An Alliance group code, such as FB, WB, MGI, HGNC, ZFIN, RGD, or SGD.",
           "name": "data_provider",
           "required": false,
           "type": "string"
         },
         {
-          "description": "Data provider display name or organism/provider label.",
+          "description": "The full display name of the group or organism.",
           "name": "provider_name",
           "required": false,
           "type": "string"
         },
         {
-          "description": "NCBI Taxon CURIE, such as NCBITaxon:7227.",
+          "description": "A standard NCBI Taxonomy species ID, such as NCBITaxon:7227 (fruit fly).",
           "name": "taxon_id",
           "required": false,
           "type": "string"
         },
         {
-          "description": "Maximum number of provider candidates to return.",
+          "description": "The most matching groups to return.",
           "name": "limit",
           "required": false,
           "type": "integer"
         }
       ],
-      "summary": "Narrow extractor-safe lookup for provider/species/taxon context. This tool does not search gene names, gene IDs, synonyms, or generic entity mappings."
+      "summary": "A focused lookup that matches a species name to its Alliance group (such as FlyBase or WormBase) and its standard NCBI Taxonomy ID. It is just for species and group context; it does not look up genes, alleles, or other entities."
     },
     "methods": null,
     "name": "AGR Species Context Lookup",
@@ -988,7 +988,7 @@
     "agent_methods": null,
     "binding_kind": "static",
     "category": "API",
-    "description": "Query the Alliance of Genome Resources API for orthology relationships.",
+    "description": "Look up which genes are counterparts of each other across species (orthology).",
     "documentation": {
       "parameters": [
         {
@@ -1016,7 +1016,7 @@
           "type": "string"
         }
       ],
-      "summary": "Queries orthology relationships between genes across species using the Alliance of Genome Resources API."
+      "summary": "Finds orthology relationships \u2014 genes that correspond to one another across different species \u2014 using Alliance of Genome Resources data."
     },
     "methods": null,
     "name": "Alliance Orthology API",
@@ -1032,35 +1032,35 @@
     "agent_methods": null,
     "binding_kind": "context_factory",
     "category": "PDF Extraction",
-    "description": "Attach active-run evidence to the intended curatable object or pending ref.",
+    "description": "Link a saved piece of evidence to the finding it supports.",
     "documentation": {
       "parameters": [
         {
-          "description": "Evidence record ID to attach.",
+          "description": "Which saved piece of evidence to link.",
           "name": "evidence_record_id",
           "required": true,
           "type": "string"
         },
         {
-          "description": "Stable object ID to attach evidence to.",
+          "description": "The finding to link the evidence to.",
           "name": "object_id",
           "required": false,
           "type": "string"
         },
         {
-          "description": "Pending object/reference ID to attach evidence to.",
+          "description": "The draft finding to link the evidence to.",
           "name": "pending_ref_id",
           "required": false,
           "type": "string"
         },
         {
-          "description": "Field path supported by this evidence.",
+          "description": "The specific field this evidence supports, if it applies to just one field.",
           "name": "field_path",
           "required": false,
           "type": "string"
         }
       ],
-      "summary": "Adds object, pending-ref, and optional field-path metadata to an active evidence record without changing source quote or provenance."
+      "summary": "Connects a saved piece of evidence to a finding (or to a specific field of it), without changing the quote itself or where it came from."
     },
     "methods": null,
     "name": "Attach Evidence To Object",
@@ -1079,7 +1079,7 @@
     "agent_methods": null,
     "binding_kind": "static",
     "category": "API",
-    "description": "Query the ChEBI API for chemical compound identifiers.",
+    "description": "Look up a chemical compound in ChEBI (Chemical Entities of Biological Interest, a standard chemical database).",
     "documentation": {
       "parameters": [
         {
@@ -1107,7 +1107,7 @@
           "type": "string"
         }
       ],
-      "summary": "Queries the ChEBI API at EBI to look up chemical compound identifiers and ontology information."
+      "summary": "Looks up chemical compound IDs and related information in ChEBI, the standard chemical-compound database hosted at EBI."
     },
     "methods": null,
     "name": "ChEBI API",
@@ -1123,17 +1123,17 @@
     "agent_methods": null,
     "binding_kind": "context_factory",
     "category": "Database",
-    "description": "Query the Alliance Curation Database for disease ontology information.",
+    "description": "Run a direct query against the Alliance Curation Database to look up Disease Ontology terms and how they relate to one another.",
     "documentation": {
       "parameters": [
         {
-          "description": "SQL query to execute against the curation database.",
+          "description": "The database query to run against the curation database.",
           "name": "query",
           "required": true,
           "type": "string"
         }
       ],
-      "summary": "Executes SQL queries against the Alliance Curation Database to look up Disease Ontology (DOID) terms and relationships."
+      "summary": "Runs a direct database query to find Disease Ontology terms (DOID, the standard set of disease term IDs) and the relationships between them."
     },
     "methods": null,
     "name": "Curation Database SQL",
@@ -1151,35 +1151,35 @@
     "agent_methods": null,
     "binding_kind": "context_factory",
     "category": "PDF Extraction",
-    "description": "Detach active-run evidence from a wrong curatable object or pending ref.",
+    "description": "Remove a link between a saved piece of evidence and a finding it was wrongly tied to.",
     "documentation": {
       "parameters": [
         {
-          "description": "Evidence record ID to detach.",
+          "description": "Which saved piece of evidence to unlink.",
           "name": "evidence_record_id",
           "required": true,
           "type": "string"
         },
         {
-          "description": "Stable object ID to detach.",
+          "description": "The finding to unlink the evidence from.",
           "name": "object_id",
           "required": false,
           "type": "string"
         },
         {
-          "description": "Pending object/reference ID to detach.",
+          "description": "The draft finding to unlink the evidence from.",
           "name": "pending_ref_id",
           "required": false,
           "type": "string"
         },
         {
-          "description": "Field path attachment to detach.",
+          "description": "The specific field link to remove, if it applied to just one field.",
           "name": "field_path",
           "required": false,
           "type": "string"
         }
       ],
-      "summary": "Removes matching object, pending-ref, or field-path attachment metadata from an active evidence record."
+      "summary": "Disconnects a saved piece of evidence from a finding (or from a specific field) it was linked to. The evidence itself stays saved."
     },
     "methods": null,
     "name": "Detach Evidence From Object",
@@ -1202,22 +1202,24 @@
     "binding_kind": "static",
     "builder_run_state": true,
     "category": "Database",
-    "description": "Discard one staged Alliance allele mention candidate",
+    "description": "Drop one draft allele from the run's working list when it turned out to be wrong or unsupported.",
     "documentation": {
       "parameters": [
         {
+          "description": "Identifies which draft entry on the working list this action applies to.",
           "name": "candidate_id",
           "required": true,
           "type": "string"
         },
         {
           "default": null,
+          "description": "A short note explaining why the draft is being dropped, kept in the run's history.",
           "name": "reason",
           "required": false,
           "type": "any"
         }
       ],
-      "summary": "Marks one staged allele observation candidate as discarded without deleting the builder trace."
+      "summary": "Marks one draft allele as withdrawn so it will not appear in the final result. The entry is set aside rather than erased: it stays in the run's history for auditing, with the short reason the agent gave for dropping it."
     },
     "methods": null,
     "name": "Discard Allele Observation",
@@ -1237,22 +1239,24 @@
     "binding_kind": "static",
     "builder_run_state": true,
     "category": "Database",
-    "description": "Discard one staged disease assertion candidate",
+    "description": "Drop one draft disease annotation from the run's working list when it turned out to be wrong or unsupported.",
     "documentation": {
       "parameters": [
         {
+          "description": "Identifies which draft entry on the working list this action applies to.",
           "name": "candidate_id",
           "required": true,
           "type": "string"
         },
         {
           "default": null,
+          "description": "A short note explaining why the draft is being dropped, kept in the run's history.",
           "name": "reason",
           "required": false,
           "type": "any"
         }
       ],
-      "summary": "Marks one staged disease annotation candidate as discarded without deleting the builder trace."
+      "summary": "Marks one draft disease annotation as withdrawn so it will not appear in the final result. The entry is set aside rather than erased: it stays in the run's history for auditing, with the short reason the agent gave for dropping it."
     },
     "methods": null,
     "name": "Discard Disease Observation",
@@ -1272,21 +1276,23 @@
     "binding_kind": "static",
     "builder_run_state": true,
     "category": "Database",
-    "description": "Discard one staged Alliance gene-expression observation candidate",
+    "description": "Drop one draft gene-expression observation from the run's working list when it turned out to be wrong or unsupported.",
     "documentation": {
       "parameters": [
         {
+          "description": "Identifies which draft entry on the working list this action applies to.",
           "name": "candidate_id",
           "required": true,
           "type": "string"
         },
         {
+          "description": "A short note explaining why the draft is being dropped, kept in the run's history.",
           "name": "reason",
           "required": true,
           "type": "any"
         }
       ],
-      "summary": "Marks one staged gene-expression candidate as discarded without deleting the builder trace."
+      "summary": "Marks one draft gene-expression observation as withdrawn so it will not appear in the final result. The entry is set aside rather than erased: it stays in the run's history for auditing, with the short reason the agent gave for dropping it."
     },
     "methods": null,
     "name": "Discard Gene Expression Observation",
@@ -1306,22 +1312,24 @@
     "binding_kind": "static",
     "builder_run_state": true,
     "category": "Database",
-    "description": "Discard one staged Alliance gene mention candidate",
+    "description": "Drop one draft gene from the run's working list when it turned out to be wrong or unsupported.",
     "documentation": {
       "parameters": [
         {
+          "description": "Identifies which draft entry on the working list this action applies to.",
           "name": "candidate_id",
           "required": true,
           "type": "string"
         },
         {
           "default": null,
+          "description": "A short note explaining why the draft is being dropped, kept in the run's history.",
           "name": "reason",
           "required": false,
           "type": "any"
         }
       ],
-      "summary": "Marks one staged gene_mention_evidence candidate as discarded without deleting the builder trace."
+      "summary": "Marks one draft gene as withdrawn so it will not appear in the final result. The entry is set aside rather than erased: it stays in the run's history for auditing, with the short reason the agent gave for dropping it."
     },
     "methods": null,
     "name": "Discard Gene Mention Evidence",
@@ -1341,22 +1349,24 @@
     "binding_kind": "static",
     "builder_run_state": true,
     "category": "Database",
-    "description": "Discard one staged phenotype assertion candidate",
+    "description": "Drop one draft phenotype annotation from the run's working list when it turned out to be wrong or unsupported.",
     "documentation": {
       "parameters": [
         {
+          "description": "Identifies which draft entry on the working list this action applies to.",
           "name": "candidate_id",
           "required": true,
           "type": "string"
         },
         {
           "default": null,
+          "description": "A short note explaining why the draft is being dropped, kept in the run's history.",
           "name": "reason",
           "required": false,
           "type": "any"
         }
       ],
-      "summary": "Marks one staged PhenotypeAnnotation candidate as discarded without deleting the builder trace."
+      "summary": "Marks one draft phenotype annotation as withdrawn so it will not appear in the final result. The entry is set aside rather than erased: it stays in the run's history for auditing, with the short reason the agent gave for dropping it."
     },
     "methods": null,
     "name": "Discard Phenotype Observation",
@@ -1372,23 +1382,23 @@
     "agent_methods": null,
     "binding_kind": "context_factory",
     "category": "PDF Extraction",
-    "description": "Discard wrong or weak active-run evidence without deleting audit history.",
+    "description": "Withdraw a saved piece of evidence that turned out to be wrong or too weak, while keeping it in the run's history.",
     "documentation": {
       "parameters": [
         {
-          "description": "Evidence record ID to discard.",
+          "description": "Which saved piece of evidence to withdraw.",
           "name": "evidence_record_id",
           "required": true,
           "type": "string"
         },
         {
-          "description": "Short reason the evidence should not be retained.",
+          "description": "A short note on why the evidence should not be kept.",
           "name": "reason",
           "required": true,
           "type": "string"
         }
       ],
-      "summary": "Marks evidence discarded without deleting it. Discarded records remain available for audit and are omitted from final output by default."
+      "summary": "Sets one piece of evidence aside so it will not be used in the final result. It is not erased \u2014 it stays in the run's history for auditing and is left out of the output by default."
     },
     "methods": null,
     "name": "Discard Recorded Evidence",
@@ -1412,16 +1422,17 @@
     "builder_finalization": true,
     "builder_run_state": true,
     "category": "Database",
-    "description": "Finalize staged Alliance allele mentions through the extraction builder handoff",
+    "description": "Submit the run's draft allele list so the specialists can confirm each one.",
     "documentation": {
       "parameters": [
         {
+          "description": "The list of draft entries the agent wants to hand off for confirmation.",
           "name": "candidate_ids",
           "required": true,
           "type": "array"
         }
       ],
-      "summary": "Materializes staged allele candidates into the 4-object pending AlleleExtractionResultEnvelope payload (BLOCKED write/export), then finalizes through the project-agnostic builder handoff."
+      "summary": "Takes the allele drafts the agent settled on and hands them off for confirmation by the Allele Validation specialist, which confirms the official allele/variant against the Alliance database. The agent proposes the set; the specialists confirm the official identities and produce the records that curators review. Each finished allele draft is handed off as a small bundle of linked records (the allele, the paper, and how they connect). These records are held back from being written or exported on their own until the allele specialist confirms the official allele/variant."
     },
     "methods": null,
     "name": "Finalize Allele Extraction",
@@ -1442,16 +1453,17 @@
     "builder_finalization": true,
     "builder_run_state": true,
     "category": "Database",
-    "description": "Finalize staged disease assertions through the extraction builder handoff",
+    "description": "Submit the run's draft disease annotation list so the specialists can confirm each one.",
     "documentation": {
       "parameters": [
         {
+          "description": "The list of draft entries the agent wants to hand off for confirmation.",
           "name": "candidate_ids",
           "required": true,
           "type": "array"
         }
       ],
-      "summary": "Materializes staged disease candidates into the concrete Gene/Allele/AGMDiseaseAnnotation DiseaseExtractionResultEnvelope payload, then finalizes through the project-agnostic builder handoff."
+      "summary": "Takes the disease annotation drafts the agent settled on and hands them off for confirmation by the disease specialists, which confirm the disease term, the affected gene/allele/model, evidence codes, and provider against the Alliance database. The agent proposes the set; the specialists confirm the official identities and produce the records that curators review. The handoff turns each draft into the right kind of disease record (gene, allele, or model) based on the affected subject the agent chose."
     },
     "methods": null,
     "name": "Finalize Disease Extraction",
@@ -1472,16 +1484,17 @@
     "builder_finalization": true,
     "builder_run_state": true,
     "category": "Database",
-    "description": "Finalize staged Alliance gene-expression observations through the extraction builder handoff",
+    "description": "Submit the run's draft gene-expression observation list so the specialists can confirm each one.",
     "documentation": {
       "parameters": [
         {
+          "description": "The list of draft entries the agent wants to hand off for confirmation.",
           "name": "candidate_ids",
           "required": true,
           "type": "array"
         }
       ],
-      "summary": "Materializes staged gene-expression candidates into the canonical GeneExpressionEnvelope payload, then finalizes through the project-agnostic builder handoff."
+      "summary": "Takes the gene-expression observation drafts the agent settled on and hands them off for confirmation by the gene-expression specialists, which confirm the gene and the controlled terms against the Alliance database. The agent proposes the set; the specialists confirm the official identities and produce the records that curators review."
     },
     "methods": null,
     "name": "Finalize Gene Expression Extraction",
@@ -1502,16 +1515,17 @@
     "builder_finalization": true,
     "builder_run_state": true,
     "category": "Database",
-    "description": "Finalize staged Alliance gene mentions through the extraction builder handoff",
+    "description": "Submit the run's draft gene list so the specialists can confirm each one.",
     "documentation": {
       "parameters": [
         {
+          "description": "The list of draft entries the agent wants to hand off for confirmation.",
           "name": "candidate_ids",
           "required": true,
           "type": "array"
         }
       ],
-      "summary": "Materializes staged gene_mention_evidence candidates into the GeneExtractionResultEnvelope payload, then finalizes through the project-agnostic builder handoff."
+      "summary": "Takes the gene drafts the agent settled on and hands them off for confirmation by the Gene Validation specialist, which confirms the official gene against the Alliance database. The agent proposes the set; the specialists confirm the official identities and produce the records that curators review."
     },
     "methods": null,
     "name": "Finalize Gene Extraction",
@@ -1532,16 +1546,17 @@
     "builder_finalization": true,
     "builder_run_state": true,
     "category": "Database",
-    "description": "Finalize staged phenotype assertions through the extraction builder handoff",
+    "description": "Submit the run's draft phenotype annotation list so the specialists can confirm each one.",
     "documentation": {
       "parameters": [
         {
+          "description": "The list of draft entries the agent wants to hand off for confirmation.",
           "name": "candidate_ids",
           "required": true,
           "type": "array"
         }
       ],
-      "summary": "Materializes staged PhenotypeAnnotation candidates into the PhenotypeResultEnvelope payload, then finalizes through the project-agnostic builder handoff."
+      "summary": "Takes the phenotype annotation drafts the agent settled on and hands them off for confirmation by the phenotype specialists, which confirm the affected entity and the phenotype term against the Alliance database. The agent proposes the set; the specialists confirm the official identities and produce the records that curators review."
     },
     "methods": null,
     "name": "Finalize Phenotype Extraction",
@@ -1560,35 +1575,35 @@
     },
     "binding_kind": "static",
     "category": "Runtime Metadata",
-    "description": "Read-only deterministic agent contract lookup for tools, output schemas, domain-envelope metadata, validator bindings, ontology constraints, and field-level details",
+    "description": "Look up an agent's setup details \u2014 which tools it uses, the shape of its output, which specialists confirm its findings, and the rules on individual fields \u2014 without running anything.",
     "documentation": {
       "parameters": [
         {
-          "description": "Runtime agent identifier whose contract should be inspected.",
+          "description": "Which agent's setup you want to look at.",
           "name": "agent_id",
           "required": true,
           "type": "string"
         },
         {
-          "description": "One of tools, output_schema, domain_envelope, validator_bindings, ontology_constraints, or field.",
+          "description": "Which part of the setup to show: its tools, its output shape, its data structure, the specialists tied to it, its ontology rules, or one specific field.",
           "name": "topic",
           "required": true,
           "type": "string"
         },
         {
-          "description": "Field path for field-specific lookup; use object_type.field_path when disambiguation is needed.",
+          "description": "The specific field to look at, when you want details on just one field.",
           "name": "field_path",
           "required": false,
           "type": "string"
         },
         {
-          "description": "Use summary for compact responses or detail for field/schema/tool metadata details.",
+          "description": "Choose a short overview or the full details.",
           "name": "detail_level",
           "required": false,
           "type": "string"
         }
       ],
-      "summary": "Inspect compact, deterministic runtime contract metadata for generated system agents without reading live envelope state or executing validation."
+      "summary": "Shows a read-only summary of how a configured agent is set up: its tools, its output structure, the specialists tied to it, the ontology rules on its fields, and field-by-field details. It only reports the setup; it does not run the agent or change anything."
     },
     "methods": null,
     "name": "Agent Contract Lookup",
@@ -1603,7 +1618,7 @@
   "get_allele_by_exact_symbol": {
     "agent_methods": null,
     "category": "Database",
-    "description": "Find an allele by its exact official symbol.",
+    "description": "Find the allele whose official symbol exactly matches.",
     "documentation": {
       "parameters": [
         {
@@ -1619,7 +1634,7 @@
           "type": "string"
         }
       ],
-      "summary": "Find an allele by its exact official symbol."
+      "summary": "Find the allele whose official symbol exactly matches."
     },
     "example": {
       "allele_symbol": "e1370",
@@ -1634,17 +1649,17 @@
   "get_allele_by_id": {
     "agent_methods": null,
     "category": "Database",
-    "description": "Retrieve detailed allele information by CURIE.",
+    "description": "Get full details for one allele by its ID.",
     "documentation": {
       "parameters": [
         {
-          "description": "Allele CURIE for direct lookup.",
+          "description": "An allele ID for a direct lookup.",
           "name": "allele_id",
           "required": true,
           "type": "string"
         }
       ],
-      "summary": "Retrieve detailed allele information by CURIE."
+      "summary": "Get full details for one allele by its ID."
     },
     "example": {
       "allele_id": "WB:WBVar00143949",
@@ -1658,7 +1673,7 @@
   "get_data_provider": {
     "agent_methods": null,
     "category": "Database",
-    "description": "Resolve one Alliance data provider by abbreviation, provider display name, or taxon ID and preserve provider/taxon mismatch candidates.",
+    "description": "Look up one Alliance member group by its short code, full name, or species ID, and flag any cases where the group and species do not line up.",
     "documentation": {
       "parameters": [
         {
@@ -1686,7 +1701,7 @@
           "type": "integer"
         }
       ],
-      "summary": "Resolve one Alliance data provider by abbreviation, provider display name, or taxon ID and preserve provider/taxon mismatch candidates."
+      "summary": "Look up one Alliance member group by its short code, full name, or species ID, and flag any cases where the group and species do not line up."
     },
     "example": {
       "abbreviation": "WB",
@@ -1701,10 +1716,10 @@
   "get_data_providers": {
     "agent_methods": null,
     "category": "Database",
-    "description": "List all Alliance group data providers with abbreviation, taxon, and display name when available.",
+    "description": "List every Alliance member group, with its short code, species ID, and full name where available.",
     "documentation": {
       "parameters": [],
-      "summary": "List all Alliance group data providers with abbreviation, taxon, and display name when available."
+      "summary": "List every Alliance member group, with its short code, species ID, and full name where available."
     },
     "example": {
       "method": "get_data_providers"
@@ -1717,7 +1732,7 @@
   "get_gene_by_exact_symbol": {
     "agent_methods": null,
     "category": "Database",
-    "description": "Find a gene by its exact official symbol.",
+    "description": "Find the gene whose official symbol exactly matches.",
     "documentation": {
       "parameters": [
         {
@@ -1733,7 +1748,7 @@
           "type": "string"
         }
       ],
-      "summary": "Find a gene by its exact official symbol."
+      "summary": "Find the gene whose official symbol exactly matches."
     },
     "example": {
       "data_provider": "WB",
@@ -1748,17 +1763,17 @@
   "get_gene_by_id": {
     "agent_methods": null,
     "category": "Database",
-    "description": "Retrieve detailed gene information by CURIE.",
+    "description": "Get full details for one gene by its ID.",
     "documentation": {
       "parameters": [
         {
-          "description": "Gene CURIE for direct lookup.",
+          "description": "A gene ID for a direct lookup.",
           "name": "gene_id",
           "required": true,
           "type": "string"
         }
       ],
-      "summary": "Retrieve detailed gene information by CURIE."
+      "summary": "Get full details for one gene by its ID."
     },
     "example": {
       "gene_id": "WB:WBGene00000898",
@@ -1772,17 +1787,17 @@
   "get_literature_reference": {
     "agent_methods": null,
     "category": "Literature",
-    "description": "Exact lookup by PMID, DOI, AGRKB reference CURIE, MOD reference ID, or title using AGRCurationAPIClient(data_source=\"db\").get_literature_reference().",
+    "description": "Fetch one exact paper by a known identifier \u2014 a PubMed ID (PMID), DOI, Alliance reference ID, member-group reference ID, or exact title.",
     "documentation": {
       "parameters": [
         {
-          "description": "PMID, DOI, AGRKB reference CURIE, MOD reference ID, or title for exact lookup.",
+          "description": "A known ID or exact title for the paper you want \u2014 a PubMed ID, DOI, Alliance reference ID, or member-group reference ID.",
           "name": "identifier",
           "required": true,
           "type": "string"
         }
       ],
-      "summary": "Exact lookup by PMID, DOI, AGRKB reference CURIE, MOD reference ID, or title using AGRCurationAPIClient(data_source=\"db\").get_literature_reference()."
+      "summary": "Fetch one exact paper by a known identifier \u2014 a PubMed ID (PMID), DOI, Alliance reference ID, member-group reference ID, or exact title."
     },
     "example": {
       "identifier": "PMID:27528223",
@@ -1796,23 +1811,23 @@
   "get_ontology_term": {
     "agent_methods": null,
     "category": "Database",
-    "description": "Exact ontology term lookup by CURIE with optional ontologytermtype filtering.",
+    "description": "Fetch one exact ontology term by its ID, optionally limited to a certain kind of term.",
     "documentation": {
       "parameters": [
         {
-          "description": "Search term, CURIE, or controlled vocabulary term query.",
+          "description": "A search word, an ID, or a controlled-vocabulary term to look up.",
           "name": "term",
           "required": true,
           "type": "string"
         },
         {
-          "description": "Curation DB ontologytermtype filter for ontology term lookup and generic ontology searches.",
+          "description": "Which kind of ontology term to limit the lookup to (for example, a GO term or a mouse phenotype term).",
           "name": "ontology_term_type",
           "required": false,
           "type": "string"
         }
       ],
-      "summary": "Exact ontology term lookup by CURIE with optional ontologytermtype filtering."
+      "summary": "Fetch one exact ontology term by its ID, optionally limited to a certain kind of term."
     },
     "example": {
       "method": "get_ontology_term",
@@ -1827,17 +1842,17 @@
   "get_ontology_terms": {
     "agent_methods": null,
     "category": "Database",
-    "description": "Bulk exact ontology term lookup by CURIE.",
+    "description": "Fetch several exact ontology terms by their IDs at once.",
     "documentation": {
       "parameters": [
         {
-          "description": "CURIE list for bulk ontology term lookup.",
+          "description": "A list of term IDs to look up in bulk.",
           "name": "terms",
           "required": true,
           "type": "array[string]"
         }
       ],
-      "summary": "Bulk exact ontology term lookup by CURIE."
+      "summary": "Fetch several exact ontology terms by their IDs at once."
     },
     "example": {
       "method": "get_ontology_terms",
@@ -1855,17 +1870,17 @@
     "agent_methods": null,
     "binding_kind": "context_factory",
     "category": "PDF Extraction",
-    "description": "Fetch one active-run evidence record by ID for detailed review.",
+    "description": "Look at one saved piece of evidence from this run in full detail.",
     "documentation": {
       "parameters": [
         {
-          "description": "Evidence record ID returned by record_evidence or list_recorded_evidence.",
+          "description": "Which saved piece of evidence to look at.",
           "name": "evidence_record_id",
           "required": true,
           "type": "string"
         }
       ],
-      "summary": "Returns full details for one evidence record in the active-run workspace for detailed review."
+      "summary": "Returns the complete details of one saved piece of evidence from this run."
     },
     "methods": null,
     "name": "Get Recorded Evidence",
@@ -1883,10 +1898,10 @@
   "get_species": {
     "agent_methods": null,
     "category": "Database",
-    "description": "List all supported species/organisms.",
+    "description": "List every supported species.",
     "documentation": {
       "parameters": [],
-      "summary": "List all supported species/organisms."
+      "summary": "List every supported species."
     },
     "example": {
       "method": "get_species"
@@ -1899,7 +1914,7 @@
   "get_vocabulary_term": {
     "agent_methods": null,
     "category": "Database",
-    "description": "Exact controlled vocabulary term lookup by vocabulary and term name, abbreviation, or synonym. Optional subset (a vocabularytermset name/id, or a list of them) restricts candidates to that subset's members; omit subset for the full vocabulary.",
+    "description": "Fetch one exact term from a controlled list by its name, abbreviation, or synonym. You can narrow the search to a named part of the list, or leave that out to search the whole list.",
     "documentation": {
       "parameters": [
         {
@@ -1909,7 +1924,7 @@
           "type": "string"
         },
         {
-          "description": "Search term, CURIE, or controlled vocabulary term query.",
+          "description": "A search word, an ID, or a controlled-vocabulary term to look up.",
           "name": "term",
           "required": false,
           "type": "string"
@@ -1957,7 +1972,7 @@
           "type": "integer"
         }
       ],
-      "summary": "Exact controlled vocabulary term lookup by vocabulary and term name, abbreviation, or synonym. Optional subset (a vocabularytermset name/id, or a list of them) restricts candidates to that subset's members; omit subset for the full vocabulary."
+      "summary": "Fetch one exact term from a controlled list by its name, abbreviation, or synonym. You can narrow the search to a named part of the list, or leave that out to search the whole list."
     },
     "example": {
       "method": "get_vocabulary_term",
@@ -1974,7 +1989,7 @@
     "agent_methods": null,
     "binding_kind": "static",
     "category": "API",
-    "description": "Query the QuickGO API for Gene Ontology annotations.",
+    "description": "Look up Gene Ontology annotations for genes.",
     "documentation": {
       "parameters": [
         {
@@ -2002,7 +2017,7 @@
           "type": "string"
         }
       ],
-      "summary": "Queries the QuickGO API to retrieve GO annotations for genes, including evidence codes and qualifiers."
+      "summary": "Retrieves Gene Ontology (GO) annotations for genes, including the evidence behind each one, from the QuickGO service."
     },
     "methods": null,
     "name": "GO Annotations API",
@@ -2021,71 +2036,71 @@
     },
     "binding_kind": "static",
     "category": "Database",
-    "description": "Inspect one authoritative ontology term and bounded parent, child, or sibling context for a domain-pack field",
+    "description": "Look at one ontology term in detail, plus a limited view of its neighbors in the term tree (broader terms above it, narrower terms below it, or terms beside it).",
     "documentation": {
       "parameters": [
         {
-          "description": "Domain pack identifier, such as agr.alliance.gene_expression.",
+          "description": "Which curation area this field belongs to.",
           "name": "domain_pack_id",
           "required": true,
           "type": "string"
         },
         {
-          "description": "Curatable object type, such as GeneExpressionAnnotation.",
+          "description": "The kind of record this field is part of.",
           "name": "object_type",
           "required": true,
           "type": "string"
         },
         {
-          "description": "Domain payload field path for policy checks.",
+          "description": "The field whose rules apply to this term.",
           "name": "field_path",
           "required": true,
           "type": "string"
         },
         {
-          "description": "Ontology term CURIE to inspect.",
+          "description": "The ID of the ontology term to look at.",
           "name": "curie",
           "required": true,
           "type": "string"
         },
         {
-          "description": "Alliance provider abbreviation for provider-scoped anatomy context.",
+          "description": "The Alliance group to scope species-specific anatomy context to.",
           "name": "data_provider",
           "required": false,
           "type": "string"
         },
         {
-          "description": "Include bounded parent terms when available.",
+          "description": "Also show the broader terms above this one.",
           "name": "include_parents",
           "required": false,
           "type": "boolean"
         },
         {
-          "description": "Include bounded child terms when available.",
+          "description": "Also show the narrower terms below this one.",
           "name": "include_children",
           "required": false,
           "type": "boolean"
         },
         {
-          "description": "Include bounded sibling terms when available.",
+          "description": "Also show neighboring terms at the same level.",
           "name": "include_siblings",
           "required": false,
           "type": "boolean"
         },
         {
-          "description": "Maximum tree-walk depth; currently bounded by available API-client support.",
+          "description": "How many levels up or down the term tree to walk.",
           "name": "max_depth",
           "required": false,
           "type": "integer"
         },
         {
-          "description": "Maximum context rows to return per relation.",
+          "description": "The most neighboring terms to return for each relationship.",
           "name": "limit",
           "required": false,
           "type": "integer"
         }
       ],
-      "summary": "Bounded ontology term context inspection. This tool helps tree-walk and compare candidates but does not justify final controlled selector values."
+      "summary": "Shows one ontology term and a small, bounded set of nearby terms so the agent can walk the term tree and compare candidates. It is for exploring and comparing; the official term choice is settled separately with Resolve Domain Field Term."
     },
     "methods": null,
     "name": "Inspect Ontology Term",
@@ -2101,29 +2116,29 @@
     "agent_methods": null,
     "binding_kind": "context_factory",
     "category": "PDF Extraction",
-    "description": "Review queued active-run evidence records before final output.",
+    "description": "Review the evidence saved so far in this run before finishing.",
     "documentation": {
       "parameters": [
         {
-          "description": "Include records previously marked discarded.",
+          "description": "Also show evidence that was previously withdrawn.",
           "name": "include_discarded",
           "required": false,
           "type": "boolean"
         },
         {
-          "description": "Filter to evidence attached to this object ID.",
+          "description": "Show only evidence attached to this particular finding.",
           "name": "object_id",
           "required": false,
           "type": "string"
         },
         {
-          "description": "Filter to evidence attached to this pending reference ID.",
+          "description": "Show only evidence attached to this particular draft finding.",
           "name": "pending_ref_id",
           "required": false,
           "type": "string"
         }
       ],
-      "summary": "Returns queued evidence records from the active-run evidence workspace so the agent can confirm the final support set. Discarded records are excluded unless include_discarded is true."
+      "summary": "Shows the pieces of evidence saved so far in this run, so the agent can confirm the full set of support before finishing. Withdrawn evidence is left out unless it is explicitly included."
     },
     "methods": null,
     "name": "List Recorded Evidence",
@@ -2146,16 +2161,17 @@
     "binding_kind": "static",
     "builder_run_state": true,
     "category": "Database",
-    "description": "List compact summaries for staged Alliance allele mention candidates",
+    "description": "Show a short summary of every draft allele currently on the run's working list.",
     "documentation": {
       "parameters": [
         {
+          "description": "Whether to also show drafts that were previously withdrawn.",
           "name": "include_discarded",
           "required": true,
           "type": "boolean"
         }
       ],
-      "summary": "Returns compact builder state summaries for staged allele observation candidates."
+      "summary": "Returns a compact overview of the allele drafts staged so far in this run, so the agent can review the working set before finishing. Withdrawn drafts are left out unless they are explicitly included."
     },
     "methods": null,
     "name": "List Staged Allele Observations",
@@ -2175,16 +2191,17 @@
     "binding_kind": "static",
     "builder_run_state": true,
     "category": "Database",
-    "description": "List compact summaries for staged disease assertion candidates",
+    "description": "Show a short summary of every draft disease annotation currently on the run's working list.",
     "documentation": {
       "parameters": [
         {
+          "description": "Whether to also show drafts that were previously withdrawn.",
           "name": "include_discarded",
           "required": true,
           "type": "boolean"
         }
       ],
-      "summary": "Returns compact builder state summaries for staged disease annotation candidates."
+      "summary": "Returns a compact overview of the disease annotation drafts staged so far in this run, so the agent can review the working set before finishing. Withdrawn drafts are left out unless they are explicitly included."
     },
     "methods": null,
     "name": "List Staged Disease Observations",
@@ -2204,16 +2221,17 @@
     "binding_kind": "static",
     "builder_run_state": true,
     "category": "Database",
-    "description": "List compact summaries for staged Alliance gene-expression observation candidates",
+    "description": "Show a short summary of every draft gene-expression observation currently on the run's working list.",
     "documentation": {
       "parameters": [
         {
+          "description": "Whether to also show drafts that were previously withdrawn.",
           "name": "include_discarded",
           "required": true,
           "type": "boolean"
         }
       ],
-      "summary": "Returns compact builder state summaries for staged gene-expression candidates."
+      "summary": "Returns a compact overview of the gene-expression observation drafts staged so far in this run, so the agent can review the working set before finishing. Withdrawn drafts are left out unless they are explicitly included."
     },
     "methods": null,
     "name": "List Staged Gene Expression Observations",
@@ -2233,16 +2251,17 @@
     "binding_kind": "static",
     "builder_run_state": true,
     "category": "Database",
-    "description": "List compact summaries for staged Alliance gene mention candidates",
+    "description": "Show a short summary of every draft gene currently on the run's working list.",
     "documentation": {
       "parameters": [
         {
+          "description": "Whether to also show drafts that were previously withdrawn.",
           "name": "include_discarded",
           "required": true,
           "type": "boolean"
         }
       ],
-      "summary": "Returns compact builder state summaries for staged gene_mention_evidence candidates."
+      "summary": "Returns a compact overview of the gene drafts staged so far in this run, so the agent can review the working set before finishing. Withdrawn drafts are left out unless they are explicitly included."
     },
     "methods": null,
     "name": "List Staged Gene Mention Evidence",
@@ -2262,16 +2281,17 @@
     "binding_kind": "static",
     "builder_run_state": true,
     "category": "Database",
-    "description": "List compact summaries for staged phenotype assertion candidates",
+    "description": "Show a short summary of every draft phenotype annotation currently on the run's working list.",
     "documentation": {
       "parameters": [
         {
+          "description": "Whether to also show drafts that were previously withdrawn.",
           "name": "include_discarded",
           "required": true,
           "type": "boolean"
         }
       ],
-      "summary": "Returns compact builder state summaries for staged PhenotypeAnnotation candidates."
+      "summary": "Returns a compact overview of the phenotype annotation drafts staged so far in this run, so the agent can review the working set before finishing. Withdrawn drafts are left out unless they are explicitly included."
     },
     "methods": null,
     "name": "List Staged Phenotype Observations",
@@ -2286,7 +2306,7 @@
   "map_curies_to_names": {
     "agent_methods": null,
     "category": "Database",
-    "description": "Bulk map CURIEs to display names for a supported helper category.",
+    "description": "Turn a list of IDs into their human-readable names.",
     "documentation": {
       "parameters": [
         {
@@ -2296,13 +2316,13 @@
           "type": "string"
         },
         {
-          "description": "CURIE list for generic CURIE-to-name mapping.",
+          "description": "A list of IDs to map to display names.",
           "name": "curies",
           "required": true,
           "type": "array[string]"
         }
       ],
-      "summary": "Bulk map CURIEs to display names for a supported helper category."
+      "summary": "Turn a list of IDs into their human-readable names."
     },
     "example": {
       "category": "ontology",
@@ -2319,7 +2339,7 @@
   "map_entity_curies_to_info": {
     "agent_methods": null,
     "category": "Database",
-    "description": "Retrieve generic Alliance biological entity facts by CURIE.",
+    "description": "Get facts about Alliance entities from their IDs.",
     "documentation": {
       "parameters": [
         {
@@ -2329,13 +2349,13 @@
           "type": "string"
         },
         {
-          "description": "Entity CURIEs for generic entity information lookup.",
+          "description": "A list of entity IDs to look up facts for.",
           "name": "entity_curies",
           "required": true,
           "type": "array[string]"
         }
       ],
-      "summary": "Retrieve generic Alliance biological entity facts by CURIE."
+      "summary": "Get facts about Alliance entities from their IDs."
     },
     "example": {
       "entity_curies": [
@@ -2352,7 +2372,7 @@
   "map_entity_names_to_curies": {
     "agent_methods": null,
     "category": "Database",
-    "description": "Resolve generic Alliance biological entity names or labels to CURIEs within explicit taxon context.",
+    "description": "Turn entity names or labels into their Alliance IDs, for a stated species.",
     "documentation": {
       "parameters": [
         {
@@ -2380,7 +2400,7 @@
           "type": "string"
         }
       ],
-      "summary": "Resolve generic Alliance biological entity names or labels to CURIEs within explicit taxon context."
+      "summary": "Turn entity names or labels into their Alliance IDs, for a stated species."
     },
     "example": {
       "entity_names": [
@@ -2403,26 +2423,29 @@
     "binding_kind": "static",
     "builder_run_state": true,
     "category": "Database",
-    "description": "Patch enumerated fields on a staged Alliance allele mention candidate",
+    "description": "Make small, allowed corrections to a draft allele that is already on the run's working list.",
     "documentation": {
       "parameters": [
         {
+          "description": "Identifies which draft entry on the working list this action applies to.",
           "name": "candidate_id",
           "required": true,
           "type": "string"
         },
         {
+          "description": "A short label the agent gives this draft so it can refer back to the same entry later in the run.",
           "name": "pending_ref_id",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The specific fields to correct on the draft, each paired with its new value.",
           "name": "updates",
           "required": true,
           "type": "array"
         }
       ],
-      "summary": "Applies bounded repairs to a staged allele observation candidate."
+      "summary": "Updates specific fields on one draft allele the agent staged earlier \u2014 for example fixing a typo in a captured value or attaching better supporting quotes. Only the small set of fields meant to be editable can be changed; the rest of the draft stays as recorded."
     },
     "methods": null,
     "name": "Patch Allele Observation",
@@ -2442,26 +2465,29 @@
     "binding_kind": "static",
     "builder_run_state": true,
     "category": "Database",
-    "description": "Patch enumerated fields on a staged disease assertion candidate",
+    "description": "Make small, allowed corrections to a draft disease annotation that is already on the run's working list.",
     "documentation": {
       "parameters": [
         {
+          "description": "Identifies which draft entry on the working list this action applies to.",
           "name": "candidate_id",
           "required": true,
           "type": "string"
         },
         {
+          "description": "A short label the agent gives this draft so it can refer back to the same entry later in the run.",
           "name": "pending_ref_id",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The specific fields to correct on the draft, each paired with its new value.",
           "name": "updates",
           "required": true,
           "type": "array"
         }
       ],
-      "summary": "Applies bounded repairs to a staged disease annotation candidate."
+      "summary": "Updates specific fields on one draft disease annotation the agent staged earlier \u2014 for example fixing a typo in a captured value or attaching better supporting quotes. Only the small set of fields meant to be editable can be changed; the rest of the draft stays as recorded."
     },
     "methods": null,
     "name": "Patch Disease Observation",
@@ -2481,26 +2507,29 @@
     "binding_kind": "static",
     "builder_run_state": true,
     "category": "Database",
-    "description": "Patch enumerated fields on a staged Alliance gene-expression observation candidate",
+    "description": "Make small, allowed corrections to a draft gene-expression observation that is already on the run's working list.",
     "documentation": {
       "parameters": [
         {
+          "description": "Identifies which draft entry on the working list this action applies to.",
           "name": "candidate_id",
           "required": true,
           "type": "string"
         },
         {
+          "description": "A short label the agent gives this draft so it can refer back to the same entry later in the run.",
           "name": "pending_ref_id",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The specific fields to correct on the draft, each paired with its new value.",
           "name": "updates",
           "required": true,
           "type": "array"
         }
       ],
-      "summary": "Applies bounded repairs to a staged gene-expression candidate. Controlled selector patches require resolver_call_id provenance."
+      "summary": "Updates specific fields on one draft gene-expression observation the agent staged earlier \u2014 for example fixing a typo in a captured value or attaching better supporting quotes. Only the small set of fields meant to be editable can be changed; the rest of the draft stays as recorded."
     },
     "methods": null,
     "name": "Patch Gene Expression Observation",
@@ -2520,26 +2549,29 @@
     "binding_kind": "static",
     "builder_run_state": true,
     "category": "Database",
-    "description": "Patch enumerated fields on a staged Alliance gene mention candidate",
+    "description": "Make small, allowed corrections to a draft gene that is already on the run's working list.",
     "documentation": {
       "parameters": [
         {
+          "description": "Identifies which draft entry on the working list this action applies to.",
           "name": "candidate_id",
           "required": true,
           "type": "string"
         },
         {
+          "description": "A short label the agent gives this draft so it can refer back to the same entry later in the run.",
           "name": "pending_ref_id",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The specific fields to correct on the draft, each paired with its new value.",
           "name": "updates",
           "required": true,
           "type": "array"
         }
       ],
-      "summary": "Applies bounded repairs to a staged gene_mention_evidence candidate."
+      "summary": "Updates specific fields on one draft gene the agent staged earlier \u2014 for example fixing a typo in a captured value or attaching better supporting quotes. Only the small set of fields meant to be editable can be changed; the rest of the draft stays as recorded."
     },
     "methods": null,
     "name": "Patch Gene Mention Evidence",
@@ -2559,26 +2591,29 @@
     "binding_kind": "static",
     "builder_run_state": true,
     "category": "Database",
-    "description": "Patch enumerated fields on a staged phenotype assertion candidate",
+    "description": "Make small, allowed corrections to a draft phenotype annotation that is already on the run's working list.",
     "documentation": {
       "parameters": [
         {
+          "description": "Identifies which draft entry on the working list this action applies to.",
           "name": "candidate_id",
           "required": true,
           "type": "string"
         },
         {
+          "description": "A short label the agent gives this draft so it can refer back to the same entry later in the run.",
           "name": "pending_ref_id",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The specific fields to correct on the draft, each paired with its new value.",
           "name": "updates",
           "required": true,
           "type": "array"
         }
       ],
-      "summary": "Applies bounded repairs to a staged PhenotypeAnnotation candidate."
+      "summary": "Updates specific fields on one draft phenotype annotation the agent staged earlier \u2014 for example fixing a typo in a captured value or attaching better supporting quotes. Only the small set of fields meant to be editable can be changed; the rest of the draft stays as recorded."
     },
     "methods": null,
     "name": "Patch Phenotype Observation",
@@ -2594,7 +2629,7 @@
     "agent_methods": null,
     "binding_kind": "static",
     "category": "API",
-    "description": "Query the QuickGO API for Gene Ontology term information.",
+    "description": "Look up a Gene Ontology term in QuickGO.",
     "documentation": {
       "parameters": [
         {
@@ -2622,7 +2657,7 @@
           "type": "string"
         }
       ],
-      "summary": "Queries the QuickGO API to retrieve Gene Ontology (GO) term details including names, definitions, and relationships."
+      "summary": "Looks up Gene Ontology (GO) term details \u2014 names, definitions, and relationships \u2014 from the QuickGO service."
     },
     "methods": null,
     "name": "QuickGO API",
@@ -2638,17 +2673,17 @@
     "agent_methods": null,
     "binding_kind": "context_factory",
     "category": "PDF Extraction",
-    "description": "Read one PDF chunk and return selectable evidence_spans[].span_id values.",
+    "description": "Read the full text of one passage from the PDF and get back the exact pieces of it that can be saved as evidence.",
     "documentation": {
       "parameters": [
         {
-          "description": "Chunk identifier returned by search_document hits or section source chunks.",
+          "description": "Which passage to read, taken from a search result or a section's list of passages.",
           "name": "chunk_id",
           "required": true,
           "type": "string"
         }
       ],
-      "summary": "Retrieves full raw chunk text, neighboring chunk IDs, and selectable evidence span IDs for record_evidence."
+      "summary": "Returns the complete text of one passage, pointers to the passages just before and after it, and the specific snippets within it that can be captured as supporting evidence."
     },
     "methods": null,
     "name": "Read Chunk",
@@ -2667,17 +2702,17 @@
     "agent_methods": null,
     "binding_kind": "context_factory",
     "category": "PDF Extraction",
-    "description": "Survey the full text of a specific document section.",
+    "description": "Read the full text of a named section of the paper.",
     "documentation": {
       "parameters": [
         {
-          "description": "Name of the section to read (e.g., 'Methods', 'Introduction').",
+          "description": "The section to read, such as Methods or Introduction.",
           "name": "section_name",
           "required": true,
           "type": "string"
         }
       ],
-      "summary": "Retrieves complete section text for discovery and context. Use source_chunks[].chunk_id with read_chunk for final evidence selection."
+      "summary": "Returns the complete text of a section for getting oriented and reading in context. The individual passages it lists can then be read in full to pick out exact supporting quotes."
     },
     "methods": null,
     "name": "Read Section",
@@ -2696,23 +2731,23 @@
     "agent_methods": null,
     "binding_kind": "context_factory",
     "category": "PDF Extraction",
-    "description": "Survey the full text of a specific subsection within a section.",
+    "description": "Read the full text of a named subsection inside a section of the paper.",
     "documentation": {
       "parameters": [
         {
-          "description": "Parent section name.",
+          "description": "The section that contains the subsection.",
           "name": "section_name",
           "required": true,
           "type": "string"
         },
         {
-          "description": "Subsection name to read.",
+          "description": "The subsection to read.",
           "name": "subsection_name",
           "required": true,
           "type": "string"
         }
       ],
-      "summary": "Retrieves subsection content for discovery and context. Use read_chunk on relevant chunks for final evidence selection."
+      "summary": "Returns the complete text of one subsection for getting oriented and reading in context. The relevant passages can then be read in full to pick out exact supporting quotes."
     },
     "methods": null,
     "name": "Read Subsection",
@@ -2731,23 +2766,23 @@
     "agent_methods": null,
     "binding_kind": "context_factory",
     "category": "PDF Extraction",
-    "description": "Create verified PDF evidence from backend-generated read_chunk span_ids.",
+    "description": "Save one piece of supporting evidence from the PDF, using snippets picked out of a passage that was read.",
     "documentation": {
       "parameters": [
         {
-          "description": "Entity label associated with this evidence record.",
+          "description": "The thing this evidence is about (for example, the gene or allele name).",
           "name": "entity",
           "required": true,
           "type": "string"
         },
         {
-          "description": "One or more span IDs copied from read_chunk(...).chunk.evidence_spans[].span_id.",
+          "description": "The snippets to save, picked from a passage that was read.",
           "name": "span_ids",
           "required": true,
           "type": "array[string]"
         }
       ],
-      "summary": "Resolves selected evidence_spans[].span_id values against exact chunk text and returns backend-copied verified_quote plus locator metadata. Use one call for one evidence unit; multiple selected spans are stored as conjoined source fragments."
+      "summary": "Turns chosen snippets from a passage into a saved piece of evidence with the exact verified quote and where it came from in the paper. Each call saves one piece of evidence; if several snippets are chosen together, they are stored as one joined quote."
     },
     "methods": null,
     "name": "Record Evidence",
@@ -2770,71 +2805,71 @@
     "binding_kind": "static",
     "builder_run_state": true,
     "category": "Database",
-    "description": "Resolve one final domain-pack controlled field selector and return copyable resolver provenance",
+    "description": "Settle the official standard term for one field and return a confirmed value with its supporting trail, ready to use.",
     "documentation": {
       "parameters": [
         {
-          "description": "Domain pack identifier, such as agr.alliance.gene_expression.",
+          "description": "Which curation area this field belongs to.",
           "name": "domain_pack_id",
           "required": true,
           "type": "string"
         },
         {
-          "description": "Curatable object type, such as GeneExpressionAnnotation.",
+          "description": "The kind of record this field is part of.",
           "name": "object_type",
           "required": true,
           "type": "string"
         },
         {
-          "description": "Domain payload field path to resolve.",
+          "description": "Which field is being settled.",
           "name": "field_path",
           "required": true,
           "type": "string"
         },
         {
-          "description": "Evidence-backed paper phrase being resolved.",
+          "description": "The phrase from the paper that this term is being matched to.",
           "name": "source_phrase",
           "required": true,
           "type": "string"
         },
         {
-          "description": "Optional quote, page, section, span IDs, provider, or taxon context from verified evidence.",
+          "description": "Optional supporting context \u2014 quote, page, section, provider, or species.",
           "name": "evidence_context",
           "required": false,
           "type": "object"
         },
         {
-          "description": "Candidate CURIE selected from search or inspect results.",
+          "description": "The ID of the candidate term picked from the search or inspect results.",
           "name": "candidate_curie",
           "required": false,
           "type": "string"
         },
         {
-          "description": "Candidate non-CURIE value selected from search results, such as a vocabulary term name.",
+          "description": "A candidate value that is a name rather than an ID, picked from the search results (for example a controlled-list term name).",
           "name": "candidate_value",
           "required": false,
           "type": "string"
         },
         {
-          "description": "Alliance provider abbreviation for provider-scoped lookup.",
+          "description": "The Alliance group to scope the lookup to.",
           "name": "data_provider",
           "required": false,
           "type": "string"
         },
         {
-          "description": "Optional taxon context preserved for audit and future routing.",
+          "description": "The species context, kept for the record.",
           "name": "taxon",
           "required": false,
           "type": "string"
         },
         {
-          "description": "Maximum candidate set used for final verification.",
+          "description": "The most candidates to check while confirming.",
           "name": "limit",
           "required": false,
           "type": "integer"
         }
       ],
-      "summary": "Final controlled-field resolver. This is the only ontology/CV resolver tool whose output may justify writing a controlled selector into extractor JSON."
+      "summary": "Confirms the one official standard term for a field, after the agent has explored candidates with the search and inspect tools. Its result is the trusted choice the agent can record, with a clear trail of how the term was decided."
     },
     "methods": null,
     "name": "Resolve Domain Field Term",
@@ -2963,7 +2998,7 @@
   "search_alleles": {
     "agent_methods": null,
     "category": "Database",
-    "description": "Search for alleles by symbol using LIKE matching.",
+    "description": "Find alleles whose symbol contains the text you give.",
     "documentation": {
       "parameters": [
         {
@@ -2991,7 +3026,7 @@
           "type": "string"
         }
       ],
-      "summary": "Search for alleles by symbol using LIKE matching."
+      "summary": "Find alleles whose symbol contains the text you give."
     },
     "example": {
       "allele_symbol": "tm1",
@@ -3007,7 +3042,7 @@
   "search_alleles_bulk": {
     "agent_methods": null,
     "category": "Database",
-    "description": "Bulk allele symbol search in one tool call.",
+    "description": "Search for many allele symbols at once in a single call.",
     "documentation": {
       "parameters": [
         {
@@ -3035,7 +3070,7 @@
           "type": "string"
         }
       ],
-      "summary": "Bulk allele symbol search in one tool call."
+      "summary": "Search for many allele symbols at once in a single call."
     },
     "example": {
       "allele_symbols": [
@@ -3055,11 +3090,11 @@
   "search_anatomy_terms": {
     "agent_methods": null,
     "category": "Database",
-    "description": "Search species-specific anatomy ontology terms.",
+    "description": "Search anatomy terms for a specific species.",
     "documentation": {
       "parameters": [
         {
-          "description": "Search term, CURIE, or controlled vocabulary term query.",
+          "description": "A search word, an ID, or a controlled-vocabulary term to look up.",
           "name": "term",
           "required": true,
           "type": "string"
@@ -3089,7 +3124,7 @@
           "type": "integer"
         }
       ],
-      "summary": "Search species-specific anatomy ontology terms."
+      "summary": "Search anatomy terms for a specific species."
     },
     "example": {
       "data_provider": "WB",
@@ -3105,29 +3140,29 @@
     "agent_methods": null,
     "binding_kind": "context_factory",
     "category": "Document",
-    "description": "Discovery search over uploaded PDF chunks using hybrid, lexical, or hybrid-lexical-first retrieval.",
+    "description": "Search the uploaded PDF for passages relevant to a query, using meaning-based matching, exact word matching, or a blend.",
     "documentation": {
       "parameters": [
         {
-          "description": "Search query text (semantic + keyword matching).",
+          "description": "What to search the paper for.",
           "name": "query",
           "required": true,
           "type": "string"
         },
         {
-          "description": "Maximum number of results (default: 5).",
+          "description": "The most matching passages to return (default 5).",
           "name": "limit",
           "required": false,
           "type": "integer"
         },
         {
-          "description": "Filter to specific sections (e.g., ['Methods', 'Results']).",
+          "description": "Limit the search to certain sections, such as Methods or Results.",
           "name": "section_keywords",
           "required": false,
           "type": "array"
         },
         {
-          "description": "Retrieval mode: auto (default, maps to hybrid), hybrid, lexical, or hybrid_lexical_first. Use lexical for exact symbols/IDs and hybrid_lexical_first when normal hybrid search should retry with lexical-heavy matching if needed.",
+          "description": "How to match: by meaning (best for broad concepts), by exact words (best for specific symbols and IDs), or a blend. The default blends both.",
           "enum": [
             "auto",
             "hybrid",
@@ -3139,7 +3174,7 @@
           "type": "enum"
         }
       ],
-      "summary": "Finds relevant chunks in the uploaded PDF. Use returned chunk_id values with read_chunk for final evidence span selection. Use lexical-heavy modes for exact-match terms and controlled identifiers; keep auto/hybrid for broad conceptual searches."
+      "summary": "Finds passages in the uploaded PDF that match a query. Meaning-based search is best for broad concepts, while exact word matching is best for specific symbols and identifiers. The matching passages can then be read in full to pick out exact supporting quotes."
     },
     "methods": null,
     "name": "Search Document",
@@ -3161,71 +3196,71 @@
     },
     "binding_kind": "static",
     "category": "Database",
-    "description": "Search domain-pack-declared ontology and controlled-vocabulary candidates for one controlled field without accepting a final selector",
+    "description": "Search for candidate standard terms (from an ontology or controlled list) that could fill one specific field, based on a phrase the agent read in the paper.",
     "documentation": {
       "parameters": [
         {
-          "description": "Domain pack identifier, such as agr.alliance.gene_expression.",
+          "description": "Which curation area this field belongs to (for example, gene expression).",
           "name": "domain_pack_id",
           "required": true,
           "type": "string"
         },
         {
-          "description": "Curatable object type, such as GeneExpressionAnnotation.",
+          "description": "The kind of record this field is part of.",
           "name": "object_type",
           "required": true,
           "type": "string"
         },
         {
-          "description": "Domain payload field path, such as relation.name or expression_pattern.where_expressed.",
+          "description": "Which field the agent is trying to fill (for example, \"where expressed\").",
           "name": "field_path",
           "required": true,
           "type": "string"
         },
         {
-          "description": "Evidence-backed paper label or controlled-field query text.",
+          "description": "The phrase from the paper to look up candidate terms for.",
           "name": "query",
           "required": true,
           "type": "string"
         },
         {
-          "description": "Optional source phrase, quote, figure, provider, or taxon context from verified evidence.",
+          "description": "Optional supporting context from the paper \u2014 the source phrase, quote, figure, provider, or species.",
           "name": "evidence_context",
           "required": false,
           "type": "object"
         },
         {
-          "description": "Alliance provider abbreviation for provider-scoped anatomy lookup.",
+          "description": "The Alliance group to scope a species-specific anatomy lookup to.",
           "name": "data_provider",
           "required": false,
           "type": "string"
         },
         {
-          "description": "Optional taxon context preserved for audit and future routing.",
+          "description": "The species context, kept for the record.",
           "name": "taxon",
           "required": false,
           "type": "string"
         },
         {
-          "description": "Optional ontology branch root preserved for field-scoped branch filtering where available.",
+          "description": "An optional starting point in the ontology to limit the search to one branch.",
           "name": "branch_root_curie",
           "required": false,
           "type": "string"
         },
         {
-          "description": "Maximum number of candidates to return.",
+          "description": "The most candidate terms to return.",
           "name": "limit",
           "required": false,
           "type": "integer"
         },
         {
-          "description": "Require exact label/name matching when the declared package lookup method supports it.",
+          "description": "Require an exact name match instead of close matches, where supported.",
           "name": "exact_match",
           "required": false,
           "type": "boolean"
         }
       ],
-      "summary": "Broad field-scoped candidate discovery from evidence-backed paper phrases. Search results are candidate guidance only; final selectors must be resolved with resolve_domain_field_term."
+      "summary": "Casts a wide net for possible standard-term matches for one field, starting from a phrase backed by evidence in the paper. The results are suggestions to compare, not a final choice \u2014 the agent settles on the official term separately with Resolve Domain Field Term."
     },
     "methods": null,
     "name": "Search Domain Field Terms",
@@ -3240,7 +3275,7 @@
   "search_genes": {
     "agent_methods": null,
     "category": "Database",
-    "description": "Search for genes by symbol using LIKE matching.",
+    "description": "Find genes whose symbol contains the text you give.",
     "documentation": {
       "parameters": [
         {
@@ -3268,7 +3303,7 @@
           "type": "string"
         }
       ],
-      "summary": "Search for genes by symbol using LIKE matching."
+      "summary": "Find genes whose symbol contains the text you give."
     },
     "example": {
       "data_provider": "WB",
@@ -3284,7 +3319,7 @@
   "search_genes_bulk": {
     "agent_methods": null,
     "category": "Database",
-    "description": "Bulk gene symbol search in one tool call.",
+    "description": "Search for many gene symbols at once in a single call.",
     "documentation": {
       "parameters": [
         {
@@ -3312,7 +3347,7 @@
           "type": "string"
         }
       ],
-      "summary": "Bulk gene symbol search in one tool call."
+      "summary": "Search for many gene symbols at once in a single call."
     },
     "example": {
       "data_provider": "FB",
@@ -3332,11 +3367,11 @@
   "search_go_terms": {
     "agent_methods": null,
     "category": "Database",
-    "description": "Search Gene Ontology terms by name or keyword.",
+    "description": "Search Gene Ontology (GO) terms by name or keyword.",
     "documentation": {
       "parameters": [
         {
-          "description": "Search term, CURIE, or controlled vocabulary term query.",
+          "description": "A search word, an ID, or a controlled-vocabulary term to look up.",
           "name": "term",
           "required": true,
           "type": "string"
@@ -3366,7 +3401,7 @@
           "type": "integer"
         }
       ],
-      "summary": "Search Gene Ontology terms by name or keyword."
+      "summary": "Search Gene Ontology (GO) terms by name or keyword."
     },
     "example": {
       "go_aspect": "molecular_function",
@@ -3381,11 +3416,11 @@
   "search_life_stage_terms": {
     "agent_methods": null,
     "category": "Database",
-    "description": "Search species-specific developmental stage ontology terms.",
+    "description": "Search developmental-stage (life-stage) terms for a specific species.",
     "documentation": {
       "parameters": [
         {
-          "description": "Search term, CURIE, or controlled vocabulary term query.",
+          "description": "A search word, an ID, or a controlled-vocabulary term to look up.",
           "name": "term",
           "required": true,
           "type": "string"
@@ -3415,7 +3450,7 @@
           "type": "integer"
         }
       ],
-      "summary": "Search species-specific developmental stage ontology terms."
+      "summary": "Search developmental-stage (life-stage) terms for a specific species."
     },
     "example": {
       "data_provider": "WB",
@@ -3430,29 +3465,29 @@
   "search_literature_references": {
     "agent_methods": null,
     "category": "Literature",
-    "description": "Fuzzy reference search by title, citation, AGRKB ID, PMID, DOI, or MOD reference ID using AGRCurationAPIClient(data_source=\"db\").search_literature_references().",
+    "description": "Search for likely-matching papers by title, citation text, or any known identifier when you do not have an exact match.",
     "documentation": {
       "parameters": [
         {
-          "description": "Title, citation, AGRKB ID, PMID, DOI, or MOD reference ID for search.",
+          "description": "A title, citation, or identifier to search for when you do not have an exact match.",
           "name": "query",
           "required": true,
           "type": "string"
         },
         {
-          "description": "Require exact search semantics for search_literature_references.",
+          "description": "When searching, require an exact match instead of likely matches.",
           "name": "exact_match",
           "required": false,
           "type": "boolean"
         },
         {
-          "description": "Maximum candidate references to return for search_literature_references.",
+          "description": "The most candidate papers to return from a search.",
           "name": "limit",
           "required": false,
           "type": "integer"
         }
       ],
-      "summary": "Fuzzy reference search by title, citation, AGRKB ID, PMID, DOI, or MOD reference ID using AGRCurationAPIClient(data_source=\"db\").search_literature_references()."
+      "summary": "Search for likely-matching papers by title, citation text, or any known identifier when you do not have an exact match."
     },
     "example": {
       "exact_match": false,
@@ -3468,17 +3503,17 @@
   "search_ontology_terms": {
     "agent_methods": null,
     "category": "Database",
-    "description": "Search ontology terms by label within a required curation DB ontologytermtype.",
+    "description": "Search ontology terms by name within one chosen kind of term (for example, mouse phenotype terms).",
     "documentation": {
       "parameters": [
         {
-          "description": "Search term, CURIE, or controlled vocabulary term query.",
+          "description": "A search word, an ID, or a controlled-vocabulary term to look up.",
           "name": "term",
           "required": true,
           "type": "string"
         },
         {
-          "description": "Curation DB ontologytermtype filter for ontology term lookup and generic ontology searches.",
+          "description": "Which kind of ontology term to limit the lookup to (for example, a GO term or a mouse phenotype term).",
           "name": "ontology_term_type",
           "required": true,
           "type": "string"
@@ -3502,7 +3537,7 @@
           "type": "integer"
         }
       ],
-      "summary": "Search ontology terms by label within a required curation DB ontologytermtype."
+      "summary": "Search ontology terms by name within one chosen kind of term (for example, mouse phenotype terms)."
     },
     "example": {
       "exact_match": true,
@@ -3518,7 +3553,7 @@
   "search_vocabulary_terms": {
     "agent_methods": null,
     "category": "Database",
-    "description": "Search controlled vocabulary terms by vocabulary name/label and term name, abbreviation, or synonym. Optional subset (a vocabularytermset name/id, or a list of them) restricts candidates to that subset's members; omit subset for the full vocabulary.",
+    "description": "Search a controlled list for terms by name, abbreviation, or synonym. You can narrow it to a named part of the list, or search the whole list.",
     "documentation": {
       "parameters": [
         {
@@ -3528,7 +3563,7 @@
           "type": "string"
         },
         {
-          "description": "Search term, CURIE, or controlled vocabulary term query.",
+          "description": "A search word, an ID, or a controlled-vocabulary term to look up.",
           "name": "term",
           "required": false,
           "type": "string"
@@ -3582,7 +3617,7 @@
           "type": "integer"
         }
       ],
-      "summary": "Search controlled vocabulary terms by vocabulary name/label and term name, abbreviation, or synonym. Optional subset (a vocabularytermset name/id, or a list of them) restricts candidates to that subset's members; omit subset for the full vocabulary."
+      "summary": "Search a controlled list for terms by name, abbreviation, or synonym. You can narrow it to a named part of the list, or search the whole list."
     },
     "example": {
       "exact_match": true,
@@ -3603,61 +3638,70 @@
     "binding_kind": "static",
     "builder_run_state": true,
     "category": "Database",
-    "description": "Stage one retained, evidence-backed Alliance allele mention candidate with paper-backed validator selector hints",
+    "description": "Add one new draft allele to the run's working list, backed by the exact wording the agent found in the paper.",
     "documentation": {
       "parameters": [
         {
+          "description": "A short label the agent gives this draft so it can refer back to the same entry later in the run.",
           "name": "pending_ref_id",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The exact wording for this entity as it appears in the paper.",
           "name": "mention",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The supporting quotes (captured earlier from the PDF) that back up this draft.",
           "name": "evidence_record_ids",
           "required": true,
           "type": "array"
         },
         {
+          "description": "The exact paper phrases the agent read this finding from.",
           "name": "source_mentions",
           "required": true,
           "type": "array"
         },
         {
           "default": null,
+          "description": "A cleaned-up version of the allele name the agent suggests, offered as a hint for the allele specialist.",
           "name": "normalized_hint",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "The gene this allele belongs to, if the paper names it.",
           "name": "associated_gene",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "The species this allele belongs to, if stated.",
           "name": "taxon",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "The title of the paper the allele was read from.",
           "name": "reference_title",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "The file name of the uploaded paper the allele was read from.",
           "name": "reference_filename",
           "required": false,
           "type": "any"
         }
       ],
-      "summary": "Stages one allele paper/evidence association candidate from verified evidence and the exact paper mention. The active allele validator owns final allele identity."
+      "summary": "Records a single allele the agent read in the paper, together with the supporting quotes it captured \u2014 a first-pass draft, not a final record. Afterward, the Allele Validation specialist confirms the official allele or variant against the Alliance database and settles its identity. One call adds one draft entry."
     },
     "methods": null,
     "name": "Stage Allele Observation",
@@ -3677,117 +3721,136 @@
     "binding_kind": "static",
     "builder_run_state": true,
     "category": "Database",
-    "description": "Stage one retained, evidence-backed disease assertion candidate with a disease mention, pending DOID term, subject (type+identifier), role/confidence, data provider, ECO evidence codes, relation, and source mentions",
+    "description": "Add one new draft disease annotation to the run's working list, backed by the exact wording the agent found in the paper.",
     "documentation": {
       "parameters": [
         {
+          "description": "A short label the agent gives this draft so it can refer back to the same entry later in the run.",
           "name": "pending_ref_id",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The exact wording for this entity as it appears in the paper.",
           "name": "mention",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The disease name as the agent read it from the paper.",
           "name": "disease_name",
           "required": true,
           "type": "string"
         },
         {
+          "description": "How the disease appears in this paper: the main disease studied (primary), mentioned as background, used for comparison (comparative), the disease being modeled (model context), or unspecified. This is the agent's read of the paper context, not a stored relationship.",
           "name": "role",
           "required": true,
           "type": "string"
         },
         {
+          "description": "How sure the agent is about this finding (high, medium, or low).",
           "name": "confidence",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The Alliance group this belongs to, such as FB (FlyBase), WB (WormBase), MGI (Mouse), ZFIN (Zebrafish), RGD (Rat), SGD (Yeast), or HGNC (Human).",
           "name": "data_provider",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The supporting quotes (captured earlier from the PDF) that back up this draft.",
           "name": "evidence_record_ids",
           "required": true,
           "type": "array"
         },
         {
+          "description": "The exact paper phrases the agent read this finding from.",
           "name": "source_mentions",
           "required": true,
           "type": "array"
         },
         {
           "default": null,
+          "description": "The Disease Ontology ID (DOID, a standard disease term ID) the agent proposes, if it found one; the disease specialist confirms it.",
           "name": "disease_curie",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "What kind of thing has the disease association \u2014 a gene, an allele, or a whole modified organism (model). This choice decides what kind of record is produced.",
           "name": "subject_type",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "The ID of the gene, allele, or model the disease is associated with.",
           "name": "subject_identifier",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "The name of the gene, allele, or model the disease is associated with.",
           "name": "subject_label",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "The official relationship between the subject (gene, allele, or model) and the disease, chosen from the Disease Relation vocabulary \u2014 for example \"is model of\" or \"is implicated in\". The specialist confirms this term.",
           "name": "disease_relation_name",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "The Evidence and Conclusion Ontology codes (ECO, a standard set of \"how was this shown\" codes) the agent proposes for this association.",
           "name": "evidence_code_curies",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "The genetic sex stated for this finding, if any (a standard controlled value).",
           "name": "genetic_sex_name",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "Standard qualifier terms that refine the disease association, if the paper states any.",
           "name": "disease_qualifier_names",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "IDs of additional genes the paper says were involved together with the subject.",
           "name": "with_gene_identifiers",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature), with the kind of relationship each had to the result. Left empty when the paper states no conditions.",
           "name": "condition_relations",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "True when the paper explicitly says the finding did NOT occur.",
           "name": "negated",
           "required": false,
           "type": "any"
         }
       ],
-      "summary": "Stages one disease builder candidate from verified evidence, a disease mention/DOID, the subject (which selects the concrete Gene/Allele/AGM subtype), ECO codes, and a relation. The active validators own final identity."
+      "summary": "Records a single disease annotation the agent read in the paper, together with the supporting quotes it captured \u2014 a first-pass draft, not a final record. Afterward, the disease specialists confirm the disease term, the affected gene/allele/model, the evidence codes, and the data provider against the Alliance database and settle the official identity. One call adds one draft entry. It is the richest of the five: one draft carries the disease mention and disease term, the affected subject (gene, allele, or model), evidence codes, the relation (such as \"is model of\"), the data provider, and any experimental conditions. The choice of subject decides whether the final record is a gene, allele, or model disease annotation."
     },
     "methods": null,
     "name": "Stage Disease Observation",
@@ -3807,46 +3870,53 @@
     "binding_kind": "static",
     "builder_run_state": true,
     "category": "Database",
-    "description": "Stage one Alliance gene-expression observation candidate with evidence and resolver-backed controlled selectors",
+    "description": "Add one new draft gene-expression observation to the run's working list, backed by the exact wording the agent found in the paper.",
     "documentation": {
       "parameters": [
         {
+          "description": "A short label the agent gives this draft so it can refer back to the same entry later in the run.",
           "name": "pending_ref_id",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The supporting quotes (captured earlier from the PDF) that back up this draft.",
           "name": "evidence_record_ids",
           "required": true,
           "type": "array"
         },
         {
+          "description": "A plain sentence describing where (and when) the gene was seen to be expressed, in the agent's words from the paper.",
           "name": "where_expressed_statement",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The gene whose expression was observed, with the exact phrase from the paper and the agent's proposed symbol/ID.",
           "name": "subject",
           "required": true,
           "type": "any"
         },
         {
+          "description": "The paper the observation came from, with the exact phrase and its reference ID.",
           "name": "reference",
           "required": true,
           "type": "any"
         },
         {
+          "description": "The standard-term choices the agent made for this observation (such as the anatomy and developmental-stage terms), each paired with the value it selected. A term specialist confirms these.",
           "name": "controlled_fields",
           "required": true,
           "type": "array"
         },
         {
+          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature), with the kind of relationship each had to the result. Left empty when the paper states no conditions.",
           "name": "condition_relations",
           "required": true,
           "type": "any"
         }
       ],
-      "summary": "Stages one gene-expression builder candidate. Controlled fields must reference prior resolve_domain_field_term tool call IDs."
+      "summary": "Records a single gene-expression observation the agent read in the paper, together with the supporting quotes it captured \u2014 a first-pass draft, not a final record. Afterward, the gene-expression specialists confirm the gene and the controlled terms against the Alliance database and settle the official identity. One call adds one draft entry. One draft carries the gene whose expression was observed, the reference it came from, a plain \"where expressed\" statement, and the controlled-term choices (such as the anatomy and developmental-stage terms) that a term specialist confirms."
     },
     "methods": null,
     "name": "Stage Gene Expression Observation",
@@ -3866,72 +3936,83 @@
     "binding_kind": "static",
     "builder_run_state": true,
     "category": "Database",
-    "description": "Stage one retained, evidence-backed Alliance gene mention candidate with paper-backed identity hints",
+    "description": "Add one new draft gene to the run's working list, backed by the exact wording the agent found in the paper.",
     "documentation": {
       "parameters": [
         {
+          "description": "A short label the agent gives this draft so it can refer back to the same entry later in the run.",
           "name": "pending_ref_id",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The exact wording for this entity as it appears in the paper.",
           "name": "mention",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The supporting quotes (captured earlier from the PDF) that back up this draft.",
           "name": "evidence_record_ids",
           "required": true,
           "type": "array"
         },
         {
+          "description": "The agent's notes on how it figured out which gene this mention refers to.",
           "name": "identity_resolution_notes",
           "required": true,
           "type": "array"
         },
         {
+          "description": "How sure the agent is about this finding (high, medium, or low).",
           "name": "confidence",
           "required": true,
           "type": "string"
         },
         {
           "default": null,
+          "description": "The species named in the paper for this gene, if stated.",
           "name": "species",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "The NCBI Taxonomy ID (a standard species ID, e.g. NCBITaxon:7227 for fruit fly) the agent suggests, if it could tell.",
           "name": "taxon_hint",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "The Alliance group the agent thinks this gene belongs to, as a hint for the specialist.",
           "name": "data_provider_hint",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "The gene ID the agent proposes, offered as a hint; the gene specialist confirms the official one.",
           "name": "proposed_primary_external_id",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "The gene symbol the agent proposes, offered as a hint.",
           "name": "proposed_gene_symbol",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "The species ID the agent proposes for this gene, offered as a hint.",
           "name": "proposed_taxon",
           "required": false,
           "type": "any"
         }
       ],
-      "summary": "Stages one gene_mention_evidence builder candidate from verified evidence and paper-backed identity hints. The gene validator owns final identity."
+      "summary": "Records a single gene the agent read in the paper, together with the supporting quotes it captured \u2014 a first-pass draft, not a final record. Afterward, the Gene Validation specialist confirms the official gene against the Alliance database and settles its identity. One call adds one draft entry. The agent records the mention plus its best identity hints; settling the official gene is left to the specialist."
     },
     "methods": null,
     "name": "Stage Gene Mention Evidence",
@@ -3951,91 +4032,105 @@
     "binding_kind": "static",
     "builder_run_state": true,
     "category": "Database",
-    "description": "Stage one retained, evidence-backed phenotype assertion candidate with a free-text statement, pending subject/term references, and source mentions",
+    "description": "Add one new draft phenotype annotation to the run's working list, backed by the exact wording the agent found in the paper.",
     "documentation": {
       "parameters": [
         {
+          "description": "A short label the agent gives this draft so it can refer back to the same entry later in the run.",
           "name": "pending_ref_id",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The plain-language description of the phenotype as stated in the paper.",
           "name": "phenotype_annotation_object",
           "required": true,
           "type": "string"
         },
         {
+          "description": "The supporting quotes (captured earlier from the PDF) that back up this draft.",
           "name": "evidence_record_ids",
           "required": true,
           "type": "array"
         },
         {
+          "description": "The exact paper phrases the agent read this finding from.",
           "name": "source_mentions",
           "required": true,
           "type": "array"
         },
         {
           "default": null,
+          "description": "The ID of the gene, allele, or model that shows this phenotype.",
           "name": "subject_identifier",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "The name of the gene, allele, or model that shows this phenotype.",
           "name": "subject_label",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "What kind of thing shows the phenotype \u2014 a gene, an allele, or a whole modified organism (model).",
           "name": "subject_type",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "The species ID of the affected entity, if stated.",
           "name": "subject_taxon",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "The phenotype term ID the agent proposes, if it found one; a term specialist confirms it.",
           "name": "term_curie",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "The phenotype term name the agent proposes.",
           "name": "term_label",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "The Alliance group this belongs to, such as FB (FlyBase), WB (WormBase), MGI (Mouse), ZFIN (Zebrafish), RGD (Rat), SGD (Yeast), or HGNC (Human).",
           "name": "data_provider",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "The species ID tied to the proposed phenotype term, if relevant.",
           "name": "term_taxon_id",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature), with the kind of relationship each had to the result. Left empty when the paper states no conditions.",
           "name": "condition_relations",
           "required": false,
           "type": "any"
         },
         {
           "default": null,
+          "description": "True when the paper explicitly says the finding did NOT occur.",
           "name": "negated",
           "required": false,
           "type": "any"
         }
       ],
-      "summary": "Stages one PhenotypeAnnotation builder candidate from verified evidence, a free-text phenotype statement, and pending subject/term references. The active validators own final identity."
+      "summary": "Records a single phenotype annotation the agent read in the paper, together with the supporting quotes it captured \u2014 a first-pass draft, not a final record. Afterward, the phenotype specialists confirm the affected entity and the phenotype term against the Alliance database and settle the official identity. One call adds one draft entry."
     },
     "methods": null,
     "name": "Stage Phenotype Observation",
@@ -4051,35 +4146,35 @@
     "agent_methods": null,
     "binding_kind": "context_factory",
     "category": "PDF Extraction",
-    "description": "Update only editable active-run evidence metadata.",
+    "description": "Update the editable notes on a saved piece of evidence.",
     "documentation": {
       "parameters": [
         {
-          "description": "Evidence record ID to update.",
+          "description": "Which saved piece of evidence to update.",
           "name": "evidence_record_id",
           "required": true,
           "type": "string"
         },
         {
-          "description": "Updated entity label for the evidence.",
+          "description": "An updated label for what this evidence is about.",
           "name": "entity",
           "required": false,
           "type": "string"
         },
         {
-          "description": "Field path supported by this evidence.",
+          "description": "The field this evidence supports.",
           "name": "field_path",
           "required": false,
           "type": "string"
         },
         {
-          "description": "Agent-authored note about how this evidence should be used.",
+          "description": "A note on how this evidence should be used.",
           "name": "agent_note",
           "required": false,
           "type": "string"
         }
       ],
-      "summary": "Updates agent-owned metadata such as entity, field_path, and agent_note. Source quote and provenance fields are immutable."
+      "summary": "Changes the editable details on a piece of evidence \u2014 what it is about, which field it supports, and the agent's note. The quote itself and where it came from cannot be changed."
     },
     "methods": null,
     "name": "Update Evidence Metadata",

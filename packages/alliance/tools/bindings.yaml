@@ -5,7 +5,7 @@ tools:
     binding_kind: static
     callable: src.lib.openai_agents.tools.agent_contract:get_agent_contract
     required_context: []
-    description: Read-only deterministic agent contract lookup for tools, output schemas, domain-envelope metadata, validator bindings, ontology constraints, and field-level details
+    description: Look up an agent's setup details — which tools it uses, the shape of its output, which specialists confirm its findings, and the rules on individual fields — without running anything.
     source_file: backend/src/lib/openai_agents/tools/agent_contract.py
     metadata:
       name: Agent Contract Lookup
@@ -13,29 +13,29 @@ tools:
       audit:
         display_name: Agent Contract Lookup
       documentation:
-        summary: Inspect compact, deterministic runtime contract metadata for generated system agents without reading live envelope state or executing validation.
+        summary: 'Shows a read-only summary of how a configured agent is set up: its tools, its output structure, the specialists tied to it, the ontology rules on its fields, and field-by-field details. It only reports the setup; it does not run the agent or change anything.'
         parameters:
           - name: agent_id
             type: string
             required: true
-            description: Runtime agent identifier whose contract should be inspected.
+            description: Which agent's setup you want to look at.
           - name: topic
             type: string
             required: true
-            description: One of tools, output_schema, domain_envelope, validator_bindings, ontology_constraints, or field.
+            description: 'Which part of the setup to show: its tools, its output shape, its data structure, the specialists tied to it, its ontology rules, or one specific field.'
           - name: field_path
             type: string
             required: false
-            description: Field path for field-specific lookup; use object_type.field_path when disambiguation is needed.
+            description: The specific field to look at, when you want details on just one field.
           - name: detail_level
             type: string
             required: false
-            description: Use summary for compact responses or detail for field/schema/tool metadata details.
+            description: Choose a short overview or the full details.
   - tool_id: agr_curation_query
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:agr_curation_query
     required_context: []
-    description: Structured AGR curation database queries with lookup attempts, candidate matches, classifications, provider projections, ontology term and controlled vocabulary lookup/search helpers, and flow validation attachment reference lookups
+    description: Look things up in the Alliance Curation Database — genes, alleles, ontology terms, controlled-vocabulary terms, species, and member groups — through one tool with many specific lookup methods.
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     provider_adapters:
       groq_schema_constraints:
@@ -47,7 +47,7 @@ tools:
       audit:
         display_name: AGR Curation Query
       documentation:
-        summary: A unified package-owned tool for querying the Alliance Curation Database. Different agents use different methods of this tool based on their specialization.
+        summary: A single tool for looking up Alliance curation data. It offers many specific methods — search for a gene, fetch an allele by ID, look up an ontology term, list member groups, and more. Different agents use the methods that fit their job.
         example_queries:
           - Find gene daf-2 in WormBase
           - Get allele information for e1370
@@ -55,7 +55,7 @@ tools:
           - name: method
             type: string
             required: true
-            description: The query method to execute. Determines what type of data to retrieve.
+            description: Which lookup to run (for example, search for a gene or fetch an allele by ID). This decides what is looked up.
           - name: gene_symbol
             type: string
             required: false
@@ -67,7 +67,7 @@ tools:
           - name: gene_id
             type: string
             required: false
-            description: Gene CURIE for direct lookup.
+            description: A gene ID for a direct lookup.
           - name: allele_symbol
             type: string
             required: false
@@ -79,7 +79,7 @@ tools:
           - name: allele_id
             type: string
             required: false
-            description: Allele CURIE for direct lookup.
+            description: An allele ID for a direct lookup.
           - name: entity_type
             type: string
             required: false
@@ -91,7 +91,7 @@ tools:
           - name: entity_curies
             type: array[string]
             required: false
-            description: Entity CURIEs for generic entity information lookup.
+            description: A list of entity IDs to look up facts for.
           - name: data_provider
             type: string
             required: false
@@ -107,11 +107,11 @@ tools:
           - name: term
             type: string
             required: false
-            description: Search term, CURIE, or controlled vocabulary term query.
+            description: A search word, an ID, or a controlled-vocabulary term to look up.
           - name: terms
             type: array[string]
             required: false
-            description: CURIE list for bulk ontology term lookup.
+            description: A list of term IDs to look up in bulk.
           - name: vocabulary
             type: string
             required: false
@@ -131,7 +131,7 @@ tools:
           - name: ontology_term_type
             type: string
             required: false
-            description: Curation DB ontologytermtype filter for ontology term lookup and generic ontology searches.
+            description: Which kind of ontology term to limit the lookup to (for example, a GO term or a mouse phenotype term).
           - name: category
             type: string
             required: false
@@ -139,11 +139,11 @@ tools:
           - name: curies
             type: array[string]
             required: false
-            description: CURIE list for generic CURIE-to-name mapping.
+            description: A list of IDs to map to display names.
       methods:
         search_genes:
           name: Search Genes
-          description: Search for genes by symbol using LIKE matching.
+          description: Find genes whose symbol contains the text you give.
           required_params: [gene_symbol]
           optional_params: [data_provider, limit, include_synonyms]
           example:
@@ -153,7 +153,7 @@ tools:
             limit: 10
         search_genes_bulk:
           name: Search Genes (Bulk)
-          description: Bulk gene symbol search in one tool call.
+          description: Search for many gene symbols at once in a single call.
           required_params: [gene_symbols]
           optional_params: [data_provider, limit, include_synonyms]
           example:
@@ -163,7 +163,7 @@ tools:
             limit: 10
         get_gene_by_exact_symbol:
           name: Get Gene by Exact Symbol
-          description: Find a gene by its exact official symbol.
+          description: Find the gene whose official symbol exactly matches.
           required_params: [gene_symbol]
           optional_params: [data_provider]
           example:
@@ -172,7 +172,7 @@ tools:
             data_provider: WB
         get_gene_by_id:
           name: Get Gene by ID
-          description: Retrieve detailed gene information by CURIE.
+          description: Get full details for one gene by its ID.
           required_params: [gene_id]
           optional_params: []
           example:
@@ -180,7 +180,7 @@ tools:
             gene_id: WB:WBGene00000898
         search_alleles:
           name: Search Alleles
-          description: Search for alleles by symbol using LIKE matching.
+          description: Find alleles whose symbol contains the text you give.
           required_params: [allele_symbol]
           optional_params: [data_provider, limit, include_synonyms]
           example:
@@ -190,7 +190,7 @@ tools:
             limit: 10
         search_alleles_bulk:
           name: Search Alleles (Bulk)
-          description: Bulk allele symbol search in one tool call.
+          description: Search for many allele symbols at once in a single call.
           required_params: [allele_symbols]
           optional_params: [data_provider, limit, include_synonyms]
           example:
@@ -200,7 +200,7 @@ tools:
             limit: 10
         get_allele_by_exact_symbol:
           name: Get Allele by Exact Symbol
-          description: Find an allele by its exact official symbol.
+          description: Find the allele whose official symbol exactly matches.
           required_params: [allele_symbol]
           optional_params: [data_provider]
           example:
@@ -209,7 +209,7 @@ tools:
             data_provider: WB
         get_allele_by_id:
           name: Get Allele by ID
-          description: Retrieve detailed allele information by CURIE.
+          description: Get full details for one allele by its ID.
           required_params: [allele_id]
           optional_params: []
           example:
@@ -217,7 +217,7 @@ tools:
             allele_id: WB:WBVar00143949
         search_anatomy_terms:
           name: Search Anatomy Terms
-          description: Search species-specific anatomy ontology terms.
+          description: Search anatomy terms for a specific species.
           required_params: [term, data_provider]
           optional_params: [exact_match, include_synonyms, limit]
           example:
@@ -226,7 +226,7 @@ tools:
             data_provider: WB
         search_life_stage_terms:
           name: Search Life Stage Terms
-          description: Search species-specific developmental stage ontology terms.
+          description: Search developmental-stage (life-stage) terms for a specific species.
           required_params: [term, data_provider]
           optional_params: [exact_match, include_synonyms, limit]
           example:
@@ -235,7 +235,7 @@ tools:
             data_provider: WB
         search_go_terms:
           name: Search GO Terms
-          description: Search Gene Ontology terms by name or keyword.
+          description: Search Gene Ontology (GO) terms by name or keyword.
           required_params: [term]
           optional_params: [go_aspect, exact_match, include_synonyms, limit]
           example:
@@ -244,7 +244,7 @@ tools:
             go_aspect: molecular_function
         get_ontology_term:
           name: Get Ontology Term
-          description: Exact ontology term lookup by CURIE with optional ontologytermtype filtering.
+          description: Fetch one exact ontology term by its ID, optionally limited to a certain kind of term.
           required_params: [term]
           optional_params: [ontology_term_type]
           example:
@@ -253,7 +253,7 @@ tools:
             ontology_term_type: GOTerm
         get_ontology_terms:
           name: Get Ontology Terms
-          description: Bulk exact ontology term lookup by CURIE.
+          description: Fetch several exact ontology terms by their IDs at once.
           required_params: [terms]
           optional_params: []
           example:
@@ -261,7 +261,7 @@ tools:
             terms: [GO:0003674, ECO:0000314]
         search_ontology_terms:
           name: Search Ontology Terms
-          description: Search ontology terms by label within a required curation DB ontologytermtype.
+          description: Search ontology terms by name within one chosen kind of term (for example, mouse phenotype terms).
           required_params: [term, ontology_term_type]
           optional_params: [exact_match, include_synonyms, limit]
           example:
@@ -271,7 +271,7 @@ tools:
             exact_match: true
         map_curies_to_names:
           name: Map CURIEs to Names
-          description: Bulk map CURIEs to display names for a supported helper category.
+          description: Turn a list of IDs into their human-readable names.
           required_params: [category, curies]
           optional_params: []
           example:
@@ -280,7 +280,7 @@ tools:
             curies: [GO:0003674]
         get_vocabulary_term:
           name: Get Vocabulary Term
-          description: Exact controlled vocabulary term lookup by vocabulary and term name, abbreviation, or synonym. Optional subset (a vocabularytermset name/id, or a list of them) restricts candidates to that subset's members; omit subset for the full vocabulary.
+          description: Fetch one exact term from a controlled list by its name, abbreviation, or synonym. You can narrow the search to a named part of the list, or leave that out to search the whole list.
           required_params: [vocabulary]
           optional_params: [term, term_name, abbreviation, synonym, subset, include_synonyms, include_obsolete, limit]
           example:
@@ -290,7 +290,7 @@ tools:
             term_name: is_model_of
         search_vocabulary_terms:
           name: Search Vocabulary Terms
-          description: Search controlled vocabulary terms by vocabulary name/label and term name, abbreviation, or synonym. Optional subset (a vocabularytermset name/id, or a list of them) restricts candidates to that subset's members; omit subset for the full vocabulary.
+          description: Search a controlled list for terms by name, abbreviation, or synonym. You can narrow it to a named part of the list, or search the whole list.
           required_params: []
           optional_params: [vocabulary, term, term_name, abbreviation, synonym, subset, exact_match, include_synonyms, include_obsolete, limit]
           example:
@@ -300,21 +300,21 @@ tools:
             exact_match: true
         get_species:
           name: Get Species
-          description: List all supported species/organisms.
+          description: List every supported species.
           required_params: []
           optional_params: []
           example:
             method: get_species
         get_data_providers:
           name: Get Data Providers
-          description: List all Alliance group data providers with abbreviation, taxon, and display name when available.
+          description: List every Alliance member group, with its short code, species ID, and full name where available.
           required_params: []
           optional_params: []
           example:
             method: get_data_providers
         get_data_provider:
           name: Get Data Provider
-          description: Resolve one Alliance data provider by abbreviation, provider display name, or taxon ID and preserve provider/taxon mismatch candidates.
+          description: Look up one Alliance member group by its short code, full name, or species ID, and flag any cases where the group and species do not line up.
           required_params: []
           optional_params: [abbreviation, provider_name, taxon_id, limit]
           example:
@@ -323,7 +323,7 @@ tools:
             taxon_id: NCBITaxon:6239
         map_entity_names_to_curies:
           name: Map Entity Names to CURIEs
-          description: Resolve generic Alliance biological entity names or labels to CURIEs within explicit taxon context.
+          description: Turn entity names or labels into their Alliance IDs, for a stated species.
           required_params: [entity_type, entity_names]
           optional_params: [taxon_id, data_provider]
           example:
@@ -333,7 +333,7 @@ tools:
             taxon_id: NCBITaxon:10090
         map_entity_curies_to_info:
           name: Map Entity CURIEs to Info
-          description: Retrieve generic Alliance biological entity facts by CURIE.
+          description: Get facts about Alliance entities from their IDs.
           required_params: [entity_type, entity_curies]
           optional_params: []
           example:
@@ -346,7 +346,7 @@ tools:
           methods:
             - map_entity_curies_to_info
             - map_entity_names_to_curies
-          description: The AGM Validation agent validates affected genomic model subjects with explicit identifier, label, and taxon context.
+          description: The Affected Genomic Model (AGM) specialist confirms which modified organism a finding refers to, using its ID, name, and species.
         subject_entity_validation:
           agent_name: Subject Entity Validation Agent
           methods:
@@ -358,23 +358,23 @@ tools:
             - get_allele_by_exact_symbol
             - map_entity_curies_to_info
             - map_entity_names_to_curies
-          description: The Subject Entity agent routes explicit subject_type values to gene, allele, or AGM validation paths.
+          description: The Subject specialist confirms the affected entity — sending it to the gene, allele, or modified-organism path depending on what it is.
         gene:
           agent_name: Gene Validation Agent
           methods: [search_genes, search_genes_bulk, get_gene_by_exact_symbol, get_gene_by_id]
-          description: The Gene Agent uses these methods to validate gene identifiers and retrieve gene information.
+          description: The Gene specialist confirms gene identities and pulls full gene details against the Alliance database.
         allele:
           agent_name: Allele Validation Agent
           methods: [search_alleles, search_alleles_bulk, get_allele_by_exact_symbol, get_allele_by_id]
-          description: The Allele Agent uses these methods to validate allele/variant identifiers.
+          description: The Allele specialist confirms allele and variant identities against the Alliance database.
         gene_expression:
           agent_name: Gene Expression Extractor
           methods: [search_genes, search_genes_bulk, get_gene_by_exact_symbol]
-          description: The Gene Expression agent validates gene names found during PDF extraction.
+          description: The Gene Expression agent confirms gene names it found while reading the PDF.
         gene_ontology:
           agent_name: Gene Ontology Agent
           methods: [search_go_terms]
-          description: The GO Agent searches for Gene Ontology terms.
+          description: The Gene Ontology agent looks up GO terms.
         ontology_term_validation:
           agent_name: Ontology Term Resolver Agent
           methods:
@@ -385,19 +385,19 @@ tools:
             - search_life_stage_terms
             - search_go_terms
             - map_curies_to_names
-          description: The Ontology Term Resolver agent validates exact ontology CURIEs and resolves typed label or synonym lookups while preserving ambiguous or unresolved candidates.
+          description: The Ontology Term specialist confirms exact ontology IDs and resolves term names or synonyms, keeping note of any cases that stayed unclear.
         controlled_vocabulary_validation:
           agent_name: Controlled Vocabulary Validation Agent
           methods:
             - get_vocabulary_term
             - search_vocabulary_terms
-          description: The Controlled Vocabulary Validation agent validates vocabulary rows by vocabulary name, term name, abbreviation, and synonym.
+          description: The Controlled Vocabulary specialist confirms terms by their list name, term name, abbreviation, and synonym.
         data_provider_validation:
           agent_name: Data Provider Validation Agent
           methods:
             - get_data_provider
             - get_data_providers
-          description: The Data Provider Validation agent validates provider abbreviations and provider-to-taxon consistency.
+          description: The Member Group specialist confirms group codes and checks that the group and species line up.
         experimental_condition_validation:
           agent_name: Experimental Condition Validation Agent
           methods:
@@ -409,9 +409,9 @@ tools:
             - search_vocabulary_terms
             - get_data_provider
             - get_data_providers
-          description: The Experimental Condition Validation agent composes ontology, controlled vocabulary, data-provider, taxon, and chemical component validation evidence into one condition-level decision.
+          description: The Experimental Condition specialist brings together ontology, controlled-vocabulary, member-group, species, and chemical checks into one decision for each condition.
       agent_studio:
-        prompt_description: "Structured API for Alliance curation database lookups. Filter by data_provider: MGI, FB, WB, ZFIN, RGD, SGD, HGNC."
+        prompt_description: "Structured lookups in the Alliance Curation Database. Narrow results to a member group: MGI, FB, WB, ZFIN, RGD, SGD, HGNC."
         diagnostic:
           enabled: true
           category: api
@@ -566,7 +566,7 @@ tools:
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:agr_species_context_lookup
     required_context: []
-    description: Resolve Alliance species, data provider, and NCBI taxon context without gene or allele lookup
+    description: Work out the species, the Alliance group, and the standard species ID for a paper, without looking up any genes or alleles.
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
       name: AGR Species Context Lookup
@@ -574,33 +574,33 @@ tools:
       audit:
         display_name: AGR Species Context Lookup
       documentation:
-        summary: Narrow extractor-safe lookup for provider/species/taxon context. This tool does not search gene names, gene IDs, synonyms, or generic entity mappings.
+        summary: A focused lookup that matches a species name to its Alliance group (such as FlyBase or WormBase) and its standard NCBI Taxonomy ID. It is just for species and group context; it does not look up genes, alleles, or other entities.
         parameters:
           - name: species
             type: string
             required: false
-            description: Species label from the paper, such as Drosophila melanogaster or C. elegans.
+            description: A species name from the paper, such as Drosophila melanogaster or C. elegans.
           - name: data_provider
             type: string
             required: false
-            description: Alliance provider abbreviation, such as FB, WB, MGI, HGNC, ZFIN, RGD, or SGD.
+            description: An Alliance group code, such as FB, WB, MGI, HGNC, ZFIN, RGD, or SGD.
           - name: provider_name
             type: string
             required: false
-            description: Data provider display name or organism/provider label.
+            description: The full display name of the group or organism.
           - name: taxon_id
             type: string
             required: false
-            description: NCBI Taxon CURIE, such as NCBITaxon:7227.
+            description: A standard NCBI Taxonomy species ID, such as NCBITaxon:7227 (fruit fly).
           - name: limit
             type: integer
             required: false
-            description: Maximum number of provider candidates to return.
+            description: The most matching groups to return.
   - tool_id: search_domain_field_terms
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:search_domain_field_terms
     required_context: []
-    description: Search domain-pack-declared ontology and controlled-vocabulary candidates for one controlled field without accepting a final selector
+    description: Search for candidate standard terms (from an ontology or controlled list) that could fill one specific field, based on a phrase the agent read in the paper.
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
       name: Search Domain Field Terms
@@ -608,53 +608,53 @@ tools:
       audit:
         display_name: Search Domain Field Terms
       documentation:
-        summary: Broad field-scoped candidate discovery from evidence-backed paper phrases. Search results are candidate guidance only; final selectors must be resolved with resolve_domain_field_term.
+        summary: Casts a wide net for possible standard-term matches for one field, starting from a phrase backed by evidence in the paper. The results are suggestions to compare, not a final choice — the agent settles on the official term separately with Resolve Domain Field Term.
         parameters:
           - name: domain_pack_id
             type: string
             required: true
-            description: Domain pack identifier, such as agr.alliance.gene_expression.
+            description: Which curation area this field belongs to (for example, gene expression).
           - name: object_type
             type: string
             required: true
-            description: Curatable object type, such as GeneExpressionAnnotation.
+            description: The kind of record this field is part of.
           - name: field_path
             type: string
             required: true
-            description: Domain payload field path, such as relation.name or expression_pattern.where_expressed.
+            description: Which field the agent is trying to fill (for example, "where expressed").
           - name: query
             type: string
             required: true
-            description: Evidence-backed paper label or controlled-field query text.
+            description: The phrase from the paper to look up candidate terms for.
           - name: evidence_context
             type: object
             required: false
-            description: Optional source phrase, quote, figure, provider, or taxon context from verified evidence.
+            description: Optional supporting context from the paper — the source phrase, quote, figure, provider, or species.
           - name: data_provider
             type: string
             required: false
-            description: Alliance provider abbreviation for provider-scoped anatomy lookup.
+            description: The Alliance group to scope a species-specific anatomy lookup to.
           - name: taxon
             type: string
             required: false
-            description: Optional taxon context preserved for audit and future routing.
+            description: The species context, kept for the record.
           - name: branch_root_curie
             type: string
             required: false
-            description: Optional ontology branch root preserved for field-scoped branch filtering where available.
+            description: An optional starting point in the ontology to limit the search to one branch.
           - name: limit
             type: integer
             required: false
-            description: Maximum number of candidates to return.
+            description: The most candidate terms to return.
           - name: exact_match
             type: boolean
             required: false
-            description: Require exact label/name matching when the declared package lookup method supports it.
+            description: Require an exact name match instead of close matches, where supported.
   - tool_id: inspect_ontology_term
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:inspect_ontology_term
     required_context: []
-    description: Inspect one authoritative ontology term and bounded parent, child, or sibling context for a domain-pack field
+    description: Look at one ontology term in detail, plus a limited view of its neighbors in the term tree (broader terms above it, narrower terms below it, or terms beside it).
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
       name: Inspect Ontology Term
@@ -662,53 +662,53 @@ tools:
       audit:
         display_name: Inspect Ontology Term
       documentation:
-        summary: Bounded ontology term context inspection. This tool helps tree-walk and compare candidates but does not justify final controlled selector values.
+        summary: Shows one ontology term and a small, bounded set of nearby terms so the agent can walk the term tree and compare candidates. It is for exploring and comparing; the official term choice is settled separately with Resolve Domain Field Term.
         parameters:
           - name: domain_pack_id
             type: string
             required: true
-            description: Domain pack identifier, such as agr.alliance.gene_expression.
+            description: Which curation area this field belongs to.
           - name: object_type
             type: string
             required: true
-            description: Curatable object type, such as GeneExpressionAnnotation.
+            description: The kind of record this field is part of.
           - name: field_path
             type: string
             required: true
-            description: Domain payload field path for policy checks.
+            description: The field whose rules apply to this term.
           - name: curie
             type: string
             required: true
-            description: Ontology term CURIE to inspect.
+            description: The ID of the ontology term to look at.
           - name: data_provider
             type: string
             required: false
-            description: Alliance provider abbreviation for provider-scoped anatomy context.
+            description: The Alliance group to scope species-specific anatomy context to.
           - name: include_parents
             type: boolean
             required: false
-            description: Include bounded parent terms when available.
+            description: Also show the broader terms above this one.
           - name: include_children
             type: boolean
             required: false
-            description: Include bounded child terms when available.
+            description: Also show the narrower terms below this one.
           - name: include_siblings
             type: boolean
             required: false
-            description: Include bounded sibling terms when available.
+            description: Also show neighboring terms at the same level.
           - name: max_depth
             type: integer
             required: false
-            description: Maximum tree-walk depth; currently bounded by available API-client support.
+            description: How many levels up or down the term tree to walk.
           - name: limit
             type: integer
             required: false
-            description: Maximum context rows to return per relation.
+            description: The most neighboring terms to return for each relationship.
   - tool_id: resolve_domain_field_term
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:resolve_domain_field_term
     required_context: []
-    description: Resolve one final domain-pack controlled field selector and return copyable resolver provenance
+    description: Settle the official standard term for one field and return a confirmed value with its supporting trail, ready to use.
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
       name: Resolve Domain Field Term
@@ -719,53 +719,53 @@ tools:
       audit:
         display_name: Resolve Domain Field Term
       documentation:
-        summary: Final controlled-field resolver. This is the only ontology/CV resolver tool whose output may justify writing a controlled selector into extractor JSON.
+        summary: Confirms the one official standard term for a field, after the agent has explored candidates with the search and inspect tools. Its result is the trusted choice the agent can record, with a clear trail of how the term was decided.
         parameters:
           - name: domain_pack_id
             type: string
             required: true
-            description: Domain pack identifier, such as agr.alliance.gene_expression.
+            description: Which curation area this field belongs to.
           - name: object_type
             type: string
             required: true
-            description: Curatable object type, such as GeneExpressionAnnotation.
+            description: The kind of record this field is part of.
           - name: field_path
             type: string
             required: true
-            description: Domain payload field path to resolve.
+            description: Which field is being settled.
           - name: source_phrase
             type: string
             required: true
-            description: Evidence-backed paper phrase being resolved.
+            description: The phrase from the paper that this term is being matched to.
           - name: evidence_context
             type: object
             required: false
-            description: Optional quote, page, section, span IDs, provider, or taxon context from verified evidence.
+            description: Optional supporting context — quote, page, section, provider, or species.
           - name: candidate_curie
             type: string
             required: false
-            description: Candidate CURIE selected from search or inspect results.
+            description: The ID of the candidate term picked from the search or inspect results.
           - name: candidate_value
             type: string
             required: false
-            description: Candidate non-CURIE value selected from search results, such as a vocabulary term name.
+            description: A candidate value that is a name rather than an ID, picked from the search results (for example a controlled-list term name).
           - name: data_provider
             type: string
             required: false
-            description: Alliance provider abbreviation for provider-scoped lookup.
+            description: The Alliance group to scope the lookup to.
           - name: taxon
             type: string
             required: false
-            description: Optional taxon context preserved for audit and future routing.
+            description: The species context, kept for the record.
           - name: limit
             type: integer
             required: false
-            description: Maximum candidate set used for final verification.
+            description: The most candidates to check while confirming.
   - tool_id: stage_gene_expression_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:stage_gene_expression_observation
     required_context: []
-    description: Stage one Alliance gene-expression observation candidate with evidence and resolver-backed controlled selectors
+    description: Add one new draft gene-expression observation to the run's working list, backed by the exact wording the agent found in the paper.
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
       name: Stage Gene Expression Observation
@@ -774,12 +774,41 @@ tools:
       audit:
         display_name: Stage Gene Expression Observation
       documentation:
-        summary: Stages one gene-expression builder candidate. Controlled fields must reference prior resolve_domain_field_term tool call IDs.
+        summary: 'Records a single gene-expression observation the agent read in the paper, together with the supporting quotes it captured — a first-pass draft, not a final record. Afterward, the gene-expression specialists confirm the gene and the controlled terms against the Alliance database and settle the official identity. One call adds one draft entry. One draft carries the gene whose expression was observed, the reference it came from, a plain "where expressed" statement, and the controlled-term choices (such as the anatomy and developmental-stage terms) that a term specialist confirms.'
+        parameters:
+          - name: pending_ref_id
+            type: string
+            required: true
+            description: A short label the agent gives this draft so it can refer back to the same entry later in the run.
+          - name: evidence_record_ids
+            type: array
+            required: true
+            description: The supporting quotes (captured earlier from the PDF) that back up this draft.
+          - name: where_expressed_statement
+            type: string
+            required: true
+            description: A plain sentence describing where (and when) the gene was seen to be expressed, in the agent's words from the paper.
+          - name: subject
+            type: any
+            required: true
+            description: The gene whose expression was observed, with the exact phrase from the paper and the agent's proposed symbol/ID.
+          - name: reference
+            type: any
+            required: true
+            description: The paper the observation came from, with the exact phrase and its reference ID.
+          - name: controlled_fields
+            type: array
+            required: true
+            description: The standard-term choices the agent made for this observation (such as the anatomy and developmental-stage terms), each paired with the value it selected. A term specialist confirms these.
+          - name: condition_relations
+            type: any
+            required: true
+            description: Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature), with the kind of relationship each had to the result. Left empty when the paper states no conditions.
   - tool_id: patch_gene_expression_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:patch_gene_expression_observation
     required_context: []
-    description: Patch enumerated fields on a staged Alliance gene-expression observation candidate
+    description: Make small, allowed corrections to a draft gene-expression observation that is already on the run's working list.
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
       name: Patch Gene Expression Observation
@@ -788,12 +817,25 @@ tools:
       audit:
         display_name: Patch Gene Expression Observation
       documentation:
-        summary: Applies bounded repairs to a staged gene-expression candidate. Controlled selector patches require resolver_call_id provenance.
+        summary: Updates specific fields on one draft gene-expression observation the agent staged earlier — for example fixing a typo in a captured value or attaching better supporting quotes. Only the small set of fields meant to be editable can be changed; the rest of the draft stays as recorded.
+        parameters:
+          - name: candidate_id
+            type: string
+            required: true
+            description: Identifies which draft entry on the working list this action applies to.
+          - name: pending_ref_id
+            type: string
+            required: true
+            description: A short label the agent gives this draft so it can refer back to the same entry later in the run.
+          - name: updates
+            type: array
+            required: true
+            description: The specific fields to correct on the draft, each paired with its new value.
   - tool_id: discard_gene_expression_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:discard_gene_expression_observation
     required_context: []
-    description: Discard one staged Alliance gene-expression observation candidate
+    description: Drop one draft gene-expression observation from the run's working list when it turned out to be wrong or unsupported.
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
       name: Discard Gene Expression Observation
@@ -802,12 +844,21 @@ tools:
       audit:
         display_name: Discard Gene Expression Observation
       documentation:
-        summary: Marks one staged gene-expression candidate as discarded without deleting the builder trace.
+        summary: 'Marks one draft gene-expression observation as withdrawn so it will not appear in the final result. The entry is set aside rather than erased: it stays in the run''s history for auditing, with the short reason the agent gave for dropping it.'
+        parameters:
+          - name: candidate_id
+            type: string
+            required: true
+            description: Identifies which draft entry on the working list this action applies to.
+          - name: reason
+            type: any
+            required: true
+            description: A short note explaining why the draft is being dropped, kept in the run's history.
   - tool_id: list_staged_gene_expression_observations
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:list_staged_gene_expression_observations
     required_context: []
-    description: List compact summaries for staged Alliance gene-expression observation candidates
+    description: Show a short summary of every draft gene-expression observation currently on the run's working list.
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
       name: List Staged Gene Expression Observations
@@ -816,12 +867,17 @@ tools:
       audit:
         display_name: List Staged Gene Expression Observations
       documentation:
-        summary: Returns compact builder state summaries for staged gene-expression candidates.
+        summary: Returns a compact overview of the gene-expression observation drafts staged so far in this run, so the agent can review the working set before finishing. Withdrawn drafts are left out unless they are explicitly included.
+        parameters:
+          - name: include_discarded
+            type: boolean
+            required: true
+            description: Whether to also show drafts that were previously withdrawn.
   - tool_id: finalize_gene_expression_extraction
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:finalize_gene_expression_extraction
     required_context: []
-    description: Finalize staged Alliance gene-expression observations through the extraction builder handoff
+    description: Submit the run's draft gene-expression observation list so the specialists can confirm each one.
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
       name: Finalize Gene Expression Extraction
@@ -835,7 +891,12 @@ tools:
       audit:
         display_name: Finalize Gene Expression Extraction
       documentation:
-        summary: Materializes staged gene-expression candidates into the canonical GeneExpressionEnvelope payload, then finalizes through the project-agnostic builder handoff.
+        summary: Takes the gene-expression observation drafts the agent settled on and hands them off for confirmation by the gene-expression specialists, which confirm the gene and the controlled terms against the Alliance database. The agent proposes the set; the specialists confirm the official identities and produce the records that curators review.
+        parameters:
+          - name: candidate_ids
+            type: array
+            required: true
+            description: The list of draft entries the agent wants to hand off for confirmation.
   # ---------------------------------------------------------------------------------------
   # Gene extractor builder tools (Phase 1 envelope -> builder migration). Per-domain module
   # gene_builder_tools.py over the project-agnostic ExtractionBuilderWorkspace; the gene
@@ -845,7 +906,7 @@ tools:
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.gene_builder_tools:stage_gene_mention_evidence
     required_context: []
-    description: Stage one retained, evidence-backed Alliance gene mention candidate with paper-backed identity hints
+    description: Add one new draft gene to the run's working list, backed by the exact wording the agent found in the paper.
     source_file: python/src/agr_ai_curation_alliance/tools/gene_builder_tools.py
     metadata:
       name: Stage Gene Mention Evidence
@@ -856,12 +917,63 @@ tools:
       audit:
         display_name: Stage Gene Mention Evidence
       documentation:
-        summary: Stages one gene_mention_evidence builder candidate from verified evidence and paper-backed identity hints. The gene validator owns final identity.
+        summary: 'Records a single gene the agent read in the paper, together with the supporting quotes it captured — a first-pass draft, not a final record. Afterward, the Gene Validation specialist confirms the official gene against the Alliance database and settles its identity. One call adds one draft entry. The agent records the mention plus its best identity hints; settling the official gene is left to the specialist.'
+        parameters:
+          - name: pending_ref_id
+            type: string
+            required: true
+            description: A short label the agent gives this draft so it can refer back to the same entry later in the run.
+          - name: mention
+            type: string
+            required: true
+            description: The exact wording for this entity as it appears in the paper.
+          - name: evidence_record_ids
+            type: array
+            required: true
+            description: The supporting quotes (captured earlier from the PDF) that back up this draft.
+          - name: identity_resolution_notes
+            type: array
+            required: true
+            description: The agent's notes on how it figured out which gene this mention refers to.
+          - name: confidence
+            type: string
+            required: true
+            description: How sure the agent is about this finding (high, medium, or low).
+          - name: species
+            type: any
+            required: false
+            default: null
+            description: The species named in the paper for this gene, if stated.
+          - name: taxon_hint
+            type: any
+            required: false
+            default: null
+            description: The NCBI Taxonomy ID (a standard species ID, e.g. NCBITaxon:7227 for fruit fly) the agent suggests, if it could tell.
+          - name: data_provider_hint
+            type: any
+            required: false
+            default: null
+            description: The Alliance group the agent thinks this gene belongs to, as a hint for the specialist.
+          - name: proposed_primary_external_id
+            type: any
+            required: false
+            default: null
+            description: The gene ID the agent proposes, offered as a hint; the gene specialist confirms the official one.
+          - name: proposed_gene_symbol
+            type: any
+            required: false
+            default: null
+            description: The gene symbol the agent proposes, offered as a hint.
+          - name: proposed_taxon
+            type: any
+            required: false
+            default: null
+            description: The species ID the agent proposes for this gene, offered as a hint.
   - tool_id: patch_gene_mention_evidence
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.gene_builder_tools:patch_gene_mention_evidence
     required_context: []
-    description: Patch enumerated fields on a staged Alliance gene mention candidate
+    description: Make small, allowed corrections to a draft gene that is already on the run's working list.
     source_file: python/src/agr_ai_curation_alliance/tools/gene_builder_tools.py
     metadata:
       name: Patch Gene Mention Evidence
@@ -870,12 +982,25 @@ tools:
       audit:
         display_name: Patch Gene Mention Evidence
       documentation:
-        summary: Applies bounded repairs to a staged gene_mention_evidence candidate.
+        summary: Updates specific fields on one draft gene the agent staged earlier — for example fixing a typo in a captured value or attaching better supporting quotes. Only the small set of fields meant to be editable can be changed; the rest of the draft stays as recorded.
+        parameters:
+          - name: candidate_id
+            type: string
+            required: true
+            description: Identifies which draft entry on the working list this action applies to.
+          - name: pending_ref_id
+            type: string
+            required: true
+            description: A short label the agent gives this draft so it can refer back to the same entry later in the run.
+          - name: updates
+            type: array
+            required: true
+            description: The specific fields to correct on the draft, each paired with its new value.
   - tool_id: discard_gene_mention_evidence
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.gene_builder_tools:discard_gene_mention_evidence
     required_context: []
-    description: Discard one staged Alliance gene mention candidate
+    description: Drop one draft gene from the run's working list when it turned out to be wrong or unsupported.
     source_file: python/src/agr_ai_curation_alliance/tools/gene_builder_tools.py
     metadata:
       name: Discard Gene Mention Evidence
@@ -884,12 +1009,22 @@ tools:
       audit:
         display_name: Discard Gene Mention Evidence
       documentation:
-        summary: Marks one staged gene_mention_evidence candidate as discarded without deleting the builder trace.
+        summary: 'Marks one draft gene as withdrawn so it will not appear in the final result. The entry is set aside rather than erased: it stays in the run''s history for auditing, with the short reason the agent gave for dropping it.'
+        parameters:
+          - name: candidate_id
+            type: string
+            required: true
+            description: Identifies which draft entry on the working list this action applies to.
+          - name: reason
+            type: any
+            required: false
+            default: null
+            description: A short note explaining why the draft is being dropped, kept in the run's history.
   - tool_id: list_staged_gene_mention_evidence
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.gene_builder_tools:list_staged_gene_mention_evidence
     required_context: []
-    description: List compact summaries for staged Alliance gene mention candidates
+    description: Show a short summary of every draft gene currently on the run's working list.
     source_file: python/src/agr_ai_curation_alliance/tools/gene_builder_tools.py
     metadata:
       name: List Staged Gene Mention Evidence
@@ -898,12 +1033,17 @@ tools:
       audit:
         display_name: List Staged Gene Mention Evidence
       documentation:
-        summary: Returns compact builder state summaries for staged gene_mention_evidence candidates.
+        summary: Returns a compact overview of the gene drafts staged so far in this run, so the agent can review the working set before finishing. Withdrawn drafts are left out unless they are explicitly included.
+        parameters:
+          - name: include_discarded
+            type: boolean
+            required: true
+            description: Whether to also show drafts that were previously withdrawn.
   - tool_id: finalize_gene_extraction
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.gene_builder_tools:finalize_gene_extraction
     required_context: []
-    description: Finalize staged Alliance gene mentions through the extraction builder handoff
+    description: Submit the run's draft gene list so the specialists can confirm each one.
     source_file: python/src/agr_ai_curation_alliance/tools/gene_builder_tools.py
     metadata:
       name: Finalize Gene Extraction
@@ -917,7 +1057,12 @@ tools:
       audit:
         display_name: Finalize Gene Extraction
       documentation:
-        summary: Materializes staged gene_mention_evidence candidates into the GeneExtractionResultEnvelope payload, then finalizes through the project-agnostic builder handoff.
+        summary: Takes the gene drafts the agent settled on and hands them off for confirmation by the Gene Validation specialist, which confirms the official gene against the Alliance database. The agent proposes the set; the specialists confirm the official identities and produce the records that curators review.
+        parameters:
+          - name: candidate_ids
+            type: array
+            required: true
+            description: The list of draft entries the agent wants to hand off for confirmation.
   # ---------------------------------------------------------------------------------------
   # Allele extractor builder tools (Phase 4 envelope -> builder migration). Per-domain module
   # allele_builder_tools.py over the project-agnostic ExtractionBuilderWorkspace. Allele is
@@ -929,7 +1074,7 @@ tools:
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.allele_builder_tools:stage_allele_observation
     required_context: []
-    description: Stage one retained, evidence-backed Alliance allele mention candidate with paper-backed validator selector hints
+    description: Add one new draft allele to the run's working list, backed by the exact wording the agent found in the paper.
     source_file: python/src/agr_ai_curation_alliance/tools/allele_builder_tools.py
     metadata:
       name: Stage Allele Observation
@@ -940,12 +1085,54 @@ tools:
       audit:
         display_name: Stage Allele Observation
       documentation:
-        summary: Stages one allele paper/evidence association candidate from verified evidence and the exact paper mention. The active allele validator owns final allele identity.
+        summary: 'Records a single allele the agent read in the paper, together with the supporting quotes it captured — a first-pass draft, not a final record. Afterward, the Allele Validation specialist confirms the official allele or variant against the Alliance database and settles its identity. One call adds one draft entry.'
+        parameters:
+          - name: pending_ref_id
+            type: string
+            required: true
+            description: A short label the agent gives this draft so it can refer back to the same entry later in the run.
+          - name: mention
+            type: string
+            required: true
+            description: The exact wording for this entity as it appears in the paper.
+          - name: evidence_record_ids
+            type: array
+            required: true
+            description: The supporting quotes (captured earlier from the PDF) that back up this draft.
+          - name: source_mentions
+            type: array
+            required: true
+            description: The exact paper phrases the agent read this finding from.
+          - name: normalized_hint
+            type: any
+            required: false
+            default: null
+            description: A cleaned-up version of the allele name the agent suggests, offered as a hint for the allele specialist.
+          - name: associated_gene
+            type: any
+            required: false
+            default: null
+            description: The gene this allele belongs to, if the paper names it.
+          - name: taxon
+            type: any
+            required: false
+            default: null
+            description: The species this allele belongs to, if stated.
+          - name: reference_title
+            type: any
+            required: false
+            default: null
+            description: The title of the paper the allele was read from.
+          - name: reference_filename
+            type: any
+            required: false
+            default: null
+            description: The file name of the uploaded paper the allele was read from.
   - tool_id: patch_allele_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.allele_builder_tools:patch_allele_observation
     required_context: []
-    description: Patch enumerated fields on a staged Alliance allele mention candidate
+    description: Make small, allowed corrections to a draft allele that is already on the run's working list.
     source_file: python/src/agr_ai_curation_alliance/tools/allele_builder_tools.py
     metadata:
       name: Patch Allele Observation
@@ -954,12 +1141,25 @@ tools:
       audit:
         display_name: Patch Allele Observation
       documentation:
-        summary: Applies bounded repairs to a staged allele observation candidate.
+        summary: Updates specific fields on one draft allele the agent staged earlier — for example fixing a typo in a captured value or attaching better supporting quotes. Only the small set of fields meant to be editable can be changed; the rest of the draft stays as recorded.
+        parameters:
+          - name: candidate_id
+            type: string
+            required: true
+            description: Identifies which draft entry on the working list this action applies to.
+          - name: pending_ref_id
+            type: string
+            required: true
+            description: A short label the agent gives this draft so it can refer back to the same entry later in the run.
+          - name: updates
+            type: array
+            required: true
+            description: The specific fields to correct on the draft, each paired with its new value.
   - tool_id: discard_allele_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.allele_builder_tools:discard_allele_observation
     required_context: []
-    description: Discard one staged Alliance allele mention candidate
+    description: Drop one draft allele from the run's working list when it turned out to be wrong or unsupported.
     source_file: python/src/agr_ai_curation_alliance/tools/allele_builder_tools.py
     metadata:
       name: Discard Allele Observation
@@ -968,12 +1168,22 @@ tools:
       audit:
         display_name: Discard Allele Observation
       documentation:
-        summary: Marks one staged allele observation candidate as discarded without deleting the builder trace.
+        summary: 'Marks one draft allele as withdrawn so it will not appear in the final result. The entry is set aside rather than erased: it stays in the run''s history for auditing, with the short reason the agent gave for dropping it.'
+        parameters:
+          - name: candidate_id
+            type: string
+            required: true
+            description: Identifies which draft entry on the working list this action applies to.
+          - name: reason
+            type: any
+            required: false
+            default: null
+            description: A short note explaining why the draft is being dropped, kept in the run's history.
   - tool_id: list_staged_allele_observations
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.allele_builder_tools:list_staged_allele_observations
     required_context: []
-    description: List compact summaries for staged Alliance allele mention candidates
+    description: Show a short summary of every draft allele currently on the run's working list.
     source_file: python/src/agr_ai_curation_alliance/tools/allele_builder_tools.py
     metadata:
       name: List Staged Allele Observations
@@ -982,12 +1192,17 @@ tools:
       audit:
         display_name: List Staged Allele Observations
       documentation:
-        summary: Returns compact builder state summaries for staged allele observation candidates.
+        summary: Returns a compact overview of the allele drafts staged so far in this run, so the agent can review the working set before finishing. Withdrawn drafts are left out unless they are explicitly included.
+        parameters:
+          - name: include_discarded
+            type: boolean
+            required: true
+            description: Whether to also show drafts that were previously withdrawn.
   - tool_id: finalize_allele_extraction
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.allele_builder_tools:finalize_allele_extraction
     required_context: []
-    description: Finalize staged Alliance allele mentions through the extraction builder handoff
+    description: Submit the run's draft allele list so the specialists can confirm each one.
     source_file: python/src/agr_ai_curation_alliance/tools/allele_builder_tools.py
     metadata:
       name: Finalize Allele Extraction
@@ -1001,7 +1216,12 @@ tools:
       audit:
         display_name: Finalize Allele Extraction
       documentation:
-        summary: Materializes staged allele candidates into the 4-object pending AlleleExtractionResultEnvelope payload (BLOCKED write/export), then finalizes through the project-agnostic builder handoff.
+        summary: Takes the allele drafts the agent settled on and hands them off for confirmation by the Allele Validation specialist, which confirms the official allele/variant against the Alliance database. The agent proposes the set; the specialists confirm the official identities and produce the records that curators review. Each finished allele draft is handed off as a small bundle of linked records (the allele, the paper, and how they connect). These records are held back from being written or exported on their own until the allele specialist confirms the official allele/variant.
+        parameters:
+          - name: candidate_ids
+            type: array
+            required: true
+            description: The list of draft entries the agent wants to hand off for confirmation.
   # ---------------------------------------------------------------------------------------
   # Phenotype extractor builder tools (Phase 3 envelope -> builder migration). Per-domain module
   # phenotype_builder_tools.py over the project-agnostic ExtractionBuilderWorkspace. The active
@@ -1012,7 +1232,7 @@ tools:
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.phenotype_builder_tools:stage_phenotype_observation
     required_context: []
-    description: Stage one retained, evidence-backed phenotype assertion candidate with a free-text statement, pending subject/term references, and source mentions
+    description: Add one new draft phenotype annotation to the run's working list, backed by the exact wording the agent found in the paper.
     source_file: python/src/agr_ai_curation_alliance/tools/phenotype_builder_tools.py
     metadata:
       name: Stage Phenotype Observation
@@ -1023,12 +1243,79 @@ tools:
       audit:
         display_name: Stage Phenotype Observation
       documentation:
-        summary: Stages one PhenotypeAnnotation builder candidate from verified evidence, a free-text phenotype statement, and pending subject/term references. The active validators own final identity.
+        summary: 'Records a single phenotype annotation the agent read in the paper, together with the supporting quotes it captured — a first-pass draft, not a final record. Afterward, the phenotype specialists confirm the affected entity and the phenotype term against the Alliance database and settle the official identity. One call adds one draft entry.'
+        parameters:
+          - name: pending_ref_id
+            type: string
+            required: true
+            description: A short label the agent gives this draft so it can refer back to the same entry later in the run.
+          - name: phenotype_annotation_object
+            type: string
+            required: true
+            description: The plain-language description of the phenotype as stated in the paper.
+          - name: evidence_record_ids
+            type: array
+            required: true
+            description: The supporting quotes (captured earlier from the PDF) that back up this draft.
+          - name: source_mentions
+            type: array
+            required: true
+            description: The exact paper phrases the agent read this finding from.
+          - name: subject_identifier
+            type: any
+            required: false
+            default: null
+            description: The ID of the gene, allele, or model that shows this phenotype.
+          - name: subject_label
+            type: any
+            required: false
+            default: null
+            description: The name of the gene, allele, or model that shows this phenotype.
+          - name: subject_type
+            type: any
+            required: false
+            default: null
+            description: What kind of thing shows the phenotype — a gene, an allele, or a whole modified organism (model).
+          - name: subject_taxon
+            type: any
+            required: false
+            default: null
+            description: The species ID of the affected entity, if stated.
+          - name: term_curie
+            type: any
+            required: false
+            default: null
+            description: The phenotype term ID the agent proposes, if it found one; a term specialist confirms it.
+          - name: term_label
+            type: any
+            required: false
+            default: null
+            description: The phenotype term name the agent proposes.
+          - name: data_provider
+            type: any
+            required: false
+            default: null
+            description: The Alliance group this belongs to, such as FB (FlyBase), WB (WormBase), MGI (Mouse), ZFIN (Zebrafish), RGD (Rat), SGD (Yeast), or HGNC (Human).
+          - name: term_taxon_id
+            type: any
+            required: false
+            default: null
+            description: The species ID tied to the proposed phenotype term, if relevant.
+          - name: condition_relations
+            type: any
+            required: false
+            default: null
+            description: Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature), with the kind of relationship each had to the result. Left empty when the paper states no conditions.
+          - name: negated
+            type: any
+            required: false
+            default: null
+            description: True when the paper explicitly says the finding did NOT occur.
   - tool_id: patch_phenotype_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.phenotype_builder_tools:patch_phenotype_observation
     required_context: []
-    description: Patch enumerated fields on a staged phenotype assertion candidate
+    description: Make small, allowed corrections to a draft phenotype annotation that is already on the run's working list.
     source_file: python/src/agr_ai_curation_alliance/tools/phenotype_builder_tools.py
     metadata:
       name: Patch Phenotype Observation
@@ -1037,12 +1324,25 @@ tools:
       audit:
         display_name: Patch Phenotype Observation
       documentation:
-        summary: Applies bounded repairs to a staged PhenotypeAnnotation candidate.
+        summary: Updates specific fields on one draft phenotype annotation the agent staged earlier — for example fixing a typo in a captured value or attaching better supporting quotes. Only the small set of fields meant to be editable can be changed; the rest of the draft stays as recorded.
+        parameters:
+          - name: candidate_id
+            type: string
+            required: true
+            description: Identifies which draft entry on the working list this action applies to.
+          - name: pending_ref_id
+            type: string
+            required: true
+            description: A short label the agent gives this draft so it can refer back to the same entry later in the run.
+          - name: updates
+            type: array
+            required: true
+            description: The specific fields to correct on the draft, each paired with its new value.
   - tool_id: discard_phenotype_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.phenotype_builder_tools:discard_phenotype_observation
     required_context: []
-    description: Discard one staged phenotype assertion candidate
+    description: Drop one draft phenotype annotation from the run's working list when it turned out to be wrong or unsupported.
     source_file: python/src/agr_ai_curation_alliance/tools/phenotype_builder_tools.py
     metadata:
       name: Discard Phenotype Observation
@@ -1051,12 +1351,22 @@ tools:
       audit:
         display_name: Discard Phenotype Observation
       documentation:
-        summary: Marks one staged PhenotypeAnnotation candidate as discarded without deleting the builder trace.
+        summary: 'Marks one draft phenotype annotation as withdrawn so it will not appear in the final result. The entry is set aside rather than erased: it stays in the run''s history for auditing, with the short reason the agent gave for dropping it.'
+        parameters:
+          - name: candidate_id
+            type: string
+            required: true
+            description: Identifies which draft entry on the working list this action applies to.
+          - name: reason
+            type: any
+            required: false
+            default: null
+            description: A short note explaining why the draft is being dropped, kept in the run's history.
   - tool_id: list_staged_phenotype_observations
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.phenotype_builder_tools:list_staged_phenotype_observations
     required_context: []
-    description: List compact summaries for staged phenotype assertion candidates
+    description: Show a short summary of every draft phenotype annotation currently on the run's working list.
     source_file: python/src/agr_ai_curation_alliance/tools/phenotype_builder_tools.py
     metadata:
       name: List Staged Phenotype Observations
@@ -1065,12 +1375,17 @@ tools:
       audit:
         display_name: List Staged Phenotype Observations
       documentation:
-        summary: Returns compact builder state summaries for staged PhenotypeAnnotation candidates.
+        summary: Returns a compact overview of the phenotype annotation drafts staged so far in this run, so the agent can review the working set before finishing. Withdrawn drafts are left out unless they are explicitly included.
+        parameters:
+          - name: include_discarded
+            type: boolean
+            required: true
+            description: Whether to also show drafts that were previously withdrawn.
   - tool_id: finalize_phenotype_extraction
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.phenotype_builder_tools:finalize_phenotype_extraction
     required_context: []
-    description: Finalize staged phenotype assertions through the extraction builder handoff
+    description: Submit the run's draft phenotype annotation list so the specialists can confirm each one.
     source_file: python/src/agr_ai_curation_alliance/tools/phenotype_builder_tools.py
     metadata:
       name: Finalize Phenotype Extraction
@@ -1084,7 +1399,12 @@ tools:
       audit:
         display_name: Finalize Phenotype Extraction
       documentation:
-        summary: Materializes staged PhenotypeAnnotation candidates into the PhenotypeResultEnvelope payload, then finalizes through the project-agnostic builder handoff.
+        summary: Takes the phenotype annotation drafts the agent settled on and hands them off for confirmation by the phenotype specialists, which confirm the affected entity and the phenotype term against the Alliance database. The agent proposes the set; the specialists confirm the official identities and produce the records that curators review.
+        parameters:
+          - name: candidate_ids
+            type: array
+            required: true
+            description: The list of draft entries the agent wants to hand off for confirmation.
   # ---------------------------------------------------------------------------------------
   # Disease extractor builder tools (Phase 2 envelope -> builder migration, FULL LinkML alignment).
   # Per-domain module disease_builder_tools.py over the project-agnostic ExtractionBuilderWorkspace.
@@ -1096,7 +1416,7 @@ tools:
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.disease_builder_tools:stage_disease_observation
     required_context: []
-    description: Stage one retained, evidence-backed disease assertion candidate with a disease mention, pending DOID term, subject (type+identifier), role/confidence, data provider, ECO evidence codes, relation, and source mentions
+    description: Add one new draft disease annotation to the run's working list, backed by the exact wording the agent found in the paper.
     source_file: python/src/agr_ai_curation_alliance/tools/disease_builder_tools.py
     metadata:
       name: Stage Disease Observation
@@ -1107,12 +1427,100 @@ tools:
       audit:
         display_name: Stage Disease Observation
       documentation:
-        summary: Stages one disease builder candidate from verified evidence, a disease mention/DOID, the subject (which selects the concrete Gene/Allele/AGM subtype), ECO codes, and a relation. The active validators own final identity.
+        summary: 'Records a single disease annotation the agent read in the paper, together with the supporting quotes it captured — a first-pass draft, not a final record. Afterward, the disease specialists confirm the disease term, the affected gene/allele/model, the evidence codes, and the data provider against the Alliance database and settle the official identity. One call adds one draft entry. It is the richest of the five: one draft carries the disease mention and disease term, the affected subject (gene, allele, or model), evidence codes, the relation (such as "is model of"), the data provider, and any experimental conditions. The choice of subject decides whether the final record is a gene, allele, or model disease annotation.'
+        parameters:
+          - name: pending_ref_id
+            type: string
+            required: true
+            description: A short label the agent gives this draft so it can refer back to the same entry later in the run.
+          - name: mention
+            type: string
+            required: true
+            description: The exact wording for this entity as it appears in the paper.
+          - name: disease_name
+            type: string
+            required: true
+            description: The disease name as the agent read it from the paper.
+          - name: role
+            type: string
+            required: true
+            description: 'How the disease appears in this paper: the main disease studied (primary), mentioned as background, used for comparison (comparative), the disease being modeled (model context), or unspecified. This is the agent''s read of the paper context, not a stored relationship.'
+          - name: confidence
+            type: string
+            required: true
+            description: How sure the agent is about this finding (high, medium, or low).
+          - name: data_provider
+            type: string
+            required: true
+            description: The Alliance group this belongs to, such as FB (FlyBase), WB (WormBase), MGI (Mouse), ZFIN (Zebrafish), RGD (Rat), SGD (Yeast), or HGNC (Human).
+          - name: evidence_record_ids
+            type: array
+            required: true
+            description: The supporting quotes (captured earlier from the PDF) that back up this draft.
+          - name: source_mentions
+            type: array
+            required: true
+            description: The exact paper phrases the agent read this finding from.
+          - name: disease_curie
+            type: any
+            required: false
+            default: null
+            description: The Disease Ontology ID (DOID, a standard disease term ID) the agent proposes, if it found one; the disease specialist confirms it.
+          - name: subject_type
+            type: any
+            required: false
+            default: null
+            description: What kind of thing has the disease association — a gene, an allele, or a whole modified organism (model). This choice decides what kind of record is produced.
+          - name: subject_identifier
+            type: any
+            required: false
+            default: null
+            description: The ID of the gene, allele, or model the disease is associated with.
+          - name: subject_label
+            type: any
+            required: false
+            default: null
+            description: The name of the gene, allele, or model the disease is associated with.
+          - name: disease_relation_name
+            type: any
+            required: false
+            default: null
+            description: The official relationship between the subject (gene, allele, or model) and the disease, chosen from the Disease Relation vocabulary — for example "is model of" or "is implicated in". The specialist confirms this term.
+          - name: evidence_code_curies
+            type: any
+            required: false
+            default: null
+            description: The Evidence and Conclusion Ontology codes (ECO, a standard set of "how was this shown" codes) the agent proposes for this association.
+          - name: genetic_sex_name
+            type: any
+            required: false
+            default: null
+            description: The genetic sex stated for this finding, if any (a standard controlled value).
+          - name: disease_qualifier_names
+            type: any
+            required: false
+            default: null
+            description: Standard qualifier terms that refine the disease association, if the paper states any.
+          - name: with_gene_identifiers
+            type: any
+            required: false
+            default: null
+            description: IDs of additional genes the paper says were involved together with the subject.
+          - name: condition_relations
+            type: any
+            required: false
+            default: null
+            description: Any experimental conditions the paper explicitly tied to this finding (for example a drug treatment or temperature), with the kind of relationship each had to the result. Left empty when the paper states no conditions.
+          - name: negated
+            type: any
+            required: false
+            default: null
+            description: True when the paper explicitly says the finding did NOT occur.
   - tool_id: patch_disease_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.disease_builder_tools:patch_disease_observation
     required_context: []
-    description: Patch enumerated fields on a staged disease assertion candidate
+    description: Make small, allowed corrections to a draft disease annotation that is already on the run's working list.
     source_file: python/src/agr_ai_curation_alliance/tools/disease_builder_tools.py
     metadata:
       name: Patch Disease Observation
@@ -1121,12 +1529,25 @@ tools:
       audit:
         display_name: Patch Disease Observation
       documentation:
-        summary: Applies bounded repairs to a staged disease annotation candidate.
+        summary: Updates specific fields on one draft disease annotation the agent staged earlier — for example fixing a typo in a captured value or attaching better supporting quotes. Only the small set of fields meant to be editable can be changed; the rest of the draft stays as recorded.
+        parameters:
+          - name: candidate_id
+            type: string
+            required: true
+            description: Identifies which draft entry on the working list this action applies to.
+          - name: pending_ref_id
+            type: string
+            required: true
+            description: A short label the agent gives this draft so it can refer back to the same entry later in the run.
+          - name: updates
+            type: array
+            required: true
+            description: The specific fields to correct on the draft, each paired with its new value.
   - tool_id: discard_disease_observation
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.disease_builder_tools:discard_disease_observation
     required_context: []
-    description: Discard one staged disease assertion candidate
+    description: Drop one draft disease annotation from the run's working list when it turned out to be wrong or unsupported.
     source_file: python/src/agr_ai_curation_alliance/tools/disease_builder_tools.py
     metadata:
       name: Discard Disease Observation
@@ -1135,12 +1556,22 @@ tools:
       audit:
         display_name: Discard Disease Observation
       documentation:
-        summary: Marks one staged disease annotation candidate as discarded without deleting the builder trace.
+        summary: 'Marks one draft disease annotation as withdrawn so it will not appear in the final result. The entry is set aside rather than erased: it stays in the run''s history for auditing, with the short reason the agent gave for dropping it.'
+        parameters:
+          - name: candidate_id
+            type: string
+            required: true
+            description: Identifies which draft entry on the working list this action applies to.
+          - name: reason
+            type: any
+            required: false
+            default: null
+            description: A short note explaining why the draft is being dropped, kept in the run's history.
   - tool_id: list_staged_disease_observations
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.disease_builder_tools:list_staged_disease_observations
     required_context: []
-    description: List compact summaries for staged disease assertion candidates
+    description: Show a short summary of every draft disease annotation currently on the run's working list.
     source_file: python/src/agr_ai_curation_alliance/tools/disease_builder_tools.py
     metadata:
       name: List Staged Disease Observations
@@ -1149,12 +1580,17 @@ tools:
       audit:
         display_name: List Staged Disease Observations
       documentation:
-        summary: Returns compact builder state summaries for staged disease annotation candidates.
+        summary: Returns a compact overview of the disease annotation drafts staged so far in this run, so the agent can review the working set before finishing. Withdrawn drafts are left out unless they are explicitly included.
+        parameters:
+          - name: include_discarded
+            type: boolean
+            required: true
+            description: Whether to also show drafts that were previously withdrawn.
   - tool_id: finalize_disease_extraction
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.disease_builder_tools:finalize_disease_extraction
     required_context: []
-    description: Finalize staged disease assertions through the extraction builder handoff
+    description: Submit the run's draft disease annotation list so the specialists can confirm each one.
     source_file: python/src/agr_ai_curation_alliance/tools/disease_builder_tools.py
     metadata:
       name: Finalize Disease Extraction
@@ -1168,37 +1604,42 @@ tools:
       audit:
         display_name: Finalize Disease Extraction
       documentation:
-        summary: Materializes staged disease candidates into the concrete Gene/Allele/AGMDiseaseAnnotation DiseaseExtractionResultEnvelope payload, then finalizes through the project-agnostic builder handoff.
+        summary: Takes the disease annotation drafts the agent settled on and hands them off for confirmation by the disease specialists, which confirm the disease term, the affected gene/allele/model, evidence codes, and provider against the Alliance database. The agent proposes the set; the specialists confirm the official identities and produce the records that curators review. The handoff turns each draft into the right kind of disease record (gene, allele, or model) based on the affected subject the agent chose.
+        parameters:
+          - name: candidate_ids
+            type: array
+            required: true
+            description: The list of draft entries the agent wants to hand off for confirmation.
   - tool_id: search_document
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_search_document_tool
     required_context:
       - document_id
       - user_id
-    description: Discovery search over uploaded PDF chunks using hybrid, lexical, or hybrid-lexical-first retrieval.
+    description: Search the uploaded PDF for passages relevant to a query, using meaning-based matching, exact word matching, or a blend.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
       name: Search Document
       category: Document
       documentation:
-        summary: Finds relevant chunks in the uploaded PDF. Use returned chunk_id values with read_chunk for final evidence span selection. Use lexical-heavy modes for exact-match terms and controlled identifiers; keep auto/hybrid for broad conceptual searches.
+        summary: Finds passages in the uploaded PDF that match a query. Meaning-based search is best for broad concepts, while exact word matching is best for specific symbols and identifiers. The matching passages can then be read in full to pick out exact supporting quotes.
         parameters:
         - name: query
           type: string
           required: true
-          description: Search query text (semantic + keyword matching).
+          description: What to search the paper for.
         - name: limit
           type: integer
           required: false
-          description: 'Maximum number of results (default: 5).'
+          description: The most matching passages to return (default 5).
         - name: section_keywords
           type: array
           required: false
-          description: Filter to specific sections (e.g., ['Methods', 'Results']).
+          description: Limit the search to certain sections, such as Methods or Results.
         - name: search_mode
           type: enum
           required: false
-          description: 'Retrieval mode: auto (default, maps to hybrid), hybrid, lexical, or hybrid_lexical_first. Use lexical for exact symbols/IDs and hybrid_lexical_first when normal hybrid search should retry with lexical-heavy matching if needed.'
+          description: 'How to match: by meaning (best for broad concepts), by exact words (best for specific symbols and IDs), or a blend. The default blends both.'
           enum:
           - auto
           - hybrid
@@ -1210,264 +1651,264 @@ tools:
     required_context:
       - document_id
       - user_id
-    description: Read one PDF chunk and return selectable evidence_spans[].span_id values.
+    description: Read the full text of one passage from the PDF and get back the exact pieces of it that can be saved as evidence.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
       name: Read Chunk
       category: PDF Extraction
       documentation:
-        summary: Retrieves full raw chunk text, neighboring chunk IDs, and selectable evidence span IDs for record_evidence.
+        summary: Returns the complete text of one passage, pointers to the passages just before and after it, and the specific snippets within it that can be captured as supporting evidence.
         parameters:
         - name: chunk_id
           type: string
           required: true
-          description: Chunk identifier returned by search_document hits or section source chunks.
+          description: Which passage to read, taken from a search result or a section's list of passages.
   - tool_id: read_section
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_read_section_tool
     required_context:
       - document_id
       - user_id
-    description: Survey the full text of a specific document section.
+    description: Read the full text of a named section of the paper.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
       name: Read Section
       category: PDF Extraction
       documentation:
-        summary: Retrieves complete section text for discovery and context. Use source_chunks[].chunk_id with read_chunk for final evidence selection.
+        summary: Returns the complete text of a section for getting oriented and reading in context. The individual passages it lists can then be read in full to pick out exact supporting quotes.
         parameters:
         - name: section_name
           type: string
           required: true
-          description: Name of the section to read (e.g., 'Methods', 'Introduction').
+          description: The section to read, such as Methods or Introduction.
   - tool_id: read_subsection
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_read_subsection_tool
     required_context:
       - document_id
       - user_id
-    description: Survey the full text of a specific subsection within a section.
+    description: Read the full text of a named subsection inside a section of the paper.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
       name: Read Subsection
       category: PDF Extraction
       documentation:
-        summary: Retrieves subsection content for discovery and context. Use read_chunk on relevant chunks for final evidence selection.
+        summary: Returns the complete text of one subsection for getting oriented and reading in context. The relevant passages can then be read in full to pick out exact supporting quotes.
         parameters:
         - name: section_name
           type: string
           required: true
-          description: Parent section name.
+          description: The section that contains the subsection.
         - name: subsection_name
           type: string
           required: true
-          description: Subsection name to read.
+          description: The subsection to read.
   - tool_id: record_evidence
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_record_evidence_tool
     required_context:
       - document_id
       - user_id
-    description: Create verified PDF evidence from backend-generated read_chunk span_ids.
+    description: Save one piece of supporting evidence from the PDF, using snippets picked out of a passage that was read.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
       name: Record Evidence
       category: PDF Extraction
       documentation:
-        summary: Resolves selected evidence_spans[].span_id values against exact chunk text and returns backend-copied verified_quote plus locator metadata. Use one call for one evidence unit; multiple selected spans are stored as conjoined source fragments.
+        summary: Turns chosen snippets from a passage into a saved piece of evidence with the exact verified quote and where it came from in the paper. Each call saves one piece of evidence; if several snippets are chosen together, they are stored as one joined quote.
         parameters:
         - name: entity
           type: string
           required: true
-          description: Entity label associated with this evidence record.
+          description: The thing this evidence is about (for example, the gene or allele name).
         - name: span_ids
           type: array[string]
           required: true
-          description: One or more span IDs copied from read_chunk(...).chunk.evidence_spans[].span_id.
+          description: The snippets to save, picked from a passage that was read.
   - tool_id: list_recorded_evidence
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_list_recorded_evidence_tool
     required_context:
       - document_id
       - user_id
-    description: Review queued active-run evidence records before final output.
+    description: Review the evidence saved so far in this run before finishing.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
       name: List Recorded Evidence
       category: PDF Extraction
       documentation:
-        summary: Returns queued evidence records from the active-run evidence workspace so the agent can confirm the final support set. Discarded records are excluded unless include_discarded is true.
+        summary: Shows the pieces of evidence saved so far in this run, so the agent can confirm the full set of support before finishing. Withdrawn evidence is left out unless it is explicitly included.
         parameters:
         - name: include_discarded
           type: boolean
           required: false
-          description: Include records previously marked discarded.
+          description: Also show evidence that was previously withdrawn.
         - name: object_id
           type: string
           required: false
-          description: Filter to evidence attached to this object ID.
+          description: Show only evidence attached to this particular finding.
         - name: pending_ref_id
           type: string
           required: false
-          description: Filter to evidence attached to this pending reference ID.
+          description: Show only evidence attached to this particular draft finding.
   - tool_id: get_recorded_evidence
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_get_recorded_evidence_tool
     required_context:
       - document_id
       - user_id
-    description: Fetch one active-run evidence record by ID for detailed review.
+    description: Look at one saved piece of evidence from this run in full detail.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
       name: Get Recorded Evidence
       category: PDF Extraction
       documentation:
-        summary: Returns full details for one evidence record in the active-run workspace for detailed review.
+        summary: Returns the complete details of one saved piece of evidence from this run.
         parameters:
         - name: evidence_record_id
           type: string
           required: true
-          description: Evidence record ID returned by record_evidence or list_recorded_evidence.
+          description: Which saved piece of evidence to look at.
   - tool_id: attach_evidence_to_object
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_attach_evidence_to_object_tool
     required_context:
       - document_id
       - user_id
-    description: Attach active-run evidence to the intended curatable object or pending ref.
+    description: Link a saved piece of evidence to the finding it supports.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
       name: Attach Evidence To Object
       category: PDF Extraction
       documentation:
-        summary: Adds object, pending-ref, and optional field-path metadata to an active evidence record without changing source quote or provenance.
+        summary: Connects a saved piece of evidence to a finding (or to a specific field of it), without changing the quote itself or where it came from.
         parameters:
         - name: evidence_record_id
           type: string
           required: true
-          description: Evidence record ID to attach.
+          description: Which saved piece of evidence to link.
         - name: object_id
           type: string
           required: false
-          description: Stable object ID to attach evidence to.
+          description: The finding to link the evidence to.
         - name: pending_ref_id
           type: string
           required: false
-          description: Pending object/reference ID to attach evidence to.
+          description: The draft finding to link the evidence to.
         - name: field_path
           type: string
           required: false
-          description: Field path supported by this evidence.
+          description: The specific field this evidence supports, if it applies to just one field.
   - tool_id: detach_evidence_from_object
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_detach_evidence_from_object_tool
     required_context:
       - document_id
       - user_id
-    description: Detach active-run evidence from a wrong curatable object or pending ref.
+    description: Remove a link between a saved piece of evidence and a finding it was wrongly tied to.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
       name: Detach Evidence From Object
       category: PDF Extraction
       documentation:
-        summary: Removes matching object, pending-ref, or field-path attachment metadata from an active evidence record.
+        summary: Disconnects a saved piece of evidence from a finding (or from a specific field) it was linked to. The evidence itself stays saved.
         parameters:
         - name: evidence_record_id
           type: string
           required: true
-          description: Evidence record ID to detach.
+          description: Which saved piece of evidence to unlink.
         - name: object_id
           type: string
           required: false
-          description: Stable object ID to detach.
+          description: The finding to unlink the evidence from.
         - name: pending_ref_id
           type: string
           required: false
-          description: Pending object/reference ID to detach.
+          description: The draft finding to unlink the evidence from.
         - name: field_path
           type: string
           required: false
-          description: Field path attachment to detach.
+          description: The specific field link to remove, if it applied to just one field.
   - tool_id: discard_recorded_evidence
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_discard_recorded_evidence_tool
     required_context:
       - document_id
       - user_id
-    description: Discard wrong or weak active-run evidence without deleting audit history.
+    description: Withdraw a saved piece of evidence that turned out to be wrong or too weak, while keeping it in the run's history.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
       name: Discard Recorded Evidence
       category: PDF Extraction
       documentation:
-        summary: Marks evidence discarded without deleting it. Discarded records remain available for audit and are omitted from final output by default.
+        summary: Sets one piece of evidence aside so it will not be used in the final result. It is not erased — it stays in the run's history for auditing and is left out of the output by default.
         parameters:
         - name: evidence_record_id
           type: string
           required: true
-          description: Evidence record ID to discard.
+          description: Which saved piece of evidence to withdraw.
         - name: reason
           type: string
           required: true
-          description: Short reason the evidence should not be retained.
+          description: A short note on why the evidence should not be kept.
   - tool_id: update_recorded_evidence_metadata
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_update_recorded_evidence_metadata_tool
     required_context:
       - document_id
       - user_id
-    description: Update only editable active-run evidence metadata.
+    description: Update the editable notes on a saved piece of evidence.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
       name: Update Evidence Metadata
       category: PDF Extraction
       documentation:
-        summary: Updates agent-owned metadata such as entity, field_path, and agent_note. Source quote and provenance fields are immutable.
+        summary: Changes the editable details on a piece of evidence — what it is about, which field it supports, and the agent's note. The quote itself and where it came from cannot be changed.
         parameters:
         - name: evidence_record_id
           type: string
           required: true
-          description: Evidence record ID to update.
+          description: Which saved piece of evidence to update.
         - name: entity
           type: string
           required: false
-          description: Updated entity label for the evidence.
+          description: An updated label for what this evidence is about.
         - name: field_path
           type: string
           required: false
-          description: Field path supported by this evidence.
+          description: The field this evidence supports.
         - name: agent_note
           type: string
           required: false
-          description: Agent-authored note about how this evidence should be used.
+          description: A note on how this evidence should be used.
   - tool_id: curation_db_sql
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.sql:create_curation_db_sql_tool
     required_context:
       - database_url
-    description: Query the Alliance Curation Database for disease ontology information.
+    description: Run a direct query against the Alliance Curation Database to look up Disease Ontology terms and how they relate to one another.
     source_file: python/src/agr_ai_curation_alliance/tools/sql.py
     metadata:
       name: Curation Database SQL
       category: Database
       documentation:
-        summary: Executes SQL queries against the Alliance Curation Database to look up Disease Ontology (DOID) terms and relationships.
+        summary: Runs a direct database query to find Disease Ontology terms (DOID, the standard set of disease term IDs) and the relationships between them.
         parameters:
         - name: query
           type: string
           required: true
-          description: SQL query to execute against the curation database.
+          description: The database query to run against the curation database.
   - tool_id: chebi_api_call
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.rest:chebi_api_call
     required_context: []
-    description: Query the ChEBI API for chemical compound identifiers.
+    description: Look up a chemical compound in ChEBI (Chemical Entities of Biological Interest, a standard chemical database).
     source_file: python/src/agr_ai_curation_alliance/tools/rest.py
     metadata:
       name: ChEBI API
       category: API
       documentation:
-        summary: Queries the ChEBI API at EBI to look up chemical compound identifiers and ontology information.
+        summary: Looks up chemical compound IDs and related information in ChEBI, the standard chemical-compound database hosted at EBI.
         parameters:
         - name: url
           type: string
@@ -1489,13 +1930,13 @@ tools:
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.rest:quickgo_api_call
     required_context: []
-    description: Query the QuickGO API for Gene Ontology term information.
+    description: Look up a Gene Ontology term in QuickGO.
     source_file: python/src/agr_ai_curation_alliance/tools/rest.py
     metadata:
       name: QuickGO API
       category: API
       documentation:
-        summary: Queries the QuickGO API to retrieve Gene Ontology (GO) term details including names, definitions, and relationships.
+        summary: Looks up Gene Ontology (GO) term details — names, definitions, and relationships — from the QuickGO service.
         parameters:
         - name: url
           type: string
@@ -1517,13 +1958,13 @@ tools:
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.rest:go_api_call
     required_context: []
-    description: Query the QuickGO API for Gene Ontology annotations.
+    description: Look up Gene Ontology annotations for genes.
     source_file: python/src/agr_ai_curation_alliance/tools/rest.py
     metadata:
       name: GO Annotations API
       category: API
       documentation:
-        summary: Queries the QuickGO API to retrieve GO annotations for genes, including evidence codes and qualifiers.
+        summary: Retrieves Gene Ontology (GO) annotations for genes, including the evidence behind each one, from the QuickGO service.
         parameters:
         - name: url
           type: string
@@ -1545,13 +1986,13 @@ tools:
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.rest:alliance_api_call
     required_context: []
-    description: Query the Alliance of Genome Resources API for orthology relationships.
+    description: Look up which genes are counterparts of each other across species (orthology).
     source_file: python/src/agr_ai_curation_alliance/tools/rest.py
     metadata:
       name: Alliance Orthology API
       category: API
       documentation:
-        summary: Queries orthology relationships between genes across species using the Alliance of Genome Resources API.
+        summary: Finds orthology relationships — genes that correspond to one another across different species — using Alliance of Genome Resources data.
         parameters:
         - name: url
           type: string
@@ -1645,7 +2086,7 @@ tools:
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.literature_references:agr_literature_reference_lookup
     required_context: []
-    description: ES-backed Alliance literature reference lookup and fuzzy title/citation search through agr-curation-api-client
+    description: Look up a paper in the Alliance literature collection by its ID, or find candidate papers by title or citation text.
     source_file: python/src/agr_ai_curation_alliance/tools/literature_references.py
     metadata:
       name: AGR Literature Reference Lookup
@@ -1653,7 +2094,7 @@ tools:
       audit:
         display_name: AGR Literature Reference Lookup
       documentation:
-        summary: Resolve literature references from the Alliance literature Elasticsearch index through the official agr-curation-api-client package. Returns lookup attempts, candidate references, ambiguity/no-match details, and safe curator-facing status messages.
+        summary: Finds papers in the Alliance literature collection. Give it a known ID (such as a PubMed ID or DOI) to fetch the exact paper, or a title/citation to search for likely matches. It reports what it tried, the candidate papers it found, any cases where the match was unclear or nothing matched, and a plain status message.
         example_queries:
           - Resolve PMID:27528223 to an Alliance reference
           - Search Hahm KB Suppressed Helicobocter pylori by title text
@@ -1661,27 +2102,27 @@ tools:
           - name: method
             type: string
             required: true
-            description: Use get_literature_reference for exact identifier/title lookup or search_literature_references for fuzzy title/citation search.
+            description: Choose whether to fetch one exact paper by ID/title, or search for likely matches.
           - name: identifier
             type: string
             required: false
-            description: PMID, DOI, AGRKB reference CURIE, MOD reference ID, or title for exact lookup.
+            description: A known ID or exact title for the paper you want — a PubMed ID, DOI, Alliance reference ID, or member-group reference ID.
           - name: query
             type: string
             required: false
-            description: Title, citation, AGRKB ID, PMID, DOI, or MOD reference ID for search.
+            description: A title, citation, or identifier to search for when you do not have an exact match.
           - name: exact_match
             type: boolean
             required: false
-            description: Require exact search semantics for search_literature_references.
+            description: When searching, require an exact match instead of likely matches.
           - name: limit
             type: integer
             required: false
-            description: Maximum candidate references to return for search_literature_references.
+            description: The most candidate papers to return from a search.
       methods:
         get_literature_reference:
           name: Get Literature Reference
-          description: Exact lookup by PMID, DOI, AGRKB reference CURIE, MOD reference ID, or title using AGRCurationAPIClient(data_source="db").get_literature_reference().
+          description: Fetch one exact paper by a known identifier — a PubMed ID (PMID), DOI, Alliance reference ID, member-group reference ID, or exact title.
           required_params: [identifier]
           optional_params: []
           source: literature_es
@@ -1690,7 +2131,7 @@ tools:
             identifier: PMID:27528223
         search_literature_references:
           name: Search Literature References
-          description: Fuzzy reference search by title, citation, AGRKB ID, PMID, DOI, or MOD reference ID using AGRCurationAPIClient(data_source="db").search_literature_references().
+          description: Search for likely-matching papers by title, citation text, or any known identifier when you do not have an exact match.
           required_params: [query]
           optional_params: [exact_match, limit]
           source: literature_es
