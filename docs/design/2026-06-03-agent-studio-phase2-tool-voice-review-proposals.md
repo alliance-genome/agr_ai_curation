@@ -196,11 +196,11 @@ parameter appears. Domain-specific parameters follow.
 |---|---|
 | `disease_name` | The disease name as the agent read it from the paper. |
 | `disease_curie` | The Disease Ontology ID (DOID, a standard disease term ID) the agent proposes, if it found one; the disease specialist confirms it. |
-| `role` | How the disease relates to the finding (for example, the disease being modeled). |
+| `role` | How the disease appears in this paper: the main disease studied (primary), mentioned as background, used for comparison (comparative), the disease being modeled (model context), or unspecified. This is the agent's read of the paper context, not a stored relationship. |
 | `subject_type` | What kind of thing has the disease association — a gene, an allele, or a whole modified organism (model). This choice decides what kind of record is produced. |
 | `subject_identifier` | The ID of the gene, allele, or model the disease is associated with. |
 | `subject_label` | The name of the gene, allele, or model the disease is associated with. |
-| `disease_relation_name` | The standard relationship phrase between the subject and the disease, such as "is model of". |
+| `disease_relation_name` | The official relationship between the subject (gene, allele, or model) and the disease, chosen from the Disease Relation vocabulary — for example "is model of" or "is implicated in". The specialist confirms this term. |
 | `evidence_code_curies` | The Evidence and Conclusion Ontology codes (ECO, a standard set of "how was this shown" codes) the agent proposes for this association. |
 | `genetic_sex_name` | The genetic sex stated for this finding, if any (a standard controlled value). |
 | `disease_qualifier_names` | Standard qualifier terms that refine the disease association, if the paper states any. |
