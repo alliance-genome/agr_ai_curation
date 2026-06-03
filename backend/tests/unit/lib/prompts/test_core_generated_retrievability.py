@@ -90,6 +90,46 @@ def test_envelope_required_flags_available_at_detail():
     ), "per-field required flags must remain retrievable at detail level"
 
 
+def test_validator_curie_allow_list_still_fetchable():
+    """The literal CURIE allow-lists removed from the prompt (e.g. accepted_prefixes)
+    must still be reachable via get_agent_contract validator_bindings detail.
+
+    The slimmed prompt used to inline a per-binding ``accepted_prefixes`` literal
+    allow-list. This proves that exact literal survives in the contract data, not
+    just that some selector key exists. Shape confirmed against live data:
+    ``validator_binding_id`` is the binding identifier; ``input_fields`` is a dict
+    keyed by field name; ``accepted_prefixes`` is a literal-source selector whose
+    ``value`` is the allow-list. The live phenotype allow-list is ["MP",
+    "WBPhenotype"] (note: ZP is NOT part of this binding's accepted_prefixes).
+    """
+    result = get_agent_contract(
+        agent_id=AGENT, topic="validator_bindings", detail_level="detail"
+    )
+    assert result.get("success") is True
+    bindings = [
+        binding
+        for pack in (result.get("domain_packs") or [])
+        for binding in (pack.get("bindings") or [])
+    ]
+    assert bindings, "validator bindings must remain retrievable"
+
+    target = next(
+        binding
+        for binding in bindings
+        if binding.get("validator_binding_id") == "phenotype_term_ontology_validator"
+    )
+    input_fields = target["input_fields"]
+    assert "accepted_prefixes" in input_fields, (
+        "the literal accepted_prefixes allow-list must remain fetchable at detail level"
+    )
+    accepted = input_fields["accepted_prefixes"]
+    assert accepted.get("source") == "literal"
+    values = accepted["value"]
+    assert "MP" in values and "WBPhenotype" in values, (
+        f"the literal CURIE allow-list must survive; got {values!r}"
+    )
+
+
 def test_ontology_accepted_terms_available():
     """Accepted ontology terms/constraints (the slim pointer now directs here) must be fetchable."""
     result = get_agent_contract(agent_id=AGENT, topic="ontology_constraints")

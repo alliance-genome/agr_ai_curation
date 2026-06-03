@@ -31,16 +31,17 @@ Removed from the inlined runtime contract for **every** agent: the full tool-inv
 | go_annotations | 985 | 938 | -47 | -5% |
 | orthologs | 979 | 926 | -53 | -5% |
 | curation_prep | 950 | 950 | 0 | 0% |
-| json_formatter | 79 | 29 | -50 | -63% |
-| csv_formatter | 78 | 29 | -49 | -63% |
-| tsv_formatter | 78 | 29 | -49 | -63% |
+| json_formatter | 79 | 0 | -79 | -100% |
+| csv_formatter | 78 | 0 | -78 | -100% |
+| tsv_formatter | 78 | 0 | -78 | -100% |
 | chat_output | 0 | 0 | 0 | — |
 | supervisor | 0 | 0 | 0 | — |
 
 ## Summary
 
 - **Biggest win, gene_expression: 9,023 → 1,894 chars (~1,780 tokens saved per call).** The five extractors drop 44–79%.
-- The change benefits **all tool-bearing agents**, not just the extractors: every agent lost the inlined tool-inventory line (validators/lookups −5–7%, formatters −63%), and the validator-bound agents additionally lost the per-binding enumeration.
+- The change benefits **all tool-bearing agents**, not just the extractors: every agent lost the inlined tool-inventory line (validators/lookups −5–7%), and the validator-bound agents additionally lost the per-binding enumeration.
+- The three formatters (json/csv/tsv) drop to **0 chars (−100%)**: they have tools but no required-tool policy, no domain pack, and no `output_schema`, so the runtime contract has no body lines. The assembler now suppresses the bare `## Generated Runtime Contract` heading when no contract lines follow, so these agents get no `core_generated` layer at all (like `chat_output`/`supervisor`) instead of a 29-char heading-only stub.
 - `curation_prep` is unchanged (no tools/domain pack contributing removable lines); `chat_output`/`supervisor` have no `core_generated` layer.
 - Largest remaining `core_generated` is phenotype_extractor at 1,915 chars, well under the 2,500-char soft budget enforced by `test_prompt_size_budget.py`.
 
@@ -48,4 +49,4 @@ Removed from the inlined runtime contract for **every** agent: the full tool-inv
 
 - Deletion-only for the runtime contract; nothing the model acts on was removed (the kept "validators own these fields" line + retained safety rule preserve no-invention; base-prompt rules untouched).
 - Every removed datum is still served by `get_agent_contract` — proven by `test_core_generated_retrievability.py` (topics `tools`, `validator_bindings`+detail, `domain_envelope`+detail, `ontology_constraints`).
-- Full prompt/contract + agent-studio/catalog test surface green (143 + 89 tests); no code or fixture references the removed strings.
+- The Phase-A-touched prompt/contract tests (`tests/unit/lib/prompts/` and `tests/unit/test_phenotype_extractor_domain_envelope_contract.py`) and the agent-studio/catalog tests pass; no code or fixture references the removed strings. One **unrelated, pre-existing** test in the broader prompt/contract surface — `test_record_evidence_prompt_contract.py::test_pdf_corpus_trial_examples_do_not_teach_quote_submission` — fails on this branch (it `rglob`s `docs/design/pdf-corpus-trials/*.json` and trips on gitignored on-disk corpus artifacts; it has no dependency on `assembly.py`/`core_generated` and was not changed by Phase A). It is green on a pristine `main` checkout, which lacks those local artifacts.

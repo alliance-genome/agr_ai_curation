@@ -322,8 +322,6 @@ def _core_generated_source_ref(agent: AgentDefinition) -> str:
 
 def _build_compact_runtime_contract(agent: AgentDefinition) -> str:
     lines: list[str] = []
-    if agent.tools or agent.output_schema or _agent_domain_pack_id(agent):
-        lines.append("## Generated Runtime Contract")
 
     if agent.tools:
         required_tools = required_tool_names_for_available_tools(
@@ -363,7 +361,10 @@ def _build_compact_runtime_contract(agent: AgentDefinition) -> str:
             "identity is pending."
         )
 
-    return "\n".join(lines)
+    if not lines:
+        return ""
+
+    return "\n".join(["## Generated Runtime Contract", *lines])
 
 
 def _agent_domain_pack_id(agent: AgentDefinition) -> str | None:
