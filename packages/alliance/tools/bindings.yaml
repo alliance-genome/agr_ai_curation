@@ -1175,137 +1175,472 @@ tools:
     required_context:
       - document_id
       - user_id
-    description: Discovery search over scoped document chunks with auto/hybrid, lexical, or hybrid_lexical_first modes; use read_chunk on returned chunk IDs for final evidence span selection
+    description: Discovery search over uploaded PDF chunks using hybrid, lexical, or hybrid-lexical-first retrieval.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
+    metadata:
+      name: Search Document
+      category: Document
+      documentation:
+        summary: Finds relevant chunks in the uploaded PDF. Use returned chunk_id values with read_chunk for final evidence span selection. Use lexical-heavy modes for exact-match terms and controlled identifiers; keep auto/hybrid for broad conceptual searches.
+        parameters:
+        - name: query
+          type: string
+          required: true
+          description: Search query text (semantic + keyword matching).
+        - name: limit
+          type: integer
+          required: false
+          description: 'Maximum number of results (default: 5).'
+        - name: section_keywords
+          type: array
+          required: false
+          description: Filter to specific sections (e.g., ['Methods', 'Results']).
+        - name: search_mode
+          type: enum
+          required: false
+          description: 'Retrieval mode: auto (default, maps to hybrid), hybrid, lexical, or hybrid_lexical_first. Use lexical for exact symbols/IDs and hybrid_lexical_first when normal hybrid search should retry with lexical-heavy matching if needed.'
+          enum:
+          - auto
+          - hybrid
+          - lexical
+          - hybrid_lexical_first
   - tool_id: read_chunk
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_read_chunk_tool
     required_context:
       - document_id
       - user_id
-    description: Read one scoped document chunk with selectable evidence_spans[].span_id values for record_evidence
+    description: Read one PDF chunk and return selectable evidence_spans[].span_id values.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
+    metadata:
+      name: Read Chunk
+      category: PDF Extraction
+      documentation:
+        summary: Retrieves full raw chunk text, neighboring chunk IDs, and selectable evidence span IDs for record_evidence.
+        parameters:
+        - name: chunk_id
+          type: string
+          required: true
+          description: Chunk identifier returned by search_document hits or section source chunks.
   - tool_id: read_section
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_read_section_tool
     required_context:
       - document_id
       - user_id
-    description: Survey all content from a named document section; use read_chunk for final evidence span selection
+    description: Survey the full text of a specific document section.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
+    metadata:
+      name: Read Section
+      category: PDF Extraction
+      documentation:
+        summary: Retrieves complete section text for discovery and context. Use source_chunks[].chunk_id with read_chunk for final evidence selection.
+        parameters:
+        - name: section_name
+          type: string
+          required: true
+          description: Name of the section to read (e.g., 'Methods', 'Introduction').
   - tool_id: read_subsection
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_read_subsection_tool
     required_context:
       - document_id
       - user_id
-    description: Survey all content from a named document subsection; use read_chunk for final evidence span selection
+    description: Survey the full text of a specific subsection within a section.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
+    metadata:
+      name: Read Subsection
+      category: PDF Extraction
+      documentation:
+        summary: Retrieves subsection content for discovery and context. Use read_chunk on relevant chunks for final evidence selection.
+        parameters:
+        - name: section_name
+          type: string
+          required: true
+          description: Parent section name.
+        - name: subsection_name
+          type: string
+          required: true
+          description: Subsection name to read.
   - tool_id: record_evidence
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_record_evidence_tool
     required_context:
       - document_id
       - user_id
-    description: Create verified evidence from read_chunk span_ids and preserve exact source fragments with optional envelope target refs
+    description: Create verified PDF evidence from backend-generated read_chunk span_ids.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
+    metadata:
+      name: Record Evidence
+      category: PDF Extraction
+      documentation:
+        summary: Resolves selected evidence_spans[].span_id values against exact chunk text and returns backend-copied verified_quote plus locator metadata. Use one call for one evidence unit; multiple selected spans are stored as conjoined source fragments.
+        parameters:
+        - name: entity
+          type: string
+          required: true
+          description: Entity label associated with this evidence record.
+        - name: span_ids
+          type: array[string]
+          required: true
+          description: One or more span IDs copied from read_chunk(...).chunk.evidence_spans[].span_id.
   - tool_id: list_recorded_evidence
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_list_recorded_evidence_tool
     required_context:
       - document_id
       - user_id
-    description: Review queued active-run evidence records before final output, excluding discarded records by default
+    description: Review queued active-run evidence records before final output.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
+    metadata:
+      name: List Recorded Evidence
+      category: PDF Extraction
+      documentation:
+        summary: Returns queued evidence records from the active-run evidence workspace so the agent can confirm the final support set. Discarded records are excluded unless include_discarded is true.
+        parameters:
+        - name: include_discarded
+          type: boolean
+          required: false
+          description: Include records previously marked discarded.
+        - name: object_id
+          type: string
+          required: false
+          description: Filter to evidence attached to this object ID.
+        - name: pending_ref_id
+          type: string
+          required: false
+          description: Filter to evidence attached to this pending reference ID.
   - tool_id: get_recorded_evidence
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_get_recorded_evidence_tool
     required_context:
       - document_id
       - user_id
-    description: Fetch one active-run evidence record by evidence_record_id for detailed review before finalization
+    description: Fetch one active-run evidence record by ID for detailed review.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
+    metadata:
+      name: Get Recorded Evidence
+      category: PDF Extraction
+      documentation:
+        summary: Returns full details for one evidence record in the active-run workspace for detailed review.
+        parameters:
+        - name: evidence_record_id
+          type: string
+          required: true
+          description: Evidence record ID returned by record_evidence or list_recorded_evidence.
   - tool_id: attach_evidence_to_object
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_attach_evidence_to_object_tool
     required_context:
       - document_id
       - user_id
-    description: Attach active-run evidence to the intended curatable object or pending ref without changing source quote or provenance
+    description: Attach active-run evidence to the intended curatable object or pending ref.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
+    metadata:
+      name: Attach Evidence To Object
+      category: PDF Extraction
+      documentation:
+        summary: Adds object, pending-ref, and optional field-path metadata to an active evidence record without changing source quote or provenance.
+        parameters:
+        - name: evidence_record_id
+          type: string
+          required: true
+          description: Evidence record ID to attach.
+        - name: object_id
+          type: string
+          required: false
+          description: Stable object ID to attach evidence to.
+        - name: pending_ref_id
+          type: string
+          required: false
+          description: Pending object/reference ID to attach evidence to.
+        - name: field_path
+          type: string
+          required: false
+          description: Field path supported by this evidence.
   - tool_id: detach_evidence_from_object
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_detach_evidence_from_object_tool
     required_context:
       - document_id
       - user_id
-    description: Detach active-run evidence from a wrong curatable object or pending ref without changing source quote or provenance
+    description: Detach active-run evidence from a wrong curatable object or pending ref.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
+    metadata:
+      name: Detach Evidence From Object
+      category: PDF Extraction
+      documentation:
+        summary: Removes matching object, pending-ref, or field-path attachment metadata from an active evidence record.
+        parameters:
+        - name: evidence_record_id
+          type: string
+          required: true
+          description: Evidence record ID to detach.
+        - name: object_id
+          type: string
+          required: false
+          description: Stable object ID to detach.
+        - name: pending_ref_id
+          type: string
+          required: false
+          description: Pending object/reference ID to detach.
+        - name: field_path
+          type: string
+          required: false
+          description: Field path attachment to detach.
   - tool_id: discard_recorded_evidence
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_discard_recorded_evidence_tool
     required_context:
       - document_id
       - user_id
-    description: Mark wrong or weak active-run evidence as discarded without deleting source quote, provenance, or audit history
+    description: Discard wrong or weak active-run evidence without deleting audit history.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
+    metadata:
+      name: Discard Recorded Evidence
+      category: PDF Extraction
+      documentation:
+        summary: Marks evidence discarded without deleting it. Discarded records remain available for audit and are omitted from final output by default.
+        parameters:
+        - name: evidence_record_id
+          type: string
+          required: true
+          description: Evidence record ID to discard.
+        - name: reason
+          type: string
+          required: true
+          description: Short reason the evidence should not be retained.
   - tool_id: update_recorded_evidence_metadata
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_update_recorded_evidence_metadata_tool
     required_context:
       - document_id
       - user_id
-    description: Update only editable active-run evidence metadata without changing immutable source quote or provenance fields
+    description: Update only editable active-run evidence metadata.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
+    metadata:
+      name: Update Evidence Metadata
+      category: PDF Extraction
+      documentation:
+        summary: Updates agent-owned metadata such as entity, field_path, and agent_note. Source quote and provenance fields are immutable.
+        parameters:
+        - name: evidence_record_id
+          type: string
+          required: true
+          description: Evidence record ID to update.
+        - name: entity
+          type: string
+          required: false
+          description: Updated entity label for the evidence.
+        - name: field_path
+          type: string
+          required: false
+          description: Field path supported by this evidence.
+        - name: agent_note
+          type: string
+          required: false
+          description: Agent-authored note about how this evidence should be used.
   - tool_id: curation_db_sql
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.sql:create_curation_db_sql_tool
     required_context:
       - database_url
-    description: Read-only SQL access to the configured curation database
+    description: Query the Alliance Curation Database for disease ontology information.
     source_file: python/src/agr_ai_curation_alliance/tools/sql.py
+    metadata:
+      name: Curation Database SQL
+      category: Database
+      documentation:
+        summary: Executes SQL queries against the Alliance Curation Database to look up Disease Ontology (DOID) terms and relationships.
+        parameters:
+        - name: query
+          type: string
+          required: true
+          description: SQL query to execute against the curation database.
   - tool_id: chebi_api_call
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.rest:chebi_api_call
     required_context: []
-    description: Query the ChEBI API on ebi.ac.uk
+    description: Query the ChEBI API for chemical compound identifiers.
     source_file: python/src/agr_ai_curation_alliance/tools/rest.py
+    metadata:
+      name: ChEBI API
+      category: API
+      documentation:
+        summary: Queries the ChEBI API at EBI to look up chemical compound identifiers and ontology information.
+        parameters:
+        - name: url
+          type: string
+          required: true
+          description: Full URL to query (must be on ebi.ac.uk domain).
+        - name: method
+          type: string
+          required: false
+          description: 'HTTP method (default: GET).'
+        - name: headers_json
+          type: string
+          required: false
+          description: Optional JSON string for request headers.
+        - name: body_json
+          type: string
+          required: false
+          description: Optional JSON string for request body.
   - tool_id: quickgo_api_call
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.rest:quickgo_api_call
     required_context: []
-    description: Query the QuickGO API on ebi.ac.uk
+    description: Query the QuickGO API for Gene Ontology term information.
     source_file: python/src/agr_ai_curation_alliance/tools/rest.py
+    metadata:
+      name: QuickGO API
+      category: API
+      documentation:
+        summary: Queries the QuickGO API to retrieve Gene Ontology (GO) term details including names, definitions, and relationships.
+        parameters:
+        - name: url
+          type: string
+          required: true
+          description: Full URL to query (must be on ebi.ac.uk domain).
+        - name: method
+          type: string
+          required: false
+          description: 'HTTP method (default: GET).'
+        - name: headers_json
+          type: string
+          required: false
+          description: Optional JSON string for request headers.
+        - name: body_json
+          type: string
+          required: false
+          description: Optional JSON string for request body.
   - tool_id: go_api_call
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.rest:go_api_call
     required_context: []
-    description: Query the Gene Ontology API on geneontology.org
+    description: Query the QuickGO API for Gene Ontology annotations.
     source_file: python/src/agr_ai_curation_alliance/tools/rest.py
+    metadata:
+      name: GO Annotations API
+      category: API
+      documentation:
+        summary: Queries the QuickGO API to retrieve GO annotations for genes, including evidence codes and qualifiers.
+        parameters:
+        - name: url
+          type: string
+          required: true
+          description: Full URL to query (must be on ebi.ac.uk domain).
+        - name: method
+          type: string
+          required: false
+          description: 'HTTP method (default: GET).'
+        - name: headers_json
+          type: string
+          required: false
+          description: Optional JSON string for request headers.
+        - name: body_json
+          type: string
+          required: false
+          description: Optional JSON string for request body.
   - tool_id: alliance_api_call
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.rest:alliance_api_call
     required_context: []
-    description: Query the Alliance API on alliancegenome.org
+    description: Query the Alliance of Genome Resources API for orthology relationships.
     source_file: python/src/agr_ai_curation_alliance/tools/rest.py
+    metadata:
+      name: Alliance Orthology API
+      category: API
+      documentation:
+        summary: Queries orthology relationships between genes across species using the Alliance of Genome Resources API.
+        parameters:
+        - name: url
+          type: string
+          required: true
+          description: Full URL to query (must be on alliancegenome.org domain).
+        - name: method
+          type: string
+          required: false
+          description: 'HTTP method (default: GET).'
+        - name: headers_json
+          type: string
+          required: false
+          description: Optional JSON string for request headers.
+        - name: body_json
+          type: string
+          required: false
+          description: Optional JSON string for request body.
   - tool_id: save_csv_file
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.file_output:save_csv_file
     required_context: []
-    description: Save structured data as CSV output
+    description: Save data as a downloadable CSV file.
     source_file: python/src/agr_ai_curation_alliance/tools/file_output.py
+    metadata:
+      name: Save CSV File
+      category: Output
+      documentation:
+        summary: Creates a CSV file from structured row data and returns a download link.
+        parameters:
+        - name: data_json
+          type: string
+          required: true
+          description: JSON array string of row objects to convert to CSV.
+        - name: filename
+          type: string
+          required: true
+          description: Output filename (without extension).
+        - name: columns
+          type: string
+          required: false
+          description: Optional JSON array string listing column names in output order.
   - tool_id: save_tsv_file
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.file_output:save_tsv_file
     required_context: []
-    description: Save structured data as TSV output
+    description: Save data as a downloadable TSV file.
     source_file: python/src/agr_ai_curation_alliance/tools/file_output.py
+    metadata:
+      name: Save TSV File
+      category: Output
+      documentation:
+        summary: Creates a TSV file from structured data and returns a download link.
+        parameters:
+        - name: data_json
+          type: string
+          required: true
+          description: JSON array string of row objects to convert to TSV.
+        - name: filename
+          type: string
+          required: true
+          description: Output filename (without extension).
+        - name: columns
+          type: string
+          required: false
+          description: Optional JSON array string listing column names in output order.
   - tool_id: save_json_file
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.file_output:save_json_file
     required_context: []
-    description: Save structured data as JSON output
+    description: Save data as a downloadable JSON file.
     source_file: python/src/agr_ai_curation_alliance/tools/file_output.py
+    metadata:
+      name: Save JSON File
+      category: Output
+      documentation:
+        summary: Creates a JSON file from structured data and returns a download link.
+        parameters:
+        - name: data_json
+          type: string
+          required: true
+          description: JSON string containing the data to serialize to JSON.
+        - name: filename
+          type: string
+          required: true
+          description: Output filename (without extension).
+        - name: pretty
+          type: boolean
+          required: false
+          description: Whether to pretty-print the JSON output with indentation.
   - tool_id: agr_literature_reference_lookup
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.literature_references:agr_literature_reference_lookup
