@@ -124,12 +124,11 @@ def test_build_tool_execution_context_uses_env_database_url(monkeypatch):
     assert context.database_url == "postgresql://example/db"
 
 
-def test_curated_search_document_documents_search_mode_parameter():
+def test_search_document_documents_search_mode_parameter():
+    tool = catalog_service.get_all_tools()["search_document"]
     parameters = {
         parameter["name"]: parameter
-        for parameter in catalog_service.CURATED_TOOL_REGISTRY["search_document"][
-            "documentation"
-        ]["parameters"]
+        for parameter in tool["documentation"]["parameters"]
     }
 
     assert parameters["search_mode"]["enum"] == [
@@ -142,19 +141,16 @@ def test_curated_search_document_documents_search_mode_parameter():
     assert "exact symbols/IDs" in parameters["search_mode"]["description"]
 
 
-def test_curated_pdf_evidence_tools_document_span_contract():
+def test_pdf_evidence_tools_document_span_contract():
+    tools = catalog_service.get_all_tools()
     record_parameters = {
         parameter["name"]: parameter
-        for parameter in catalog_service.CURATED_TOOL_REGISTRY["record_evidence"][
-            "documentation"
-        ]["parameters"]
+        for parameter in tools["record_evidence"]["documentation"]["parameters"]
     }
-    read_chunk_summary = catalog_service.CURATED_TOOL_REGISTRY["read_chunk"][
+    read_chunk_summary = tools["read_chunk"]["documentation"]["summary"]
+    workspace_summary = tools["update_recorded_evidence_metadata"][
         "documentation"
     ]["summary"]
-    workspace_summary = catalog_service.CURATED_TOOL_REGISTRY[
-        "update_recorded_evidence_metadata"
-    ]["documentation"]["summary"]
 
     assert "evidence span IDs" in read_chunk_summary
     assert "span_ids" in record_parameters
