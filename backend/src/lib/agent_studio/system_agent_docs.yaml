@@ -1,7 +1,7 @@
 # Curator-facing docs for synthetic flow nodes that have no agent bundle folder.
 # Voice: curator-friendly, plain language (no developer jargon).
-# task_input and curation_prep are the only AGENT_DOCUMENTATION entries with no
-# agent folder; their prose lives here so it stays out of Python.
+# task_input and curation_prep are synthetic flow nodes with no agent folder (and
+# thus no sibling docs.yaml); their prose lives here so it stays out of Python.
 task_input:
   summary: "The starting point for curation workflows - defines what task the AI should perform."
   capabilities:
