@@ -1,6 +1,4 @@
 """Soft budget so the generated contract can't silently re-bloat."""
-import pytest
-
 from src.lib.prompts.size_report import core_layer_sizes
 
 # Post-slim ceiling (chars) for core_generated. Generous headroom over the
@@ -8,7 +6,6 @@ from src.lib.prompts.size_report import core_layer_sizes
 CORE_GENERATED_BUDGET = 2500
 
 
-@pytest.mark.xfail(reason="core_generated slim lands in Task 2", strict=True)
 def test_core_generated_within_budget_for_all_agents():
     report = core_layer_sizes()
     assert report, "expected at least one agent with core layers"

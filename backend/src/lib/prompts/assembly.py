@@ -326,7 +326,6 @@ def _build_compact_runtime_contract(agent: AgentDefinition) -> str:
         lines.append("## Generated Runtime Contract")
 
     if agent.tools:
-        lines.append(f"- Tool inventory from agent.yaml: {', '.join(agent.tools)}.")
         required_tools = required_tool_names_for_available_tools(
             agent.tools,
             required_package_tool_names_resolver=_required_package_tool_names,
@@ -398,21 +397,15 @@ def _build_domain_pack_contract_lines(agent: AgentDefinition) -> list[str]:
         f"({metadata.status.value}{semantic_suffix})."
     ]
 
-    provider_refs = _format_schema_refs(metadata.schema_refs)
-    if provider_refs:
-        lines.append(f"- Schema/provider refs: {provider_refs}.")
-
-    object_summary = _format_object_summary(metadata.object_definitions)
-    if object_summary:
-        lines.append(f"- Extractor envelope objects: {object_summary}.")
-
-    pending_summary = _format_pending_object_summary(metadata.object_definitions)
-    if pending_summary:
-        lines.append(f"- Pending unresolved shapes: {pending_summary}.")
-
     validator_fields = _format_validator_bound_fields(metadata.object_definitions)
     if validator_fields:
-        lines.append(f"- Validator-bound fields: {validator_fields}.")
+        lines.append(
+            "- Validators own these fields; do not invent their identifiers: "
+            f"{validator_fields}. "
+            "Use get_agent_contract (topics validator_bindings and "
+            "ontology_constraints, detail_level=detail) for the full bindings, "
+            "selectors, and accepted ontology terms."
+        )
 
     active_bindings = [
         binding
@@ -422,75 +415,10 @@ def _build_domain_pack_contract_lines(agent: AgentDefinition) -> list[str]:
     if active_bindings:
         lines.append(
             "- Active validator bindings own validator result fields and envelope "
-            "validation findings."
-        )
-        lines.extend(
-            f"- Active validator binding: {_format_active_validator_binding(binding)}."
-            for binding in active_bindings
+            "validation findings; do not author validator outputs yourself."
         )
 
     return lines
-
-
-def _format_schema_refs(schema_refs: Sequence[Any]) -> str:
-    refs: list[str] = []
-    for schema_ref in schema_refs[:3]:
-        provider = str(getattr(schema_ref, "provider", "") or "").strip()
-        name = str(getattr(schema_ref, "name", "") or "").strip()
-        version = str(getattr(schema_ref, "version", "") or "").strip()
-        short_version = version[:12] if version else ""
-        label = ".".join(part for part in (provider, name) if part)
-        if short_version:
-            label = f"{label}@{short_version}" if label else short_version
-        if label:
-            refs.append(label)
-    if len(schema_refs) > 3:
-        refs.append(f"+{len(schema_refs) - 3} more")
-    return "; ".join(refs)
-
-
-def _format_object_summary(object_definitions: Sequence[Any]) -> str:
-    chunks: list[str] = []
-    for object_definition in object_definitions:
-        role = _metadata_text(object_definition.metadata, "object_role")
-        required_fields = [
-            field.field_path
-            for field in object_definition.fields
-            if bool(getattr(field, "required", False))
-        ]
-        required_suffix = (
-            f" required[{_join_limited(required_fields, limit=6)}]"
-            if required_fields
-            else ""
-        )
-        role_suffix = f" role={role}" if role else ""
-        chunks.append(
-            f"{object_definition.object_type}({object_definition.model_ref or 'no model'}"
-            f"{role_suffix}{required_suffix})"
-        )
-    return "; ".join(chunks)
-
-
-def _format_pending_object_summary(object_definitions: Sequence[Any]) -> str:
-    chunks: list[str] = []
-    for object_definition in object_definitions:
-        validation_state = _metadata_text(object_definition.metadata, "validation_state")
-        if not validation_state or not validation_state.startswith("pending_"):
-            continue
-        required_fields = [
-            field.field_path
-            for field in object_definition.fields
-            if bool(getattr(field, "required", False))
-        ]
-        required_suffix = (
-            f"; required {_join_limited(required_fields, limit=4)}"
-            if required_fields
-            else ""
-        )
-        chunks.append(
-            f"{object_definition.object_type}={validation_state}{required_suffix}"
-        )
-    return "; ".join(chunks)
 
 
 def _format_validator_bound_fields(object_definitions: Sequence[Any]) -> str:
@@ -499,51 +427,8 @@ def _format_validator_bound_fields(object_definitions: Sequence[Any]) -> str:
         for field in object_definition.fields:
             binding_id = _metadata_text(field.metadata, "validator_binding_id")
             if binding_id:
-                fields.append(
-                    f"{object_definition.object_type}.{field.field_path}->{binding_id}"
-                )
+                fields.append(f"{object_definition.object_type}.{field.field_path}")
     return _join_limited(fields, limit=10)
-
-
-def _format_active_validator_binding(binding: Any) -> str:
-    targets = []
-    if binding.object_types:
-        targets.append(f"objects[{', '.join(binding.object_types)}]")
-    if binding.field_paths:
-        targets.append(f"fields[{', '.join(binding.field_paths)}]")
-    target_text = " ".join(targets) or "pack scope"
-    policy_bits = [
-        bit
-        for bit, enabled in (
-            ("required", binding.required),
-            ("blocking", binding.blocking),
-            ("opt-out allowed", binding.allow_opt_out),
-        )
-        if enabled
-    ]
-    policy_text = f"; {'/'.join(policy_bits)}" if policy_bits else ""
-    selectors = _format_input_selectors(binding.input_fields)
-    selector_text = f"; selectors {selectors}" if selectors else ""
-    return f"{binding.binding_id} targets {target_text}{policy_text}{selector_text}"
-
-
-def _format_input_selectors(input_fields: Mapping[str, Any]) -> str:
-    selectors: list[str] = []
-    for name, selector in sorted(input_fields.items()):
-        source = str(getattr(selector, "source", "") or "").strip()
-        path = str(getattr(selector, "path", "") or "").strip()
-        if source == "literal":
-            value = getattr(selector, "value", None)
-            if isinstance(value, list):
-                value_text = "[" + ", ".join(str(item) for item in value) + "]"
-            else:
-                value_text = str(value)
-            selectors.append(f"{name}<-literal:{value_text}")
-        elif path:
-            selectors.append(f"{name}<-{source}.{path}")
-        else:
-            selectors.append(f"{name}<-{source}")
-    return _join_limited(selectors, limit=8)
 
 
 def _required_package_tool_names(available_tool_names: set[str]) -> set[str]:

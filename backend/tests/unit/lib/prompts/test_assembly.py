@@ -142,18 +142,33 @@ def test_core_generated_contract_summarizes_tool_and_domain_metadata(monkeypatch
     bundle = assembly.build_agent_core_prompt("phenotype_extractor")
     generated = bundle.layers[1].content
 
-    assert "Tool inventory from agent.yaml" in generated
+    # KEEP — action-relevant lines
     assert "call at least one document retrieval tool" in generated
     assert "get_agent_contract" in generated
     assert "Domain envelope pack: agr.alliance.phenotype v0.1.0" in generated
-    assert "PhenotypeAnnotation(PhenotypeAnnotationPayload role=curatable_unit" in generated
-    assert "Pending unresolved shapes: PhenotypeTerm=pending_ontology_resolution" in generated
-    assert "PhenotypeTerm.curie->phenotype_term_ontology_validator" in generated
-    assert "accepted_prefixes<-literal:[MP, WBPhenotype, ZP]" in generated
     assert "No extractor should invent exact ontology CURIEs" in generated
+    # NEW — single compact validator-owned-fields line replaces the per-field map
+    assert "Validators own these fields" in generated
+    assert "do not invent" in generated
+    assert "PhenotypeTerm.curie" in generated  # at least one field named in the capped list
 
-    assert len(generated.splitlines()) <= 40
-    assert len(generated.split()) <= 1500
+    # REMOVED — audit enumeration must no longer be inlined
+    assert "Tool inventory from agent.yaml" not in generated
+    assert "PhenotypeAnnotation(PhenotypeAnnotationPayload role=" not in generated
+    assert "Pending unresolved shapes:" not in generated
+    assert "->phenotype_term_ontology_validator" not in generated
+    assert "accepted_prefixes<-literal:" not in generated
+
+    # Tighter size bounds for the compact contract. NOTE: this test's fixture
+    # agent sets output_schema="PhenotypeResultEnvelope" (stubbed to
+    # DemoStructuredOutput), so the core_generated ``generated`` layer here also
+    # carries the fixed ~9-line/~127-word "## CRITICAL ... STRUCTURED OUTPUT"
+    # block plus a blank separator -- making this fixture 19 lines / 314 words.
+    # The real phenotype_extractor has output_schema=None and no such block, so
+    # its contract is smaller. The ceilings below sit just above this fixture
+    # (runtime contract alone is ~9 lines / ~187 words, vs >30 lines pre-slim).
+    assert len(generated.splitlines()) <= 20
+    assert len(generated.split()) <= 330
     assert "prompt_templates:" not in bundle.layers[1].source_ref
     assert "domain_pack:agr.alliance.phenotype" in bundle.layers[1].source_ref
 
