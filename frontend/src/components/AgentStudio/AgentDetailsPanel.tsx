@@ -40,7 +40,6 @@ import ScienceIcon from '@mui/icons-material/Science'
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import StorageIcon from '@mui/icons-material/Storage'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
-import LightbulbOutlinedIcon from '@mui/icons-material/LightbulbOutlined'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
@@ -533,35 +532,11 @@ function AgentDetailsPanel({
               </Box>
             )}
 
-            {/* Tips section - sourced from docs.yaml */}
-            {documentation?.tips && documentation.tips.length > 0 && (
-              <Box sx={{ mb: 3 }}>
-                <SectionTitle>
-                  <LightbulbOutlinedIcon fontSize="small" color="info" />
-                  Tips for Best Results
-                </SectionTitle>
-                <List dense disablePadding>
-                  {documentation.tips.map((tip, idx) => (
-                    <ListItem key={idx} sx={{ pl: 0 }}>
-                      <ListItemIcon sx={{ minWidth: 28 }}>
-                        <LightbulbOutlinedIcon fontSize="small" sx={{ color: 'info.main', fontSize: '1rem' }} />
-                      </ListItemIcon>
-                      <ListItemText
-                        primary={tip}
-                        primaryTypographyProps={{ variant: 'body2' }}
-                      />
-                    </ListItem>
-                  ))}
-                </List>
-              </Box>
-            )}
-
             {/* Empty state for Guidance */}
-            {(!documentation?.limitations || documentation.limitations.length === 0) &&
-             (!documentation?.tips || documentation.tips.length === 0) && (
+            {(!documentation?.limitations || documentation.limitations.length === 0) && (
               <Box sx={{ textAlign: 'center', py: 4, color: 'text.secondary' }}>
                 <Typography variant="body2">
-                  No specific guidance documented for this agent.
+                  No specific limitations documented for this agent.
                 </Typography>
               </Box>
             )}

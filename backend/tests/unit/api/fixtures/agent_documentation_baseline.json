@@ -49,8 +49,7 @@
       "Cannot create missing model records or assign new provider identifiers.",
       "Only reports lookup evidence available from Alliance curation data."
     ],
-    "summary": "Validates affected genomic model (AGM) subjects by matching supplied identifiers or labels to Alliance model-organism records.\n",
-    "tips": []
+    "summary": "Validates affected genomic model (AGM) subjects by matching supplied identifiers or labels to Alliance model-organism records.\n"
   },
   "agm_validation": {
     "capabilities": [
@@ -102,8 +101,7 @@
       "Cannot create missing model records or assign new provider identifiers.",
       "Only reports lookup evidence available from Alliance curation data."
     ],
-    "summary": "Validates affected genomic model (AGM) subjects by matching supplied identifiers or labels to Alliance model-organism records.\n",
-    "tips": []
+    "summary": "Validates affected genomic model (AGM) subjects by matching supplied identifiers or labels to Alliance model-organism records.\n"
   },
   "allele": {
     "capabilities": [
@@ -161,8 +159,7 @@
       "Allele symbols written with angle brackets are matched to their superscript form automatically \u2014 you don't need to reformat them.",
       "Very broad searches return at most 500 matches (100 by default), so narrow your search if you don't see the allele you expect."
     ],
-    "summary": "Validates allele/variant identifiers against the Alliance Curation Database by symbol, ID, or gene association.",
-    "tips": []
+    "summary": "Validates allele/variant identifiers against the Alliance Curation Database by symbol, ID, or gene association."
   },
   "allele_extractor": {
     "capabilities": [
@@ -228,8 +225,7 @@
       "Balancer chromosomes and chromosomal deficiencies are classified as tools, not alleles",
       "Confirming each allele against the Alliance database is the Allele Validation Agent's job; any unconfirmed or conflicting alleles stay visible to you as validator findings."
     ],
-    "summary": "Extracts experimentally supported allele and variant mentions from uploaded PDFs, distinguishing alleles from strains, transgenes, and balancers.",
-    "tips": []
+    "summary": "Extracts experimentally supported allele and variant mentions from uploaded PDFs, distinguishing alleles from strains, transgenes, and balancers."
   },
   "allele_validation": {
     "capabilities": [
@@ -287,8 +283,7 @@
       "Allele symbols written with angle brackets are matched to their superscript form automatically \u2014 you don't need to reformat them.",
       "Very broad searches return at most 500 matches (100 by default), so narrow your search if you don't see the allele you expect."
     ],
-    "summary": "Validates allele/variant identifiers against the Alliance Curation Database by symbol, ID, or gene association.",
-    "tips": []
+    "summary": "Validates allele/variant identifiers against the Alliance Curation Database by symbol, ID, or gene association."
   },
   "chat_output": {
     "capabilities": [
@@ -303,8 +298,7 @@
     "limitations": [
       "Output is optimized for interactive reading, not file export"
     ],
-    "summary": "Formats and displays final results directly in the chat interface for immediate curator review.",
-    "tips": []
+    "summary": "Formats and displays final results directly in the chat interface for immediate curator review."
   },
   "chat_output_formatter": {
     "capabilities": [
@@ -319,8 +313,7 @@
     "limitations": [
       "Output is optimized for interactive reading, not file export"
     ],
-    "summary": "Formats and displays final results directly in the chat interface for immediate curator review.",
-    "tips": []
+    "summary": "Formats and displays final results directly in the chat interface for immediate curator review."
   },
   "chemical": {
     "capabilities": [
@@ -371,8 +364,7 @@
       "Multiple results for common names (e.g., 'glucose' matches many stereoisomers) - selects most biologically relevant form",
       "Every answer comes from a fresh, live lookup against ChEBI \u2014 it never answers from memory."
     ],
-    "summary": "Confirms chemical compound names against ChEBI (Chemical Entities of Biological Interest) and gives you the matching official ChEBI term and ID for a chemical annotation.",
-    "tips": []
+    "summary": "Confirms chemical compound names against ChEBI (Chemical Entities of Biological Interest) and gives you the matching official ChEBI term and ID for a chemical annotation."
   },
   "chemical_validation": {
     "capabilities": [
@@ -423,8 +415,7 @@
       "Multiple results for common names (e.g., 'glucose' matches many stereoisomers) - selects most biologically relevant form",
       "Every answer comes from a fresh, live lookup against ChEBI \u2014 it never answers from memory."
     ],
-    "summary": "Confirms chemical compound names against ChEBI (Chemical Entities of Biological Interest) and gives you the matching official ChEBI term and ID for a chemical annotation.",
-    "tips": []
+    "summary": "Confirms chemical compound names against ChEBI (Chemical Entities of Biological Interest) and gives you the matching official ChEBI term and ID for a chemical annotation."
   },
   "controlled_vocabulary": {
     "capabilities": [
@@ -468,8 +459,7 @@
       "Cannot create or update controlled vocabulary rows.",
       "Common abbreviations may produce ambiguous results unless the vocabulary is specified."
     ],
-    "summary": "Validates controlled vocabulary terms by vocabulary name, term name, abbreviation, synonym, and obsolete state.\n",
-    "tips": []
+    "summary": "Validates controlled vocabulary terms by vocabulary name, term name, abbreviation, synonym, and obsolete state.\n"
   },
   "controlled_vocabulary_validation": {
     "capabilities": [
@@ -513,8 +503,7 @@
       "Cannot create or update controlled vocabulary rows.",
       "Common abbreviations may produce ambiguous results unless the vocabulary is specified."
     ],
-    "summary": "Validates controlled vocabulary terms by vocabulary name, term name, abbreviation, synonym, and obsolete state.\n",
-    "tips": []
+    "summary": "Validates controlled vocabulary terms by vocabulary name, term name, abbreviation, synonym, and obsolete state.\n"
   },
   "csv_formatter": {
     "capabilities": [
@@ -529,8 +518,7 @@
     "limitations": [
       "Nested structures may be flattened for tabular compatibility"
     ],
-    "summary": "Formats structured extraction results as a downloadable CSV file for spreadsheet workflows.",
-    "tips": []
+    "summary": "Formats structured extraction results as a downloadable CSV file for spreadsheet workflows."
   },
   "csv_output_formatter": {
     "capabilities": [
@@ -545,8 +533,7 @@
     "limitations": [
       "Nested structures may be flattened for tabular compatibility"
     ],
-    "summary": "Formats structured extraction results as a downloadable CSV file for spreadsheet workflows.",
-    "tips": []
+    "summary": "Formats structured extraction results as a downloadable CSV file for spreadsheet workflows."
   },
   "curation_prep": {
     "capabilities": [
@@ -582,8 +569,7 @@
       "Does not replace curator review or approval; it prepares the review session but does not submit final curation",
       "The later automated steps still handle matching items to official records and saving them."
     ],
-    "summary": "Gathers everything the earlier agents found, checks that each item is complete and well-formed, and opens a ready-to-review session for you \u2014 keeping the supporting quotes attached to every item.",
-    "tips": []
+    "summary": "Gathers everything the earlier agents found, checks that each item is complete and well-formed, and opens a ready-to-review session for you \u2014 keeping the supporting quotes attached to every item."
   },
   "data_provider": {
     "capabilities": [
@@ -635,8 +621,7 @@
       "Cannot create new provider records or taxon relationships.",
       "Provider-to-taxon checks are limited to relationships present in Alliance curation data."
     ],
-    "summary": "Validates Alliance data provider abbreviations, display names, and provider-to-taxon consistency for submitted curation records.\n",
-    "tips": []
+    "summary": "Validates Alliance data provider abbreviations, display names, and provider-to-taxon consistency for submitted curation records.\n"
   },
   "data_provider_validation": {
     "capabilities": [
@@ -688,8 +673,7 @@
       "Cannot create new provider records or taxon relationships.",
       "Provider-to-taxon checks are limited to relationships present in Alliance curation data."
     ],
-    "summary": "Validates Alliance data provider abbreviations, display names, and provider-to-taxon consistency for submitted curation records.\n",
-    "tips": []
+    "summary": "Validates Alliance data provider abbreviations, display names, and provider-to-taxon consistency for submitted curation records.\n"
   },
   "disease": {
     "capabilities": [
@@ -732,8 +716,7 @@
       "Does not walk up or down the disease hierarchy (parent or child terms) and does not track a term's obsolete history \u2014 ask the Ontology Term Resolver for related terms.",
       "Every answer comes from a live lookup against the Alliance's disease terms \u2014 it never answers from memory."
     ],
-    "summary": "Confirms disease names against the Disease Ontology (DOID) and gives you the matching official disease term and its ID, so a disease annotation can be submitted with confidence.",
-    "tips": []
+    "summary": "Confirms disease names against the Disease Ontology (DOID) and gives you the matching official disease term and its ID, so a disease annotation can be submitted with confidence."
   },
   "disease_extractor": {
     "capabilities": [
@@ -791,8 +774,7 @@
       "Diseases mentioned only in introduction/background without new experimental findings are excluded",
       "Looking each disease up in the Disease Ontology and confirming the provider is the Disease Validation Agent's job; any unconfirmed or conflicting diseases stay visible to you as validator findings."
     ],
-    "summary": "Extracts experimentally supported disease associations from uploaded PDFs, classifying disease roles and gene-disease relationship types for Alliance curation.",
-    "tips": []
+    "summary": "Extracts experimentally supported disease associations from uploaded PDFs, classifying disease roles and gene-disease relationship types for Alliance curation."
   },
   "disease_validation": {
     "capabilities": [
@@ -835,8 +817,7 @@
       "Does not walk up or down the disease hierarchy (parent or child terms) and does not track a term's obsolete history \u2014 ask the Ontology Term Resolver for related terms.",
       "Every answer comes from a live lookup against the Alliance's disease terms \u2014 it never answers from memory."
     ],
-    "summary": "Confirms disease names against the Disease Ontology (DOID) and gives you the matching official disease term and its ID, so a disease annotation can be submitted with confidence.",
-    "tips": []
+    "summary": "Confirms disease names against the Disease Ontology (DOID) and gives you the matching official disease term and its ID, so a disease annotation can be submitted with confidence."
   },
   "experimental_condition": {
     "capabilities": [
@@ -889,8 +870,7 @@
       "Cannot create missing ontology, chemical, vocabulary, taxon, or provider records.",
       "Quantity and unit validation depends on the submitted field context and available vocabulary evidence."
     ],
-    "summary": "Validates composite Alliance experimental-condition payloads by checking ontology, chemical, taxon, vocabulary, quantity, and provider components together.\n",
-    "tips": []
+    "summary": "Validates composite Alliance experimental-condition payloads by checking ontology, chemical, taxon, vocabulary, quantity, and provider components together.\n"
   },
   "experimental_condition_validation": {
     "capabilities": [
@@ -943,8 +923,7 @@
       "Cannot create missing ontology, chemical, vocabulary, taxon, or provider records.",
       "Quantity and unit validation depends on the submitted field context and available vocabulary evidence."
     ],
-    "summary": "Validates composite Alliance experimental-condition payloads by checking ontology, chemical, taxon, vocabulary, quantity, and provider components together.\n",
-    "tips": []
+    "summary": "Validates composite Alliance experimental-condition payloads by checking ontology, chemical, taxon, vocabulary, quantity, and provider components together.\n"
   },
   "gene": {
     "capabilities": [
@@ -986,8 +965,7 @@
       "Only validates against Alliance group data",
       "Some newly published genes may not be in the database yet"
     ],
-    "summary": "Validates gene identifiers against the Alliance Curation Database.",
-    "tips": []
+    "summary": "Validates gene identifiers against the Alliance Curation Database."
   },
   "gene_expression": {
     "capabilities": [
@@ -1053,8 +1031,7 @@
       "The extractor records the term wording it finds; turning that into an official ontology ID is the validators' or the Ontology Term Resolver's job.",
       "Requires at least one document search or read tool call before returning results"
     ],
-    "summary": "Reads an uploaded paper and pulls out where and when each gene is expressed \u2014 the tissues, cell types, developmental stages, and any sex-specific patterns \u2014 with the supporting quote, ready for the specialist validators to confirm.",
-    "tips": []
+    "summary": "Reads an uploaded paper and pulls out where and when each gene is expressed \u2014 the tissues, cell types, developmental stages, and any sex-specific patterns \u2014 with the supporting quote, ready for the specialist validators to confirm."
   },
   "gene_expression_extraction": {
     "capabilities": [
@@ -1120,8 +1097,7 @@
       "The extractor records the term wording it finds; turning that into an official ontology ID is the validators' or the Ontology Term Resolver's job.",
       "Requires at least one document search or read tool call before returning results"
     ],
-    "summary": "Reads an uploaded paper and pulls out where and when each gene is expressed \u2014 the tissues, cell types, developmental stages, and any sex-specific patterns \u2014 with the supporting quote, ready for the specialist validators to confirm.",
-    "tips": []
+    "summary": "Reads an uploaded paper and pulls out where and when each gene is expressed \u2014 the tissues, cell types, developmental stages, and any sex-specific patterns \u2014 with the supporting quote, ready for the specialist validators to confirm."
   },
   "gene_extractor": {
     "capabilities": [
@@ -1187,8 +1163,7 @@
       "When a gene could belong to more than one species, it uses clues in the text; cases it can't settle are flagged for curator review.",
       "Confirming each gene against the Alliance database is the Gene Validation Agent's job; any unconfirmed or conflicting genes stay visible to you as validator findings."
     ],
-    "summary": "Reads an uploaded paper and proposes the genes that have real experimental support in it, with the quote that backs each one \u2014 ready for the Gene Validation Agent to confirm against the Alliance database.",
-    "tips": []
+    "summary": "Reads an uploaded paper and proposes the genes that have real experimental support in it, with the quote that backs each one \u2014 ready for the Gene Validation Agent to confirm against the Alliance database."
   },
   "gene_ontology": {
     "capabilities": [
@@ -1244,8 +1219,7 @@
       "Does not perform GO enrichment analysis",
       "Every answer comes from a fresh, live lookup against the Gene Ontology \u2014 it never answers from memory."
     ],
-    "summary": "Looks up Gene Ontology (GO) terms \u2014 their definitions, broader and narrower terms, and how they relate \u2014 across the three GO categories: molecular function, biological process, and cellular component.",
-    "tips": []
+    "summary": "Looks up Gene Ontology (GO) terms \u2014 their definitions, broader and narrower terms, and how they relate \u2014 across the three GO categories: molecular function, biological process, and cellular component."
   },
   "gene_ontology_lookup": {
     "capabilities": [
@@ -1301,8 +1275,7 @@
       "Does not perform GO enrichment analysis",
       "Every answer comes from a fresh, live lookup against the Gene Ontology \u2014 it never answers from memory."
     ],
-    "summary": "Looks up Gene Ontology (GO) terms \u2014 their definitions, broader and narrower terms, and how they relate \u2014 across the three GO categories: molecular function, biological process, and cellular component.",
-    "tips": []
+    "summary": "Looks up Gene Ontology (GO) terms \u2014 their definitions, broader and narrower terms, and how they relate \u2014 across the three GO categories: molecular function, biological process, and cellular component."
   },
   "gene_validation": {
     "capabilities": [
@@ -1344,8 +1317,7 @@
       "Only validates against Alliance group data",
       "Some newly published genes may not be in the database yet"
     ],
-    "summary": "Validates gene identifiers against the Alliance Curation Database.",
-    "tips": []
+    "summary": "Validates gene identifiers against the Alliance Curation Database."
   },
   "go_annotations": {
     "capabilities": [
@@ -1402,8 +1374,7 @@
       "Cannot explore GO term hierarchy or parent/child relationships",
       "Heavily annotated genes may have 500+ IEA annotations - manual annotations are prioritized when summarizing"
     ],
-    "summary": "Retrieves existing GO annotations for specific genes from the Gene Ontology Consortium API, including evidence codes, curation sources, and annotation counts.",
-    "tips": []
+    "summary": "Retrieves existing GO annotations for specific genes from the Gene Ontology Consortium API, including evidence codes, curation sources, and annotation counts."
   },
   "go_annotations_lookup": {
     "capabilities": [
@@ -1460,8 +1431,7 @@
       "Cannot explore GO term hierarchy or parent/child relationships",
       "Heavily annotated genes may have 500+ IEA annotations - manual annotations are prioritized when summarizing"
     ],
-    "summary": "Retrieves existing GO annotations for specific genes from the Gene Ontology Consortium API, including evidence codes, curation sources, and annotation counts.",
-    "tips": []
+    "summary": "Retrieves existing GO annotations for specific genes from the Gene Ontology Consortium API, including evidence codes, curation sources, and annotation counts."
   },
   "json_formatter": {
     "capabilities": [
@@ -1476,8 +1446,7 @@
     "limitations": [
       "File is optimized for machine consumption over spreadsheet readability"
     ],
-    "summary": "Formats structured extraction results as downloadable JSON while preserving nested data.",
-    "tips": []
+    "summary": "Formats structured extraction results as downloadable JSON while preserving nested data."
   },
   "json_output_formatter": {
     "capabilities": [
@@ -1492,8 +1461,7 @@
     "limitations": [
       "File is optimized for machine consumption over spreadsheet readability"
     ],
-    "summary": "Formats structured extraction results as downloadable JSON while preserving nested data.",
-    "tips": []
+    "summary": "Formats structured extraction results as downloadable JSON while preserving nested data."
   },
   "ontology_term_validation": {
     "capabilities": [
@@ -1554,8 +1522,7 @@
       "Requires ontology_term_type for generic label or synonym lookup.",
       "Requires data_provider for provider-scoped anatomy and life-stage lookup."
     ],
-    "summary": "Resolves exact ontology CURIEs and typed ontology-term labels with package lookup helpers while preserving ambiguous or unresolved candidates.\n",
-    "tips": []
+    "summary": "Resolves exact ontology CURIEs and typed ontology-term labels with package lookup helpers while preserving ambiguous or unresolved candidates.\n"
   },
   "orthologs": {
     "capabilities": [
@@ -1611,8 +1578,7 @@
       "Does not find paralogs (within-species gene duplications)",
       "Some genes have no orthologs in certain species (this is valid biological data, not an error)"
     ],
-    "summary": "Finds a gene's orthologs (the matching genes in other species) and tells you how confident the prediction is, based on how many ortholog-prediction methods agree (the DIOPT approach).",
-    "tips": []
+    "summary": "Finds a gene's orthologs (the matching genes in other species) and tells you how confident the prediction is, based on how many ortholog-prediction methods agree (the DIOPT approach)."
   },
   "orthologs_lookup": {
     "capabilities": [
@@ -1668,8 +1634,7 @@
       "Does not find paralogs (within-species gene duplications)",
       "Some genes have no orthologs in certain species (this is valid biological data, not an error)"
     ],
-    "summary": "Finds a gene's orthologs (the matching genes in other species) and tells you how confident the prediction is, based on how many ortholog-prediction methods agree (the DIOPT approach).",
-    "tips": []
+    "summary": "Finds a gene's orthologs (the matching genes in other species) and tells you how confident the prediction is, based on how many ortholog-prediction methods agree (the DIOPT approach)."
   },
   "pdf_extraction": {
     "capabilities": [
@@ -1710,8 +1675,7 @@
       "Very large tables may be truncated",
       "Figure analysis is limited to captions only"
     ],
-    "summary": "Extracts text, tables, and structured data from scientific papers using hybrid and lexical document search modes.",
-    "tips": []
+    "summary": "Extracts text, tables, and structured data from scientific papers using hybrid and lexical document search modes."
   },
   "phenotype_extractor": {
     "capabilities": [
@@ -1772,8 +1736,7 @@
       "Wild-type/control observations are baselines, not phenotype assertions",
       "The extractor proposes the trait wording only; confirming the official ontology term is the phenotype term validator's job after extraction."
     ],
-    "summary": "Extracts experimentally supported phenotype assertions from uploaded PDFs, capturing genotype-phenotype links, polarity, severity, and supporting evidence.",
-    "tips": []
+    "summary": "Extracts experimentally supported phenotype assertions from uploaded PDFs, capturing genotype-phenotype links, polarity, severity, and supporting evidence."
   },
   "reference": {
     "capabilities": [
@@ -1818,8 +1781,7 @@
       "Cannot create missing literature records or correct external reference metadata.",
       "Lookup quality depends on the Alliance literature service and indexed reference metadata."
     ],
-    "summary": "Resolves source-paper references by PMID, DOI, AGRKB CURIE, MOD reference ID, title, or citation text through Alliance literature lookup.\n",
-    "tips": []
+    "summary": "Resolves source-paper references by PMID, DOI, AGRKB CURIE, MOD reference ID, title, or citation text through Alliance literature lookup.\n"
   },
   "reference_validation": {
     "capabilities": [
@@ -1864,8 +1826,7 @@
       "Cannot create missing literature records or correct external reference metadata.",
       "Lookup quality depends on the Alliance literature service and indexed reference metadata."
     ],
-    "summary": "Resolves source-paper references by PMID, DOI, AGRKB CURIE, MOD reference ID, title, or citation text through Alliance literature lookup.\n",
-    "tips": []
+    "summary": "Resolves source-paper references by PMID, DOI, AGRKB CURIE, MOD reference ID, title, or citation text through Alliance literature lookup.\n"
   },
   "subject_entity": {
     "capabilities": [
@@ -1918,8 +1879,7 @@
       "Cannot create missing subject records or assign new entity identifiers.",
       "Only routes among the supported subject validation paths exposed by the package."
     ],
-    "summary": "Routes biological annotation subjects by explicit subject type to gene, allele, or affected genomic model validation paths.\n",
-    "tips": []
+    "summary": "Routes biological annotation subjects by explicit subject type to gene, allele, or affected genomic model validation paths.\n"
   },
   "subject_entity_validation": {
     "capabilities": [
@@ -1972,8 +1932,7 @@
       "Cannot create missing subject records or assign new entity identifiers.",
       "Only routes among the supported subject validation paths exposed by the package."
     ],
-    "summary": "Routes biological annotation subjects by explicit subject type to gene, allele, or affected genomic model validation paths.\n",
-    "tips": []
+    "summary": "Routes biological annotation subjects by explicit subject type to gene, allele, or affected genomic model validation paths.\n"
   },
   "supervisor": {
     "capabilities": [
@@ -1996,8 +1955,7 @@
       "Very ambiguous queries may be routed to a general agent first",
       "Not available in Flow Builder - works automatically in chat"
     ],
-    "summary": "Routes curator queries to the appropriate specialist agent - works behind the scenes.",
-    "tips": []
+    "summary": "Routes curator queries to the appropriate specialist agent - works behind the scenes."
   },
   "task_input": {
     "capabilities": [
@@ -2019,8 +1977,7 @@
       "Instructions should be clear and specific for best results",
       "Complex multi-part requests may need to be broken into separate flows"
     ],
-    "summary": "The starting point for curation workflows - defines what task the AI should perform.",
-    "tips": []
+    "summary": "The starting point for curation workflows - defines what task the AI should perform."
   },
   "tsv_formatter": {
     "capabilities": [
@@ -2035,8 +1992,7 @@
     "limitations": [
       "Like CSV, complex nested fields may be flattened"
     ],
-    "summary": "Formats structured extraction results as a downloadable TSV file for tab-delimited pipelines.",
-    "tips": []
+    "summary": "Formats structured extraction results as a downloadable TSV file for tab-delimited pipelines."
   },
   "tsv_output_formatter": {
     "capabilities": [
@@ -2051,7 +2007,6 @@
     "limitations": [
       "Like CSV, complex nested fields may be flattened"
     ],
-    "summary": "Formats structured extraction results as a downloadable TSV file for tab-delimited pipelines.",
-    "tips": []
+    "summary": "Formats structured extraction results as a downloadable TSV file for tab-delimited pipelines."
   }
 }

@@ -173,7 +173,6 @@ def _convert_documentation(doc_dict: Optional[Dict[str, Any]]) -> Optional[Agent
         capabilities=capabilities,
         data_sources=data_sources,
         limitations=doc_dict.get("limitations", []),
-        tips=doc_dict.get("tips", []),
     )
 
 

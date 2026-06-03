@@ -29,8 +29,6 @@ def test_docs_yaml_populates_documentation(tmp_path):
             capabilities:
               - name: "Gene lookup"
                 description: "Find a gene by its symbol, name, or ID"
-            tips:
-              - "Include the species when you can"
         """,
     )
     reset_cache()
@@ -41,7 +39,6 @@ def test_docs_yaml_populates_documentation(tmp_path):
     assert doc is not None
     assert doc["summary"] == "Checks gene names against the Alliance database."
     assert doc["capabilities"][0]["name"] == "Gene lookup"
-    assert doc["tips"] == ["Include the species when you can"]
 
 
 def test_inline_documentation_and_docs_yaml_conflict_raises(tmp_path):
