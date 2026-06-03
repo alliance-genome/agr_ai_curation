@@ -62,62 +62,10 @@ content: |
 
   If evidence is missing, say so honestly in `answer`, set `kept_count` to 0, and summarize the
   relevant searches or sections checked in `summary`, `normalization_notes[]`, or `run_summary.warnings`.
+
+  Multiple `span_ids` in one `record_evidence` call produce one evidence record. Use separate
+  `record_evidence` calls for truly disjoint evidence units.
   </evidence_rules>
-
-  <search_infrastructure>
-  The paper you are extracting from has been ingested through a PDF processing pipeline.
-  Understanding this pipeline helps you make better search decisions.
-
-  Data source:
-  - The original document is a scientific PDF that was parsed into structured chunks using
-    a document-understanding model. Each chunk is a text segment (typically a paragraph,
-    table cell, or figure legend) annotated with page number, section title, parent section,
-    subsection, and element type (NarrativeText, Table, etc.).
-  - Chunks preserve the document's section hierarchy as resolved by an LLM at ingest time,
-    so section and subsection boundaries are semantic, not positional.
-
-  Search backend:
-  - `search_document` queries a Weaviate vector database. The default
-    `search_mode="auto"` preserves hybrid search, combining semantic similarity with
-    BM25 keyword matching so natural-language queries find conceptually related passages.
-  - Pass `search_mode="lexical"` for exact symbols, IDs, strains, alleles, probes,
-    reagents, genotype handles, PMIDs/DOIs, and other controlled tokens. Pass
-    `search_mode="hybrid_lexical_first"` when normal hybrid search should retry with
-    lexical-heavy matching if needed.
-  - Results are reranked by a cross-encoder and then diversified via MMR (Maximal Marginal
-    Relevance), so the top hits balance relevance with breadth of coverage.
-  - For short queries (<=3 tokens), the system automatically boosts lexical/keyword matching
-    to avoid semantic drift on terse terms.
-  - You can pass `section_keywords` to restrict search to specific sections before the
-    vector/keyword search runs.
-
-  Reading tools:
-  - `read_section` and `read_subsection` retrieve ALL chunks belonging to a named section or
-    subsection using the LLM-resolved hierarchy, not linear page ordering. This means
-    "read_section('Methods')" returns every chunk classified under Methods regardless of
-    where those chunks appear in the PDF.
-  - Content is returned up to approx. 1500 characters per chunk hit for search, but read tools
-    return full chunk text.
-
-  Evidence selection:
-  - `search_document`, `read_section`, and `read_subsection` are discovery/survey tools.
-  - For retained evidence, call `read_chunk(chunk_id)` on the relevant chunk and select
-    backend-generated `evidence_spans[].span_id` values.
-  - Call `record_evidence(entity=..., span_ids=[...])`; do not write evidence quote text yourself.
-  - Multiple `span_ids` in one `record_evidence` call produce one evidence record. Use separate
-    `record_evidence` calls for truly disjoint evidence units.
-
-  Search strategy implications:
-  - Use natural-language queries for broad or conceptual searches to leverage semantic
-    similarity across paraphrases and synonyms; keep the default/auto mode for these.
-  - Use `search_mode="lexical"` for exact biomedical tokens and identifiers, and
-    `search_mode="hybrid_lexical_first"` when a broad query should retry with
-    lexical-heavy matching if needed.
-  - When you need complete coverage of a section, use `read_section`/`read_subsection`
-    instead of searching, since search may miss low-scoring but relevant passages.
-  - Use `section_keywords` when you want to focus on a particular section without reading
-    the entire thing.
-  </search_infrastructure>
 
   <tools>
   Use these tools:
