@@ -1,28 +1,31 @@
-# Agent Prompt-Stack Optimization — Phase B Implementation Plan
+# Agent Prompt-Stack Optimization — Phase B Implementation Plan (revised post-#446)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Remove cross-layer duplication from the curator-facing base prompts by relocating the load-bearing document-search guidance into the search/read tool descriptions (where OpenAI's guidance says tool-usage detail belongs), then deleting the now-redundant `<search_infrastructure>` block and the `Available tools:` re-listing from the base prompts that carry them.
 
-**Architecture:** Phase A slimmed the backend-generated contract; Phase B touches `packages/` — the shared tool descriptions and a small number of base prompts. The relocation must be ordered: enrich the tool descriptions FIRST (and prove the enriched text reaches the model-facing tool schema), THEN remove the duplicated block from the prompts. Each removal is justified by a per-agent redundancy map (removed line → surviving home).
+**Architecture (confirmed against post-#446 main by a code-tracing investigation — these are NOT assumptions):**
+- The **model-facing** `FunctionTool.description` for `search_document` / `read_chunk` / `read_section` / `read_subsection` comes from the inner `@function_tool` **docstrings in the PACKAGE copy** `packages/alliance/python/src/agr_ai_curation_alliance/tools/weaviate_search.py` (search_document `:150-165`, read_chunk `:242-249`, read_section `:376-389`, read_subsection `:537-552`). The runtime reaches these via bindings.yaml `callable_factory` -> `documents.py` -> package `weaviate_search`; `catalog_service._resolve_package_tool` only swaps `on_invoke_tool` and leaves `.description` (the docstring) untouched. **bindings.yaml `description` does NOT reach the model.**
+- The **curator-facing** Agent Studio catalog (`TOOL_REGISTRY[tool_id]['description']` / `['documentation']['summary']`) now reads **bindings.yaml `description` + `metadata.documentation.summary`** (post-#446 `CURATED_TOOL_REGISTRY` is deleted, so bindings.yaml is the live source).
+- There are **two `weaviate_search.py` copies**: the package copy (feeds the runtime/model) and `backend/src/lib/openai_agents/tools/weaviate_search.py` (legacy, differs only in import paths + minor wording). `backend/tests/unit/lib/openai_agents/tools/test_tool_descriptions.py` builds tools from and asserts on the **backend** copy via `inspect.getdoc`. So the test currently guards a copy the runtime does not use.
+- **Therefore Phase B edits BOTH layers and BOTH copies:** enrich the package docstrings (model) AND the backend copy (so the test guards the runtime text) AND bindings.yaml (curator parity). Relocate-before-remove ordering: enrich tool descriptions first, prove the guidance reaches the model via the docstring/runtime path, then delete the base-prompt blocks.
 
-**Tech Stack:** Python 3.11, YAML, pytest. Tests run in `ai-curation-unit-tests:latest` (the one-off `docker run` pattern used in Phase A; no DB needed for prompt/tool-doc assembly). Lightweight run command (reused throughout):
+**Tech Stack:** Python 3.11, YAML, pytest. Tests run in `ai-curation-unit-tests:latest` (the one-off `docker run` pattern from Phase A; no DB needed). Lightweight run command (reused):
 ```bash
 docker run --rm -v "$(pwd)/backend:/app/backend" -v "$(pwd)/packages:/app/packages:ro" -v "$(pwd)/config:/app/config:ro" -v "$(pwd)/alliance_agents:/app/alliance_agents" -v "$(pwd)/docs:/app/docs:ro" -v "$(pwd)/frontend:/app/frontend:ro" -w /app/backend -e OPENAI_API_KEY=test -e PYTHONUNBUFFERED=1 -e EMBEDDING_MODEL=text-embedding-3-small -e EMBEDDING_MODEL_TOKEN_LIMIT=8191 -e EMBEDDING_TOKEN_SAFETY_MARGIN=500 ai-curation-unit-tests:latest python -m pytest <paths> -q
 ```
 
 ---
 
-## Scope (refined from the spec after exploration)
+## Scope (refined after the post-#446 investigation)
 
-Exploration of all agent base prompts found the *mechanical, provably-redundant* cross-layer content is concentrated:
-- `<search_infrastructure>` block: **only `gene_expression` and `pdf`** (`prompt.yaml`). The same ~2K guidance duplicated across two base prompts — consolidate into the shared search/read tool descriptions (removes the cross-agent duplication and follows the "tool guidance lives in tool descriptions" principle).
-- `Available tools:` re-listing: **only `gene_expression`** — pure duplication of the always-sent tool schemas + the kept required-tool-call line; delete.
-- **Evidence-policy span-id mechanics** appear in all six extractors, but they are interwoven with genuine curation guidance (what counts as strong/weak evidence, examples, record/attach workflow), not a clean restatement to mechanically excise. **Their de-duplication is folded into Phase C** (the holistic per-agent rewrite, where the semantic-coverage checklist governs), NOT Phase B.
+The mechanical, provably-redundant cross-layer search guidance is **duplicated across six prompts**, but Phase B cleanly handles only the two `<search_infrastructure>` carriers; the rest is recorded and deferred:
+- `<search_infrastructure>` block — **`gene_expression` and `pdf`** (`prompt.yaml`). Consolidate into the shared search/read tool descriptions; **remove in Phase B**.
+- `Available tools:` re-listing — **`gene_expression` only**. Pure duplication of the always-sent tool schemas + the kept required-tool-call line; **remove in Phase B**.
+- `<search_context>` blocks — **`gene_extractor`, `allele_extractor`, `disease_extractor`, `phenotype_extractor`** carry the SAME search-backend facts (gene_extractor's is a 53-line near-twin of `<search_infrastructure>`; the others are 7-12 lines). These are interwoven with extractor-specific guidance, so they are **recorded in the Task 4 redundancy map and deferred to Phase C** (the holistic per-agent rewrite). Their search-backend facts are already relocated by Task 1, so Phase C can drop them cleanly.
+- Evidence-policy span-id mechanics (all six extractors) — interwoven with curation guidance; **deferred to Phase C**.
 
-So Phase B is intentionally small and low-risk: enrich 4 tool descriptions, de-dup 2 base prompts. Other agents have no Phase-B-removable block (documented in the Task 4 artifact); their cleanup happens in Phase C.
-
-**Per the spec's "all agents" intent:** Phase B still *scans* every agent (Task 4) and records the per-agent finding; "no Phase-B redundancy — handled in Phase C" is a valid, recorded outcome.
+So Phase B is intentionally small: enrich 4 tool descriptions (2 code copies + bindings.yaml), de-dup 2 base prompts. Task 4 scans every agent and records the per-agent finding.
 
 ---
 
@@ -30,97 +33,73 @@ So Phase B is intentionally small and low-risk: enrich 4 tool descriptions, de-d
 
 | File | Responsibility | Change |
 |---|---|---|
-| (model-facing tool-description source — to be confirmed in Task 1; candidates: `packages/alliance/tools/bindings.yaml` `description:` for the 4 document tools, and/or `packages/alliance/python/src/agr_ai_curation_alliance/tools/documents.py` factories) | search/read tool descriptions | Enrich with search guidance |
-| `packages/alliance/agents/gene_expression/prompt.yaml` | gene_expression base prompt | Remove `<search_infrastructure>` + `Available tools:` blocks |
-| `packages/alliance/agents/pdf/prompt.yaml` | pdf base prompt | Remove `<search_infrastructure>` block |
-| `backend/tests/unit/...` (tool-doc + prompt redundancy guards) | tests | New assertion that search guidance is in the tool schema; re-baseline tool-doc completeness if needed |
-| `docs/design/2026-06-03-prompt-size-report-phaseB.md` | per-agent redundancy map + before/after sizes | Create (Task 4) |
+| `packages/alliance/python/src/agr_ai_curation_alliance/tools/weaviate_search.py` | model-facing docstrings (runtime) | Enrich the 4 search/read `@function_tool` docstrings |
+| `backend/src/lib/openai_agents/tools/weaviate_search.py` | legacy copy guarded by the doc test | Mirror the same docstring enrichment (keep copies in sync) |
+| `packages/alliance/tools/bindings.yaml` | curator catalog source | Enrich the 4 tools' `description` / `metadata.documentation.summary` (curator-voice) |
+| `packages/alliance/agents/gene_expression/prompt.yaml` | base prompt | Remove `<search_infrastructure>` + `Available tools:`; relocate the immutability sentence (see Task 2) |
+| `packages/alliance/agents/pdf/prompt.yaml` | base prompt | Remove `<search_infrastructure>` |
+| `backend/tests/unit/lib/openai_agents/tools/test_tool_descriptions.py` | model-visible doc contract | Extend to assert the relocated search facts in the docstrings (respect its `_assert_clean_doc` stale-phrase guard) |
+| `backend/tests/unit/api/test_tool_catalog_parity.py` + `fixtures/tool_catalog_baseline.json` | curator catalog parity (added by #446) | Regenerate baseline after bindings.yaml edits; review diff |
+| `backend/tests/unit/test_gene_expression_prompt_policy.py` | gene_expression prompt contract | Keep `:112` immutability assertion passing (line relocated, not deleted) |
+| `docs/design/2026-06-03-prompt-size-report-phaseB.md` | redundancy map + sizes | Create (Task 4) |
 
 ---
 
-## Task 1: Locate the model-facing tool-description source, then enrich the search/read tools
+## Task 1: Enrich the search/read tool descriptions (model docstrings + backend copy + curator bindings.yaml)
 
-**Goal:** the search guidance must reach the MODEL (the tool schema description in the tools array), not just curator docs. First determine where that text comes from; then enrich it; then prove it lands in the assembled tool schema.
+The source-of-truth is already traced (see Architecture). No investigation step — edit the confirmed targets.
 
-- [ ] **Step 1: Trace the source of truth (investigation; record the answer in the commit message)**
+- [ ] **Step 1: Failing test — assert the relocated facts reach the model-visible docstrings.** Extend `backend/tests/unit/lib/openai_agents/tools/test_tool_descriptions.py` (it builds the tools and asserts on `inspect.getdoc`). Add assertions that the search/read tool docstrings contain the load-bearing search-backend facts being relocated, e.g.: `search_document` -> `lexical` AND `section_keywords`; `read_section`/`read_subsection` -> conveys "all chunks" of the named section (survey, not page order); `read_chunk` -> `evidence_spans` / `span_id`. Keep the existing `_assert_clean_doc` stale-phrase guard intact and ensure new text avoids those phrases. Run -> expect FAIL.
 
-Read these and determine what string becomes the model-facing description for `search_document` / `read_section` / `read_subsection` / `read_chunk`:
-- `packages/alliance/python/src/agr_ai_curation_alliance/tools/documents.py` (`create_search_document_tool` @ line 34, `create_read_section_tool` @ line 50, and the read_subsection/read_chunk factories) — does the `@function_tool`/`FunctionTool` get its description from a docstring, a `description=`/`description_override=` arg, or from injected metadata?
-- `packages/alliance/tools/bindings.yaml` lines 1172-1211 — the `description:` field for each document tool.
-- `backend/src/lib/openai_agents/streaming_tools.py:1320` (`description_override=getattr(existing_tool, "description", "")`) and `backend/src/lib/agent_studio/catalog_service.py` tool-resolution — does the runtime set the SDK tool's description from the bindings.yaml `description`?
+- [ ] **Step 2: Enrich the PACKAGE docstrings** in `packages/alliance/python/src/agr_ai_curation_alliance/tools/weaviate_search.py` for the 4 tools, mapping gene_expression's `<search_infrastructure>` facts to tools (1-4 crisp sentences each, NOT the whole ~2K block):
+  - **search_document:** default `auto`/hybrid (semantic + BM25) bridges paraphrases; `search_mode="lexical"` for exact gene symbols/IDs/strains/alleles/probes/genotypes/PMIDs/DOIs; `search_mode="hybrid_lexical_first"` to retry lexical-heavy; results reranked by a cross-encoder then diversified via MMR; short queries (<=3 tokens) auto-boost lexical; `section_keywords` scopes to sections before search; returns ~1500-char chunk previews.
+  - **read_section / read_subsection:** return ALL chunks of a named section/subsection via the LLM-resolved semantic hierarchy (not page order), full chunk text; use for complete coverage when search may miss low-scoring passages; figure legends are a rich source.
+  - **read_chunk:** returns full chunk text + `evidence_spans[].span_id` values for `record_evidence`.
+  Do not introduce new behavior; only relocate existing guidance.
 
-**Decision rule:** edit whichever source actually populates the SDK tool's `.description` sent to the model. If it is the bindings.yaml `description:` field, enrich that. If it is the Python factory docstring/`description_override`, enrich that and (for curator parity) mirror a `documentation.summary` in bindings.yaml. If unclear after reading, STOP and report findings rather than guessing.
+- [ ] **Step 3: Mirror the same enrichment into the BACKEND copy** `backend/src/lib/openai_agents/tools/weaviate_search.py` (same 4 docstrings, adjusted only for that copy's existing wording), so `test_tool_descriptions.py` guards text that matches the runtime package copy.
 
-- [ ] **Step 2: Write the failing test that the enriched guidance reaches the assembled tool schema**
+- [ ] **Step 4: Mirror curator-voice equivalents into `packages/alliance/tools/bindings.yaml`** — the `description` and `metadata.documentation.summary` for `search_document` / `read_chunk` / `read_section` / `read_subsection`. Keep the curator-voice (plain-language) register #446 established (see [[feedback_curator_voice_tool_docs_vs_contract_tests]] — the model gets the precise tokens via the docstrings; curator text stays approachable). Do NOT reintroduce dev jargon into bindings.yaml.
 
-Add `backend/tests/unit/lib/prompts/test_search_tool_guidance_present.py`. The test must build the actual tools the runtime sends for a document agent and assert the search guidance is in their descriptions. Use the same resolution path the runtime uses (resolve via the catalog/tool registry for, e.g., `gene_expression`). Assert the model-facing description for the search/read tools contains the load-bearing phrases that are being relocated, e.g.:
-- `search_document` description contains `lexical` AND `section_keywords` (mode + scoping guidance).
-- `read_section`/`read_subsection` description conveys "returns all chunks of the named section" (full-coverage survey, not page order).
-- `read_chunk` description conveys `evidence_spans` / `span_id` selection.
+- [ ] **Step 5: Run + re-baseline.** `test_tool_descriptions.py` -> PASS. Run `tests/unit/api/test_tool_catalog_parity.py` and `tests/unit/api/test_tool_documentation_completeness.py` + `tests/unit/test_record_evidence_prompt_contract.py` (the curator catalog contract). If the catalog parity baseline (`fixtures/tool_catalog_baseline.json`) changed because of the bindings.yaml edits, regenerate it per its in-test procedure and review the diff (should be only the 4 tools' description/summary). The curator catalog contract test must still pass (curator-voice phrases).
 
-(Use the exact phrasing you settle on in Step 3; the point is non-vacuous assertions on the real assembled descriptions. If the resolution path needs the DB, fall back to asserting on the source-of-truth field identified in Step 1 — bindings.yaml `description` or the factory's description string — and note it.)
-
-Run it; expect FAIL (guidance not there yet).
-
-- [ ] **Step 3: Enrich the four document-tool descriptions** with the load-bearing content from gene_expression's `<search_infrastructure>` block (`packages/alliance/agents/gene_expression/prompt.yaml`, the `<search_infrastructure>` section). Map the content to tools:
-  - **search_document:** default `auto`/hybrid (semantic + BM25) bridges paraphrases; pass `search_mode="lexical"` for exact gene symbols/IDs/strains/alleles/probes/genotypes/PMIDs/DOIs; `search_mode="hybrid_lexical_first"` to retry lexical-heavy; results reranked by a cross-encoder then diversified via MMR; short queries (<=3 tokens) auto-boost lexical; pass `section_keywords` to scope to sections before search; returns up to ~1500 chars per chunk preview.
-  - **read_section / read_subsection:** return ALL chunks of a named section/subsection using the LLM-resolved semantic hierarchy (not linear page order), with full chunk text; use when you need complete coverage (search may miss low-scoring but relevant passages); figure legends are a rich source.
-  - **read_chunk:** returns full chunk text plus `evidence_spans[].span_id` values to pass to `record_evidence` for final evidence selection.
-
-  Keep each description focused and crisp (1–4 sentences per tool, per OpenAI's "crisp tool descriptions" guidance — do NOT paste the whole 2K block verbatim into one tool). Do not introduce new behavior; only relocate existing guidance.
-
-- [ ] **Step 4: Run the test — expect PASS.** Also run the existing tool-doc guards and re-baseline only if a length/exact-string assertion legitimately changed:
-  Run: tool-doc completeness/parity tests (`tests/unit/api/test_tool_documentation_completeness.py`, `tests/unit/api/test_tool_catalog_parity.py`) + the new test. Expect PASS (parity baseline may need regeneration if the description text is snapshotted — if so, regenerate per its documented procedure and review the diff).
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 ```bash
-git add <enriched source file(s)> backend/tests/unit/lib/prompts/test_search_tool_guidance_present.py <any re-baselined tool-doc test/fixture>
-git commit -m "feat(tools): carry document-search guidance in the search/read tool descriptions (prereq for prompt de-dup)"
+git add packages/alliance/python/src/agr_ai_curation_alliance/tools/weaviate_search.py backend/src/lib/openai_agents/tools/weaviate_search.py packages/alliance/tools/bindings.yaml backend/tests/unit/lib/openai_agents/tools/test_tool_descriptions.py <regenerated baseline if any>
+git commit -m "feat(tools): carry document-search guidance in the search/read tool descriptions (model docstrings + curator bindings.yaml); prereq for prompt de-dup"
 ```
 
 ---
 
-## Task 2: De-dup the gene_expression base prompt
+## Task 2: De-dup the gene_expression base prompt (+ relocate the immutability line)
 
-**Files:** Modify `packages/alliance/agents/gene_expression/prompt.yaml`.
+**Files:** `packages/alliance/agents/gene_expression/prompt.yaml`; possibly `backend/tests/unit/test_gene_expression_prompt_policy.py`.
 
-- [ ] **Step 1: Build the per-agent redundancy map (write it in the commit message + Task 4 artifact)**
+- [ ] **Step 1: Redundancy map.** `<search_infrastructure>` -> enriched tool descriptions (Task 1); `Available tools:` -> always-sent tool schemas + the kept required-tool-call line in `core_generated`. Confirm every distinct fact is in its new home before deleting.
 
-For gene_expression, map each block being removed to its surviving home:
-- `<search_infrastructure>` block → the enriched search/read tool descriptions (Task 1).
-- `Available tools:` list (inside `<tools_and_retrieval>`) → the always-sent tool schemas + the kept "Required tool-call policy" line in `core_generated`.
+- [ ] **Step 2: Relocate the evidence-immutability sentence.** `gene_expression/prompt.yaml:257` ("After evidence is recorded, source quote and provenance fields are immutable…") lives INSIDE the `<search_infrastructure>` block but is **evidence-policy, not search-infra**, and is asserted by `test_gene_expression_prompt_policy.py:112`. Move that sentence into the prompt's `<evidence_record_contract>` (or `<evidence_rules>`) section BEFORE removing the block, so the rule survives and the test still passes unchanged. Record this in the redundancy map.
 
-Confirm every distinct fact in those two blocks is preserved in its new home BEFORE deleting (this is the spec's semantic-coverage requirement for the de-dup).
+- [ ] **Step 3: Remove the `<search_infrastructure>` block** (the entire `<search_infrastructure> … </search_infrastructure>` section, minus the relocated sentence).
 
-- [ ] **Step 2: Remove the `<search_infrastructure>` block** (the entire `<search_infrastructure> ... </search_infrastructure>` section) from `gene_expression/prompt.yaml`.
+- [ ] **Step 4: Remove the `Available tools:` re-listing** within `<tools_and_retrieval>` (the bare bulleted tool list). Keep surrounding retrieval-strategy guidance (preferred-order workflow, retrieval budget) that is curation guidance, not a bare tool enumeration; note any judgment calls.
 
-- [ ] **Step 3: Remove the `Available tools:` re-listing** within `<tools_and_retrieval>` (the bulleted tool list) — keep the surrounding retrieval-strategy guidance that is NOT a bare tool list (e.g., the preferred-order workflow, retrieval budget) unless that guidance is itself pure tool-schema duplication. When in doubt, keep curation guidance and remove only the bare "tool: what it does" enumeration; note any judgment calls.
+- [ ] **Step 5: Run + size.** `tests/unit/lib/prompts/ tests/unit/test_gene_expression_prompt_policy.py tests/unit/test_record_evidence_prompt_contract.py tests/unit/api/test_agent_studio_domain_envelope_prompt_policy.py` -> PASS. The immutability assertion must still pass (relocated, not deleted); if another asserted phrase was relocated to a tool description, re-baseline that assertion to its new home (do NOT weaken). Capture `wc -c packages/alliance/agents/gene_expression/prompt.yaml`.
 
-- [ ] **Step 4: Run the prompt/contract surface + size report — expect PASS and a smaller prompt**
-
-Run: `tests/unit/lib/prompts/ tests/unit/test_gene_expression_prompt_policy.py tests/unit/api/test_agent_studio_domain_envelope_prompt_policy.py`. Expect PASS. If `test_gene_expression_prompt_policy.py` asserts a phrase from a removed block, verify the phrase now lives in the tool description and re-baseline that assertion to its new location (do NOT weaken it); if it asserts surviving curation guidance, it should still pass untouched.
-Then capture the new base-prompt size for gene_expression (`wc -c packages/alliance/agents/gene_expression/prompt.yaml`).
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 ```bash
 git add packages/alliance/agents/gene_expression/prompt.yaml <any re-baselined test>
-git commit -m "refactor(prompts): drop search-infrastructure + tool re-listing from gene_expression base prompt (now in tool descriptions/schemas)"
+git commit -m "refactor(prompts): drop search-infrastructure + tool re-listing from gene_expression base prompt (relocate evidence-immutability line; search facts now in tool descriptions)"
 ```
 
 ---
 
 ## Task 3: De-dup the pdf base prompt
 
-**Files:** Modify `packages/alliance/agents/pdf/prompt.yaml`.
+**Files:** `packages/alliance/agents/pdf/prompt.yaml`.
 
-- [ ] **Step 1: Redundancy map** — `<search_infrastructure>` block → enriched search/read tool descriptions (Task 1). Confirm every fact in pdf's block is covered by the enriched tool descriptions; if pdf's block contains a fact NOT in gene_expression's block (and thus possibly not yet relocated), add that fact to the relevant tool description in the same way as Task 1 before removing it here.
-
+- [ ] **Step 1: Redundancy map** — pdf `<search_infrastructure>` -> enriched tool descriptions (Task 1). Confirm every fact in pdf's block is covered by the enriched docstrings; if pdf has a fact NOT already relocated, add it to the relevant tool docstring (package + backend copy) + bindings.yaml first.
 - [ ] **Step 2: Remove the `<search_infrastructure>` block** from `pdf/prompt.yaml`.
-
-- [ ] **Step 3: Run + size**
-
-Run: `tests/unit/lib/prompts/` + any `pdf`-specific prompt test (search `backend/tests/unit` for `pdf` prompt/contract tests; run them). Expect PASS (re-baseline only assertions on relocated text). Capture new `wc -c` for `pdf/prompt.yaml`.
-
+- [ ] **Step 3: Run + size.** `tests/unit/lib/prompts/` + any `pdf` prompt/contract test (grep `backend/tests/unit` for `pdf`). PASS (re-baseline only relocated-phrase assertions). Capture `wc -c packages/alliance/agents/pdf/prompt.yaml`.
 - [ ] **Step 4: Commit**
 ```bash
 git add packages/alliance/agents/pdf/prompt.yaml <any re-baselined test>
@@ -133,10 +112,8 @@ git commit -m "refactor(prompts): drop duplicated search-infrastructure block fr
 
 **Files:** Create `docs/design/2026-06-03-prompt-size-report-phaseB.md`.
 
-- [ ] **Step 1: Scan every agent and record the finding.** For each agent under `packages/alliance/agents/*/`, grep its `prompt.yaml` for Phase-B-removable cross-layer blocks (`<search_infrastructure>`, `Available tools:`, and any verbatim restatement of the `core_generated` lines). Record per-agent: either the redundancy map (removed → surviving home) for gene_expression/pdf, or "no Phase-B-removable redundancy; base-prompt cleanup handled in Phase C."
-
-- [ ] **Step 2: Before/after base-prompt sizes** for the two de-dup'd agents (gene_expression, pdf) — chars before (gene_expression 31,675; pdf 9,707, from the spec's measurement) vs after (`wc -c`), with delta. Note the search guidance moved into the tool descriptions (net token effect: removes the cross-agent duplication; the consolidated guidance is sent once via the shared tool schemas).
-
+- [ ] **Step 1: Scan every agent** under `packages/alliance/agents/*/` and record per-agent: the redundancy map (removed -> surviving home) for gene_expression/pdf; for `gene_extractor`/`allele_extractor`/`disease_extractor`/`phenotype_extractor` record their `<search_context>` blocks as **"same search-backend facts, now in the tool descriptions; block removal deferred to Phase C"**; the chunk-annotation/pipeline background as an explicit intentional-drop; the immutability-line relocation; and "no Phase-B redundancy" for the rest.
+- [ ] **Step 2: Before/after base-prompt sizes** for gene_expression + pdf (before from the spec: gene_expression 31,675; pdf 9,707) vs after (`wc -c`), with delta. **Honest token framing:** this is net-save for gene_expression + pdf only; the four `<search_context>` extractors keep their blocks until Phase C (no shrink yet); the 4 tool descriptions grow modestly and are sent to every document-tool agent. The win is de-duplication + correct structure, not a uniform per-call reduction.
 - [ ] **Step 3: Commit**
 ```bash
 git add docs/design/2026-06-03-prompt-size-report-phaseB.md
@@ -147,7 +124,7 @@ git commit -m "docs(design): Phase B per-agent redundancy map + before/after bas
 
 ## Phase B gate (after all tasks)
 
-1. Dispatch the final **Opus 4.8** review of the Phase B diff (vs the Phase A tip), tasked to confirm: every removed line has a verified surviving home (no curation guidance lost); the relocated search guidance actually reaches the model-facing tool schema; tool descriptions stayed crisp (not bloated).
+1. Dispatch the final **Opus 4.8** review of the Phase B diff (vs the Phase A tip), tasked to confirm: every removed line has a verified surviving home (no curation guidance lost); the relocated search guidance actually reaches the MODEL via the package docstrings (not just bindings.yaml); the two `weaviate_search.py` copies stayed in sync; tool descriptions stayed crisp (not bloated); curator bindings.yaml stayed plain-language.
 2. Run **`/external-llm-code-review`** (Codex, gpt-5.5/high) on the Phase B diff with the same task; show Chris the output verbatim.
 3. Address findings, then proceed to the Phase C plan.
 
@@ -155,8 +132,8 @@ git commit -m "docs(design): Phase B per-agent redundancy map + before/after bas
 
 ## Self-Review
 
-**Spec coverage (Phase B portion):** relocate search guidance to tool descriptions before removal — Task 1 (with the prerequisite ordering + a test that it reaches the model); per-agent redundancy maps — Tasks 2/3 maps + Task 4 artifact; remove `<search_infrastructure>` (gene_expression+pdf) and `Available tools:` (gene_expression) — Tasks 2/3; "all agents" scanned with recorded findings — Task 4; evidence-policy de-dup deferred to Phase C with rationale — Scope section. Covered.
+**Spec coverage:** relocate search guidance to tool descriptions before removal — Task 1 (confirmed dual-layer targets + a test on the model-visible docstrings); per-agent redundancy maps — Tasks 2/3 + Task 4; remove `<search_infrastructure>` (gene_expression+pdf) and `Available tools:` (gene_expression) — Tasks 2/3; the 4 `<search_context>` blocks recorded + Phase-C-deferred — Scope + Task 4; immutability line preserved + test kept green — Task 2; evidence-policy deferred to Phase C — Scope. Covered.
 
-**Placeholder scan:** Task 1 contains an explicit investigation Step (locate the description source) rather than a guessed file path — this is deliberate (the source of truth must be confirmed by reading code) and bounded by a decision rule + a STOP-and-report fallback, not a vague "figure it out." All other steps have concrete files, content, and commands. The two reviewers (Codex gpt-5.5/high + Opus 4.8) will validate Task 1's resolution.
+**Placeholder scan:** the pre-#446 "locate the source" investigation step is removed (the source is now confirmed); all targets are concrete file paths verified by the investigation. No TBDs.
 
-**Consistency:** the run command and the "relocate-before-remove" ordering are consistent across Tasks 1→2→3; the redundancy-map requirement is consistent in Tasks 2, 3, and the Task 4 artifact.
+**Consistency:** relocate-before-remove ordering across Tasks 1->2->3; the model-vs-curator dual-layer edit is consistent in Task 1 + the File Structure; the redundancy-map requirement is consistent in Tasks 2/3/4.
