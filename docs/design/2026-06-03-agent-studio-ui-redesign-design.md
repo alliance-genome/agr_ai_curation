@@ -55,6 +55,8 @@ Restructure the right-hand config panel from one long scroll into a **fixed head
 
 Carry the Workshop's principles to the agent detail view Chris also flagged as cluttered: an identity crown for the selected agent, sectioning to reduce the simultaneous box/line density, curator-voice labels, and the new theme. **Less-specified than the Workshop** — to be designed concretely during implementation (likely its own short design pass), reusing the same structure/voice/theme decisions above.
 
+**Follow-up status (2026-06-03, after the redesign implementation):** The detail view already inherits the app-wide theme (Geist/accent/layered surfaces), the Tool-Details slide-over, and the composed empty state, so it reads better immediately. The deeper restructure remains a **separate brainstorm → spec → plan** effort. Concrete pain points to address there: (1) the Overview/Guidance/Envelope/Prompts tabs lack an identity "crown" for the selected agent (apply the Workshop pattern); (2) the **Envelope tab** (`DomainEnvelopeMetadataPanel`, ~42KB) is the densest surface, especially for validators — the main target for density reduction; (3) align tool-chip + section spacing with the new theme. Not started.
+
 ## Implementation notes
 
 - The validated design was a **throwaway hot-reload prototype** (uncommitted edits to `theme.ts`, `index.html`, `App.tsx`, `PromptWorkshop.tsx`, `ToolDetailsDialog.tsx`, `AgentDetailsPanel.tsx`, plus a dev-only `vite.config.ts` proxy-target env var). It is the **visual reference**, not the shippable code.
