@@ -130,7 +130,8 @@ class AgentConfigSource:
     agent_yaml: Path | None
     prompt_yaml: Path | None
     schema_py: Path | None
-    group_rule_files: tuple[Path, ...]
+    docs_yaml: Path | None = None
+    group_rule_files: tuple[Path, ...] = ()
     package_id: str | None = None
     package_path: Path | None = None
 
@@ -206,6 +207,7 @@ def _merge_agent_config_source(
         agent_yaml=_pick_path(base.agent_yaml, override.agent_yaml),
         prompt_yaml=_pick_path(base.prompt_yaml, override.prompt_yaml),
         schema_py=_pick_path(base.schema_py, override.schema_py),
+        docs_yaml=_pick_path(base.docs_yaml, override.docs_yaml),
         group_rule_files=_merge_group_rule_files(
             base.group_rule_files,
             override.group_rule_files,
@@ -360,6 +362,7 @@ def _resolve_package_agent_sources(package: LoadedPackage) -> tuple[AgentConfigS
                 agent_yaml=agent_yaml,
                 prompt_yaml=prompt_yaml,
                 schema_py=schema_py,
+                docs_yaml=(agent_dir / "docs.yaml") if (agent_dir / "docs.yaml").exists() else None,
                 group_rule_files=tuple(group_rule_files),
                 package_id=package.package_id,
                 package_path=package.package_path,
@@ -377,6 +380,7 @@ def _resolve_legacy_agent_sources(agents_path: Path) -> tuple[AgentConfigSource,
             agent_yaml=folder / "agent.yaml",
             prompt_yaml=folder / "prompt.yaml",
             schema_py=folder / "schema.py",
+            docs_yaml=(folder / "docs.yaml") if (folder / "docs.yaml").exists() else None,
             group_rule_files=tuple(
                 sorted(
                     path

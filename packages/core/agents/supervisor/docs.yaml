@@ -1,0 +1,16 @@
+# Curator-facing documentation for the Supervisor Agent.
+summary: "Routes curator queries to the appropriate specialist agent - works behind the scenes."
+capabilities:
+  - name: "Query routing"
+    description: "Automatically determines which specialist agent should handle your question"
+    example_query: "Find the gene daf-2"
+    example_result: "Hands the question to the Gene Validation Agent"
+  - name: "Multi-step coordination"
+    description: "Coordinates complex queries that need multiple agents"
+    example_query: "Find all genes mentioned in the paper and validate them"
+    example_result: "Sends the paper to the PDF Specialist first, then passes the genes it finds to the Gene Validation Agent"
+data_sources: []
+limitations:
+  - "Routing decisions are based on query keywords and context"
+  - "Very ambiguous queries may be routed to a general agent first"
+  - "Not available in Flow Builder - works automatically in chat"

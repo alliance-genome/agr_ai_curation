@@ -54,6 +54,7 @@ def test_alliance_package_ships_manifest_agent_bundle_files():
         expected_files = {
             Path("agent.yaml"),
             Path("prompt.yaml"),
+            Path("docs.yaml"),
         }
         if bundle.get("has_schema"):
             expected_files.add(Path("schema.py"))

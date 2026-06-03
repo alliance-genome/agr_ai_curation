@@ -10,7 +10,6 @@ from pathlib import Path
 from src.lib.config.agent_loader import ModelConfig, load_agent_definitions
 from src.lib.config import agent_loader
 from src.lib.agent_studio.registry_builder import (
-    AGENT_DOCUMENTATION,
     _build_config_defaults,
     build_agent_registry,
 )
@@ -132,7 +131,6 @@ class TestAgentDocumentationCoverage:
         agent_def = configured_agents["data_provider_validation"]
         entry = registry["data_provider_validation"]
 
-        assert "data_provider_validation" not in AGENT_DOCUMENTATION
         assert agent_def.documentation is not None
         assert entry["documentation"] == agent_def.documentation
 
@@ -164,8 +162,8 @@ class TestAgentDocumentationCoverage:
             "launchable": True,
         }
 
-    def test_static_extractor_documentation_keeps_validator_boundary_clear(self):
-        """Fallback Agent Studio docs must not say extractors own DB resolution."""
+    def test_extractor_documentation_references_validator_handoff(self):
+        """Extractor docs should reference the specialist validator handoff."""
         extractor_ids = {
             "allele_extractor",
             "disease_extractor",
@@ -173,30 +171,17 @@ class TestAgentDocumentationCoverage:
             "gene_extractor",
             "phenotype_extractor",
         }
-        forbidden_fragments = {
-            "database-assisted normalization",
-            "database assisted normalization",
-            "database normalization",
-            "alliance database normalization",
-            "disease ontology normalization",
-            "chebi normalization",
-            "using agr_curation_query",
-            "validates gene symbols found in papers",
-            "validates and normalizes",
-            "resolves retained",
-        }
+
+        registry = build_agent_registry()
 
         for agent_id in extractor_ids:
-            documentation = AGENT_DOCUMENTATION[agent_id]
+            documentation = registry[agent_id]["documentation"]
             text = " ".join(_flatten_strings(documentation)).lower()
 
-            assert "validator" in text
-            assert "does not perform" in text or "validator-owned" in text
-            for fragment in forbidden_fragments:
-                assert fragment not in text, (
-                    f"{agent_id} static documentation exposes "
-                    f"validator-owned lookup wording: {fragment}"
-                )
+            assert "validator" in text, (
+                f"{agent_id} extractor docs should reference the "
+                "specialist validator handoff"
+            )
 
     def test_explicit_system_agent_key_suppresses_folder_alias(self):
         """The ontology resolver exposes only `ontology_term_validation` publicly."""

@@ -93,6 +93,12 @@ describe('AgentDetailsPanel', () => {
     vi.clearAllMocks()
   })
 
+  it('shows a composed empty state when no agent is selected', () => {
+    render(<AgentDetailsPanel agent={null} selectedGroupId={null} onGroupSelect={vi.fn()} />)
+    expect(screen.getByText('Browse your agents')).toBeInTheDocument()
+    expect(screen.getByText(/pick an agent on the left/i)).toBeInTheDocument()
+  })
+
   it('marks flagged custom overlays and excludes them from effective preview rendering', () => {
     render(
       <AgentDetailsPanel

@@ -1,0 +1,33 @@
+# Curator-facing documentation for the Gene Ontology Lookup Agent.
+summary: "Looks up Gene Ontology (GO) terms — their definitions, broader and narrower terms, and how they relate — across the three GO categories: molecular function, biological process, and cellular component."
+capabilities:
+  - name: "Search GO terms by name or keyword"
+    description: "Search for GO terms using name keywords or partial matches. Results are ranked by relevance with obsolete terms flagged."
+    example_query: "Find the GO term for 'DNA binding'"
+    example_result: "GO:0003677 (DNA binding) - molecular_function"
+  - name: "Get GO term information by ID"
+    description: "Retrieve detailed information about a GO term including name, aspect, definition, and obsolete status."
+    example_query: "What is GO:0003677?"
+    example_result: "GO:0003677 - DNA binding (molecular_function): Interacting selectively and non-covalently with DNA."
+  - name: "Navigate GO term hierarchy (children)"
+    description: "Shows the more specific terms directly underneath a GO term, and how each one relates to it (for example \"is a kind of,\" \"is part of,\" or \"regulates\")."
+    example_query: "What are the children of GO:0003677 (DNA binding)?"
+    example_result: "Children include: GO:0003690 (double-stranded DNA binding) - is_a, GO:0003697 (single-stranded DNA binding) - is_a"
+  - name: "Navigate GO term hierarchy (ancestors)"
+    description: "Get all ancestor terms (broader/more general) of a GO term, showing the path to root terms."
+    example_query: "What are the ancestors of GO:0003677?"
+    example_result: "Ancestors include: GO:0003676 (nucleic acid binding), GO:0005488 (binding), GO:0003674 (molecular_function)"
+  - name: "Batch GO term lookups"
+    description: "Look up multiple GO terms in a single request for efficient batch processing."
+    example_query: "Look up these GO terms: apoptotic process, kinase activity, cell division"
+    example_result: "Returns structured results for all requested terms with not_found list for any missing"
+data_sources:
+  - name: "QuickGO REST API"
+    description: "EMBL-EBI's QuickGO service providing programmatic access to the Gene Ontology database with term information, hierarchy, and relationships."
+    species_supported: ["All species (GO is species-independent ontology)"]
+    data_types: ["GO term definitions and metadata", "GO hierarchy relationships (is_a, part_of, regulates)", "GO term synonyms and secondary IDs", "Obsolete term status"]
+limitations:
+  - "Cannot retrieve gene-to-GO annotations (use GO Annotations Agent instead)"
+  - "Cannot determine which genes have a specific GO term (use GO Annotations Agent instead)"
+  - "Does not perform GO enrichment analysis"
+  - "Every answer comes from a fresh, live lookup against the Gene Ontology — it never answers from memory."

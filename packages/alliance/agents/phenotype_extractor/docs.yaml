@@ -1,0 +1,33 @@
+# Curator-facing documentation for the Phenotype Extractor Agent.
+summary: "Extracts experimentally supported phenotype assertions from uploaded PDFs, capturing genotype-phenotype links, polarity, severity, and supporting evidence."
+capabilities:
+  - name: "Phenotype candidate harvesting"
+    description: "Scans the paper for phenotype descriptions, observable traits, and mutant characterizations across results, figures, and tables"
+    example_query: "Extract all phenotypes from this paper"
+    example_result: "Returns phenotype candidates with the description as written, associated genotype, and experimental evidence"
+  - name: "Phenotype decomposition"
+    description: "Splits composite phenotype descriptions into individual assertions (e.g., 'small body size and reduced fertility' becomes two separate phenotypes)"
+    example_query: "Extract phenotypes from this C. elegans genetics paper"
+    example_result: "Returns individual phenotype assertions with polarity (gain/loss), severity qualifiers, and penetrance when stated"
+  - name: "Genotype-phenotype linking"
+    description: "Associates each phenotype with the specific genotype, allele, or experimental condition that causes it, including conditional and negative results"
+    example_query: "Which alleles cause which phenotypes?"
+    example_result: "Returns phenotype-genotype pairs with experimental context (e.g., daf-2(e1370) → extended lifespan)"
+  - name: "Hands phenotypes to the validator"
+    description: "Passes each proposed phenotype — with the trait as written, the organism, the subject, and the supporting quote — to the phenotype term validator, the stronger specialist that authoritatively confirms each one. The extractor proposes; the validator confirms and settles the official ontology term."
+    example_query: "Extract the phenotypes and pass them on for confirmation"
+    example_result: "Returns each proposed phenotype with its supporting quote, ready for the validator to confirm the official term"
+data_sources:
+  - name: "PDF Document Search (Weaviate)"
+    description: "Hybrid semantic/keyword plus lexical-heavy search modes over uploaded PDF documents"
+    species_supported: null
+    data_types: ["PDF text chunks", "Section content", "Subsection content", "Figure legends"]
+  - name: "Phenotype term validator"
+    description: "The phenotype term validator confirms the official term for supported WormBase (WB) and Mouse Genome Informatics (MGI) phenotypes after extraction. Phenotypes from other databases aren't supported yet, so those are set aside rather than confirmed."
+    species_supported: ["C. elegans (WB)", "M. musculus (MGI)"]
+    data_types: ["Phenotype labels", "Provider/taxon hints", "Validator lookup results"]
+limitations:
+  - "Requires an uploaded PDF document — cannot extract phenotypes from chat text alone"
+  - "Distinguishes phenotypes from diseases — clinical conditions are handled by the Disease Extraction Agent"
+  - "Wild-type/control observations are baselines, not phenotype assertions"
+  - "The extractor proposes the trait wording only; confirming the official ontology term is the phenotype term validator's job after extraction."

@@ -28,7 +28,7 @@ def test_should_use_groq_tool_json_compat_when_structured_output_and_tools_prese
     agent = SimpleNamespace(
         output_type=_Envelope,
         tools=[object()],
-        model=SimpleNamespace(model="groq/openai/gpt-oss-120b"),
+        model=SimpleNamespace(model="groq/stub-groq-model"),
     )
 
     assert _should_use_groq_tool_json_compat(agent) is True
@@ -38,7 +38,7 @@ def test_should_not_use_groq_tool_json_compat_without_tools():
     agent = SimpleNamespace(
         output_type=_Envelope,
         tools=[],
-        model=SimpleNamespace(model="groq/openai/gpt-oss-120b"),
+        model=SimpleNamespace(model="groq/stub-groq-model"),
     )
 
     assert _should_use_groq_tool_json_compat(agent) is False

@@ -1,0 +1,33 @@
+# Curator-facing documentation for the Gene Extractor Agent.
+summary: "Reads an uploaded paper and proposes the genes that have real experimental support in it, with the quote that backs each one — ready for the Gene Validation Agent to confirm against the Alliance database."
+capabilities:
+  - name: "Gene candidate harvesting"
+    description: "Scans the full paper for gene symbols, names, and synonyms across all sections including titles, abstracts, results, figure legends, and tables"
+    example_query: "Extract all gene mentions from this paper"
+    example_result: "Returns harvested candidates with exact mention text, species context, and supporting evidence"
+  - name: "Disambiguation and false-positive filtering"
+    description: "Filters out common-word gene names (e.g., 'not', 'can', 'white'), gene families vs individual genes, and author/reagent names before validation"
+    example_query: "Extract genes from this Drosophila paper"
+    example_result: "Correctly excludes 'white' as background strain while retaining 'white' as a studied gene when experimentally supported"
+  - name: "Evidence-based validation"
+    description: "Retains only genes with direct experimental support in the paper — genes cited from prior work or mentioned speculatively are excluded with reason codes"
+    example_query: "Which genes have experimental data in this paper?"
+    example_result: "Returns retained genes with evidence text and page numbers, plus explicit exclusions with reason codes"
+  - name: "Hands genes to the validator"
+    description: "Passes each proposed gene — with its exact wording from the paper, the species, and the supporting quote — to the Gene Validation Agent, the stronger specialist that authoritatively confirms each one against the Alliance database. The extractor proposes; the validator confirms and settles the official gene ID."
+    example_query: "Extract the genes and pass them on for confirmation"
+    example_result: "Returns each proposed gene with its supporting quote, ready for the Gene Validation Agent to confirm"
+data_sources:
+  - name: "PDF Document Search (Weaviate)"
+    description: "Hybrid semantic/keyword plus lexical-heavy search modes over uploaded PDF documents"
+    species_supported: null
+    data_types: ["PDF text chunks", "Section content", "Subsection content"]
+  - name: "Gene Validation Agent"
+    description: "The specialist validator that takes the proposed genes and authoritatively confirms or rejects each one against the Alliance database after extraction."
+    species_supported: ["C. elegans (WB)", "D. melanogaster (FB)", "D. rerio (ZFIN)", "H. sapiens (HGNC)", "M. musculus (MGI)", "R. norvegicus (RGD)", "S. cerevisiae (SGD)"]
+    data_types: ["Proposed gene IDs", "Proposed symbols", "Taxon/provider hints", "Validator lookup results"]
+limitations:
+  - "Requires an uploaded PDF document — cannot extract genes from chat text alone"
+  - "Genes mentioned only in references without experimental data in this paper are excluded"
+  - "When a gene could belong to more than one species, it uses clues in the text; cases it can't settle are flagged for curator review."
+  - "Confirming each gene against the Alliance database is the Gene Validation Agent's job; any unconfirmed or conflicting genes stay visible to you as validator findings."

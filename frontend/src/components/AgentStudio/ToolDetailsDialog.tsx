@@ -8,11 +8,9 @@
 
 import { useState, useEffect } from 'react'
 import {
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
+  Drawer,
   Button,
+  IconButton,
   Box,
   Typography,
   Chip,
@@ -32,6 +30,7 @@ import {
   Tooltip,
 } from '@mui/material'
 import BuildIcon from '@mui/icons-material/Build'
+import CloseIcon from '@mui/icons-material/Close'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import CodeIcon from '@mui/icons-material/Code'
 import CategoryIcon from '@mui/icons-material/Category'
@@ -98,13 +97,41 @@ function ToolDetailsDialog({
   const methodsToShow = tool?.relevant_methods || tool?.methods
 
   return (
-    <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth>
-      <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+    <Drawer
+      anchor="right"
+      open={open}
+      onClose={handleClose}
+      PaperProps={{
+        sx: {
+          width: { xs: '100%', sm: 520 },
+          display: 'flex',
+          flexDirection: 'column',
+        },
+      }}
+    >
+      {/* Header */}
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 1,
+          px: 3,
+          py: 2,
+          borderBottom: '1px solid',
+          borderColor: 'divider',
+        }}
+      >
         <BuildIcon color="primary" />
-        Tool Details
-      </DialogTitle>
+        <Typography variant="h6" sx={{ flexGrow: 1 }}>
+          Tool Details
+        </Typography>
+        <IconButton onClick={handleClose} aria-label="Close" size="small">
+          <CloseIcon />
+        </IconButton>
+      </Box>
 
-      <DialogContent>
+      {/* Scrollable content */}
+      <Box sx={{ flexGrow: 1, overflowY: 'auto', px: 3, py: 2 }}>
         {loading && (
           <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
             <CircularProgress />
@@ -255,14 +282,24 @@ function ToolDetailsDialog({
             </Box>
           </Box>
         )}
-      </DialogContent>
+      </Box>
 
-      <DialogActions sx={{ px: 3, pb: 2 }}>
+      {/* Footer */}
+      <Box
+        sx={{
+          display: 'flex',
+          justifyContent: 'flex-end',
+          px: 3,
+          py: 2,
+          borderTop: '1px solid',
+          borderColor: 'divider',
+        }}
+      >
         <Button onClick={handleClose}>
           Close
         </Button>
-      </DialogActions>
-    </Dialog>
+      </Box>
+    </Drawer>
   )
 }
 

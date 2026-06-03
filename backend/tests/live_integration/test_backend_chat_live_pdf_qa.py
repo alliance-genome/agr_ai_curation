@@ -287,7 +287,7 @@ def test_live_chat_with_loaded_pdf_openai(monkeypatch: pytest.MonkeyPatch):
 @pytest.mark.provider_groq
 @pytest.mark.manual_only
 def test_live_chat_with_loaded_pdf_groq(monkeypatch: pytest.MonkeyPatch):
-    model_id = os.getenv("LIVE_LLM_GROQ_MODEL", "openai/gpt-oss-120b").strip()
+    model_id = os.getenv("LIVE_LLM_GROQ_MODEL", "").strip()
     _run_live_chat_pdf_case(
         monkeypatch,
         provider="groq",

@@ -38,21 +38,6 @@ models:
     avoid_for:
       - Simple database retrieval tasks where latency is the priority
 
-  - model_id: openai/gpt-oss-120b
-    name: GPT-OSS 120B
-    provider: groq
-    description: Ultra-fast open-weight model on Groq, optimized for high-throughput retrieval and database-heavy curation workflows.
-    guidance: Fastest option for database-heavy lookup and extraction pipelines; ideal when speed and iteration tempo matter most.
-    default: false
-    supports_reasoning: false
-    supports_temperature: true
-    recommended_for:
-      - High-volume database lookups and extraction
-      - Structured summaries over many retrieved passages
-      - Fast iterative analysis loops
-    avoid_for:
-      - The most difficult long-chain reasoning tasks where GPT-5.5 is preferred
-
   # gpt-4o is intentionally NOT registered. It is retired; the minimum model is
   # gpt-5.5. Do not re-add it. Persisted agents that referenced gpt-4o are moved
   # to gpt-5.5 by the alembic migration migrate_agent_gpt4o_models_to_gpt55.

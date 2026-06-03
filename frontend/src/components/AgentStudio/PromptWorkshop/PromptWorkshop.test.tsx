@@ -235,13 +235,36 @@ function getLabeledControl(label: string): HTMLElement {
 }
 
 async function waitForAgentName(value: string): Promise<void> {
+  // The Agent Name field lives on the "Setup" section tab; ensure it is active.
+  gotoSection('Setup')
   await waitFor(() => {
     expect(screen.getByLabelText('Agent Name')).toHaveValue(value)
   }, { timeout: 10000 })
 }
 
+function gotoSection(section: 'Setup' | 'Prompt' | 'Tools' | 'Reference'): void {
+  fireEvent.click(screen.getByRole('button', { name: section }))
+}
+
+// The Tools section holds the "Tools" accordion (collapsed unless tools are
+// already attached) followed by the "Tool Requests" accordion. Navigate to the
+// section and make sure the first ("Tools") accordion is expanded.
+async function openToolsAccordion(): Promise<void> {
+  gotoSection('Tools')
+  const toolsAccordionButton = (await screen.findAllByRole('button', { name: /Tools/ })).find((button) =>
+    button.classList.contains('MuiAccordionSummary-root')
+  )
+  expect(toolsAccordionButton).toBeTruthy()
+  if (toolsAccordionButton!.getAttribute('aria-expanded') !== 'true') {
+    fireEvent.click(toolsAccordionButton!)
+  }
+}
+
 async function getGroupOverrideSelect(): Promise<HTMLElement> {
-  const accordionButton = screen.getByRole('button', { name: /Group Rules/ })
+  // Group-rule controls now live on the read-only "Reference" section tab,
+  // inside the "Species & group rules" accordion.
+  gotoSection('Reference')
+  const accordionButton = await screen.findByRole('button', { name: /Species & group rules/ })
   if (accordionButton.getAttribute('aria-expanded') !== 'true') {
     fireEvent.click(accordionButton)
   }
@@ -446,28 +469,34 @@ describe('PromptWorkshop', () => {
       expect(serviceMocks.fetchAgentTemplates).toHaveBeenCalled()
     })
 
+    // Read-only inherited layers now live on the "Reference" section tab.
+    gotoSection('Reference')
+
     const expectBefore = (firstLabel: string, secondLabel: string) => {
       const first = screen.getByText(firstLabel)
       const second = screen.getByText(secondLabel)
       expect(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     }
-    expectBefore('Core Prompt', 'Generated Contract')
-    expectBefore('Generated Contract', 'Group Rules')
-    expectBefore('Group Rules', 'Curator Overlay')
-    expectBefore('Curator Overlay', 'Effective Prompt Preview')
+    expectBefore('Built-in instructions', 'Output structure')
+    expectBefore('Output structure', 'Template instructions')
+    expectBefore('Template instructions', 'Species & group rules')
 
-    fireEvent.click(await screen.findByText('Core Prompt'))
+    fireEvent.click(await screen.findByText('Built-in instructions'))
     expect(screen.getByText('Locked core contract')).toBeInTheDocument()
-    expect(screen.getAllByText('Read-only').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Locked').length).toBeGreaterThan(0)
 
-    fireEvent.click(await screen.findByText('Generated Contract'))
+    fireEvent.click(await screen.findByText('Output structure'))
     expect(screen.getByText('Locked generated contract')).toBeInTheDocument()
 
-    fireEvent.click(await screen.findByText('Base Prompt'))
+    fireEvent.click(await screen.findByText('Template instructions'))
     expect(screen.getByText('System base prompt')).toBeInTheDocument()
 
-    fireEvent.click(await screen.findByText('Curator Overlay'))
-    expect(screen.getByPlaceholderText('Add curator-authored guidance that should sit on top of the locked core/base prompt...')).toHaveValue('')
+    // The editable curator overlay now lives on the "Prompt" section tab and is open by default.
+    gotoSection('Prompt')
+    expect(await screen.findByText('Your custom instructions')).toBeInTheDocument()
+    expect(
+      screen.getByPlaceholderText(/Write any extra instructions you want this agent to follow/)
+    ).toHaveValue('')
   }, 15000)
 
   it('clearly marks existing overlays that need copied-core review in the prompt preview', async () => {
@@ -482,13 +511,15 @@ describe('PromptWorkshop', () => {
 
     await waitForAgentName('My Agent')
 
-    fireEvent.click(await screen.findByText('Curator Overlay'))
+    // Overlay editing + preview now live on the "Prompt" section tab.
+    gotoSection('Prompt')
+    expect(await screen.findByText('Your custom instructions')).toBeInTheDocument()
     expect(screen.getAllByText(/Custom overlay contains locked\/core prompt markers/).length).toBeGreaterThan(0)
-    expect(screen.getByPlaceholderText('Add curator-authored guidance that should sit on top of the locked core/base prompt...')).toHaveValue(
-      'Partial Platform Runtime Contract prose with local curator edits.'
-    )
+    expect(
+      screen.getByPlaceholderText(/Write any extra instructions you want this agent to follow/)
+    ).toHaveValue('Partial Platform Runtime Contract prose with local curator edits.')
 
-    fireEvent.click(await screen.findByText('Effective Prompt Preview'))
+    fireEvent.click(await screen.findByText('Final instructions (preview)'))
     expect(screen.getAllByText((_content, element) => {
       const text = element?.textContent || ''
       return text.includes('[Custom overlay needs coordinator review before runtime use]')
@@ -524,9 +555,8 @@ describe('PromptWorkshop', () => {
       expect(serviceMocks.fetchToolLibrary).toHaveBeenCalled()
     })
 
-    // Expand the Tools accordion first
-    fireEvent.click(screen.getByRole('button', { name: /Tools/ }))
-
+    // Tools controls now live on the "Tools" section tab.
+    await openToolsAccordion()
     fireEvent.click(await screen.findByRole('button', { name: 'Manage Tools' }))
 
     const restrictedText = await screen.findByText(/Not attachable by policy/)
@@ -544,9 +574,8 @@ describe('PromptWorkshop', () => {
       expect(serviceMocks.fetchToolLibrary).toHaveBeenCalled()
     })
 
-    // Expand the Tools accordion first
-    fireEvent.click(screen.getByRole('button', { name: /Tools/ }))
-
+    // Tools controls now live on the "Tools" section tab.
+    await openToolsAccordion()
     fireEvent.click(await screen.findByRole('button', { name: 'Manage Tools' }))
 
     const dialog = await screen.findByRole('dialog', { name: 'Tool Library' })
@@ -608,9 +637,8 @@ describe('PromptWorkshop', () => {
       expect(serviceMocks.fetchToolLibrary).toHaveBeenCalled()
     })
 
-    // Expand the Tools accordion first
-    fireEvent.click(screen.getByRole('button', { name: /Tools/ }))
-
+    // Tools controls now live on the "Tools" section tab.
+    await openToolsAccordion()
     fireEvent.click(await screen.findByRole('button', { name: 'Send to Developers' }))
     const dialog = await screen.findByRole('dialog', { name: 'Submit Tool Request' })
     fireEvent.change(within(dialog).getByLabelText('Title'), {
@@ -677,7 +705,7 @@ describe('PromptWorkshop', () => {
     })
 
     // Ensure tools controls are visible before opening the library modal
-    fireEvent.click(screen.getByRole('button', { name: /Tools/ }))
+    await openToolsAccordion()
 
     fireEvent.click(await screen.findByRole('button', { name: 'Manage Tools' }))
     const toolDialog = await screen.findByRole('dialog', { name: 'Tool Library' })
@@ -792,12 +820,13 @@ describe('PromptWorkshop', () => {
       />
     )
 
-    fireEvent.click(await screen.findByText('Curator Overlay'))
+    gotoSection('Prompt')
+    expect(await screen.findByText('Your custom instructions')).toBeInTheDocument()
 
     await waitFor(() => {
-      expect(screen.getByPlaceholderText('Add curator-authored guidance that should sit on top of the locked core/base prompt...')).toHaveValue(
-        'Updated prompt from Claude'
-      )
+      expect(
+        screen.getByPlaceholderText(/Write any extra instructions you want this agent to follow/)
+      ).toHaveValue('Updated prompt from Claude')
     })
     expect(screen.getByText('Applied Claude update: Reworked structure and tightened extraction constraints.')).toBeInTheDocument()
   })
@@ -832,12 +861,13 @@ describe('PromptWorkshop', () => {
     templatesDeferred.resolve(templates)
     customAgentsDeferred.resolve({ custom_agents: [], total: 0 })
 
-    fireEvent.click(await screen.findByText('Curator Overlay'))
+    gotoSection('Prompt')
+    expect(await screen.findByText('Your custom instructions')).toBeInTheDocument()
 
     await waitFor(() => {
-      expect(screen.getByPlaceholderText('Add curator-authored guidance that should sit on top of the locked core/base prompt...')).toHaveValue(
-        'Late-arriving update from Claude'
-      )
+      expect(
+        screen.getByPlaceholderText(/Write any extra instructions you want this agent to follow/)
+      ).toHaveValue('Late-arriving update from Claude')
     }, { timeout: 10000 })
     expect(screen.getByText('Applied Claude update: Applied after workshop bootstrap finished.')).toBeInTheDocument()
   }, 15000)
@@ -924,6 +954,8 @@ describe('PromptWorkshop', () => {
       expect(serviceMocks.fetchModelOptions).toHaveBeenCalled()
     })
 
+    // The "Discuss prompt changes with Claude" action lives on the "Prompt" section tab.
+    gotoSection('Prompt')
     fireEvent.click(await screen.findByRole('button', { name: 'Discuss prompt changes with Claude' }))
 
     expect(onVerifyRequest).toHaveBeenCalledTimes(1)
@@ -981,6 +1013,8 @@ describe('PromptWorkshop', () => {
 
     await assertGroupOptions(['FB', 'WB'], ['MGI'])
 
+    // Template picker lives on the "Setup" section tab.
+    gotoSection('Setup')
     const templateControl = getLabeledControl('Template')
     fireEvent.mouseDown(within(templateControl).getByRole('combobox'))
     fireEvent.click(await screen.findByRole('option', { name: 'Disease Specialist' }))
@@ -1007,6 +1041,8 @@ describe('PromptWorkshop', () => {
 
     await assertGroupOptions(['FB', 'WB'], ['MGI'])
 
+    // The starting-point toggle lives on the "Setup" section tab.
+    gotoSection('Setup')
     fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
 
     await waitForAgentName('Disease Agent (Copy)')
@@ -1077,6 +1113,8 @@ describe('PromptWorkshop', () => {
 
     await assertGroupOptions(['FB', 'WB'], ['MGI'])
 
+    // The starting-point toggle and clone-source picker live on the "Setup" section tab.
+    gotoSection('Setup')
     fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
 
     const cloneSourceControl = getLabeledControl('Clone Source')
@@ -1087,4 +1125,93 @@ describe('PromptWorkshop', () => {
 
     await assertGroupOptions(['WB'], ['FB', 'MGI'])
   }, 20000)
+
+  // ── Workshop section-tab layout + curator-voice labels (Task 2 redesign) ──
+
+  it('renders the four section tabs with Setup as the default section', async () => {
+    render(<PromptWorkshop catalog={buildCatalog()} />)
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchAgentTemplates).toHaveBeenCalled()
+    })
+
+    // The fixed configure-your-agent header is present.
+    expect(screen.getByText(/Configure your agent/i)).toBeInTheDocument()
+
+    // All four section nav tabs render.
+    expect(screen.getByRole('button', { name: 'Setup' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Prompt' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Tools' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Reference' })).toBeInTheDocument()
+
+    // Setup is the default section: identity content ("Starting point") is visible.
+    expect(screen.getByText('Starting point')).toBeInTheDocument()
+  }, 15000)
+
+  it('gates section content so Reference shows the read-only intro and hides Setup-only content', async () => {
+    render(<PromptWorkshop catalog={buildCatalog()} />)
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchAgentTemplates).toHaveBeenCalled()
+    })
+
+    // Setup-only content is visible on the default tab.
+    expect(screen.getByText('Starting point')).toBeInTheDocument()
+
+    gotoSection('Reference')
+
+    // The read-only intro box explains the built-in instruction layers.
+    expect(
+      await screen.findByText(/built-in instruction layers that make up this agent/i)
+    ).toBeInTheDocument()
+
+    // Setup-only content ("Starting point") is no longer rendered.
+    expect(screen.queryByText('Starting point')).not.toBeInTheDocument()
+  }, 15000)
+
+  it('uses curator-voice labels for the prompt layers and drops old jargon', async () => {
+    render(<PromptWorkshop catalog={buildCatalogWithPromptLayers()} />)
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchAgentTemplates).toHaveBeenCalled()
+    })
+
+    // Reference tab: renamed read-only layers.
+    gotoSection('Reference')
+    expect(await screen.findByText('Built-in instructions')).toBeInTheDocument()
+    expect(screen.getByText('Output structure')).toBeInTheDocument()
+    expect(screen.getByText('Template instructions')).toBeInTheDocument()
+    expect(screen.getByText('Species & group rules')).toBeInTheDocument()
+
+    // Old jargon is gone from the Reference tab.
+    expect(screen.queryByText('Core Prompt')).not.toBeInTheDocument()
+    expect(screen.queryByText('Generated Contract')).not.toBeInTheDocument()
+    expect(screen.queryByText('Group Rules')).not.toBeInTheDocument()
+
+    // Prompt tab: renamed editable overlay + preview.
+    gotoSection('Prompt')
+    expect(await screen.findByText('Your custom instructions')).toBeInTheDocument()
+    expect(screen.getByText('Final instructions (preview)')).toBeInTheDocument()
+
+    // Old jargon is gone from the Prompt tab.
+    expect(screen.queryByText('Curator Overlay')).not.toBeInTheDocument()
+    expect(screen.queryByText('Effective Prompt Preview')).not.toBeInTheDocument()
+  }, 15000)
+
+  it('does not expose an Output Schema Key field anywhere in the workshop', async () => {
+    render(<PromptWorkshop catalog={buildCatalog()} />)
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchAgentTemplates).toHaveBeenCalled()
+    })
+
+    // Setup tab (default) — the field used to live here.
+    expect(screen.queryByLabelText(/output schema key/i)).toBeNull()
+
+    // And it is absent on every other section tab too.
+    for (const section of ['Prompt', 'Tools', 'Reference'] as const) {
+      gotoSection(section)
+      expect(screen.queryByLabelText(/output schema key/i)).toBeNull()
+    }
+  }, 15000)
 })

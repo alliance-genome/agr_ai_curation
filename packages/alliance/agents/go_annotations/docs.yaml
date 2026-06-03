@@ -1,0 +1,30 @@
+# Curator-facing documentation for the GO Annotations Lookup Agent.
+summary: "Retrieves existing GO annotations for specific genes from the Gene Ontology Consortium API, including evidence codes, curation sources, and annotation counts."
+capabilities:
+  - name: "Gene annotation lookup"
+    description: "Retrieve all GO annotations for a specific gene, showing the functions, processes, and cellular locations associated with that gene"
+    example_query: "What GO annotations exist for WB:WBGene00000898?"
+    example_result: "Returns annotations like GO:0003677 (DNA binding) with evidence code IDA, assigned by WB"
+  - name: "Evidence code analysis"
+    description: "Distinguish between manually curated annotations (IDA, IMP, IPI) and automatic/electronic annotations (IEA, IBA)"
+    example_query: "What manually curated annotations does daf-2 have?"
+    example_result: "Returns only the manually curated annotations, plus a count of how many are manual versus automatic"
+  - name: "Batch annotation retrieval"
+    description: "Retrieve GO annotations for multiple genes in a single request"
+    example_query: "Get GO annotations for: WB:WBGene00000912, WB:WBGene00001234"
+    example_result: "Returns annotations for each gene with evidence codes and sources"
+  - name: "GO aspect classification"
+    description: "Categorize annotations by GO aspect: Molecular Function (MF), Biological Process (BP), or Cellular Component (CC)"
+    example_query: "What molecular functions does this gene have?"
+    example_result: "Returns the matching annotations grouped by GO category, each with its GO ID, term name, and evidence"
+data_sources:
+  - name: "Gene Ontology Consortium API"
+    description: "Official GO API at api.geneontology.org providing gene annotations with evidence codes"
+    species_supported: ["C. elegans (WB:)", "D. melanogaster (FB:)", "D. rerio (ZFIN:)", "H. sapiens (HGNC:)", "M. musculus (MGI:)", "R. norvegicus (RGD:)", "S. cerevisiae (SGD:)"]
+    data_types: ["GO annotations", "evidence codes", "curation sources", "qualifiers"]
+limitations:
+  - "Gene IDs must be in Alliance format (e.g., WB:WBGene00000898, HGNC:11998)"
+  - "Cannot search for GO terms by keyword - use Gene Ontology Lookup Agent for that"
+  - "Cannot find genes by GO term (e.g., 'what genes have kinase activity')"
+  - "Cannot explore GO term hierarchy or parent/child relationships"
+  - "Heavily annotated genes may have 500+ IEA annotations - manual annotations are prioritized when summarizing"

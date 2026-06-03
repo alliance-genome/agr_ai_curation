@@ -97,7 +97,6 @@ def test_get_tool_registry_propagates_package_tool_instantiation_errors(monkeypa
         )
 
     monkeypatch.setattr(tool_introspection, "introspect_tool", _fake_introspect)
-    monkeypatch.setattr(catalog_service, "TOOL_OVERRIDES", {"search_document": {"category": "Document"}})
 
     catalog_service.clear_package_tool_runtime_caches()
     with pytest.raises(RuntimeError, match="boom"):

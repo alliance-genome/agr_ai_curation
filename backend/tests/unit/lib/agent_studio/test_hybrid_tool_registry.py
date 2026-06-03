@@ -1,10 +1,7 @@
 """Tests for hybrid tool registry (introspection + overrides)."""
 import pytest
 
-from src.lib.agent_studio.catalog_service import (
-    get_tool_registry,
-    TOOL_OVERRIDES,
-)
+from src.lib.agent_studio.catalog_service import get_tool_registry
 
 
 def test_get_tool_registry_returns_dict():
@@ -96,15 +93,15 @@ def test_get_tool_registry_has_description():
         assert "description" in metadata or hasattr(metadata, 'description')
 
 
-def test_tool_overrides_merge_with_introspected():
-    """Manual overrides should merge with introspected data."""
+def test_bindings_metadata_merges_with_introspected():
+    """Curator metadata from bindings.yaml should merge with introspected data.
+
+    search_document's category is supplied by its bindings.yaml metadata block
+    (formerly the hardcoded TOOL_OVERRIDES), so it should reach the catalog.
+    """
     registry = get_tool_registry()
-    # If agr_curation_query has an override, it should be applied
-    if "agr_curation_query" in TOOL_OVERRIDES:
-        tool = registry.get("agr_curation_query", {})
-        override = TOOL_OVERRIDES["agr_curation_query"]
-        if "category" in override:
-            assert tool.get("category") == override["category"]
+    tool = registry.get("search_document", {})
+    assert tool.get("category") == "Document"
 
 
 @pytest.mark.parametrize(

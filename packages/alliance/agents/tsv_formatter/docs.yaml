@@ -1,0 +1,9 @@
+# Curator-facing documentation for the TSV Output Formatter Agent.
+summary: "Formats structured extraction results as a downloadable TSV file for tab-delimited pipelines."
+capabilities:
+  - name: "TSV export"
+    description: "Generates tab-delimited output for pipelines that expect TSV input"
+    example_query: "Export curated rows as TSV"
+    example_result: "Returns a downloadable TSV with stable tab-delimited columns"
+limitations:
+  - "Like CSV, complex nested fields may be flattened"

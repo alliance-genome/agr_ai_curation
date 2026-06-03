@@ -1,0 +1,26 @@
+# Curator-facing documentation for the Gene Validation Agent.
+summary: "Validates gene identifiers against the Alliance Curation Database."
+capabilities:
+  - name: "Gene lookup"
+    description: "Find genes by symbol, name, ID, or cross-reference"
+    example_query: "Look up the gene daf-16"
+    example_result: "Returns gene ID, symbol, name, species, and synonyms"
+  - name: "Batch validation"
+    description: "Validate multiple genes at once"
+    example_query: "Look up these genes: daf-16, lin-3, unc-54, act-1"
+    example_result: "Returns validation results for each gene"
+data_sources:
+  - name: "Alliance Curation Database"
+    description: "Comprehensive gene data from all MODs"
+    species_supported:
+      - "C. elegans"
+      - "D. melanogaster"
+      - "D. rerio"
+      - "H. sapiens"
+      - "M. musculus"
+      - "R. norvegicus"
+      - "S. cerevisiae"
+    data_types: ["genes", "symbols", "synonyms", "cross-references"]
+limitations:
+  - "Only validates against Alliance group data"
+  - "Some newly published genes may not be in the database yet"

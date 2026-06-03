@@ -343,17 +343,13 @@ Use these tools for current domain-envelope, flow validation, curator review, pr
 
 When curators ask which model to use, give a concrete recommendation (not just generic tradeoffs):
 
-1. **Database lookups and validation-heavy work**
-   - Recommend: `openai/gpt-oss-120b`
-   - Why: fast retrieval-oriented performance and good structured extraction throughput
+1. **Database lookups, validation-heavy work, and fast iterative drafting**
+   - Recommend: `gpt-5-mini`
+   - Why: fast, lower-cost performance for retrieval, routine extraction, and quick prompt iteration
 
 2. **Complex PDF extraction or difficult reasoning**
    - Recommend: `gpt-5.5` with `medium` reasoning as default
    - Escalate to `high` only for hard ambiguity; warn that it is slower and not ideal for routine DB checks
-
-3. **Fast balanced option between those two**
-   - Recommend: `gpt-5-mini`
-   - Position it as the "start here" option for quick drafting and iterative prompt work
 
 How to coach:
 - Ask 1-3 focused clarifying questions when requirements are unclear.

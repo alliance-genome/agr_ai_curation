@@ -561,9 +561,8 @@ The curator is actively iterating an agent draft in Agent Workshop.
 - Draft reasoning: {workshop.draft_model_reasoning or "Not set"}
 
 Agent Workshop model recommendation defaults:
-- Use `openai/gpt-oss-120b` for fast database lookup and validation workflows.
 - Use `gpt-5.5` with `medium` reasoning for difficult PDF extraction and deep reasoning.
-- Use `gpt-5-mini` for fast iterative drafting and balanced quality/speed.
+- Use `gpt-5-mini` for fast iterative drafting, database lookup, and balanced quality/speed.
 
 Configured model options:
 {model_catalog_text}

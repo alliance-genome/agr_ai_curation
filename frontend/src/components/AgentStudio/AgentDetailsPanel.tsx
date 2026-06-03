@@ -40,8 +40,7 @@ import ScienceIcon from '@mui/icons-material/Science'
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import StorageIcon from '@mui/icons-material/Storage'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
-import LightbulbOutlinedIcon from '@mui/icons-material/LightbulbOutlined'
-import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
+import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined'
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 
@@ -244,10 +243,13 @@ function AgentDetailsPanel({
   if (!agent) {
     return (
       <EmptyState>
-        <Box>
-          <HelpOutlineIcon sx={{ fontSize: 48, mb: 2, opacity: 0.5 }} />
-          <Typography variant="body1">
-            Select an agent from the list to view its details.
+        <Box sx={{ maxWidth: 360 }}>
+          <AutoAwesomeOutlinedIcon sx={{ fontSize: 48, mb: 2, opacity: 0.5 }} />
+          <Typography variant="h6" sx={{ mb: 1 }}>
+            Browse your agents
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Pick an agent on the left to see what it does, the tools it uses, and the validation that applies.
           </Typography>
         </Box>
       </EmptyState>
@@ -532,45 +534,6 @@ function AgentDetailsPanel({
                 </List>
               </Box>
             )}
-
-            {/* Tips section - static for now */}
-            <Box sx={{ mb: 3 }}>
-              <SectionTitle>
-                <LightbulbOutlinedIcon fontSize="small" color="info" />
-                Tips for Best Results
-              </SectionTitle>
-              <List dense disablePadding>
-                <ListItem sx={{ pl: 0 }}>
-                  <ListItemIcon sx={{ minWidth: 28 }}>
-                    <LightbulbOutlinedIcon fontSize="small" sx={{ color: 'info.main', fontSize: '1rem' }} />
-                  </ListItemIcon>
-                  <ListItemText
-                    primary="Be specific with your queries - include gene symbols, IDs, or species when possible"
-                    primaryTypographyProps={{ variant: 'body2' }}
-                  />
-                </ListItem>
-                <ListItem sx={{ pl: 0 }}>
-                  <ListItemIcon sx={{ minWidth: 28 }}>
-                    <LightbulbOutlinedIcon fontSize="small" sx={{ color: 'info.main', fontSize: '1rem' }} />
-                  </ListItemIcon>
-                  <ListItemText
-                    primary="Use the 'Discuss with Claude' button if you're unsure how this agent can help"
-                    primaryTypographyProps={{ variant: 'body2' }}
-                  />
-                </ListItem>
-                {agent.has_group_rules && (
-                  <ListItem sx={{ pl: 0 }}>
-                    <ListItemIcon sx={{ minWidth: 28 }}>
-                      <LightbulbOutlinedIcon fontSize="small" sx={{ color: 'info.main', fontSize: '1rem' }} />
-                    </ListItemIcon>
-                    <ListItemText
-                      primary="This agent has group-specific rules - check the Prompts tab to see how behavior varies by species"
-                      primaryTypographyProps={{ variant: 'body2' }}
-                    />
-                  </ListItem>
-                )}
-              </List>
-            </Box>
 
             {/* Empty state for Guidance */}
             {(!documentation?.limitations || documentation.limitations.length === 0) && (

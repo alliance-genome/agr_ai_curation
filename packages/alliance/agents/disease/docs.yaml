@@ -1,0 +1,26 @@
+# Curator-facing documentation for the Disease Validation Agent.
+summary: "Confirms disease names against the Disease Ontology (DOID) and gives you the matching official disease term and its ID, so a disease annotation can be submitted with confidence."
+capabilities:
+  - name: "Disease name lookup"
+    description: "Find DOID identifiers for disease names using case-insensitive search"
+    example_query: "Look up Alzheimer's disease"
+    example_result: "Returns DOID:10652, name, definition, and synonyms"
+  - name: "DOID lookup"
+    description: "Retrieve disease information by DOID identifier"
+    example_query: "What is DOID:14330?"
+    example_result: "Returns Parkinson's disease with definition and relationships"
+  - name: "Synonym search"
+    description: "Find diseases by synonym names when the exact term is not found"
+    example_query: "Look up Alzheimers dementia"
+    example_result: "Finds DOID:10652 via synonym match"
+data_sources:
+  - name: "Alliance disease term records"
+    description: "The Alliance's curated copy of the Disease Ontology — official disease names, their IDs, definitions, and synonyms."
+    species_supported: null
+    data_types: ["disease terms", "DOIDs", "definitions", "synonyms"]
+limitations:
+  - "Only queries Disease Ontology (DOID) terms - does not include other disease vocabularies"
+  - "Does not provide gene-disease associations (use Gene Specialist for that)"
+  - "Disease prevalence and statistics are not available from this validator path"
+  - "Does not walk up or down the disease hierarchy (parent or child terms) and does not track a term's obsolete history — ask the Ontology Term Resolver for related terms."
+  - "Every answer comes from a live lookup against the Alliance's disease terms — it never answers from memory."

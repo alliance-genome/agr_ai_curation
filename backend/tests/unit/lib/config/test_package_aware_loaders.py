@@ -486,6 +486,10 @@ def test_resolve_agent_config_sources_merges_partial_override_without_dropping_p
         "content: Package prompt\n",
         encoding="utf-8",
     )
+    (package_agent_dir / "docs.yaml").write_text(
+        "summary: pkg docs\n",
+        encoding="utf-8",
+    )
     (package_agent_dir / "group_rules").mkdir()
     (package_agent_dir / "group_rules" / "demo.yaml").write_text(
         "content: Package DEMO rules\n",
@@ -511,6 +515,9 @@ def test_resolve_agent_config_sources_merges_partial_override_without_dropping_p
     assert demo_source.agent_dir == override_agent_dir
     assert demo_source.agent_yaml == (package_agent_dir / "agent.yaml")
     assert demo_source.prompt_yaml == (package_agent_dir / "prompt.yaml")
+    # The override layer ships no docs.yaml, so the merged source must keep the
+    # package bundle's docs.yaml (the exact shadowing bug this asset fix closed).
+    assert demo_source.docs_yaml == (package_agent_dir / "docs.yaml")
     assert demo_source.group_rule_files == (
         package_agent_dir / "group_rules" / "demo.yaml",
         override_agent_dir / "group_rules" / "team.yaml",

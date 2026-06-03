@@ -1,0 +1,9 @@
+# Curator-facing documentation for the Chat Output Formatter Agent.
+summary: "Formats and displays final results directly in the chat interface for immediate curator review."
+capabilities:
+  - name: "Inline result rendering"
+    description: "Presents structured extraction output in readable chat-first format"
+    example_query: "Show me the extracted entities in chat"
+    example_result: "Returns a readable, sectioned summary directly in chat"
+limitations:
+  - "Output is optimized for interactive reading, not file export"
