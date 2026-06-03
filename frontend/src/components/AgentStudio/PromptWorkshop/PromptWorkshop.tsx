@@ -1672,7 +1672,7 @@ function PromptWorkshop({
                 Model & behavior
               </Typography>
 
-              {/* Model / Visibility / Output Schema */}
+              {/* Model & Visibility */}
               <Stack direction="row" alignItems="center" spacing={0.5}>
                 <Typography variant="caption" color="text.secondary">
                   Model guidance

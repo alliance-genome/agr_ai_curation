@@ -502,16 +502,18 @@ export function AppContent() {
                 variant="caption"
                 sx={{
                   opacity: 1,
-                  color: (theme) => theme.palette.text.primary,
+                  // AppBar is the fixed deep-blue bar in both modes, so use white
+                  // (not text.primary, which is dark in light mode) for legibility.
+                  color: (theme) => theme.palette.common.white,
                   fontSize: '0.7rem',
                   fontFamily: 'monospace',
-                  backgroundColor: (theme) => alpha(theme.palette.text.primary, 0.1),
+                  backgroundColor: (theme) => alpha(theme.palette.common.white, 0.1),
                   px: 0.75,
                   py: 0.25,
                   borderRadius: 0.5,
                   cursor: 'default',
                   '&:hover': {
-                    backgroundColor: (theme) => alpha(theme.palette.text.primary, 0.16),
+                    backgroundColor: (theme) => alpha(theme.palette.common.white, 0.16),
                   }
                 }}
               >
