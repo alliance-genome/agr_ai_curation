@@ -74,6 +74,7 @@ import {
 } from '@/services/agentStudioService'
 import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
 import DomainEnvelopeMetadataPanel from '../DomainEnvelopeMetadataPanel'
+import { isWorkshopModel } from './workshopModels'
 
 const FALLBACK_ICON_OPTIONS = ['🔧', '🧬', '📄', '🔍', '🧪', '📊', '🧠', '⚙️', '✨', '📝', '📚', '🧩']
 
@@ -136,8 +137,8 @@ const StyledMenu = styled(Menu)(({ theme }) => ({
 const SectionCard = styled(Paper)(({ theme }) => ({
   padding: theme.spacing(2.5),
   borderRadius: 10,
-  border: `1px solid ${alpha(theme.palette.divider, 0.6)}`,
-  backgroundColor: alpha(theme.palette.background.paper, 0.6),
+  border: 'none',
+  backgroundColor: alpha(theme.palette.background.paper, 0.45),
 }))
 
 const SectionHeader = styled(Typography)(({ theme }) => ({
@@ -154,7 +155,7 @@ const SectionHeader = styled(Typography)(({ theme }) => ({
 const PromptLayerPreview = styled(Box)(({ theme }) => ({
   padding: theme.spacing(1.5),
   borderRadius: 6,
-  border: `1px solid ${alpha(theme.palette.divider, 0.5)}`,
+  border: `1px solid ${alpha(theme.palette.divider, 0.2)}`,
   backgroundColor: alpha(theme.palette.common.black, 0.12),
   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
   fontSize: '0.78rem',
@@ -186,7 +187,7 @@ const StyledToggleButtonGroup = styled(ToggleButtonGroup)(({ theme }) => ({
 const StyledAccordion = styled(Accordion)(({ theme }) => ({
   backgroundColor: 'transparent',
   boxShadow: 'none',
-  border: `1px solid ${alpha(theme.palette.divider, 0.5)}`,
+  border: `1px solid ${alpha(theme.palette.divider, 0.18)}`,
   borderRadius: `${theme.shape.borderRadius}px !important`,
   '&::before': { display: 'none' },
   '&:not(:last-child)': { marginBottom: theme.spacing(1) },
@@ -332,6 +333,7 @@ function PromptWorkshop({
   const { agents: agentMetadata, refresh: refreshAgentMetadata } = useAgentMetadata()
 
   const [parentAgentId, setParentAgentId] = useState('')
+  const [workshopSection, setWorkshopSection] = useState<'setup' | 'prompt' | 'tools' | 'reference'>('setup')
   const [gettingStartedMode, setGettingStartedMode] = useState<GettingStartedMode>('template')
   const [customAgents, setCustomAgents] = useState<CustomAgent[]>([])
   const [selectedCustomAgentId, setSelectedCustomAgentId] = useState<string>('')
@@ -1469,7 +1471,68 @@ function PromptWorkshop({
         </ToolbarStatus>
       </Toolbar>
 
-      <Box sx={{ p: 2.5, overflow: 'auto' }}>
+      {/* ── Fixed header region (does not scroll): identity crown + section nav ── */}
+      <Box
+        sx={{
+          flexShrink: 0,
+          px: 2.5,
+          pt: 2,
+          pb: 1.5,
+          backgroundColor: 'background.paper',
+          borderBottom: (theme) => `1px solid ${alpha(theme.palette.divider, 0.25)}`,
+          boxShadow: (theme) => `0 1px 2px ${alpha(theme.palette.common.black, 0.18)}`,
+          zIndex: 2,
+        }}
+      >
+        <Stack spacing={1.5}>
+          {/* Agent identity title block */}
+          <Box>
+            <Typography
+              variant="overline"
+              sx={{ display: 'block', letterSpacing: '0.12em', color: 'text.secondary', lineHeight: 1.4 }}
+            >
+              Configure your agent
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'baseline', flexWrap: 'wrap' }}>
+              <Typography
+                variant="h6"
+                sx={{ fontWeight: 600, lineHeight: 1.2, color: name.trim() ? 'text.primary' : 'text.secondary' }}
+              >
+                {name.trim() || 'New Agent'}
+              </Typography>
+              <Chip
+                size="small"
+                variant="outlined"
+                label={
+                  gettingStartedMode === 'clone'
+                    ? `Custom — cloned from ${selectedCloneSource?.name || '(no source)'}`
+                    : gettingStartedMode === 'scratch'
+                      ? 'Custom — from scratch'
+                      : `Template: ${selectedTemplate?.name || parentAgent?.agent_name || '(none selected)'}`
+                }
+                sx={{ maxWidth: 280, '& .MuiChip-label': { fontSize: '0.72rem' } }}
+              />
+            </Box>
+          </Box>
+
+          {/* Section navigation */}
+          <StyledToggleButtonGroup
+            exclusive
+            size="small"
+            value={workshopSection}
+            onChange={(_event, value) => value && setWorkshopSection(value)}
+            sx={{ width: '100%', '& .MuiToggleButton-root': { flex: 1 } }}
+          >
+            <ToggleButton value="setup">Setup</ToggleButton>
+            <ToggleButton value="prompt">Prompt</ToggleButton>
+            <ToggleButton value="tools">Tools</ToggleButton>
+            <ToggleButton value="reference">Reference</ToggleButton>
+          </StyledToggleButtonGroup>
+        </Stack>
+      </Box>
+
+      {/* ── Scrollable content region ── */}
+      <Box sx={{ flex: 1, p: 2.5, overflow: 'auto' }}>
         <Stack spacing={3}>
           {error && <Alert severity="error" sx={{ borderRadius: 2 }}>{error}</Alert>}
           {status && <Alert severity="success" sx={{ borderRadius: 2 }}>{status}</Alert>}
@@ -1480,7 +1543,8 @@ function PromptWorkshop({
             </Alert>
           )}
 
-          {/* ── Section 1: Identity & Configuration ── */}
+          {/* ── Section 1 (setup): Identity & Configuration ── */}
+          {workshopSection === 'setup' && (
           <SectionCard elevation={0}>
             <SectionHeader>Identity & Configuration</SectionHeader>
 
@@ -1548,10 +1612,8 @@ function PromptWorkshop({
                 </FormControl>
               )}
 
-              <Divider sx={{ opacity: 0.5 }} />
-
-              {/* Name + Icon row */}
-              <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'flex-start' }}>
+              {/* Icon + Agent Name row */}
+              <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'flex-start', maxWidth: 420 }}>
                 <FormControl size="small" sx={{ width: 72, flexShrink: 0 }}>
                   <InputLabel>Icon</InputLabel>
                   <Select
@@ -1578,14 +1640,15 @@ function PromptWorkshop({
 
               <TextField
                 fullWidth
+                multiline
+                minRows={2}
+                maxRows={5}
                 size="small"
                 label="Description"
                 value={description}
                 onChange={(event) => setDescription(event.target.value)}
                 placeholder="Brief description of what this agent does"
               />
-
-              <Divider sx={{ opacity: 0.5 }} />
 
               {domainEnvelopeMetadata && (
                 <>
@@ -1598,6 +1661,14 @@ function PromptWorkshop({
                   <Divider sx={{ opacity: 0.5 }} />
                 </>
               )}
+
+              {/* Model & behavior */}
+              <Typography
+                variant="overline"
+                sx={{ display: 'block', letterSpacing: '0.1em', color: 'text.secondary', mt: 0.5 }}
+              >
+                Model & behavior
+              </Typography>
 
               {/* Model / Visibility / Output Schema */}
               <Stack direction="row" alignItems="center" spacing={0.5}>
@@ -1618,11 +1689,15 @@ function PromptWorkshop({
                     value={selectedModelId}
                     onChange={(event) => handleModelChange(event.target.value)}
                   >
-                    {modelOptions.map((model) => (
-                      <MenuItem key={model.model_id} value={model.model_id}>
-                        {model.name}
-                      </MenuItem>
-                    ))}
+                    {modelOptions
+                      // Show only the curator-supported models, plus whatever the
+                      // draft already has selected so an existing/legacy choice stays visible.
+                      .filter((model) => isWorkshopModel(model.model_id) || model.model_id === selectedModelId)
+                      .map((model) => (
+                        <MenuItem key={model.model_id} value={model.model_id}>
+                          {model.name}
+                        </MenuItem>
+                      ))}
                   </Select>
                 </FormControl>
                 <FormControl size="small" sx={{ minWidth: 180, flex: 1 }}>
@@ -1636,20 +1711,12 @@ function PromptWorkshop({
                     <MenuItem value="project">Shared with Project</MenuItem>
                   </Select>
                 </FormControl>
-                <TextField
-                  size="small"
-                  label="Output Schema Key"
-                  value={outputSchemaKey}
-                  onChange={(event) => setOutputSchemaKey(event.target.value)}
-                  placeholder="Optional"
-                  sx={{ minWidth: 180, flex: 1 }}
-                />
               </Box>
 
               {selectedModelOption && (
                 <Box
                   sx={{
-                    border: (theme) => `1px solid ${alpha(theme.palette.divider, 0.6)}`,
+                    border: (theme) => `1px solid ${alpha(theme.palette.divider, 0.18)}`,
                     borderRadius: 1.5,
                     p: 1.5,
                     backgroundColor: (theme) => alpha(theme.palette.background.default, 0.35),
@@ -1657,7 +1724,7 @@ function PromptWorkshop({
                 >
                   <Stack direction="row" alignItems="flex-start" justifyContent="space-between" spacing={1.5}>
                     <Box>
-                      <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
                         {selectedModelOption.name}
                       </Typography>
                       <Typography variant="caption" color="text.secondary">
@@ -1695,7 +1762,7 @@ function PromptWorkshop({
                           </Typography>
                           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', mt: 0.5 }}>
                             {selectedModelOption.recommended_for.map((item) => (
-                              <Chip key={item} size="small" color="success" variant="outlined" label={item} />
+                              <Chip key={item} size="small" variant="outlined" label={item} />
                             ))}
                           </Box>
                         </>
@@ -1707,7 +1774,7 @@ function PromptWorkshop({
                           </Typography>
                           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', mt: 0.5 }}>
                             {selectedModelOption.avoid_for.map((item) => (
-                              <Chip key={item} size="small" color="warning" variant="outlined" label={item} />
+                              <Chip key={item} size="small" variant="outlined" label={item} />
                             ))}
                           </Box>
                         </>
@@ -1752,11 +1819,13 @@ function PromptWorkshop({
 
             </Stack>
           </SectionCard>
+          )}
 
-          {/* ── Section 2: Prompt Layers ── */}
+          {/* ── Section (prompt): Prompt ── */}
+          {workshopSection === 'prompt' && (
           <SectionCard elevation={0}>
             <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1.5} sx={{ mb: 2 }}>
-              <SectionHeader sx={{ mb: 0 }}>Prompt Layers</SectionHeader>
+              <SectionHeader sx={{ mb: 0 }}>Prompt</SectionHeader>
               {onVerifyRequest && (
                 <Button size="small" variant="outlined" onClick={handleDiscussPromptChangesWithClaude}>
                   Discuss prompt changes with Claude
@@ -1764,11 +1833,80 @@ function PromptWorkshop({
               )}
             </Stack>
             <Stack spacing={1}>
+              <StyledAccordion defaultExpanded={true}>
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Your custom instructions</Typography>
+                </AccordionSummary>
+                <AccordionDetails>
+                  {overlayStatus === 'needs_review' && (
+                    <Alert severity="warning" sx={{ mb: 1.5 }}>
+                      {overlayWarning || 'This saved overlay contains locked/core prompt markers that need coordinator review before the final prompt is trusted.'}
+                    </Alert>
+                  )}
+                  {overlayStatus === 'deduplicated' && (
+                    <Alert severity="info" sx={{ mb: 1.5 }}>
+                      Removed copied locked/template layers from this overlay: {removedLayerKinds.map(formatLayerKind).join(', ') || 'parent prompt layers'}.
+                    </Alert>
+                  )}
+                  <TextField
+                    fullWidth
+                    multiline
+                    minRows={12}
+                    value={customPrompt}
+                    onChange={(event) => setCustomPrompt(event.target.value)}
+                    placeholder="Write any extra instructions you want this agent to follow. They're added on top of the agent's built-in instructions, so you don't need to repeat anything that's already there."
+                    variant="outlined"
+                    sx={{
+                      '& .MuiInputBase-root': {
+                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                        fontSize: '0.85rem',
+                        backgroundColor: (theme) => alpha(theme.palette.common.black, 0.15),
+                        borderRadius: 1.5,
+                      },
+                      '& .MuiOutlinedInput-notchedOutline': {
+                        borderColor: (theme) => alpha(theme.palette.divider, 0.3),
+                      },
+                    }}
+                  />
+                </AccordionDetails>
+              </StyledAccordion>
+
+              <StyledAccordion defaultExpanded={false}>
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Final instructions (preview)</Typography>
+                </AccordionSummary>
+                <AccordionDetails>
+                  <PromptLayerPreview>
+                    {effectivePromptPreview || 'No effective prompt preview is available yet.'}
+                  </PromptLayerPreview>
+                </AccordionDetails>
+              </StyledAccordion>
+            </Stack>
+          </SectionCard>
+          )}
+
+          {/* ── Section (reference): Reference (read-only) ── */}
+          {workshopSection === 'reference' && (
+          <SectionCard elevation={0}>
+            <SectionHeader>Reference (read-only)</SectionHeader>
+            <Box
+              sx={{
+                mb: 2,
+                p: 1.5,
+                borderRadius: 1.5,
+                backgroundColor: (theme) => alpha(theme.palette.info.main, 0.08),
+              }}
+            >
+              <Typography variant="body2" color="text.secondary">
+                These are the built-in instruction layers that make up this agent. They're read-only here — shown so you can see what your own instructions (on the Prompt tab) build on. You don't need to change anything on this tab.
+              </Typography>
+            </Box>
+            <Stack spacing={1}>
               <StyledAccordion defaultExpanded={false}>
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                   <Stack direction="row" spacing={1} alignItems="center">
-                    <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Core Prompt</Typography>
-                    <Chip size="small" icon={<LockOutlinedIcon />} label="Read-only" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
+                    <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Built-in instructions</Typography>
+                    <Chip size="small" icon={<LockOutlinedIcon />} label="Locked" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
                   </Stack>
                 </AccordionSummary>
                 <AccordionDetails>
@@ -1781,8 +1919,8 @@ function PromptWorkshop({
               <StyledAccordion defaultExpanded={false}>
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                   <Stack direction="row" spacing={1} alignItems="center">
-                    <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Generated Contract</Typography>
-                    <Chip size="small" icon={<LockOutlinedIcon />} label="Read-only" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
+                    <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Output structure</Typography>
+                    <Chip size="small" icon={<LockOutlinedIcon />} label="Automatic" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
                   </Stack>
                 </AccordionSummary>
                 <AccordionDetails>
@@ -1795,8 +1933,8 @@ function PromptWorkshop({
               <StyledAccordion defaultExpanded={false}>
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                   <Stack direction="row" spacing={1} alignItems="center">
-                    <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Base Prompt</Typography>
-                    <Chip size="small" label="Read-only in Workshop" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
+                    <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Template instructions</Typography>
+                    <Chip size="small" label="From template" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
                   </Stack>
                 </AccordionSummary>
                 <AccordionDetails>
@@ -1809,7 +1947,7 @@ function PromptWorkshop({
               <StyledAccordion defaultExpanded={false}>
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                   <Stack direction="row" spacing={1} alignItems="center">
-                    <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Group Rules</Typography>
+                    <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Species & group rules</Typography>
                     {hasAnyGroupOverrides && (
                       <Chip size="small" label={`${Object.keys(groupPromptOverrides).length} override${Object.keys(groupPromptOverrides).length !== 1 ? 's' : ''}`} color="warning" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
                     )}
@@ -1901,59 +2039,12 @@ function PromptWorkshop({
                   </Stack>
                 </AccordionDetails>
               </StyledAccordion>
-
-              <StyledAccordion defaultExpanded={false}>
-                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Curator Overlay</Typography>
-                </AccordionSummary>
-                <AccordionDetails>
-                  {overlayStatus === 'needs_review' && (
-                    <Alert severity="warning" sx={{ mb: 1.5 }}>
-                      {overlayWarning || 'This saved overlay contains locked/core prompt markers that need coordinator review before the final prompt is trusted.'}
-                    </Alert>
-                  )}
-                  {overlayStatus === 'deduplicated' && (
-                    <Alert severity="info" sx={{ mb: 1.5 }}>
-                      Removed copied locked/template layers from this overlay: {removedLayerKinds.map(formatLayerKind).join(', ') || 'parent prompt layers'}.
-                    </Alert>
-                  )}
-                  <TextField
-                    fullWidth
-                    multiline
-                    minRows={12}
-                    value={customPrompt}
-                    onChange={(event) => setCustomPrompt(event.target.value)}
-                    placeholder="Add curator-authored guidance that should sit on top of the locked core/base prompt..."
-                    variant="outlined"
-                    sx={{
-                      '& .MuiInputBase-root': {
-                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                        fontSize: '0.85rem',
-                        backgroundColor: (theme) => alpha(theme.palette.common.black, 0.15),
-                        borderRadius: 1.5,
-                      },
-                      '& .MuiOutlinedInput-notchedOutline': {
-                        borderColor: (theme) => alpha(theme.palette.divider, 0.3),
-                      },
-                    }}
-                  />
-                </AccordionDetails>
-              </StyledAccordion>
-
-              <StyledAccordion defaultExpanded={false}>
-                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Effective Prompt Preview</Typography>
-                </AccordionSummary>
-                <AccordionDetails>
-                  <PromptLayerPreview>
-                    {effectivePromptPreview || 'No effective prompt preview is available yet.'}
-                  </PromptLayerPreview>
-                </AccordionDetails>
-              </StyledAccordion>
             </Stack>
           </SectionCard>
+          )}
 
-          {/* ── Section 3: Advanced Settings ── */}
+          {/* ── Section (tools): Advanced Settings ── */}
+          {workshopSection === 'tools' && (
           <SectionCard elevation={0}>
             <SectionHeader>Advanced Settings</SectionHeader>
 
@@ -2051,6 +2142,7 @@ function PromptWorkshop({
               </AccordionDetails>
             </StyledAccordion>
           </SectionCard>
+          )}
 
           {/* ── Section 4: Save & History ── */}
           <SectionCard elevation={0}>
