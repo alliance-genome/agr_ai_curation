@@ -2,7 +2,6 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { describe, beforeEach, expect, it, vi } from 'vitest'
 
 import PromptWorkshop from './PromptWorkshop'
-import { WORKSHOP_MODEL_IDS, isWorkshopModel } from './workshopModels'
 import { buildDomainEnvelopeMetadata } from '@/test/fixtures/agentStudioDomainEnvelope'
 import type { PromptCatalog, CustomAgent, ModelOption, ToolLibraryItem, AgentTemplate } from '@/types/promptExplorer'
 
@@ -1215,17 +1214,4 @@ describe('PromptWorkshop', () => {
       expect(screen.queryByLabelText(/output schema key/i)).toBeNull()
     }
   }, 15000)
-})
-
-describe('workshopModels', () => {
-  it('offers only the curator-supported models', () => {
-    expect(WORKSHOP_MODEL_IDS).toEqual(['gpt-5.5', 'gpt-5-mini'])
-  })
-
-  it('treats supported models as workshop models and excludes hidden experimental ones', () => {
-    expect(isWorkshopModel('gpt-5.5')).toBe(true)
-    expect(isWorkshopModel('gpt-5-mini')).toBe(true)
-    expect(isWorkshopModel('openai/gpt-oss-120b')).toBe(false)
-    expect(isWorkshopModel('gpt-4o')).toBe(false)
-  })
 })

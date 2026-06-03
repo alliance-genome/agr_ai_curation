@@ -74,7 +74,6 @@ import {
 } from '@/services/agentStudioService'
 import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
 import DomainEnvelopeMetadataPanel from '../DomainEnvelopeMetadataPanel'
-import { isWorkshopModel } from './workshopModels'
 
 const FALLBACK_ICON_OPTIONS = ['🔧', '🧬', '📄', '🔍', '🧪', '📊', '🧠', '⚙️', '✨', '📝', '📚', '🧩']
 
@@ -1379,8 +1378,8 @@ function PromptWorkshop({
   const handleAskClaudeAboutModels = () => {
     const targetName = selectedCustomAgent?.name || name.trim() || selectedTemplate?.name || parentAgent?.agent_name || 'this agent draft'
     const modelLines = modelOptions
-      // Only show Claude the models a curator can actually select in the picker.
-      .filter((model) => isWorkshopModel(model.model_id))
+      // modelOptions already comes from GET /models, which the backend filters to
+      // curator-visible models (config/models.yaml curator_visible), so no extra filter here.
       .map((model) => {
         const reasoning = model.reasoning_options.length > 0
           ? `Reasoning: ${model.reasoning_options.join(', ')} (default: ${model.default_reasoning || 'none'})`
@@ -1692,9 +1691,7 @@ function PromptWorkshop({
                     onChange={(event) => handleModelChange(event.target.value)}
                   >
                     {modelOptions
-                      // Show only the curator-supported models, plus whatever the
-                      // draft already has selected so an existing/legacy choice stays visible.
-                      .filter((model) => isWorkshopModel(model.model_id) || model.model_id === selectedModelId)
+                      // Backend already returns only curator-visible models (config-driven).
                       .map((model) => (
                         <MenuItem key={model.model_id} value={model.model_id}>
                           {model.name}

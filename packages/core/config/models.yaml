@@ -44,6 +44,7 @@ models:
     description: Ultra-fast open-weight model on Groq, optimized for high-throughput retrieval and database-heavy curation workflows.
     guidance: Fastest option for database-heavy lookup and extraction pipelines; ideal when speed and iteration tempo matter most.
     default: false
+    curator_visible: false
     supports_reasoning: false
     supports_temperature: true
     recommended_for:
