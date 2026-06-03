@@ -2,6 +2,14 @@
 
 Date: 2026-06-02. Status: **DESIGN — approved by Chris 2026-06-02; revised after the package-tree finding;
 not yet implemented.**
+
+> **OUTCOME UPDATE (2026-06-03): the `tips` part of this design was dropped (commit `8516cdde`).**
+> Phase 1 shipped the docs migration (agent prose → per-bundle `docs.yaml`, `AGENT_DOCUMENTATION`
+> deleted, completeness guard test added). The "move the frontend Tips for Best Results block into
+> `docs.yaml` tips[]" idea was **removed**: curators don't drive these agents (extraction/lookup/
+> validation are automated), so usage tips read as instructions a curator never gives. What each
+> agent/validator *does* is carried by each `docs.yaml` `summary`. Ignore the `tips` references below.
+> See memory `feedback_no_usage_tips_curators_dont_drive_agents`.
 Origin: after the large auto-validation build-out (disease / gene-expression / phenotype validators,
 multivalued-field validation, experimental conditions, submission gating), curators have no way to *see*
 what validation an agent performs. Chris: add a **Validation** section to the Agent Studio agent detail

@@ -2,6 +2,16 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **OUTCOME UPDATE (2026-06-03): the `tips` feature was removed (commit `8516cdde`).**
+> Tasks 1 and 10 below are obsolete. Chris's call: curators don't drive these agents
+> (extraction/lookup/validation are automated), so "tips for best results" were being
+> written as instructions the curator would give the agent — which is misleading,
+> since a curator never types them. What each agent/validator *does* is already covered
+> by the `docs.yaml` `summary`. The `tips` model field, converter mapping, dedicated
+> test, frontend "Tips for Best Results" section, and the `tips` key in the parity
+> baseline were all removed. Ignore every "tips" reference in the tasks below.
+> See memory `feedback_no_usage_tips_curators_dont_drive_agents`.
+
 **Goal:** Move every agent's curator-facing documentation (summary, capabilities, data sources, limitations, tips) out of the Python `AGENT_DOCUMENTATION` dict into a per-bundle `docs.yaml` (plus a small system-docs YAML for the two synthetic flow nodes), add a `tips` field end-to-end, render tips from the API, delete the Python dict and its fallback, and add a guard test so agent documentation can never silently go missing.
 
 **Architecture:** Agent definitions load from runtime packages (`packages/alliance/agents/<folder>/`, `packages/core/agents/<folder>/`) via `load_agent_definitions()`. Today `AgentDefinition.documentation` comes from an inline `documentation:` key in `agent.yaml` and otherwise falls back to the `AGENT_DOCUMENTATION` dict in `registry_builder.py`. We add a sibling `docs.yaml` read (adjunct asset from `AgentConfigSource.agent_dir`) that populates `AgentDefinition.documentation`, migrate all content into those files, and delete the dict. The work is split into a **faithful port** (byte-equivalent to the dict, locked by a parity test) followed by a reviewed **improve** pass (curator-voice rewrites + net-new docs for agents the dict never covered, enforced by a completeness guard test).
