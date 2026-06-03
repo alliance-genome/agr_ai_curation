@@ -502,16 +502,16 @@ export function AppContent() {
                 variant="caption"
                 sx={{
                   opacity: 1,
-                  color: (theme) => theme.palette.primary.contrastText,
+                  color: (theme) => theme.palette.text.primary,
                   fontSize: '0.7rem',
                   fontFamily: 'monospace',
-                  backgroundColor: (theme) => alpha(theme.palette.primary.contrastText, 0.1),
+                  backgroundColor: (theme) => alpha(theme.palette.text.primary, 0.1),
                   px: 0.75,
                   py: 0.25,
                   borderRadius: 0.5,
                   cursor: 'default',
                   '&:hover': {
-                    backgroundColor: (theme) => alpha(theme.palette.primary.contrastText, 0.16),
+                    backgroundColor: (theme) => alpha(theme.palette.text.primary, 0.16),
                   }
                 }}
               >

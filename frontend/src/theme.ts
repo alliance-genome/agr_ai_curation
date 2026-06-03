@@ -7,10 +7,10 @@ export type ThemeMode = PaletteMode;
 export const DEFAULT_THEME_MODE: ThemeMode = 'dark';
 
 const darkPrimary = {
-  main: '#2196f3',
-  light: '#64b5f6',
-  dark: '#1976d2',
-  contrastText: '#102033',
+  main: '#3b82f6',
+  light: '#60a5fa',
+  dark: '#2563eb',
+  contrastText: '#ffffff',
 };
 
 const lightPrimary = {
@@ -49,12 +49,12 @@ function getModeTokens(mode: ThemeMode) {
 
   return {
     primary,
-    backgroundDefault: '#121212',
-    backgroundPaper: '#1e1e1e',
-    dataGridHeader: '#252525',
+    backgroundDefault: '#0f1217',
+    backgroundPaper: '#1b212b',
+    dataGridHeader: '#222a36',
     textPrimary: '#ffffff',
     textSecondary: 'rgba(255, 255, 255, 0.7)',
-    divider: 'rgba(255, 255, 255, 0.12)',
+    divider: 'rgba(255, 255, 255, 0.16)',
     actionActive: 'rgba(255, 255, 255, 0.54)',
     actionHover: 'rgba(255, 255, 255, 0.08)',
     actionSelected: 'rgba(255, 255, 255, 0.16)',
@@ -65,6 +65,9 @@ function getModeTokens(mode: ThemeMode) {
 
 function buildThemeOptions(mode: ThemeMode): ThemeOptions {
   const tokens = getModeTokens(mode);
+
+  // Tinted shadow carrying the dark-blue background hue (used on elevated surfaces)
+  const tintedShadow = '0 4px 24px rgba(2, 8, 20, 0.5)';
 
   return {
     palette: {
@@ -89,7 +92,8 @@ function buildThemeOptions(mode: ThemeMode): ThemeOptions {
       },
     },
     typography: {
-      fontFamily: '"Roboto", "Helvetica", "Arial", sans-serif',
+      fontFamily: '"Geist", "Inter", "Roboto", "Helvetica", "Arial", sans-serif',
+      fontWeightMedium: 500,
       h1: {
         fontSize: '1.5rem',
         fontWeight: 500,
@@ -101,6 +105,13 @@ function buildThemeOptions(mode: ThemeMode): ThemeOptions {
       },
     },
     components: {
+      MuiCssBaseline: {
+        styleOverrides: {
+          body: {
+            fontVariantNumeric: 'tabular-nums',
+          },
+        },
+      },
       // @ts-expect-error MuiDataGrid types come from @mui/x-data-grid
       MuiDataGrid: {
         styleOverrides: {
@@ -132,14 +143,42 @@ function buildThemeOptions(mode: ThemeMode): ThemeOptions {
           paper: {
             backgroundColor: tokens.backgroundPaper,
             borderRight: `1px solid ${tokens.divider}`,
+            boxShadow: tintedShadow,
+          },
+        },
+      },
+      MuiDialog: {
+        styleOverrides: {
+          paper: {
+            boxShadow: tintedShadow,
+          },
+        },
+      },
+      MuiMenu: {
+        styleOverrides: {
+          paper: {
+            boxShadow: tintedShadow,
+          },
+        },
+      },
+      MuiCard: {
+        styleOverrides: {
+          root: {
+            boxShadow: tintedShadow,
           },
         },
       },
       MuiAppBar: {
+        defaultProps: {
+          elevation: 0,
+        },
         styleOverrides: {
           root: {
-            backgroundColor: tokens.primary.main,
-            color: tokens.primary.contrastText,
+            backgroundColor: '#1c5fb8', // confident deep blue nav bar
+            color: '#ffffff',
+            borderBottom: '1px solid rgba(255, 255, 255, 0.16)',
+            backgroundImage: 'none',
+            boxShadow: 'none',
             zIndex: 1201, // Above drawer
           },
         },
