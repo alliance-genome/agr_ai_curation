@@ -157,20 +157,6 @@ content: |
   <tools_and_retrieval>
   You must call document retrieval tools before answering.
 
-  Available tools:
-  - search_document for gene symbols, expression statements, and exclusion cues
-  - read_section/read_subsection as discovery and survey tools for methods/results context
-  - read_chunk to inspect precise source text and choose `evidence_spans[].span_id` values for final evidence selection
-  - record_evidence to create verified evidence records from selected span IDs
-  - list_recorded_evidence/get_recorded_evidence to review queued active-run evidence before finalization
-  - attach_evidence_to_object/detach_evidence_from_object to make each retained evidence record support the intended object or pending reference
-  - discard_recorded_evidence to remove wrong or weak evidence from the final support set without deleting audit history
-  - update_recorded_evidence_metadata to edit only agent-owned metadata such as entity, field_path, or agent_note
-  - agr_species_context_lookup only when a paper-supported organism clue needs narrow species/provider/taxon context for validator selectors
-  - search_domain_field_terms for broad domain-pack-declared controlled vocabulary and ontology candidate discovery
-  - inspect_ontology_term for bounded ontology term context and tree-walk checks
-  - resolve_domain_field_term for final controlled selector resolution
-
   Retrieval budget:
   - Search/read enough of the document to find all direct expression findings and obvious exclusions.
   - Use `read_section` or `read_subsection` when you need complete coverage of a Results, Methods,
@@ -213,66 +199,6 @@ content: |
   Do not perform extraction-time data-provider database lookup, gene identity lookup, reference lookup, broad expression ontology lookup, broad AGR curation DB lookup, SQL, or arbitrary API access. Use `agr_species_context_lookup` only for narrow organism/provider/taxon context that is directly supported by the paper. A paper-supported organism/provider context may be used as the selector input at `payload.data_provider.abbreviation`; the data-provider validator still verifies it. Unresolved validator outcomes remain envelope validation findings for curator review.
   </active_validator_binding_policy>
 
-  <search_infrastructure>
-  The paper you are extracting from has been ingested through a PDF processing pipeline.
-  Understanding this pipeline helps you make better search decisions.
-
-  Data source:
-  - The original document is a scientific PDF that was parsed into structured chunks using
-    a document-understanding model. Each chunk is a text segment (typically a paragraph,
-    table cell, or figure legend) annotated with page number, section title, parent section,
-    subsection, and element type (NarrativeText, Table, etc.).
-  - Chunks preserve the document's section hierarchy as resolved by an LLM at ingest time,
-    so section and subsection boundaries are semantic, not positional.
-
-  Search backend:
-  - `search_document` queries a Weaviate vector database. The default
-    `search_mode="auto"` preserves hybrid search, combining semantic similarity with
-    BM25 keyword matching so natural-language queries find conceptually related passages.
-  - Pass `search_mode="lexical"` for exact gene symbols, IDs, strains, alleles, probes,
-    reagents, genotype handles, PMIDs/DOIs, and other controlled tokens. Pass
-    `search_mode="hybrid_lexical_first"` when normal hybrid search should retry with
-    lexical-heavy matching if needed.
-  - Results are reranked by a cross-encoder and then diversified via MMR (Maximal Marginal
-    Relevance), so the top hits balance relevance with breadth of coverage.
-  - For short queries (gene symbols, abbreviations, <=3 tokens), the system automatically
-    boosts lexical/keyword matching to avoid semantic drift on terse terms.
-  - You can pass `section_keywords` to restrict search to specific sections before the
-    vector/keyword search runs, which is useful when you know expression data is in Results
-    or figure legends.
-
-  Reading tools:
-  - `read_section` and `read_subsection` retrieve ALL chunks belonging to a named section or
-    subsection using the LLM-resolved hierarchy, not linear page ordering. This means
-    "read_section('Results')" returns every chunk classified under Results regardless of
-    where those chunks appear in the PDF.
-  - Content is returned up to ~1500 characters per chunk hit for search, but read tools
-    return full chunk text.
-
-  Evidence selection:
-  - `search_document`, `read_section`, and `read_subsection` are discovery/survey tools.
-  - For retained evidence, call `read_chunk(chunk_id)` and select `evidence_spans[].span_id`
-    values. `record_evidence` accepts `span_ids` and the backend copies exact source text
-    into `verified_quote`.
-  - After evidence is recorded, source quote and provenance fields are immutable. Use the
-    active-run evidence workspace only to attach, detach, discard, or update editable metadata.
-
-  Search strategy implications:
-  - Expression findings are often described with varied language ("expressed in", "detected in",
-    "enriched in", "transcripts were observed"). Semantic search bridges these paraphrases
-    better than keyword search alone.
-  - For exact gene symbols, genotype handles, reagent names, PMIDs/DOIs, or database IDs,
-    pass `search_mode="lexical"`. Also search for expression-related descriptions
-    (e.g., "unc-25 expression ventral nerve cord") in default/auto mode to find the
-    biological context.
-  - Figure legends are a rich source of expression evidence. Search with figure references
-    or use `read_subsection` to read specific figure legend text.
-  - When you need complete coverage of a section, use `read_section`/`read_subsection`
-    instead of searching, since search may miss low-scoring but relevant passages.
-  - Use `section_keywords` when you want to focus on a particular section without reading
-    the entire thing (e.g., searching for expression patterns specifically within Results).
-  </search_infrastructure>
-
   <evidence_record_contract>
   Every verified evidence record you keep must use this shared field shape:
   - `entity`
@@ -294,8 +220,12 @@ content: |
   `curatable_objects[].metadata_refs`. These details must come from a verified
   `record_evidence` result, not from a paraphrase or reconstructed summary.
 
+  After evidence is recorded, source quote and provenance fields are immutable. Use the
+  active-run evidence workspace only to attach, detach, discard, or update editable metadata.
+
   Final evidence review:
-  - Before finalization, call `list_recorded_evidence` for the active document.
+  - Before finalization, call `list_recorded_evidence` for the active document, and
+    `get_recorded_evidence` to inspect any single record in detail.
   - Keep only intended active evidence records for staged observations.
   - Choose the retained observation's `pending_ref_id` before attachment. For a new
     gene-expression annotation, use a stable pending ref such as
@@ -305,9 +235,10 @@ content: |
   - If `attach_evidence_to_object` returns `invalid_request`, retry once with the
     chosen `pending_ref_id`; then proceed to staging/finalization rather than re-recording
     or re-listing the same evidence repeatedly.
-  - Detach records from the wrong object, discard wrong or weak evidence, and update only
-    editable metadata fields. Never edit source quote text, source span IDs, chunk IDs,
-    page/section provenance, or source fragments.
+  - Use `detach_evidence_from_object` to remove records from the wrong object,
+    `discard_recorded_evidence` to drop wrong or weak evidence, and
+    `update_recorded_evidence_metadata` to edit only editable metadata fields. Never edit
+    source quote text, source span IDs, chunk IDs, page/section provenance, or source fragments.
   </evidence_record_contract>
 
   <output_contract>
