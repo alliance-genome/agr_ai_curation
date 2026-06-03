@@ -52,6 +52,41 @@ def test_document_discovery_tools_point_to_read_chunk_span_selection(monkeypatch
     assert "Survey" in docs["read_subsection"]
     assert "evidence_spans[].span_id" in docs["read_subsection"]
 
+    # Document-search guidance relocated from the gene_expression prompt's
+    # <search_infrastructure> block must now live in the tool docstrings so a
+    # later task can delete that prompt block without losing the guidance.
+    # These tokens are UNIQUE to the relocated prose (not the base docstring's
+    # pre-existing search_mode/section_keywords mentions), so they genuinely
+    # guard the enrichment: reverting it would drop them and fail this test.
+    search_doc = docs["search_document"]
+    assert "BM25" in search_doc, (
+        "search_document must explain hybrid search blends semantic + BM25 keyword matching"
+    )
+    assert "cross-encoder" in search_doc, (
+        "search_document must explain cross-encoder reranking"
+    )
+    assert "MMR" in search_doc, (
+        "search_document must explain MMR diversification"
+    )
+
+    # read_section / read_subsection must convey FULL/survey coverage of a named
+    # section via the semantic hierarchy (not page/positional order).
+    for read_tool in ("read_section", "read_subsection"):
+        doc_lower = docs[read_tool].lower()
+        assert "all" in doc_lower, (
+            f"{read_tool} must convey it returns ALL chunks of the named section"
+        )
+        assert "hierarchy" in doc_lower, (
+            f"{read_tool} must convey it uses the LLM-resolved semantic hierarchy"
+        )
+        assert "page" in doc_lower, (
+            f"{read_tool} must contrast with linear page order"
+        )
+
+    # read_chunk is the evidence-selection step: full text + span ids.
+    assert "evidence_spans" in docs["read_chunk"]
+    assert "span_id" in docs["read_chunk"]
+
     for tool_name, doc in docs.items():
         _assert_clean_doc(tool_name, doc)
 
