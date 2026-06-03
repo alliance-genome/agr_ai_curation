@@ -2,6 +2,7 @@
 import textwrap
 import pytest
 
+from src.lib.agent_studio.system_agent_docs import get_system_agent_documentation
 from src.lib.config.agent_loader import load_agent_definitions, reset_cache
 
 
@@ -127,9 +128,6 @@ def test_empty_docs_yaml_logs_warning_and_no_documentation(tmp_path, caplog):
     reset_cache()
     assert agents["gene_validation"].documentation is None
     assert "Empty docs.yaml in gene" in caplog.text
-
-
-from src.lib.agent_studio.system_agent_docs import get_system_agent_documentation
 
 
 def test_system_agent_docs_has_task_input_and_curation_prep():
