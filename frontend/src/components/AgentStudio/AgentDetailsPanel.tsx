@@ -40,7 +40,7 @@ import ScienceIcon from '@mui/icons-material/Science'
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import StorageIcon from '@mui/icons-material/Storage'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
-import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
+import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined'
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 
@@ -243,10 +243,13 @@ function AgentDetailsPanel({
   if (!agent) {
     return (
       <EmptyState>
-        <Box>
-          <HelpOutlineIcon sx={{ fontSize: 48, mb: 2, opacity: 0.5 }} />
-          <Typography variant="body1">
-            Select an agent from the list to view its details.
+        <Box sx={{ maxWidth: 360 }}>
+          <AutoAwesomeOutlinedIcon sx={{ fontSize: 48, mb: 2, opacity: 0.5 }} />
+          <Typography variant="h6" sx={{ mb: 1 }}>
+            Browse your agents
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Pick an agent on the left to see what it does, the tools it uses, and the validation that applies.
           </Typography>
         </Box>
       </EmptyState>
