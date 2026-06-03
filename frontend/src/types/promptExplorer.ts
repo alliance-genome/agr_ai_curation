@@ -29,6 +29,7 @@ export interface AgentDocumentation {
   capabilities: AgentCapability[]
   data_sources: DataSourceInfo[]
   limitations: string[]
+  tips?: string[]
 }
 
 // ============================================================================

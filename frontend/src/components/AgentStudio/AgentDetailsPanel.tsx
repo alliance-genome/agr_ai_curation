@@ -533,50 +533,35 @@ function AgentDetailsPanel({
               </Box>
             )}
 
-            {/* Tips section - static for now */}
-            <Box sx={{ mb: 3 }}>
-              <SectionTitle>
-                <LightbulbOutlinedIcon fontSize="small" color="info" />
-                Tips for Best Results
-              </SectionTitle>
-              <List dense disablePadding>
-                <ListItem sx={{ pl: 0 }}>
-                  <ListItemIcon sx={{ minWidth: 28 }}>
-                    <LightbulbOutlinedIcon fontSize="small" sx={{ color: 'info.main', fontSize: '1rem' }} />
-                  </ListItemIcon>
-                  <ListItemText
-                    primary="Be specific with your queries - include gene symbols, IDs, or species when possible"
-                    primaryTypographyProps={{ variant: 'body2' }}
-                  />
-                </ListItem>
-                <ListItem sx={{ pl: 0 }}>
-                  <ListItemIcon sx={{ minWidth: 28 }}>
-                    <LightbulbOutlinedIcon fontSize="small" sx={{ color: 'info.main', fontSize: '1rem' }} />
-                  </ListItemIcon>
-                  <ListItemText
-                    primary="Use the 'Discuss with Claude' button if you're unsure how this agent can help"
-                    primaryTypographyProps={{ variant: 'body2' }}
-                  />
-                </ListItem>
-                {agent.has_group_rules && (
-                  <ListItem sx={{ pl: 0 }}>
-                    <ListItemIcon sx={{ minWidth: 28 }}>
-                      <LightbulbOutlinedIcon fontSize="small" sx={{ color: 'info.main', fontSize: '1rem' }} />
-                    </ListItemIcon>
-                    <ListItemText
-                      primary="This agent has group-specific rules - check the Prompts tab to see how behavior varies by species"
-                      primaryTypographyProps={{ variant: 'body2' }}
-                    />
-                  </ListItem>
-                )}
-              </List>
-            </Box>
+            {/* Tips section - sourced from docs.yaml */}
+            {documentation?.tips && documentation.tips.length > 0 && (
+              <Box sx={{ mb: 3 }}>
+                <SectionTitle>
+                  <LightbulbOutlinedIcon fontSize="small" color="info" />
+                  Tips for Best Results
+                </SectionTitle>
+                <List dense disablePadding>
+                  {documentation.tips.map((tip, idx) => (
+                    <ListItem key={idx} sx={{ pl: 0 }}>
+                      <ListItemIcon sx={{ minWidth: 28 }}>
+                        <LightbulbOutlinedIcon fontSize="small" sx={{ color: 'info.main', fontSize: '1rem' }} />
+                      </ListItemIcon>
+                      <ListItemText
+                        primary={tip}
+                        primaryTypographyProps={{ variant: 'body2' }}
+                      />
+                    </ListItem>
+                  ))}
+                </List>
+              </Box>
+            )}
 
             {/* Empty state for Guidance */}
-            {(!documentation?.limitations || documentation.limitations.length === 0) && (
+            {(!documentation?.limitations || documentation.limitations.length === 0) &&
+             (!documentation?.tips || documentation.tips.length === 0) && (
               <Box sx={{ textAlign: 'center', py: 4, color: 'text.secondary' }}>
                 <Typography variant="body2">
-                  No specific limitations documented for this agent.
+                  No specific guidance documented for this agent.
                 </Typography>
               </Box>
             )}
