@@ -38,5 +38,10 @@ The four `<search_context>` extractors are **unchanged in Phase B** (their block
 
 - **Model-facing guidance guarded:** `test_tool_descriptions.py` asserts the search/read docstrings carry the relocated facts (`BM25`, `cross-encoder`, `MMR`, hierarchy/page, `evidence_spans`/`span_id`) — non-vacuous (would fail on a revert).
 - **Curator catalog:** `bindings.yaml` summaries rewritten in plain language (no dev jargon); `tool_catalog_baseline.json` parity regenerated (only the 4 tool summaries changed).
-- **Nothing load-bearing lost:** per-agent redundancy maps confirm every removed fact's surviving home; the `<search_infrastructure>` forbidden-fragment guard in `test_assembly.py` now passes for the de-dup'd prompts; `test_gene_expression_prompt_policy.py` green (immutability relocated, not lost).
+- **Nothing load-bearing lost:** per-agent redundancy maps confirm every removed fact's surviving home; `test_tool_descriptions.py` guards the relocated facts in the model docstrings; `test_gene_expression_prompt_policy.py` green (immutability relocated, not lost). (The `<search_infrastructure>` forbidden-fragment guard in `test_assembly.py` is scoped to phenotype_extractor, which never carried such a block, so it does not itself exercise the gene_expression/pdf removals — the real evidence is the size deltas + the relocation and tool-description tests.)
+
+## Carry-overs for Phase C
+
+- `gene_extractor`'s `<search_context>` block still contains the inaccurate "~1500 characters per chunk hit" claim — Phase C must **drop** this sentence (as Phase B did for gene_expression/pdf), NOT relocate it. The other three deferred extractors carry the shorter `<search_context>` variant without this claim.
+- Two-copy architecture: `test_tool_descriptions.py` guards the legacy backend `weaviate_search.py` copy while the runtime uses the package copy; they're kept in sync manually (the Phase B enrichment is identical in both). A future cleanup could point the test at the package copy (or consolidate the copies) so the guard tracks the runtime directly.
 - The only failing test in this checkout is the environmental `test_pdf_corpus_trial_examples_do_not_teach_quote_submission` (gitignored on-disk corpus artifacts) — passes in CI; not a Phase-B regression.
