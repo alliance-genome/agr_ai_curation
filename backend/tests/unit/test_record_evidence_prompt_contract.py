@@ -174,18 +174,24 @@ def test_record_evidence_tool_policy_surfaces_are_span_only():
 
 
 def test_agent_studio_catalog_tool_inventory_exposes_span_workspace_contract():
+    # These fragments verify each tool's catalog documentation still conveys its
+    # role in the evidence workflow (search -> read passage -> pick snippets ->
+    # save evidence -> review/link/withdraw). They are written in the curator-voice
+    # (plain-language) form the descriptions now use; the precise parameter tokens
+    # (span_ids, etc.) are guaranteed to reach the model by the tools' function
+    # parameter schemas and the agent base prompts, not by this curator-facing prose.
     required_by_tool = {
-        "search_document": ["Discovery", "read_chunk"],
-        "read_chunk": ["evidence_spans[].span_id"],
-        "read_section": ["Survey", "read_chunk"],
-        "read_subsection": ["Survey", "read_chunk"],
-        "record_evidence": ["span_ids", "verified_quote"],
-        "list_recorded_evidence": ["Review", "active-run evidence"],
-        "get_recorded_evidence": ["detailed review"],
-        "attach_evidence_to_object": ["intended curatable object"],
-        "detach_evidence_from_object": ["wrong curatable object"],
-        "discard_recorded_evidence": ["wrong or weak"],
-        "update_recorded_evidence_metadata": ["editable"],
+        "search_document": ["passages", "read in full"],
+        "read_chunk": ["snippets", "evidence"],
+        "read_section": ["named section", "read in full"],
+        "read_subsection": ["named subsection", "read in full"],
+        "record_evidence": ["snippets", "verified quote"],
+        "list_recorded_evidence": ["review", "saved so far in this run"],
+        "get_recorded_evidence": ["full detail"],
+        "attach_evidence_to_object": ["finding it supports"],
+        "detach_evidence_from_object": ["wrongly tied"],
+        "discard_recorded_evidence": ["wrong or too weak", "history"],
+        "update_recorded_evidence_metadata": ["editable", "cannot be changed"],
     }
 
     stale_hits: list[str] = []
