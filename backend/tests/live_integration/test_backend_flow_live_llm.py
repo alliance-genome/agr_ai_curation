@@ -316,7 +316,7 @@ def test_live_flow_execution_openai(monkeypatch: pytest.MonkeyPatch):
 @pytest.mark.streaming
 @pytest.mark.manual_only
 def test_live_flow_execution_groq(monkeypatch: pytest.MonkeyPatch):
-    model_id = os.getenv("LIVE_LLM_GROQ_MODEL", "openai/gpt-oss-120b").strip()
+    model_id = os.getenv("LIVE_LLM_GROQ_MODEL", "").strip()
     _run_live_flow_case(
         monkeypatch,
         provider="groq",

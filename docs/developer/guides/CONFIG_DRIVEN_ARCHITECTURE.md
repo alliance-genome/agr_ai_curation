@@ -375,13 +375,6 @@ models:
       low: Fastest mode. Good for quick checks.
       medium: Recommended default for curation.
       high: Deepest reasoning. Use sparingly.
-
-  - model_id: openai/gpt-oss-120b
-    name: GPT-OSS 120B
-    provider: groq                      # Routed through Groq via LiteLLM
-    description: Ultra-fast open-weight model on Groq.
-    supports_reasoning: false
-    supports_temperature: true
 ```
 
 #### Model Definition Fields

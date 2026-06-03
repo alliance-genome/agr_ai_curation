@@ -109,7 +109,7 @@ def test_resolve_model_provider_uses_model_catalog_and_provider_registry(monkeyp
         else None,
     )
 
-    assert resolve_model_provider("openai/gpt-oss-120b") == "groq"
+    assert resolve_model_provider("stub-groq-model") == "groq"
 
 
 def test_resolve_model_provider_requires_known_model(monkeypatch):
@@ -214,7 +214,7 @@ def test_build_model_settings_applies_groq_safety_defaults(monkeypatch):
     monkeypatch.delenv("GROQ_TOOL_TEMPERATURE_MAX", raising=False)
 
     settings = build_model_settings(
-        model="openai/gpt-oss-120b",
+        model="stub-groq-model",
         temperature=0.9,
         parallel_tool_calls=True,
     )
@@ -243,7 +243,7 @@ def test_build_model_settings_allows_groq_parallel_when_enabled(monkeypatch):
     monkeypatch.setenv("GROQ_PARALLEL_TOOL_CALLS_ENABLED", "true")
 
     settings = build_model_settings(
-        model="openai/gpt-oss-120b",
+        model="stub-groq-model",
         temperature=0.2,
         parallel_tool_calls=True,
     )
@@ -419,8 +419,8 @@ def test_get_model_for_agent_keeps_namespaced_model_with_groq_prefix(monkeypatch
             "GROQ_BASE_URL": "https://api.groq.com/openai/v1",
         },
     ):
-        get_model_for_agent("openai/gpt-oss-120b")
+        get_model_for_agent("stub-groq-model")
 
-    assert captured["model"] == "groq/openai/gpt-oss-120b"
+    assert captured["model"] == "groq/stub-groq-model"
     assert captured["base_url"] == "https://api.groq.com/openai/v1"
     assert captured["api_key"] == "groq-key"
