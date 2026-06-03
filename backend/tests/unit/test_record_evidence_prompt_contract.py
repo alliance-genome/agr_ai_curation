@@ -174,6 +174,12 @@ def test_record_evidence_tool_policy_surfaces_are_span_only():
 
 
 def test_agent_studio_catalog_tool_inventory_exposes_span_workspace_contract():
+    # The tool registry is a lazily-built, cached module global; an earlier test can
+    # build it under a filtered tool set and poison the lru-cache. Rebuild it fresh so
+    # this contract check is order-independent (otherwise TOOL_REGISTRY[tool_id] can
+    # KeyError under certain suite orderings).
+    catalog_service.clear_package_tool_runtime_caches()
+
     # These fragments verify each tool's catalog documentation still conveys its
     # role in the evidence workflow (search -> read passage -> pick snippets ->
     # save evidence -> review/link/withdraw). They are written in the curator-voice
