@@ -18,38 +18,40 @@ you are the resolver that settles it
 return structured `AlleleResultEnvelope` data using the shared validator result contract
 never from memory, guessing, or unsupported normalization
 
-# AV-03 success: calls agr_curation_query before any allele information (no memory)
-You called `agr_curation_query` before providing any allele information
+# AV-03 query-before-any-fact / no memory (success_criteria removed; rule now in <goal>)
+Decide every identity from what the database returns
 
-# AV-04 success: selected_inputs.mention primary, hints as disambiguating context
-you used `selected_inputs.mention` as the primary query
-treated `selected_inputs.normalized_hint`, `selected_inputs.associated_gene`, `selected_inputs.taxon`, and `selected_inputs.evidence_quote` only as disambiguating context
+# AV-04 selected_inputs.mention primary, hints as disambiguating context (success_criteria removed; rule in <resolution_and_validation_rules>)
+Use `selected_inputs.mention` as the primary query.
+Treat these as disambiguating context only:
 
-# AV-05 success/literal-first; do not rewrite before first lookup (contract token)
+# AV-05 literal-first; do not rewrite before first lookup (contract token)
+# (RELOCATED from success_criteria into <resolution_and_validation_rules> ## Symbol handling — verbatim, hard-pinned by test_allele_prompt_keeps_evidence_quotes_out_of_symbol_queries)
 do not rewrite or normalize it before the first lookup
 
-# AV-06 success: never pass an evidence sentence into allele_symbol (contract tokens)
+# AV-06 never pass an evidence sentence into allele_symbol (contract tokens)
+# (RELOCATED from success_criteria into <resolution_and_validation_rules> ## Symbol handling — verbatim, hard-pinned by test_allele_prompt_keeps_evidence_quotes_out_of_symbol_queries)
 Never pass a whole evidence sentence
 Evidence text is context for judging candidates
 
-# AV-07 species context -> data_provider, else all species
-You used species context to set `data_provider` when a species was stated, and searched all species when none was stated.
+# AV-07 species context -> data_provider, else all species (success_criteria removed; rule in <resolution_and_validation_rules>)
+When the query or paper names a species, pass the matching `data_provider`.
 
-# AV-08 resolved_objects / resolved_values scalar / candidates+allele_candidates
-You reported each resolved allele in `resolved_objects`, copied authoritative scalar fields into `resolved_values`, and recorded candidate matches in `candidates` and `allele_candidates`.
+# AV-08 resolved_objects / resolved_values scalar / candidates+allele_candidates (success_criteria removed; rule in <result_contract>)
+`resolved_objects`: database-returned allele facts for resolved matches.
 
 # AV-09 status resolved/unresolved decision (contract-test tokens)
 `status: "resolved"`
 `status: "unresolved"`
 
-# AV-10 missing_expected_fields + curator_message/explanation
-You listed every unresolved expected field in `missing_expected_fields`
+# AV-10 missing_expected_fields (success_criteria removed; rule in <result_contract>)
+`missing_expected_fields`: the expected fields you could not populate from lookup evidence.
 
-# AV-11 record every DB call in lookup_attempts
-You recorded every database call in `lookup_attempts`, with its provider, method, query, result count, outcome, and any short message.
+# AV-11 record every DB call in lookup_attempts (success_criteria removed; rule in <result_contract> + <goal>)
+`lookup_attempts`: one record for each `agr_curation_query` call
 
-# AV-12 no-invention: only use fields returned by query results
-You used only fields returned by the query results for allele IDs, symbols, names, species, provider codes, status flags, synonyms, and attribution.
+# AV-12 no-invention: only use fields returned by query results (success_criteria + result_contract trailing line removed; no-invention rule survives in <resolution_and_validation_rules> ## No memory, no guessing)
+If the database does not support it, you do not have it.
 
 # AV-13s scope: allele symbols/names/IDs incl example CURIEs; AlleleMention bindings
 You handle allele symbols, names, full names, and IDs such as `WB:WBVar00012345` or `MGI:3689906`
@@ -104,11 +106,10 @@ A deprecated or synonym-stored symbol -> use `search_alleles`, since synonym mat
 Several alleles sharing a symbol -> check the species, associated gene, and notation on each query result before deciding.
 
 # AV-28/AV-29/AV-30/AV-31 shared result contract root fields (contract tokens)
+# (4 copied-from-request root fields collapsed to one agm-style line in the leanness
+#  pass; the contract test still asserts each backtick token, all retained here.)
 Populate these root fields exactly, and do not wrap them under another object:
-`request_id`: copy from the validator request.
-`validator_binding_id`: copy from the validator request.
-`validator_agent`: copy the package and agent identity from the request.
-`target`: copy the target object from the request.
+`request_id`, `validator_binding_id`, `validator_agent`, `target`: copied from the request.
 `resolved_values`: scalar values keyed by expected result field
 `resolved_objects`: database-returned allele facts for resolved matches.
 `missing_expected_fields`: the expected fields you could not populate from lookup evidence.

@@ -47,10 +47,31 @@ not an extractor and not a builder. Verified against the code:
 
 So the rewrite uses the **role-adapted, outcome-first VALIDATOR skeleton**:
 
-`<role>` -> `<goal>` -> `<success_criteria>` -> `<scope>` ->
-`<resolution_and_validation_rules>` -> `<lookup_workflow>` -> `<result_contract>` ->
-`<stop_rules>`. The outcome-first ORDER (Role -> Goal -> Success -> Scope -> Rules
--> Workflow -> Output -> Stop) is preserved.
+`<role>` -> `<goal>` -> `<scope>` -> `<resolution_and_validation_rules>` ->
+`<lookup_workflow>` -> `<result_contract>` -> `<stop_rules>`. The outcome-first
+ORDER (Role -> Goal -> Scope -> Rules -> Workflow -> Output -> Stop) is preserved.
+
+> **Leanness pass (post-rewrite, matching agm/subject_entity):** the original
+> rewrite carried a `<success_criteria>` section whose bullets were ~90%
+> restatement of rules already in `<resolution_and_validation_rules>`,
+> `<result_contract>`, and `<stop_rules>`. That section is now **removed** to match
+> the lean validator standard (agm/subject_entity carry no `<success_criteria>`).
+> The "record every database call you make" success idea was folded into `<goal>`.
+> Three contract-test-pinned fragments that lived ONLY in `<success_criteria>` —
+> "do not rewrite or normalize it before the first lookup" (AV-05), "Never pass a
+> whole evidence sentence" and "Evidence text is context for judging candidates"
+> (AV-06) — were **RELOCATED verbatim** into `<resolution_and_validation_rules>`
+> (## Symbol handling), NOT deleted, so
+> `test_allele_prompt_keeps_evidence_quotes_out_of_symbol_queries` stays green. A
+> duplicate "Keep supporting evidence quotes out of the `allele_symbol` argument …"
+> sentence in `<lookup_workflow>` (a verbatim restatement of the same sentence in
+> `<resolution_and_validation_rules>` ## Symbol handling) was dropped as a clean free
+> cut; the rules copy is kept. The four copied-from-request root fields in
+> `<result_contract>` were collapsed to one agm-style line (every backtick token
+> retained for the contract test), and the trailing "Use only fields returned by the
+> query results for allele IDs…" no-invention restatement was dropped (AV-12 survives
+> once in ## No memory, no guessing). Each removed success bullet's rule survives in
+> another surviving section (see the per-ID homes below).
 
 ### VALIDATOR framing (load-bearing, per Chris)
 
@@ -195,16 +216,16 @@ and are NOT promoted to a `.reason_codes.txt`. So none is created.
 |----|-------------------|----------|
 | AV-01 | Agent identity: an Allele Data Specialist for the Alliance Genome Resources Curation Database who helps curators identify and validate allele information by querying the AGR curation database. | `<role>` (reframed to curator-voice "stronger specialized resolver"; identity + DB-query purpose retained) |
 | AV-02 | Goal: validate allele symbols, names, IDs, species, obsolete status, and extinction status from database evidence; return structured `AlleleResultEnvelope` data using the shared validator result contract, without guessing or unsupported normalization. | `<goal>` |
-| AV-03 | Success: calls `agr_curation_query` before providing allele information. | `<success_criteria>` (curator-facing success line KEPT once; the imperative "you MUST call before responding" is CORE's required-tool-call policy, AV-RTC). Literal token `` `agr_curation_query` `` retained. |
-| AV-04 | Success: for domain validation requests, uses `selected_inputs.mention` as the primary query, with optional `selected_inputs.normalized_hint`, `selected_inputs.associated_gene`, `selected_inputs.taxon`, and `selected_inputs.evidence_quote` only as disambiguating context. | `<success_criteria>` + `<resolution_and_validation_rules>` (the `selected_inputs` handoff contract; AV-14) |
-| AV-05 | Success: searches the literal compact allele symbol, notation, or ID supplied by the user or paper first; do not rewrite or normalize it before the first lookup. | `<success_criteria>` + `<resolution_and_validation_rules>` (literal-symbol-first; "do not rewrite or normalize it before the first lookup" is a contract-test token) |
-| AV-06 | Success: never pass a whole evidence sentence, descriptive clause, phenotype sentence, or paragraph into `allele_symbol`. Evidence text is context for judging candidates, not the allele search query. | `<success_criteria>` (verbatim contract-test tokens: "Never pass a whole evidence sentence", "Evidence text is context for judging candidates") |
-| AV-07 | Success: uses species context to set `data_provider` when a species is stated, and searches all species when no species is stated. | `<success_criteria>` + `<resolution_and_validation_rules>` (species selection; AV-17) |
-| AV-08 | Success: reports each resolved allele in `resolved_objects`, copies expected scalar fields into `resolved_values`, and records candidate matches in `candidates` and `allele_candidates`. | `<success_criteria>` + `<result_contract>` (AV-30) |
-| AV-09 | Success: uses `status: "resolved"` only when expected fields are filled from database evidence; uses `status: "unresolved"` when fields are missing, ambiguous, not found, or blocked by tool errors. | `<success_criteria>` + `<result_contract>` (verbatim `status: "resolved"` / `status: "unresolved"` tokens — contract-test requirement) |
-| AV-10 | Success: lists unresolved expected fields in `missing_expected_fields`; explains missing data or ambiguity in `curator_message` and `explanation`. | `<success_criteria>` + `<result_contract>` |
-| AV-11 | Success: records every database call in `lookup_attempts`, including provider, method, query, result count, outcome, and any short message. | `<success_criteria>` + `<result_contract>` (AV-31) |
-| AV-12 | Success: uses only fields returned by query results for allele IDs, symbols, names, species, provider codes, status flags, synonyms, and attribution. | `<success_criteria>` + `<resolution_and_validation_rules>` (no-invention) |
+| AV-03 | Success: calls `agr_curation_query` before providing allele information. | `<goal>` ("Decide every identity from what the database returns") + `<resolution_and_validation_rules>` (## No memory, no guessing). The imperative "you MUST call before responding" is CORE's required-tool-call policy (AV-RTC). Literal token `` `agr_curation_query` `` retained. **(`<success_criteria>` removed in the leanness pass — restatement.)** |
+| AV-04 | Success: for domain validation requests, uses `selected_inputs.mention` as the primary query, with optional `selected_inputs.normalized_hint`, `selected_inputs.associated_gene`, `selected_inputs.taxon`, and `selected_inputs.evidence_quote` only as disambiguating context. | `<resolution_and_validation_rules>` (the `selected_inputs` handoff contract; AV-14). **(`<success_criteria>` removed — restatement of AV-14.)** |
+| AV-05 | Success: searches the literal compact allele symbol, notation, or ID supplied by the user or paper first; do not rewrite or normalize it before the first lookup. | **RELOCATED verbatim** `<success_criteria>` -> `<resolution_and_validation_rules>` (## Symbol handling). "do not rewrite or normalize it before the first lookup" is a contract-test token hard-pinned by `test_allele_prompt_keeps_evidence_quotes_out_of_symbol_queries`; moved, not deleted. |
+| AV-06 | Success: never pass a whole evidence sentence, descriptive clause, phenotype sentence, or paragraph into `allele_symbol`. Evidence text is context for judging candidates, not the allele search query. | **RELOCATED verbatim** `<success_criteria>` -> `<resolution_and_validation_rules>` (## Symbol handling). "Never pass a whole evidence sentence" and "Evidence text is context for judging candidates" are contract-test tokens hard-pinned by `test_allele_prompt_keeps_evidence_quotes_out_of_symbol_queries`; moved, not deleted. |
+| AV-07 | Success: uses species context to set `data_provider` when a species is stated, and searches all species when no species is stated. | `<resolution_and_validation_rules>` (species selection; AV-17). **(`<success_criteria>` removed — restatement of AV-17.)** |
+| AV-08 | Success: reports each resolved allele in `resolved_objects`, copies expected scalar fields into `resolved_values`, and records candidate matches in `candidates` and `allele_candidates`. | `<result_contract>` (AV-30). **(`<success_criteria>` removed — restatement of the result-contract field roster.)** |
+| AV-09 | Success: uses `status: "resolved"` only when expected fields are filled from database evidence; uses `status: "unresolved"` when fields are missing, ambiguous, not found, or blocked by tool errors. | `<result_contract>` (verbatim `status: "resolved"` / `status: "unresolved"` tokens — contract-test requirement). **(`<success_criteria>` removed — restatement of AV-28.)** |
+| AV-10 | Success: lists unresolved expected fields in `missing_expected_fields`; explains missing data or ambiguity in `curator_message` and `explanation`. | `<result_contract>`. **(`<success_criteria>` removed — restatement of the result-contract field roster.)** |
+| AV-11 | Success: records every database call in `lookup_attempts`, including provider, method, query, result count, outcome, and any short message. | `<goal>` ("record every database call you make") + `<result_contract>` (AV-31). **(`<success_criteria>` removed — restatement; the "record every call" idea folded into `<goal>`.)** |
+| AV-12 | Success: uses only fields returned by query results for allele IDs, symbols, names, species, provider codes, status flags, synonyms, and attribution. | `<resolution_and_validation_rules>` (no-invention; ## No memory, no guessing). **(The `<result_contract>` "Use only fields returned by the query results for allele IDs…" restatement was dropped in the leanness pass; the no-invention rule survives once in rules.)** |
 
 ## Scope / no-transfer
 
@@ -228,7 +249,7 @@ and are NOT promoted to a `.reason_codes.txt`. So none is created.
 
 | ID | Load-bearing rule | New home |
 |----|-------------------|----------|
-| AV-20 | Use the minimum lookup path sufficient for correctness: if the user/PDF provides a CURIE/ID, call `get_allele_by_id`; if you have a compact allele notation, gene-associated allele symbol, or partial allele symbol, call `search_alleles`; if you have an exact full symbol, call `get_allele_by_exact_symbol`. Keep supporting evidence quotes out of the `allele_symbol` argument — use them only to decide which returned candidate matches. | `<lookup_workflow>` (which-method-when JUDGMENT retained; per-method MECHANICS relocated to bindings; the keep-evidence-out clause is AV-18's contract token home) |
+| AV-20 | Use the minimum lookup path sufficient for correctness: if the user/PDF provides a CURIE/ID, call `get_allele_by_id`; if you have a compact allele notation, gene-associated allele symbol, or partial allele symbol, call `search_alleles`; if you have an exact full symbol, call `get_allele_by_exact_symbol`. | `<lookup_workflow>` (which-method-when JUDGMENT retained; per-method MECHANICS relocated to bindings). **Leanness pass: the duplicate "Keep supporting evidence quotes out of the `allele_symbol` argument …" sentence that had also appeared here was dropped (clean free cut); AV-18's contract token now lives once in `<resolution_and_validation_rules>` ## Symbol handling.** |
 | AV-21 | Bounded lookup path (ordered): (1) determine whether the input is a CURIE/ID or a compact symbol/notation; (2) for CURIE/ID input, call `get_allele_by_id`; (3) for symbol/notation input, call `search_alleles`; (4) if too many results return, narrow by adding more characters or applying the known species `data_provider`; (5) if no result returns, report "Allele not found in database" with the exact search attempted. | `<lookup_workflow>` (ordered bounded path — the invariants file pins this order) |
 | AV-22 | Troubleshooting judgment: too many results -> add a species filter with `data_provider`; a compact notation or partial symbol (e.g. "Ulk1") -> use `search_alleles` so it returns the matching allele variants; a deprecated or synonym-stored symbol -> use `search_alleles` because synonym matching may surface the current allele; multiple alleles sharing a symbol -> check the species, associated gene, and notation on each query result before deciding. | `<lookup_workflow>` (consolidated troubleshooting judgment; de-duped against the pre-rewrite `# Lookup Examples`) |
 
