@@ -41,17 +41,23 @@
   },
   {
     "phrase": "Searches using LIKE patterns: exact, prefix, then contains.",
-    "category": "deleted",
-    "reason": "GV-24 (pure internal mechanic). The LIKE-pattern matching order is a low-level implementation detail of the agr_curation_query search methods, not a curation judgment the curator edits. The curator-facing consequence (search_genes handles exact + partial + synonym matches) is KEPT as method-choice judgment in <lookup_workflow>; the bindings catalog already states search_genes 'finds genes whose symbol contains the text you give'. Dropped with no home so the deletion is visible in review rather than hidden in the diff.",
+    "synonyms": [
+      "matches by exact, then prefix, then contains (case-insensitive)"
+    ],
+    "category": "relocated",
+    "reason": "GV-24 (Phase C review follow-up). The exact->prefix->contains search-order mechanic is STRATEGY-AFFECTING, not dead implementation detail: the surviving troubleshooting step in <lookup_workflow> ('narrow by adding more characters') depends on the model understanding why a short query like 'daf' returns many candidates. So it is RELOCATED (not deleted) to the model-facing agr_curation_query tool documentation: the @function_tool docstring in packages/alliance/python/src/agr_ai_curation_alliance/tools/agr_curation.py (model-facing) AND the bindings.yaml agr_curation_query metadata.documentation.summary (curator-facing + the harness home text). The synonym is the verbatim phrasing now in the bindings summary, which is what the bindings:agr_curation_query home-check reads (top-level description + documentation.summary).",
     "old_source": "packages/alliance/agents/gene/prompt.yaml:# Available Gene Methods (search_genes Behavior)",
-    "new_home": ""
+    "new_home": "bindings:agr_curation_query"
   },
   {
     "phrase": "Is case-insensitive.",
-    "category": "deleted",
-    "reason": "GV-24 (pure internal mechanic). Case-insensitivity of the search methods is a tool implementation detail with no curation judgment attached; it does not change which method the validator picks or how it decides resolved-vs-unresolved. Dropped with no home (printed for review).",
+    "synonyms": [
+      "exact, then prefix, then contains (case-insensitive)"
+    ],
+    "category": "relocated",
+    "reason": "GV-24 (Phase C review follow-up). Case-insensitivity travels with the same search-order mechanic above and is relocated with it to the model-facing agr_curation_query docstring and the bindings.yaml summary, rather than deleted, because the 'adding characters narrows the candidate set' guidance only makes sense alongside the (case-insensitive) exact->prefix->contains model. The synonym is the verbatim '(case-insensitive)' phrasing now in the bindings summary (the bindings:agr_curation_query home text).",
     "old_source": "packages/alliance/agents/gene/prompt.yaml:# Available Gene Methods (search_genes Behavior)",
-    "new_home": ""
+    "new_home": "bindings:agr_curation_query"
   },
   {
     "phrase": "Returns a `match_type` field showing how it matched.",

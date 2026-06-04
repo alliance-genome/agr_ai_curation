@@ -138,24 +138,52 @@ docstring):
   its ID."
 
 So the **per-method MECHANICS** (which method does exact vs contains, bulk, by-id)
-are carried by the curator catalog and are relocated. The handful of low-level
-implementation mechanics the catalog does NOT carry —
-**"LIKE patterns: exact, prefix, then contains", "case-insensitive", "Returns a
-`match_type` field showing how it matched", "Searches symbols, full names, and
-synonyms"** — are pure internal mechanics with low curation value. They are
-**DELETED with no home** (recorded in `.dropped.json` as `deleted`, printed for
-review), because: (a) they are not a curation judgment the curator edits, (b)
-`match_type` survives as a field in the result-contract `gene_candidates` detail
-(GV-36, kept), and (c) adding them to the model-facing tool docstring/bindings would
-re-introduce the exact duplication this lever removes. No curation guidance is lost:
-the rewrite keeps "use `search_genes` because it handles exact, partial, synonym,
-and alternative-name matches" as the method-choice JUDGMENT in `<lookup_workflow>`.
+are carried by the curator catalog and are relocated. The remaining low-level
+mechanics the catalog did NOT originally carry split two ways:
+
+- **Search-order + case-insensitive mechanic — RELOCATED (Phase C review follow-up).**
+  "Searches using LIKE patterns: exact, prefix, then contains" and "Is
+  case-insensitive" are **STRATEGY-AFFECTING**, not dead implementation detail: the
+  surviving `<lookup_workflow>` troubleshooting step "narrow by adding more
+  characters" depends on the model knowing why a short query like `daf` returns many
+  candidates (the exact->prefix->contains model). The pilot review flagged the
+  earlier "delete" call as a real strategy-affecting loss. So this mechanic is
+  **RELOCATED** to the model-facing `agr_curation_query` tool documentation: one
+  concise sentence added to the `@function_tool` docstring
+  (`packages/alliance/python/.../tools/agr_curation.py`, near `search_genes`) so the
+  MODEL sees it, AND the same sentence added to the bindings.yaml
+  `agr_curation_query` `metadata.documentation.summary` (curator-facing) so the
+  harness `bindings:agr_curation_query` home-check (which reads the top-level
+  `description` + `documentation.summary`) passes. Recorded in `.dropped.json` as
+  `relocated -> bindings:agr_curation_query`. Relocated wording:
+  **"search_genes matches by exact, then prefix, then contains (case-insensitive),
+  across symbols, full names, and synonyms — so a shorter query returns more
+  candidates and adding characters narrows them."**
+- **`match_type` mechanic — DELETED (fine).** "Returns a `match_type` field showing
+  how it matched" is dropped with no home (recorded as `deleted`, printed for
+  review): `match_type` survives as a documented field of the result-contract
+  `gene_candidates` detail (GV-32, kept), so the value is not lost; only the
+  standalone tool-output restatement is dropped.
+
+No curation guidance is lost: the rewrite also keeps "use `search_genes` because it
+handles exact, partial, synonym, and alternative-name matches" as the method-choice
+JUDGMENT in `<lookup_workflow>`.
 
 > NOTE for the next 13 validators (allele/etc.): the allele validator carries the
 > identical "Available Allele Methods" mechanics block (`search_alleles` LIKE/
-> case-insensitive/match_type). Apply the SAME decision: relocate the per-method
-> which-method-when semantics (carried by bindings `methods.*`), delete the pure
-> internal mechanics, keep the literal-symbol-first + method-choice judgment.
+> case-insensitive/match_type). Apply the SAME decision:
+> 1. Relocate the per-method which-method-when semantics (carried by bindings
+>    `methods.*`).
+> 2. **RELOCATE the search-order + case-insensitive mechanic** (strategy-affecting,
+>    same reason as gene) to the `agr_curation_query` docstring + bindings
+>    `documentation.summary`. The bindings summary already carries the gene wording
+>    and is a valid `bindings:agr_curation_query` home; if the allele rewrite wants
+>    allele-specific phrasing, add a parallel "search_alleles matches by exact, then
+>    prefix, then contains (case-insensitive), across symbols, full names, and
+>    synonyms" sentence to the docstring + summary.
+> 3. DELETE only the standalone `match_type` restatement (it survives as an
+>    `allele_candidates` field), and keep the literal-symbol-first + method-choice
+>    judgment.
 
 ### Template rule — Shared Result Contract: **LOAD-BEARING, KEPT (de-dup lever 2)**
 
@@ -277,10 +305,13 @@ NOT promoted to a `.reason_codes.txt`. So none is created.
 
 1. **Tool MECHANICS vs JUDGMENT (`# Available Gene Methods`):** the per-method
    which-method-when semantics are carried by the curator catalog
-   (`bindings:agr_curation_query` `methods.*`) and relocated; the pure internal
-   mechanics (LIKE exact/prefix/contains, case-insensitive, `match_type` field,
-   searches-synonyms) are deleted with no home (low curation value;
-   `match_type` survives in the `gene_candidates` result detail). The curation
+   (`bindings:agr_curation_query` `methods.*`) and relocated; the search-order +
+   case-insensitive mechanic (LIKE exact/prefix/contains, case-insensitive,
+   searches-synonyms) is **RELOCATED** to the model-facing `agr_curation_query`
+   docstring + bindings `documentation.summary` (Phase C review follow-up — it is
+   strategy-affecting, since `<lookup_workflow>`'s "add characters to narrow"
+   depends on it); only the standalone `match_type` restatement is deleted with no
+   home (`match_type` survives in the `gene_candidates` result detail). The curation
    JUDGMENT (which method to choose when, literal-symbol-first, rutabaga->rut
    synonym example) is KEPT.
 2. **Shared Result Contract:** verified NOT injected by a shared layer; KEPT
