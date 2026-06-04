@@ -1,0 +1,36 @@
+# Phase C workflow invariants: data_provider validator (Wave 3 — bounded lookup path).
+#
+# Invariants are STRONGER than plain phrase retention: each line is an ordered step
+# of the validator's bounded data-provider lookup path. The invariant framework
+# (1) reuses the retention assertion -- every line must appear in the assembled
+# render -- and (2) asserts the lines appear in this same order by first occurrence,
+# so the rewrite cannot scramble the
+# exact-lookup -> all-inputs-match-resolve -> taxon-mismatch -> name-conflict ->
+# multiple-candidates -> tool-error -> zero-match sequence.
+#
+# AUTHORING RULE (enforced by the harness): each phrase must occur EXACTLY ONCE in
+# the assembled render and be listed in workflow order. These are verbatim from the
+# rewritten <lookup_workflow> "Bounded lookup path" numbered block (steps 1-7),
+# where each occurs exactly once and in order. (DPV-13a..DPV-13g in
+# docs/design/phaseC-checklists/data_provider.md.)
+
+# Step 1 -- exact provider lookup with the supplied inputs.
+Call `get_data_provider` with the supplied `abbreviation`, `provider_name`, and taxon context (`taxon_id`).
+
+# Step 2 -- single provider: resolve only when every supplied input matches.
+Treat a single provider as resolved only when every supplied input matches the provider facts returned by the tool.
+
+# Step 3 -- abbreviation resolves but taxon differs: unresolved + mismatch explanation.
+If the abbreviation resolves but the supplied taxon differs from the provider taxon, return `status: "unresolved"`. Preserve the provider in `candidates` and `data_provider_candidates`, include the tool lookup attempt, and explain the provider/taxon mismatch in `curator_message`, `explanation`, and `mismatch_explanations`.
+
+# Step 4 -- provider name conflicts with abbreviation: unresolved with candidate facts.
+If the provider name conflicts with the abbreviation, return unresolved with all candidate facts and a curator-facing mismatch explanation.
+
+# Step 5 -- multiple candidates remain: unresolved, preserve.
+If multiple plausible provider candidates remain, return `status: "unresolved"` and preserve the candidates.
+
+# Step 6 -- tool under-development/unavailable: unresolved with outcome error.
+If the tool reports under-development or unavailable helper behavior, return unresolved with a lookup attempt outcome of `error` and a curator-facing message that provider validation could not run in this runtime.
+
+# Step 7 -- zero exact matches: unresolved with no-match explanation.
+If the tool returns zero exact matches, return unresolved with `lookup_attempts`, `missing_expected_fields`, provider candidates when returned, and a curator-facing no-match explanation.
