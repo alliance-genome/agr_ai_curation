@@ -168,8 +168,8 @@ jobs:
               should carry that meaning
 
             Do NOT flag legitimate project-specific content that is intentionally scoped to Alliance drop-ins or
-            instance documentation, including `packages/alliance/`, `alliance_config/`,
-            `alliance_tools/`, Alliance migration history, tests for those
+            instance documentation, including `packages/alliance/`, `alliance_agents/`, `alliance_config/`,
+            `alliance_tools/`, `scripts/deploy_alliance.sh`, Alliance migration history, tests for those
             package-specific paths, and docs/examples that explicitly describe the Alliance instance. The issue is
             leakage from those boundaries into reusable platform/core code.
 
