@@ -1,0 +1,13 @@
+[
+  {
+    "phrase": "Produce a CurationPrepAgentOutput compatible with the structured output schema",
+    "category": "relocated",
+    "reason": "PREP-OUT output-mandate de-dup. The pre-rewrite base opened its '## Output expectations' with 'Produce a CurationPrepAgentOutput compatible with the structured output schema.' Because agent.yaml sets output_schema: CurationPrepAgentOutput, the locked core now INJECTS that mandate: a '## Generated Runtime Contract' line ('produce JSON matching CurationPrepAgentOutput; the structured-output layer below is authoritative for final response shape') plus the full '## CRITICAL: ALWAYS PRODUCE STRUCTURED OUTPUT AS VALID JSON' block naming CurationPrepAgentOutput. Restating it in the base would duplicate the locked mandate, so the base opener is dropped (relocated -> render). The schema token 'CurationPrepAgentOutput' and the prep-specific field rules (candidates=[], envelope_refs + review_row_count, run_metadata placeholders, processing_notes/warnings) are KEPT once in <output_contract>.",
+    "old_source": "config/agents/curation_prep/prompt.yaml:## Output expectations",
+    "new_home": "render",
+    "synonyms": [
+      "produce JSON matching CurationPrepAgentOutput",
+      "you MUST produce the CurationPrepAgentOutput structured output"
+    ]
+  }
+]
