@@ -308,7 +308,6 @@ print_summary() {
     echo "Next steps: open the application URL and complete your configured OIDC sign-in flow."
   fi
   echo "Restart command: docker compose --env-file ${env_output_path} -f ${main_compose_file} up -d"
-  echo "Alliance note: deploy_alliance.sh is Alliance-internal only."
 }
 
 start_pdfx_stack_if_configured() {

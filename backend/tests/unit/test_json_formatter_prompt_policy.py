@@ -21,7 +21,6 @@ def _load_prompt_content(relative_path: str) -> str:
     "relative_path",
     [
         "packages/alliance/agents/json_formatter/prompt.yaml",
-        "alliance_agents/json_formatter/prompt.yaml",
     ],
 )
 def test_json_formatter_prompt_uses_runtime_tool_contract(relative_path: str):
@@ -33,10 +32,3 @@ def test_json_formatter_prompt_uses_runtime_tool_contract(relative_path: str):
     assert "Do not paste JSON into the assistant response" in content
     assert "filename_hint" not in content
     assert "\nFormatted JSON output:\n" not in content
-
-
-def test_json_formatter_prompt_copies_stay_in_sync():
-    package_prompt = _load_prompt_content("packages/alliance/agents/json_formatter/prompt.yaml")
-    legacy_prompt = _load_prompt_content("alliance_agents/json_formatter/prompt.yaml")
-
-    assert legacy_prompt == package_prompt

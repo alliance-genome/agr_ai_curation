@@ -7,7 +7,6 @@ on:
       - 'backend/**'
       - 'frontend/**'
       - 'config/**'
-      - 'alliance_agents/**'
       - 'packages/**'
       - 'docker-compose.yml'
       - 'docker-compose.test.yml'
@@ -24,7 +23,6 @@ on:
       - 'backend/**'
       - 'frontend/**'
       - 'config/**'
-      - 'alliance_agents/**'
       - 'packages/**'
       - 'docker-compose.yml'
       - 'docker-compose.test.yml'
@@ -73,7 +71,6 @@ jobs:
           set +e
           docker run --rm \
             -v "${{ github.workspace }}/backend:/app/backend" \
-            -v "${{ github.workspace }}/alliance_agents:/app/alliance_agents" \
             -v "${{ github.workspace }}/config:/app/config" \
             -v "${{ github.workspace }}/packages:/app/packages:ro" \
             -v "${{ github.workspace }}/docs:/app/docs:ro" \

@@ -123,15 +123,13 @@ agr_ai_curation/
 │       ├── python/src/agr_ai_curation_alliance/
 │       ├── requirements/
 │       └── tools/bindings.yaml
-├── backend/
-│   ├── src/lib/config/                  # Runtime config/package loaders
-│   ├── src/lib/domain_packs/            # Domain-pack registry, validation, curator review, materialization
-│   ├── src/lib/domain_envelopes/        # Persisted envelope checkpoints and field patches
-│   ├── src/lib/packages/                # Package discovery, manifests, registry, runner
-│   ├── src/lib/agent_studio/            # Agent Studio services and runtime catalog
-│   └── src/models/sql/                  # Database models
-└── scripts/
-    └── deploy_alliance.sh               # Repo-local agr.alliance sync helper
+└── backend/
+    ├── src/lib/config/                  # Runtime config/package loaders
+    ├── src/lib/domain_packs/            # Domain-pack registry, validation, curator review, materialization
+    ├── src/lib/domain_envelopes/        # Persisted envelope checkpoints and field patches
+    ├── src/lib/packages/                # Package discovery, manifests, registry, runner
+    ├── src/lib/agent_studio/            # Agent Studio services and runtime catalog
+    └── src/models/sql/                  # Database models
 ```
 
 ---
@@ -960,38 +958,16 @@ health_check:
 ## Deployment
 
 For standalone installs, deliver custom behavior by copying a versioned package
-into `~/.agr_ai_curation/runtime/packages/` and restarting the stack. The
-commands below are repo-maintainer helpers for syncing shipped Alliance content
-inside a source checkout.
+into `~/.agr_ai_curation/runtime/packages/` and restarting the stack.
 
-### Alliance Deployment
+### Alliance Agents Source of Truth
 
-In the repo-maintainer workflow, Alliance agents can be staged in
-`alliance_agents/` and synced into the package-owned source tree at
-`packages/alliance/agents/` plus the repo mirror at `config/agents/`:
-
-```bash
-# Preview changes (dry run)
-./scripts/deploy_alliance.sh --dry-run --verbose
-
-# Deploy Alliance agents
-make deploy-alliance
-
-# Or use the script directly
-./scripts/deploy_alliance.sh --verbose
-```
-
-### Deployment Script Options
-
-```bash
-./scripts/deploy_alliance.sh [OPTIONS]
-
-Options:
-  --dry-run      Show what would be deployed without making changes
-  --clean        Remove existing agents before deploying
-  --verbose      Show detailed output
-  --force        Skip confirmation prompts
-```
+Alliance agents are edited directly in the package-owned source tree at
+`packages/alliance/agents/`. The runtime loads these via the package-manifest
+loader; repo-local overrides live in `config/agents/` and are layered on top at
+load time. There is no separate `alliance_agents/` mirror or sync step — edit
+`packages/alliance/agents/` (and `config/agents/` for overrides) and restart the
+stack.
 
 ### Docker Deployment
 
@@ -1049,7 +1025,6 @@ AGENT_SUPERVISOR_MODEL=gpt-4o
 CONFIG_PATH=/app/config
 MODELS_CONFIG_PATH=/app/config/models.yaml
 PROVIDERS_CONFIG_PATH=/app/config/providers.yaml
-ALLIANCE_AGENTS_PATH=/app/alliance_agents
 
 # Tool policy cache
 TOOL_POLICY_CACHE_TTL_SECONDS=30   # How long to cache tool policies (default: 30)
@@ -1102,13 +1077,6 @@ import json
 report = build_provider_runtime_report(strict_mode=False)
 print(json.dumps(report, indent=2))
 "
-```
-
-### Test Deployment Script
-
-```bash
-# Dry run to see what would change
-./scripts/deploy_alliance.sh --dry-run --verbose
 ```
 
 ---
