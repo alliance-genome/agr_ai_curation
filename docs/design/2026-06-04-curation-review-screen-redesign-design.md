@@ -23,8 +23,9 @@ Two panes, not four:
 
 - **Left — full-height PDF.** The source paper at full height, and it doubles as the **evidence
   surface**, so there is **no separate evidence column**. We **keep the existing click-to-highlight
-  mechanism** as-is: the curator, reviewing an object, scrolls to a field and **clicks its evidence
-  chip**, and the supporting passage lights up in the PDF via native pdf.js quote highlighting
+  mechanism** as-is: the curator, reviewing an object, scrolls to the field/group that carries the
+  evidence and **clicks its evidence chip**, and the supporting passage lights up in the PDF via native
+  pdf.js quote highlighting
   (`CandidateFieldEditor.tsx`, `pdfEvents.ts`, `PdfViewer.tsx`). We are **not** building
   auto-highlight-on-field-focus — click-to-highlight is enough and already works.
 - **Right — the work pane**, which contains, top to bottom:
@@ -41,9 +42,17 @@ Two panes, not four:
 Field rows carry **state coloring**: resolved/validated (green ✓), needs-review/unresolved (amber !),
 AI-suggested-unconfirmed (grey). **Needs-review fields float to the top of their group and are counted
 in the object header**, so the curator's eye goes to what matters instead of treating all ~32 fields
-equally. Each field keeps its **evidence chip** (the existing per-field evidence control) — clicking it
-highlights the passage in the PDF. Showing the quote text inline on the chip rather than only in a
-tooltip is a minor presentation tweak on top of what's already there, not new plumbing.
+equally.
+
+**Evidence granularity (verified against real data):** evidence is **per-object, anchored to the
+field/group it supports** — not one quote per leaf field, and not a single blob for the whole object. An
+object owns a *set* of evidence records (`evidence_record_ids`), each naming the `field_paths` it backs
+(e.g. for pef-1: one quote → the assay `expression_experiment.expression_assay_used`, one → the site
+`expression_pattern.where_expressed.anatomical_structure`, one → `data_provider.abbreviation`); the
+projection's `field_path` is optional, so a record can also be object-level. This maps onto the
+redesign's **groups**: each group surfaces the evidence anchored to it (an "evidence" chip on the group),
+and clicking it runs the existing pdf.js highlight. So evidence lives at the **group / anchored-field
+level**, plus an object-level evidence list for any unanchored records.
 
 **Theme:** mockups rendered light for dense-reading legibility; final theme (light vs the current dark
 "workbench") is a deferred polish decision, not a structural one.
