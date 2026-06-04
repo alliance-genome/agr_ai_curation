@@ -1,104 +1,83 @@
-# Agent Prompt-Stack Optimization — Phase C Implementation Plan (outcome-first base-prompt rewrites, all 24 agents)
+# Agent Prompt-Stack Optimization — Phase C Implementation Plan (outcome-first base-prompt rewrites, all agents)
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax. Each per-agent task is a fresh subagent + two-stage review.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development. Steps use checkbox (`- [ ]`). Each per-agent rewrite is a fresh subagent + two-stage review. **Revised after Opus 4.8 + Codex gpt-5.5/high plan review** (both "execute with changes"); their must-fixes are folded in below.
 
-**Goal:** Rewrite every agent's base prompt (`packages/alliance/agents/<agent>/prompt.yaml`) to a lean, outcome-first structure, preserving every load-bearing curation rule, guarded uniformly by a reusable mechanical-check harness + a committed per-agent semantic-coverage checklist.
+**Goal:** Rewrite every agent's base prompt to a lean, outcome-first structure, preserving every load-bearing curation rule, guarded by a reusable no-DB mechanical-check harness + committed per-agent semantic-coverage checklists. **Loss-full** (changes instructions the model acts on; accepted); verification is **structural + the two LLM reviews (no live A/B)**.
 
-**Architecture:** Phase C is **loss-full** (it changes instructions the model acts on) and accepted as such; verification is **structural + the two LLM reviews (no live A/B)** per the spec. A shared harness (Task 1) makes the rewrites guardable without live runs; Tasks 2-25 rewrite one agent each, following ONE procedure, ordered by base-prompt size (largest/highest-value first). Each rewrite preserves the agent's load-bearing inventory (seeded from its existing contract test + a fresh read), restructures to the skeleton, runs the mechanical checks, and goes through spec + code-quality review.
+## Prompt trees & scope (verified)
 
-**Tech Stack:** Python 3.11, YAML, pytest. Run command (no DB):
+- **`packages/alliance/agents/` is the live committed source** (resolver path; production mounts it). Edit it for the 24 packaged agents.
+- **`config/agents/` is an override layer that wins by folder name** and is on the production path. Three agents have a **prompt** override there and MUST be edited in `config/agents/`: **`supervisor`** (config-only, ~17.5K), **`curation_prep`** (config-only, ~3.5K), **`chat_output`** (in BOTH trees, currently byte-identical — edit the config copy AND keep the packages copy in sync). A harness guard asserts no agent's `config/agents` prompt diverges unexpectedly from packages.
+- **`alliance_agents/` is a STALE legacy mirror — do NOT edit.** No `docs.yaml`, last commit 2026-05-30, already diverged from packages; `scripts/deploy_alliance.sh` (which would copy it into packages) is "Alliance-internal only" (`06_start_verify.sh:311`), not in the deploy path. **Flag:** do not run `deploy_alliance.sh` against this branch — it would revert this work from the stale mirror.
+- **Total scope: 26 prompts** = 24 packaged + supervisor + curation_prep (chat_output counts once but is edited in two trees).
+
+**Tech Stack:** Python 3.11, YAML, pytest. Run (no DB):
 ```bash
 docker run --rm -v "$(pwd)/backend:/app/backend" -v "$(pwd)/packages:/app/packages:ro" -v "$(pwd)/config:/app/config:ro" -v "$(pwd)/alliance_agents:/app/alliance_agents" -v "$(pwd)/docs:/app/docs:ro" -v "$(pwd)/frontend:/app/frontend:ro" -w /app/backend -e OPENAI_API_KEY=test -e PYTHONUNBUFFERED=1 -e EMBEDDING_MODEL=text-embedding-3-small -e EMBEDDING_MODEL_TOKEN_LIMIT=8191 -e EMBEDDING_TOKEN_SAFETY_MARGIN=500 ai-curation-unit-tests:latest python -m pytest <paths> -q
 ```
-(`test_pdf_corpus_trial_examples_do_not_teach_quote_submission` fails environmentally in this checkout — gitignored on-disk corpus artifacts; ignore it.)
+(`test_pdf_corpus_trial_examples_do_not_teach_quote_submission` fails environmentally here — ignore.)
+
+## Execution model: WAVES (per Codex)
+
+Execute in waves; gate (Opus 4.8 + Codex gpt-5.5/high) after each wave before the next:
+- **Wave 0 — Harness (Task 1)** + **prove it catches a planted loss** on one pilot.
+- **Wave 1 — Pilot extractor: gene_extractor** (largest). Validate the full per-agent procedure end-to-end.
+- **Wave 2 — Remaining extractors:** gene_expression, disease_extractor, allele_extractor, phenotype_extractor, pdf.
+- **Wave 3 — Validators/lookups:** gene, allele, ontology_term, chemical, go_annotations, experimental_condition, disease, orthologs, reference, controlled_vocabulary, gene_ontology, data_provider, subject_entity, agm, supervisor.
+- **Wave 4 — Output/formatters:** chat_output (dual-tree), tsv_formatter, json_formatter, csv_formatter, curation_prep.
+
+## The outcome-first skeleton (every agent)
+
+Restructure to: **Role → Goal → Success criteria → Constraints (invariants only) → Output/handoff → Stop rules.** Convert process lists to decision rules + stop criteria (keep exact path only where it matters — resolver loop, evidence-span workflow). Collapse repeats; resolve contradictions; reserve MUST/NEVER for true invariants. Curator-voice (zero-tech audience). Preserve domain-specific no-invention/resolver rules.
+
+**Extractors additionally:** drop the `<search_context>` block (facts already in tool descriptions; DROP the inaccurate "~1500-char" sentence — do not relocate); relocate any non-search (evidence-policy) sentence into the evidence section; de-dup the evidence-span mechanic that duplicates `core_generated`'s `record_evidence` summary (keep the curation guidance).
 
 ---
 
-## The outcome-first skeleton (applied to EVERY agent)
+## Task 1 (Wave 0): Build the no-DB mechanical-check harness
 
-Restructure each base prompt to this order, scaled to the agent:
-**Role → Goal → Success criteria → Constraints (invariants only) → Output / handoff → Stop rules.**
+**Files:** `backend/tests/unit/lib/prompts/phase_c_harness.py` (helpers) + `backend/tests/unit/lib/prompts/test_phase_c_rewrite_guards.py` (tests) + `backend/tests/unit/lib/prompts/phase_c_inventories/<agent>[.<group>].txt` and `<agent>.dropped.json` per agent.
 
-Rules:
-- Convert step-by-step PROCESS lists into outcome statements + decision rules + explicit stop criteria. Keep the exact path only where it genuinely matters (e.g., the resolver loop, the evidence-span workflow).
-- Collapse repeated rule statements into one clearly-placed rule. Resolve contradictions (reserve `MUST`/`NEVER`/`ALWAYS` for true invariants — safety, required fields, no-invention, resolver discipline).
-- Preserve curator-voice (plain language for biologists; see [[feedback_curator_friendly_docs]] and [[feedback_curator_voice_tool_docs_vs_contract_tests]]). Preserve domain-specific no-invention/resolver rules — do NOT lean on `core_generated`'s single validator line.
-- **For the extractors** (gene_expression, gene_extractor, disease_extractor, allele_extractor, phenotype_extractor, pdf): additionally
-  - **Drop the `<search_context>` block** — its search-backend facts are already in the search/read tool descriptions (Phase B). DROP the inaccurate "~1500 characters per chunk hit" sentence (search returns full text), do NOT relocate it. Relocate any genuinely non-search sentence (evidence-policy) into the evidence section, like Phase B did for gene_expression/pdf.
-  - **De-dup the evidence-policy mechanics** that duplicate `core_generated`'s `record_evidence` summary (the literal `read_chunk.evidence_spans[].span_id -> record_evidence -> verified_quote` mechanic) — keep the curation guidance (what counts as strong/weak evidence, the workflow, exclusions), remove only the verbatim mechanic restatement.
+- [ ] **Step 1: Real no-DB assembled-render helper.** `build_agent_prompt_layers().render()` reads the DB-backed prompt cache (`assembly.py:151` → `cache.py:289` raises if uninitialized) — it does NOT read files. So write `assembled_prompt_text(agent_id, group_id=None)` that, with NO DB: resolves the agent via `resolve_agent_config_sources()` / `load_agent_definitions()`, reads `prompt.yaml` `content` (base) and the group_rules YAML for `group_id`, builds the locked core via `build_agent_core_prompt(agent_id)` (no DB), and concatenates `core.render() + "\n\n" + base_content + "\n\n" + group_content`. This is the real assembled text for retention checks. (Do NOT use the monkeypatched fake-content fixtures the existing assembly tests use.)
 
----
+- [ ] **Step 2: Fragment-retention guard with group dimension.** Per inventory file `<agent>[.<group>].txt` (one load-bearing phrase per line; a `.<group>` suffix means render with that group), assert every phrase appears in `assembled_prompt_text(agent, group)`. The **checklist (fresh full read) is the authoritative inventory source**; the existing contract test's asserted phrases are a secondary must-include set (they cover only a small base-prompt subset). Seed initially with 2 agents to prove the guard FAILS on a missing phrase and PASSES when present.
 
-## Task 1: Build the shared mechanical-check harness
+- [ ] **Step 3: Machine-checked dropped-list.** `<agent>.dropped.json` entries each carry `{phrase, category: relocated|deleted, reason, old_source, new_home}`. For `category=relocated`, the harness ASSERTS the phrase (or a declared synonym) actually appears in `new_home` (the assembled render, a `bindings.yaml` tool description, or `get_agent_contract` output). For `category=deleted` (no home — truly redundant/inaccurate), no assertion, but the harness PRINTS the full deleted-with-no-home list as review output so it can't hide in the diff. A relocated entry whose home check fails = test failure (closes the "drop a rule and add it to the dropped-list" gaming hole).
 
-**Files:** Create `backend/tests/unit/lib/prompts/test_phase_c_rewrite_guards.py` + a per-agent inventory dir `backend/tests/unit/lib/prompts/phase_c_inventories/` (one `<agent>.txt` per agent: load-bearing phrases that MUST appear in the assembled prompt, one per line; plus an optional `<agent>.dropped.txt` for explicit intentional-drops with reasons).
+- [ ] **Step 4: Workflow-invariant assertions (restored from spec).** Per agent, assert the named/ordered workflow steps survive in the assembled render: evidence-span workflow, resolver workflow, builder stage/finalize workflow (incl. counts/ordering where the existing contract test asserts them, e.g. `test_gene_extractor_domain_envelope_contract.py:376-384`), no-invention rule, validator delegation, output/handoff contract. Encode these as per-agent invariant assertions (stronger than phrase retention — they assert ordered steps).
 
-- [ ] **Step 1: Inventory loader + retention guard.** A test that, for each agent with an inventory file, builds the assembled prompt (`build_agent_prompt_layers(agent_id).render()`) and asserts every inventory phrase appears in it. (No DB needed; `build_agent_prompt_layers` reads files. If a group-scoped phrase is needed, assemble with the relevant group.) A phrase that legitimately moved out of the base prompt (e.g. to a tool description or core_generated) is recorded in `<agent>.dropped.txt` with its new home and excluded from the retention set. Write the loader + a parametrized test; seed it initially with a couple of agents' inventories to prove it works (FAIL on a missing phrase, PASS when present).
-- [ ] **Step 2: Reason-code survival guard.** For agents that enumerate canonical `reason_code` values (gene_expression, and any extractor exposing `metadata.exclusions[].reason_code`), assert the full set appears in the assembled prompt. Source the canonical set from the domain pack / the current prompt; commit it as part of the inventory.
-- [ ] **Step 3: Contradiction lint.** A check that greps each rewritten prompt for co-occurring contradictory absolutes on the same field/subject (a heuristic: flag if the same field path appears under both a MUST/ALWAYS and a NEVER within the prompt). Keep it simple and report-only if a clean automatic rule is hard; the per-agent review is the backstop.
-- [ ] **Step 4: Render smoke.** Assert each agent's assembled bundle renders without error and `core_generated` is present where expected (reuses the Phase A smoke pattern).
-- [ ] **Step 5: Run + commit.** Harness green on the seeded agents. Commit `test(prompts): Phase C rewrite-guard harness (per-agent retention, reason-code survival, contradiction lint, render smoke)`.
+- [ ] **Step 5: Reason-code survival.** For agents with canonical `reason_code` enums, assert the full set (sourced from the **domain pack** — e.g. `packages/alliance/python/.../domain_packs/gene_expression/{export,conversion}.py`, NOT by grepping the prompt) appears in the assembled render.
+
+- [ ] **Step 6: Report-only contradiction dump + config-divergence + render/custom-agent smoke.** (a) Dump every MUST/NEVER/ALWAYS line per agent for the human reviewer (no automated semantic detection — current prompts have zero such tokens; Phase C introduces them). (b) Assert no agent's `config/agents/<a>/prompt.yaml` diverges from its `packages` copy except the intended config-only agents. (c) Render smoke: each agent's assembled bundle renders; a custom (curator-cloned) agent's render works (reuse the catalog/`_build_runtime_instructions` path).
+
+- [ ] **Step 7:** Harness green on seeds. Commit `test(prompts): Phase C no-DB rewrite-guard harness (retention w/ groups, machine-checked dropped-list, workflow invariants, reason-code survival, contradiction dump, config-divergence + render smoke)`.
+
+- [ ] **Step 8 (prove it):** On the pilot, deliberately drop one real rule WITHOUT updating the inventory/dropped-list and confirm the harness FAILS; then revert. Record this in the Wave-0 gate.
 
 ---
 
-## Per-agent procedure (Tasks 2-25 each follow this)
+## Per-agent procedure (every rewrite task)
 
-For agent `<A>` (inputs in the table below):
-- [ ] **Step 1: Semantic-coverage checklist.** Read `packages/alliance/agents/<A>/prompt.yaml` and its seed contract test. Extract EVERY load-bearing rule (curation rules, no-invention, resolver discipline, reason_codes, evidence rules, output/handoff contract, group-rule hooks, field-path contracts). Write `docs/design/phaseC-checklists/<A>.md` mapping each rule -> its new home in the rewrite (or an explicit, justified "intentionally dropped as redundant/inaccurate").
-- [ ] **Step 2: Build the agent's harness inventory.** From the checklist + the seed contract test's asserted phrases, write `backend/tests/unit/lib/prompts/phase_c_inventories/<A>.txt` (load-bearing phrases to retain) and `<A>.dropped.txt` (relocated/dropped, with reasons).
-- [ ] **Step 3: Rewrite** `prompt.yaml` `content` to the skeleton, preserving every checklist item, collapsing repeats, resolving contradictions, in curator voice. For extractors, apply the `<search_context>` drop + evidence-policy de-dup.
-- [ ] **Step 4: Run** the harness for `<A>` + the agent's existing contract/policy test + `tests/unit/lib/prompts/`. Green. Re-baseline an existing contract assertion ONLY where the checklist documents a legitimate move; NEVER weaken. Capture before/after `wc -c`.
-- [ ] **Step 5: Commit** (explicit paths): the prompt.yaml + the checklist + the inventory files + any re-baselined test. Message: `refactor(prompts): outcome-first rewrite of <A> base prompt (-<delta> chars; semantic-coverage checklist committed)`.
-- [ ] **Step 6: Two-stage review** — spec (every checklist item has a verified home; no load-bearing rule lost; no test weakened) then code-quality (reads clean, curator-voice, outcome-first, no contradictions, no orphaned refs).
-
----
-
-## Agent order + per-agent inputs
-
-Ordered largest-first (highest value + biggest reduction). "Seed test" = the contract/policy test whose asserted phrases seed the retention inventory (if none listed, build the inventory fresh from the prompt).
-
-| # | agent | chars | seed test | notes |
-|---|---|---:|---|---|
-| 2 | gene_extractor | 28222 | test_gene_extractor_domain_envelope_contract | extractor: `<search_context>` drop (53-line near-twin; DROP ~1500 claim) + evidence de-dup; handoff/envelope contract |
-| 3 | gene_expression | 26936 | test_gene_expression_prompt_policy | extractor: evidence de-dup; canonical reason_codes; `<search_infrastructure>` already removed (Phase B) |
-| 4 | disease_extractor | 19826 | test_disease_extractor_domain_envelope_contract | extractor: `<search_context>` drop + evidence de-dup |
-| 5 | allele_extractor | 17031 | test_allele_extractor_mgi_prompt_policy | extractor: `<search_context>` drop + evidence de-dup; MGI group hook |
-| 6 | phenotype_extractor | 16367 | test_phenotype_extractor_domain_envelope_contract | extractor: `<search_context>` drop + evidence de-dup; phenotype reason_codes |
-| 7 | gene | 16172 | test_gene_allele_validator_result_contract | validator: no-invention/resolver; validator-result contract |
-| 8 | allele | 12679 | test_gene_allele_validator_result_contract | validator |
-| 9 | ontology_term | 10649 | test_ontology_term_validator_contract | lookup/validator |
-| 10 | chemical | 10031 | test_disease_chemical_validator_result_contract | validator |
-| 11 | go_annotations | 8564 | (fresh) | lookup |
-| 12 | experimental_condition | 8054 | (fresh; cross-type — see test_record_evidence/domain_envelope) | validator; composite-condition rules |
-| 13 | disease | 7642 | test_disease_chemical_validator_result_contract | validator |
-| 14 | orthologs | 7555 | (fresh) | lookup |
-| 15 | reference | 7349 | test_reference_validator_result_contract | validator |
-| 16 | controlled_vocabulary | 6843 | (fresh) | lookup |
-| 17 | gene_ontology | 6712 | (fresh) | lookup |
-| 18 | pdf | 6514 | test_record_evidence_prompt_contract | extractor (output_schema); `<search_infrastructure>` already removed (Phase B); evidence de-dup |
-| 19 | data_provider | 5822 | test_provider_contract_guardrail | validator |
-| 20 | subject_entity | 5262 | test_subject_entity_validator_result_contract | validator |
-| 21 | chat_output | 5052 | (fresh) | output agent (has output_schema) |
-| 22 | tsv_formatter | 4779 | test_tsv_formatter_prompt_policy | formatter — likely minimal change; record "already lean" if so |
-| 23 | agm | 3750 | (fresh) | validator |
-| 24 | json_formatter | 3260 | test_json_formatter_prompt_policy | formatter — likely minimal |
-| 25 | csv_formatter | 3196 | test_csv_formatter_prompt_policy | formatter — likely minimal |
-
-Also re-run the cross-cutting guards after each extractor rewrite: `test_record_evidence_prompt_contract.py`, `test_domain_envelope_repair_prompt_contract.py`, `test_non_gene_evidence_prompt_policy.py`, `test_agent_studio_domain_envelope_prompt_policy.py`, `test_assembly.py` (the editable-prompt forbidden-fragment guard).
+For agent `<A>` (tree per the scope section):
+- [ ] **1. Semantic-coverage checklist** → `docs/design/phaseC-checklists/<A>.md`: read the current prompt + its seed contract test; list EVERY load-bearing rule (curation rules, no-invention, resolver discipline, reason_codes, evidence rules, output/handoff contract, group-rule hooks, field-path/count/ordering contracts) → its new home, or an explicit justified drop. **Each checklist line gets a stable ID.**
+- [ ] **2. Inventory + dropped-list** for the harness (`phase_c_inventories/<A>...`), derived from the checklist (authoritative) + the contract-test phrases (secondary).
+- [ ] **3. Rewrite** `prompt.yaml` `content` to the skeleton, preserving every checklist item, in curator voice. Extractors: `<search_context>` drop + evidence de-dup. For config-tree agents edit `config/agents/<A>/prompt.yaml` (and sync packages for chat_output).
+- [ ] **4. Re-baseline rules (tight):** any edited/removed assertion in the seed contract test MUST be cross-referenced to a checklist ID and have a **replacement assertion in the SAME commit** (ideally targeting the new layer via the assembled render), OR a reviewed `deleted` dropped-entry. **Never** delete an assertion with no replacement; **never** weaken a count/ordering assertion (`==3`→`>=1` is forbidden — counts/ordering may move with their example but not loosen).
+- [ ] **5. Run** the harness for `<A>` + the agent's contract/policy test + `tests/unit/lib/prompts/` + (after each extractor) the cross-cutting guards (`test_record_evidence_prompt_contract.py`, `test_domain_envelope_repair_prompt_contract.py`, `test_non_gene_evidence_prompt_policy.py`, `test_agent_studio_domain_envelope_prompt_policy.py`, `test_assembly.py`). Green. Capture before/after `wc -c`.
+- [ ] **6. Commit** (explicit paths): prompt.yaml(s) + checklist + inventory + dropped-list + any re-baselined test.
+- [ ] **7. Two-stage review** — spec (every checklist ID has a verified home; no assertion deleted without replacement; no count/ordering weakened; group phrases checked under their group) then code-quality (reads clean, curator-voice, outcome-first), **plus a scenario-card pass** (the reviewer walks the rewritten prompt against the agent's scenario cards — e.g. for extractors: prior-work citation, methods-only mention, rescue/marker exclusion, negative result, ambiguous ontology/provider — confirming each still resolves correctly).
 
 ---
 
-## Final task: Phase C size artifact + gate
+## Per-wave gate + final
 
-- [ ] **Size artifact** `docs/design/2026-06-04-prompt-size-report-phaseC.md`: per-agent before/after `wc -c`, total reduction, and the per-agent checklist index. Honest framing: each rewrite preserved its checklist; loss-full risk is mitigated by the harness + checklists + the two reviews, not live A/B.
-- [ ] **Phase C gate:** Opus 4.8 review + `/external-llm-code-review` (Codex gpt-5.5/high) over the whole Phase C diff, tasked to confirm per-agent: no load-bearing rule lost (spot-check checklists against diffs), no contradictions introduced, curator-voice preserved, no test weakened to hide a loss. Output shown to Chris verbatim. Address findings.
-
----
+- After each wave: Opus 4.8 review + `/external-llm-code-review` (Codex gpt-5.5/high) over that wave's diff (no load-bearing rule lost; no contradictions; curator-voice; no weakened assertions; scenario cards hold). Output shown to Chris. Address findings before the next wave.
+- **Final:** size artifact `docs/design/2026-06-04-prompt-size-report-phaseC.md` (per-agent before/after + checklist index + honest loss-full framing) and a closing gate review over the full Phase C diff.
 
 ## Self-Review
 
-**Spec coverage:** outcome-first rewrite of all agents — Tasks 2-25; mechanical non-live checks (fragment-retention, reason-code survival, contradiction lint, render smoke) — Task 1 harness + per-agent inventories; per-agent semantic-coverage checklist — Step 1 each; `<search_context>` drop + evidence de-dup for extractors — skeleton + per-agent notes; structural + two reviews, no live A/B, loss-full accepted — Architecture + gate. Covered.
+**Spec coverage:** outcome-first rewrite of all agents (incl. the config-tree supervisor/curation_prep/chat_output) — per-agent tasks across waves; harness with real no-DB render + group dimension + machine-checked dropped-list + workflow invariants + reason-code survival + contradiction dump + render/custom-agent/config-divergence smoke — Task 1; per-agent semantic-coverage checklist with IDs + tight re-baselining + scenario cards — procedure; `<search_context>` drop + evidence de-dup for extractors — skeleton; structural + two reviews per wave, no live A/B, loss-full accepted — gate. Covered. `alliance_agents` explicitly out (stale); deploy_alliance.sh landmine flagged.
 
-**Placeholder scan:** the per-agent tasks intentionally share ONE concrete procedure (the skeleton + harness + checklist are fully specified) rather than 24× verbatim duplication — this is the right granularity for repetitive-but-careful rewrites; each task's per-agent inputs (size, seed test, notes) are in the table. The "(fresh)" seed entries mean "build the inventory from the prompt itself" (explicit, not a TBD).
+**Placeholder scan:** the harness foundation is now concretely specified (no-DB render via `build_agent_core_prompt` + file-read base/group concat — corrects the prior false "reads files" claim); per-agent tasks share one fully-specified procedure with per-agent inputs in the wave lists. No TBDs.
 
-**Consistency:** the harness inventory format, the checklist requirement, and the skeleton are consistent across all per-agent tasks; the extractor-specific `<search_context>`/evidence-de-dup steps are consistent in the skeleton + the table notes.
+**Consistency:** inventory/group format, checklist-ID re-baselining, and the skeleton are consistent across all per-agent tasks and waves.
