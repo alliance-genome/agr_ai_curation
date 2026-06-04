@@ -1,0 +1,20 @@
+[
+  {
+    "phrase": "Your response is structured as an OrthologsResult object.",
+    "synonyms": [
+      "produce JSON matching OrthologsResult; the structured-output layer below is authoritative for final response shape"
+    ],
+    "category": "relocated",
+    "reason": "ORT-OUT output-mandate de-dup. The pre-rewrite '<output>' opened with 'Your response is structured as an OrthologsResult object. Populate it from Alliance API results only.' and listed the required shared validator fields as a JSON-only output mandate that the locked Generated Runtime Contract already injects ('Output contract from agent.yaml: produce JSON matching OrthologsResult; the structured-output layer below is authoritative for final response shape' plus the CRITICAL structured-output block 'Your final response MUST be valid JSON matching the OrthologsResult schema EXACTLY'). The lean rewrite no longer restates the JSON-only output mandate; the core half of the render owns it. The home check is satisfied by the synonym (the core's injected output-contract line). The `OrthologsResult` token is KEPT once in <goal>, and the ortholog root-field detail is KEPT in <result_contract> because the core does not enumerate it.",
+    "old_source": "packages/alliance/agents/orthologs/prompt.yaml:<output>",
+    "new_home": "render"
+  },
+  {
+    "phrase": "Common prediction methods include Ensembl Compara, InParanoid, OMA, OrthoFinder, OrthoInspector, PANTHER, PhylomeDB, SonicParanoid, ZFIN, Hieranoid, and Xenbase.",
+    "synonyms": [],
+    "category": "deleted",
+    "reason": "ORT-10 reference-list deletion. The pre-rewrite '<domain_context>' listed eleven known prediction-method names as a static reference. This is a pure reference list with NO decision rule: the agent reports whatever methods the Alliance API returns under `predictionMethodsMatched` / `predictionMethodsNotMatched` (ORT-15), so enumerating the known method names in the prompt changes no behavior and is not a load-bearing rule. The narrative orthology definition prose ('genes in different species that evolved from a common ancestral gene by speciation') is likewise dropped as narrative -- the curator-voice <role>/<goal> already convey 'cross-species counterparts'. Deleted with no home; printed for review by the Phase C deleted-rules dump.",
+    "old_source": "packages/alliance/agents/orthologs/prompt.yaml:<domain_context>",
+    "new_home": ""
+  }
+]

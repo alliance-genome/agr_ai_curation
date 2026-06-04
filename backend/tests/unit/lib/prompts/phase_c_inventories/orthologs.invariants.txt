@@ -1,0 +1,24 @@
+# Phase C workflow invariants: orthologs lookup (Wave 3 — bounded lookup path).
+#
+# Invariants are STRONGER than plain phrase retention: each line is an ordered step of
+# the lookup's bounded ortholog fetch path. The framework (1) reuses the retention
+# assertion -- every line must appear in the assembled render -- and (2) asserts the
+# lines appear in this order by first occurrence, so the rewrite cannot scramble the
+# read-id -> call-api -> parse-results -> record-attempt sequence.
+#
+# AUTHORING RULE (enforced by the harness): each phrase must occur EXACTLY ONCE in the
+# assembled render and be listed in workflow order. These are verbatim from the rewritten
+# <lookup_workflow> numbered block (steps 1-4), where each occurs exactly once and in
+# order. (ORT-17..ORT-19 in docs/design/phaseC-checklists/orthologs.md.)
+
+# Step 1 -- read the Alliance-format gene ID from the request.
+Read the Alliance-format gene ID from the request.
+
+# Step 2 -- call alliance_api_call for the orthologs endpoint.
+Call `alliance_api_call` for the orthologs endpoint `https://www.alliancegenome.org/api/gene/{gene_id}/orthologs`.
+
+# Step 3 -- parse orthology relationships from the results array.
+Parse the orthology relationships from the `results` array per the rules above.
+
+# Step 4 -- record each call in lookup_attempts; stop once evidence is enough.
+Record each call in `lookup_attempts` with outcome `success`, `not_found`, `ambiguous`, or `error`.
