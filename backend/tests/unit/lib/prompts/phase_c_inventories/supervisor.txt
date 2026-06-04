@@ -99,7 +99,7 @@ route mentions through a resolver/validator when the curator
 needs validated IDs
 
 # SUP-47 entity types we can / cannot validate
-We can validate genes, alleles, diseases, chemicals, and anatomy/stage ontology terms.
+We can validate genes, alleles, diseases, chemicals, and ontology terms (including GO, anatomy, and life-stage terms).
 We cannot validate strains, repository stock IDs (JAX#, MMRRC#, CGC#, etc.),
 strain-to-allele mapping, PMID/PubMed lookups, protein sequences, variant effects, or
 structural data.
