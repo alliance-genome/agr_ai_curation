@@ -39,7 +39,7 @@ content: |
   - Gene names like hpo-30 follow C. elegans nomenclature (lowercase, 3-letter code + hyphen + number).
 
   ### Output discipline
-  - Do not stage candidates you exclude — leave them unstaged. (You never write `metadata.exclusions[]`; the system records exclusions for you.) The reason_code names your exclusion reasoning.
+  - Do not stage candidates you exclude — leave them unstaged. (You never write `metadata.exclusions[]`; the builder path leaves it empty.)
   - Keep only experimentally observed WB-curation-relevant GeneExpressionAnnotation objects in `curatable_objects[]`.
   - Store verified quotes, page numbers, figure references, genotype strings, and unresolved WB anatomy/stage labels in envelope metadata or object metadata; do not put legacy flat evidence fields in payload.
 
@@ -83,6 +83,6 @@ content: |
 
 
   ### Shared domain-envelope output contract
-  - Emit retained semantic findings only as `GeneExpressionAnnotation` entries in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  - Stage retained semantic findings through the builder tools only; the backend materializes them as `GeneExpressionAnnotation` entries in `curatable_objects[]`. Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]` yourself.
   - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and curator review notes under `metadata.*` as non-semantic envelope metadata.
   - Each curatable object should include `object_type`, `object_role`, `payload`, `evidence_record_ids`, `metadata_refs`, and either `object_id` or `pending_ref_id`; include `schema_ref` or `model_ref`, definition-state notes, and field/object refs when available.

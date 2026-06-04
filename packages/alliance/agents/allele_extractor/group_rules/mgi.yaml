@@ -12,7 +12,7 @@ content: |
   - Transgene notation: Tg(construct)### — e.g., Tg(Camk2a-cre)T29-1Stl.
   - Cre driver lines (Tg(promoter-Cre)) are tools for conditional genetics, NOT alleles.
   - Reporter transgenes (Tg(promoter-GFP), ROSA26 reporters) are tools.
-  - Do not stage transgene constructs as alleles unless the transgene IS the experimental variable (the system still records them for audit).
+  - Do not stage transgene constructs as alleles unless the transgene IS the experimental variable.
 
   ### Strain disambiguation
   - C57BL/6 (B6), BALB/c, 129S1, FVB/N, DBA/2 are inbred mouse strains — NOT alleles.
@@ -49,6 +49,6 @@ content: |
 
 
   ### Shared domain-envelope output contract
-  - Emit retained semantic findings only in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  - Stage retained findings through the builder tools only; the backend materializes them into `curatable_objects[]`. Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]` yourself.
   - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and curator review notes under `metadata.*` as non-semantic envelope metadata.
   - Each curatable object should include `object_type`, `object_role`, `payload`, `evidence_record_ids`, `metadata_refs`, and either `object_id` or `pending_ref_id`; include `schema_ref` or `model_ref`, definition-state notes, and field/object refs when available.

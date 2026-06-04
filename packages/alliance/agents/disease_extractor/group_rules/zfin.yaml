@@ -22,7 +22,7 @@ content: |
 
 
   ### Shared domain-envelope output contract
-  - Emit retained semantic findings only as `DiseaseAnnotation` pending assertions in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  - Stage retained semantic findings through the builder tools only; the backend materializes them as `DiseaseAnnotation` pending assertions in `curatable_objects[]`. Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]` yourself.
   - Use `object_role: "curatable_unit"`, `model_ref: "PendingDiseaseAssertionPayload"`, `definition_state: "in_development"`, and payload field `disease_annotation_object.name` plus optional `disease_annotation_object.curie`; do not use legacy flat `normalized_id` or `normalized_label` fields.
   - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and curator review notes under `metadata.*` as non-semantic envelope metadata.
   - Surface incomplete subject, reference, evidence-code, data-provider, or concrete write-target context with blocked write behavior and definition-state notes rather than inventing values.
