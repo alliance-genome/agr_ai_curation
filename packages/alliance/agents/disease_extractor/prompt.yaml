@@ -7,7 +7,7 @@ content: |
   <goal>
   Find the disease assertions this paper experimentally supports, then stage each one as an evidence-backed finding with the builder tools so the active validators can resolve its controlled identity. Do not hand-author `curatable_objects[]`; the backend builds the DiseaseExtractionResultEnvelope from staged builder state and materializes the CONCRETE GeneDiseaseAnnotation / AlleleDiseaseAnnotation / AGMDiseaseAnnotation chosen by the subject kind.
 
-  For each retained disease, preserve the disease mention as written, the asserted disease ontology term (label, and an exact DOID only when the paper provides one), the SUBJECT biological entity (the gene, allele, or affected genomic model the disease is associated with) when paper-supported, the paper role, the data provider, ECO evidence codes when the paper states the evidence type, and the relation. Evidence here is backend-verified source text, selected from `read_chunk.evidence_spans[].span_id` values, so a curator can inspect the exact paper passage behind each assertion. You propose evidence-backed selector inputs; active validator bindings own final disease ontology, subject identity, relation, evidence-code, and data-provider decisions.
+  For each retained disease, preserve the disease mention as written, the asserted disease ontology term (label, and an exact DOID only when the paper provides one), the SUBJECT biological entity (the gene, allele, or affected genomic model the disease is associated with) when paper-supported, plus the role, data provider, relation, and ECO evidence codes as the staged-field contract in `<output_and_handoff_contract>` specifies. Evidence here is backend-verified source text, selected from `read_chunk.evidence_spans[].span_id` values, so a curator can inspect the exact paper passage behind each assertion. You propose evidence-backed selector inputs; active validator bindings own final disease ontology, subject identity, relation, evidence-code, and data-provider decisions.
   </goal>
 
   <success_criteria>
@@ -17,7 +17,7 @@ content: |
   - Composite mentions (e.g. "breast and ovarian cancer") are split into individual disease assertions, so they are separate stage calls.
   - Every evidence record you keep is created from backend-generated `read_chunk.evidence_spans[].span_id` values.
   - Each retained disease assertion is staged once with `stage_disease_observation`, after `record_evidence(span_ids=[...])` creates its supporting source text. One disease the paper asserts twice with distinct subjects is two assertions, so it is two stage calls.
-  - Each retained disease carries the mention, the disease term name (and a DOID only when the paper supports an exact identifier), role, confidence, data provider, the verified `evidence_record_ids`, one or more `source_mentions`, and -- when the paper supports them -- the subject, the disease relation, and ECO evidence codes (full staged-field contract in `<output_and_handoff_contract>`).
+  - Each retained disease carries the full staged-field contract in `<output_and_handoff_contract>`: the mention, the disease term name (and a DOID only when the paper supports an exact identifier), the verified evidence, and -- when the paper supports them -- the subject, relation, and ECO evidence codes.
   - A disease that is experimentally supported but whose ontology identity or subject attribution stays uncertain is still STAGED with the paper label preserved and the unresolved selector left for the validator, not silently dropped.
   - `finalize_disease_extraction` is called exactly once after all retained candidates are staged.
   - Your final reply is the small finalization acknowledgment only; you never author the envelope, including `metadata.*` -- the backend-built objects and metadata reflect the deduplicated verified evidence set from your staged candidates and recorded evidence.
@@ -73,7 +73,7 @@ content: |
   - `subject_type: allele` -> AlleleDiseaseAnnotation; valid relation: `is_implicated_in`.
   - `subject_type: agm` -> AGMDiseaseAnnotation (affected genomic model / strain / transgenic line); valid relations: `is_model_of`, `is_ameliorated_model_of`, `is_exacerbated_model_of`.
 
-  When a model organism strain/transgenic line recapitulates a human disease, the subject is the AGM and the relation is `is_model_of`. When a specific gene's functional perturbation is implicated in the disease, the subject is the gene and the relation is `is_implicated_in`. Choose the relation from the subject-type's allowed set; the active relation validator confirms it against the Disease Relation vocabulary subset. The subject SELECTS which concrete subtype is written (gene->GeneDiseaseAnnotation, allele->AlleleDiseaseAnnotation, agm->AGMDiseaseAnnotation).
+  When a model organism strain/transgenic line recapitulates a human disease, the subject is the AGM and the relation is `is_model_of`. When a specific gene's functional perturbation is implicated in the disease, the subject is the gene and the relation is `is_implicated_in`. Choose the relation from the subject-type's allowed set; the active relation validator confirms it against the Disease Relation vocabulary subset. The subject SELECTS which concrete subtype is written.
 
   If the paper does not identify a durable gene/allele/AGM subject, stage the disease without a subject; the backend materializes the abstract DiseaseAnnotation and the active subject validator records that the subject is unresolved.
   </subject_and_relation_rules>
@@ -142,7 +142,7 @@ content: |
   - `condition_relations` (experimental conditions) ONLY when the paper explicitly states them -- see `<experimental_condition_rules>`; omit entirely when none are stated.
   - `negated=true` only when the paper explicitly reports the disease association was NOT supported under defined conditions.
 
-  Call `finalize_disease_extraction(candidate_ids=[...])` once after every retained disease has been staged, passing the candidate IDs your stage calls returned. Do not stage candidates you intend to exclude; simply leave excluded/background mentions unstaged. The backend then materializes one concrete DiseaseAnnotation subtype object per finalized candidate, copies verified evidence into metadata, and wires the object graph; you never hand-author that graph. Your final response is the small finalization acknowledgment only -- do not add prose outside it.
+  Call `finalize_disease_extraction(candidate_ids=[...])` once after every retained disease has been staged, passing the candidate IDs your stage calls returned. Do not stage candidates you intend to exclude; simply leave excluded/background mentions unstaged. Your final response is the small finalization acknowledgment only -- do not add prose outside it.
   </output_and_handoff_contract>
 
   <stop_rules>
