@@ -289,7 +289,9 @@ def _parse_inventory_filename(path: Path) -> tuple[str, str | None]:
 
     The agent key itself may contain underscores but never dots, so any dotted
     suffix before ``.txt`` is the group id. Reserved suffixes (``dropped``,
-    ``invariants``) are NOT ``.txt`` inventory files and are excluded by callers.
+    ``invariants``, ``reason_codes``) are NOT group-dimensioned retention
+    inventories and are excluded by callers (``iter_inventory_files`` skips the
+    ``.invariants.txt`` / ``.reason_codes.txt`` files; ``dropped`` is ``.json``).
     """
     stem = path.name[: -len(".txt")]
     if "." in stem:
@@ -304,8 +306,12 @@ def iter_inventory_files() -> tuple[InventoryFile, ...]:
         return ()
     inventories: list[InventoryFile] = []
     for path in sorted(INVENTORY_DIR.glob("*.txt")):
-        # *.invariants.txt is handled by the invariant framework, not retention.
-        if path.name.endswith(".invariants.txt"):
+        # *.invariants.txt and *.reason_codes.txt are reserved suffixes handled by
+        # their own frameworks (workflow-invariant ordering and reason-code
+        # survival), not the group-dimensioned retention guard. Excluding them
+        # here keeps ``reason_codes``/``invariants`` from being misparsed as a
+        # group id by ``_parse_inventory_filename``.
+        if path.name.endswith((".invariants.txt", ".reason_codes.txt")):
             continue
         agent_key, group_id = _parse_inventory_filename(path)
         inventories.append(

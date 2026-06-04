@@ -1,13 +1,22 @@
 # Phase C load-bearing phrase inventory: gene_extractor + FB group rules.
 #
-# The `.fb` filename suffix means the retention guard renders gene_extractor
-# WITH the FB (FlyBase) group rules and asserts these phrases survive. Group
+# The `.fb` filename suffix renders gene_extractor WITH the FB (FlyBase) group
+# rules and asserts these phrases survive in the combined render. The FB group
 # rules carry MOD-specific curation guidance that must not be lost when the base
-# prompt is rewritten. Seed subset; expanded during the rewrite task.
+# prompt is rewritten; the base rewrite must keep rendering cleanly under FB.
+# (Checklist IDs GE-78/GE-79/GE-80 in
+# docs/design/phaseC-checklists/gene_extractor.md.)
 
-# FlyBase nomenclature / disambiguation guidance
+# GE-78 FlyBase nomenclature: case indicates dominance.
 Drosophila gene symbols use case to indicate dominance
-Drosophila p53 is referred to as "p53" or "Dmp53"
+uppercase first letter = dominant (Notch, Delta), lowercase = recessive (white, yellow, vermilion)
 
-# Group rules still bind to the shared validated-reference output object
+# GE-78 common-word Drosophila gene disambiguation set.
+Drosophila has many gene names that are common English words. These require explicit gene/experimental context
+
+# GE-79 multi-species disambiguation (Drosophila p53 vs mouse/human).
+Drosophila p53 is referred to as "p53" or "Dmp53"
+NOT Trp53 (mouse) or TP53 (human)
+
+# GE-80 FB still binds to the shared validated-reference output object.
 gene_mention_evidence
