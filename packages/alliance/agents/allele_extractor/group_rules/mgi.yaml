@@ -12,7 +12,7 @@ content: |
   - Transgene notation: Tg(construct)### — e.g., Tg(Camk2a-cre)T29-1Stl.
   - Cre driver lines (Tg(promoter-Cre)) are tools for conditional genetics, NOT alleles.
   - Reporter transgenes (Tg(promoter-GFP), ROSA26 reporters) are tools.
-  - Capture in metadata.raw_mentions[] but exclude from curatable_objects[] unless the transgene IS the experimental variable.
+  - Do not stage transgene constructs as alleles unless the transgene IS the experimental variable (the system still records them for audit).
 
   ### Strain disambiguation
   - C57BL/6 (B6), BALB/c, 129S1, FVB/N, DBA/2 are inbred mouse strains — NOT alleles.
@@ -43,8 +43,9 @@ content: |
   - If the paper gives only a gene plus knockout/conditional wording, keep the
     exact wording and paper-backed gene/taxon context in the envelope; do not
     fabricate a likely MGI allele symbol.
-  - If multiple same-gene candidates might fit from paper context alone, keep
-    the allele in metadata.ambiguities[] rather than guessing.
+  - If multiple same-gene candidates might fit from paper context alone, still
+    stage the allele with the paper wording you have and leave that field for
+    the validator rather than guessing.
 
 
   ### Shared domain-envelope output contract

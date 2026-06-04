@@ -7,11 +7,14 @@
 # lab-code/disambiguation guidance survives. (Checklist ID AE-55 in
 # docs/design/phaseC-checklists/allele_extractor.md.)
 #
-# NOTE: group_rules/mgi.yaml is NOT edited by this task (the group_rules
-# metadata-framing cleanup is a separate tracked task). These are the same
-# load-bearing MGI lab-code lines that test_allele_extractor_mgi_prompt_policy.py
-# asserts against the MGI group rule; pinning them here ties them to the COMBINED
-# (base + MGI) render so the base rewrite cannot regress the merged prompt.
+# NOTE: the group_rules metadata-framing cleanup (Phase C) reworded the MGI
+# ambiguity line away from the impossible `metadata.ambiguities[]` write toward
+# "leave that field for the validator"; the load-bearing curation DECISION
+# (uncertain same-gene candidates are not guessed) is preserved and re-pinned
+# below. These are the same load-bearing MGI lab-code lines that
+# test_allele_extractor_mgi_prompt_policy.py asserts against the MGI group rule;
+# pinning them here ties them to the COMBINED (base + MGI) render so the base
+# rewrite cannot regress the merged prompt.
 
 # AE-55 MGI lab-code -> creator/institution attribution context for validator hints
 tm1.1Hko
@@ -24,5 +27,5 @@ Do not validate or search MGI allele symbols during extraction. Active allele
 # AE-55 preserve exact notation + paper-backed validation context
 Preserve paper-backed context that can help validation
 
-# AE-55 ambiguous same-gene candidates kept for review rather than guessed
-the allele in metadata.ambiguities[] rather than guessing
+# AE-55 ambiguous same-gene candidates staged for the validator rather than guessed
+the validator rather than guessing

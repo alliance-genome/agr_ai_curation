@@ -12,7 +12,7 @@ content: |
   - Integrated arrays: xxIs### format (e.g., qyIs369, muIs32). These are transgene constructs, NOT alleles.
   - Extrachromosomal arrays: xxEx### format (e.g., muEx225). These are transgene constructs, NOT alleles.
   - Reporter fusions (gene::GFP, gene::mCherry) are tools, not alleles being studied.
-  - Capture transgenes in metadata.raw_mentions[] but exclude from curatable_objects[] unless the transgene IS the experimental variable.
+  - Do not stage transgene constructs as alleles unless the transgene IS the experimental variable (the system still records them for audit).
 
   ### Strain disambiguation
   - N2 (Bristol) is the standard wild-type strain — NOT an allele.

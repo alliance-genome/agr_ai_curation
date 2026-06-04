@@ -10,7 +10,7 @@ content: |
   ### Balancers (exclude from curatable_objects[])
   - Balancer chromosomes are genetic tools, NOT alleles of specific genes.
   - Common balancers: FM7, FM7a, FM7c (X chromosome); CyO (chromosome 2); TM3, TM6B, TM6C (chromosome 3).
-  - Capture in metadata.raw_mentions[] but exclude from curatable_objects[] with reason_code: balancer_or_deficiency.
+  - Do not stage balancer chromosomes as alleles (the system still records them for audit); the exclusion reasoning is balancer_or_deficiency.
 
   ### Deficiencies and duplications (exclude from curatable_objects[])
   - Deficiencies: Df(chromosome_arm)name — e.g., Df(3R)Exel6197. These are chromosomal deletions.

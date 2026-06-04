@@ -11,7 +11,7 @@ content: |
   ### Transgene constructs (exclude from curatable_objects[])
   - Transgene notation follows mouse conventions: Tg(construct)###.
   - Reporter constructs are tools, not alleles.
-  - Capture in metadata.raw_mentions[] but exclude from curatable_objects[] unless the transgene IS the experimental variable.
+  - Do not stage transgene constructs as alleles unless the transgene IS the experimental variable (the system still records them for audit).
 
   ### Strain disambiguation
   - Sprague-Dawley (SD), Wistar, Fischer 344 (F344), Lewis, Brown Norway (BN) are inbred/outbred rat strains — NOT alleles.

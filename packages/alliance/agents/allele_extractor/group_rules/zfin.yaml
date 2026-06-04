@@ -12,7 +12,7 @@ content: |
   - Transgene notation: Tg(promoter:reporter)labcode — e.g., Tg(fli1:EGFP)y1.
   - BAC transgenes: TgBAC(gene:reporter).
   - Reporter lines are tools for visualization, NOT alleles.
-  - Capture in metadata.raw_mentions[] but exclude from curatable_objects[] unless the transgene IS the experimental variable.
+  - Do not stage transgene constructs as alleles unless the transgene IS the experimental variable (the system still records them for audit).
 
   ### Strain disambiguation
   - AB, TU (Tuebingen), and WIK are standard wild-type zebrafish strains — NOT alleles.
