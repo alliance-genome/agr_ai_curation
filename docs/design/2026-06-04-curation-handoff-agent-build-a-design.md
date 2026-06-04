@@ -41,15 +41,21 @@ both favored A2.)
    "curation ready / sessions created" success signal and return it.
 4. **Flow executor** — `backend/src/lib/flows/executor.py:2065-2115` (the existing `curation_prep` tool to
    model on), terminal/`FLOW_FINISHED` handling (`:2927-3012`), output-node classification (`:158-181`).
-5. **Reuse the existing two-stage prep** — `run_curation_prep` (`curation_prep_service.py:75-136`,
-   one-adapter enforcement `:464-475`); `run_post_curation_pipeline` (`pipeline.py:90-111`, `created_by_id`
-   threaded `:103,:350`); and especially the **chat per-adapter loop** `prepare_chat_curation_sessions`
-   (`bootstrap_service.py:92-136`) which runs prep then loops adapters calling `bootstrap_document_session`
-   — this is the exact reusable shape for auto-push.
+5. **Reuse the existing two-stage prep** — `run_curation_prep` (`curation_prep_service.py:75-136`;
+   one-adapter throw at `:464`, uniqueness via `_resolve_single_value` `:566`);
+   `run_post_curation_pipeline` is at `pipeline.py:254` (the `PostCurationPipelineRequest` dataclass is
+   `:91`, `created_by_id` field `:103`, threaded into `upsert_prepared_session` `:343`); and especially
+   the **chat per-adapter loop** `prepare_chat_curation_sessions` (`bootstrap_service.py:92-136`) which
+   runs prep then loops adapters calling `bootstrap_document_session` — the exact reusable shape for
+   auto-push.
 6. **Identity** — batch resolves `cognito_sub = user.auth_sub` and passes `user_id=cognito_sub`,
    `db_user_id=batch.user_id` (`processor.py:128-135, :319-321`). Sessions store `created_by_id` as
    `String()` (`models.py:105`), stamped from the Cognito subject on the chat path
-   (`bootstrap_service.py:177-179`).
+   (`bootstrap_service.py:177-179`). **Correction (gpt-5.5 review):** inventory "my-curator" filtering
+   currently keys on **`assigned_curator_id`**, not `created_by_id` (`session_queries.py:124`);
+   `created_by_id` is used for display only. So for the run to land in the runner's "my inventory"
+   (ALL-557), A2 must **also stamp `assigned_curator_id`** with the runner's identity — or ALL-557 must
+   filter on `created_by_id`. This is now a cross-cutting decision with ALL-557 (see Open Questions).
 
 ## 3. Out of Scope — Do NOT Touch
 
@@ -78,11 +84,21 @@ both favored A2.)
   `prepare_chat_curation_sessions` does for chat. The agent emits no `FILE_READY`, so the flow terminates
   via the natural fallback (`executor.py:2979-2995`) and reports via `FLOW_FINISHED` (`:2996-3012`); emit a
   `CURATION_READY` event (with created session ids) and/or attach session ids to `FLOW_FINISHED.data`.
-  Transaction parity with the chat path (`manage_transaction=False` per adapter, then one commit).
+  **Must-fix from review:** (a) **force `PipelineExecutionMode.SYNC`** when calling
+  `run_post_curation_pipeline` directly — the default `AUTO` can schedule async and return **no
+  `session_id`** for large candidate counts (`pipeline.py:254,:965`), which would break the success
+  signal; (b) the **batch processor today consumes only `FILE_READY`** — it must be changed to actually
+  read the curation signal, not just have the flow publish it; (c) flow failures are **yielded as events,
+  not raised** — if `CURATION_READY` precedes a later `FLOW_ERROR`, the processor must still mark the run
+  failed; (d) transaction parity is only partial — `run_curation_prep`'s `persist_extraction_result`
+  **commits even when given a caller session** (`extraction_results.py:566`), so prep persistence is not
+  inside the single rollback.
 - **Per-adapter sessions:** loop adapters like `prepare_chat_curation_sessions` over `adapter_keys`
   (`bootstrap_service.py:108`); `run_curation_prep` enforces one adapter per call, so N adapters → N sessions.
-- **Identity/ownership:** stamp `created_by_id` with the run's **Cognito subject** (matches chat path;
-  what ALL-557 "my inventory" filters on). `db_user_id` stays for agent-visibility only.
+- **Identity/ownership:** stamp the run's **Cognito subject** as the session owner. Set `created_by_id`
+  (matches the chat path) **and `assigned_curator_id`** (the field inventory "my-curator" filtering
+  actually uses — `session_queries.py:124`), so the session lands in the runner's "my inventory" (ALL-557).
+  `db_user_id` stays for agent-visibility only.
 
 ## 5. Development Guardrails
 
@@ -95,9 +111,13 @@ both favored A2.)
 1. **Success-signal shape:** new `CURATION_READY` event (with `session_ids`/`adapter_keys`) vs. enriching
    `FLOW_FINISHED.data` (already carries `status`+`adapter_keys`, `executor.py:3010`). What does the batch
    processor consume?
-2. **`BatchDocument` storage:** reuse `result_file_path` as a curation marker, or add a column
-   (`curation_session_ids` / `outcome_kind`) so the UI can distinguish file vs curation outcomes? (New
-   column = a migration.)
+2. **`BatchDocument` storage:** reusing `result_file_path` (`backend/src/models/sql/batch.py:100`) for a
+   curation marker **conflicts with the ZIP/download path** that assumes it's a file artifact
+   (`backend/src/api/batch.py:275`), so this likely needs a **new column** (`curation_session_ids` /
+   `outcome_kind`) + a migration. Confirm.
+2a. **Owner field decision (cross-ALL-557):** A2 sets `assigned_curator_id` to the runner so "my inventory"
+   works (inventory filters on `assigned_curator_id`, not `created_by_id`). Confirm this is the intended
+   ownership model vs. changing ALL-557 to filter on `created_by_id`.
 3. **Capability name:** `curation_handoff` (proposed) vs `curation_output`/`curation_terminal` — becomes a
    stable token in YAML + validation.
 4. **Multi-adapter session naming:** with one session per adapter, what default notes/tags/display so the

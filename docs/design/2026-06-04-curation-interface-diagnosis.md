@@ -46,10 +46,11 @@ All file references are relative to the repo root and were verified against `mai
    cannot be *built* to terminate in curation, so a batch run does not produce the prep/envelope
    records the curation interface needs.** Note the front-end affordance to open curation from a
    batch run *already exists* — `PreparedReviewAndCurateButton` is rendered on batch rows
-   (`frontend/src/pages/BatchPage.tsx:1075,1167`) and calls `bootstrap-availability` → `bootstrap`
-   per document. The gap is upstream: that button has nothing to open because the batch run never
-   ran curation prep. Build A's real job is to make batch runs produce eligible prep/session
-   records for that existing path (see §5).
+   (`frontend/src/pages/BatchPage.tsx:1075,1167`); clicking it looks up an existing curation session
+   for the document and, if none, POSTs `/documents/{id}/bootstrap` (`openCurationWorkspace.ts`; the
+   `bootstrap-availability` helper still exists but is deprecated). The gap is upstream: that button has
+   nothing to open because the batch run never ran curation prep. Build A's real job is to make batch
+   runs produce eligible prep/session records for that existing path (see §5).
 
 2. **The chat path is a real, working two-layer pipeline.** Extraction → revisioned **Domain
    Envelope** (semantic source of truth) → **review session + candidates + editable drafts**
@@ -148,7 +149,7 @@ Writes: `POST /prep`, `POST /documents/{id}/bootstrap`, `POST /candidates/{id}/d
 | **Chat** | "Prepare for curation" → `POST /prep` → `prepare_chat_curation_sessions` (`bootstrap_service.py:92`) | Yes | **Yes** (runs the full pipeline in the same call) | **Works** |
 | **Flow step** | `curation_prep` node; tool calls only `run_curation_prep` and returns JSON (`executor.py:2092-2108`) | Yes (stage 1) | **No** — deferred to a later `bootstrap` action | **Incomplete** |
 | **Batch** | n/a — `validate_flow_for_batch` rejects any exit node without `file_output` (`validation.py:58-66`) | — | **No** — flow fails batch validation | **Blocked at flow-build time** |
-| **Per-document button** | "Review & Curate" on a batch/document row → `bootstrap-availability` → `POST /documents/{id}/bootstrap` (`BatchPage.tsx:1075,1167` → `openCurationWorkspace.ts`) | Reuses prep records if present | **Yes — IF** a prep/envelope record exists for that document | **Path exists; starved of inputs from batch** |
+| **Per-document button** | "Review & Curate" on a batch/document row → existing-session lookup, else `POST /documents/{id}/bootstrap` (`BatchPage.tsx:1075,1167` → `openCurationWorkspace.ts`) | Reuses prep records if present | **Yes — IF** a prep/envelope record exists for that document | **Path exists; starved of inputs from batch** |
 
 **Verified evidence:**
 - `validation.py:63-66` — `chat_output` exit → error; non-`file_output` exit → *"Flow must end
@@ -163,8 +164,8 @@ Writes: `POST /prep`, `POST /documents/{id}/bootstrap`, `POST /candidates/{id}/d
 **Implication for Build A.** The functional gap Chris described ("batch flows just add stuff to
 the curation interface for them to look at later") is real but more precise than "batch can't
 reach curation": the *front-end* path exists (`PreparedReviewAndCurateButton` →
-`bootstrap-availability` → `bootstrap`), but a batch run never produces the prep/envelope record
-that `bootstrap-availability` looks for, so the button has nothing to open. Two candidate
+existing-session lookup → `bootstrap`), but a batch run never produces the prep/envelope record
+that `bootstrap` looks for, so the button has nothing to open. Two candidate
 approaches (to be brainstormed):
 
 - **A1 — make `curation_prep` a legal batch terminal that runs the full pipeline.** Add a

@@ -22,8 +22,11 @@ highlight) validated against Rossum, Azure Document Intelligence, and Sensible H
 Two panes, not four:
 
 - **Left — full-height PDF.** The source paper at full height, and it doubles as the **evidence
-  surface**. Selecting a field highlights its supporting passage in the PDF (the app already does
-  native pdf.js quote highlighting). There is **no separate evidence column**.
+  surface**. Selecting a field highlights its supporting passage in the PDF, and there is **no separate
+  evidence column**. *Reality check (gpt-5.5 review): the native pdf.js quote-highlight mechanism
+  exists, but today it fires only when the curator clicks a field's evidence chip/control
+  (`CandidateFieldEditor.tsx:447`, `pdfEvents.ts`, `PdfViewer.tsx`), **not** on plain field selection.
+  Wiring "select field → highlight" is **new work in this build**, not a free reuse.*
 - **Right — the work pane**, which contains, top to bottom:
   1. **Object selector strip** (sits over the form *only*, never over the PDF): `‹ ›` prev/next, the
      current object identity ("pef-1 · gene-expression annotation · 3 of 14"), a **"▾ all objects"
@@ -39,7 +42,9 @@ Field rows carry **state coloring**: resolved/validated (green ✓), needs-revie
 AI-suggested-unconfirmed (grey). **Needs-review fields float to the top of their group and are counted
 in the object header**, so the curator's eye goes to what matters instead of treating all ~32 fields
 equally. On the selected field, a **small inline evidence quote chip** appears (with a "highlighted in
-PDF →" affordance) so the curator can confirm at a glance without always looking left.
+PDF →" affordance) so the curator can confirm at a glance without always looking left. *(Review note:
+today field evidence shows a location label with the quote in a tooltip, and object-level evidence uses
+quote cards in a separate panel — the inline quote chip is **new** here.)*
 
 **Theme:** mockups rendered light for dense-reading legibility; final theme (light vs the current dark
 "workbench") is a deferred polish decision, not a structural one.
@@ -47,11 +52,19 @@ PDF →" affordance) so the curator can confirm at a glance without always looki
 ## 3. Single review surface (collapse the two)
 
 Today the app picks between a modern envelope-backed card list (`EnvelopeObjectReviewTable`) and a
-legacy 7-column table (`EntityTagTable`) at runtime via `hasEnvelopeObjectRows`. Build B standardizes
-on the **envelope-driven surface** described above and **retires the legacy table** (after confirming
-no live session type depends on it). The surface is **driven by the domain pack's projection metadata**
-(`workspace_display` groups/summary fields), so a new domain/envelope shape renders correctly with no
-bespoke per-domain UI — keeping the screen project-agnostic.
+legacy 7-column table (`EntityTagTable`) at runtime via `hasEnvelopeObjectRows`
+(= `envelopeReviewRequests.length > 0`, i.e. any candidate carrying a `projection_ref`). Build B
+standardizes on the **envelope-driven surface** described above and **retires the legacy table** (after
+confirming no live session type depends on it). The surface is **driven by the domain pack's projection
+metadata** (`workspace_display` groups/summary fields), so a new domain/envelope shape renders correctly
+with no bespoke per-domain UI — keeping the screen project-agnostic.
+
+**Must-do before retiring `EntityTagTable` (gpt-5.5 review):** the legacy table uniquely provides
+**add-manual-entity, delete-row, inline legacy-row edit, an "Accept all validated" toolbar, and the
+legacy evidence preview**; `EnvelopeObjectReviewTable` currently has select/search/filter/accept/reject
++ an evidence panel but **lacks delete, manual-add, inline-row-edit, and accept-all-validated**. These
+affordances must be **rebuilt on the envelope surface** (or consciously dropped) before the legacy table
+is removed — this is real scope, not a free deletion.
 
 ## 4. Field-density cleanup (depends on the field-coverage audit)
 
@@ -68,7 +81,10 @@ candidate):
   `expression_experiment.single_reference.reference_id`).
 
 The audit produces, per domain pack, the keep/hide/collapse decision and read-only-vs-editable
-designation that drives `workspace_display`.
+designation that drives `workspace_display`. *Review note: this is genuine build work — today
+array/object fields default to a JSON textarea (`FieldRow.tsx:201`), and the materializer does **not**
+auto-hide `definition_state_category: under_development` fields, so the chip/sub-table rendering and the
+hide rules must be implemented.*
 
 ## 5. Field editing & ontology-term lookup — roadmap (design-for, build incrementally)
 
@@ -98,12 +114,16 @@ free-text note — directly from the review screen:
 - **Thumbs up / thumbs down** on each object (in the object header, beside Accept/Reject) — a
   lightweight "AI got this right / wrong" signal. This is **distinct from the Accept/Reject curation
   decision**: a curator can accept a corrected object yet still thumbs-down the AI's first pass.
-- **A feedback-message icon** — the **same chat-bubble/feedback control used in the chat UI** —
-  opening a short free-text message to the team.
+- **A feedback-message icon** opening a short free-text message to the team — the same kind of
+  "Provide Feedback" entry the chat offers.
 
-Both **reuse the existing curator-feedback mechanism** (the chat feedback control that already feeds
-the curator-feedback → email / Langfuse / TraceReview pipeline). This is wiring an existing capability
-onto a new surface, not new infrastructure.
+Both **reuse the existing curator-feedback pipeline** — frontend `FeedbackDialog` → `submitFeedback`
+→ `POST /api/feedback/submit` → persisted report → background trace capture / email / TraceReview.
+*Precision (gpt-5.5 review): in chat this lives under the message `MoreVert` menu as "Provide
+Feedback" (`MessageActions.tsx`, `FeedbackDialog.tsx`, `backend/src/api/feedback.py`); there is **no**
+object-level thumbs API or literal "chat-bubble" control to drop in. So the review screen needs its own
+thumbs + feedback-entry UI wired to that existing `/api/feedback/submit` pipeline — reusing the backend,
+building the surface.*
 
 **Phasing:** design-for now (reserve the spot in the object header so the layout doesn't shift later);
 build the wiring as a fast follow — **not required for Phase 1**.

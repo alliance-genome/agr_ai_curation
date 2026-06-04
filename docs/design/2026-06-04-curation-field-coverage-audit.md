@@ -102,8 +102,10 @@ summary fields today. Validator patches resolved values onto the same object (no
 sub-label **when it diverges** (fires 1/11 in real data: `cep-290`/`ccep-290`). **Hide**
 `proposed_primary_external_id` (never populated).
 
-**Correctness fix:** `species` ("C. elegans") is currently **silently dropped** despite being in
-`summary_fields` — restore it as read-only context beside the taxon CURIE.
+**Correctness fix:** `species` ("C. elegans") is **not shown** today — corrected per gpt-5.5 review,
+it is **not in the configured `summary_fields`** (so `_summary_fields` skips it), and it has no
+`editable: true` (so it would render read-only). Action: **add `species` to the displayed (read-only)
+fields** beside the taxon CURIE; do not mark it editable.
 **COLLAPSE:** the 5 evidence-locator fields (`page`, `section`, `subsection`, `figure_reference`, +hide
 `chunk_id`) → one "Evidence location" line; `identity_resolution_notes` → collapsible notes; `data_provider_hint`
 → provenance footer. **Move to header/chip:** `confidence` (badge), `verified_quote` (inline evidence chip).
@@ -111,8 +113,10 @@ sub-label **when it diverges** (fires 1/11 in real data: `cep-290`/`ccep-290`). 
 **Only ontology field:** `taxon` (NCBITaxon). `primary_external_id`/`gene_symbol` use the gene validator
 + direct edit, not the term browser.
 
-**Proposed groups (add):** Gene identity (editable: gene_symbol, primary_external_id, taxon, species) ·
-AI proposal (divergence-only) · Evidence (collapsed locator) · Provenance & notes.
+**Proposed groups (add):** Gene identity (editable: gene_symbol, primary_external_id, taxon; `species`
+read-only) · AI proposal (divergence-only) · Evidence (collapsed locator) · Provenance & notes.
+*(Making `species` editable would require adding `editable: true` to the pack field — out of scope;
+keep it read-only.)*
 
 ---
 
@@ -126,9 +130,13 @@ see which allele the row is about**. Inverse of the density problem.
 row; **HIDE** `association_kind` (routing constant) and `evidence_record_ids[0]` (internal id).
 **De-duplicate** the shared `Reference`/`title` (all 6 rows = same paper) → session header; drop the
 per-row `reference` object_ref. **COLLAPSE** `evidence_quote`/`mention` → evidence chip + PDF highlight.
-`Allele.allele_symbol` is the **only `editable:true` field in the pack** (when an Allele row materializes).
-**Ontology/ID fields:** `allele_identifier`, `Allele.primary_external_id` (allele CURIE, direct-edit +
-allele validator), `Allele.taxon` (NCBITaxon). AlleleMention/EvidenceQuote are `metadata_only` → no rows.
+`Allele.allele_symbol` is the **only `editable:true` field in the pack** (when an Allele row materializes);
+**`Allele.primary_external_id` and `Allele.taxon` are read-only today** (validator metadata but no
+`editable: true` → read-only per `materialization.py:1535`). Direct-CURIE editing of those is a Phase-2
+change that requires adding `editable: true`, not current behavior.
+**Ontology/ID fields:** `allele_identifier`, `Allele.primary_external_id` (allele CURIE; read-only now,
+resolved by the allele validator), `Allele.taxon` (NCBITaxon). AlleleMention/EvidenceQuote are
+`metadata_only` → no rows.
 
 **Proposed groups (add):** Association → Allele (allele_identifier chip) + Evidence chip; Allele row →
 Identity (allele_symbol editable, primary_external_id/taxon read-only). Set explicit `summary_fields` so
@@ -170,12 +178,14 @@ declared pack fields, not just what renders today — sandbox disease envelopes 
 `phenotype_terms[0].ontology_lookup_hint.*` and the standalone PhenotypeTerm row). **HIDE** export/write
 scaffolding (`export_state`, `write_blocked_reason` ×2 → amber state chip), `annotation_kind`,
 `evidence_record_ids[0]`. **De-duplicate** the inlined `phenotype_terms[0].*` block vs the standalone
-PhenotypeTerm row (show the term once; the row owns CURIE editing). **COLLAPSE** the 4 raw-JSON object_ref
-blobs (`phenotype_annotation_subject`, `phenotype_terms[0]`, `single_reference`, `evidence_quote`) → chips.
-**Suppress empty validated-reference rows** (Reference renders 0 fields). **Hide `condition_relations.*`
-when empty.**
+PhenotypeTerm row. **Editability nuance (gpt-5.5 review):** the inlined `phenotype_terms[0].curie` **is**
+`editable: true`, but the **standalone `PhenotypeTerm.curie` is read-only** today (no `editable` flag).
+So let the term be **edited via the inlined assertion field**; the standalone row shows a read-only term
+chip. **COLLAPSE** the 4 raw-JSON object_ref blobs (`phenotype_annotation_subject`, `phenotype_terms[0]`,
+`single_reference`, `evidence_quote`) → chips. **Suppress empty validated-reference rows** (Reference
+renders 0 fields). **Hide `condition_relations.*` when empty.**
 **KEEP-EDITABLE:** `phenotype_annotation_object` (statement), `negated` (toggle), `phenotype_terms[0].curie`
-/ PhenotypeTerm `curie` (term, "⌕ Browse"), PhenotypeSubject `subject_identifier` + `taxon`.
+(the editable term path; "⌕ Browse"), PhenotypeSubject `subject_identifier` + `taxon`.
 17 fields → ~5 + evidence chip + conditional conditions expander.
 
 **Proposed groups (add):** Phenotype statement · Phenotype term (chip + CURIE) · Subject · Evidence &
@@ -198,3 +208,10 @@ PhenotypeSubject `taxon`; ZECO/ChEBI/taxon condition curies; CV `condition_relat
   allele `allele_identifier`; de-duplicate disease/phenotype validated-reference rows.
 - **Ontology-field inventory (per §5 of the Build B spec)** is captured per pack above; it defines where
   the Phase-1 "⌕ Browse terms" affordance appears and what `ontology_family` each maps to.
+- **Path caveat (gpt-5.5 review):** some field references above are written in **shorthand** (e.g.
+  `expression_assay_used.curie`, `condition_relation_type.name`); when encoding `workspace_display` use
+  the **full `field_path`** from the pack — e.g. `expression_experiment.expression_assay_used.curie`,
+  `condition_relations.condition_relation_type.name`. Verify each path against the pack before use.
+- **Editability is per-field in the pack:** several fields the redesign would like editable
+  (`Allele.primary_external_id`/`taxon`, standalone `PhenotypeTerm.curie`, gene `species`) are read-only
+  today (no `editable: true`). Making them editable is a deliberate pack change, not assumed.
