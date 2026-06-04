@@ -1,0 +1,29 @@
+# Phase C workflow invariants: allele validator (Wave 3 — bounded lookup path).
+#
+# Invariants are STRONGER than plain phrase retention: each line is an ordered
+# step of the validator's bounded DB lookup path. The invariant framework
+# (1) reuses the retention assertion -- every line must appear in the assembled
+# render -- and (2) asserts the lines appear in this same order by first
+# occurrence, so the rewrite cannot scramble the
+# classify -> by-id -> search -> narrow -> not-found sequence.
+#
+# AUTHORING RULE (enforced by the harness): each phrase must occur EXACTLY ONCE
+# in the assembled render and be listed in workflow order. These are verbatim
+# from the rewritten <lookup_workflow> "Bounded lookup path" numbered block
+# (steps 1-5), where each occurs exactly once and in order. (AV-21 in
+# docs/design/phaseC-checklists/allele.md.)
+
+# Step 1 -- classify the input as a CURIE/ID or a compact symbol/notation.
+Decide whether the input is a CURIE/ID or a compact symbol/notation.
+
+# Step 2 -- a CURIE/ID is resolved by id.
+For CURIE/ID input, call `get_allele_by_id`.
+
+# Step 3 -- a symbol/notation goes through search_alleles.
+For symbol/notation input, call `search_alleles`.
+
+# Step 4 -- too many results: narrow.
+If too many results come back, narrow by adding more characters or by applying the known species `data_provider`.
+
+# Step 5 -- nothing back: report not-found with the exact search attempted.
+report "Allele not found in database" with the exact search you attempted.

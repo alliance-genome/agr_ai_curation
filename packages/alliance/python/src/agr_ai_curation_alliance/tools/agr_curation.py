@@ -1183,6 +1183,10 @@ def agr_curation_query(
     across symbols, full names, and synonyms -- so a shorter query returns more
     candidates and adding characters narrows them.
 
+    search_alleles matches by exact, then prefix, then contains (case-insensitive),
+    across symbols, full names, and synonyms -- so a shorter query returns more
+    candidates and adding characters narrows them.
+
     Args:
         method: The query method (search_genes, search_genes_bulk, search_alleles, search_alleles_bulk, etc.)
         gene_symbol: Gene symbol to search for

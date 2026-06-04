@@ -455,7 +455,7 @@
           "type": "array[string]"
         }
       ],
-      "summary": "A single tool for looking up Alliance curation data. It offers many specific methods \u2014 search for a gene, fetch an allele by ID, look up an ontology term, list member groups, and more. Different agents use the methods that fit their job. A gene search (search_genes) matches by exact, then prefix, then contains (case-insensitive), across symbols, full names, and synonyms, so a shorter query returns more candidates and adding characters narrows them."
+      "summary": "A single tool for looking up Alliance curation data. It offers many specific methods \u2014 search for a gene, fetch an allele by ID, look up an ontology term, list member groups, and more. Different agents use the methods that fit their job. A gene search (search_genes) matches by exact, then prefix, then contains (case-insensitive), across symbols, full names, and synonyms, so a shorter query returns more candidates and adding characters narrows them. An allele search (search_alleles) matches by exact, then prefix, then contains (case-insensitive), across symbols, full names, and synonyms, so a shorter query returns more candidates and adding characters narrows them."
     },
     "methods": {
       "get_allele_by_exact_symbol": {
