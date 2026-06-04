@@ -236,13 +236,16 @@ def test_bundled_alliance_gene_extractor_prompt_teaches_verified_evidence_flow(m
     prompt_payload = yaml.safe_load(source.prompt_yaml.read_text(encoding="utf-8"))
     prompt_content = str(prompt_payload["content"])
 
-    assert "<few_shot_examples>" in prompt_content
+    assert "<examples>" in prompt_content
     assert prompt_content.count("record_evidence(") >= 3
     assert '"status": "verified"' in prompt_content
     assert "`verified_quote`" in prompt_content
     assert "`chunk_id`" in prompt_content
-    assert "Do not call `record_evidence` for every gene mentioned anywhere in the paper." in prompt_content
-    assert "Do not place free-text evidence summaries in staging fields." in prompt_content
+    assert (
+        "do not `record_evidence` for every mention or for genes you are excluding"
+        in prompt_content
+    )
+    assert "Do not write, reconstruct, trim, or paraphrase source quote text yourself." in prompt_content
 
 
 def test_bundled_alliance_load_prompts_tracks_package_paths(monkeypatch):
