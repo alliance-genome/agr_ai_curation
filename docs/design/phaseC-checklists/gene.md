@@ -48,16 +48,27 @@ So the rewrite uses a **role-adapted, outcome-first VALIDATOR skeleton** (the
 template for the other 13 validators + supervisor), NOT the builder-extractor
 skeleton:
 
-`<role>` -> `<goal>` -> `<success_criteria>` (end-state: resolved-vs-unresolved
-decided correctly, every DB call recorded, no guessing) -> `<scope>` (in/out of
-scope; no cross-agent transfer) -> `<resolution_and_validation_rules>` (verify-vs-
-resolve mode, no-invention/no-memory, literal-symbol-first, species/provider
-selection, batch mode + bulk grouping, identity disambiguation from handoff
-context, symbol conventions) -> `<lookup_workflow>` (bounded ordered DB lookup path
-+ which-method-when judgment) -> `<result_contract>` (the GeneResultEnvelope root
-fields + statuses + gene candidate/object detail) -> `<stop_rules>`. The
-outcome-first ORDER (Role -> Goal -> Success -> Scope -> Rules -> Workflow ->
-Output -> Stop) is preserved.
+`<role>` -> `<goal>` (end-state folded in: resolve from DB evidence, no guessing,
+record every DB call) -> `<scope>` (in/out of scope; no cross-agent transfer) ->
+`<resolution_and_validation_rules>` (verify-vs-resolve mode, no-invention/no-memory,
+literal-symbol-first, species/provider selection, batch mode + bulk grouping,
+identity disambiguation from handoff context, symbol conventions) ->
+`<lookup_workflow>` (bounded ordered DB lookup path + which-method-when judgment) ->
+`<result_contract>` (the GeneResultEnvelope root fields + statuses + gene
+candidate/object detail) -> `<stop_rules>`. The outcome-first ORDER (Role -> Goal ->
+Scope -> Rules -> Workflow -> Output -> Stop) is preserved.
+
+> **Leanness pass (post-rewrite, matching agm/subject_entity):** the original
+> rewrite carried a `<success_criteria>` section whose bullets were ~90%
+> restatement of rules already in `<resolution_and_validation_rules>`,
+> `<result_contract>`, and `<stop_rules>`. That section is now **removed** to match
+> the lean validator standard (agm/subject_entity carry no `<success_criteria>`).
+> Two genuinely-unique success ideas were folded into `<goal>`: "resolve every
+> identity from what the database returns" and "record every database call you
+> make". Each removed success bullet's rule survives in another surviving section
+> (see the per-ID homes below); the inventory phrases that lived only in
+> success_criteria were re-pointed to verbatim substrings of those surviving
+> sentences.
 
 ### VALIDATOR framing (load-bearing, per Chris)
 
@@ -214,15 +225,15 @@ NOT promoted to a `.reason_codes.txt`. So none is created.
 |----|-------------------|----------|
 | GV-01 | Agent identity: a Gene Data Specialist for the Alliance Genome Resources Curation Database who helps curators identify and validate gene information by querying the AGR curation database. | `<role>` (reframed to curator-voice "stronger specialized resolver"; identity + DB-query purpose retained) |
 | GV-02 | Goal: validate gene symbols, names, IDs, species, genomic locations, cross-references, gene types, and full names from database evidence; return structured `GeneResultEnvelope` data using the shared validator result contract, without guessing, unsupported normalization, or memory-based gene facts. | `<goal>` |
-| GV-03 | Success: calls `agr_curation_query` before providing any gene information. | `<success_criteria>` (curator-facing success line KEPT once; the imperative "you MUST call before responding" is CORE's required-tool-call policy, GV-RTC). Literal token `` `agr_curation_query` `` retained. |
-| GV-04 | Success: searches the literal symbol, name, or ID supplied by the user or paper first. | `<success_criteria>` + `<resolution_and_validation_rules>` (literal-symbol-first; also GV-12) |
+| GV-03 | Success: calls `agr_curation_query` before providing any gene information. | `<goal>` ("Decide every identity from what the database returns") + `<resolution_and_validation_rules>` (## No memory, no guessing). The imperative "you MUST call before responding" is CORE's required-tool-call policy (GV-RTC). Literal token `` `agr_curation_query` `` retained. **(`<success_criteria>` removed in the leanness pass — this success line was a restatement; the rule survives in `<goal>`/rules.)** |
+| GV-04 | Success: searches the literal symbol, name, or ID supplied by the user or paper first. | `<resolution_and_validation_rules>` (literal-symbol-first; GV-12). **(`<success_criteria>` removed — restatement of GV-12.)** |
 | GV-05 | Cleans genotype notation only after the tool flags it or the input clearly contains zygosity notation that is not stored as a gene symbol. | `<resolution_and_validation_rules>` (symbol handling; merged with GV-19) |
-| GV-06 | Uses species context to set `data_provider` when a species is stated, and searches all species when no species is stated. | `<success_criteria>` + `<resolution_and_validation_rules>` (species selection; also GV-17) |
-| GV-07 | Copies authoritative scalar fields into `resolved_values`, records candidate matches in `candidates` and `gene_candidates`, treats `resolved_objects` as optional diagnostic lookup context only; the gene domain pack materializes scalar fields on the `gene_mention_evidence` target and does not create a separate Gene object. | `<success_criteria>` + `<result_contract>` (GV-28/GV-30) |
-| GV-08 | Uses `status: "resolved"` only when expected fields are filled from database evidence; uses `status: "unresolved"` when fields are missing, ambiguous, not found, or blocked by tool errors. | `<success_criteria>` + `<result_contract>` (verbatim `status: "resolved"` / `status: "unresolved"` tokens — contract-test requirement) |
-| GV-09 | Lists unresolved expected fields in `missing_expected_fields`; explains missing data or ambiguity in `curator_message` and `explanation`. | `<success_criteria>` + `<result_contract>` |
-| GV-10 | Records every database call in `lookup_attempts`, including provider, method, query, result count, outcome, and any short message. | `<success_criteria>` + `<result_contract>` (GV-31) |
-| GV-11 | Uses only fields returned by query results for gene IDs, symbols, names, species, provider codes, gene types, genomic locations, cross-references, and synonyms. | `<success_criteria>` + `<resolution_and_validation_rules>` (no-invention) |
+| GV-06 | Uses species context to set `data_provider` when a species is stated, and searches all species when no species is stated. | `<resolution_and_validation_rules>` (species selection; GV-17). **(`<success_criteria>` removed — restatement of GV-17.)** |
+| GV-07 | Copies authoritative scalar fields into `resolved_values`, records candidate matches in `candidates` and `gene_candidates`, treats `resolved_objects` as optional diagnostic lookup context only; the gene domain pack materializes scalar fields on the `gene_mention_evidence` target and does not create a separate Gene object. | `<result_contract>` (GV-28/GV-30). **(`<success_criteria>` removed — restatement of the result-contract field roster.)** |
+| GV-08 | Uses `status: "resolved"` only when expected fields are filled from database evidence; uses `status: "unresolved"` when fields are missing, ambiguous, not found, or blocked by tool errors. | `<result_contract>` (verbatim `status: "resolved"` / `status: "unresolved"` tokens — contract-test requirement). **(`<success_criteria>` removed — restatement of GV-28.)** |
+| GV-09 | Lists unresolved expected fields in `missing_expected_fields`; explains missing data or ambiguity in `curator_message` and `explanation`. | `<result_contract>`. **(`<success_criteria>` removed — restatement of the result-contract field roster.)** |
+| GV-10 | Records every database call in `lookup_attempts`, including provider, method, query, result count, outcome, and any short message. | `<goal>` ("record every database call you make") + `<result_contract>` (GV-31). **(`<success_criteria>` removed — restatement; the "record every call" idea folded into `<goal>`.)** |
+| GV-11 | Uses only fields returned by query results for gene IDs, symbols, names, species, provider codes, gene types, genomic locations, cross-references, and synonyms. | `<resolution_and_validation_rules>` (no-invention; ## No memory, no guessing). **(The `<result_contract>` "Use only fields returned by the query results for gene IDs…" restatement was dropped in the leanness pass; the no-invention rule survives once in rules.)** |
 
 ## Scope / no-transfer
 

@@ -17,27 +17,27 @@ you are the resolver that settles it
 return a structured `GeneResultEnvelope` using the shared validator result contract
 never from memory, training-data recall, guessing, or unsupported normalization
 
-# GV-03 success: calls agr_curation_query before any gene information (no memory)
-You called `agr_curation_query` before providing any gene information
+# GV-03 query-before-any-fact / no memory (success_criteria removed; rule now in <goal>)
+Decide every identity from what the database returns
 
-# GV-04 success/literal-first
-You searched the literal symbol, name, or ID supplied by the user or paper first
+# GV-04 literal-first (success_criteria removed; rule in <resolution_and_validation_rules>)
+ALWAYS search the LITERAL symbol from the paper first.
 
-# GV-06 species context -> data_provider, else all species
-You used species context to set `data_provider` when a species was stated, and searched all species when none was stated.
+# GV-06 species context -> data_provider, else all species (success_criteria removed; rule in <resolution_and_validation_rules>)
+When the query or paper names a species, pass the matching `data_provider`.
 
-# GV-07 resolved_values scalar / candidates+gene_candidates / resolved_objects diagnostic
-You copied authoritative scalar fields into `resolved_values`, recorded candidate matches in `candidates` and `gene_candidates`, and used `resolved_objects` only as optional diagnostic context.
+# GV-07 resolved_objects diagnostic-only (success_criteria removed; rule in <result_contract>)
+`resolved_objects`: optional diagnostic lookup context only.
 
 # GV-08 status resolved/unresolved decision (contract-test tokens)
 `status: "resolved"`
 `status: "unresolved"`
 
-# GV-09 missing_expected_fields + curator_message/explanation
-You listed every unresolved expected field in `missing_expected_fields`
+# GV-09 missing_expected_fields (success_criteria removed; rule in <result_contract>)
+`missing_expected_fields`: the expected fields you could not populate from lookup evidence.
 
-# GV-10 record every DB call in lookup_attempts
-You recorded every database call in `lookup_attempts`, with its provider, method, query, result count, outcome, and any short message.
+# GV-10 record every DB call in lookup_attempts (success_criteria removed; rule in <result_contract> + <goal>)
+`lookup_attempts`: one record for each `agr_curation_query` call
 
 # GV-13s scope: gene symbols/names/IDs incl example CURIE
 You handle gene symbols, names, and IDs such as `WB:WBGene00001234`
@@ -84,7 +84,7 @@ If no species is mentioned, omit `data_provider` and search all species.
 
 # GV-05/GV-19 symbol handling: clean notation only when flagged; DB drives decision
 Clean genotype or zygosity notation only after the tool flags it
-let database evidence and the returned candidates drive the final decision
+database evidence and the returned candidates drive the final decision
 
 # GV-20 symbol conventions: literal first even when convention suggests another
 Search the paper's literal symbol first even when organism naming conventions suggest a different capitalization or an ortholog.
@@ -120,11 +120,10 @@ An old or deprecated symbol -> use `search_genes`, since synonym matching may su
 Several genes sharing a name -> check the species and taxon on each query result before deciding.
 
 # GV-28/GV-29/GV-30/GV-31 shared result contract root fields (contract tokens)
+# (4 copied-from-request root fields collapsed to one agm-style line in the leanness
+#  pass; the contract test still asserts each backtick token, all retained here.)
 Populate these root fields exactly, and do not wrap them under another object:
-`request_id`: copy from the validator request.
-`validator_binding_id`: copy from the validator request.
-`validator_agent`: copy the package and agent identity from the request.
-`target`: copy the target object from the request.
+`request_id`, `validator_binding_id`, `validator_agent`, `target`: copied from the request.
 `resolved_values`: scalar values keyed by expected result field
 `resolved_objects`: optional diagnostic lookup context only.
 it does not create a separate Gene object
