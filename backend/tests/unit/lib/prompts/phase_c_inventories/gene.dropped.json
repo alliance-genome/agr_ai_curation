@@ -1,0 +1,70 @@
+[
+  {
+    "phrase": "You MUST call the `agr_curation_query` tool before providing any response about genes.",
+    "synonyms": [
+      "call at least one of agr_curation_query before final output"
+    ],
+    "category": "relocated",
+    "reason": "GV-RTC / GV-03 de-dup. The pre-rewrite '## Tool Requirement' restated the required-tool-call imperative that the locked Generated Runtime Contract already injects ('Required tool-call policy: call at least one of agr_curation_query before final output'). The rewrite drops the base imperative and keeps the curator-facing success line 'You called agr_curation_query before providing any gene information' once; the machine imperative survives in the core half of the assembled render. The literal `agr_curation_query` token is still present in the base prompt.",
+    "old_source": "packages/alliance/agents/gene/prompt.yaml:## Tool Requirement",
+    "new_home": "render"
+  },
+  {
+    "phrase": "Structured output is enforced as `GeneResultEnvelope`. Keep prose concise and compatible with that schema.",
+    "synonyms": [
+      "produce JSON matching GeneResultEnvelope; the structured-output layer below is authoritative for final response shape"
+    ],
+    "category": "relocated",
+    "reason": "GV-35 de-dup. The pre-rewrite '# Output' opener restated the JSON-only / GeneResultEnvelope output mandate that the locked core already injects ('Output contract from agent.yaml: produce JSON matching GeneResultEnvelope; the structured-output layer below is authoritative for final response shape' plus the CRITICAL structured-output block). The rewrite drops the base restatement; the mandate survives in the core half of the render. The gene-object FIELD detail (gene_id/symbol/taxon/species/data_provider + optional fields) is KEPT in <result_contract> because the core does not enumerate it.",
+    "old_source": "packages/alliance/agents/gene/prompt.yaml:# Output",
+    "new_home": "render"
+  },
+  {
+    "phrase": "## `search_genes` - Recommended for partial matches",
+    "synonyms": [
+      "It offers many specific methods — search for a gene, fetch an allele by ID"
+    ],
+    "category": "relocated",
+    "reason": "GV-24 de-dup (tool MECHANICS vs JUDGMENT). The pre-rewrite '# Available Gene Methods' block restated per-method tool mechanics (required/optional param lists, recommended-use one-liners) that the curator tool catalog already carries: agr_curation_query's bindings.yaml `methods.search_genes.description` ('Find genes whose symbol contains the text you give'), `methods.get_gene_by_exact_symbol.description` ('Find the gene whose official symbol exactly matches'), `methods.search_genes_bulk.description`, and `methods.get_gene_by_id.description`, under a tool whose top-level summary states it 'offers many specific methods — search for a gene, fetch an allele by ID ... Different agents use the methods that fit their job'. The rewrite keeps the curation JUDGMENT (which method to choose when, in <lookup_workflow>) and drops the restated mechanics. The synonym matches the tool's bindings description/summary (the harness home text).",
+    "old_source": "packages/alliance/agents/gene/prompt.yaml:# Available Gene Methods",
+    "new_home": "bindings:agr_curation_query"
+  },
+  {
+    "phrase": "## `get_gene_by_exact_symbol` - Exact symbol lookup",
+    "synonyms": [
+      "many specific lookup methods"
+    ],
+    "category": "relocated",
+    "reason": "GV-24 de-dup. Same lever as the search_genes method block: the per-method headers and param lists of '# Available Gene Methods' are tool mechanics carried by the agr_curation_query bindings catalog (`methods.get_gene_by_exact_symbol`: 'Find the gene whose official symbol exactly matches'). The which-method-when judgment ('An exact official database symbol you are already confident in -> get_gene_by_exact_symbol') is KEPT in <lookup_workflow>. The synonym is the bindings description's 'many specific lookup methods' phrasing (the home text).",
+    "old_source": "packages/alliance/agents/gene/prompt.yaml:# Available Gene Methods",
+    "new_home": "bindings:agr_curation_query"
+  },
+  {
+    "phrase": "Searches using LIKE patterns: exact, prefix, then contains.",
+    "category": "deleted",
+    "reason": "GV-24 (pure internal mechanic). The LIKE-pattern matching order is a low-level implementation detail of the agr_curation_query search methods, not a curation judgment the curator edits. The curator-facing consequence (search_genes handles exact + partial + synonym matches) is KEPT as method-choice judgment in <lookup_workflow>; the bindings catalog already states search_genes 'finds genes whose symbol contains the text you give'. Dropped with no home so the deletion is visible in review rather than hidden in the diff.",
+    "old_source": "packages/alliance/agents/gene/prompt.yaml:# Available Gene Methods (search_genes Behavior)",
+    "new_home": ""
+  },
+  {
+    "phrase": "Is case-insensitive.",
+    "category": "deleted",
+    "reason": "GV-24 (pure internal mechanic). Case-insensitivity of the search methods is a tool implementation detail with no curation judgment attached; it does not change which method the validator picks or how it decides resolved-vs-unresolved. Dropped with no home (printed for review).",
+    "old_source": "packages/alliance/agents/gene/prompt.yaml:# Available Gene Methods (search_genes Behavior)",
+    "new_home": ""
+  },
+  {
+    "phrase": "Returns a `match_type` field showing how it matched.",
+    "category": "deleted",
+    "reason": "GV-24 (pure internal mechanic; preserved elsewhere). The fact that the search returns a match_type is a tool-output mechanic; the match_type value itself survives as a documented field of the result-contract `gene_candidates` detail (GV-32, kept in <result_contract>: 'gene_candidates: ... and match_type'). The standalone 'Returns a match_type field showing how it matched' restatement under the method block is dropped with no home (printed for review).",
+    "old_source": "packages/alliance/agents/gene/prompt.yaml:# Available Gene Methods (search_genes Behavior)",
+    "new_home": ""
+  },
+  {
+    "phrase": "Repository: https://github.com/alliance-genome/agr_curation_api_client",
+    "category": "deleted",
+    "reason": "GV-REPO. A developer-facing repository link is not a curation rule, not curator-voice content, and instructs the model on nothing. Dropped with no home (printed for review).",
+    "old_source": "packages/alliance/agents/gene/prompt.yaml:Role/Repository line",
+    "new_home": ""
+  }
+]

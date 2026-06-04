@@ -1,0 +1,14 @@
+# Phase C group-hook inventory: gene validator rendered with the MGI group.
+#
+# One sampled group (MGI), mirroring how the extractor harness samples a single
+# group (e.g. gene_extractor.fb). Asserts the rewritten base prompt renders
+# cleanly UNDER a group overlay and the organism-specific MGI gene-search hook
+# still arrives in the assembled render (core + base + MGI group rules). No gene
+# contract test asserts group-rule content; the group rules themselves are
+# unchanged by this rewrite.
+
+# MGI organism convention hook (capitalized mouse gene symbols).
+Mouse gene symbols use initial capital letter
+
+# MGI result-interpretation hook.
+Verify the gene matches what's described in the paper

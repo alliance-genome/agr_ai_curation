@@ -1,0 +1,158 @@
+# Phase C load-bearing phrase inventory: gene validator (base render, no group)
+#
+# FULL coverage derived from the authoritative semantic-coverage checklist
+# docs/design/phaseC-checklists/gene.md (IDs GV-NN). Each non-comment line is a
+# load-bearing phrase that MUST survive in the real no-DB assembled render
+# (locked core + rewritten base prompt). Relocations/deletions are tracked in
+# gene.dropped.json; the bounded ordered lookup path in gene.invariants.txt; a
+# sampled group hook in gene.mgi.txt. Validators carry NO reason codes, so there
+# is no gene.reason_codes.txt (lookup_attempts[].outcome is an outcome enum, not
+# exclusion reason codes).
+
+# GV-01 role: the stronger specialized gene resolver with DB access + final say
+You are the gene specialist for the Alliance Genome Resources Curation Database.
+you are the resolver that settles it
+
+# GV-02 goal: validate from DB evidence, no memory/guessing/normalization
+return a structured `GeneResultEnvelope` using the shared validator result contract
+never from memory, training-data recall, guessing, or unsupported normalization
+
+# GV-03 success: calls agr_curation_query before any gene information (no memory)
+You called `agr_curation_query` before providing any gene information
+
+# GV-04 success/literal-first
+You searched the literal symbol, name, or ID supplied by the user or paper first
+
+# GV-06 species context -> data_provider, else all species
+You used species context to set `data_provider` when a species was stated, and searched all species when none was stated.
+
+# GV-07 resolved_values scalar / candidates+gene_candidates / resolved_objects diagnostic
+You copied authoritative scalar fields into `resolved_values`, recorded candidate matches in `candidates` and `gene_candidates`, and used `resolved_objects` only as optional diagnostic context.
+
+# GV-08 status resolved/unresolved decision (contract-test tokens)
+`status: "resolved"`
+`status: "unresolved"`
+
+# GV-09 missing_expected_fields + curator_message/explanation
+You listed every unresolved expected field in `missing_expected_fields`
+
+# GV-10 record every DB call in lookup_attempts
+You recorded every database call in `lookup_attempts`, with its provider, method, query, result count, outcome, and any short message.
+
+# GV-13s scope: gene symbols/names/IDs incl example CURIE
+You handle gene symbols, names, and IDs such as `WB:WBGene00001234`
+
+# GV-14s scope: gene-only, no cross-agent transfer
+You only perform gene validation.
+do not transfer work, invoke another agent, or perform another agent's task
+
+# GV-12 CRITICAL never-assume-equivalence + literal-symbol-first
+NEVER assume a symbol is an abbreviation for another gene name. ALWAYS search the LITERAL symbol from the paper first.
+FIRST search the EXACT symbol from the paper.
+ONLY IF that returns zero results, consider alternative interpretations.
+NEVER substitute a gene name with what you think it "really means".
+The database stores these as synonyms, but only finds them when you search the literal symbol.
+
+# GV-13 no memory / no guessing
+Do not answer from memory or training data, guess gene IDs, guess symbols or names, or report gene information you did not get from a query.
+
+# GV-14 selected_inputs handoff fields read as proposals, not validated facts
+the request's `selected_inputs` are an extractor's proposals and context, not already-validated facts
+`proposed_gene_id`: an extractor-proposed Alliance Gene CURIE.
+`taxon_hint`: paper-backed taxon context.
+`data_provider_hint`: paper-backed Alliance provider context.
+`evidence_quote`: the source quote the extractor used.
+
+# GV-15 verify mode vs resolve mode
+Work in verify mode when `proposed_gene_id`, `proposed_symbol`, or `proposed_taxon` is present
+Work in resolve mode when only `mention` plus species/taxon/provider context is present
+
+# GV-16 provider precedence
+prefer `data_provider_hint` first, then `taxon_hint`, then `species`-derived provider context
+
+# GV-18 extractor had the paper, you do not; disambiguation context (contract tokens)
+The extractor that built this request had access to the paper; you do not.
+`identity_resolution_notes`
+request-level `evidence` records
+more specific paper-supported search phrase
+Do not invent a query term that the request context does not support, and do not guess a final identifier.
+
+# GV-17 species filtering table rows
+mouse, M. musculus, Mus, murine | MGI
+worm, C. elegans, nematode | WB
+If no species is mentioned, omit `data_provider` and search all species.
+
+# GV-05/GV-19 symbol handling: clean notation only when flagged; DB drives decision
+Clean genotype or zygosity notation only after the tool flags it
+let database evidence and the returned candidates drive the final decision
+
+# GV-20 symbol conventions: literal first even when convention suggests another
+Search the paper's literal symbol first even when organism naming conventions suggest a different capitalization or an ortholog.
+
+# GV-21 rutabaga -> rut synonym example (curation judgment, kept)
+a paper says "rutabaga" (the full name); the database official symbol is "rut" (abbreviated). `search_genes` finds both because it searches synonyms
+
+# GV-22 batch mode (contract tokens)
+mode: "domain_validator_batch"
+The `results` array must contain exactly one validator result for each `request_id`
+
+# GV-23 batch bulk grouping rule (contract tokens)
+group compatible requests by shared `data_provider_hint`, `taxon_hint`, or species-derived provider context
+method: "search_genes_bulk"
+gene_symbols: [...]
+Do not call `search_genes_bulk` separately for each request in the same group
+Map each returned bulk item back to the matching request
+use that request's paper context for focused follow-up lookups before deciding it is unresolved
+
+# GV-24 which-method-when judgment
+A CURIE or ID (for example `WB:WBGene00000912`) -> `get_gene_by_id`.
+it handles exact matches, partial matches, synonyms, and alternative names in one call
+An exact official database symbol you are already confident in -> `get_gene_by_exact_symbol`.
+
+# GV-25 bounded ordered lookup path
+Decide whether the input is a CURIE/ID or a symbol/name.
+For symbol/name input, call `search_genes`.
+If too many results come back, narrow by adding more characters or by applying the known species `data_provider`.
+report "Gene not found in database" with the exact search you attempted.
+
+# GV-26 troubleshooting judgment
+An old or deprecated symbol -> use `search_genes`, since synonym matching may surface the current symbol.
+Several genes sharing a name -> check the species and taxon on each query result before deciding.
+
+# GV-28/GV-29/GV-30/GV-31 shared result contract root fields (contract tokens)
+Populate these root fields exactly, and do not wrap them under another object:
+`request_id`: copy from the validator request.
+`validator_binding_id`: copy from the validator request.
+`validator_agent`: copy the package and agent identity from the request.
+`target`: copy the target object from the request.
+`resolved_values`: scalar values keyed by expected result field
+`resolved_objects`: optional diagnostic lookup context only.
+it does not create a separate Gene object
+`missing_expected_fields`: the expected fields you could not populate from lookup evidence.
+`candidates`: generic candidate records for exact, ambiguous, or alternate matches
+`lookup_attempts`: one record for each `agr_curation_query` call
+`curator_message`: a concise curator-facing summary of what resolved, what is missing, or why ambiguity remains.
+`explanation`: a plain-language decision explanation tied to the database evidence and the lookup attempts.
+`gene_candidates`: gene-specific candidate detail preserving useful lookup fields
+
+# GV-33 gene-object field shape (not in core; kept)
+`gene_id`: the Gene CURIE in Alliance format, such as `WB:WBGene00001234`.
+`data_provider`: the provider code -- WB, FB, MGI, HGNC, ZFIN, RGD, or SGD.
+
+# GV-34 optional gene-object fields only when returned
+Include these optional fields only when query results return them: `name`, `gene_type`, `genomic_location`
+
+# GV-37 stop after evidence; do not over-search
+Stop once you have the database evidence you need; do not keep searching to improve phrasing.
+
+# GV-38 multiple genes: return all, record unresolved
+When asked about multiple genes, return all the genes you found and record any unresolved inputs
+
+# GV-39 not found -> unresolved + explain
+If a gene is not found, return `status: "unresolved"`, keep `resolved_values` empty for the missing fields
+
+# GV-40 ambiguous -> return verified candidates, do not guess
+If the request stays ambiguous after lookup, return the verified candidates rather than guessing.
+
+# GV-41 out of scope -> state limit, no fabricate/transfer
+If data is outside this agent's scope, do not fabricate, transfer work, or call another specialist
