@@ -21,6 +21,24 @@ kinds (gene / allele / AGM) by reading the explicit `subject_type`, selecting on
 concrete validator route, and recording that routing provenance. The routing
 decision tree is the load-bearing core of this prompt and is preserved in full.
 
+> **LEAN re-tightening (Chris review).** The first draft applied the skeleton in its
+> fuller form and grew the prompt ~1.6x (5262 -> 8655 chars) by restating rules across
+> `<success_criteria>` + rules + workflow + stop-rules. The committed rewrite is
+> **lean**: the standalone `<success_criteria>` section is folded into `<goal>`
+> (route-only-from-type, call-before-resolved, status decision, record-every-call),
+> `<resolution_and_validation_rules>` carry the type-normalization table + unsupported-type
+> stop + the full resolved/unresolved decision policy once, `<lookup_workflow>` owns the
+> ordered routing path + the three routes' lookup semantics, `<result_contract>` is the
+> ORIGINAL terse field list (with a single `resolved_values` note for the
+> `expected_result_fields` keys) plus the no-repair/no-compose + no-`under_development`
+> discipline, and `<stop_rules>` keeps only the two genuinely-new stops
+> (stop-when-enough, out-of-scope) — the zero/multiple/conflict/error and
+> missing-input/unsupported stops live in the workflow + rules. The dropped
+> "For unresolved missing-input or unsupported-type requests, return unresolved without
+> making an unrelated lookup" line is now covered once by the unsupported-type rule. No
+> load-bearing rule was dropped; every ID below still maps to a home. The retention
+> inventory was re-baselined to the condensed wording.
+
 Legend for "New home":
 - A `<section>` name is a section of the **rewritten** base prompt.
 - `CORE` / `render` means the locked Generated Runtime Contract
