@@ -1,0 +1,26 @@
+# Phase C workflow invariants: allele_extractor (Wave 2, FULL coverage).
+#
+# Invariants are STRONGER than plain phrase retention: each line is an ordered
+# step of the extractor's load-bearing builder workflow. The invariant framework
+# (1) reuses the retention assertion -- every line must appear in the assembled
+# render -- and (2) asserts the lines appear in this same order by first
+# occurrence, so the rewrite cannot scramble the
+# search -> record_evidence -> stage -> review/finalize sequence even if it keeps
+# the individual phrases.
+#
+# AUTHORING RULE (enforced by the harness): each phrase must occur EXACTLY ONCE
+# in the assembled render. These are verbatim from the rewritten <workflow>
+# ordered block (steps 1-4), where each occurs exactly once and in workflow order.
+# (AE-21 in docs/design/phaseC-checklists/allele_extractor.md.)
+
+# Step 1 -- retrieve candidate allele/variant mentions and context first.
+Search/read the document for candidate allele/variant mentions and context.
+
+# Step 2 -- read the chunk, pick backend span ids, record one evidence unit.
+select the backend-generated `evidence_spans[].span_id` values that directly support one evidence unit
+
+# Step 3 -- stage each retained allele with its verified evidence and selector hints.
+Stage each retained allele with `stage_allele_observation`, passing a stable `pending_ref_id`
+
+# Step 4 -- review staged candidates, then finalize once.
+Call `list_staged_allele_observations` to review

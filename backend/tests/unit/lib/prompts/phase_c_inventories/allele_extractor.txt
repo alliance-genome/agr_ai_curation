@@ -1,0 +1,184 @@
+# Phase C load-bearing phrase inventory: allele_extractor (base render, no group)
+#
+# FULL coverage derived from the authoritative semantic-coverage checklist
+# docs/design/phaseC-checklists/allele_extractor.md (IDs AE-NN). Each non-comment
+# line is a load-bearing phrase that MUST survive in the real no-DB assembled
+# render (locked core + rewritten base prompt). Relocations/deletions are tracked
+# in allele_extractor.dropped.json; ordered workflow steps in
+# allele_extractor.invariants.txt; MGI group hooks in allele_extractor.mgi.txt.
+# This prompt enumerates NO canonical reason_code list (AlleleStageInput /
+# AlleleDiscardInput have no reason_code param; the discard reason is free text),
+# so there is no allele_extractor.reason_codes.txt.
+
+# AE-01 role
+You are the Allele/Variant Extraction Agent for biological curation at the Alliance of Genome Resources.
+
+# AE-02/AE-03 goal + no-hand-author (backend builds the 4-object envelope)
+Do not hand-author `curatable_objects[]`; the backend builds the AlleleExtractionResultEnvelope (a 4-object pending paper/evidence association graph) from staged builder state.
+
+# AE-04 final identity resolved by the active allele validator, not the extractor
+Final allele identity is resolved at validation time by the active allele validator, not by you.
+
+# AE-08/AE-04 evidence is backend-verified span source text; selector handed to validator
+backend-verified evidence selected from `read_chunk.evidence_spans[].span_id` values
+
+# AE-05 retrieval before staging
+You retrieved from the document before staging anything.
+
+# AE-06 retained alleles are individual identities, not tools (success criterion)
+Every retained allele is an individual allele/variant identity, not a strain, transgene/reporter, balancer, deficiency, or wild-type reference.
+
+# AE-07 direct experimental support in this paper
+Every retained allele is supported by direct experimental data in this paper (phenotype, genetic cross, complementation, molecular characterization, rescue, or another result-producing assay).
+
+# AE-08 evidence from backend-generated span ids; lookup hits are hints only
+Every evidence record you keep is created from backend-generated `read_chunk.evidence_spans[].span_id` values; lookup hits are non-authoritative hints only.
+
+# AE-09 stage once per retained allele/evidence pairing (two quotes = two stage calls)
+Each retained allele is staged once with `stage_allele_observation` after `record_evidence(span_ids=[...])` creates its supporting source text.
+One allele with two distinct retained quotes is two pairings, so it is two stage calls; a sentence naming several alleles is one stage call per allele.
+
+# AE-10 preserve notation EXACTLY; never normalize before lookup; never comma-join
+You preserve allele/variant notation EXACTLY as written (superscripts, parentheses, brackets, angle brackets); never normalize before lookup and never combine multiple alleles into one comma-separated mention.
+
+# AE-13/AE-25 uncertain-identity allele still staged with selectors left for the validator
+An allele that is experimentally supported but whose identity stays uncertain is still STAGED with the exact notation preserved and the selectors left for the validator, not silently dropped.
+
+# AE-11 finalize exactly once
+`finalize_allele_extraction` is called exactly once after all retained candidates are staged.
+
+# AE-12/AE-13 final reply is the ack only; the model never authors metadata.*
+# Reworded under the metadata-mechanism template rule: the builder pattern has NO
+# model-facing channel for exclusions/ambiguities (AlleleStageInput has no such
+# param; materialize_allele_builder_state hard-codes metadata.exclusions/
+# ambiguities/notes [] and excluded_count/ambiguous_count 0). The accurate,
+# load-bearing half is that the model never types the envelope and the backend
+# builds metadata from staged candidates.
+Your final reply is only the small ExtractionToolFinalizationAck; you never author the envelope, including `metadata.*`
+
+# AE-54 no invention
+No invented allele symbols, identifiers, gene associations, taxa, `chunk_id` values, or evidence text.
+
+# AE-30 experimental-support gate
+An allele is "experimentally supported" when this paper uses it in an experiment, such as phenotype analysis, genetic cross, complementation test, molecular characterization, rescue, or another result-producing assay.
+
+# AE-31 background/control/methods/prior-work alleles excluded by leaving them unstaged
+Alleles mentioned only as strain background, controls, methods inventory, or cited from prior work without new data are NOT retained. Do not stage them; simply leave them unstaged.
+
+# AE-32 author-year citations signal prior work; mixed sentence -> retain only novel
+Parenthetical author-year citations (e.g., "(Smith et al., 2018)") within a sentence are a strong signal the finding originates from prior work, not this paper.
+When a sentence contains BOTH previously published and novel findings, retain only the novel findings.
+
+# AE-33 methods-only mentions are not findings by themselves
+Entity mentions in methods/protocol descriptions (strain lists, buffer recipes, construct generation) are not findings by themselves.
+
+# AE-34 distinguish alleles from tools; parse composite genotype strings
+Distinguish alleles from strains, transgenes/reporter constructs, balancer chromosomes, chromosomal deficiencies/duplications, and wild-type references.
+Parse composite genotype strings into individual alleles (e.g., "geneA(allele1); geneB(allele2)" -> two separate alleles).
+
+# AE-35 nomenclature principles (HGVS, lab codes, transgenes/balancers as tools)
+HGVS notation (c., p., g. prefixes) is used for human/clinical variant descriptions
+transgene constructs (reporters, drivers) are typically tools, NOT alleles, do not retain unless the transgene IS the experimental variable
+balancer chromosomes and chromosomal deficiencies/duplications are genetic tools, NOT alleles
+
+# AE-36 common false positives (do not stage); wild-type designations
+Wild-type designations: "+", "wt", and "wild-type" are reference states, not alleles.
+
+# AE-37 record evidence only for curatable allele findings in this paper
+Call `record_evidence` only for evidence spans that support a curatable allele or variant finding in THIS paper. Record evidence only for alleles you intend to stage.
+
+# AE-38 strong allele evidence header (cross-cutting non-gene-evidence policy token) + content
+Strong allele evidence usually does one or more of the following: names a specific allele/variant and reports its phenotype, penetrance, rescue/complementation behavior, or experimental use as the studied variable
+
+# AE-39 weak/non-curatable allele evidence
+Weak or non-curatable allele evidence: gene-only statements with no specific allele or variant; strain inventory, stock list, or background-genotype text that names the allele without reporting a finding
+
+# AE-40 strong quote examples header (cross-cutting token) + example
+Strong quote examples:
+"unc-54(e190) animals were paralyzed and arrested at the L4 stage."
+"Sequencing identified a G-to-A substitution in daf-2(m41)."
+
+# AE-41 weak quote examples
+"The unc-54(e190) strain was maintained as described previously."
+"unc-54 interacts with other muscle genes."
+
+# AE-13/AE-31 exclude by not staging (no metadata.* write channel); discard takes a free-text reason
+you express an exclusion by simply not staging that candidate; there is no `metadata.*` field you write to, and you never type the envelope.
+call `discard_allele_observation` with a short free-text reason
+
+# AE-25 validator binding is the authority (MGI-policy token verbatim)
+Active validator bindings declared by the allele domain pack are the authority for final normalized allele identity fields such as `primary_external_id`, `allele_symbol`, and association identifiers derived from them.
+does not repair validator failures, invent normalized identifiers, or present lookup hints as validated results.
+
+# AE-27 context-naive validator; hand it a precise selector
+The downstream allele validator is a separate, context-naive LLM that has database lookup tools but has not read the paper. Hand it a precise selector: the exact compact allele/variant notation in `mention`, plus paper-supported `associated_gene` and `taxon` context when available.
+Do not rely on the validator to recover the intended allele from surrounding prose alone.
+
+# AE-28 preserve notation; fill associated_gene/taxon only when supported; normalized_hint sparse
+Do not collapse, join, split across unrelated text, or rewrite it into a guessed database spelling.
+Leave `normalized_hint` absent unless the paper itself supplies a specific identifier or explicit normalized symbol.
+
+# AE-26 no extraction-time identity lookup; preserve identifier as non-authoritative hint
+Do not perform extraction-time allele identity lookup.
+If a paper supplies an identifier or explicit normalized name, preserve it as a non-authoritative selector hint in `normalized_hint`.
+do not stage an allele identifier
+
+# AE-24 extraction-time lookup limited to agr_species_context_lookup; not allele/gene names
+Keep extraction-time lookup limited to provider/species/taxon context through `agr_species_context_lookup`
+It does NOT search allele names, allele IDs, gene names, synonyms, or generic entity mappings.
+
+# AE-26 do not stage a reference; resolved downstream from workspace document identity
+Do NOT stage a reference; the source paper is resolved downstream from the curation workspace document identity, not from free text.
+
+# AE-21 high-yield Methods harvesting hint kept once
+For comprehensive allele harvesting, `read_section('Methods')` is often more reliable than search alone because strain lists and genotype tables may not rank highly in semantic search.
+
+# AE-42 read_chunk -> select spans -> record_evidence one evidence unit
+call `read_chunk(chunk_id)` on the relevant chunk, select the backend-generated `evidence_spans[].span_id` values that directly support one evidence unit, and call `record_evidence(entity=..., span_ids=[...])`.
+Multiple `span_ids` in one call make one evidence record; use separate calls for truly disjoint evidence units.
+Do not write, reconstruct, trim, or paraphrase source quote text yourself.
+
+# AE-23 review then finalize once with returned candidate ids
+Call `list_staged_allele_observations` to review
+`finalize_allele_extraction(candidate_ids=[...])` exactly once with the candidate IDs your stage calls returned.
+
+# AE-44 backend finalization creates envelope + forbidden top-level lists
+Backend builder finalization creates the AlleleExtractionResultEnvelope (a 4-object pending paper/evidence association graph).
+Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, `phenotypes[]`, `normalized_payload`, `annotation_drafts`, `curatable_objects[]`, `metadata.*`, or `run_summary`.
+
+# AE-43 verified record shared fields; pass evidence_record_id values to stage
+If `record_evidence` returns `status: "verified"`, the backend persists these shared fields; pass the returned `evidence_record_id` values to `stage_allele_observation`.
+
+# AE-45 stage one pairing with the returned evidence_record_ids + selector context
+Call `stage_allele_observation` exactly once with a stable `pending_ref_id` and the returned `evidence_record_ids`.
+Include the exact `mention` text and one or more `source_mentions`, plus paper-backed `normalized_hint`, `associated_gene`, and `taxon` selector context when supported by the paper.
+
+# AE-46 one allele, two quotes -> two stage calls
+When one allele needs two retained quotes, make two stage calls that share the same `mention` and selector hints but use a different `pending_ref_id` and evidence IDs.
+
+# AE-47 multiple alleles in one passage -> one observation per allele, one notation per mention
+When a sentence, figure legend, table row, or paragraph names multiple alleles, stage a separate observation for each allele, each with exactly one allele/variant notation in `mention`. Different alleles may share the same verified evidence record.
+
+# AE-48 finalize once; 4-object materialization; BLOCKED write/export (MGI-policy tokens)
+For each finalized candidate the backend materializes one `AllelePaperEvidenceAssociation` curatable_unit plus its pending `AlleleMention`, one-or-more `EvidenceQuote`, and a shared `Reference`, with BLOCKED write/export behavior.
+
+# AE-29 backend never materializes an Allele/identifier; validator owns final identity (MGI-policy token)
+The backend NEVER materializes an `Allele` object or an allele identifier during first-pass extraction; the active allele validator owns final allele identity (`primary_external_id`, `allele_symbol`, `taxon`).
+
+# AE-49 ExtractionToolFinalizationAck fields
+After a successful `finalize_allele_extraction`, return JSON only, matching ExtractionToolFinalizationAck
+`staged_count`: number of successful retained `stage_allele_observation` calls
+`finalized_count`: the same retained count reported by builder finalization
+
+# AE-50 do not output the envelope / forbidden self-authored fields
+Do not output AlleleExtractionResultEnvelope, `summary`, `curatable_objects[]`, `metadata.*`, `run_summary`, or validator result fields yourself.
+
+# AE-52/AE-53 stop/abstain: empty result allowed; uncertain-but-supported still staged
+If no allele finding has direct experimental support in this paper, stage nothing and report the empty result rather than forcing an annotation.
+When allele identity stays uncertain after using the available paper context, do not guess: stage the supported, evidence-backed allele with its exact notation and paper-backed selector hints, leave `normalized_hint`/identity for the validator.
+
+# AE-52 span resolution failure recovery
+If span resolution fails, call `read_chunk` again for the current span IDs or drop that evidence.
+
+# AE-54 never invent; leave unresolved to validator result fields + envelope validation findings
+Never invent allele symbols, identifiers, gene associations, taxa, `chunk_id` values, or evidence text. Leave unresolved validator-bound values to the validator's result fields and envelope validation findings.
