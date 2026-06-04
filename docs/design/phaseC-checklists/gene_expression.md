@@ -235,7 +235,7 @@ satisfied by the base. Verified.
 
 | ID | Load-bearing rule | New home |
 |----|-------------------|----------|
-| GEX-68 | Span-failure recovery (read_chunk again or drop; no invented quotes/merged fragments). | `<stop_rules>` + `<evidence_record_contract>` |
+| GEX-68 | Span-failure recovery (read_chunk again or drop; no invented quotes/merged fragments). | `<evidence_record_contract>` (Phase C lean cut: the duplicate `<stop_rules>` copy was removed as cross-section restatement; the verbatim home is now `<evidence_record_contract>`, and the retention `.txt` line was re-baselined to that copy's wording, "for current span IDs") |
 | GEX-69 | Active validator bindings own final relation/data-provider/subject/reference/assay/anatomy/stage/cellular-component/UBERON-GO-slim verification + condition relation type + per-condition validation; reagent/specimen/allele validators under development; unresolved required values stay envelope validation findings; do not describe under-development fields as database-validated. | `<stop_rules>` (REWORDED from `<unresolved_validation>`, template rule 1: dropped "preserve candidate context in metadata.ambiguities[]/normalization_notes[]/notes[]" — the model has no write channel; "envelope validation findings" retained — cross-cutting token) |
 
 ---

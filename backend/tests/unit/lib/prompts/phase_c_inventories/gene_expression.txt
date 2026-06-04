@@ -220,7 +220,10 @@ Do not emit top-level legacy semantic lists: `items[]`, `annotations[]`, `genes[
 Never invent genes, IDs, reagent details, or evidence text.
 
 # GEX-68 span resolution failure recovery
-If span resolution fails, call `read_chunk` again for the current span IDs or drop that evidence.
+# Re-baselined (Phase C lean cut): the <stop_rules> duplicate of this line was cut
+# as cross-section restatement; the surviving verbatim home is <evidence_record_contract>
+# ("for current span IDs", no "the"). Verbatim substring of that surviving copy.
+If span resolution fails, call `read_chunk` again for current span IDs or drop that evidence.
 
 # GEX-69 active validator bindings own final fields; unresolved -> validation findings
 # Reworded from <unresolved_validation> (metadata-mechanism template rule: dropped the

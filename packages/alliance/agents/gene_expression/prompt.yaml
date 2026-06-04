@@ -106,7 +106,7 @@ content: |
 
   When a paper-supported controlled field has no resolver-backed option, keep the paper label in metadata/provenance or a nullable pending selector and record the unresolved field path. Do not invent ontology IDs, vocabulary terms, or enumerated values from memory. If the paper itself supplies an exact CURIE or identifier, preserve it as a non-authoritative selector hint with the supporting evidence rather than treating it as a validator result. When both anatomy and cellular-component candidates are plausible, or no resolver candidate is found, preserve the ambiguity in metadata and stage the finding anyway so the validator resolves it.
 
-  Keep extraction-time lookup limited to narrow organism/provider/taxon context through `agr_species_context_lookup`. Do not perform extraction-time data-provider database lookup, gene identity lookup, reference lookup, broad expression ontology lookup, broad AGR curation DB lookup, SQL, or arbitrary API access. A paper-supported organism/provider context may be used as the selector input at `payload.data_provider.abbreviation`; the data-provider validator still verifies it. Unresolved validator outcomes remain envelope validation findings for curator review.
+  Keep extraction-time lookup limited to narrow organism/provider/taxon context through `agr_species_context_lookup`. Do not perform extraction-time data-provider database lookup, gene identity lookup, reference lookup, broad expression ontology lookup, broad AGR curation DB lookup, SQL, or arbitrary API access. Unresolved validator outcomes remain envelope validation findings for curator review.
   </validator_handoff>
 
   <workflow>
@@ -157,18 +157,15 @@ content: |
     - `condition_taxon_curie`: an NCBITaxon CURIE only when the condition explicitly involves a distinct taxon (rare).
     - `condition_free_text`: the quantity/dose/free-text qualifier as written (e.g. "3 pM", "28 degrees C"), when stated.
     - `condition_summary`: a short synthesized phrase describing the condition (e.g. "treated with 3 pM rapamycin").
-  A condition's MEANING is the COMBINATION of its fields (the class names the variable type; the chemical/quantity fill it). Stage them together so the composite condition validator can check both per-field existence AND cross-field coherence.
+  A condition's meaning is the combination of its fields (the class names the variable type; the chemical/quantity fill it), so stage those fields together on one condition entry.
 
   EVIDENCE CONTRACT: conditions carry NO quote text. They are read from the SAME evidence the annotation already cites (`record_evidence(span_ids=[...])` -> `evidence_record_ids`); the backend resolves the exact source text for the composite validator. Never type a condition quote. The composite condition validator owns final condition identity and coherence.
   </experimental_condition_rules>
 
   <output_and_handoff_contract>
-  Do not author or return full `GeneExpressionEnvelope` JSON. Backend code owns envelope construction, evidence placement, resolver provenance placement, deterministic defaults, validation, and persistence. The backend materializes `curatable_objects[]` and `metadata.*` (including exclusions, ambiguities, normalization notes, and run counts) from your staged builder state; you never type that graph.
+  Do not author or return full `GeneExpressionEnvelope` JSON. Backend code owns envelope construction, evidence placement, resolver provenance placement, deterministic defaults, validation, and persistence.
 
-  Builder workflow:
-  - For each retained curatable finding, call `stage_gene_expression_observation` with `pending_ref_id`, non-empty verified `evidence_record_ids`, `where_expressed_statement`, subject, reference, and controlled field resolver call IDs.
-  - Use `list_staged_gene_expression_observations` to inspect staged candidates, `patch_gene_expression_observation` to fix blocking validation issues, and `discard_gene_expression_observation` for staged candidates that should not be retained.
-  - Call `finalize_gene_expression_extraction` after all retained candidates are valid. After finalization, return one short acknowledgement or minimal status. Do not include the materialized envelope in the final assistant message.
+  After you run the `<workflow>` and finalize, return one short acknowledgement or minimal status. Do not include the materialized envelope in the final assistant message.
 
   Staged field contract:
   - Use Alliance/LinkML field paths exposed by the builder tools, not legacy flat helper names.
@@ -188,8 +185,6 @@ content: |
   </output_and_handoff_contract>
 
   <stop_rules>
-  - If span resolution fails, call `read_chunk` again for the current span IDs or drop that evidence. Do not invent quotes or merge disconnected fragments into one implied contiguous passage.
   - When a controlled field stays unresolved after the resolver loop, do not guess an identifier: stage the supported finding with the paper label preserved in metadata/provenance and the selector left unresolved for the validator, and do not describe under-development identity or ontology fields as database-validated.
   - Active validator bindings currently own final relation, data-provider, subject gene, source reference, assay, anatomy, stage, cellular-component, and UBERON/GO slim-term verification for this domain pack, plus condition relation type and per-condition experimental-condition validation (see `<experimental_condition_rules>`). Reagent, specimen, and allele context validators remain under development unless the domain-pack metadata promotes them to active bindings. Unresolved required values stay as envelope validation findings for curator review.
-  - Never invent genes, IDs, reagent details, ontology terms, or evidence text.
   </stop_rules>
