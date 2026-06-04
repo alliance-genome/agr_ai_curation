@@ -22,11 +22,11 @@ highlight) validated against Rossum, Azure Document Intelligence, and Sensible H
 Two panes, not four:
 
 - **Left — full-height PDF.** The source paper at full height, and it doubles as the **evidence
-  surface**. Selecting a field highlights its supporting passage in the PDF, and there is **no separate
-  evidence column**. *Reality check (gpt-5.5 review): the native pdf.js quote-highlight mechanism
-  exists, but today it fires only when the curator clicks a field's evidence chip/control
-  (`CandidateFieldEditor.tsx:447`, `pdfEvents.ts`, `PdfViewer.tsx`), **not** on plain field selection.
-  Wiring "select field → highlight" is **new work in this build**, not a free reuse.*
+  surface**, so there is **no separate evidence column**. We **keep the existing click-to-highlight
+  mechanism** as-is: the curator, reviewing an object, scrolls to a field and **clicks its evidence
+  chip**, and the supporting passage lights up in the PDF via native pdf.js quote highlighting
+  (`CandidateFieldEditor.tsx`, `pdfEvents.ts`, `PdfViewer.tsx`). We are **not** building
+  auto-highlight-on-field-focus — click-to-highlight is enough and already works.
 - **Right — the work pane**, which contains, top to bottom:
   1. **Object selector strip** (sits over the form *only*, never over the PDF): `‹ ›` prev/next, the
      current object identity ("pef-1 · gene-expression annotation · 3 of 14"), a **"▾ all objects"
@@ -41,10 +41,9 @@ Two panes, not four:
 Field rows carry **state coloring**: resolved/validated (green ✓), needs-review/unresolved (amber !),
 AI-suggested-unconfirmed (grey). **Needs-review fields float to the top of their group and are counted
 in the object header**, so the curator's eye goes to what matters instead of treating all ~32 fields
-equally. On the selected field, a **small inline evidence quote chip** appears (with a "highlighted in
-PDF →" affordance) so the curator can confirm at a glance without always looking left. *(Review note:
-today field evidence shows a location label with the quote in a tooltip, and object-level evidence uses
-quote cards in a separate panel — the inline quote chip is **new** here.)*
+equally. Each field keeps its **evidence chip** (the existing per-field evidence control) — clicking it
+highlights the passage in the PDF. Showing the quote text inline on the chip rather than only in a
+tooltip is a minor presentation tweak on top of what's already there, not new plumbing.
 
 **Theme:** mockups rendered light for dense-reading legibility; final theme (light vs the current dark
 "workbench") is a deferred polish decision, not a structural one.
@@ -166,7 +165,8 @@ final theme decision; inventory-table rework (ALL-557).
 - [ ] One review surface for all session types (legacy 7-column table retired); rendering is driven
       by domain-pack projection metadata.
 - [ ] Fields grouped/collapsible; needs-review fields floated and counted; field-state coloring.
-- [ ] Selecting a field highlights its evidence in the PDF and shows the inline quote chip.
+- [ ] Clicking a field's evidence chip highlights its passage in the PDF (existing click-to-highlight
+      mechanism; no auto-highlight-on-focus required).
 - [ ] Density cleanup applied per the field audit (mirrors/under-development hidden; nested data not
       raw JSON).
 - [ ] Object Accept/Reject + bulk accept-all-validated work.
