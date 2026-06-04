@@ -1,0 +1,30 @@
+# Phase C workflow invariants: gene_expression (Wave 2, FULL coverage).
+#
+# Invariants are STRONGER than plain phrase retention: each line is an ordered
+# step of the extractor's load-bearing builder workflow. The invariant framework
+# (1) reuses the retention assertion -- every line must appear in the assembled
+# render -- and (2) asserts the lines appear in this same order by first
+# occurrence, so the rewrite cannot scramble the
+# search -> record_evidence -> resolver -> stage -> review/finalize sequence even
+# if it keeps the individual phrases.
+#
+# AUTHORING RULE (enforced by the harness): each phrase must occur EXACTLY ONCE
+# in the assembled render. These are verbatim from the rewritten <workflow>
+# ordered block (steps 1-5), where each occurs exactly once and in workflow
+# order. (GEX-39/GEX-40/GEX-41/GEX-42/GEX-43 in
+# docs/design/phaseC-checklists/gene_expression.md.)
+
+# Step 1 -- retrieve candidate expression statements and context first.
+Search/read the document for candidate expression statements and context.
+
+# Step 2 -- read the chunk, pick backend span ids, record one evidence unit.
+select the backend-generated `evidence_spans[].span_id` values that directly support one evidence unit
+
+# Step 3 -- resolve every controlled selector before staging it.
+run the resolver loop: `search_domain_field_terms` for candidates
+
+# Step 4 -- stage each retained finding once with its verified evidence.
+Call `stage_gene_expression_observation` once per retained curatable finding
+
+# Step 5 -- review staged candidates before finalizing.
+Call `list_staged_gene_expression_observations` to review

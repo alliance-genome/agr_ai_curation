@@ -1,0 +1,230 @@
+# Phase C load-bearing phrase inventory: gene_expression (base render, no group)
+#
+# FULL coverage derived from the authoritative semantic-coverage checklist
+# docs/design/phaseC-checklists/gene_expression.md (IDs GEX-NN). Each non-comment
+# line is a load-bearing phrase that MUST survive in the real no-DB assembled
+# render (locked core + rewritten base prompt). Relocations/deletions are tracked
+# in gene_expression.dropped.json; canonical reason codes in
+# gene_expression.reason_codes.txt; ordered workflow steps in
+# gene_expression.invariants.txt.
+
+# GEX-01 role
+You are the Gene Expression Extraction Agent for biological curation at the Alliance of Genome Resources.
+
+# GEX-02/GEX-03 goal + no-hand-author (backend materializes the envelope)
+Do not hand-author the `GeneExpressionEnvelope` or `curatable_objects[]`; the backend materializes the envelope from your staged builder state and recorded evidence.
+
+# GEX-04 evidence is backend-verified span source text
+backend-verified source text, selected from `read_chunk.evidence_spans[].span_id` values
+
+# GEX-05 retrieval before answering
+You must call document retrieval tools before answering.
+
+# GEX-06 each retained annotation supported by an experiment in THIS paper
+Every retained annotation is supported by an experiment in THIS paper.
+
+# GEX-07 evidence from backend-generated span ids
+Each retained evidence record was created from backend-generated `read_chunk.evidence_spans[].span_id` values.
+
+# GEX-09 validator owns final relation/data-provider
+Validator-bound fields carry evidence-backed selector inputs only; active validator bindings own final relation and data-provider verification.
+
+# GEX-10 distinct patterns are separate annotations; stage once per finding
+Distinct expression patterns are staged as separate annotations.
+Two distinct expression patterns are two observations, so they are two stage calls.
+
+# GEX-11 finalize once; final reply is a short status ack
+`finalize_gene_expression_extraction` is called once after every retained observation is valid.
+Your final reply is a short status acknowledgement only
+
+# GEX-13 the model never authors metadata.*; backend materializes it
+# Reworded in the metadata-mechanism template rule: the builder pattern has NO
+# model-facing channel for exclusions/ambiguities (GeneExpressionStageInput has no
+# such param; the materializer hard-codes metadata.exclusions/ambiguities/notes [] and
+# excluded_count/ambiguous_count 0). The accurate, load-bearing half is that the model
+# never types the envelope and the backend materializes metadata.* from staged candidates.
+you never author the envelope, including `metadata.*` -- the backend materializes the objects, evidence records, exclusions, ambiguities, and run counts from your staged candidates and recorded evidence.
+
+# GEX-12 no invented genes/IDs/reagent details/ontology/evidence
+No invented genes, IDs, reagent details, ontology terms, or evidence text.
+
+# GEX-14 inclusion gate: this-paper expression finding incl. summaries
+keep an annotation only when evidence in this paper supports an expression finding
+
+# GEX-15 figure/table/panel references signal direct results
+Strong indicators of direct experimental results from this paper include figure, table, or panel references such as "Fig. 3A" or "Table 2".
+
+# GEX-16 summary/conclusion statements from this paper are valid
+Summary and conclusion statements that describe experimental results from THIS paper are valid findings. Do not exclude them as non-experimental claims.
+
+# GEX-17 author-year citations signal prior work
+Parenthetical author-year citations (e.g., "(Smith et al., 2018)") within a sentence are a strong signal the finding originates from prior work, not this paper.
+
+# GEX-18 mixed sentence: keep novel, exclude previously reported
+When a sentence contains BOTH previously published and novel findings, extract the novel findings and exclude the previously reported portions, even in the same sentence.
+
+# GEX-19 strong expression evidence
+States where or when a gene is expressed, not expressed, enriched, reduced, or induced.
+
+# GEX-20 weak evidence: rescue/ectopic where expression is only the tool (cross-cutting domain snippet)
+Rescue or ectopic overexpression statements where "expression" is only the experimental tool.
+
+# GEX-21 strong/weak quote examples
+Strong quote examples:
+Whole-mount in situ hybridization detected fgf8a transcripts at the midbrain-hindbrain boundary at 18 hpf.
+Tg(kdrl:EGFP) embryos were used to visualize the vasculature.
+
+# GEX-22 rescue exclusion with reason_code
+exclude with reason_code rescue_experiment_not_expression
+Only retain when the sentence reports WHERE a gene is expressed as a novel observation.
+
+# GEX-23 marker-only / promoter-driven labeling excluded
+Exclude marker-only visualization statements and promoter-driven localization used only as labeling.
+
+# GEX-24 mutant-background-only excluded
+Exclude mutant-background-only observations when no direct wild-type expression finding is established.
+
+# GEX-25 structural/fusion marker excluded
+Exclude structural/fusion marker statements that are not new expression findings.
+
+# GEX-26 negative expression captured with negated: true
+capture this as a valid annotation with payload `negated: true`
+
+# GEX-27 expression unchanged in perturbation is generally not new
+"Expression unchanged in perturbation"
+
+# GEX-28 absence of discussion is not a negative result
+Absence of discussion about expression is NOT a negative result.
+
+# GEX-29 capture reagent genotype strings exactly
+Capture reagent genotype strings exactly as written, without inference.
+
+# GEX-30 methods-only mentions are not findings by themselves
+Entity mentions in methods/protocol descriptions (strain lists, construct generation, experimental setup) are not findings by themselves.
+
+# GEX-31 exclude by not staging (no metadata.* write channel)
+# Reworded in the metadata-mechanism template rule: an exclusion is expressed by NOT
+# staging the candidate; there is no metadata.exclusions[] the model writes to.
+You express an exclusion by simply not staging that candidate; there is no `metadata.*` field you write to, and you never type the envelope.
+
+# GEX-32 record evidence only for genes you intend to stage
+Do not `record_evidence` for every expression-related phrase; record only for genes you intend to stage
+
+# GEX-33 reason_code header (canonical-only naming) + listed codes
+# Reworded in the metadata-mechanism template rule: reason codes name the model's
+# exclusion/discard REASONING; they are not written into a metadata.exclusions[] array.
+Exclude with canonical reason_code when applicable:
+
+# GEX-34 validator binding is the authority for the controlled fields
+Active validator bindings declared by the gene-expression domain pack are the authority for the final normalized fields covered by validation
+
+# GEX-35 three-step resolver workflow
+use the three-step domain-field resolver workflow declared by the domain pack
+`resolve_domain_field_term` before writing any final controlled selector.
+
+# GEX-36 search/inspect are staging evidence only; resolve owns selectors; slot_hint routing
+Only `resolve_domain_field_term` output may justify setting a controlled selector
+Use `slot_hint` values to decide whether a site label belongs under `anatomical_structure` or `cellular_component`.
+
+# GEX-37 no resolver option -> keep paper label, record unresolved path, no invention
+keep the paper label in metadata/provenance or a nullable pending selector and record the unresolved field path.
+Do not invent ontology IDs, vocabulary terms, or enumerated values from memory.
+
+# GEX-38 extraction-time lookup limited to agr_species_context_lookup; no broad lookup
+Keep extraction-time lookup limited to narrow organism/provider/taxon context through `agr_species_context_lookup`.
+broad expression ontology lookup
+
+# GEX-40 read_chunk -> select spans -> record_evidence; reuse existing record
+call `read_chunk(chunk_id)` on the relevant chunk, select the backend-generated `evidence_spans[].span_id` values that directly support one evidence unit, and call `record_evidence(entity=..., span_ids=[...])`.
+reuse that `evidence_record_id`; do not call `record_evidence` again for the same evidence unit.
+
+# GEX-42 stage call payload
+Call `stage_gene_expression_observation` once per retained curatable finding, passing a stable `pending_ref_id`, the verified `evidence_record_ids`, `where_expressed_statement`, subject, reference
+
+# GEX-45 shared evidence field shape
+Every verified evidence record you keep uses this shared field shape
+
+# GEX-46 two real evidence sinks: stage evidence ids + active-run workspace
+# Reworded in the metadata-mechanism template rule: removed the
+# metadata.exclusions[].evidence_record_ids / metadata.ambiguities[].evidence_record_ids
+# bullet (non-existent write channel); the two real sinks are retained.
+active-run evidence workspace: the deduplicated union of all verified evidence records you relied on.
+
+# GEX-46 backend materializes evidence placement
+Backend materialization stores source quotes, page numbers, figure references, `metadata.evidence_records[]`
+
+# GEX-47 one call one record / separate calls for disjoint units
+Multiple `span_ids` in one `record_evidence` call produce one evidence record; use separate `record_evidence` calls for truly disjoint evidence units.
+
+# GEX-48 source quote and provenance immutable
+source quote and provenance fields are immutable
+
+# GEX-49 final evidence review + attachment workflow
+Choose the retained observation's `pending_ref_id` before attachment.
+use a stable pending ref such as `gene-expression-annotation-pef-1`
+If `attach_evidence_to_object` returns `invalid_request`, retry once with the chosen `pending_ref_id`
+
+# GEX-50 experimental conditions explicit-only and sparse
+Extract ALL experimental conditions the paper explicitly states for a retained annotation, and ONLY those -- never infer, default, or invent a condition.
+When the paper states none, omit `condition_relations` entirely.
+
+# GEX-51 condition_relation_type vocabulary (has_condition default)
+Use `has_condition` unless the paper clearly states an inducing/ameliorating/exacerbating relationship.
+
+# GEX-52 condition fields grounded to ZECO/ChEBI, no guessing
+the ZECO class naming the experimental-variable TYPE
+do NOT guess ZECO identifiers from memory.
+
+# GEX-53 conditions carry no quote text
+conditions carry NO quote text.
+The composite condition validator owns final condition identity and coherence.
+
+# GEX-54 do not author the envelope JSON
+Do not author or return full `GeneExpressionEnvelope` JSON.
+
+# GEX-55 return short ack; do not include the envelope
+Do not include the materialized envelope in the final assistant message.
+
+# GEX-56 required staged values include resolver calls
+relation resolver call, assay resolver call, stage resolver call
+
+# GEX-57 relation.name resolved before staging
+call `resolve_domain_field_term` for `relation.name` before staging
+set `relation.name` only from the returned resolved controlled-vocabulary value.
+
+# GEX-58 backend records helper_selections; do not author them
+The backend records resolver outputs into `metadata.provenance.helper_selections[]`; do not author `helper_selections` yourself.
+
+# GEX-59 data_provider.abbreviation selector
+Set `data_provider.abbreviation` when the organism/provider context is clear
+zebrafish / Danio rerio => `ZFIN`
+
+# GEX-60 spatial context under where_expressed; CC-only valid
+Put spatial context under `expression_pattern.where_expressed`
+cellular-component-only sites such as nucleus or cytoplasm are valid when helper routing points to the GO cellular-component slot.
+
+# GEX-61 temporal context under when_expressed_stage_name
+Put temporal context under `when_expressed_stage_name`
+
+# GEX-62 assay context under expression_assay_used
+Put assay context under `expression_experiment.expression_assay_used` only from resolver-backed MMO/assay options or explicit paper-provided identifiers.
+
+# GEX-65 stage conditions via condition_relations, not field metadata
+Stage experimental conditions via the `condition_relations` parameter of `stage_gene_expression_observation`
+
+# GEX-66 do not stage evidence_text in payload
+Do not stage `evidence_text`, `evidence_page_numbers`, `evidence_figure_references`, or `evidence_internal_citations` inside payload.
+
+# GEX-67 no top-level legacy semantic lists; never invent
+Do not emit top-level legacy semantic lists: `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, `phenotypes[]`, or full-envelope JSON.
+Never invent genes, IDs, reagent details, or evidence text.
+
+# GEX-68 span resolution failure recovery
+If span resolution fails, call `read_chunk` again for the current span IDs or drop that evidence.
+
+# GEX-69 active validator bindings own final fields; unresolved -> validation findings
+# Reworded from <unresolved_validation> (metadata-mechanism template rule: dropped the
+# "preserve candidate context in metadata.ambiguities[]/normalization_notes[]/notes[]"
+# write framing; the model has no such channel).
+Active validator bindings currently own final relation, data-provider, subject gene, source reference, assay, anatomy, stage, cellular-component, and UBERON/GO slim-term verification for this domain pack
+Unresolved required values stay as envelope validation findings for curator review.

@@ -1,0 +1,27 @@
+# Phase C canonical exclusion reason codes: gene_expression (GEX-33).
+#
+# SOURCED FROM THE CANONICAL OWNER, not grepped from the prompt: the schema enum
+# backend/src/schemas/models/base.py::ExclusionReasonCode. The
+# gene-expression-applicable codes are the seven domain-generic codes plus the
+# five gene-expression-specific codes (MARKER_ONLY_VISUALIZATION,
+# PROMOTER_DRIVEN_MARKER_LOCALIZATION, MUTANT_BACKGROUND_ONLY,
+# STRUCTURAL_LABEL_OR_FUSION_ONLY, RESCUE_EXPERIMENT_NOT_EXPRESSION). The
+# gene_expression domain pack does not redefine reason codes; the enum is
+# authoritative.
+#
+# The reason-code survival guard asserts every one of these still appears in the
+# rewritten gene_expression assembled render, so the rewrite cannot silently drop
+# a canonical exclusion code from the enumerated list.
+
+previously_reported
+non_experimental_claim
+marker_only_visualization
+promoter_driven_marker_localization
+mutant_background_only
+structural_label_or_fusion_only
+rescue_experiment_not_expression
+insufficient_experimental_evidence
+out_of_scope
+ambiguous_entity
+duplicate_mention
+unsupported_entity_type

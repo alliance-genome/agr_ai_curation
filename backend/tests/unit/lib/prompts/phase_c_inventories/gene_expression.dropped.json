@@ -1,0 +1,30 @@
+[
+  {
+    "phrase": "Non-curatable candidates preserved in `metadata.exclusions[]` with canonical reason_code values.",
+    "category": "deleted",
+    "reason": "GEX-31/template rule 1. INACCURATE for the builder pattern: GeneExpressionStageInput exposes no exclusion/reason_code parameter and materialize_gene_expression_builder_state hard-codes metadata.exclusions: [] and run_summary.excluded_count: 0 (conversion.py L795-812). The model has NO channel to write metadata.exclusions[]. The curation INTENT is preserved by the accurate rule, kept in <success_criteria>/<evidence_and_curation_rules>: an exclusion is expressed by NOT staging the candidate (or discard_gene_expression_observation with a free-text reason), and a canonical reason_code names the model's exclusion reasoning. No home for the literal 'write to metadata.exclusions[]' framing because the channel does not exist; recorded here so the deletion is visible in review.",
+    "old_source": "packages/alliance/agents/gene_expression/prompt.yaml:<success_criteria>",
+    "new_home": ""
+  },
+  {
+    "phrase": "Uncertain but potentially useful findings preserved in `metadata.ambiguities[]` for curator review.",
+    "category": "deleted",
+    "reason": "GEX-13/GEX-31/template rule 1. INACCURATE: the materializer hard-codes metadata.ambiguities: [] and run_summary.ambiguous_count: 0; the stage tool has no ambiguity parameter. The model cannot write metadata.ambiguities[]. The curation INTENT (a finding that is experimentally supported but whose controlled identity stays uncertain is NOT silently dropped) is preserved accurately in <success_criteria>/<validator_handoff>/<stop_rules>: stage the supported finding with the paper label preserved and the unresolved selector left for the validator. No home for the literal metadata.ambiguities[] write framing.",
+    "old_source": "packages/alliance/agents/gene_expression/prompt.yaml:<success_criteria>",
+    "new_home": ""
+  },
+  {
+    "phrase": "`metadata.exclusions[].evidence_record_ids` or `metadata.ambiguities[].evidence_record_ids`: only when verified evidence materially clarifies a non-trivial decision",
+    "category": "deleted",
+    "reason": "GEX-46/template rule 1. INACCURATE: this <evidence_record_contract> bullet told the model to place evidence ids under metadata.exclusions[].evidence_record_ids / metadata.ambiguities[].evidence_record_ids, but those arrays are backend-hard-coded empty and the model never authors metadata.*. Removed. The accurate, retained guidance keeps the two real evidence sinks: stage_gene_expression_observation.evidence_record_ids and the active-run evidence workspace dedup union. The 'record only for genes you intend to stage / to clarify a non-trivial decision' intent is preserved in <evidence_and_curation_rules>.",
+    "old_source": "packages/alliance/agents/gene_expression/prompt.yaml:<evidence_record_contract>",
+    "new_home": ""
+  },
+  {
+    "phrase": "preserve candidate context in `metadata.ambiguities[]`, `metadata.normalization_notes[]`, or `metadata.notes[]`",
+    "category": "deleted",
+    "reason": "GEX-69/template rule 1. INACCURATE: the <unresolved_validation> block told the model to preserve unresolved context in metadata.ambiguities[]/normalization_notes[]/notes[]. All three are backend-materialized (exclusions/ambiguities/notes hard-coded to [], normalization_notes hard-coded to one backend string) and the model never types metadata.*. Removed when the block was folded into <stop_rules>. The accurate, retained intent: keep the extraction evidence-backed, preserve the paper label in the staged finding's selector/provenance for the validator, do not describe under-development fields as database-validated, and let unresolved required values remain envelope validation findings.",
+    "old_source": "packages/alliance/agents/gene_expression/prompt.yaml:<unresolved_validation>",
+    "new_home": ""
+  }
+]
