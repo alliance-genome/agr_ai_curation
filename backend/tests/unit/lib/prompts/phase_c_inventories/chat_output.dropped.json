@@ -1,0 +1,9 @@
+[
+  {
+    "phrase": "## Example Output",
+    "category": "deleted",
+    "reason": "CHAT-EX worked-example deletion. The pre-rewrite prompt closed with a '## Example Output' block (a 'Gene Expression Summary' markdown table with daf-16/age-1/daf-2 rows plus a '### Notes' list). It is a redundant illustration of the section scaffold (CHAT-23: Summary/Details/Validation and blockers/Notes) and the markdown mechanics (CHAT-24: ## headings, tables, bullets, code-formatted IDs) that are already stated load-bearing in <output_contract>. The lean CHAT-RESPONSE skeleton states each response-shape rule ONCE without a worked specimen; the table/heading/notes shape survives in CHAT-23/CHAT-24, so the example carries no rule that is lost. No home (deleted, not relocated).",
+    "old_source": "packages/alliance/agents/chat_output/prompt.yaml:## Example Output (also config/agents/chat_output/prompt.yaml — dual-tree, byte-identical)",
+    "new_home": ""
+  }
+]
