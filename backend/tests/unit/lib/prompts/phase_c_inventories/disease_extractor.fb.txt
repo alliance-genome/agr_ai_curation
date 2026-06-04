@@ -1,0 +1,22 @@
+# Phase C load-bearing phrase inventory: disease_extractor + FB group rules.
+#
+# The `.fb` filename suffix renders disease_extractor WITH the FB (FlyBase) group
+# rules and asserts these phrases survive in the COMBINED render. The base prompt
+# rewrite must keep rendering cleanly under FB; this inventory guards that the
+# base rewrite does not break the combined render and that the load-bearing FB
+# disease-model guidance survives. (Checklist IDs DE-55/DE-56 in
+# docs/design/phaseC-checklists/disease_extractor.md.)
+#
+# NOTE: group_rules/fb.yaml is NOT edited by this task (the group_rules
+# metadata-framing cleanup is a separate tracked task). These phrases are the
+# stable FB disease-model curation lines, deliberately NOT the metadata-framing
+# lines that the separate cleanup task will revise.
+
+# DE-55 FB disease-model context: capture the human disease, note model_context.
+When a paper describes a Drosophila model of a human disease, capture the human disease
+
+# DE-55 do not exclude disease mentions just because they appear in a Drosophila study.
+Do NOT exclude disease mentions just because they appear in a Drosophila study.
+
+# DE-56 fly-phenotype vs human-disease split: fly phenotypes go to phenotype_extractor.
+The human disease reference ("Parkinson's-like") is disease model context

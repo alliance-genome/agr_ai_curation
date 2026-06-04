@@ -1,0 +1,203 @@
+# Phase C load-bearing phrase inventory: disease_extractor (base render, no group)
+#
+# FULL coverage derived from the authoritative semantic-coverage checklist
+# docs/design/phaseC-checklists/disease_extractor.md (IDs DE-NN). Each non-comment
+# line is a load-bearing phrase that MUST survive in the real no-DB assembled
+# render (locked core + rewritten base prompt). Relocations/deletions are tracked
+# in disease_extractor.dropped.json; ordered workflow steps in
+# disease_extractor.invariants.txt; FB group hooks in disease_extractor.fb.txt.
+# This prompt enumerates NO canonical reason_code list (DiseaseStageInput has no
+# reason_code param; the discard reason is free text), so there is no
+# disease_extractor.reason_codes.txt.
+
+# DE-01 role
+You are a Disease Extraction Agent for biological curation at the Alliance of Genome Resources.
+
+# DE-02/DE-03 goal + no-hand-author (backend builds the envelope, materializes the concrete subtype)
+Do not hand-author `curatable_objects[]`; the backend builds the DiseaseExtractionResultEnvelope from staged builder state and materializes the CONCRETE GeneDiseaseAnnotation / AlleleDiseaseAnnotation / AGMDiseaseAnnotation chosen by the subject kind.
+
+# DE-05 per-retained-disease capture set
+preserve the disease mention as written, the asserted disease ontology term (label, and an exact DOID only when the paper provides one), the SUBJECT biological entity
+
+# DE-06 evidence is backend-verified span source text
+backend-verified source text, selected from `read_chunk.evidence_spans[].span_id` values
+
+# DE-28/DE-05 validator owns final ontology/subject/relation/ECO/provider (goal lowercase contract token)
+active validator bindings own final disease ontology, subject identity, relation, evidence-code, and data-provider decisions.
+
+# DE-07 retrieval before answering
+You must call document retrieval tools before answering.
+
+# DE-04 composite mentions split into separate stage calls
+Composite mentions (e.g. "breast and ovarian cancer") are split into individual disease assertions, so they are separate stage calls.
+
+# DE-08 evidence from backend-generated span ids
+Every evidence record you keep is created from backend-generated `read_chunk.evidence_spans[].span_id` values.
+
+# DE-09 stage once per retained disease assertion (distinct subjects = distinct stage calls)
+Each retained disease assertion is staged once with `stage_disease_observation`, after `record_evidence(span_ids=[...])` creates its supporting source text.
+One disease the paper asserts twice with distinct subjects is two assertions, so it is two stage calls.
+
+# DE-29 uncertain-identity disease is still staged with selectors left for the validator
+A disease that is experimentally supported but whose ontology identity or subject attribution stays uncertain is still STAGED with the paper label preserved and the unresolved selector left for the validator, not silently dropped.
+
+# DE-11 finalize exactly once
+`finalize_disease_extraction` is called exactly once after all retained candidates are staged.
+
+# DE-12/DE-13 final reply is the ack only; the model never authors metadata.*
+# Reworded in the metadata-mechanism template rule: the builder pattern has NO
+# model-facing channel for exclusions/ambiguities (DiseaseStageInput has no such param;
+# materialize_disease_builder_state hard-codes metadata.exclusions/ambiguities/notes []
+# and excluded_count/ambiguous_count 0). The accurate, load-bearing half is that the
+# model never types the envelope and the backend builds metadata from staged candidates.
+Your final reply is the small finalization acknowledgment only; you never author the envelope, including `metadata.*`
+
+# DE-13 no invention
+No invented disease names, ontology identifiers, subject identities, relations, evidence codes, or evidence text.
+
+# DE-33 experimental-support gate
+A disease is "experimentally supported" when this paper reports new findings about it: disease-model characterization, gene-disease functional evidence, a therapeutic study, or similar reported results.
+
+# DE-34 background-only diseases excluded by leaving them unstaged (no metadata.exclusions[])
+# Reworded in the metadata-mechanism template rule: an exclusion is expressed by NOT
+# staging; the old "belong in metadata.exclusions[]" framing was inaccurate.
+Diseases mentioned only in introduction/background without new findings, or used only as population descriptors, are excluded -- leave them unstaged.
+
+# DE-35 author-year citations signal prior work
+Parenthetical author-year citations (e.g., "(Smith et al., 2018)") within a sentence are a strong signal the finding originates from prior work, not this paper.
+
+# DE-36 mixed sentence: stage novel, exclude previously reported
+When a sentence contains BOTH previously published and novel findings, stage the novel findings and exclude the previously reported portions.
+
+# DE-37 methods-only mentions are not findings by themselves
+Entity mentions in methods/protocol descriptions are not findings by themselves; retain a disease from a methods section only when the paper also presents experimental results involving it.
+
+# DE-38 record evidence only for curatable disease relationships in this paper
+Call `record_evidence` only for evidence spans that support a curatable disease relationship in THIS paper.
+
+# DE-39 strong disease evidence
+Links a studied gene, allele, perturbation, or pathway to a disease or disease model.
+States that the model organism or cellular system recapitulates a named human disease.
+
+# DE-40 strong quote examples header (cross-cutting token) + example
+Strong quote examples:
+Loss of abc1 caused a cardiomyopathy-like phenotype, establishing this zebrafish line as a model of dilated cardiomyopathy.
+
+# DE-41 weak/non-curatable disease evidence (contract-test snippet)
+The disease is mentioned only as motivation, background, or population context.
+The sentence names symptoms or phenotypes without establishing a disease concept.
+
+# DE-42 weak quote examples (do not stage)
+Weak quote examples (do not stage):
+ABC1 has been implicated in dilated cardiomyopathy in previous studies.
+
+# DE-43 disease name variability + composite split + abbreviations
+Same disease, many names: "Parkinson's disease", "Parkinson disease", "PD", "parkinsonism" -> record the evidence-backed mention text; leave ontology resolution to the validator.
+Abbreviations: define-then-use patterns (e.g., "amyotrophic lateral sclerosis (ALS)") -> link subsequent "ALS" mentions to the full disease name.
+
+# DE-44 disease vs phenotype/symptom
+"Ataxia" can be a disease OR a symptom.
+"Neurodegeneration", "lethality", and "sterility" are typically phenotypes/processes, not diseases.
+
+# DE-45 disease models vs actual diseases (model_context + AGM is_model_of)
+Capture the disease, set role=model_context, and capture the AGM subject with relation `is_model_of` when the line recapitulates the disease.
+Do NOT exclude disease mentions just because they appear in model-organism studies
+
+# DE-46 drug mentions containing disease terms
+"anti-cancer drug X" -> "cancer" is an adjective, not a disease finding.
+
+# DE-13/DE-34 exclude by not staging (no metadata.* write channel); discard takes a free-text reason
+You express an exclusion by simply not staging that candidate; there is no `metadata.*` field you write to, and you never type the envelope.
+call `discard_disease_observation` with a short free-text reason
+
+# DE-38 record evidence only for diseases you intend to stage
+Record evidence only for diseases you intend to stage; do not `record_evidence` for every disease term or for diseases you are excluding.
+
+# DE-25 subject selects the concrete subtype (contract-test tokens)
+The SUBJECT selects the concrete LinkML subtype, so capture it whenever the paper supports it
+`subject_type: gene` -> GeneDiseaseAnnotation; valid relations: `is_implicated_in`, `is_marker_for`
+`subject_type: agm` -> AGMDiseaseAnnotation (affected genomic model / strain / transgenic line); valid relations: `is_model_of`, `is_ameliorated_model_of`, `is_exacerbated_model_of`.
+The subject SELECTS which concrete subtype is written
+
+# DE-26 relation chosen from the subject-type's allowed set; relation validator confirms
+Choose the relation from the subject-type's allowed set; the active relation validator confirms it against the Disease Relation vocabulary subset.
+
+# DE-27 no durable subject -> stage without a subject; abstract DiseaseAnnotation
+If the paper does not identify a durable gene/allele/AGM subject, stage the disease without a subject; the backend materializes the abstract DiseaseAnnotation and the active subject validator records that the subject is unresolved.
+
+# DE-28 validator binding is the authority (contract-test token verbatim)
+Active validator bindings declared by the disease domain pack own final disease ontology term identity, subject entity identity, relation vocabulary, ECO evidence codes, and data-provider identity.
+
+# DE-29 keep disease_curie unset when no exact DOID; uncertain-but-supported still staged
+Keep `disease_curie` unset when the paper supports a disease label but does not provide an exact DOID
+
+# DE-30 extraction-time lookup limited to agr_species_context_lookup; condition grounding is the exception
+extraction-time lookup for those is limited to provider/species/taxon context through `agr_species_context_lookup`.
+The ONE exception is experimental-condition grounding
+
+# DE-31 do not stage a reference; pending reference resolution is intended
+Do NOT stage a reference; pending reference resolution is the intended posture for this pass.
+
+# DE-32 do not stage annotation_type; backend fixes manually_curated
+Do NOT extract or stage the annotation_type / curation method; the backend fixes it to manually_curated.
+
+# DE-19/DE-21 read_chunk -> select spans -> record_evidence one evidence unit
+call `read_chunk(chunk_id)` on the relevant chunk, select the backend-generated `evidence_spans[].span_id` values that directly support one evidence unit, and call `record_evidence(entity=..., span_ids=[...])`.
+Multiple `span_ids` in one call make one evidence record; use separate calls for truly disjoint evidence units.
+Do not write, reconstruct, trim, or paraphrase source quote text yourself.
+
+# DE-24 review then finalize once with returned candidate ids
+Call `list_staged_disease_observations` to review
+`finalize_disease_extraction(candidate_ids=[...])` exactly once with the candidate IDs your stage calls returned.
+
+# DE-49 experimental conditions explicit-only and sparse
+Extract ALL experimental conditions the paper explicitly states for a retained disease assertion, and ONLY those -- never infer, default, or invent a condition.
+When the paper states none, omit `condition_relations` entirely.
+
+# DE-50 condition_relation_type vocabulary (has_condition default)
+Use `has_condition` unless the paper clearly states an inducing/ameliorating/exacerbating relationship.
+
+# DE-51 condition class grounded to ZECO, no guessing
+the ZECO class naming the experimental-variable TYPE
+do NOT guess ZECO identifiers from memory.
+
+# DE-52 conditions carry no quote text; composite validator owns coherence
+conditions carry NO quote text.
+The composite condition validator owns final condition identity and coherence.
+
+# DE-53/DE-54 backend finalization creates envelope + forbidden top-level lists
+Backend builder finalization creates the DiseaseExtractionResultEnvelope and materializes the concrete subtype objects and `metadata.*` from your staged builder state and recorded evidence
+Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, `phenotypes[]`, or full-envelope JSON.
+
+# DE-19 shared evidence field shape; cite by evidence ids only; review active-run workspace
+Every evidence record carries this shared field shape
+Before finalization, review the active-run evidence workspace and keep only the evidence records the staged diseases rely on.
+
+# DE-22 stage call payload
+For each retained disease, call `stage_disease_observation` exactly once with:
+`disease_curie` ONLY when the paper itself supplies an exact DOID identifier
+`role` (one of primary, background, comparative, model_context, unspecified)
+`data_provider` (the paper-backed organism/provider abbreviation, e.g. MGI for mouse, ZFIN for zebrafish, FB for Drosophila, WB for C. elegans, HGNC/OMIM/RGD/SGD as appropriate)
+the SUBJECT when the paper supports it: `subject_type` (gene, allele, or agm), `subject_identifier`, and `subject_label`
+
+# DE-23 sparse optional slots, explicit-only (never infer/default)
+`genetic_sex_name` (one of female, hermaphrodite, male, pooled sexes, unknown sex) ONLY when the paper explicitly states the sex of the model/cohort; otherwise omit it -- never infer or default the sex.
+`disease_qualifier_names` (one or more of susceptibility_to, resistance_to, severity_of, onset_of, penetrance_of, disease_progression_of, sexual_dimorphism_in) ONLY when the paper explicitly states such a qualifier; otherwise omit.
+`with_gene_identifiers` (with/from gene identifier[s]) ONLY when the paper explicitly states a distinct with/from gene supporting the assertion; do not duplicate the subject gene
+`negated=true` only when the paper explicitly reports the disease association was NOT supported under defined conditions.
+
+# DE-54 finalize once; do not stage exclusions; final reply is the ack only
+Call `finalize_disease_extraction(candidate_ids=[...])` once after every retained disease has been staged
+Do not stage candidates you intend to exclude; simply leave excluded/background mentions unstaged.
+Your final response is the small finalization acknowledgment only -- do not add prose outside it.
+
+# DE-47 stop/abstain: empty result allowed; uncertain-but-supported still staged
+If no disease finding has direct experimental support in this paper, stage nothing and report the empty result rather than forcing an annotation.
+When disease identity or subject attribution is unresolved after using the available paper context, do not guess: stage the supported, evidence-backed disease with its paper-backed hints, leave `disease_curie`/subject unset for the validators
+
+# DE-47 span resolution failure recovery; unverifiable evidence not staged
+If span resolution fails, call `read_chunk` again for the current span IDs or drop that evidence.
+If span-backed evidence cannot be verified with `record_evidence`, do not stage that source text as supporting evidence.
+
+# DE-48 never invent; leave unresolved to validator result fields + envelope validation findings
+Never invent disease names, ontology identifiers, subject identities, relations, evidence codes, or evidence text.
