@@ -1,0 +1,19 @@
+# Phase C group-hook inventory: supervisor rendered with the MGI group.
+#
+# Asserts the rewritten base prompt renders cleanly UNDER the MGI group overlay and the
+# organism-specific MGI allele-dispatch hooks still arrive in the assembled render
+# (core + rewritten base + MGI group rules). The base rewrite does NOT touch
+# config/agents/supervisor/group_rules/mgi.yaml; these phrases come from that unchanged
+# group-rule file (SUP-67).
+
+# MGI allele-dispatch goal (route mouse allele lookups with enough source attribution).
+## MGI-SPECIFIC RULES (Mus musculus)
+
+# MGI attribution-disambiguation hook: the Allele Specialist uses fullname_attribution.
+fullname_attribution
+
+# MGI trigger phrases that mean "include source attribution".
+"gifted from", "obtained from", "provided by", "kindly provided"
+
+# MGI strip-zygosity hook (do not put fl/fl, +/- into the lookup query).
+Do NOT include zygosity notation in the query (fl/fl, +/-, etc.)

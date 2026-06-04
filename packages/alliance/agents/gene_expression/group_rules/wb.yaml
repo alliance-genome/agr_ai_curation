@@ -39,7 +39,7 @@ content: |
   - Gene names like hpo-30 follow C. elegans nomenclature (lowercase, 3-letter code + hyphen + number).
 
   ### Output discipline
-  - Every excluded candidate must land in `metadata.exclusions[]` with canonical reason_code and evidence refs when available.
+  - Do not stage candidates you exclude — leave them unstaged. (You never write `metadata.exclusions[]`; the builder path leaves it empty.)
   - Keep only experimentally observed WB-curation-relevant GeneExpressionAnnotation objects in `curatable_objects[]`.
   - Store verified quotes, page numbers, figure references, genotype strings, and unresolved WB anatomy/stage labels in envelope metadata or object metadata; do not put legacy flat evidence fields in payload.
 
@@ -60,12 +60,12 @@ content: |
   ### Incomplete annotation handling
   - When expression is mentioned but key details (anatomy, life stage) are missing from the text:
     - Still capture the annotation with null values at the relevant domain-pack payload paths, such as `expression_pattern.where_expressed.anatomical_structure.name` and/or `when_expressed_stage_name`.
-    - Add a `metadata.ambiguities[]` entry noting which fields are incomplete and may require curator review of figures.
+    - Leave the incomplete fields for the validator and note in your staged evidence which fields are missing and may require curator review of figures.
     - Example: "Expression pattern of the acox-1.1 gene." -> capture with gene but null anatomy.
   - When neuron or tissue identities are stated as uncertain ("possibly M3, AWB, and ASJ"):
     - Capture the annotation with the tentative identities.
     - Preserve the uncertainty qualifier verbatim in the linked `metadata.evidence_records[]` quote and raw mention metadata.
-    - Add a `metadata.ambiguities[]` entry noting the tentative identification.
+    - Stage the annotation with the tentative identities and leave the uncertain field for the validator rather than resolving it yourself.
 
   ### Negative expression results (C. elegans)
   - Experimentally demonstrated absence of expression is a valid annotation with payload `negated: true`.
@@ -75,7 +75,7 @@ content: |
     - If this is the ONLY evidence of the expression pattern, capture it with context.
 
   ### Ambiguity handling policy
-  - When uncertain whether a sentence reports new experimental results or summarizes prior work, err on the side of INCLUSION with a `metadata.ambiguities[]` entry.
+  - When uncertain whether a sentence reports new experimental results or summarizes prior work, err on the side of INCLUSION: still stage the annotation and leave the uncertain call for the validator and curator review.
   - WormBase curators prefer high recall over high precision for AI-assisted triage. It is easier for a curator to dismiss a false positive than to find a missed annotation.
 
   ### Additional WB exclusion reason_codes
@@ -83,6 +83,6 @@ content: |
 
 
   ### Shared domain-envelope output contract
-  - Emit retained semantic findings only as `GeneExpressionAnnotation` entries in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  - Stage retained semantic findings through the builder tools only; the backend materializes them as `GeneExpressionAnnotation` entries in `curatable_objects[]`. Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]` yourself.
   - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and curator review notes under `metadata.*` as non-semantic envelope metadata.
   - Each curatable object should include `object_type`, `object_role`, `payload`, `evidence_record_ids`, `metadata_refs`, and either `object_id` or `pending_ref_id`; include `schema_ref` or `model_ref`, definition-state notes, and field/object refs when available.

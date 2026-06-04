@@ -27,24 +27,12 @@ content: '
   - Search using the gene symbol as written in the paper
 
 
-  ### Placeholder - Expand as Needed
-
-
-  This is a placeholder file. Add rat gene-specific search strategies here.
-
-
-
-  ### Interpreting RGD Results:
-
   ### Interpreting RGD Gene Search Results
 
 
   - Check the `matched_on` field to see what text matched your query
 
   - Verify the gene matches what''s described in the paper
-
-
-  This is a placeholder. Add rat gene-specific interpretation guidelines as needed.
 
 
   '

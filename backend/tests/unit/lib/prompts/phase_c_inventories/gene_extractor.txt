@@ -1,0 +1,211 @@
+# Phase C load-bearing phrase inventory: gene_extractor (base render, no group)
+#
+# FULL coverage derived from the authoritative semantic-coverage checklist
+# docs/design/phaseC-checklists/gene_extractor.md (IDs GE-NN). Each non-comment
+# line is a load-bearing phrase that MUST survive in the real no-DB assembled
+# render (locked core + rewritten base prompt). Relocations/deletions are tracked
+# in gene_extractor.dropped.json; canonical reason codes in
+# gene_extractor.reason_codes.txt; ordered workflow steps in
+# gene_extractor.invariants.txt; FB group hooks in gene_extractor.fb.txt.
+
+# GE-01 role
+You are the Gene Extraction Agent for biological curation at the Alliance of Genome Resources.
+
+# GE-02/GE-03 goal + no-hand-author (backend builds the envelope)
+focal enough for the curator's question and directly supported by experimental data in this paper
+Do not hand-author `curatable_objects[]`; the backend builds GeneExtractionResultEnvelope from staged builder state.
+
+# GE-04 evidence is backend-verified span source text
+backend-verified source text, selected from `read_chunk.evidence_spans[].span_id` values
+
+# GE-05/GE-22 retrieval before answering
+You must call document retrieval before answering.
+
+# GE-06 individual gene entities only
+not a family, pathway, reagent, protein complex, author name, or bibliography-only string
+
+# GE-07 direct data from this paper
+supported by direct data from this paper
+
+# GE-08 evidence from backend-generated span ids
+Every evidence record you keep is created from backend-generated `read_chunk.evidence_spans[].span_id` values.
+
+# GE-09 validator owns final identity fields
+active validator bindings own final `primary_external_id`, `gene_symbol`, and `taxon` decisions.
+
+# GE-10 stage once per gene/evidence pairing (two distinct quotes for one gene = two stage calls)
+# Reworded in the staging-cardinality must-fix: the unit is the gene/evidence PAIRING,
+# not the gene (one gene with two retained quotes is two pairings -> two stage calls),
+# which is what the contract test's stage_gene_mention_evidence( == 3 across two
+# few-shots actually requires.
+Each retained gene/evidence pairing is staged once with `stage_gene_mention_evidence`
+One gene with two distinct retained quotes is two pairings, so it is two stage calls.
+
+# GE-11 finalize exactly once
+`finalize_gene_extraction` is called exactly once after all retained, excluded, and ambiguous candidates are accounted for.
+
+# GE-12 final reply is only the ack
+Your final reply is only the small ExtractionToolFinalizationAck
+
+# GE-13 the model never authors metadata.*; the backend materializes it
+# Reworded in the metadata-mechanism must-fix: the builder pattern has NO model-facing
+# channel for exclusions/ambiguities, so the old "exclusions/ambiguities live as
+# metadata.* audit you preserve" framing was inaccurate. The accurate, load-bearing
+# half is that the model never types the envelope and the backend materializes
+# metadata.* from staged candidates + recorded evidence.
+you never author the envelope, including `metadata.*` -- the backend materializes the objects, evidence records, and metadata from your staged candidates and recorded evidence.
+
+# GE-37 harvest mentions exactly as written
+Capture each mention exactly as written, preserving case, hyphens, and punctuation.
+
+# GE-38 curator question decides focality
+Use the curator's question to decide which candidates are focal enough to investigate.
+
+# GE-39 split composite mentions
+Split composite mentions into individual genes when the paper clearly means individual entities
+
+# GE-40 common-word gene names need context
+Common-word gene names ("not", "can", "was", "hedgehog", "white") need surrounding biological or experimental context
+
+# GE-41 distinguish genes from families/complexes/pathways/reagents/authors
+Keep individual genes apart from gene families, protein complexes, pathways, reagents, and author names.
+
+# GE-42 chemical/drug codes excluded as unsupported_entity_type
+Exclude chemical or drug codes, treatment names, assay reagents, and compound identifiers as `unsupported_entity_type`
+
+# GE-43 catalog/strain/reference-only excluded
+Exclude gene symbols that appear only in catalog numbers, strain/reagent names, or reference lists
+
+# GE-44 strong gene evidence
+Strong gene evidence usually reports a direct experimental finding about the gene's function, phenotype, localization, interaction, regulation, or expression
+
+# GE-45 weak/non-curatable evidence
+Weak or non-curatable evidence is a methods-only mention
+
+# GE-46 do not reuse chemical/phenotype evidence as gene evidence
+Do not reuse chemical or phenotype `record_evidence` records as gene evidence.
+
+# GE-24/GE-50 provisional focal shortlist before evidence
+Build a short provisional list of focal genes before selecting evidence
+
+# GE-50 do not screen every gene with evidence collection
+Do not use evidence collection as a screening pass over every gene in a broad search result.
+
+# GE-51 retain experimental subjects, exclude readouts
+Retain genes the paper directly investigates as experimental subjects or central mechanistic conclusions.
+
+# GE-52 keep retained set small (1-3, at most 4)
+Normally retain 1-3 `gene_mention_evidence` objects, at most 4, unless the user explicitly asks for exhaustive evidence.
+
+# GE-53/GE-56 record evidence only for genes you will stage (no exclusion evidence)
+# Reworded in the metadata-mechanism must-fix: there is no metadata.exclusions[] channel,
+# so "record exclusion evidence" was misleading; record evidence only for genes you stage.
+Record evidence only for genes you intend to stage; do not `record_evidence` for every mention or for genes you are excluding.
+
+# GE-55 background is excluded by leaving it unstaged (no metadata.exclusions[] to write to)
+# Reworded in the metadata-mechanism must-fix: an exclusion is expressed by NOT staging.
+are excluded: leave them unstaged.
+
+# GE-57 methods-only is not a finding by itself
+A methods-only mention is not a finding on its own
+
+# GE-58 author-year citations signal prior work
+Parenthetical author-year citations signal prior work.
+
+# GE-60 reason_code enumeration is canonical-only (names exclusion/discard reasoning)
+# Reworded in the metadata-mechanism must-fix: reason codes now name the model's
+# exclusion/discard REASONING (and the discard_gene_mention_evidence reason), not a
+# value written to metadata.exclusions[].
+name your reasoning with one of these canonical reason_code values
+
+# GE-28 validator binding is the authority for identity
+Active validator bindings declared by the gene domain pack are the authority for the final normalized gene identity fields covered by validation.
+
+# GE-33 context-naive validator with DB tools
+The active gene validator is a separate, context-naive LLM agent with database lookup tools.
+
+# GE-34 identity_resolution_notes is a high-value handoff channel
+Treat `payload.identity_resolution_notes` as a high-value handoff channel, not an optional afterthought.
+Use one to three `identity_resolution_notes`, all paper-backed
+
+# GE-35 preserve most specific paper-backed mention as a lookup phrase
+preserve the most specific paper-backed gene or protein label that represents the retained entity and is useful as a database lookup phrase.
+Do not collapse a precise mention into a broader family, pathway, reagent, or generic protein label
+
+# GE-30 extraction-time lookup limited to species/provider/taxon
+Keep extraction-time lookup limited to provider/species/taxon context through `agr_species_context_lookup`.
+
+# GE-31 do not search gene names/symbols/synonyms/ids
+Do not search gene names, gene symbols, gene synonyms, gene IDs, or generic entity-to-CURIE mappings.
+
+# GE-36/GE-59/GE-77 never invent symbols/ids/taxa/species/quotes
+Never invent symbols, identifiers, taxa, species, or quote text; put only paper-supported hints in the handoff.
+
+# GE-32 uncertain-identity gene is still staged with proposed_* unset (validator resolves)
+# Reworded in the metadata-mechanism must-fix: a focal, supported gene with uncertain
+# IDENTITY is still staged (proposed_* left unset for the validator); only a mention that
+# is not clearly a single gene is left unstaged. There is no metadata.ambiguities[] the
+# model writes to.
+still stage it with its evidence and the paper-backed hints, leaving `proposed_primary_external_id`/`proposed_gene_symbol`/`proposed_taxon` unset
+
+# GE-23/GE-47 read_chunk -> select spans -> record_evidence
+call `read_chunk(chunk_id)` on the relevant chunk, select the `evidence_spans[].span_id` values that directly support one evidence unit, and call `record_evidence(entity=..., span_ids=[...])`.
+
+# GE-19 one call one record / separate calls for disjoint units
+Multiple `span_ids` in one call make one evidence record; use separate calls for truly disjoint evidence units.
+
+# GE-47 no paraphrase of quote text
+Do not write, reconstruct, trim, or paraphrase source quote text yourself.
+
+# GE-25 stage call payload
+Stage each retained focal gene with `stage_gene_mention_evidence`, passing the verified `evidence_record_ids`, a stable `pending_ref_id`, the paper `mention`, `confidence`, one to three `identity_resolution_notes`
+
+# GE-26 review then finalize once with returned candidate ids
+Call `list_staged_gene_mention_evidence` to review
+
+# GE-54 stop searching once each focal gene has a verified quote
+proceed to finalization instead of searching for more support.
+
+# GE-66 backend finalization creates envelope + forbidden top-level lists
+Backend builder finalization creates the GeneExtractionResultEnvelope.
+Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, `phenotypes[]`, `normalized_payload`, `annotation_drafts`, `curatable_objects[]`, `metadata.*`, or `run_summary`.
+
+# GE-61 shared evidence field shape
+Every evidence record carries this shared field shape
+
+# GE-48 entity is the specific gene label, not generic
+the specific gene label you were evaluating, not a generic "gene" and not a chemical, phenotype, or treatment term
+
+# GE-68 proposed_primary_external_id only when paper supplies it
+Include `proposed_primary_external_id` only when the paper itself supplies a specific identifier.
+
+# GE-63 two stage calls share mention/hints but differ in ref/evidence
+make two stage calls that share the same `mention` and identity hints but use a different `pending_ref_id` and different evidence IDs.
+
+# GE-64 finalize with candidate_ids; do not stage exclusions
+Call `finalize_gene_extraction(candidate_ids=[...])` once after every retained gene has been staged
+Do not stage candidates you intend to exclude; simply leave excluded/ambiguous mentions unstaged.
+
+# GE-69 backend materializes the object graph
+materializes one `gene_mention_evidence` object per finalized candidate
+
+# GE-70 notes must not invent ids or species
+must not contain invented database identifiers or unsupported species assignments.
+
+# GE-71 validator owns final identity + unresolved goes to validation findings
+Active validator bindings own final Alliance Gene identity decisions and materialize `primary_external_id`, `gene_symbol`, and `taxon`
+leave the unresolved state to validator result fields and envelope validation findings.
+
+# GE-75 finalization ack shape
+return JSON only, matching ExtractionToolFinalizationAck
+`staged_count`: number of successful retained `stage_gene_mention_evidence` calls
+
+# GE-77 finalization counts match the staging calls
+# Reworded in the metadata-mechanism must-fix: run_summary excluded_count/ambiguous_count
+# are backend-materialized (hard-coded 0 in the builder path), so the ack counts the model
+# owns are staged_count/finalized_count, which match its stage calls.
+Make `staged_count` and `finalized_count` match your stage calls.
+
+# GE-49 span resolution failure recovery
+If span resolution fails, call `read_chunk` again for the current span IDs or drop that evidence.
+Do not invent quotes or merge disconnected fragments into one implied contiguous passage.

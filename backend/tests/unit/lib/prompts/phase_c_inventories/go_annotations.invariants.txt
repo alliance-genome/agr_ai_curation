@@ -1,0 +1,24 @@
+# Phase C workflow invariants: go_annotations lookup (Wave 3 — bounded lookup path).
+#
+# Invariants are STRONGER than plain phrase retention: each line is an ordered step of
+# the lookup's bounded GO-annotation fetch path. The framework (1) reuses the retention
+# assertion -- every line must appear in the assembled render -- and (2) asserts the
+# lines appear in this order by first occurrence, so the rewrite cannot scramble the
+# read-id -> call-api -> read-associations -> record-attempt sequence.
+#
+# AUTHORING RULE (enforced by the harness): each phrase must occur EXACTLY ONCE in the
+# assembled render and be listed in workflow order. These are verbatim from the
+# rewritten <lookup_workflow> numbered block (steps 1-4), where each occurs exactly once
+# and in order. (GOA-18..GOA-20 in docs/design/phaseC-checklists/go_annotations.md.)
+
+# Step 1 -- read the Alliance-format gene_id from the request.
+Read the Alliance-format `gene_id` from the request.
+
+# Step 2 -- call go_api_call for the gene function endpoint.
+Call `go_api_call` for `GET /bioentity/gene/{gene_id}/function` on the GO API base `https://api.geneontology.org/api`
+
+# Step 3 -- read annotations from the associations array.
+Read the GO annotations from the `associations` array in the JSON response.
+
+# Step 4 -- record the call in lookup_attempts; stop once evidence is enough.
+Record the API call in `lookup_attempts` with outcome `success`, `not_found`, `ambiguous`, or `error`.

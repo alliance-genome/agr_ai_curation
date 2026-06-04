@@ -10,7 +10,7 @@ content: |
   ### Balancers (exclude from curatable_objects[])
   - Balancer chromosomes are genetic tools, NOT alleles of specific genes.
   - Common balancers: FM7, FM7a, FM7c (X chromosome); CyO (chromosome 2); TM3, TM6B, TM6C (chromosome 3).
-  - Capture in metadata.raw_mentions[] but exclude from curatable_objects[] with reason_code: balancer_or_deficiency.
+  - Do not stage balancer chromosomes as alleles; the exclusion reasoning is balancer_or_deficiency.
 
   ### Deficiencies and duplications (exclude from curatable_objects[])
   - Deficiencies: Df(chromosome_arm)name — e.g., Df(3R)Exel6197. These are chromosomal deletions.
@@ -29,6 +29,6 @@ content: |
 
 
   ### Shared domain-envelope output contract
-  - Emit retained semantic findings only in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  - Stage retained findings through the builder tools only; the backend materializes them into `curatable_objects[]`. Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]` yourself.
   - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and curator review notes under `metadata.*` as non-semantic envelope metadata.
   - Each curatable object should include `object_type`, `object_role`, `payload`, `evidence_record_ids`, `metadata_refs`, and either `object_id` or `pending_ref_id`; include `schema_ref` or `model_ref`, definition-state notes, and field/object refs when available.

@@ -1,0 +1,24 @@
+# Phase C workflow invariants: tsv_formatter (Wave 4 — ordered file-production path).
+#
+# Invariants are STRONGER than plain phrase retention: each line is an ordered step of the
+# formatter's file-production path. The framework (1) reuses the retention assertion --
+# every line must appear in the assembled render -- and (2) asserts the lines appear in
+# this order by first occurrence, so the rewrite cannot scramble the
+# read-rows -> build-data_json -> call-save -> confirm sequence.
+#
+# AUTHORING RULE (enforced by the harness): each phrase must occur EXACTLY ONCE in the
+# assembled render and be listed in workflow order. These are verbatim from the rewritten
+# <workflow> numbered block (steps 1-4), where each occurs exactly once and in order.
+# (TSV-20..TSV-24 in docs/design/phaseC-checklists/tsv_formatter.md.)
+
+# Step 1 -- read the row objects and column order from the request.
+Read the row objects and column order from the provided data and request.
+
+# Step 2 -- build data_json (preserving an explicit column order in columns).
+Build `data_json` as a valid JSON array string of row objects, and put any explicit column order into the `columns` argument.
+
+# Step 3 -- call save_tsv_file to create the file.
+Call `save_tsv_file` to create the downloadable TSV file with these arguments:
+
+# Step 4 -- after the tool succeeds, confirm the file is ready.
+After the tool succeeds, confirm the file is ready.

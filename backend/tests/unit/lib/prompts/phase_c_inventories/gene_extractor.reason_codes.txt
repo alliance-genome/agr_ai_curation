@@ -1,0 +1,22 @@
+# Phase C canonical exclusion reason codes: gene_extractor (GE-60).
+#
+# SOURCED FROM THE CANONICAL OWNER, not grepped from the prompt: the schema enum
+# src/schemas/models/base.py::ExclusionReasonCode. The gene-applicable codes are
+# the seven domain-generic codes plus the three gene-specific codes
+# (GENE_FAMILY_NOT_INDIVIDUAL, AUTHOR_OR_REAGENT_NAME, REFERENCE_LIST_ONLY). The
+# gene domain pack does not redefine reason codes; the enum is authoritative.
+#
+# The reason-code survival guard asserts every one of these still appears in the
+# rewritten gene_extractor assembled render, so the rewrite cannot silently drop
+# a canonical exclusion code from the enumerated list.
+
+previously_reported
+non_experimental_claim
+insufficient_experimental_evidence
+out_of_scope
+ambiguous_entity
+duplicate_mention
+unsupported_entity_type
+gene_family_not_individual
+author_or_reagent_name
+reference_list_only

@@ -1,0 +1,33 @@
+# Phase C workflow invariants: ontology_term validator (Wave 3 — bounded lookup path).
+#
+# Invariants are STRONGER than plain phrase retention: each line is an ordered step of
+# the validator's bounded ontology lookup path. The invariant framework (1) reuses the
+# retention assertion -- every line must appear in the assembled render -- and
+# (2) asserts the lines appear in this same order by first occurrence, so the rewrite
+# cannot scramble the
+# curie-lookup -> terms-resolve -> label-helper -> apply-gates -> zero-results ->
+# multiple-candidates sequence.
+#
+# AUTHORING RULE (enforced by the harness): each phrase must occur EXACTLY ONCE in the
+# assembled render and be listed in workflow order. These are verbatim from the
+# rewritten <lookup_workflow> "Bounded lookup path" numbered block (steps 1-6), where
+# each occurs exactly once and in order. (OTV-20..OTV-25 in
+# docs/design/phaseC-checklists/ontology_term.md.)
+
+# Step 1 -- curie present: exact CURIE lookup.
+If `curie` is present, call `get_ontology_term` first with `term=curie` and `ontology_term_type` when supplied.
+
+# Step 2 -- terms present: resolve each item per the repeated-terms rule.
+If `terms` is present, resolve each item independently and preserve input order per the repeated-`terms` rule above.
+
+# Step 3 -- label/name only: choose the narrowest helper.
+If only a label/name is present, choose the narrowest search helper supported by the request per the narrowest-helper rule above.
+
+# Step 4 -- after lookup: apply the prefix/allowlist/exact-match gates.
+After lookup, apply the `accepted_prefixes`, `allowed_term_curies`, `unresolved_allowed_term_labels`, and `exact_match` gates above.
+
+# Step 5 -- zero results: unresolved with attempts + missing fields.
+If the tool returns zero results, return `status: "unresolved"` with `lookup_attempts`, `missing_expected_fields`, and a curator-facing explanation.
+
+# Step 6 -- multiple candidates remain: unresolved, preserve candidates.
+If multiple plausible candidates remain, return `status: "unresolved"` with `candidates` and `ontology_term_candidates`.

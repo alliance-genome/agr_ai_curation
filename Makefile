@@ -380,24 +380,6 @@ env-check: ## Verify environment configuration
 	fi
 
 # =============================================================================
-# DEPLOYMENT
-# =============================================================================
-
-.PHONY: deploy-alliance
-deploy-alliance: ## Deploy Alliance-specific agents to config/agents/
-	@echo "Deploying Alliance content..."
-	@./scripts/deploy_alliance.sh
-
-.PHONY: deploy-alliance-clean
-deploy-alliance-clean: ## Clean and deploy Alliance agents
-	@echo "Clean deploying Alliance content..."
-	@./scripts/deploy_alliance.sh --clean
-
-.PHONY: deploy-check
-deploy-check: ## Dry-run to see what would be deployed
-	@./scripts/deploy_alliance.sh --dry-run --verbose
-
-# =============================================================================
 # PRODUCTION (EC2 with GELF logging)
 # =============================================================================
 

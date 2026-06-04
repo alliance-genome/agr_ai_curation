@@ -40,7 +40,11 @@ def test_allele_extractor_mgi_overlay_includes_lab_code_disambiguation_workflow(
     assert "Active allele" in content
     assert "paper-backed context that can help validation" in content
     assert "do not" in content
-    assert "ambiguities[]" in content
+    # The metadata-framing cleanup reworded the ambiguity line off the impossible
+    # `metadata.ambiguities[]` write (AlleleStageInput has no such param) onto the
+    # builder-accurate "leave that field for the validator" framing; the curation
+    # DECISION (uncertain same-gene candidates are not guessed) is preserved.
+    assert "the validator rather than guessing" in content
 
 
 def test_allele_extractor_prompt_declares_allele_domain_envelope_contract():

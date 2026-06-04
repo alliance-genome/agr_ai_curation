@@ -1,0 +1,31 @@
+# Phase C load-bearing phrase inventory: allele_extractor + MGI group rules.
+#
+# The `.mgi` filename suffix renders allele_extractor WITH the MGI (mouse) group
+# rules and asserts these phrases survive in the COMBINED render. The base prompt
+# rewrite must keep rendering cleanly under MGI; this inventory guards that the
+# base rewrite does not break the combined render and that the load-bearing MGI
+# lab-code/disambiguation guidance survives. (Checklist ID AE-55 in
+# docs/design/phaseC-checklists/allele_extractor.md.)
+#
+# NOTE: the group_rules metadata-framing cleanup (Phase C) reworded the MGI
+# ambiguity line away from the impossible `metadata.ambiguities[]` write toward
+# "leave that field for the validator"; the load-bearing curation DECISION
+# (uncertain same-gene candidates are not guessed) is preserved and re-pinned
+# below. These are the same load-bearing MGI lab-code lines that
+# test_allele_extractor_mgi_prompt_policy.py asserts against the MGI group rule;
+# pinning them here ties them to the COMBINED (base + MGI) render so the base
+# rewrite cannot regress the merged prompt.
+
+# AE-55 MGI lab-code -> creator/institution attribution context for validator hints
+tm1.1Hko
+em1Cya
+em1Gpt
+
+# AE-55 do not validate/search MGI symbols at extraction; active allele validator owns identity
+Do not validate or search MGI allele symbols during extraction. Active allele
+
+# AE-55 preserve exact notation + paper-backed validation context
+Preserve paper-backed context that can help validation
+
+# AE-55 ambiguous same-gene candidates staged for the validator rather than guessed
+the validator rather than guessing

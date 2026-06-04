@@ -234,7 +234,6 @@ EOF
   assert_contains 'trace_review_backend' "$output_path"
   assert_contains '8001' "$output_path"
   assert_contains 'Auth mode: oidc' "$output_path"
-  assert_contains 'deploy_alliance.sh is Alliance-internal only.' "$output_path"
 }
 
 test_start_verify_marks_pdfx_skipped_when_not_configured() {

@@ -1,0 +1,36 @@
+# Phase C workflow invariants: agm validator (Wave 3 — bounded lookup path).
+#
+# Invariants are STRONGER than plain phrase retention: each line is an ordered
+# step of the validator's bounded AGM lookup path. The invariant framework
+# (1) reuses the retention assertion -- every line must appear in the assembled
+# render -- and (2) asserts the lines appear in this same order by first
+# occurrence, so the rewrite cannot scramble the
+# identifier-lookup -> identifier-resolve -> label-lookup -> label-resolve ->
+# multiple-candidates -> missing-taxon -> tool-error sequence.
+#
+# AUTHORING RULE (enforced by the harness): each phrase must occur EXACTLY ONCE
+# in the assembled render and be listed in workflow order. These are verbatim
+# from the rewritten <lookup_workflow> "Bounded lookup path" numbered block
+# (steps 1-7), where each occurs exactly once and in order. (AGMV-13..AGMV-19 in
+# docs/design/phaseC-checklists/agm.md.)
+
+# Step 1 -- identifier present: map CURIE to info.
+If `subject_identifier` is present, call `map_entity_curies_to_info` with `entity_type: "agm"` and `entity_curies` for that identifier.
+
+# Step 2 -- single non-conflicting identifier match: resolve.
+If that returns one AGM whose taxon does not conflict with the supplied taxon, resolve it.
+
+# Step 3 -- no identifier match, label + taxon present: map name to CURIE.
+If no identifier match is found and both `subject_label` and `taxon` are present, call `map_entity_names_to_curies` with `entity_type: "agm"`, `entity_names`, and `taxon_id`.
+
+# Step 4 -- single label match: resolve only when nothing conflicts.
+Treat a single label match as resolved only when the returned identifier, label, and taxon do not conflict with the supplied fields.
+
+# Step 5 -- multiple candidates remain: unresolved, preserve.
+If multiple candidates remain, return `status: "unresolved"` and preserve candidates.
+
+# Step 6 -- label-only lookup with missing taxon: unresolved, explain.
+If a label-only lookup is missing taxon context, return unresolved and explain that AGM label routing requires taxon.
+
+# Step 7 -- tool unavailable/error: unresolved with outcome error.
+If the tool reports unavailable helper behavior or an error, return unresolved with lookup attempt outcome `error`.

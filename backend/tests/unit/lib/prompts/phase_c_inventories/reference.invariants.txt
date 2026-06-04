@@ -1,0 +1,23 @@
+# Phase C workflow invariants: reference validator (Wave 3 — bounded lookup ladder).
+#
+# Invariants are STRONGER than plain phrase retention: each line is an ordered step of the
+# validator's bounded literature lookup ladder. The framework (1) reuses the retention
+# assertion -- every line must appear in the assembled render -- and (2) asserts the lines
+# appear in this order by first occurrence, so the rewrite cannot scramble the
+# exact-identifier -> exact-title -> fuzzy-search method-selection sequence.
+#
+# AUTHORING RULE (enforced by the harness): each phrase must occur EXACTLY ONCE in the
+# assembled render and be listed in workflow order. These are verbatim from the rewritten
+# <lookup_workflow> "Bounded lookup ladder" numbered block (steps 1-3), where each occurs
+# exactly once and in order. (RFV-17..RFV-19 in docs/design/phaseC-checklists/reference.md.)
+# Step 4 (outcome classification) references the rules above, so it is not an ordered step
+# here; its outcomes are covered by the retention inventory (RFV-13..RFV-15).
+
+# Step 1 -- exact identifier lookup first (get_literature_reference + identifier).
+Exact identifier lookup first when `reference_id`, `curie`, `pmid`, `doi`, AGRKB, PMID, DOI, MOD, or other cross-reference identifiers are present.
+
+# Step 2 -- exact title lookup next (get_literature_reference + title).
+Exact title lookup next when a title is present and no identifier resolved.
+
+# Step 3 -- fuzzy title/short-citation/abstract-fragment search last (search_literature_references).
+Fuzzy title, short-citation, or abstract/citation-fragment search last when exact lookup did not resolve.

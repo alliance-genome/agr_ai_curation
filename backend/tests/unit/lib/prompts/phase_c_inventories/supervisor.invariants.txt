@@ -1,0 +1,30 @@
+# Phase C workflow invariants: supervisor router (Wave 3 — ordered handoff workflow).
+#
+# Invariants are STRONGER than plain phrase retention: each line is an ordered step of the
+# supervisor's per-handoff orchestration procedure. The framework (1) reuses the retention
+# assertion -- every line must appear in the assembled render -- and (2) asserts the lines
+# appear in this order by first occurrence, so the rewrite cannot scramble the
+# reformulate -> batch -> read-results-back -> validation-follow-up -> curation-prep sequence.
+#
+# AUTHORING RULE (enforced by the harness): each phrase must occur EXACTLY ONCE in the
+# assembled render and be listed in workflow order. These are verbatim from the rewritten
+# <handoff_workflow> section, where each occurs exactly once and in order.
+# (SUP-22, SUP-28, SUP-29, SUP-36, SUP-45 in docs/design/phaseC-checklists/supervisor.md.)
+
+# Step 1 -- reformulate the curator's message into a specialist-ready handoff.
+Before every specialist call, transform the curator's message into a specialist-ready
+scientific request.
+
+# Step 2 -- batch multiple entities into one call when the specialist accepts lists.
+When a specialist can process lists, batch multiple entities into one call using
+comma-separated lists
+
+# Step 3 -- read specialist results back, focusing the answer on conclusions.
+When a specialist returns evidence-backed findings, focus the answer on conclusions:
+
+# Step 4 -- follow up on validation findings that stay open after the handoff.
+Validation findings stay visible until a validator rerun resolves them or a curator
+records a review decision.
+
+# Step 5 -- curation-prep checkpoint, only after explicit later-turn confirmation.
+If the curator wants to prepare findings for the curation workspace, first ask exactly:

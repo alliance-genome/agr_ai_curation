@@ -1,0 +1,19 @@
+# Phase C group-hook inventory: supervisor rendered with the RGD group.
+#
+# Asserts the rewritten base prompt renders cleanly UNDER the RGD group overlay and the
+# organism-specific RGD allele-dispatch hooks still arrive in the assembled render
+# (core + rewritten base + RGD group rules). The base rewrite does NOT touch
+# config/agents/supervisor/group_rules/rgd.yaml; these phrases come from that unchanged
+# group-rule file (SUP-68).
+
+# RGD allele-dispatch goal (route rat allele lookups with institution attribution).
+## RGD-SPECIFIC RULES (Rattus norvegicus)
+
+# RGD attribution-disambiguation hook: the Allele Specialist uses fullname_attribution.
+fullname_attribution
+
+# RGD institution-source examples baked into RGD fullnames.
+Medical College of Wisconsin (MCW / Mcwi)
+
+# RGD focus on institution, ignore author names.
+ignore other attribution like author names

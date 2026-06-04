@@ -99,7 +99,6 @@ services:
       dockerfile: Dockerfile.test
     volumes:
       - ./backend:/app/backend
-      - ./alliance_agents:/app/alliance_agents:ro
       - ./config:/app/config:ro
       - ./packages:/app/packages:ro
       - ./docs:/app/docs:ro
@@ -156,7 +155,6 @@ services:
       dockerfile: backend/Dockerfile.unit-test
     volumes:
       - ./backend:/app/backend
-      - ./alliance_agents:/app/alliance_agents
       - ./config:/app/config
       - ./packages:/app/packages:ro
       - ./docs:/app/docs:ro
@@ -213,7 +211,6 @@ services:
       dockerfile: Dockerfile.test
     volumes:
       - ./backend:/app/backend
-      - ./alliance_agents:/app/alliance_agents:ro
       - ./config:/app/config:ro
       - ./packages:/app/packages:ro
       - ./scripts/testing:/app/scripts/testing:ro

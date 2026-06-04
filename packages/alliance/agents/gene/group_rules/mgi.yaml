@@ -27,24 +27,12 @@ content: '
   - Search the exact name from the paper - synonym matching will find it
 
 
-  ### Placeholder - Expand as Needed
-
-
-  This is a placeholder file. Add mouse gene-specific search strategies here.
-
-
-
-  ### Interpreting MGI Results:
-
   ### Interpreting MGI Gene Search Results
 
 
   - Check the `matched_on` field to see what text matched your query
 
   - Verify the gene matches what''s described in the paper
-
-
-  This is a placeholder. Add mouse gene-specific interpretation guidelines as needed.
 
 
   '

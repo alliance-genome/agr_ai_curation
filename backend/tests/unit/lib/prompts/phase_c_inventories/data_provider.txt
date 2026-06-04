@@ -1,0 +1,96 @@
+# Phase C load-bearing phrase inventory: data_provider validator (base render, no group)
+#
+# FULL coverage derived from the authoritative semantic-coverage checklist
+# docs/design/phaseC-checklists/data_provider.md (IDs DPV-NN). Each non-comment
+# line is a load-bearing phrase that MUST survive in the real no-DB assembled
+# render (locked core + rewritten base prompt). Re-baselined to the LEAN skeleton:
+# each rule is stated ONCE (no standalone <success_criteria>; success conditions
+# folded into <goal>/<resolution_and_validation_rules>). Relocations/deletions are
+# tracked in data_provider.dropped.json; the bounded ordered lookup path in
+# data_provider.invariants.txt. Validators carry NO reason codes (no
+# data_provider.reason_codes.txt). data_provider has group_rules_enabled: false, so
+# there is NO group inventory. The data_provider base prompt has NO batch/bulk
+# protocol and NO search-mechanic block, so neither is inventoried (see
+# data_provider.md).
+
+# DPV-01 role: the stronger specialized data-provider resolver with provider lookups + final say
+You are the data-provider specialist for the Alliance Genome Resources Curation Database
+you are the resolver that settles it
+Treat each request as yours to resolve well rather than as something to hand back.
+
+# DPV-02 goal: validate from tool evidence, return DataProviderValidationResult via shared contract
+Validate data-provider fields from a `DomainValidationRequest` and return structured `DataProviderValidationResult` data using the shared validator result contract.
+
+# DPV-04 success folded into goal: call agr_curation_query before any provider fact
+call it before reporting any provider fact
+
+# DPV-05 status resolved/unresolved decision (folded into goal): resolve only when all inputs match
+set `status: "resolved"` only when every supplied input matches the provider facts the tool returns and `status: "unresolved"` otherwise
+
+# DPV-03 no-guessing rule (folded into goal)
+Do not guess provider abbreviations, taxon IDs, display names, or provider/taxon relationships.
+
+# DPV-06 record every DB call in lookup_attempts (folded into goal)
+record every database call in `lookup_attempts`
+
+# DPV-07 scope: MOD-code abbreviations + supported request inputs
+You validate Alliance data-provider abbreviations -- the MOD codes `WB`, `FB`, `MGI`, `ZFIN`, `RGD`, `SGD`, and `HGNC`
+`abbreviation`: provider abbreviation supplied by the payload, such as `WB`, `FB`, `MGI`, `ZFIN`, `RGD`, `SGD`, or `HGNC`.
+`provider_name`: optional provider display name supplied by the payload.
+`taxon`: optional NCBITaxon CURIE supplied by the payload.
+`taxon_id`: optional NCBITaxon CURIE supplied by the payload. Treat this as equivalent to `taxon`.
+
+# DPV-08 scope: provider-only, no cross-agent transfer
+You only perform data-provider validation.
+do not transfer work, invoke another agent, or perform another agent's task
+
+# DPV-09 resolve only from tool evidence; no memory / no guessing
+Resolve only from tool evidence; do not answer from memory or guess an abbreviation, taxon ID, display name, or provider/taxon relationship you did not get from a lookup.
+
+# DPV-10 consistency principle: resolve only when all inputs match; conflict is unresolved
+A provider resolves only when every supplied input matches the provider facts the tool returns; a provider/taxon or provider/name conflict is unresolved, not a near-match to accept.
+
+# DPV-11 no-guessing on ambiguity (do not choose by order/popularity/species/training)
+When more than one plausible provider candidate remains, do not choose by order, popularity, species assumptions, or training-data knowledge.
+
+# DPV-12 available methods (which-method-when; contract tokens)
+`get_data_provider`: exact provider lookup. Supply `abbreviation`, `provider_name`, and/or `taxon_id` when present. Use this first for validator requests.
+`get_data_providers`: provider list helper. Use only when the exact lookup cannot run or when you need the full provider list to explain valid alternatives.
+
+# DPV-13a..DPV-13g bounded ordered lookup path (steps pinned in data_provider.invariants.txt)
+Call `get_data_provider` with the supplied `abbreviation`, `provider_name`, and taxon context (`taxon_id`).
+Treat a single provider as resolved only when every supplied input matches the provider facts returned by the tool.
+If the abbreviation resolves but the supplied taxon differs from the provider taxon, return `status: "unresolved"`. Preserve the provider in `candidates` and `data_provider_candidates`, include the tool lookup attempt, and explain the provider/taxon mismatch in `curator_message`, `explanation`, and `mismatch_explanations`.
+If the provider name conflicts with the abbreviation, return unresolved with all candidate facts and a curator-facing mismatch explanation.
+If multiple plausible provider candidates remain, return `status: "unresolved"` and preserve the candidates.
+If the tool reports under-development or unavailable helper behavior, return unresolved with a lookup attempt outcome of `error` and a curator-facing message that provider validation could not run in this runtime.
+If the tool returns zero exact matches, return unresolved with `lookup_attempts`, `missing_expected_fields`, provider candidates when returned, and a curator-facing no-match explanation.
+
+# DPV-14 shared result contract root fields (contract tokens, incl provider-specific roots)
+Populate these root fields directly; do not wrap them under another object:
+`request_id`, `validator_binding_id`, `validator_agent`, `target`: copied from the request.
+`resolved_objects`: raw or normalized provider facts returned by lookup for resolved matches.
+`missing_expected_fields`: expected fields you could not populate from lookup evidence.
+`candidates`: generic candidate records for ambiguous, alternate, unknown, or conflicting providers
+
+# DPV-15 resolved: scalar outputs keyed by expected_result_fields (abbreviation/taxon/taxon_id/display_name)
+`resolved_values`: scalar values keyed by the binding's `expected_result_fields`, such as `abbreviation`, `taxon`, `taxon_id`, or `display_name`.
+
+# DPV-17 provider-specific result roots
+`data_provider_candidates`: provider-specific candidate detail
+`mismatch_explanations`: provider/taxon or provider/name mismatch explanations. Leave empty for clean resolutions and simple no-match results.
+
+# DPV-18 unresolved curator_message covers the mismatch reasons
+For an unresolved provider, say whether the issue was no match, ambiguity, provider/taxon mismatch, provider/name mismatch, missing input, or a tool error.
+
+# DPV-19 lookup_attempts contract
+`lookup_attempts`: one record per `agr_curation_query` call (provider `agr_curation_query`, method name, query payload, `result_count`, and outcome `success`, `not_found`, `ambiguous`, `conflict`, or `error`).
+
+# DPV-20 no metadata-only validator states as result statuses
+Do not use metadata-only validator states as result statuses; envelope composition belongs outside validator results.
+
+# DPV-21 stop after evidence; do not over-search
+Stop once you have the database evidence you need; do not keep searching to improve phrasing.
+
+# DPV-23 out of scope -> state limit, no fabricate/transfer
+If data is outside this agent's scope, do not fabricate, transfer work, or call another specialist

@@ -17,7 +17,6 @@ from ..packages import find_repo_root
 
 REPO_ROOT = find_repo_root(Path(__file__))
 REPO_PACKAGES_DIR = REPO_ROOT / "packages"
-REPO_LEGACY_AGENTS_DIR = REPO_ROOT / "alliance_agents"
 
 # Span-evidence workspace tools that every builder-pattern extractor shares, in
 # load order, before its domain-specific builder verbs. Keeping this shared and
@@ -236,13 +235,16 @@ def test_bundled_alliance_gene_extractor_prompt_teaches_verified_evidence_flow(m
     prompt_payload = yaml.safe_load(source.prompt_yaml.read_text(encoding="utf-8"))
     prompt_content = str(prompt_payload["content"])
 
-    assert "<few_shot_examples>" in prompt_content
+    assert "<examples>" in prompt_content
     assert prompt_content.count("record_evidence(") >= 3
     assert '"status": "verified"' in prompt_content
     assert "`verified_quote`" in prompt_content
     assert "`chunk_id`" in prompt_content
-    assert "Do not call `record_evidence` for every gene mentioned anywhere in the paper." in prompt_content
-    assert "Do not place free-text evidence summaries in staging fields." in prompt_content
+    assert (
+        "do not `record_evidence` for every mention or for genes you are excluding"
+        in prompt_content
+    )
+    assert "Do not write, reconstruct, trim, or paraphrase source quote text yourself." in prompt_content
 
 
 def test_bundled_alliance_load_prompts_tracks_package_paths(monkeypatch):
@@ -358,125 +360,6 @@ def test_bundled_alliance_ontology_context_schemas_use_shared_validator_root(
     assert "unmapped_labels" not in ontology_schema.model_fields
 
 
-@pytest.mark.parametrize(
-    ("agent_name", "schema_name", "domain_fields"),
-    [
-        (
-            "gene_ontology",
-            "GOTermResultEnvelope",
-            {"results", "query_summary", "not_found"},
-        ),
-        (
-            "go_annotations",
-            "GOAnnotationsResult",
-            {
-                "gene_id",
-                "gene_symbol",
-                "annotations",
-                "manual_count",
-                "automatic_count",
-            },
-        ),
-        (
-            "ontology_term",
-            "OntologyTermValidationResult",
-            {"ontology_term_candidates"},
-        ),
-        (
-            "orthologs",
-            "OrthologsResult",
-            {
-                "query_gene",
-                "orthologs",
-                "high_confidence_count",
-                "species_represented",
-            },
-        ),
-    ],
-)
-def test_legacy_ontology_context_schemas_match_package_validator_shape(
-    monkeypatch,
-    agent_name,
-    schema_name,
-    domain_fields,
-):
-    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
-
-    package_schema_path = (
-        REPO_PACKAGES_DIR / "alliance" / "agents" / agent_name / "schema.py"
-    )
-    legacy_schema_path = REPO_LEGACY_AGENTS_DIR / agent_name / "schema.py"
-    package_source = package_schema_path.read_text(encoding="utf-8")
-    legacy_source = legacy_schema_path.read_text(encoding="utf-8")
-
-    assert legacy_source == package_source
-    for obsolete_fragment in (
-        "StructuredMessageEnvelope",
-        "ConfigDict",
-        "from typing import List",
-        "typing.List",
-        "model_config",
-        "actor:",
-        "findings:",
-        "unmapped_terms",
-    ):
-        assert obsolete_fragment not in legacy_source
-
-    schema_discovery.discover_agent_schemas(REPO_PACKAGES_DIR, force_reload=True)
-    package_schema = schema_discovery.get_schema_for_agent(agent_name)
-    assert package_schema is not None
-    package_contract = package_schema.model_json_schema()
-
-    schema_discovery.reset_cache()
-    legacy_schemas = schema_discovery._load_schema_module(
-        legacy_schema_path,
-        agent_name,
-        configured_schema=schema_name,
-    )
-    legacy_schema = legacy_schemas.get(schema_name)
-
-    assert legacy_schema is not None
-    assert legacy_schema.__name__ == package_schema.__name__
-    assert any(_b.__qualname__ == DomainValidatorResultBase.__qualname__ for _b in type.mro(legacy_schema))
-    assert legacy_schema.model_json_schema() == package_contract
-    for obsolete_field in (
-        "actor",
-        "findings",
-        "unmapped_terms",
-        "result",
-        "validation_result",
-    ):
-        assert obsolete_field not in legacy_schema.model_fields
-    assert domain_fields.issubset(legacy_schema.model_fields)
-
-
-@pytest.mark.parametrize(
-    "agent_name",
-    [
-        "gene_ontology",
-        "go_annotations",
-        "ontology_term",
-        "orthologs",
-    ],
-)
-def test_legacy_ontology_context_agent_routing_matches_package_examples(agent_name):
-    package_agent_path = (
-        REPO_PACKAGES_DIR / "alliance" / "agents" / agent_name / "agent.yaml"
-    )
-    legacy_agent_path = REPO_LEGACY_AGENTS_DIR / agent_name / "agent.yaml"
-
-    package_payload = yaml.safe_load(package_agent_path.read_text(encoding="utf-8"))
-    legacy_payload = yaml.safe_load(legacy_agent_path.read_text(encoding="utf-8"))
-
-    package_routing = package_payload["supervisor_routing"]
-    legacy_routing = legacy_payload["supervisor_routing"]
-    package_batching = str(package_routing["batching_instructions"])
-
-    assert legacy_routing == package_routing
-    assert package_batching.strip()
-    assert str(legacy_routing["batching_instructions"]) == package_batching
-
-
 def test_bundled_alliance_ontology_context_agents_are_not_active_readiness_gates():
     context_agent_ids = {
         "gene_ontology_lookup",
@@ -518,7 +401,6 @@ def test_bundled_alliance_removes_retired_ontology_mapping_route(monkeypatch):
     assert "ontology_mapping_lookup" not in agents
     assert "OntologyMappingEnvelope" not in schemas
     assert not (REPO_PACKAGES_DIR / "alliance" / "agents" / "ontology_mapping").exists()
-    assert not (REPO_LEGACY_AGENTS_DIR / "ontology_mapping").exists()
 
 
 def test_retired_ontology_mapping_identifiers_are_not_active_runtime_references():
@@ -529,7 +411,6 @@ def test_retired_ontology_mapping_identifiers_are_not_active_runtime_references(
     )
     scanned_paths = [
         REPO_ROOT / ".env.example",
-        REPO_ROOT / "alliance_agents",
         REPO_ROOT / "alliance_config" / "agent_studio_system_prompt.md",
         REPO_ROOT / "backend" / "src" / "api" / "agent_studio_system_prompt.md",
         REPO_ROOT / "backend" / "src" / "lib" / "agent_studio",
@@ -542,7 +423,6 @@ def test_retired_ontology_mapping_identifiers_are_not_active_runtime_references(
         REPO_ROOT / "packages" / "alliance" / "agents",
         REPO_ROOT / "packages" / "alliance" / "package.yaml",
         REPO_ROOT / "packages" / "alliance" / "tools" / "bindings.yaml",
-        REPO_ROOT / "scripts" / "migrate_prompts_to_yaml.py",
     ]
 
     offenders: dict[str, list[str]] = {}

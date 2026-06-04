@@ -1,0 +1,16 @@
+[
+  {
+    "phrase": "Identify all C. elegans genes in this paper",
+    "category": "deleted",
+    "reason": "SUP-56 redundant-example deletion. The pre-rewrite '<examples>' carried a 'gene_extraction_direct' example ('Identify all C. elegans genes in this paper' -> ask_gene_extractor_specialist with an organism-scoped extraction reformulation). It demonstrates no distinct routing decision beyond SUP-52 (the 'curator_grade_handoff' example, KEPT verbatim), which already shows routing a focal-gene request to `ask_gene_extractor_specialist` with a full curator-grade reformulation. The C. elegans variant uses the same tool and the same handoff shape, so it is a redundant illustration, not a load-bearing rule. The `ask_gene_extractor_specialist` routing itself is KEPT in the Routing map (SUP-17) and demonstrated by SUP-52. Deleted with no home; printed for review by the Phase C deleted-rules dump.",
+    "old_source": "config/agents/supervisor/prompt.yaml:<examples>/gene_extraction_direct",
+    "new_home": ""
+  },
+  {
+    "phrase": "What is this paper mainly about?",
+    "category": "deleted",
+    "reason": "SUP-57 redundant-example deletion. The pre-rewrite '<examples>' carried a 'broad_paper_analysis' example ('What is this paper mainly about?' -> ask_pdf_extraction_specialist asking for the main biological question, core methods, principal findings, conclusions). That routing is fully specified by the Routing map row for `ask_pdf_extraction_specialist` (KEPT in SUP-17: 'Broad document content, methods, figures, paper-level analysis'; Triggers include 'what is this paper about', broad content questions) and by the <role>/<goal> synthesis framing. The example adds no distinct routing decision beyond the table row, so it is a redundant illustration. The `ask_pdf_extraction_specialist` routing for broad paper questions is KEPT (SUP-17). Deleted with no home; printed for review by the Phase C deleted-rules dump.",
+    "old_source": "config/agents/supervisor/prompt.yaml:<examples>/broad_paper_analysis",
+    "new_home": ""
+  }
+]

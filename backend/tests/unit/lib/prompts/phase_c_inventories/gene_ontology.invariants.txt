@@ -1,0 +1,27 @@
+# Phase C workflow invariants: gene_ontology lookup (Wave 3 — bounded query plan).
+#
+# Invariants are STRONGER than plain phrase retention: each line is an ordered step of the
+# lookup's bounded QuickGO query plan. The framework (1) reuses the retention assertion --
+# every line must appear in the assembled render -- and (2) asserts the lines appear in
+# this order by first occurrence, so the rewrite cannot scramble the
+# id-or-text -> search -> fetch-details -> no-match -> record-and-stop sequence.
+#
+# AUTHORING RULE (enforced by the harness): each phrase must occur EXACTLY ONCE in the
+# assembled render and be listed in workflow order. These are verbatim from the rewritten
+# <lookup_workflow> "Bounded query plan" numbered block (steps 1-5), where each occurs
+# exactly once and in order. (GOT-17..GOT-22 in docs/design/phaseC-checklists/gene_ontology.md.)
+
+# Step 1 -- identify exact GO ID vs text.
+Identify whether the request is by exact GO ID or by text.
+
+# Step 2 -- text: search once, first non-obsolete hit, one follow-up if ambiguous.
+For text, call `/search` once, use the first relevant non-obsolete hit, and only do one follow-up search when the first result set is clearly ambiguous.
+
+# Step 3 -- fetch required details (terms / complete / hierarchy only when asked).
+Fetch the required details: `/terms/{ids}` for the minimum required fields, `/complete` when definitions, synonyms, or relationships are needed, and `/children`, `/ancestors`, or `/descendants` only when hierarchy is asked.
+
+# Step 4 -- no exact match: nearest candidate in summary, unresolved input in not_found.
+If no exact match is found, report the nearest useful candidate in the summary and place the unresolved input in `not_found`.
+
+# Step 5 -- record attempt; return and stop when the envelope is fully populated.
+Record each call in `lookup_attempts` with outcome `success`, `not_found`, `ambiguous`, or `error`, and return and stop when the envelope is fully populated from the collected evidence.

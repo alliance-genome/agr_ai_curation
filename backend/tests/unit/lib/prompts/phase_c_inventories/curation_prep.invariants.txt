@@ -1,0 +1,21 @@
+# Phase C workflow invariants: curation_prep (Wave 4 — ordered selection path).
+#
+# Invariants are STRONGER than plain phrase retention: each line is an ordered step of the
+# prep agent's envelope-selection path. The framework (1) reuses the retention assertion --
+# every line must appear in the assembled render -- and (2) asserts the lines appear in
+# this order by first occurrence, so the rewrite cannot scramble the
+# read-all -> consider-together -> select-or-withhold sequence.
+#
+# AUTHORING RULE (enforced by the harness): each phrase must occur EXACTLY ONCE in the
+# assembled render and be listed in workflow order. These are verbatim from the rewritten
+# <workflow> numbered block (steps 1-3), where each occurs exactly once and in order.
+# (PREP-04, PREP-05, and workflow step 3 in docs/design/phaseC-checklists/curation_prep.md.)
+
+# Step 1 -- read the entire input payload before deciding what to emit.
+Read the entire input payload before deciding what candidates to emit.
+
+# Step 2 -- consider all input sections together.
+Consider extraction_results, scope_confirmation, evidence_records, conversation_history, and adapter_metadata together.
+
+# Step 3 -- select each in-scope persisted revision or explicitly withhold it.
+Select each in-scope persisted envelope revision for review, or explicitly withhold it with a run_metadata note.

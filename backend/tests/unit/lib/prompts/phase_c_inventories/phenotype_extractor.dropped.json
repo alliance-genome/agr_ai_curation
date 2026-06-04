@@ -1,0 +1,68 @@
+[
+  {
+    "phrase": "`search_document` queries a Weaviate vector database. Default `search_mode=\"auto\"` preserves hybrid search.",
+    "category": "relocated",
+    "reason": "PE-16. The <search_context> block was removed per the Phase C extractor skeleton. The hybrid-default search fact already lives on the production path in the search_document bindings.yaml description/summary, which the model sees as the tool description. The base prompt no longer restates the search backend mechanics.",
+    "old_source": "packages/alliance/agents/phenotype_extractor/prompt.yaml:<search_context>",
+    "new_home": "bindings:search_document",
+    "synonyms": ["The default blended search combines meaning-based and exact-word matching"]
+  },
+  {
+    "phrase": "Pass `search_mode=\"lexical\"` for exact phenotype labels, genotype handles, allele names, strain names, reagent identifiers, PMIDs/DOIs, and other controlled tokens.",
+    "category": "relocated",
+    "reason": "PE-17. The lexical-mode guidance for exact tokens is carried by the search_document bindings summary, which tells the model exact-word matching is best for specific symbols/strains/alleles/probes/identifiers and that very short queries automatically lean on exact-word matching. The base prompt no longer restates it.",
+    "old_source": "packages/alliance/agents/phenotype_extractor/prompt.yaml:<search_context>",
+    "new_home": "bindings:search_document",
+    "synonyms": ["Exact-word matching is best for specific gene symbols, strains, alleles, probes, or identifiers"]
+  },
+  {
+    "phrase": "`read_section`/`read_subsection` retrieve ALL chunks under a named section using the LLM-resolved hierarchy, useful for complete coverage of Results, figure legends, or Methods context.",
+    "category": "relocated",
+    "reason": "PE-19. The full-section coverage fact (read all chunks under a named section, grouped by the paper's own structure rather than by page order, for full coverage) lives in the read_section and read_subsection bindings summaries on the production path. The base prompt no longer restates the read-tool mechanics; the workflow keeps the curation hint to read Results/figures/Methods for complete coverage.",
+    "old_source": "packages/alliance/agents/phenotype_extractor/prompt.yaml:<search_context>",
+    "new_home": "bindings:read_section",
+    "synonyms": ["grouped by the paper's own structure rather than by page order", "full coverage"]
+  },
+  {
+    "phrase": "The loaded paper was ingested through a PDF processing pipeline into structured chunks annotated with page, section, subsection, and element type.",
+    "category": "deleted",
+    "reason": "PE-15. Backend ingestion implementation detail, not a curation rule. The page/section/subsection/element-type provenance fields the model actually needs already surface in the read_chunk and record_evidence tool results (and in the shared evidence field shape retained in <output_and_handoff_contract>). No home for the ingestion-pipeline narration; recorded here so the deletion is visible in review.",
+    "old_source": "packages/alliance/agents/phenotype_extractor/prompt.yaml:<search_context>",
+    "new_home": ""
+  },
+  {
+    "phrase": "Pass `search_mode=\"hybrid_lexical_first\"` when normal hybrid search should retry with lexical-heavy matching.",
+    "category": "deleted",
+    "reason": "PE-18. Internal retry-mode mechanic, not a curation rule and not a curator-facing search behavior. The curator-facing search guidance (blended default, exact-word matching for specific tokens, short queries leaning lexical) already lives in the search_document bindings summary. The hybrid_lexical_first retry knob is an implementation detail dropped with no home.",
+    "old_source": "packages/alliance/agents/phenotype_extractor/prompt.yaml:<search_context>",
+    "new_home": ""
+  },
+  {
+    "phrase": "Raw mentions, excluded candidates, ambiguity notes, normalization notes, evidence, and run summaries are preserved as `metadata.*` audit information, not as helper semantic lists.",
+    "category": "deleted",
+    "reason": "PE-12. Latent contradiction flagged by the pilot for phenotype. The model has NO channel to write metadata.* audit fields: PhenotypeStageInput exposes no exclusion/ambiguity/reason_code/raw-mention param, and materialize_phenotype_builder_state hard-codes metadata.exclusions/ambiguities/notes=[], normalization_notes=[<one backend string>], run_summary.excluded_count/ambiguous_count=0, and builds raw_mentions backend-side from staged candidates (conversion.py L786-847). Instructing the model to 'preserve' these is impossible to satisfy and contradicts the same prompt's 'do not author curatable_objects[] / no prose outside the ack'. Deleted with no home; the accurate mechanism (you never type metadata.*; exclude by not staging; the backend materializes metadata from staged state) is stated in <success_criteria>/<evidence_and_curation_rules>/<output_and_handoff_contract>, and the curation intent is preserved (uncertain-but-supported phenotype STILL staged with selectors left for the validator).",
+    "old_source": "packages/alliance/agents/phenotype_extractor/prompt.yaml:<success_criteria>",
+    "new_home": ""
+  },
+  {
+    "phrase": "Exclude or move to metadata.exclusions[]:",
+    "category": "deleted",
+    "reason": "PE-39. Same metadata-mechanism contradiction as PE-12. There is no metadata.exclusions[] write channel for the model (materializer hard-codes exclusions=[]). The exclusion list under this header is preserved as curation guidance in <evidence_and_curation_rules>, but reworded to the real mechanism: an exclusion is expressed by NOT staging the candidate (or discard_phenotype_observation with a free-text reason). The 'move to metadata.exclusions[]' instruction is deleted with no home.",
+    "old_source": "packages/alliance/agents/phenotype_extractor/prompt.yaml:<evidence_rules>",
+    "new_home": ""
+  },
+  {
+    "phrase": "Keep audit material, exclusions, ambiguities, normalization notes, and run counters in the configured metadata locations; do not add prose outside the final finalization acknowledgment.",
+    "category": "deleted",
+    "reason": "PE-12. Third instance of the same contradiction (the old <structured_output_guidance> block). 'Keep ... in the configured metadata locations' instructs the model to write metadata it cannot reach. Deleted with no home; the load-bearing half ('do not add prose outside the final finalization acknowledgment' / 'never invent ... evidence text' / 'stage the evidence-backed context for curator review instead of forcing a validated answer') is preserved verbatim-in-spirit in <output_and_handoff_contract>/<stop_rules>.",
+    "old_source": "packages/alliance/agents/phenotype_extractor/prompt.yaml:<structured_output_guidance>",
+    "new_home": ""
+  },
+  {
+    "phrase": "search-context ~1500-char chunk size claim",
+    "category": "deleted",
+    "reason": "PE-21. The template flags a '~1500-char' search-context size claim as a deletion; the pre-rewrite phenotype prompt contains NO such size claim. Recorded as a deleted no-op entry for parity with the worked examples so the deletion ledger is explicit; nothing was actually present to remove.",
+    "old_source": "packages/alliance/agents/phenotype_extractor/prompt.yaml:<search_context>",
+    "new_home": ""
+  }
+]

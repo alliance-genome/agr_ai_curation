@@ -477,15 +477,18 @@ def test_phenotype_extractor_prompt_agent_and_group_rules_name_domain_contract()
     assert "active validator bindings own" in prompt_content
     assert "agr_curation_query" not in agent_data["tools"]
     assert "broad curation lookup tools" in prompt_content
-    assert "PhenotypeAnnotation(PhenotypeAnnotationPayload role=curatable_unit" in generated_content
-    assert "Schema/provider refs: alliance_linkml." in generated_content
-    assert "PhenotypeSubject" in generated_content
-    assert "PhenotypeTerm" in generated_content
+    # The core_generated runtime contract was slimmed (Phase A) to action-relevant
+    # lines only. The envelope-object dump, schema/provider refs, and the
+    # ``->{binding_id}`` suffix on validator-bound fields are no longer inlined --
+    # they stay retrievable via get_agent_contract. Re-baselined to the compact
+    # "Validators own these fields" line, which still names the bound fields.
+    assert "PhenotypeAnnotation(PhenotypeAnnotationPayload role=" not in generated_content
+    assert "Schema/provider refs:" not in generated_content
+    assert "->phenotype_subject_entity_validator" not in generated_content
+    assert "Validators own these fields" in generated_content
+    assert "PhenotypeSubject.subject_identifier" in generated_content
+    assert "PhenotypeAnnotation.phenotype_terms[0].curie" in generated_content
     assert "taxon" in generated_content
-    assert (
-        "PhenotypeSubject.subject_identifier->phenotype_subject_entity_validator"
-        in generated_content
-    )
     assert "Active validator bindings own validator result fields" in generated_content
     assert "repair_mode" not in prompt_content
     assert "repair_notes" not in prompt_content

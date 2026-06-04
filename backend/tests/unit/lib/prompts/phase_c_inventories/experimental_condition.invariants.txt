@@ -1,0 +1,30 @@
+# Phase C workflow invariants: experimental_condition composite validator (Wave 3 — bounded composite path).
+#
+# Invariants are STRONGER than plain phrase retention: each line is an ordered step of the
+# validator's bounded COMPOSITE lookup path. The invariant framework
+# (1) reuses the retention assertion -- every line must appear in the assembled render --
+# and (2) asserts the lines appear in this same order by first occurrence, so the rewrite
+# cannot scramble the
+# enumerate-components -> ground-each-component -> resolve-single-unambiguous ->
+# judge-relation-coherence -> compose-condition-decision sequence.
+#
+# AUTHORING RULE (enforced by the harness): each phrase must occur EXACTLY ONCE in the
+# assembled render and be listed in workflow order. These are verbatim from the rewritten
+# <lookup_workflow> "Bounded composite lookup path" numbered block (steps 1-5), where each
+# occurs exactly once and in order. (ECV-11..ECV-15 in
+# docs/design/phaseC-checklists/experimental_condition.md.)
+
+# Step 1 -- enumerate every present/required component (relation type as coherence context only).
+Enumerate every present or required component of the condition (relation type as coherence context only).
+
+# Step 2 -- ground each present component via its owning capability method before resolving it.
+For each present grounded component -- condition class/id, condition chemical (ChEBI ontology term), condition taxon, quantity/unit, data provider -- call the owning capability's `agr_curation_query` method before resolving it, and record each call in that component's `lookup_attempts`.
+
+# Step 3 -- resolve only a single unambiguous match; preserve ambiguous/obsolete/conflicting as candidates.
+Resolve a component only when tool evidence returns a single unambiguous match satisfying its expected fields; preserve ambiguous, obsolete, conflicting, or alternate records as that component's candidates and leave it unresolved.
+
+# Step 4 -- judge relation coherence using condition_relation_type as context only.
+Judge relation coherence using `condition_relation_type` as context only -- does the resolved condition class fit the stated relation? -- without looking up the relation vocabulary.
+
+# Step 5 -- compose condition-level decision; otherwise unresolved with blocking components listed.
+Compose the condition-level decision: resolved only when every required component resolved and the condition-level expected fields can be populated from lookup evidence; otherwise unresolved with the blocking components listed in `unresolved_components`.

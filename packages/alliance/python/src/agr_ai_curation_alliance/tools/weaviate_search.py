@@ -151,11 +151,16 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
 
         Use returned chunk_id values with read_chunk for final evidence selection.
         Do not use search snippets as retained evidence.
-        Use search_mode='lexical' for exact biomedical symbols, IDs, strains,
-        alleles, probes, reagents, genotype handles, PMIDs/DOIs, and controlled
-        tokens; use search_mode='hybrid_lexical_first' when broad hybrid search
-        should retry with lexical-heavy matching if needed. The default 'auto'
-        preserves hybrid search for broad conceptual queries.
+        The default search_mode='auto' runs hybrid search (semantic similarity plus
+        BM25 keyword matching), so it bridges paraphrases like "expressed in" vs
+        "detected in" that pure keyword search would miss. Use search_mode='lexical'
+        for exact gene symbols, IDs, strains, alleles, probes, reagents, genotype
+        handles, and PMIDs/DOIs; use search_mode='hybrid_lexical_first' when broad
+        hybrid search should retry with lexical-heavy matching. Results are reranked
+        by a cross-encoder and then diversified via MMR, and short queries (<=3
+        tokens) auto-boost lexical matching to avoid semantic drift. Pass
+        section_keywords to scope the search to named sections (e.g. Results or
+        figure legends) before retrieval runs.
 
         Args:
             query: Search terms or natural-language retrieval query.
@@ -239,10 +244,13 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
 
     @function_tool
     async def read_chunk(chunk_id: str) -> ChunkReadResult:
-        """Read one PDF chunk and return selectable evidence_spans.
+        """Read one PDF chunk and return its full text plus selectable evidence_spans.
 
-        For retained evidence, choose evidence_spans[].span_id values and pass
-        them to record_evidence(span_ids=[...]). Do not write evidence quote text.
+        This is the evidence-selection step: it returns the complete chunk text and
+        deterministic evidence_spans, each carrying a span_id. For retained evidence,
+        choose evidence_spans[].span_id values and pass them to
+        record_evidence(span_ids=[...]); the backend copies the exact source text into
+        verified_quote. Do not write evidence quote text yourself.
 
         Args:
             chunk_id: Chunk identifier returned by search_document or section source chunks.
@@ -373,11 +381,13 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
 
     @function_tool
     async def read_section(section_name: str) -> SectionReadResult:
-        """Survey ALL content from a specific section of the document.
+        """Survey the full text of ALL chunks in a named section of the document.
 
-        Use this tool when you need to read an ENTIRE section at once, especially for:
+        Returns every chunk classified under the section via the LLM-resolved semantic
+        hierarchy, not linear page order, so it gives complete coverage even when search
+        would miss low-scoring passages. Reach for it for comprehensive reads, especially:
         - Extracting complete lists (e.g., all strains in Methods)
-        - Getting full tables or figures
+        - Getting full tables or figure legends (a rich source of expression evidence)
         - Reading complete methodology details
         - Any case where you need comprehensive section content
         Use section.source_chunks[].chunk_id with read_chunk for final evidence
@@ -534,12 +544,13 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
 
     @function_tool
     async def read_subsection(parent_section: str, subsection: str) -> SubsectionReadResult:
-        """Survey content from a SPECIFIC SUBSECTION within a parent section.
+        """Survey the full text of ALL chunks in a SPECIFIC SUBSECTION of a parent section.
 
-        Use this for precise reading when you know the exact subsection you need.
-        This respects the LLM-resolved document hierarchy for accurate boundaries.
-        For retained evidence, call read_chunk on relevant chunks and select
-        evidence_spans[].span_id values before record_evidence.
+        Returns every chunk under the subsection via the LLM-resolved semantic hierarchy,
+        not linear page order, for complete coverage when search may miss low-scoring
+        passages. Use it for precise, full reads of a named subsection (figure legends are
+        a rich source of expression evidence). For retained evidence, call read_chunk on
+        relevant chunks and select evidence_spans[].span_id values before record_evidence.
 
         Examples:
             - read_subsection("Methods", "Fly Strains")

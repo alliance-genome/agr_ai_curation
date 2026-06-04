@@ -1,0 +1,30 @@
+# Phase C workflow invariants: subject_entity validator (Wave 3 — routing decision path).
+#
+# Invariants are STRONGER than plain phrase retention: each line is an ordered
+# step of the validator's routing decision path. The invariant framework
+# (1) reuses the retention assertion -- every line must appear in the assembled
+# render -- and (2) asserts the lines appear in this same order by first
+# occurrence, so the rewrite cannot scramble the
+# normalize -> unsupported-stop -> select-route -> run-lookup -> resolve/unresolve
+# sequence.
+#
+# AUTHORING RULE (enforced by the harness): each phrase must occur EXACTLY ONCE
+# in the assembled render and be listed in workflow order. These are verbatim
+# from the rewritten <lookup_workflow> numbered routing block (steps 1-5), where
+# each occurs exactly once and in order. (SEV-WF in
+# docs/design/phaseC-checklists/subject_entity.md.)
+
+# Step 1 -- normalize the subject_type by its exact label.
+Normalize `subject_type` by its exact label.
+
+# Step 2 -- unsupported type: stop without a lookup path.
+For an unsupported type, return unresolved without calling a lookup path.
+
+# Step 3 -- select exactly one concrete route and record it.
+Select exactly one concrete route and set `selected_validator.validator_agent` accordingly.
+
+# Step 4 -- run that route's lookup semantics.
+Run that route's lookup semantics against `agr_curation_query`.
+
+# Step 5 -- resolve only on one non-conflicting match; otherwise unresolved.
+Resolve only on exactly one non-conflicting match; otherwise return unresolved and preserve the candidates.

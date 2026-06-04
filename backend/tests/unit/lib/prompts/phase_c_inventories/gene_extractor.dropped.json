@@ -1,0 +1,86 @@
+[
+  {
+    "phrase": "The default `search_mode=\"auto\"` preserves hybrid search, combining semantic similarity with BM25 keyword matching",
+    "synonyms": [
+      "default blended search combines meaning-based and exact-word matching"
+    ],
+    "category": "relocated",
+    "reason": "GE-14. The <search_context> block restated the hybrid/auto search-backend fact that already lives in the search_document tool description on the production path. The Phase C extractor skeleton drops the <search_context> block and relocates these facts to the tool descriptions rather than duplicating them in the base prompt. The verbatim tool-summary wording is the synonym so the home check passes on equivalent phrasing.",
+    "old_source": "packages/alliance/agents/gene_extractor/prompt.yaml:<search_context>",
+    "new_home": "bindings:search_document"
+  },
+  {
+    "phrase": "Pass `search_mode=\"lexical\"` for exact gene symbols, IDs, strains, alleles, probes",
+    "synonyms": [
+      "Exact-word matching is best for specific gene symbols, strains, alleles, probes, or identifiers"
+    ],
+    "category": "relocated",
+    "reason": "GE-15. The lexical-mode-for-controlled-tokens fact is a search_document tool capability already documented in its tool description; relocate (do not duplicate) per the Phase C extractor skeleton.",
+    "old_source": "packages/alliance/agents/gene_extractor/prompt.yaml:<search_context>",
+    "new_home": "bindings:search_document"
+  },
+  {
+    "phrase": "You can pass `section_keywords` to restrict search to specific sections",
+    "synonyms": [
+      "can be limited to particular sections"
+    ],
+    "category": "relocated",
+    "reason": "GE-16. Section-restriction guidance is a tool capability that lives in the search_document tool description; relocate rather than restate in the base prompt.",
+    "old_source": "packages/alliance/agents/gene_extractor/prompt.yaml:<search_context>",
+    "new_home": "bindings:search_document"
+  },
+  {
+    "phrase": "read_section('Methods')\" returns every chunk classified under Methods regardless of where those chunks appear in the PDF",
+    "synonyms": [
+      "complete text of every passage in a section, grouped by the paper's own structure rather than by page order"
+    ],
+    "category": "relocated",
+    "reason": "GE-17. The full-section/full-subsection coverage fact (all chunks under a named section via the LLM-resolved hierarchy, not page order) is a read_section/read_subsection tool capability already documented in those tool descriptions; relocate per the skeleton instead of restating the <search_context> reading-tools paragraph in the base prompt.",
+    "old_source": "packages/alliance/agents/gene_extractor/prompt.yaml:<search_context>",
+    "new_home": "bindings:read_section"
+  },
+  {
+    "phrase": "select the backend-generated `evidence_spans[].span_id` values that directly support one evidence unit",
+    "synonyms": [
+      "snippets within it that can be captured as supporting evidence"
+    ],
+    "category": "relocated",
+    "reason": "GE-18 (de-dup). The <search_context> evidence-selection paragraph restated the read_chunk span-selection mechanic that read_chunk's own tool description already carries ('the specific snippets within it that can be captured as supporting evidence'). The curation guidance (pick spans that directly support a finding, no paraphrase) is KEPT once in <workflow>/<evidence_and_curation_rules>; the duplicated tool mechanic is relocated to the tool description.",
+    "old_source": "packages/alliance/agents/gene_extractor/prompt.yaml:<search_context>",
+    "new_home": "bindings:read_chunk"
+  },
+  {
+    "phrase": "Multiple `span_ids` in one `record_evidence` call produce one evidence record",
+    "synonyms": [
+      "Each call saves one piece of evidence"
+    ],
+    "category": "relocated",
+    "reason": "GE-19 (de-dup). The one-call-one-record mechanic appeared in both <search_context> and the evidence rules; the record_evidence tool description already states it ('Each call saves one piece of evidence; if several snippets are chosen together, they are stored as one joined quote'). The base prompt keeps the curation guidance to use separate calls for truly disjoint evidence units (verbatim in <workflow>), and the mechanic itself is relocated to the tool description.",
+    "old_source": "packages/alliance/agents/gene_extractor/prompt.yaml:<search_context> + <evidence_rules>",
+    "new_home": "bindings:record_evidence"
+  },
+  {
+    "phrase": "Active validator bindings declared by the gene domain pack are the authority",
+    "synonyms": [
+      "alliance_gene_reference_lookup"
+    ],
+    "category": "relocated",
+    "reason": "GE-29. The base prompt keeps the curation RULE (validator owns final identity), but the concrete active gene validator binding identity is enumerated by get_agent_contract (topic validator_bindings) as alliance_gene_reference_lookup; the binding-identity detail is owned by the contract, not restated in the base prompt.",
+    "old_source": "packages/alliance/agents/gene_extractor/prompt.yaml:<active_validator_binding_policy>",
+    "new_home": "contract:gene_extractor:validator_bindings"
+  },
+  {
+    "phrase": "Content is returned up to ~1500 characters per chunk hit for search",
+    "category": "deleted",
+    "reason": "GE-20. Inaccurate, brittle implementation detail (the ~1500-char figure is not a contract and drifts); the Phase C extractor skeleton explicitly DROPS this sentence with NO relocation. No home; recorded here so the deletion is visible in review rather than hidden in the diff.",
+    "old_source": "packages/alliance/agents/gene_extractor/prompt.yaml:<search_context>",
+    "new_home": ""
+  },
+  {
+    "phrase": "Results are reranked by a cross-encoder and then diversified via MMR (Maximal Marginal Relevance)",
+    "category": "deleted",
+    "reason": "GE-21. Internal search-ranking mechanics (cross-encoder rerank + MMR diversification, short-query lexical boost) are implementation details that do not change the curator-facing extraction behavior. The one curator-relevant consequence (very short queries lean on exact-word matching) already lives in the search_document tool description, so this sentence is deleted with no relocation rather than duplicated.",
+    "old_source": "packages/alliance/agents/gene_extractor/prompt.yaml:<search_context>",
+    "new_home": ""
+  }
+]

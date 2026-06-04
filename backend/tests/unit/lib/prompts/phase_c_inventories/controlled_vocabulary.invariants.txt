@@ -1,0 +1,30 @@
+# Phase C workflow invariants: controlled_vocabulary validator (Wave 3 — bounded lookup path).
+#
+# Invariants are STRONGER than plain phrase retention: each line is an ordered step of
+# the validator's bounded controlled-vocabulary lookup path. The invariant framework
+# (1) reuses the retention assertion -- every line must appear in the assembled render
+# -- and (2) asserts the lines appear in this same order by first occurrence, so the
+# rewrite cannot scramble the
+# exact-lookup -> broader-search -> resolve-or-unresolve -> tool-unavailable ->
+# zero-results sequence.
+#
+# AUTHORING RULE (enforced by the harness): each phrase must occur EXACTLY ONCE in the
+# assembled render and be listed in workflow order. These are verbatim from the
+# rewritten <lookup_workflow> "Bounded lookup path" numbered block (steps 1-5), where
+# each occurs exactly once and in order. (CVV-15..CVV-19 in
+# docs/design/phaseC-checklists/controlled_vocabulary.md.)
+
+# Step 1 -- vocabulary + one term query: exact lookup.
+If `vocabulary` and one term query are present, call `get_vocabulary_term` first with `include_synonyms: true`, `include_obsolete: true`, and a limit large enough to detect ambiguity.
+
+# Step 2 -- exact lookup empty + broader allowed: search.
+If the exact lookup returns no candidates and the target allows broader search, call `search_vocabulary_terms` with `exact_match: false` and a small limit.
+
+# Step 3 -- single non-obsolete exact: resolve; obsolete/multiple: unresolved.
+Resolve a single non-obsolete exact candidate; return obsolete or multiple candidates as unresolved per the rules above.
+
+# Step 4 -- tool unavailable/under-development: unresolved with error.
+If the tool reports under-development or unavailable helper behavior, return unresolved with a lookup attempt outcome of `error` and a curator-facing message that vocabulary validation could not run in this runtime.
+
+# Step 5 -- zero results: unresolved no-match.
+If the tool returns zero results, return unresolved with `lookup_attempts`, `missing_expected_fields`, and a curator-facing no-match explanation.

@@ -1,0 +1,17 @@
+# Phase C group-hook inventory: allele validator rendered with the MGI group.
+#
+# One sampled group (MGI), mirroring how the gene harness samples a single group
+# (gene.mgi.txt). Asserts the rewritten base prompt renders cleanly UNDER a group
+# overlay and the organism-specific MGI allele-search hooks still arrive in the
+# assembled render (core + base + MGI group rules). No allele contract test
+# asserts group-rule content; the group rules themselves are unchanged by this
+# rewrite.
+
+# MGI genotype-notation strip hook (papers use zygosity notation the DB never stores).
+Strip Genotype Notation Before Searching
+
+# MGI result-selection hook (use paper notation to pick the right allele variant).
+Selecting from Multiple Search Results
+
+# MGI attribution-disambiguation hook (creator/institution from the fullname).
+fullname_attribution

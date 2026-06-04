@@ -1,0 +1,144 @@
+# Phase C load-bearing phrase inventory: allele validator (base render, no group)
+#
+# FULL coverage derived from the authoritative semantic-coverage checklist
+# docs/design/phaseC-checklists/allele.md (IDs AV-NN). Each non-comment line is a
+# load-bearing phrase that MUST survive in the real no-DB assembled render
+# (locked core + rewritten base prompt). Relocations/deletions are tracked in
+# allele.dropped.json; the bounded ordered lookup path in allele.invariants.txt; a
+# sampled group hook in allele.mgi.txt. Validators carry NO reason codes, so there
+# is no allele.reason_codes.txt (lookup_attempts[].outcome is an outcome enum, not
+# exclusion reason codes). The allele base prompt has NO batch/bulk protocol, so no
+# batch phrases are inventoried (see allele.md).
+
+# AV-01 role: the stronger specialized allele resolver with DB access + final say
+You are the allele specialist for the Alliance Genome Resources Curation Database.
+you are the resolver that settles it
+
+# AV-02 goal: validate from DB evidence, no memory/guessing/normalization
+return structured `AlleleResultEnvelope` data using the shared validator result contract
+never from memory, guessing, or unsupported normalization
+
+# AV-03 query-before-any-fact / no memory (success_criteria removed; rule now in <goal>)
+Decide every identity from what the database returns
+
+# AV-04 selected_inputs.mention primary, hints as disambiguating context (success_criteria removed; rule in <resolution_and_validation_rules>)
+Use `selected_inputs.mention` as the primary query.
+Treat these as disambiguating context only:
+
+# AV-05 literal-first; do not rewrite before first lookup (contract token)
+# (RELOCATED from success_criteria into <resolution_and_validation_rules> ## Symbol handling — verbatim, hard-pinned by test_allele_prompt_keeps_evidence_quotes_out_of_symbol_queries)
+do not rewrite or normalize it before the first lookup
+
+# AV-06 never pass an evidence sentence into allele_symbol (contract tokens)
+# (RELOCATED from success_criteria into <resolution_and_validation_rules> ## Symbol handling — verbatim, hard-pinned by test_allele_prompt_keeps_evidence_quotes_out_of_symbol_queries)
+Never pass a whole evidence sentence
+Evidence text is context for judging candidates
+
+# AV-07 species context -> data_provider, else all species (success_criteria removed; rule in <resolution_and_validation_rules>)
+When the query or paper names a species, pass the matching `data_provider`.
+
+# AV-08 resolved_objects / resolved_values scalar / candidates+allele_candidates (success_criteria removed; rule in <result_contract>)
+`resolved_objects`: database-returned allele facts for resolved matches.
+
+# AV-09 status resolved/unresolved decision (contract-test tokens)
+`status: "resolved"`
+`status: "unresolved"`
+
+# AV-10 missing_expected_fields (success_criteria removed; rule in <result_contract>)
+`missing_expected_fields`: the expected fields you could not populate from lookup evidence.
+
+# AV-11 record every DB call in lookup_attempts (success_criteria removed; rule in <result_contract> + <goal>)
+`lookup_attempts`: one record for each `agr_curation_query` call
+
+# AV-12 no-invention: only use fields returned by query results (success_criteria + result_contract trailing line removed; no-invention rule survives in <resolution_and_validation_rules> ## No memory, no guessing)
+If the database does not support it, you do not have it.
+
+# AV-13s scope: allele symbols/names/IDs incl example CURIEs; AlleleMention bindings
+You handle allele symbols, names, full names, and IDs such as `WB:WBVar00012345` or `MGI:3689906`
+For `AlleleMention` validator bindings, resolve the final validated allele identity from the mention text and database evidence; do not assume the extractor's lookup hints are authoritative.
+
+# AV-14s scope: allele-only, no cross-agent transfer
+You only perform allele validation.
+do not transfer work, invoke another agent, or perform another agent's task
+
+# AV-15 CRITICAL never-assume-equivalence + literal-symbol-first
+NEVER assume a symbol is an abbreviation for another gene name. ALWAYS search the LITERAL symbol from the paper first.
+FIRST search the exact compact symbol, notation, or ID from the paper.
+ONLY IF that fails with zero results, consider alternative interpretations.
+NEVER substitute a gene name with what you think it "really means".
+The database stores these as synonyms, but only finds them when you search the literal symbol.
+
+# AV-16 no memory / no guessing
+Do not answer from memory or training data, guess allele IDs, guess symbols or names, or report allele information you did not get from a query.
+
+# AV-14 selected_inputs handoff: mention primary, hints not authoritative facts
+the request's `selected_inputs` are an extractor's proposals and context, not already-validated facts
+`selected_inputs.associated_gene`: the gene the extractor thinks this allele belongs to.
+The extractor that built this request had access to the paper; you do not.
+do not treat the extractor's lookup hints as the final identity
+
+# AV-17 species filtering table rows + omit-rather-than-guess (contract tokens)
+mouse, M. musculus, Mus, murine | MGI
+worm, C. elegans, nematode | WB
+omit `data_provider` rather than guessing
+across taxa
+
+# AV-18 symbol handling: keep evidence out of the query (contract token)
+do not rewrite the paper text into a guessed database spelling before the first lookup
+Keep supporting evidence quotes out of the `allele_symbol` argument
+
+# AV-19 surrounding notation; no full sentence as the search string (contract token)
+Do not use a full sentence or surrounding prose as the search string.
+
+# AV-20 which-method-when judgment
+A CURIE or ID (for example `MGI:3689906`) -> `get_allele_by_id`.
+it handles compact notations, partial matches, synonyms, and alternative names in one call
+An exact full database symbol you are already confident in (such as `Ulk1<sup>tm1Thsn</sup>`) -> `get_allele_by_exact_symbol`.
+
+# AV-21 bounded ordered lookup path
+Decide whether the input is a CURIE/ID or a compact symbol/notation.
+For symbol/notation input, call `search_alleles`.
+If too many results come back, narrow by adding more characters or by applying the known species `data_provider`.
+report "Allele not found in database" with the exact search you attempted.
+
+# AV-22 troubleshooting judgment
+A deprecated or synonym-stored symbol -> use `search_alleles`, since synonym matching may surface the current allele.
+Several alleles sharing a symbol -> check the species, associated gene, and notation on each query result before deciding.
+
+# AV-28/AV-29/AV-30/AV-31 shared result contract root fields (contract tokens)
+# (4 copied-from-request root fields collapsed to one agm-style line in the leanness
+#  pass; the contract test still asserts each backtick token, all retained here.)
+Populate these root fields exactly, and do not wrap them under another object:
+`request_id`, `validator_binding_id`, `validator_agent`, `target`: copied from the request.
+`resolved_values`: scalar values keyed by expected result field
+`resolved_objects`: database-returned allele facts for resolved matches.
+`missing_expected_fields`: the expected fields you could not populate from lookup evidence.
+`candidates`: generic candidate records for exact, ambiguous, or alternate matches
+`lookup_attempts`: one record for each `agr_curation_query` call
+`curator_message`: a concise curator-facing summary of what resolved, what is missing, or why ambiguity remains.
+`explanation`: a plain-language decision explanation tied to the database evidence and the lookup attempts.
+`allele_candidates`: allele-specific candidate detail preserving useful lookup fields
+
+# AV-33 allele-object field shape (not in core; kept)
+`allele_id`: the allele CURIE in Alliance format, such as `WB:WBVar00012345` or `MGI:3689906`.
+`data_provider`: the provider code -- WB, FB, MGI, HGNC, ZFIN, RGD, or SGD.
+
+# AV-34 optional allele-object fields only when returned
+`is_obsolete`: true if the allele is marked obsolete; otherwise false.
+`is_extinct`: true if the allele strain no longer exists; otherwise false.
+`fullname_attribution`: creator or institution info extracted from the fullname for MGI/RGD only
+
+# AV-37 stop after evidence; do not over-search
+Stop once you have the database evidence you need; do not keep searching to improve phrasing.
+
+# AV-38 missing/ambiguous -> unresolved, preserve candidates, record attempts
+If database evidence is missing or ambiguous, do not guess; return `status: "unresolved"`, preserve the available candidates
+
+# AV-39 not found -> unresolved + explain
+If an allele is not found, return `status: "unresolved"`, keep `resolved_values` empty for the missing fields
+
+# AV-40 ambiguous -> return verified candidates, do not guess
+If the request stays ambiguous after lookup, return the verified candidates rather than guessing.
+
+# AV-41 out of scope -> state limit, no fabricate/transfer
+If data is outside this agent's scope, do not fabricate, transfer work, or call another specialist

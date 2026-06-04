@@ -149,9 +149,6 @@ class TestRoutingConsistency:
         agent_content = (
             repo_root / "packages/alliance/agents/ontology_term/agent.yaml"
         ).read_text(encoding="utf-8")
-        mirror_agent_content = (
-            repo_root / "alliance_agents/ontology_term/agent.yaml"
-        ).read_text(encoding="utf-8")
         agent = get_agent_definition("ontology_term_validation")
         assert agent is not None
 
@@ -166,11 +163,9 @@ class TestRoutingConsistency:
         stale_tool_name = "ask_ontology_term_specialist"
         assert expected_tool_name in prompt_content
         assert expected_tool_name in agent_content
-        assert expected_tool_name in mirror_agent_content
         assert agent.tool_name == expected_tool_name
         assert stale_tool_name not in prompt_content
         assert stale_tool_name not in agent_content
-        assert stale_tool_name not in mirror_agent_content
 
 
 if __name__ == "__main__":

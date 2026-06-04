@@ -12,7 +12,7 @@ content: |
   - Integrated arrays: xxIs### format (e.g., qyIs369, muIs32). These are transgene constructs, NOT alleles.
   - Extrachromosomal arrays: xxEx### format (e.g., muEx225). These are transgene constructs, NOT alleles.
   - Reporter fusions (gene::GFP, gene::mCherry) are tools, not alleles being studied.
-  - Capture transgenes in metadata.raw_mentions[] but exclude from curatable_objects[] unless the transgene IS the experimental variable.
+  - Do not stage transgene constructs as alleles unless the transgene IS the experimental variable.
 
   ### Strain disambiguation
   - N2 (Bristol) is the standard wild-type strain — NOT an allele.
@@ -26,6 +26,6 @@ content: |
 
 
   ### Shared domain-envelope output contract
-  - Emit retained semantic findings only in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  - Stage retained findings through the builder tools only; the backend materializes them into `curatable_objects[]`. Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]` yourself.
   - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and curator review notes under `metadata.*` as non-semantic envelope metadata.
   - Each curatable object should include `object_type`, `object_role`, `payload`, `evidence_record_ids`, `metadata_refs`, and either `object_id` or `pending_ref_id`; include `schema_ref` or `model_ref`, definition-state notes, and field/object refs when available.

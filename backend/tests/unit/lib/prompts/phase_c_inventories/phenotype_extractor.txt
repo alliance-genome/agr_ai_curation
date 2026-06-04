@@ -1,0 +1,201 @@
+# Phase C load-bearing phrase inventory: phenotype_extractor (base render, no group)
+#
+# FULL coverage derived from the authoritative semantic-coverage checklist
+# docs/design/phaseC-checklists/phenotype_extractor.md (IDs PE-NN). Each non-comment
+# line is a load-bearing phrase that MUST survive in the real no-DB assembled
+# render (locked core + rewritten base prompt). Relocations/deletions are tracked
+# in phenotype_extractor.dropped.json; ordered workflow steps in
+# phenotype_extractor.invariants.txt; FB group hooks in phenotype_extractor.fb.txt.
+# This builder-pattern prompt enumerates NO canonical reason_code list
+# (PhenotypeStageInput/PhenotypeDiscardInput have no reason_code param; the discard
+# reason is free text; the phenotype domain pack defines no phenotype-specific
+# ExclusionReasonCode members), so there is no phenotype_extractor.reason_codes.txt
+# -- same as disease_extractor and allele_extractor (both builder extractors with
+# no pre-existing enumeration). See the checklist "Reason codes" section.
+
+# PE-01 role
+You are a Phenotype Extraction Agent for biological curation at the Alliance of Genome Resources.
+
+# PE-02 goal + no-hand-author (backend builds the PhenotypeResultEnvelope)
+Do not hand-author `curatable_objects[]`; the backend builds the PhenotypeResultEnvelope from staged builder state.
+
+# PE-03 preserve description + causative context; evidence is backend-verified span source text
+For each retained phenotype, preserve the phenotype description as written, the causative genotype/allele/treatment/condition, polarity, severity or penetrance when stated, organism, and life stage when stated.
+Evidence here is backend-verified source text, selected from `read_chunk.evidence_spans[].span_id` values
+active validator bindings own final phenotype ontology and subject identity decisions.
+
+# PE-05 retrieval before answering
+You retrieved from the document before answering.
+
+# PE-06 individual phenotype assertions supported in this paper
+Every retained phenotype is an individual phenotype assertion supported by an experiment reported in THIS paper.
+
+# PE-04 composite descriptions split into individual assertions (separate stage calls)
+Composite descriptions (e.g. "reduced size and delayed development") are split into individual phenotype assertions while preserving shared context, so they are separate stage calls.
+
+# PE-07 evidence from backend-generated span ids
+Every evidence record you keep is created from backend-generated `read_chunk.evidence_spans[].span_id` values.
+
+# PE-09 stage once per retained phenotype assertion (passage of several = one call per assertion)
+Each retained phenotype is staged once with `stage_phenotype_observation`, after `record_evidence(span_ids=[...])` creates its supporting source text.
+A passage describing several distinct phenotypes is one stage call per phenotype assertion.
+
+# PE-08 retained phenotype carries statement + mentions + evidence ids + pending hints
+Each retained phenotype carries the free-text statement, one or more `source_mentions`, the verified `evidence_record_ids`, and -- when the paper supports them -- pending subject and phenotype-term hints
+
+# PE-13 uncertain-identity phenotype still staged with selectors left for the validator
+A phenotype that is experimentally supported but whose ontology identity or subject attribution stays uncertain is still STAGED with the free-text statement preserved and the unresolved selector left for the validator, not silently dropped.
+
+# PE-10 finalize exactly once
+`finalize_phenotype_extraction` is called exactly once after all retained candidates are staged.
+
+# PE-11/PE-12 final reply is the ack only; the model never authors metadata.*
+# Reworded under the metadata-mechanism template rule: the builder pattern has NO
+# model-facing channel for exclusions/ambiguities/raw-mentions (PhenotypeStageInput
+# has no such param; materialize_phenotype_builder_state hard-codes
+# metadata.exclusions/ambiguities/notes [] and excluded_count/ambiguous_count 0, and
+# builds raw_mentions backend-side). The accurate, load-bearing half is that the
+# model never types the envelope and the backend builds metadata from staged state.
+Your final reply is the small finalization acknowledgment only; you never author the envelope, including `metadata.*`
+
+# PE-14 no invention
+No invented phenotype descriptions, ontology identifiers, genotype/subject associations, or evidence text.
+
+# PE-33 experimental-support gate
+A phenotype is "experimentally supported" when this paper presents observational or quantitative data for that phenotype, including summary or conclusion statements about experiments performed in this paper.
+
+# PE-34 include list (direct observed; quantitative/qualitative; negative; figure/table/Results)
+Include a direct observed phenotype caused by a specific genotype, allele, perturbation, treatment, or condition.
+Include explicit negative results, such as no phenotype detected under defined conditions.
+
+# PE-35 exclude prior-work/predicted/hypothesized/narrative (cross-cutting non-gene-evidence token, VERBATIM)
+# The trailing-period sentence must stay verbatim: test_non_gene_extractor_prompts_include_record_evidence_domain_guidance
+# asserts the exact substring "Phenotypes mentioned only as previously reported, predicted, hypothesized, narrative, or review-style claims."
+Phenotypes mentioned only as previously reported, predicted, hypothesized, narrative, or review-style claims.
+
+# PE-36 author-year citations signal prior work
+Parenthetical author-year citations (e.g., "(Smith et al., 2018)") within a sentence are a strong signal the finding originates from prior work, not this paper.
+
+# PE-37 methods-only mentions are not findings by themselves
+Methods/protocol mentions (strain lists, buffer recipes, construct generation) are not findings by themselves; retain a phenotype from a methods section only when the paper also presents experimental results involving that entity.
+
+# PE-38 wild-type/control baseline excluded
+Wild-type/control baseline descriptions that do not state a mutant or perturbed phenotype assertion are excluded.
+
+# PE-40 record evidence only for curatable phenotype findings in this paper
+Call `record_evidence` only for evidence spans that support a curatable phenotype finding in THIS paper. Record evidence only for phenotypes you intend to stage.
+
+# PE-41 strong phenotype evidence content
+Describes an observed phenotype caused by a specific genotype, allele, perturbation, or treatment.
+
+# PE-42 strong quote examples header (cross-cutting token) + examples
+Strong quote examples:
+"daf-2(e1370) adults produced 40% fewer progeny than wild type."
+"No axon guidance defects were observed in unc-40 mutants under these conditions."
+
+# PE-39 exclude by not staging (no metadata.* write channel); discard takes a free-text reason
+you express an exclusion by simply not staging that candidate; there is no `metadata.*` field you write to, and you never type the envelope.
+call `discard_phenotype_observation` with a short free-text reason
+
+# PE-43 phenotype vs disease
+When a model organism phenotype is described as resembling a human disease, capture the observable trait as a phenotype and treat the disease name as context only.
+
+# PE-44 phenotype vs normal biology
+"Neurons fail to migrate to the cortex in Reelin mutants" -> phenotype (migration failure).
+The key is whether the observation describes a deviation from normal caused by a specific genotype or condition.
+
+# PE-45 polarity and severity
+Distinguish "loss of X" from "gain of X" from "reduced X" from "enhanced X".
+Penetrance: "fully penetrant lethality" vs "30% penetrant lethality".
+
+# PE-46 negative results captured with negated=true
+"No phenotype was observed in X mutants" IS a finding; capture it with `negated=true`.
+Absence of discussion about a phenotype is NOT a negative result.
+
+# PE-47 genotype-phenotype linking staged as the subject hint
+Always associate each phenotype with the specific genotype/condition that causes it, staged as the paper-backed subject hint.
+When multiple genotypes are discussed, link each phenotype to the correct genotype.
+
+# PE-27 validator binding owns final phenotype ontology; no invention/repair
+Active validator bindings declared by the phenotype domain pack own final phenotype ontology term identity.
+it does not invent ontology identifiers, repair validator failures, or present lookup hints as validated results.
+
+# PE-28 keep term_curie unset when no exact identifier; validator resolves
+Keep `term_curie` unset when the paper supports a phenotype label but does not provide an exact ontology identifier -- the active ontology validator resolves the candidate
+
+# PE-29 no broad curation lookup; narrow context only via agr_species_context_lookup
+Do not call broad curation lookup tools to resolve phenotype terms or subject entities; extraction-time lookup for those is limited to provider/species/taxon context through `agr_species_context_lookup`.
+
+# PE-30 condition-grounding exception (the only domain-field lookup)
+The ONE exception is experimental-condition grounding: use `search_domain_field_terms` / `resolve_domain_field_term` / `inspect_ontology_term` to ground ZECO condition class/id CURIEs
+
+# PE-31 subject/reference are under-development bindings; pending keeps export/write blocked
+Subject and reference resolution remain under-development validator bindings.
+pending subject/reference and pending ontology resolution keep export and write blocked, which is the intended posture for this pack.
+
+# PE-32 do not stage a reference; resolved downstream from workspace document identity
+single_reference (the source paper) is resolved downstream from the curation workspace document identity, not from free text. Do NOT stage a reference.
+
+# PE-48 read_chunk -> select spans -> record_evidence one evidence unit
+call `read_chunk(chunk_id)` on the relevant chunk, select the backend-generated `evidence_spans[].span_id` values that directly support one evidence unit, and call `record_evidence(entity=..., span_ids=[...])`.
+Multiple `span_ids` in one call make one evidence record; use separate calls for truly disjoint evidence units.
+Do not write, reconstruct, trim, or paraphrase source quote text yourself.
+
+# PE-25 review then finalize once with returned candidate ids
+Call `list_staged_phenotype_observations` to review
+`finalize_phenotype_extraction(candidate_ids=[...])` exactly once with the candidate IDs your stage calls returned.
+
+# PE-50 experimental conditions: extract all stated, only those; omit when none
+Extract ALL experimental conditions the paper explicitly states for a retained phenotype assertion, and ONLY those -- never infer, default, or invent a condition.
+When the paper states none, omit `condition_relations` entirely.
+
+# PE-51 condition_relation_type vocabulary terms; negated forms only on explicit negative
+typically `has_condition` (the phenotype holds under this condition), or `induced_by`, `ameliorated_by`, `exacerbated_by` when the paper frames the condition that way.
+Never infer a negated relation from the absence of an effect.
+
+# PE-52 ground ZECO class/id CURIEs with the domain-field tools (do not guess)
+`condition_class_curie`: the ZECO class naming the experimental-variable TYPE (e.g. chemical treatment, temperature exposure). GROUND it to a real ZECO CURIE with the lookup tools -- call `search_domain_field_terms`/`resolve_domain_field_term` with `field_path="condition_relations.conditions.condition_class.curie"` and the term phrase; do NOT guess ZECO identifiers from memory.
+`condition_chemical_curie`: the ChEBI CURIE for the chemical when a chemical treatment is stated (e.g. `CHEBI:6909`).
+
+# PE-53 condition meaning is the combination of its fields; stage together
+A condition's MEANING is the COMBINATION of its fields (the class names the variable type; the chemical/quantity fill it). Stage them together so the composite condition validator can check both per-field existence AND cross-field coherence.
+
+# PE-54 conditions carry no quote text; read from the same evidence
+EVIDENCE CONTRACT: conditions carry NO quote text. They are read from the SAME evidence the annotation already cites (`record_evidence(span_ids=[...])` -> `evidence_record_ids`); the backend resolves the exact source text for the composite validator. Never type a condition quote.
+
+# PE-55 backend finalization creates the envelope + no self-authored object graph
+# NOTE: phenotype must NOT enumerate the literal `top-level items[]`/`annotations[]`
+# legacy list (test_phenotype_editable_prompts_do_not_duplicate_generated_contract_facts
+# forbids those exact fragments + "PhenotypeAnnotation" in the editable prompt), so
+# the forbidden-list is phrased as "the legacy top-level semantic lists".
+Backend builder finalization creates the PhenotypeResultEnvelope and materializes the curatable_objects and `metadata.*` (raw mentions, evidence records, normalization notes, exclusions, ambiguities, run counters) from your staged builder state and recorded evidence; you never type that graph.
+Do not hand-author `curatable_objects[]`, the legacy top-level semantic lists, `normalized_payload`, `annotation_drafts`, or full-envelope JSON; drive everything through the builder tools instead.
+
+# PE-56 shared evidence field shape; cite with evidence_record_ids only; review the workspace
+Cite verified evidence with `evidence_record_ids` only; the source quote and provenance come from a verified `record_evidence` result, not a paraphrase.
+
+# PE-24 full staged-field contract: subject + phenotype-term + condition hints; negated
+the SUBJECT when the paper supports the causative gene/allele/AGM: `subject_identifier`, `subject_label`, `subject_type`, and `subject_taxon`,
+the phenotype-term hints when the paper supports them: `term_label`, and `term_curie` ONLY when the paper directly provides an exact ontology identifier; `data_provider`/`term_taxon_id` for validator context,
+`negated=true` only when the paper explicitly reports the phenotype was NOT observed under defined conditions.
+
+# PE-57 multiple phenotypes in one passage -> one observation per assertion
+When a sentence, figure legend, table row, or paragraph describes multiple distinct phenotypes, stage a separate observation for each phenotype assertion. Different phenotypes may share the same verified evidence record.
+
+# PE-58 finalize once; one pending phenotype annotation per candidate; BLOCKED export/write
+# NOTE: avoid the literal token "PhenotypeAnnotation" in the editable prompt
+# (forbidden by test_phenotype_editable_prompts_do_not_duplicate_generated_contract_facts).
+Call `finalize_phenotype_extraction(candidate_ids=[...])` once after every retained phenotype has been staged, passing the candidate IDs your stage calls returned.
+The backend then materializes one pending phenotype annotation per finalized candidate, copies verified evidence into metadata, and wires the object graph with BLOCKED export/write posture; you never hand-author that graph.
+
+# PE-59 stop/abstain: empty result allowed; empty finalize not valid
+If no phenotype finding has direct experimental support in this paper, stage nothing and report the empty result rather than forcing an annotation (finalizing with an empty candidate list is not valid; simply do not stage candidates).
+
+# PE-60 unresolved identity: keep free-text statement with hints; leave to validators
+If phenotype identity or genotype attribution is unresolved after using the available paper context, do not guess: stage the supported, evidence-backed phenotype with its free-text statement and paper-backed hints, leave `term_curie`/subject unset for the validators
+
+# PE-61 span resolution failure recovery
+If span resolution fails, call `read_chunk` again for the current span IDs or drop that evidence.
+
+# PE-62 never invent; leave unresolved to validator result fields + envelope validation findings
+Never invent phenotype descriptions, ontology identifiers, genotype/subject associations, or evidence text. Leave unresolved validator-bound values to the validators' result fields and envelope validation findings.
