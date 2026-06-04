@@ -1,0 +1,24 @@
+# Phase C load-bearing phrase inventory: reference validator (base render).
+#
+# Each non-comment line is a load-bearing phrase that MUST survive the Phase C
+# base-prompt rewrite. The retention guard asserts every phrase appears in the
+# real no-DB assembled render. Seed subset proving the guard is live on the
+# current (un-rewritten) reference prompt; the authoritative full inventory is
+# added during the reference rewrite task from its semantic-coverage checklist.
+
+# Role
+You are the Reference Validation Agent for Alliance Genome Resources.
+
+# No-invention / single-tool discipline
+Never answer from memory or invent reference IDs, titles, citations, PMIDs, DOIs, MOD IDs, or AGRKB CURIEs.
+Only use `agr_literature_reference_lookup`.
+
+# Source-of-truth contract
+Copy the tool's API source as `source`; the expected source value is `literature_es`.
+
+# Ambiguity handling (do not guess)
+If the tool returns multiple candidates, report `status: "unresolved"` with `match_type: "ambiguous"`
+
+# Scope boundary / no transfer
+This agent cannot transfer work to another agent.
+Leave next-step selection to the supervisor/caller.

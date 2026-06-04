@@ -1,0 +1,18 @@
+# Phase C workflow invariants: gene_extractor (pilot seed).
+#
+# Invariants are STRONGER than plain phrase retention: each line is an ordered
+# step of the extractor's load-bearing builder workflow. The invariant framework
+# (1) reuses the retention assertion — every line must appear in the assembled
+# render — and (2) asserts the lines appear in this same order by first
+# occurrence, so a rewrite cannot scramble the evidence -> stage -> finalize
+# sequence even if it keeps the individual phrases.
+#
+# Seeded for the pilot only; per-agent invariants are added during each rewrite.
+# These are taken verbatim from the canonical "Work in this order" block, where
+# each occurs exactly once and in workflow order.
+
+Search/read the document for candidate mentions and context.
+build a short provisional list of focal genes before selecting evidence
+Use `read_chunk` on relevant chunks and create evidence with `record_evidence(span_ids=[...])` once a gene is both focal and experimentally supported.
+Stage each retained focal gene with `stage_gene_mention_evidence`, passing the verified `evidence_record_ids`
+Call `list_staged_gene_mention_evidence` to review

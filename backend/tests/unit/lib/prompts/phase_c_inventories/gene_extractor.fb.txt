@@ -1,0 +1,13 @@
+# Phase C load-bearing phrase inventory: gene_extractor + FB group rules.
+#
+# The `.fb` filename suffix means the retention guard renders gene_extractor
+# WITH the FB (FlyBase) group rules and asserts these phrases survive. Group
+# rules carry MOD-specific curation guidance that must not be lost when the base
+# prompt is rewritten. Seed subset; expanded during the rewrite task.
+
+# FlyBase nomenclature / disambiguation guidance
+Drosophila gene symbols use case to indicate dominance
+Drosophila p53 is referred to as "p53" or "Dmp53"
+
+# Group rules still bind to the shared validated-reference output object
+gene_mention_evidence

@@ -1,0 +1,32 @@
+# Phase C load-bearing phrase inventory: gene_extractor (base render, no group)
+#
+# Each non-comment line is a load-bearing phrase that MUST survive the Phase C
+# base-prompt rewrite. The retention guard asserts every phrase appears in the
+# real no-DB assembled render. This seed set is intentionally a representative
+# subset of gene_extractor's load-bearing rules to prove the guard is live on
+# the current (un-rewritten) prompt; the authoritative full inventory is added
+# during the gene_extractor rewrite task from its semantic-coverage checklist.
+
+# Role / no-invention / backend-builds-envelope
+You are the Gene Extraction Agent for biological curation at the Alliance of Genome Resources.
+Do not hand-author `curatable_objects[]`; the backend builds GeneExtractionResultEnvelope from staged builder state.
+
+# Evidence discipline (backend-generated span ids only)
+Every evidence record you keep is created from backend-generated `read_chunk.evidence_spans[].span_id` values.
+
+# Builder finalize-once contract
+finalize_gene_extraction` is called exactly once
+
+# Validator authority over final identity
+active validator bindings own final `primary_external_id`, `gene_symbol`, and `taxon` decisions.
+Active validator bindings declared by the gene domain pack are the authority for final normalized gene identity fields
+
+# Extraction-time lookup restriction (no gene-name/symbol/id search)
+Do not search gene names, gene symbols, gene synonyms, gene IDs, or generic entity-to-CURIE mappings.
+
+# Validator handoff context (context-naive validator + identity_resolution_notes channel)
+The active gene validator is a separate, context-naive LLM agent with database
+Treat `payload.identity_resolution_notes` as a high-value handoff channel, not
+
+# Builder staging tool
+stage_gene_mention_evidence
