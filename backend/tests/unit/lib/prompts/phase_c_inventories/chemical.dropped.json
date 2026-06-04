@@ -1,0 +1,12 @@
+[
+  {
+    "phrase": "Return only a `ChemicalValidationResult` JSON object with the shared fields at the root.",
+    "synonyms": [
+      "produce JSON matching ChemicalValidationResult; the structured-output layer below is authoritative for final response shape"
+    ],
+    "category": "relocated",
+    "reason": "CHV-OUT output-mandate de-dup. The pre-rewrite <role> carried 'return one root JSON object matching `ChemicalValidationResult`' and <output_format> opened 'Return only a `ChemicalValidationResult` JSON object with the shared fields at the root' -- a JSON-only output mandate that the locked Generated Runtime Contract already injects ('Output contract from agent.yaml: produce JSON matching ChemicalValidationResult; the structured-output layer below is authoritative for final response shape' plus the CRITICAL structured-output block 'Your final response MUST be valid JSON matching the ChemicalValidationResult schema EXACTLY'). The lean rewrite no longer restates the JSON-only output mandate; the core half of the render owns it. The home check is satisfied by the synonym (the core's injected output-contract line). The `ChemicalValidationResult` token is KEPT once in <goal> (contract-test requirement), the chemical root-field detail is KEPT in <result_contract> because the core does not enumerate it, and the curator-facing 'Do not wrap the object under `validation_result`, `result`, or any other property' rule is KEPT in <result_contract> (contract-test requirement).",
+    "old_source": "packages/alliance/agents/chemical/prompt.yaml:<output_format>",
+    "new_home": "render"
+  }
+]

@@ -1,0 +1,27 @@
+# Phase C workflow invariants: chemical validator (Wave 3 — bounded lookup path).
+#
+# Invariants are STRONGER than plain phrase retention: each line is an ordered step of the
+# validator's bounded ChEBI lookup path. The framework (1) reuses the retention assertion --
+# every line must appear in the assembled render -- and (2) asserts the lines appear in this
+# order by first occurrence, so the rewrite cannot scramble the
+# search -> compound-details -> classification -> no-match/ambiguous -> tool-fail sequence.
+#
+# AUTHORING RULE (enforced by the harness): each phrase must occur EXACTLY ONCE in the
+# assembled render and be listed in workflow order. These are verbatim from the rewritten
+# <lookup_workflow> "Bounded lookup path" numbered block (steps 1-5), where each occurs
+# exactly once and in order. (CHV-21..CHV-25 in docs/design/phaseC-checklists/chemical.md.)
+
+# Step 1 -- search es_search first for name/synonym/structure/ID-like inputs.
+Search with `es_search` first for all name, synonym, structure, or ID-like inputs.
+
+# Step 2 -- for each likely match, call the compound endpoint before returning/hierarchy.
+For each likely match, call the compound endpoint before returning or evaluating hierarchy.
+
+# Step 3 -- classification: parents/children only after a specific match is selected.
+For classification requests, call ontology parents or children only after a specific match is selected.
+
+# Step 4 -- no match for expected field -> unresolved + missing_expected_fields; ambiguous -> candidates.
+If no entries match a requested expected field, return `status: "unresolved"` and include that field in `missing_expected_fields`; for an ambiguous input, return unresolved with `candidates` and an ambiguity explanation.
+
+# Step 5 -- tool fails after one retry -> error lookup attempt.
+If a tool call fails after one retry, stop further nested enrichment for that term and return an `error` lookup attempt.
