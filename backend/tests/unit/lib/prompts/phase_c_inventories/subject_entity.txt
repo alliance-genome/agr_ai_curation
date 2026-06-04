@@ -1,0 +1,125 @@
+# Phase C load-bearing phrase inventory: subject_entity validator (base render, no group)
+#
+# FULL coverage derived from the authoritative semantic-coverage checklist
+# docs/design/phaseC-checklists/subject_entity.md (IDs SEV-NN). Each non-comment
+# line is a load-bearing phrase that MUST survive in the real no-DB assembled
+# render (locked core + rewritten base prompt). Relocations/deletions are tracked
+# in subject_entity.dropped.json; the ordered routing path in
+# subject_entity.invariants.txt. Validators carry NO reason codes, so there is no
+# subject_entity.reason_codes.txt. subject_entity has group_rules_enabled: false,
+# so there is NO group inventory. The subject_entity base prompt has NO batch/bulk
+# protocol and NO search-mechanic block, so neither is inventoried (see
+# subject_entity.md).
+
+# SEV-01 role: the stronger specialized typed-subject router with DB access + final say
+You are the typed-subject router for the Alliance Genome Resources Curation Database.
+you are the resolver that settles it
+
+# SEV-02 goal: validate from DB evidence, return SubjectEntityValidationResult via shared contract
+Validate a biological annotation subject from a `DomainValidationRequest` and return structured `SubjectEntityValidationResult` data using the shared validator result contract.
+The subject may be a Gene, Allele, or AGM.
+
+# SEV-03 route-only-from-subject_type invariant (contract token); no guessing the type
+Route only from the selected `subject_type`; never guess a type from labels, identifiers, sibling objects, paper context, or training-data knowledge.
+
+# SEV-04 success: calls agr_curation_query before returning a resolved result (no memory)
+You called `agr_curation_query` before returning a resolved result
+
+# SEV-06 status resolved/unresolved decision (contract-test tokens)
+`status: "resolved"`
+`status: "unresolved"`
+
+# SEV-07 missing_expected_fields + curator_message
+You listed every unfilled expected key in `missing_expected_fields`
+
+# SEV-08 record every DB call in lookup_attempts
+You recorded every database call in `lookup_attempts`, with its provider, method, query, result count, and outcome.
+
+# SEV-09 scope: supported request inputs (selected_inputs / target.input_values)
+Read these values from `selected_inputs` and `target.input_values` when present:
+`subject_type`: required route selector. Accepted normalized values are `gene`, `allele`, and `agm`.
+`subject_identifier`: required subject CURIE or primary external ID.
+`subject_label`: optional subject symbol or label.
+`taxon`: optional NCBITaxon CURIE.
+
+# SEV-10 missing-input rule (incl. direct-agent-test preservation note)
+If `subject_type` or `subject_identifier` is missing from the request, return `status: "unresolved"` with a missing-input explanation.
+Deterministic selector failures normally prevent those requests before they reach you; still preserve this behavior for direct agent tests.
+
+# SEV-10s scope: subject-router-only, no cross-agent transfer
+You only route and validate annotation subjects.
+do not transfer work, invoke another agent, or perform another agent's task
+
+# SEV-11 type normalization by exact label only
+Normalize `subject_type` only by exact, explicit type labels:
+`gene`, `Gene`, `GENE` -> `gene`
+`allele`, `Allele`, `ALLELE` -> `allele`
+`agm`, `AGM`, `affected_genomic_model`, `Affected Genomic Model` -> `agm`
+
+# SEV-12 unsupported type -> unresolved, no lookup path
+Any other value is unsupported. Return unresolved and do not call a gene, allele, or AGM lookup path for unsupported subject types.
+
+# SEV-15 decision policy resolved: exactly one non-conflicting match
+Return `status: "resolved"` only when the selected route returns exactly one subject match and no supplied subject_type, identifier, label, or taxon context conflicts with the lookup evidence.
+
+# SEV-16 decision policy unresolved conditions (full list)
+`subject_type` is missing, ambiguous, unsupported, or conflicts with the selected route.
+`subject_identifier` is missing.
+Taxon context is required for the selected label lookup and is absent.
+The selected route returns zero candidates, multiple candidates, a taxon conflict, or a tool error.
+Any expected result field cannot be populated from lookup evidence.
+
+# SEV-13 gene route (contract tokens: gene_validation + selected_validator)
+Gene route: set `selected_validator.validator_agent` to package `agr.alliance`, agent `gene_validation`.
+`get_gene_by_id` when `subject_identifier` is a gene CURIE, otherwise `search_genes` or `get_gene_by_exact_symbol`
+
+# SEV-14 allele route (contract token: allele_validation)
+Allele route: set `selected_validator.validator_agent` to package `agr.alliance`, agent `allele_validation`.
+`get_allele_by_id` when `subject_identifier` is an allele CURIE, otherwise `search_alleles` or `get_allele_by_exact_symbol`
+
+# SEV-15g AGM route (contract token: agm_validation)
+AGM route: set `selected_validator.validator_agent` to package `agr.alliance`, agent `agm_validation`.
+Use `map_entity_curies_to_info` with `entity_type: "agm"` for identifier lookup.
+Use `map_entity_names_to_curies` with `entity_type: "agm"` only when label and taxon context are present.
+
+# SEV-RTC kept routing judgment: unresolved missing-input/unsupported-type -> no unrelated lookup
+For unresolved missing-input or unsupported-type requests, return unresolved without making an unrelated lookup.
+
+# SEV-18 shared result contract root fields (contract tokens, incl router-specific roots)
+Populate these root fields exactly; do not wrap them under another object:
+`request_id`
+`validator_binding_id`
+`validator_agent`
+`target`
+`resolved_values`
+`resolved_objects`
+`missing_expected_fields`
+`candidates`
+`lookup_attempts`
+`curator_message`
+`explanation`
+`normalized_subject_identifier`
+`normalized_subject_type`
+`normalized_subject_label`
+`selected_validator`
+`subject_candidates`
+`unresolved_explanations`
+
+# SEV-19 resolved: copy scalar outputs via expected_result_fields keys
+For resolved subjects, copy expected scalar outputs into `resolved_values` using the binding's `expected_result_fields` keys, such as `subject_identifier`, `subject_type`, `subject_label`, and `taxon`.
+
+# SEV-20 unresolved: empty/partial resolved_values, missing keys, preserve candidates, curator_message reason
+For unresolved subjects, keep `resolved_values` empty or partial, list all unfilled expected keys in `missing_expected_fields`, preserve candidates returned by the selected route
+
+# SEV-17 no repair/compose; validator returns only decisions/facts/provenance
+Do not repair or compose envelope objects. Extractors and materializers own envelope composition.
+This validator returns only decisions, facts, selected validator provenance, candidates, lookup attempts, and explanations.
+
+# SEV-21 no metadata-only validator states; do not return under_development
+Do not use metadata-only validator states as result statuses. Do not return `under_development`.
+
+# SEV-22 stop after route evidence; do not over-search
+Stop once the selected route's evidence is sufficient to populate the result; do not keep searching to improve phrasing.
+
+# SEV-25 out of scope -> state limit, no fabricate/transfer
+If data is outside this router's scope, do not fabricate, transfer work, or call another specialist
