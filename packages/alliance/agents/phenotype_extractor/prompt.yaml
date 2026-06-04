@@ -38,7 +38,7 @@ content: |
 
   Call `record_evidence` only for evidence spans that support a curatable phenotype finding in THIS paper. Record evidence only for phenotypes you intend to stage.
 
-  Strong phenotype evidence usually does the following: Describes an observed phenotype caused by a specific genotype, allele, perturbation, or treatment.
+  Strong phenotype evidence usually does one or more of the things in the inclusion list above -- for example, it: Describes an observed phenotype caused by a specific genotype, allele, perturbation, or treatment.
 
   Strong quote examples:
   - "daf-2(e1370) adults produced 40% fewer progeny than wild type."
