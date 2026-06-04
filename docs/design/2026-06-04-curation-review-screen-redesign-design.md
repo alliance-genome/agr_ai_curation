@@ -54,6 +54,12 @@ redesign's **groups**: each group surfaces the evidence anchored to it (an "evid
 and clicking it runs the existing pdf.js highlight. So evidence lives at the **group / anchored-field
 level**, plus an object-level evidence list for any unanchored records.
 
+**This is uniform across all domain packs** — for every extracted (envelope-backed) candidate, evidence is
+projected from the domain envelope by the domain-agnostic materializer (`project_evidence_anchor_projections`);
+the `evidence_anchors` table is the legacy/manual path and is **empty DB-wide** for extracted candidates
+(the pipeline sets `evidence_records=[]`, `pipeline.py:584`). So the single review surface reads evidence
+the same way for every domain — gene_expression is not a special case.
+
 **Theme:** mockups rendered light for dense-reading legibility; final theme (light vs the current dark
 "workbench") is a deferred polish decision, not a structural one.
 
