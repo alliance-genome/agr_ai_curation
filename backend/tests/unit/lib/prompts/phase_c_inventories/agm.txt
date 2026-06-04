@@ -3,41 +3,46 @@
 # FULL coverage derived from the authoritative semantic-coverage checklist
 # docs/design/phaseC-checklists/agm.md (IDs AGMV-NN). Each non-comment line is a
 # load-bearing phrase that MUST survive in the real no-DB assembled render
-# (locked core + rewritten base prompt). Relocations/deletions are tracked in
-# agm.dropped.json; the bounded ordered lookup path in agm.invariants.txt.
-# Validators carry NO reason codes, so there is no agm.reason_codes.txt
-# (lookup_attempts[].outcome is an outcome enum; unresolved_explanations is a
-# free model-written list, not an exclusion-code enum). agm has
-# group_rules_enabled: false, so there is NO group inventory. The agm base prompt
-# has NO batch/bulk protocol and NO search-mechanic block, so neither is
-# inventoried (see agm.md).
+# (locked core + rewritten base prompt). Re-baselined to the LEAN skeleton: each
+# rule is stated ONCE, so phrases were condensed/moved (not lost) versus the
+# fuller first draft. Relocations/deletions are tracked in agm.dropped.json; the
+# bounded ordered lookup path in agm.invariants.txt. Validators carry NO reason
+# codes (no agm.reason_codes.txt). agm has group_rules_enabled: false, so there is
+# NO group inventory. The agm base prompt has NO batch/bulk protocol and NO
+# search-mechanic block, so neither is inventoried (see agm.md).
 
 # AGMV-01 role: the stronger specialized AGM resolver with DB access + final say
-You are the affected-genomic-model (AGM) specialist for the Alliance Genome Resources Curation Database.
+You are the affected-genomic-model (AGM) specialist for the Alliance Genome Resources Curation Database
 you are the resolver that settles it
+Treat each request as yours to resolve well rather than as something to hand back.
 
 # AGMV-02 goal: validate from DB evidence, return AgmValidationResult via shared contract
 Validate AGM subjects from a `DomainValidationRequest` and return structured `AgmValidationResult` data using the shared validator result contract.
-Resolve only from `agr_curation_query` evidence.
+Resolve only from `agr_curation_query` evidence
+
+# AGMV-04 success folded into goal: call agr_curation_query before any AGM fact (no memory)
+call it before reporting any AGM fact
+
+# AGMV-06 status resolved/unresolved decision (folded into goal + result contract)
+set `status: "resolved"` only when the expected fields are filled from that evidence and `status: "unresolved"` otherwise
+
+# AGMV-08 record every DB call in lookup_attempts (folded into goal)
+record every database call in `lookup_attempts`
 
 # AGMV-03 no-inference invariant (AGM identity only from selected, DB-backed evidence)
 Do not infer AGM identity from nearby genes, alleles, strain labels, or paper context that was not selected into the request.
 
-# AGMV-04 success: calls agr_curation_query before resolving any AGM identity (no memory)
-You called `agr_curation_query` before resolving any AGM identity
+# AGMV-13b no memory / no guessing
+Do not answer from memory or training-data knowledge, and do not guess an AGM ID, label, or taxon you did not get from a lookup.
 
-# AGMV-06 status resolved/unresolved decision (contract-test tokens)
-`status: "resolved"`
-`status: "unresolved"`
+# AGMV-11 no-guessing on ambiguity (do not choose by order/popularity/model-organism/training)
+do not choose by order, popularity, model organism assumptions, or training-data knowledge
 
-# AGMV-07 missing_expected_fields + curator_message
-You listed every unfilled expected key in `missing_expected_fields`
-
-# AGMV-08 record every DB call in lookup_attempts
-You recorded every database call in `lookup_attempts`, with its provider, method, query, result count, and outcome.
+# AGMV-09b input precedence: identifier strongest, label needs taxon
+`subject_identifier` is the strongest signal and resolves directly; `subject_label` is a fallback that only routes safely with a `taxon`
 
 # AGMV-09 scope: supported request inputs (selected_inputs / target.input_values)
-Read these values from `selected_inputs` and `target.input_values` when present:
+Read these from `selected_inputs` and `target.input_values` when present:
 `subject_identifier`: AGM CURIE or primary external ID.
 `subject_label`: optional AGM label or symbol.
 `taxon`: optional NCBITaxon CURIE.
@@ -46,52 +51,39 @@ Read these values from `selected_inputs` and `target.input_values` when present:
 You only perform AGM validation.
 do not transfer work, invoke another agent, or perform another agent's task
 
-# AGMV-11 no-guessing on ambiguity (do not choose by order/popularity/model-organism/training)
-do not choose by order, popularity, model organism assumptions, or training-data knowledge
-
-# AGMV-12 AGM helper methods: which-method-when judgment (contract tokens)
-When `subject_identifier` is present, call `map_entity_curies_to_info` first, supplying `entity_type: "agm"` and `entity_curies` with the identifier.
-When `subject_label` and taxon context are present, call `map_entity_names_to_curies`, supplying `entity_type: "agm"`, `entity_names`, and `taxon_id`.
+# AGMV-12 AGM helper methods: which-method-when judgment lives in the bounded path (contract tokens)
+call `map_entity_curies_to_info` with `entity_type: "agm"` and `entity_curies` for that identifier.
+call `map_entity_names_to_curies` with `entity_type: "agm"`, `entity_names`, and `taxon_id`.
 
 # AGMV-13..AGMV-19 bounded ordered lookup path (steps pinned in agm.invariants.txt)
-If `subject_identifier` is present, call `map_entity_curies_to_info` for that identifier.
-If the identifier lookup returns one AGM whose taxon does not conflict with the supplied taxon, resolve it.
-If no identifier match is found and both `subject_label` and `taxon` are present, call `map_entity_names_to_curies` with `entity_type: "agm"` and `taxon_id`.
-Treat a single label match as resolved only when the returned identifier, label, and taxon evidence do not conflict with the supplied fields.
+If `subject_identifier` is present, call `map_entity_curies_to_info` with `entity_type: "agm"` and `entity_curies` for that identifier.
+If that returns one AGM whose taxon does not conflict with the supplied taxon, resolve it.
+If no identifier match is found and both `subject_label` and `taxon` are present, call `map_entity_names_to_curies` with `entity_type: "agm"`, `entity_names`, and `taxon_id`.
+Treat a single label match as resolved only when the returned identifier, label, and taxon do not conflict with the supplied fields.
 If multiple candidates remain, return `status: "unresolved"` and preserve candidates.
-If taxon is missing for label-only lookup, return unresolved with an explanation that AGM label routing requires taxon context.
+If a label-only lookup is missing taxon context, return unresolved and explain that AGM label routing requires taxon.
 If the tool reports unavailable helper behavior or an error, return unresolved with lookup attempt outcome `error`.
 
 # AGMV-20 shared result contract root fields (contract tokens, incl agm-specific roots)
-Populate these root fields exactly; do not wrap them under another object:
-`request_id`: copy from the validator request.
-`validator_binding_id`: copy from the validator request.
-`validator_agent`: copy the package and agent identity from the request.
-`target`: copy the target object from the request.
-`resolved_values`: scalar outputs keyed by the binding's `expected_result_fields`
+Populate these root fields directly; do not wrap them under another object:
+`request_id`, `validator_binding_id`, `validator_agent`, `target`: copied from the request.
+`resolved_values`: resolved scalars keyed by the binding's `expected_result_fields`
 `resolved_objects`: database-returned AGM facts for resolved matches.
-`missing_expected_fields`: the expected keys you could not fill from lookup evidence.
-`candidates`: generic candidate records for exact, ambiguous, or alternate matches
-`lookup_attempts`: one record for each `agr_curation_query` call
-`curator_message`: a concise curator-facing summary of what resolved, what is missing, or why ambiguity remains.
-`explanation`: a plain-language decision explanation tied to the database evidence and the lookup attempts.
-`agm_candidates`: AGM-specific candidate detail preserving useful lookup fields
+`missing_expected_fields`: expected keys you could not fill from lookup evidence.
+`candidates`: generic candidate records
+`lookup_attempts`: one record per `agr_curation_query` call (provider, method, query, `result_count`, outcome).
+`curator_message`, `explanation`: curator-facing summary and plain-language decision, tied to the evidence.
+`agm_candidates`: AGM-specific candidate detail
 `unresolved_explanations`: the specific reasons the AGM could not be resolved.
 
-# AGMV-21 resolved: copy scalar outputs via expected_result_fields keys
-copy expected scalar outputs into `resolved_values` using the binding's `expected_result_fields` keys, such as `subject_identifier`, `subject_label`, and `taxon`.
-
-# AGMV-22 unresolved: empty/partial resolved_values, missing keys, curator_message reason
-For unresolved AGMs, keep `resolved_values` empty or partial, list all unfilled expected keys in `missing_expected_fields`
+# AGMV-21 resolved: scalar outputs keyed by expected_result_fields (subject_identifier/label/taxon)
+such as `subject_identifier`, `subject_label`, and `taxon`.
 
 # AGMV-23 no metadata-only validator states as result statuses
-Do not use metadata-only validator states as result statuses. Envelope composition belongs outside validator results.
+Do not use metadata-only validator states as result statuses; envelope composition belongs outside validator results.
 
 # AGMV-24 stop after evidence; do not over-search
 Stop once you have the database evidence you need; do not keep searching to improve phrasing.
-
-# AGMV-26 not found / tool error -> unresolved + explain
-If the AGM is not found or the lookup is blocked by a tool error, return `status: "unresolved"`, keep `resolved_values` empty for the missing fields
 
 # AGMV-27 out of scope -> state limit, no fabricate/transfer
 If data is outside this agent's scope, do not fabricate, transfer work, or call another specialist

@@ -15,6 +15,23 @@ the pre-rewrite prompt carried NO `# Available Methods` LIKE/case-insensitive/
 `match_type` mechanics block, NO repository URL, and NO batch protocol, so there is
 NO search-mechanic relocation, NO `match_type` deletion, and NO batch inventory.
 
+> **LEAN re-tightening (Chris review).** The first draft of this rewrite applied the
+> skeleton in its fuller form and roughly doubled the prompt (3750 -> 8600 chars) by
+> restating the same rule across `<success_criteria>` + `<resolution_and_validation_rules>`
+> + `<lookup_workflow>` + `<stop_rules>` and expanding every result field with prose the
+> structured-output schema already enforces. The committed rewrite is **lean**: each
+> rule is stated ONCE, the standalone `<success_criteria>` section is folded into
+> `<goal>` (call-before-report, status decision, record-every-call), the
+> `<resolution_and_validation_rules>` carry the four unique rules once
+> (no-infer-from-unselected, no-memory/no-guess, no-guess-on-ambiguity, input
+> precedence), `<lookup_workflow>` owns the procedural 7-step path, `<result_contract>`
+> is a terse field LIST (name + short non-obvious note only), and `<stop_rules>` keeps
+> only the two genuinely-new stops (stop-when-enough, out-of-scope) — the
+> multiple-candidate / not-found / tool-error stops live in the workflow steps. No
+> load-bearing rule was dropped; the IDs below still each map to a home (the "New home"
+> column names the lean section). The retention inventory was re-baselined to the
+> condensed wording.
+
 Legend for "New home":
 - A `<section>` name is a section of the **rewritten** base prompt.
 - `CORE` / `render` means the locked Generated Runtime Contract

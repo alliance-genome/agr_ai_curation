@@ -5,7 +5,7 @@
       "call at least one of agr_curation_query before final output"
     ],
     "category": "relocated",
-    "reason": "AGMV-RTC / AGMV-04 de-dup. The pre-rewrite '# Tool Requirement' restated the required-tool-call imperative that the locked Generated Runtime Contract already injects ('Required tool-call policy: call at least one of agr_curation_query before final output'). The rewrite drops the base imperative and keeps the curator-facing success line 'You called agr_curation_query before resolving any AGM identity' once; the machine imperative survives in the core half of the assembled render. The literal `agr_curation_query` token is still present in the base prompt.",
+    "reason": "AGMV-RTC / AGMV-04 de-dup. The pre-rewrite '# Tool Requirement' restated the required-tool-call imperative that the locked Generated Runtime Contract already injects ('Required tool-call policy: call at least one of agr_curation_query before final output'). The lean rewrite drops the base imperative and folds the curator-facing rule into <goal> once ('call it before reporting any AGM fact'); the machine imperative survives in the core half of the assembled render. The literal `agr_curation_query` token is still present in the base prompt.",
     "old_source": "packages/alliance/agents/agm/prompt.yaml:# Tool Requirement",
     "new_home": "render"
   },
@@ -15,7 +15,7 @@
       "produce JSON matching AgmValidationResult; the structured-output layer below is authoritative for final response shape"
     ],
     "category": "relocated",
-    "reason": "AGMV-02 output-mandate de-dup. The pre-rewrite '# Goal' carried the 'produce AgmValidationResult / structured-output' mandate that the locked core already injects ('Output contract from agent.yaml: produce JSON matching AgmValidationResult; the structured-output layer below is authoritative for final response shape' plus the CRITICAL structured-output block 'Your final response MUST be valid JSON matching the AgmValidationResult schema EXACTLY'). The rewrite no longer restates the JSON-only output mandate; the core half of the render owns it. The phrase is still present verbatim in <goal> (the goal text is retained), and the AGM root-field detail is KEPT in <result_contract> because the core does not enumerate it; this entry records that the machine output mandate is carried by the core, with the synonym matching the core's injected output-contract line.",
+    "reason": "AGMV-02 output-mandate de-dup. The pre-rewrite '# Goal' carried the 'produce AgmValidationResult / structured-output' mandate that the locked core already injects ('Output contract from agent.yaml: produce JSON matching AgmValidationResult; the structured-output layer below is authoritative for final response shape' plus the CRITICAL structured-output block 'Your final response MUST be valid JSON matching the AgmValidationResult schema EXACTLY'). The lean rewrite no longer restates the JSON-only output mandate; the core half of the render owns it. The home check is satisfied by the synonym (the core's injected output-contract line); the AGM root-field detail is KEPT in <result_contract> because the core does not enumerate it.",
     "old_source": "packages/alliance/agents/agm/prompt.yaml:# Goal",
     "new_home": "render"
   }
