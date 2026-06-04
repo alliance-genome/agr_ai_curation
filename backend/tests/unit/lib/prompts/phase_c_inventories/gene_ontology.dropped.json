@@ -1,0 +1,24 @@
+[
+  {
+    "phrase": "Your response will be structured as a `GOTermResultEnvelope`:",
+    "synonyms": [
+      "produce JSON matching GOTermResultEnvelope; the structured-output layer below is authoritative for final response shape"
+    ],
+    "category": "relocated",
+    "reason": "GOT-OUT output-mandate de-dup. The pre-rewrite '<goal>' carried 'return them as a `GOTermResultEnvelope` (no other top-level output shape)' and '<output_format>' opened 'Your response will be structured as a `GOTermResultEnvelope`:' -- a JSON-only output mandate that the locked Generated Runtime Contract already injects ('Output contract from agent.yaml: produce JSON matching GOTermResultEnvelope; the structured-output layer below is authoritative for final response shape' plus the CRITICAL structured-output block 'Your final response MUST be valid JSON matching the GOTermResultEnvelope schema EXACTLY'). The lean rewrite no longer restates the JSON-only output mandate; the core half of the render owns it. The home check is satisfied by the synonym (the core's injected output-contract line). The `GOTermResultEnvelope` token is KEPT once in <goal>, and the GO-term root-field detail is KEPT in <result_contract> because the core does not enumerate it.",
+    "old_source": "packages/alliance/agents/gene_ontology/prompt.yaml:<output_format>",
+    "new_home": "render"
+  },
+  {
+    "phrase": "Relationship patterns",
+    "synonyms": [
+      "is_a (specialization)",
+      "part_of (location/inclusion)",
+      "regulates (control)"
+    ],
+    "category": "deleted",
+    "reason": "GOT-15 relationship-gloss deletion. The pre-rewrite '<go_reference>' glossed three GO relationship-type labels -- is_a (specialization), part_of (location/inclusion), regulates (control). This is a narrative gloss with NO decision rule: the model reports whatever `relationship_type` QuickGO returns on `children` / `ancestors` entries (kept verbatim in <result_contract>: 'direct child entries with `go_id`, `name`, `relationship_type`'), so glossing the meaning of is_a / part_of / regulates changes no behavior and is not a load-bearing rule. The aspect labels from the same <go_reference> block (molecular_function / biological_process / cellular_component) are NOT deleted -- they survive as the load-bearing `aspect` enum in <result_contract> (GOT-14/GOT-25). Deleted with no home; printed for review by the Phase C deleted-rules dump.",
+    "old_source": "packages/alliance/agents/gene_ontology/prompt.yaml:<go_reference>",
+    "new_home": ""
+  }
+]
