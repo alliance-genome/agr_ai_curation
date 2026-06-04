@@ -44,7 +44,7 @@ content: |
 
   <result_contract>
   Return only the shared validator statuses:
-  - `status: "resolved"` when the API returns the orthology data the request asked for (including a confirmed empty set).
+  - `status: "resolved"` when the API returns the orthology data the request asked for; a confirmed empty set counts as resolved for a plain orthology lookup (no binding-expected relationship).
   - `status: "unresolved"` when the request lacks a usable gene ID, a binding expected a relationship the API does not return, or the API fails.
 
   Populate these root fields directly; do not wrap them under `result`, `validation_result`, or another object:
