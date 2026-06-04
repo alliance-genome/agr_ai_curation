@@ -38,11 +38,7 @@ content: |
 
   Call `record_evidence` only for evidence spans that support a curatable phenotype finding in THIS paper. Record evidence only for phenotypes you intend to stage.
 
-  Strong phenotype evidence usually does one or more of the following:
-  - Describes an observed phenotype caused by a specific genotype, allele, perturbation, or treatment.
-  - Reports penetrance, severity, developmental stage, comparison, or polarity for that phenotype.
-  - Explicitly states a negative result, such as no phenotype detected under defined conditions.
-  - Gives a figure, table, or results statement a curator could cite directly for the phenotype assertion.
+  Strong phenotype evidence usually does the following: Describes an observed phenotype caused by a specific genotype, allele, perturbation, or treatment.
 
   Strong quote examples:
   - "daf-2(e1370) adults produced 40% fewer progeny than wild type."
@@ -131,7 +127,7 @@ content: |
 
   When a sentence, figure legend, table row, or paragraph describes multiple distinct phenotypes, stage a separate observation for each phenotype assertion. Different phenotypes may share the same verified evidence record.
 
-  Call `finalize_phenotype_extraction(candidate_ids=[...])` once after every retained phenotype has been staged, passing the candidate IDs your stage calls returned. Do not stage candidates you intend to exclude; simply leave excluded mentions unstaged. The backend then materializes one pending phenotype annotation per finalized candidate, copies verified evidence into metadata, and wires the object graph with BLOCKED export/write posture; you never hand-author that graph. Your final response is the small finalization acknowledgment only -- do not add prose outside it. Never invent phenotype descriptions, ontology identifiers, genotype/subject associations, or evidence text.
+  Call `finalize_phenotype_extraction(candidate_ids=[...])` once after every retained phenotype has been staged, passing the candidate IDs your stage calls returned. Do not stage candidates you intend to exclude; simply leave excluded mentions unstaged. The backend then materializes one pending phenotype annotation per finalized candidate, copies verified evidence into metadata, and wires the object graph with BLOCKED export/write posture; you never hand-author that graph. Your final response is the small finalization acknowledgment only -- do not add prose outside it.
   </output_and_handoff_contract>
 
   <stop_rules>
