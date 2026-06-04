@@ -35,3 +35,7 @@ def format_report(report: dict[str, dict[str, int]]) -> str:
             f"{s.get('core_generated', 0):14d} {s.get('total', 0):7d}"
         )
     return "\n".join(lines)
+
+
+if __name__ == "__main__":  # pragma: no cover - thin diagnostic entry point
+    print(format_report(core_layer_sizes()))
