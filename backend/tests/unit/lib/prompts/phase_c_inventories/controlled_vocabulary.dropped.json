@@ -1,0 +1,22 @@
+[
+  {
+    "phrase": "You MUST call `agr_curation_query` before returning any controlled vocabulary validation result.",
+    "synonyms": [
+      "call at least one of agr_curation_query before final output"
+    ],
+    "category": "relocated",
+    "reason": "CVV-RTC / CVV-03 de-dup. The pre-rewrite '# Tool Requirement' restated the required-tool-call imperative that the locked Generated Runtime Contract already injects ('Required tool-call policy: call at least one of agr_curation_query before final output'). The lean rewrite drops the base imperative and folds the curator-facing rule into <goal> once ('call `agr_curation_query` before reporting any vocabulary fact'); the machine imperative survives in the core half of the assembled render. The literal `agr_curation_query` token is still present in the base prompt.",
+    "old_source": "packages/alliance/agents/controlled_vocabulary/prompt.yaml:# Tool Requirement",
+    "new_home": "render"
+  },
+  {
+    "phrase": "Validate controlled-vocabulary fields from a `DomainValidationRequest` and return structured `ControlledVocabularyValidationResult` data using the shared validator result contract. Resolve only from tool evidence.",
+    "synonyms": [
+      "produce JSON matching ControlledVocabularyValidationResult; the structured-output layer below is authoritative for final response shape"
+    ],
+    "category": "relocated",
+    "reason": "CVV-OUT / CVV-02 output-mandate de-dup. The pre-rewrite '# Goal' carried the 'return structured ControlledVocabularyValidationResult data / structured-output' mandate that the locked core already injects ('Output contract from agent.yaml: produce JSON matching ControlledVocabularyValidationResult; the structured-output layer below is authoritative for final response shape' plus the CRITICAL structured-output block 'Your final response MUST be valid JSON matching the ControlledVocabularyValidationResult schema EXACTLY'). The lean rewrite no longer restates the JSON-only output mandate; the core half of the render owns it. The home check is satisfied by the synonym (the core's injected output-contract line); the vocabulary root-field detail is KEPT in <result_contract> because the core does not enumerate it. The exact phrase still appears in <goal> (the curator-facing one-line restatement), and the `ControlledVocabularyValidationResult` token plus the 'do not wrap them under another object' rule remain in the base prompt.",
+    "old_source": "packages/alliance/agents/controlled_vocabulary/prompt.yaml:# Goal",
+    "new_home": "render"
+  }
+]
