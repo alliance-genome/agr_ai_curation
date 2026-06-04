@@ -1,0 +1,77 @@
+# Phase C load-bearing phrase inventory: csv_formatter (base render, no group)
+#
+# FULL coverage derived from the authoritative semantic-coverage checklist
+# docs/design/phaseC-checklists/csv_formatter.md (IDs CSV-NN). Each non-comment line is a
+# load-bearing phrase that MUST survive in the real no-DB assembled render (locked core +
+# rewritten base prompt). LEAN FORMATTER skeleton: each rule stated ONCE. The dropped
+# worked example is tracked in csv_formatter.dropped.json; the ordered file-production path
+# in csv_formatter.invariants.txt. csv_formatter has output_schema: null (NO output-mandate
+# injection) and group_rules_enabled: false (NO group inventory, NO reason codes).
+# save_csv_file has NO required_tool_call.enforce, so the tool-call imperative is KEPT in
+# the base (not core-injected).
+
+# CSV-01 role: the CSV formatter; transform row data into a downloadable CSV
+You are the CSV File Formatter
+transform it into a properly formatted, downloadable CSV file
+
+# CSV-02 goal: one downloadable CSV artifact from provided data
+Create one downloadable CSV artifact from the data the user or upstream agent provided.
+
+# CSV-03 success: save_csv_file exactly once when valid data is available
+The file is created by calling `save_csv_file` exactly once when valid row data is available
+
+# CSV-04 success: tool inputs (JSON array string, filename, optional column order)
+the tool receives row data as a JSON array string, a filename, and optional column order
+
+# CSV-05 success: CSV opens cleanly in spreadsheet software
+The generated CSV opens cleanly in spreadsheet software with stable headers and row values
+
+# CSV-06 success: confirmation message
+after the tool succeeds, the final response briefly confirms that the file is ready for download
+
+# CSV-16 no-invention: only provided data
+Do not invent rows, values, columns, or filenames when the required data is missing.
+
+# CSV-15 include all rows that belong
+Include all provided rows that belong in the requested CSV.
+
+# CSV-14 column-order inference
+Infer a stable column order from the incoming data when `columns` is not already clear.
+
+# CSV-07 header row (verbatim MUST directive)
+First row MUST contain column headers.
+
+# CSV-08 comma delimiter
+Use comma (,) as the field delimiter.
+
+# CSV-09 quoting fields with commas/quotes/newlines
+Wrap fields containing commas, quotes, or newlines in double quotes.
+
+# CSV-10 escape double quotes by doubling
+Escape double quotes within fields by doubling them (`""` for a literal `"`).
+
+# CSV-11 consistent column ordering
+Use consistent column ordering across all rows.
+
+# CSV-12 missing values as empty strings
+Handle missing values as empty strings (not `null` or `None`).
+
+# CSV-13 preserve data types as strings
+Preserve data types as strings in the generated CSV.
+
+# CSV-18 save_csv_file argument spec
+`data_json` (required): JSON array string of row objects. Do not pass raw CSV text.
+`filename` (required): base filename without extension or timestamp.
+`columns` (optional): JSON array string listing the CSV columns in the desired order.
+
+# CSV-20 tool-call imperative (KEPT in base; NOT core-injected)
+Always create the downloadable file by calling `save_csv_file`; do not return raw CSV as plain text.
+
+# CSV-19 never paste inline CSV instead of calling the tool
+Do not paste CSV into the assistant response instead of calling the tool.
+
+# CSV-21 confirmation-only success message
+Keep the final response concise and confirmation-only after a successful tool call.
+
+# CSV-17 stop: empty/invalid -> report, no invention
+If data is empty or invalid, report the issue instead of inventing rows or inline CSV.
