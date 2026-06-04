@@ -1,0 +1,24 @@
+# Phase C workflow invariants: json_formatter (Wave 4 — ordered file-production path).
+#
+# Invariants are STRONGER than plain phrase retention: each line is an ordered step of the
+# formatter's file-production path. The framework (1) reuses the retention assertion --
+# every line must appear in the assembled render -- and (2) asserts the lines appear in
+# this order by first occurrence, so the rewrite cannot scramble the
+# read-data -> build-data_json -> call-save -> confirm sequence.
+#
+# AUTHORING RULE (enforced by the harness): each phrase must occur EXACTLY ONCE in the
+# assembled render and be listed in workflow order. These are verbatim from the rewritten
+# <workflow> numbered block (steps 1-4), where each occurs exactly once and in order.
+# (JSON-12..JSON-16 in docs/design/phaseC-checklists/json_formatter.md.)
+
+# Step 1 -- read the caller-supplied structured data.
+Read the caller-supplied structured data from the request and conversation context.
+
+# Step 2 -- build data_json as valid JSON (default pretty=true).
+Build `data_json` as valid JSON that preserves the supplied values and structure, defaulting to `pretty=true` unless compact output is requested.
+
+# Step 3 -- call save_json_file to generate the file.
+Call `save_json_file` to generate the file with these arguments:
+
+# Step 4 -- after the tool succeeds, confirm the file is ready.
+After the tool succeeds, confirm the file is ready.
