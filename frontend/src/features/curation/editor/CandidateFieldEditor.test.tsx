@@ -1,7 +1,9 @@
+import userEvent from '@testing-library/user-event'
 import { render, screen } from '@testing-library/react'
 import { ThemeProvider } from '@mui/material/styles'
 import { describe, expect, it, vi } from 'vitest'
 
+import { onPDFViewerNavigateEvidence } from '@/components/pdfViewer/pdfEvents'
 import type { CurationWorkspace } from '@/features/curation/types'
 import {
   CurationWorkspaceProvider,
@@ -506,6 +508,24 @@ describe('CandidateFieldEditor', () => {
         name: 'Highlight field evidence 1: [missing evidence text]',
       }),
     ).toBeInTheDocument()
+  })
+
+  it('dispatches pdf navigation from the section evidence chip', async () => {
+    const user = userEvent.setup()
+    const onNavigateEvidence = vi.fn()
+    const unsubscribe = onPDFViewerNavigateEvidence(onNavigateEvidence)
+
+    renderEditor()
+
+    await user.click(screen.getByTestId('field-section-evidence-details'))
+
+    expect(onNavigateEvidence).toHaveBeenCalledTimes(1)
+    const command = onNavigateEvidence.mock.calls[0][0].detail.command
+    expect(command.anchorId).toBe('evidence-1')
+    expect(command.searchText).toBe('ABC appears in the result sentence.')
+    expect(command.mode).toBe('select')
+
+    unsubscribe()
   })
 
   it('marks unserializable curator edit values explicitly', () => {

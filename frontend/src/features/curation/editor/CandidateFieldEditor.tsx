@@ -510,6 +510,31 @@ function evidenceQuote(projection: DomainEnvelopeEvidenceAnchorProjection): stri
     ?? '[missing evidence text]'
 }
 
+function dispatchEvidenceProjection(
+  projection: DomainEnvelopeEvidenceAnchorProjection,
+  debugContext: Record<string, unknown>,
+): void {
+  const pageNumber = projection.page_number ?? projection.anchor.page_number ?? null
+  const sectionTitle = projection.section_title ?? projection.anchor.section_title ?? null
+
+  dispatchEvidenceNavigationCommand(
+    {
+      anchorId: projection.anchor_id,
+      anchor: projection.anchor,
+      searchText:
+        projection.anchor.viewer_search_text
+        ?? projection.quote
+        ?? projection.anchor.sentence_text
+        ?? projection.anchor.snippet_text
+        ?? null,
+      pageNumber,
+      sectionTitle,
+      mode: 'select',
+    },
+    debugContext,
+  )
+}
+
 function FieldEvidenceSlot({
   projections,
 }: {
@@ -546,26 +571,11 @@ function FieldEvidenceSlot({
               aria-label={`Highlight field evidence ${index + 1}: ${quote}`}
               data-testid={`field-evidence-projection-${projection.anchor_id}`}
               onClick={() =>
-                dispatchEvidenceNavigationCommand(
-                  {
-                    anchorId: projection.anchor_id,
-                    anchor: projection.anchor,
-                    searchText:
-                      projection.anchor.viewer_search_text
-                      ?? projection.quote
-                      ?? projection.anchor.sentence_text
-                      ?? projection.anchor.snippet_text
-                      ?? null,
-                    pageNumber,
-                    sectionTitle,
-                    mode: 'select',
-                  },
-                  {
-                    source: 'curation-field-editor',
-                    fieldPath: projection.field_path,
-                    objectId: projection.object_id,
-                  },
-                )}
+                dispatchEvidenceProjection(projection, {
+                  source: 'curation-field-editor',
+                  fieldPath: projection.field_path,
+                  objectId: projection.object_id,
+                })}
               sx={{
                 px: 0.9,
                 py: 0.35,
@@ -588,6 +598,78 @@ function FieldEvidenceSlot({
         )
       })}
     </>
+  )
+}
+
+function evidenceProjectionsForSection(
+  candidate: CurationCandidate,
+  fields: CurationDraftField[],
+): DomainEnvelopeEvidenceAnchorProjection[] {
+  const projectionsByAnchorId = new Map<string, DomainEnvelopeEvidenceAnchorProjection>()
+
+  for (const field of fields) {
+    for (const projection of evidenceProjectionsForField(candidate, field)) {
+      if (!projectionsByAnchorId.has(projection.anchor_id)) {
+        projectionsByAnchorId.set(projection.anchor_id, projection)
+      }
+    }
+  }
+
+  return [...projectionsByAnchorId.values()]
+}
+
+function SectionEvidenceSlot({
+  label,
+  projections,
+  sectionKey,
+}: {
+  label: string
+  projections: DomainEnvelopeEvidenceAnchorProjection[]
+  sectionKey: string
+}) {
+  const theme = useTheme()
+
+  if (projections.length === 0) {
+    return null
+  }
+
+  const primaryProjection = projections[0]
+  const quote = evidenceQuote(primaryProjection)
+
+  return (
+    <Tooltip arrow title={quote}>
+      <ButtonBase
+        aria-label={`Highlight ${label} evidence: ${quote}`}
+        data-testid={`field-section-evidence-${sectionKey}`}
+        onClick={() =>
+          dispatchEvidenceProjection(primaryProjection, {
+            source: 'curation-field-editor-section',
+            groupKey: sectionKey,
+            groupLabel: label,
+            objectId: primaryProjection.object_id,
+          })}
+        sx={{
+          alignItems: 'center',
+          border: `1px solid ${alpha(theme.palette.divider, 0.82)}`,
+          borderRadius: 1,
+          color: theme.palette.text.secondary,
+          display: 'inline-flex',
+          flexShrink: 0,
+          fontSize: theme.typography.caption.fontSize,
+          fontWeight: 700,
+          minHeight: 22,
+          px: 0.75,
+          py: 0.25,
+          '&:hover': {
+            borderColor: alpha(theme.palette.primary.main, 0.72),
+            backgroundColor: alpha(theme.palette.primary.main, 0.1),
+            color: theme.palette.primary.light,
+          },
+        }}
+      >
+        {projections.length} evidence
+      </ButtonBase>
+    </Tooltip>
   )
 }
 
@@ -1070,6 +1152,11 @@ export default function CandidateFieldEditor({
                 variant="outlined"
               />
             ) : null}
+            <SectionEvidenceSlot
+              label={section.label}
+              projections={evidenceProjectionsForSection(activeCandidate, section.fields)}
+              sectionKey={section.key}
+            />
             <Box
               sx={(theme) => ({
                 backgroundColor: alpha(theme.palette.common.white, 0.07),
