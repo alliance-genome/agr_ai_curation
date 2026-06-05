@@ -273,7 +273,6 @@ object_definitions:
         required: true
         object_type_ref: PhenotypeTerm
         metadata:
-          render_as: term-chip
           validator_binding_id: phenotype_term_ontology_validator
           editable: true
           source_of_truth: alliance_linkml
@@ -292,6 +291,7 @@ object_definitions:
         description: Optional exact-CURIE fast path; label-backed pending candidates remain valid without it.
         required: false
         metadata:
+          render_as: term-chip
           validator_binding_id: phenotype_term_ontology_validator
           editable: true
           source_of_truth: alliance_linkml

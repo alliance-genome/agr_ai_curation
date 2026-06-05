@@ -335,3 +335,19 @@ def test_phenotype_hides_lookup_hints_and_scaffolding():
         for path in paths
     )
     assert "annotation_kind" not in paths
+
+
+def test_phenotype_term_curie_workspace_field_carries_term_chip_hint():
+    payload = {
+        "phenotype_annotation_object": "dye-filling defect",
+        "phenotype_terms": [{"curie": "WBPhenotype:0001191"}],
+    }
+
+    fields = _workspace_fields(
+        "agr.alliance.phenotype",
+        "PhenotypeAnnotation",
+        payload,
+    )
+    by_path = {field["field_path"]: field for field in fields}
+
+    assert by_path["phenotype_terms[0].curie"]["metadata"]["render_as"] == "term-chip"
