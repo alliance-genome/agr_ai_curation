@@ -1,7 +1,6 @@
 """Tests for agent batch capabilities."""
-import pytest
 
-from src.lib.agent_studio.catalog_service import AGENT_REGISTRY, get_agent_by_id
+from src.lib.agent_studio.catalog_service import AGENT_REGISTRY
 
 
 class TestBatchCapabilities:

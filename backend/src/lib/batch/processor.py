@@ -432,6 +432,8 @@ async def _execute_flow_for_document(
         raise
 
     if flow_failure_message:
+        # A late flow error invalidates any earlier output event; do not return
+        # a partial file or review handoff as a successful batch document.
         raise RuntimeError(flow_failure_message)
 
     if not result_file_path and not review_session_ids:

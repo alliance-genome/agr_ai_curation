@@ -63,7 +63,7 @@ def _batch_document_status_event(batch: Any, doc: Any) -> Dict[str, Any]:
         "position": doc.position,
         "status": doc.status.value,
         "result_file_path": doc.result_file_path,
-        "review_session_ids": getattr(doc, "review_session_ids", None),
+        "review_session_ids": doc.review_session_ids,
         "error_message": doc.error_message,
         "processing_time_ms": doc.processing_time_ms,
     }
