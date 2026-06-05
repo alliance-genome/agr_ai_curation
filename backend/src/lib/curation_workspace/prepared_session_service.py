@@ -74,7 +74,11 @@ def find_reusable_prepared_session(
             candidate.extraction_result_id
             for candidate in session_row.candidates
         }
-        if candidate_extraction_result_ids != {target_extraction_result_id}:
+        # Flow handoff reruns write a fresh prep extraction row, then refresh the
+        # same untouched session keyed by document + adapter + flow_run_id.
+        if flow_run_id is None and candidate_extraction_result_ids != {
+            target_extraction_result_id
+        }:
             continue
         return ReusablePreparedSessionContext(
             session_id=str(session_row.id),

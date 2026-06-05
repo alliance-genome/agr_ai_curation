@@ -231,6 +231,7 @@ def _create_session_for_extraction(
     *,
     document_id: str,
     extraction_result_id: UUID,
+    flow_run_id: str | None = "flow-1",
 ) -> ReviewSessionModel:
     now = _now()
     session_row = ReviewSessionModel(
@@ -239,7 +240,7 @@ def _create_session_for_extraction(
         adapter_key="reference_adapter",
         profile_key="primary",
         document_id=UUID(document_id),
-        flow_run_id="flow-1",
+        flow_run_id=flow_run_id,
         session_version=1,
         notes="Prepared session.",
         tags=["triage"],
@@ -858,6 +859,53 @@ def test_find_reusable_prepared_session_returns_only_matching_extraction_result(
         db_session,
         document_id=document_id,
         extraction_result_id=extraction_alpha.id,
+        flow_run_id=None,
+    )
+
+    reusable = module.find_reusable_prepared_session(
+        db_session,
+        document_id=document_id,
+        adapter_key="reference_adapter",
+        flow_run_id=None,
+        prep_extraction_result_id=str(extraction_beta.id),
+    )
+
+    assert reusable is None
+
+    matching = module.find_reusable_prepared_session(
+        db_session,
+        document_id=document_id,
+        adapter_key="reference_adapter",
+        flow_run_id=None,
+        prep_extraction_result_id=str(extraction_alpha.id),
+    )
+
+    assert matching is not None
+    assert matching.session_id == str(session_alpha.id)
+
+
+def test_find_reusable_prepared_session_reuses_flow_run_session_for_newer_prep_result(
+    db_session,
+):
+    document = _create_document(db_session)
+    document_id = str(document.id)
+    extraction_alpha = _create_extraction_result(
+        db_session,
+        document_id=document_id,
+        label="alpha",
+        flow_run_id="flow-1",
+    )
+    extraction_beta = _create_extraction_result(
+        db_session,
+        document_id=document_id,
+        label="beta",
+        flow_run_id="flow-1",
+    )
+    session_alpha = _create_session_for_extraction(
+        db_session,
+        document_id=document_id,
+        extraction_result_id=extraction_alpha.id,
+        flow_run_id="flow-1",
     )
 
     reusable = module.find_reusable_prepared_session(
@@ -868,18 +916,8 @@ def test_find_reusable_prepared_session_returns_only_matching_extraction_result(
         prep_extraction_result_id=str(extraction_beta.id),
     )
 
-    assert reusable is None
-
-    matching = module.find_reusable_prepared_session(
-        db_session,
-        document_id=document_id,
-        adapter_key="reference_adapter",
-        flow_run_id="flow-1",
-        prep_extraction_result_id=str(extraction_alpha.id),
-    )
-
-    assert matching is not None
-    assert matching.session_id == str(session_alpha.id)
+    assert reusable is not None
+    assert reusable.session_id == str(session_alpha.id)
 
 
 def test_create_manual_candidate_persists_candidate_updates_session_and_logs_action(db_session):
