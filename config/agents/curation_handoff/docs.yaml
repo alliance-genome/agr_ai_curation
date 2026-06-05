@@ -1,0 +1,20 @@
+# Curator-facing documentation for the Curation Handoff Agent.
+summary: "Creates curator review sessions from completed flow or batch extraction results."
+capabilities:
+  - name: "Review session creation"
+    description: "Turns prior extraction output into one or more curator-owned review sessions."
+    example_query: "Hand these extracted findings to the curation workspace"
+    example_result: "Creates review sessions in the curation inventory for the relevant adapters"
+  - name: "Batch and flow handoff"
+    description: "Works as a terminal step for flows and batches after upstream agents have gathered evidence."
+    example_query: "Finish this batch by preparing curation review sessions"
+    example_result: "Marks the handoff ready once review sessions have been materialized"
+  - name: "Evidence-preserving transition"
+    description: "Carries extraction candidates and supporting evidence into the curation interface without approving or submitting them."
+    example_query: "Prepare the extracted candidates for curator review"
+    example_result: "Leaves candidates ready for curator decisions in the review workspace"
+data_sources: []
+limitations:
+  - "Requires upstream extraction or curation prep output; it does not discover new evidence on its own"
+  - "Does not replace curator review, approval, or final submission"
+  - "Runs as a flow or batch terminal step rather than a standalone chat specialist"
