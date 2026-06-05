@@ -213,7 +213,7 @@ def _process_single_document(
     try:
         # Execute the flow on this document
         # Use asyncio.run() since we're in a sync context
-        result_file_path = asyncio.run(
+        result_file_path, review_session_ids = asyncio.run(
             _execute_flow_for_document(
                 flow=flow,
                 document_id=str(batch_doc.document_id),
@@ -223,9 +223,8 @@ def _process_single_document(
             )
         )
 
-        # Batch workflows are file-output driven; missing FILE_READY is a hard failure.
-        if not result_file_path:
-            raise RuntimeError("Flow completed without FILE_READY output")
+        if not result_file_path and not review_session_ids:
+            raise RuntimeError("Flow completed without FILE_READY or curation handoff output")
 
         # Calculate processing time
         processing_time_ms = int((time.time() - start_time) * 1000)
@@ -233,6 +232,7 @@ def _process_single_document(
         # Mark as completed
         batch_doc.status = BatchDocumentStatus.COMPLETED
         batch_doc.result_file_path = result_file_path
+        batch_doc.review_session_ids = review_session_ids or None
         batch_doc.processing_time_ms = processing_time_ms
         batch_doc.processed_at = datetime.now(timezone.utc)
         batch.completed_documents += 1
@@ -247,6 +247,7 @@ def _process_single_document(
         processing_time_ms = int((time.time() - start_time) * 1000)
         batch_doc.status = BatchDocumentStatus.FAILED
         batch_doc.result_file_path = None
+        batch_doc.review_session_ids = None
         batch_doc.error_message = str(e)[:500]
         batch_doc.processing_time_ms = processing_time_ms
         batch_doc.processed_at = datetime.now(timezone.utc)
@@ -262,6 +263,7 @@ def _process_single_document(
                 "position": batch_doc.position,
                 "status": BatchDocumentStatus.FAILED.value,
                 "result_file_path": None,
+                "review_session_ids": None,
                 "error_message": batch_doc.error_message,
                 "processing_time_ms": processing_time_ms,
                 "timestamp": batch_doc.processed_at.isoformat(),
@@ -276,8 +278,8 @@ async def _execute_flow_for_document(
     cognito_sub: str,
     batch_id: str,
     db_user_id: Optional[int] = None,
-) -> Optional[str]:
-    """Execute a flow on a single document and extract the result file path.
+) -> tuple[Optional[str], list[str]]:
+    """Execute a flow on a single document and extract batch success outputs.
 
     All events from the flow execution are published to the BatchEventBroadcaster
     so they can be streamed to the frontend via SSE.
@@ -289,7 +291,7 @@ async def _execute_flow_for_document(
         batch_id: Batch UUID for session tracking
 
     Returns:
-        File path/ID of the generated result file, or None if no file output
+        File path/ID of the generated result file and any review session ids.
     """
     from src.lib.flows.executor import execute_flow
     from src.lib.context import set_current_user_id, set_current_session_id
@@ -311,6 +313,8 @@ async def _execute_flow_for_document(
     )
 
     result_file_path = None
+    review_session_ids: list[str] = []
+    flow_failure_message: Optional[str] = None
 
     try:
         # Execute the flow and collect events
@@ -330,16 +334,16 @@ async def _execute_flow_for_document(
             # Look for file output in FILE_READY events
             # The runner emits FILE_READY when file output tools produce FileInfo
             if event_type == "FILE_READY":
-                details = event.get("details")
-                if not isinstance(details, dict):
+                file_ready_details: Any = event.get("details")
+                if not isinstance(file_ready_details, dict):
                     logger.warning(
                         "FILE_READY event ignored - malformed details payload: %r",
-                        details
+                        file_ready_details
                     )
                     continue
 
-                download_url = details.get("download_url")
-                file_id = details.get("file_id")
+                download_url = file_ready_details.get("download_url")
+                file_id = file_ready_details.get("file_id")
 
                 if download_url and file_id:
                     # GUARDRAIL: Validate file ownership before capturing
@@ -352,7 +356,7 @@ async def _execute_flow_for_document(
                         logger.info(
                             "Found file output in flow: %s (filename: %s)",
                             result_file_path,
-                            details.get("filename")
+                            file_ready_details.get("filename")
                         )
                     else:
                         logger.warning(
@@ -367,9 +371,41 @@ async def _execute_flow_for_document(
                     )
                 continue
 
+            if event_type == "CURATION_HANDOFF_READY":
+                handoff_details: Any = event.get("details")
+                if isinstance(handoff_details, dict):
+                    raw_review_session_ids = handoff_details.get("review_session_ids")
+                    review_session_ids = (
+                        [
+                            str(review_session_id)
+                            for review_session_id in raw_review_session_ids
+                            if str(review_session_id).strip()
+                        ]
+                        if isinstance(raw_review_session_ids, list)
+                        else []
+                    )
+                    enriched_event = _enrich_event_for_batch(event, batch_id, document_id, session_id)
+                    broadcaster.publish_sync(batch_uuid, enriched_event)
+                continue
+
             # Enrich/publish non-file events with batch context for frontend streaming.
             enriched_event = _enrich_event_for_batch(event, batch_id, document_id, session_id)
             broadcaster.publish_sync(batch_uuid, enriched_event)
+            if event_type in {"FLOW_ERROR", "RUN_ERROR"}:
+                raw_details = event.get("details")
+                raw_data = event.get("data")
+                failure_details: Dict[str, Any] = (
+                    raw_details if isinstance(raw_details, dict) else {}
+                )
+                data: Dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
+                flow_failure_message = (
+                    failure_details.get("message")
+                    or failure_details.get("error")
+                    or data.get("message")
+                    or data.get("error")
+                    or event.get("message")
+                    or "Flow execution failed."
+                )
 
             # Log supervisor completion for debugging
             if event_type == "SUPERVISOR_COMPLETE":
@@ -395,13 +431,16 @@ async def _execute_flow_for_document(
         broadcaster.publish_sync(batch_uuid, error_event)
         raise
 
-    if not result_file_path:
+    if flow_failure_message:
+        raise RuntimeError(flow_failure_message)
+
+    if not result_file_path and not review_session_ids:
         logger.warning(
-            "No file output found from flow '%s' for document %s",
+            "No batch success output found from flow '%s' for document %s",
             flow.name, document_id
         )
 
-    return result_file_path
+    return result_file_path, review_session_ids
 
 
 def _enrich_event_for_batch(

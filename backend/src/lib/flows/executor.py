@@ -49,6 +49,7 @@ from src.lib.curation_workspace.curation_prep_service import (
     build_flow_scope_confirmation as _build_flow_scope_confirmation,
     ensure_domain_envelope_materialization,
 )
+from src.lib.curation_workspace.bootstrap_service import run_flow_curation_handoff
 from src.lib.curation_workspace.extraction_results import list_extraction_results
 from src.lib.curation_workspace.curation_prep_constants import (
     CURATION_PREP_AGENT_ID,
@@ -110,6 +111,8 @@ _FLOW_TEMPLATE_VARIABLE_PATTERN = re.compile(r"{{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*}
 _FLOW_TEMPLATE_DEFAULT_INPUT_FILENAME = "input"
 _FLOW_TEMPLATE_DEFAULT_TRACE_ID = "trace"
 _FLOW_TSV_FORMATTER_AGENT_IDS = {"tsv_formatter", "tsv_output_formatter"}
+CURATION_HANDOFF_AGENT_ID = "curation_handoff"
+CURATION_HANDOFF_READY_EVENT = "CURATION_HANDOFF_READY"
 
 
 class FlowTemplateConfigurationError(ValueError):
@@ -2095,6 +2098,60 @@ def get_all_agent_tools(
                 current_step_goal=data.get("step_goal"),
                 current_custom_instructions=data.get("custom_instructions"),
             )
+        elif agent_id == CURATION_HANDOFF_AGENT_ID:
+            def _make_curation_handoff_tool(
+                *,
+                current_step_goal: Optional[str],
+                current_custom_instructions: Optional[str],
+            ):
+                @function_tool(name_override=tool_name, description_override=tool_description)
+                async def _curation_handoff_tool(query: str) -> str:
+                    _ = (current_step_goal, current_custom_instructions, query)
+                    if not document_id or not user_id or not session_id:
+                        raise RuntimeError(
+                            "Curation handoff flow steps require document_id, user_id, and session_id."
+                        )
+
+                    extraction_results = _build_flow_prep_extraction_results(
+                        completed_steps=execution_state["completed_steps"],
+                        document_id=document_id,
+                        user_id=user_id,
+                        session_id=session_id,
+                        flow_run_id=flow_run_id,
+                        conversation_summary=flow_conversation_summary,
+                    )
+                    if not extraction_results:
+                        raise RuntimeError(
+                            "Curation handoff flow steps require at least one upstream extraction envelope."
+                        )
+
+                    handoff_db = SessionLocal()
+                    try:
+                        handoff_output = await run_flow_curation_handoff(
+                            extraction_results=extraction_results,
+                            document_id=document_id,
+                            runner_user_id=user_id,
+                            flow_run_id=flow_run_id,
+                            origin_session_id=session_id,
+                            conversation_summary=flow_conversation_summary,
+                            db=handoff_db,
+                        )
+                    finally:
+                        handoff_db.close()
+
+                    handoff_state = {
+                        "review_session_ids": handoff_output.review_session_ids,
+                        "adapter_keys": handoff_output.adapter_keys,
+                    }
+                    execution_state["curation_handoff"] = handoff_state
+                    return json.dumps(handoff_state)
+
+                return _curation_handoff_tool
+
+            raw_streaming_tool = _make_curation_handoff_tool(
+                current_step_goal=data.get("step_goal"),
+                current_custom_instructions=data.get("custom_instructions"),
+            )
         else:
             custom_instr = data.get("custom_instructions")
             include_evidence = _resolve_flow_step_include_evidence(
@@ -2798,6 +2855,7 @@ async def execute_flow(
     failure_reason: Optional[str] = None
     trace_id: Optional[str] = None
     extraction_persisted = False
+    curation_handoff_emitted = False
     flow_execution_state = supervisor._flow_execution_state
     completed_steps = flow_execution_state["completed_steps"]
     evidence_registry = flow_execution_state["evidence_registry"]
@@ -2948,6 +3006,40 @@ async def execute_flow(
         if flow_step_evidence_event is not None:
             yield flow_step_evidence_event
 
+        curation_handoff_state = flow_execution_state.get("curation_handoff")
+        if (
+            not curation_handoff_emitted
+            and isinstance(curation_handoff_state, Mapping)
+        ):
+            missing_steps = _missing_required_flow_steps(flow_execution_state)
+            if missing_steps:
+                failure_reason, flow_error_event = _flow_incomplete_error_event(
+                    flow_name=flow.name,
+                    missing_steps=missing_steps,
+                )
+                flow_status = "failed"
+                yield flow_error_event
+                break
+
+            extraction_persisted = True
+            curation_handoff_emitted = True
+            yield {
+                "type": CURATION_HANDOFF_READY_EVENT,
+                "timestamp": _now_iso(),
+                "details": {
+                    "review_session_ids": list(
+                        curation_handoff_state.get("review_session_ids") or []
+                    ),
+                    "adapter_keys": list(curation_handoff_state.get("adapter_keys") or []),
+                    "document_id": document_id,
+                },
+            }
+            logger.info(
+                "[Flow Executor] Curation handoff produced - terminating flow '%s'",
+                flow.name,
+            )
+            break
+
     if flow_status != "failed":
         missing_steps = _missing_required_flow_steps(flow_execution_state)
         if missing_steps:
@@ -2990,6 +3082,12 @@ async def execute_flow(
             "total_evidence_records": len(evidence_registry.records()),
             "step_evidence_counts": _build_step_evidence_counts(completed_steps),
             "adapter_keys": _build_completed_step_adapter_keys(completed_steps),
+            "review_session_ids": list(
+                (flow_execution_state.get("curation_handoff") or {}).get(
+                    "review_session_ids"
+                )
+                or []
+            ),
         }
     }
 

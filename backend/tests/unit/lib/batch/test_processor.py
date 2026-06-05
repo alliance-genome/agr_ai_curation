@@ -27,6 +27,7 @@ def _build_batch_context():
         position=0,
         status=None,
         result_file_path=None,
+        review_session_ids=None,
         processing_time_ms=None,
         processed_at=None,
         error_message=None,
@@ -41,7 +42,7 @@ def test_batch_processor_marks_failed_when_no_file_ready(monkeypatch):
     published_events = []
 
     async def _fake_execute_flow_for_document(**_kwargs):
-        return None
+        return (None, [])
 
     monkeypatch.setattr(processor, "_execute_flow_for_document", _fake_execute_flow_for_document)
     monkeypatch.setattr(
@@ -65,6 +66,7 @@ def test_batch_processor_marks_failed_when_no_file_ready(monkeypatch):
     assert batch.failed_documents == 1
     assert batch.completed_documents == 0
     assert batch_doc.result_file_path is None
+    assert batch_doc.review_session_ids is None
     assert published_events == [
         {
             "type": "DOCUMENT_STATUS",
@@ -74,7 +76,8 @@ def test_batch_processor_marks_failed_when_no_file_ready(monkeypatch):
             "position": batch_doc.position,
             "status": BatchDocumentStatus.FAILED.value,
             "result_file_path": None,
-            "error_message": "Flow completed without FILE_READY output",
+            "review_session_ids": None,
+            "error_message": "Flow completed without FILE_READY or curation handoff output",
             "processing_time_ms": batch_doc.processing_time_ms,
             "timestamp": batch_doc.processed_at.isoformat(),
         }
@@ -86,7 +89,7 @@ def test_batch_processor_marks_completed_when_file_ready(monkeypatch):
     batch, batch_doc, flow = _build_batch_context()
 
     async def _fake_execute_flow_for_document(**_kwargs):
-        return "/api/weaviate/documents/download/abc123"
+        return ("/api/weaviate/documents/download/abc123", [])
 
     monkeypatch.setattr(processor, "_execute_flow_for_document", _fake_execute_flow_for_document)
 
@@ -102,6 +105,31 @@ def test_batch_processor_marks_completed_when_file_ready(monkeypatch):
     assert batch.completed_documents == 1
     assert batch.failed_documents == 0
     assert batch_doc.result_file_path == "/api/weaviate/documents/download/abc123"
+    assert batch_doc.review_session_ids is None
+
+
+def test_batch_processor_succeeds_on_curation_handoff(monkeypatch):
+    db = Mock()
+    batch, batch_doc, flow = _build_batch_context()
+
+    async def _fake_execute_flow_for_document(**_kwargs):
+        return (None, ["session-gene", "session-gene_expression"])
+
+    monkeypatch.setattr(processor, "_execute_flow_for_document", _fake_execute_flow_for_document)
+
+    processor._process_single_document(
+        db=db,
+        batch=batch,
+        batch_doc=batch_doc,
+        flow=flow,
+        cognito_sub="auth-sub",
+    )
+
+    assert batch_doc.status == BatchDocumentStatus.COMPLETED
+    assert batch.completed_documents == 1
+    assert batch.failed_documents == 0
+    assert batch_doc.result_file_path is None
+    assert batch_doc.review_session_ids == ["session-gene", "session-gene_expression"]
 
 
 class _DummyScalarResult:
@@ -218,7 +246,7 @@ def test_execute_flow_for_document_ignores_file_ready_without_file_id(monkeypatc
         )
     )
 
-    assert result is None
+    assert result == (None, [])
     assert published_events == []
 
 
@@ -256,8 +284,90 @@ def test_execute_flow_for_document_passes_batch_id_as_flow_run_id(monkeypatch):
         )
     )
 
-    assert result == "/api/weaviate/documents/download/file-1"
+    assert result == ("/api/weaviate/documents/download/file-1", [])
     assert captured["flow_run_id"] == batch_id
+
+
+def test_execute_flow_for_document_captures_curation_handoff_ready(monkeypatch):
+    async def _fake_execute_flow(**_kwargs):
+        yield {
+            "type": "CURATION_HANDOFF_READY",
+            "details": {
+                "review_session_ids": ["session-gene", "session-gene_expression"],
+                "adapter_keys": ["gene", "gene_expression"],
+                "document_id": "doc-1",
+            },
+        }
+
+    published_events = []
+    monkeypatch.setattr(
+        processor,
+        "get_batch_broadcaster",
+        lambda: SimpleNamespace(
+            publish_sync=lambda _batch_uuid, event: published_events.append(event)
+        ),
+    )
+    monkeypatch.setattr("src.lib.flows.executor.execute_flow", _fake_execute_flow)
+    monkeypatch.setattr("src.lib.context.set_current_user_id", lambda _user_id: None)
+    monkeypatch.setattr("src.lib.context.set_current_session_id", lambda _session_id: None)
+
+    batch_id = str(uuid4())
+    document_id = str(uuid4())
+    result = asyncio.run(
+        processor._execute_flow_for_document(
+            flow=SimpleNamespace(name="Batch Flow"),
+            document_id=document_id,
+            cognito_sub="auth-sub",
+            batch_id=batch_id,
+            db_user_id=7,
+        )
+    )
+
+    assert result == (None, ["session-gene", "session-gene_expression"])
+    assert len(published_events) == 1
+    assert published_events[0]["type"] == "CURATION_HANDOFF_READY"
+    assert published_events[0]["batch_id"] == batch_id
+    assert published_events[0]["document_id"] == document_id
+
+
+def test_execute_flow_for_document_fails_if_flow_error_follows_handoff(monkeypatch):
+    async def _fake_execute_flow(**_kwargs):
+        yield {
+            "type": "CURATION_HANDOFF_READY",
+            "details": {"review_session_ids": ["session-gene"]},
+        }
+        yield {
+            "type": "FLOW_ERROR",
+            "details": {"message": "terminal step failed"},
+        }
+
+    published_events = []
+    monkeypatch.setattr(
+        processor,
+        "get_batch_broadcaster",
+        lambda: SimpleNamespace(
+            publish_sync=lambda _batch_uuid, event: published_events.append(event)
+        ),
+    )
+    monkeypatch.setattr("src.lib.flows.executor.execute_flow", _fake_execute_flow)
+    monkeypatch.setattr("src.lib.context.set_current_user_id", lambda _user_id: None)
+    monkeypatch.setattr("src.lib.context.set_current_session_id", lambda _session_id: None)
+
+    with pytest.raises(RuntimeError, match="terminal step failed"):
+        asyncio.run(
+            processor._execute_flow_for_document(
+                flow=SimpleNamespace(name="Batch Flow"),
+                document_id=str(uuid4()),
+                cognito_sub="auth-sub",
+                batch_id=str(uuid4()),
+                db_user_id=7,
+            )
+        )
+
+    assert [event["type"] for event in published_events] == [
+        "CURATION_HANDOFF_READY",
+        "FLOW_ERROR",
+    ]
 
 
 def test_execute_flow_for_document_does_not_publish_unowned_file_ready(monkeypatch):
@@ -293,7 +403,7 @@ def test_execute_flow_for_document_does_not_publish_unowned_file_ready(monkeypat
         )
     )
 
-    assert result is None
+    assert result == (None, [])
     assert published_events == []
 
 
@@ -324,7 +434,7 @@ def test_execute_flow_for_document_ignores_malformed_file_ready_details(monkeypa
         )
     )
 
-    assert result is None
+    assert result == (None, [])
     assert len(published_events) == 1
     assert published_events[0]["type"] == "SUPERVISOR_COMPLETE"
 
@@ -363,7 +473,7 @@ def test_execute_flow_for_document_strips_internal_payload_before_publish(monkey
         )
     )
 
-    assert result is None
+    assert result == (None, [])
     assert len(published_events) == 1
     assert published_events[0]["type"] == "TOOL_COMPLETE"
     assert published_events[0]["batch_id"] == batch_id
