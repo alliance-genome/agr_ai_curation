@@ -751,10 +751,11 @@ describe('CurationWorkspacePage', () => {
         current_candidate_id: 'candidate-manual-1',
       },
     }
+    const refreshDeferred = createDeferredPromise<CurationWorkspace>()
 
     serviceMocks.fetchCurationWorkspace
       .mockResolvedValueOnce(workspace)
-      .mockResolvedValue(refreshedWorkspace)
+      .mockReturnValue(refreshDeferred.promise)
     serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockResolvedValue([
       buildEnvelopeReviewRows(),
     ])
@@ -809,6 +810,18 @@ describe('CurationWorkspacePage', () => {
         evidence_anchors: [],
       })
     })
+    await waitFor(() => {
+      expect(serviceMocks.fetchCurationWorkspace).toHaveBeenCalledTimes(2)
+    })
+    expect(serviceMocks.updateCurationSession).not.toHaveBeenCalledWith({
+      session_id: 'session-1',
+      current_candidate_id: 'candidate-manual-1',
+    })
+
+    await act(async () => {
+      refreshDeferred.resolve(refreshedWorkspace)
+      await refreshDeferred.promise
+    })
 
     await waitFor(() => {
       expect(serviceMocks.fetchCurationWorkspace).toHaveBeenLastCalledWith('session-1')
@@ -818,6 +831,11 @@ describe('CurationWorkspacePage', () => {
         session_id: 'session-1',
         current_candidate_id: 'candidate-manual-1',
       })
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('location')).toHaveTextContent(
+        '/curation/session-1/candidate-manual-1',
+      )
     })
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: 'Add object' })).not.toBeInTheDocument()

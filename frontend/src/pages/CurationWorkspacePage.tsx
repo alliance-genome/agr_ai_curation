@@ -525,8 +525,8 @@ function CurationWorkspacePageContent({
         draft,
         evidence_anchors: [],
       })
-      setActiveCandidate(response.candidate.candidate_id)
       await refreshWorkspace(response.candidate.candidate_id)
+      setActiveCandidate(response.candidate.candidate_id)
       return response.candidate.candidate_id
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to create this manual entity.'
