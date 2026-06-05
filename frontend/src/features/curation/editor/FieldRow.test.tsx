@@ -157,6 +157,52 @@ describe('FieldRow', () => {
     )
   })
 
+  it('renders render_as chip fields as chips instead of JSON editors', () => {
+    renderFieldRow({
+      field: createField({
+        field_key: 'evidence_code_curies',
+        label: 'Evidence code CURIEs',
+        field_type: 'array',
+        value: ['ECO:0000033', 'ECO:0000314'],
+        seed_value: ['ECO:0000033', 'ECO:0000314'],
+        read_only: true,
+        metadata: {
+          field_metadata: {
+            render_as: 'chip',
+          },
+        },
+      }),
+      value: ['ECO:0000033', 'ECO:0000314'],
+    })
+
+    expect(screen.getByText('ECO:0000033')).toBeInTheDocument()
+    expect(screen.getByText('ECO:0000314')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Evidence code CURIEs')).not.toBeInTheDocument()
+  })
+
+  it('keeps render_as fields editable when read_only is false', () => {
+    const { onChange } = renderFieldRow({
+      field: createField({
+        field_key: 'disease_annotation_object.curie',
+        label: 'Disease term CURIE',
+        value: 'DOID:0050200',
+        seed_value: 'DOID:0050200',
+        metadata: {
+          field_metadata: {
+            render_as: 'curie-chip',
+          },
+        },
+      }),
+      value: 'DOID:0050200',
+    })
+
+    fireEvent.change(screen.getByLabelText('Disease term CURIE'), {
+      target: { value: 'DOID:1234567' },
+    })
+
+    expect(onChange).toHaveBeenCalledWith('DOID:1234567')
+  })
+
   it('supports adapter-owned custom input renderers', () => {
     const onChange = vi.fn()
 
