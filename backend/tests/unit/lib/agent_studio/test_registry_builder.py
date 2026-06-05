@@ -192,6 +192,18 @@ class TestAgentDocumentationCoverage:
         assert ontology_entry is not None
         assert registry.get("ontology_term") is None
 
+    def test_supervisor_declares_medium_reasoning_default(self, monkeypatch):
+        """Supervisor reasoning should not inherit the low global agent default."""
+        monkeypatch.delenv("AGENT_SUPERVISOR_REASONING", raising=False)
+        monkeypatch.setenv("DEFAULT_AGENT_REASONING", "low")
+        agent_loader.reset_cache()
+
+        registry = build_agent_registry()
+
+        assert registry["supervisor"]["config_defaults"]["reasoning"] == "medium"
+
+        agent_loader.reset_cache()
+
     def test_build_agent_registry_core_only_runtime_excludes_alliance_agents(
         self,
         monkeypatch,
