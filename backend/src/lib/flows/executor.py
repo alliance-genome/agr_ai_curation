@@ -3035,10 +3035,9 @@ async def execute_flow(
                 },
             }
             logger.info(
-                "[Flow Executor] Curation handoff produced - terminating flow '%s'",
+                "[Flow Executor] Curation handoff produced for flow '%s'",
                 flow.name,
             )
-            break
 
     if flow_status != "failed":
         missing_steps = _missing_required_flow_steps(flow_execution_state)

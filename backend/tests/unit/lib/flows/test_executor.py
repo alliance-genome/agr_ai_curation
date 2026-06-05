@@ -3502,7 +3502,7 @@ class TestExecuteFlowTermination:
         event_types = [event.get("type") for event in events]
 
         assert "CURATION_HANDOFF_READY" in event_types
-        assert "RUN_FINISHED" not in event_types
+        assert "RUN_FINISHED" in event_types
         assert "FLOW_ERROR" not in event_types
 
         handoff_ready = next(
@@ -3516,6 +3516,105 @@ class TestExecuteFlowTermination:
 
         flow_finished = next(event for event in events if event.get("type") == "FLOW_FINISHED")
         assert flow_finished["data"]["status"] == "completed"
+        assert flow_finished["data"]["review_session_ids"] == ["session-gene"]
+
+    @pytest.mark.asyncio
+    async def test_later_run_error_fails_after_curation_handoff_ready(
+        self, monkeypatch
+    ):
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene", step_goal="Extract genes"),
+            _agent_node("n2", "curation_handoff", step_goal="Prepare review sessions"),
+        ])
+        completed_gene_step = _make_completed_step(
+            agent_id="gene",
+            agent_name="Gene",
+            tool_name="ask_gene_specialist",
+            step=1,
+            adapter_key="gene",
+            payload=_structured_step_output("TP53", actor="gene", destination="gene"),
+        )
+        completed_handoff_step = _make_completed_step(
+            agent_id="curation_handoff",
+            agent_name="Curation Handoff",
+            tool_name="ask_curation_handoff_specialist",
+            step=2,
+            adapter_key="gene",
+            payload={"review_session_ids": ["session-gene"], "adapter_keys": ["gene"]},
+        )
+
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(
+            completed_gene_step,
+            completed_handoff_step,
+            ordered_tool_names=[
+                "ask_gene_specialist",
+                "ask_curation_handoff_specialist",
+            ],
+        )
+        supervisor._flow_execution_state["curation_handoff"] = {
+            "review_session_ids": ["session-gene"],
+            "adapter_keys": ["gene"],
+        }
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.DocumentContext.fetch",
+            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.persist_extraction_results",
+            lambda *_args, **_kwargs: pytest.fail(
+                "curation handoff should suppress fallback extraction persistence"
+            ),
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            yield {
+                "type": "TOOL_COMPLETE",
+                "details": {"toolName": "ask_curation_handoff_specialist"},
+            }
+            yield {
+                "type": "RUN_ERROR",
+                "data": {"message": "terminal step failed after handoff"},
+            }
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [
+            event
+            async for event in execute_flow(
+                flow,
+                user_id="u1",
+                session_id="s1",
+                document_id="doc-1",
+            )
+        ]
+        event_types = [event.get("type") for event in events]
+
+        assert event_types.count("CURATION_HANDOFF_READY") == 1
+        assert "RUN_ERROR" in event_types
+        assert "FLOW_ERROR" in event_types
+        flow_error = next(event for event in events if event.get("type") == "FLOW_ERROR")
+        assert flow_error["details"]["reason"] == "run_error"
+        assert "terminal step failed after handoff" in flow_error["details"]["message"]
+
+        flow_finished = next(event for event in events if event.get("type") == "FLOW_FINISHED")
+        assert flow_finished["data"]["status"] == "failed"
+        assert flow_finished["data"]["failure_reason"] == "terminal step failed after handoff"
         assert flow_finished["data"]["review_session_ids"] == ["session-gene"]
 
     @pytest.mark.asyncio
