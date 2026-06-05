@@ -163,3 +163,41 @@ Temporary diagnosis notes for the local Incus main-sandbox run.
   - curation DB `select 1` passed from the backend container;
   - literature DB `select 1` passed from the backend container;
   - `agr_literature_reference_lookup` resolved `PMID:39671436` with one `literature_es` result.
+
+## 2026-06-05 follow-up: gene validator invalid schema on UNC-112
+
+- Trace/session inspected:
+  - trace ID: `b658549cacd81eff62979cc5370a7b52`
+  - session ID: `b1ff84f5-d767-4113-999a-7d14bfdfaa21`
+  - validator request ID: `domain-validation:85de56bb054b326a1ee27be88e646e26df9545e6154ca14aafeec14fe407b57c`
+- Backend logs were captured before any restart at:
+  `/home/ctabone/.symphony/diagnostics/agr_ai_curation/main-sandbox/20260605T163851Z-gene-validator-failure`.
+- Extractor behavior looked healthy:
+  - four gene mention evidence objects staged and finalized;
+  - UNC-112 evidence quote resolved to verified sentence spans on page 1;
+  - the final supervisor response correctly left UNC-112 validation open instead of silently
+    claiming it was materialized.
+- Curation DB connectivity was not the failure:
+  - direct WB/taxon search for `unc-112` returned two gene rows;
+  - exact row: `WB:WBGene00006836` / `unc-112`;
+  - broader prefix row: `WB:WBGene00009337` /
+    `UNC-112-Interacting Guanine nucleotide exchange factor 1`.
+- Diagnosis:
+  - this is a validator-envelope contract failure, likely exposed by the weaker
+    `gpt-5.4-mini` validation model;
+  - the gene validator completed its LLM run, but dispatch rejected its structured output because
+    it returned `status: "resolved"` without at least one `lookup_attempts[].outcome == "success"`;
+  - likely variants are either an empty `lookup_attempts` list or an attempt marked `ambiguous`
+    after the model selected the exact `unc-112` candidate.
+- Implemented prompt hardening:
+  - gene validator now explicitly states that resolved results must include a successful
+    supporting lookup attempt;
+  - broad `search_genes` results with one exact provider/taxon-supported gene plus prefix
+    alternates may resolve to the exact gene, but the supporting lookup must be recorded as
+    `outcome: "success"` and alternates preserved as candidates;
+  - prompt now warns not to copy tool-only keys such as `attempted_query`, `candidate_count`, or
+    `lookup_status` into final validator `lookup_attempts`.
+- Validation:
+  - `docker compose -f docker-compose.test.yml run --rm backend-unit-tests bash -lc "python -m pytest tests/unit/test_gene_allele_validator_result_contract.py -q"`: `9 passed`.
+  - `docker compose -f docker-compose.test.yml run --rm backend-unit-tests bash -lc "python -m pytest tests/contract/alliance/domain_packs/test_alliance_gene_domain_pack.py -q"`: `12 passed`.
+  - `scripts/utilities/agent_lsp.py diagnostics backend/tests/unit/test_gene_allele_validator_result_contract.py`: Ruff and Pyright passed.

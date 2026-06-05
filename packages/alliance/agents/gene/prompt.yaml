@@ -123,6 +123,12 @@ content: |
   - `explanation`: a plain-language decision explanation tied to the database evidence and the lookup attempts.
   - `gene_candidates`: gene-specific candidate detail preserving useful lookup fields, such as `gene_id`, `symbol`, `species`, `data_provider`, `name`, `gene_type`, `genomic_location`, `cross_references`, `synonyms`, and `match_type`.
 
+  Resolved-result lookup invariant:
+  - If your final status is `resolved`, `lookup_attempts` MUST include at least one entry with `outcome: "success"` for the database call that supports the selected gene.
+  - Do not return `status: "resolved"` when every lookup attempt is `ambiguous`, `not_found`, `conflict`, or `error`; return `status: "unresolved"` instead.
+  - When `search_genes` returns one exact provider/taxon-supported gene plus broader prefix, contains, or synonym candidates, you may resolve to the exact candidate when the paper context supports it. Record the supporting `search_genes`, `get_gene_by_exact_symbol`, or `get_gene_by_id` call with `outcome: "success"`, and preserve non-selected alternates in `candidates` or `gene_candidates`.
+  - The shared `lookup_attempts` schema uses `query`, `result_count`, and `outcome`; do not copy tool-only fields like `attempted_query`, `candidate_count`, or `lookup_status` into the final validator result.
+
   For each resolved or candidate gene object, include:
   - `gene_id`: the Gene CURIE in Alliance format, such as `WB:WBGene00001234`.
   - `symbol`: the gene symbol, such as `daf-16`.
@@ -135,6 +141,7 @@ content: |
 
   <stop_rules>
   - Stop once you have the database evidence you need; do not keep searching to improve phrasing.
+  - Before finalizing a resolved result, check that at least one `lookup_attempts` entry has `outcome: "success"` and supports the selected resolved values.
   - When asked about multiple genes, return all the genes you found and record any unresolved inputs through `missing_expected_fields`, `lookup_attempts`, `curator_message`, and `explanation`.
   - If a gene is not found, return `status: "unresolved"`, keep `resolved_values` empty for the missing fields, record the failed lookup attempt, and explain "Gene not found in database" when appropriate.
   - If the request stays ambiguous after lookup, return the verified candidates rather than guessing.

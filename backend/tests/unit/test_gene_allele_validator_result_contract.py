@@ -289,6 +289,24 @@ def test_gene_prompt_requires_shared_bulk_lookup_for_batch_requests():
         assert fragment in prompt
 
 
+def test_gene_prompt_requires_successful_lookup_attempt_for_resolved_results():
+    prompt = yaml.safe_load(
+        (ALLIANCE_AGENTS_PATH / "gene" / "prompt.yaml").read_text(encoding="utf-8")
+    )["content"]
+
+    required_fragments = [
+        "Resolved-result lookup invariant",
+        '`outcome: "success"`',
+        'Do not return `status: "resolved"` when every lookup attempt',
+        "one exact provider/taxon-supported gene plus broader prefix",
+        "do not copy tool-only fields",
+        "`attempted_query`",
+        "`lookup_status`",
+    ]
+    for fragment in required_fragments:
+        assert fragment in prompt
+
+
 def test_gene_prompt_uses_extractor_handoff_context_for_disambiguation():
     prompt = yaml.safe_load(
         (ALLIANCE_AGENTS_PATH / "gene" / "prompt.yaml").read_text(encoding="utf-8")
