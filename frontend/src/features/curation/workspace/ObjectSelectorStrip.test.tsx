@@ -150,6 +150,7 @@ describe('ObjectSelectorStrip', () => {
 
   it('confirms menu deletes with the candidate id', async () => {
     const user = userEvent.setup()
+    const onSelect = vi.fn()
     const onDelete = vi.fn()
     renderStrip(
       [
@@ -157,14 +158,16 @@ describe('ObjectSelectorStrip', () => {
         selectorRow('b', 'Object B', 'GeneDiseaseAnnotation'),
       ],
       'b',
-      vi.fn(),
+      onSelect,
       onDelete,
     )
 
     await user.click(screen.getByRole('button', { name: /all objects/i }))
     await user.click(screen.getByRole('button', { name: 'Delete object Object A' }))
+    expect(onSelect).not.toHaveBeenCalled()
     await user.click(screen.getByRole('button', { name: 'Delete object' }))
 
     expect(onDelete).toHaveBeenCalledWith('a')
+    expect(onSelect).not.toHaveBeenCalled()
   })
 })
