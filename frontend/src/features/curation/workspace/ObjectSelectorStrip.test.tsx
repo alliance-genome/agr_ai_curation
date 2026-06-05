@@ -86,11 +86,13 @@ function renderStrip(
   rows: WorkspaceEnvelopeObjectReviewRow[],
   activeCandidateId = 'b',
   onSelect = vi.fn(),
+  onDelete?: (candidateId: string) => void,
 ) {
   render(
     <ThemeProvider theme={theme}>
       <ObjectSelectorStrip
         activeCandidateId={activeCandidateId}
+        onDelete={onDelete}
         onSelect={onSelect}
         rows={rows}
       />
@@ -132,5 +134,37 @@ describe('ObjectSelectorStrip', () => {
 
     expect(onSelect).toHaveBeenNthCalledWith(1, 'a')
     expect(onSelect).toHaveBeenNthCalledWith(2, 'c')
+  })
+
+  it('hides delete actions until an onDelete handler is provided', async () => {
+    const user = userEvent.setup()
+    renderStrip([
+      selectorRow('a', 'Object A', 'GeneDiseaseAnnotation'),
+      selectorRow('b', 'Object B', 'GeneDiseaseAnnotation'),
+    ])
+
+    await user.click(screen.getByRole('button', { name: /all objects/i }))
+
+    expect(screen.queryByRole('button', { name: /delete object/i })).not.toBeInTheDocument()
+  })
+
+  it('confirms menu deletes with the candidate id', async () => {
+    const user = userEvent.setup()
+    const onDelete = vi.fn()
+    renderStrip(
+      [
+        selectorRow('a', 'Object A', 'GeneDiseaseAnnotation'),
+        selectorRow('b', 'Object B', 'GeneDiseaseAnnotation'),
+      ],
+      'b',
+      vi.fn(),
+      onDelete,
+    )
+
+    await user.click(screen.getByRole('button', { name: /all objects/i }))
+    await user.click(screen.getByRole('button', { name: 'Delete object Object A' }))
+    await user.click(screen.getByRole('button', { name: 'Delete object' }))
+
+    expect(onDelete).toHaveBeenCalledWith('a')
   })
 })

@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react'
 import ExpandMoreRoundedIcon from '@mui/icons-material/ExpandMoreRounded'
 import KeyboardArrowLeftRoundedIcon from '@mui/icons-material/KeyboardArrowLeftRounded'
 import KeyboardArrowRightRoundedIcon from '@mui/icons-material/KeyboardArrowRightRounded'
+import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded'
 import {
   Box,
   Button,
@@ -24,9 +25,11 @@ import {
   selectorPosition,
   type ObjectSelectorProgressKind,
 } from './objectSelector'
+import DeleteObjectDialog from './DeleteObjectDialog'
 
 export interface ObjectSelectorStripProps {
   activeCandidateId: string | null
+  onDelete?: (candidateId: string) => void
   onSelect: (candidateId: string) => void
   rows: WorkspaceEnvelopeObjectReviewRow[]
 }
@@ -40,11 +43,13 @@ const SEGMENT_COLOR: Record<ObjectSelectorProgressKind, string> = {
 
 export default function ObjectSelectorStrip({
   activeCandidateId,
+  onDelete,
   onSelect,
   rows,
 }: ObjectSelectorStripProps) {
   const theme = useTheme()
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<WorkspaceEnvelopeObjectReviewRow | null>(null)
   const candidates = useMemo(() => rows.map((row) => row.candidate), [rows])
   const activeRow = rows.find((row) => row.candidate.candidate_id === activeCandidateId) ?? null
   const position = selectorPosition(candidates, activeCandidateId)
@@ -152,6 +157,7 @@ export default function ObjectSelectorStrip({
                 }}
                 role="option"
                 selected={selected}
+                sx={{ gap: 1, justifyContent: 'space-between' }}
               >
                 <Stack spacing={0.1} minWidth={0}>
                   <Typography sx={{ fontWeight: 700 }} variant="body2">
@@ -161,6 +167,20 @@ export default function ObjectSelectorStrip({
                     {objectSelectorType(row)}
                   </Typography>
                 </Stack>
+                {onDelete ? (
+                  <IconButton
+                    aria-label={`Delete object ${label}`}
+                    color="error"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      setAnchorEl(null)
+                      setDeleteTarget(row)
+                    }}
+                    size="small"
+                  >
+                    <DeleteOutlineRoundedIcon fontSize="small" />
+                  </IconButton>
+                ) : null}
               </MenuItem>
             )
           })}
@@ -205,6 +225,17 @@ export default function ObjectSelectorStrip({
           />
         ))}
       </Box>
+      <DeleteObjectDialog
+        candidateLabel={deleteTarget ? objectSelectorLabel(deleteTarget) : 'this object'}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={() => {
+          if (deleteTarget) {
+            onDelete?.(deleteTarget.candidate.candidate_id)
+          }
+          setDeleteTarget(null)
+        }}
+        open={deleteTarget !== null}
+      />
     </Box>
   )
 }
