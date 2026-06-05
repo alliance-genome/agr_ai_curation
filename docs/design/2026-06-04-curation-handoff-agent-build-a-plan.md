@@ -55,8 +55,8 @@ def test_curation_handoff_agent_has_curation_handoff_capability():
     agent = AGENT_REGISTRY.get("curation_handoff")
     assert agent is not None, "curation_handoff agent must be registered"
     assert "curation_handoff" in agent.get("batch_capabilities", [])
-    # terminal, not supervisor-routable
-    assert agent.get("supervisor_routing", {}).get("enabled") is False
+    # terminal, not supervisor-routable (AGENT_REGISTRY key is "supervisor", not "supervisor_routing")
+    assert agent.get("supervisor", {}).get("enabled") is False
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -827,6 +827,47 @@ git log --oneline -8
 - **Standalone (non-batch) flow runs** ending in `curation_handoff` also create sessions (the tool runs regardless of batch). Confirm that's desired (it completes the previously-incomplete flow path).
 
 ---
+
+## gpt-5.5 Review Corrections (fold in before implementing)
+
+Verdict: **Sound-with-corrections.** Apply these:
+
+1. **Task 3 — per-adapter prep loop (most important).** `run_curation_prep` requires **exactly one adapter key** (`curation_prep_service.py:464`) and returns `CurationPrepAgentOutput` with **`envelope_refs`, not `adapter_keys`**. So the service must **loop adapters and call `run_curation_prep` once per adapter** (like chat at `curation_prep_invocation.py:90`), not call it once and read `prep_output.adapter_keys`. Replace `_handoff_adapter_keys(prep_output)` (the `domain_pack_id → adapter_key` fallback is unsafe — packs have their own ids) with adapter keys **derived from the scoped extraction records** (each `CurationExtractionResultRecord.adapter_key`). Corrected core:
+
+   ```python
+   adapter_keys = sorted({r.adapter_key for r in extraction_results if r.adapter_key})
+   review_session_ids: list[str] = []
+   for adapter_key in adapter_keys:
+       adapter_records = [r for r in extraction_results if r.adapter_key == adapter_key]
+       await run_curation_prep(
+           adapter_records,
+           scope_confirmation=_build_flow_scope_confirmation(adapter_records),
+           persistence_context=CurationPrepPersistenceContext(
+               document_id=document_id, source_kind=CurationExtractionSourceKind.FLOW,
+               origin_session_id=origin_session_id, trace_id=get_current_trace_id(),
+               flow_run_id=flow_run_id, user_id=runner_user_id, conversation_summary=conversation_summary,
+           ),
+           db=db,
+       )
+       bootstrap_response = await bootstrap_document_session(
+           document_id,
+           CurationDocumentBootstrapRequest(adapter_key=adapter_key, origin_session_id=origin_session_id, curator_id=runner_user_id),
+           current_user_id=runner_user_id, db=db, manage_transaction=False,
+       )
+       review_session_ids.append(bootstrap_response.session.session_id)
+   db.commit()
+   ```
+   Update the Task 3 test accordingly (the fake `run_curation_prep` no longer needs to return `adapter_keys`; assert one prep + one bootstrap per distinct record adapter). Confirmed good: `CurationDocumentBootstrapRequest` **does** have `curator_id` (`curation_workspace.py:1846`); `bootstrap_document_session` already forces `PipelineExecutionMode.SYNC` and raises if no `session_id` (`bootstrap_service.py:168,191,196`).
+
+2. **Task 3 — imports.** `bootstrap_service.py` does **not** already import `run_curation_prep`, `CurationPrepPersistenceContext`, `CurationExtractionSourceKind`, `get_current_trace_id`, or `_build_flow_scope_confirmation`. Add them (and ensure `_build_flow_scope_confirmation` is importable — move it to `curation_prep_service.py` if it currently lives in `executor.py`).
+
+3. **Task 5 Step 3 — DB session.** `get_curation_db_session()` does not exist. Use **`SessionLocal`** (already imported in the executor at `executor.py:80`): `with SessionLocal() as handoff_db:`. (Or follow the processor contextmanager at `processor.py:87`.)
+
+4. **Task 5 Step 4 — prevent fallback persistence.** A plain `break` is not enough: the executor later persists extraction candidates when `extraction_persisted` is false (`executor.py:2979`). Set a handoff-completed flag (or set the equivalent `extraction_persisted = True`) so the post-loop fallback persistence does **not** run for the handoff path.
+
+5. **New step — API visibility of `review_session_ids`.** Adding the column isn't enough for the UI: also add the field to `BatchDocumentResponse` (`backend/src/schemas/batch.py:19`), populate it in `BatchService.batch_to_response()` (`backend/src/lib/batch/service.py:271`), and include it in the batch-status SSE (`backend/src/api/batch.py:518`). Add this as a step in Task 4.
+
+6. **Minor:** "AUTO returns `session_id=None`" is overbroad — `AUTO` is sync for small payloads; only `ASYNC` guarantees no id. Forcing `SYNC` remains correct. Loader-path prose: discovery is `backend/src/lib/config/agent_sources.py:375` (not under `lib/agent_studio`) — the plan's path was already correct; just don't confuse the prose.
 
 ## Self-Review (completed)
 

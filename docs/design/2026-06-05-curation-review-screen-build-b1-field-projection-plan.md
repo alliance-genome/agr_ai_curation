@@ -331,7 +331,7 @@ In `packages/alliance/domain_packs/gene/domain_pack.yaml`, extend the `workspace
         secondary_label_field: gene_symbol
         summary_fields:
           - gene_symbol
-          - where_expressed_statement
+          - primary_external_id
           - taxon
         groups:
           - id: identity
@@ -648,6 +648,20 @@ git commit -m "test(domain-packs): regression pass for per-pack workspace_displa
 - Group-anchored evidence: evidence is anchored to a member `field_path` of a group (B1 didn't change evidence projection); B2 surfaces the group's evidence chip by matching anchors whose `field_path` is in the group's fields.
 
 ---
+
+## gpt-5.5 Review Corrections (fold in before implementing)
+
+Verdict: **Sound-with-corrections.** Apply these:
+
+1. **Gene `where_expressed_statement` does not exist** in the gene pack — already fixed above (Task 3 `summary_fields` now uses `gene_symbol`/`primary_external_id`/`taxon`). Double-check every group/summary path you author against the pack's declared `fields[]`.
+
+2. **Read-only wording.** "Summary fallback is read-only" is imprecise: the pipeline derives `read_only` from **field metadata** in *both* the summary-fallback and workspace-group paths (`pipeline.py:592,655,734`). What groups actually change is the **draft source** (summary fallback → explicit workspace fields), not editability. Editability stays metadata-gated (`read_only = protected or not editable`). Gene's `gene_symbol`/`primary_external_id`/`taxon` already have `editable: true` (`gene/domain_pack.yaml:193,211,229`) so they're editable in both paths. Reword §3/§13 accordingly; don't imply adding groups makes fields editable.
+
+3. **The materializer tolerates unknown group field paths** (it projects a missing field as `field_type: "any"`, `value: None` — `test_materialization.py:526`), so a typo'd path will **not** fail the existing tests. Add an explicit **declared-field-path validity assertion** per pack: a test that every path listed in each pack's `workspace_display.groups`/`summary_fields` exists in that object's declared `fields[]` (or is a valid payload leaf). Add this as a step in Task 7.
+
+4. **Add a draft-level `render_as` test.** The Task 1 tests assert at the review-row level. Add one test that runs the pipeline draft conversion (`_draft_fields_from_review_row`) and asserts `draft_field.metadata.field_metadata.render_as` and `draft_field.read_only` on an actual draft field — so B1 verifies the value B2 will read, not only the review-row metadata. (Confirmed: `render_as` does pass through via `**dict(field_definition.metadata)` → `pipeline.py:644`.)
+
+5. **Minor:** Task 1's expected-failure note — an empty `tags: []` is currently kept as `[]` (not `None`); `_workspace_fields` only converts `_MISSING` → `None` (`materialization.py:1442,1454`). The `_is_empty_projection_value` helper is still correct (it preserves `False`/`0`, drops `_MISSING`/`None`/empty containers).
 
 ## Self-Review (completed)
 

@@ -366,6 +366,20 @@ git commit -m "feat(curation-ui): envelope grouped form is the default review su
 
 ---
 
+## gpt-5.5 Review Corrections (fold in before implementing)
+
+Verdict: **Sound-with-corrections.** Apply these:
+
+1. **Task 2 — field-state must use the envelope validation summary, not `validation_result`.** Two problems with the plan's `fieldState`: (a) `FieldValidationResult.status` values are `validated | ambiguous | not_found | invalid_format | conflict | skipped | overridden` (`contracts.ts:171`), **not** `failed/passed/unresolved`; and (b) `CandidateFieldEditor` deliberately **ignores legacy `field.validation_result`** for the envelope UI and uses **`validation_summary_projections`** via `validationSummariesForField()` / `strongestStatus()` (`CandidateFieldEditor.test.tsx:402`). Rewrite `fieldState` to derive from the candidate's `validation_summary_projections` for the field: treat `unresolved`/`blocked` as **needs-review**, `resolved`/`waived` as **resolved**, others as **ai-unconfirmed**. Update the tests to build `validation_summary_projections` fixtures (not `validation_result`).
+
+2. **Task 1 — `render_as` ≠ read-only.** Do **not** make a field read-only just because it has `render_as`. Honor the field's own `field.read_only` (derived backend-side from metadata, `pipeline.py:734`). A `render_as: chip` field that is editable should still allow editing; render-as governs *presentation*, not editability. Reword Task 1 Step 7 to render the value via the renderer but keep the field's edit affordance when `!field.read_only`.
+
+3. **Task 3 — object selector needs the review row for `object_type`.** `CurationCandidate` has **no `object_type`** (it lives on `DomainEnvelopeReviewRow`; `EnvelopeObjectReviewTable` reads it from there, `:354`). Either feed `ObjectSelectorStrip` the `WorkspaceEnvelopeObjectReviewRow[]` (which pairs candidate + reviewRow), or build the identity line from `candidate.display_label` + `projection_ref.object_id` only. Adjust the props/types.
+
+4. **Path fix:** `PersistentPdfWorkspaceLayout.tsx` lives at `frontend/src/components/pdfViewer/PersistentPdfWorkspaceLayout.tsx` (not under `features/curation/workspace`). Correct any reference.
+
+5. **Confirmed safe/good:** dropping `entityTableSlot` only affects `CurationWorkspacePage` + `WorkspaceShell.test` (mechanically fine) — but it removes accept/reject/delete/manual-add/accept-all access, so the **B3-parity gate in Task 4 is essential** (do not land the layout swap before B3). Evidence dispatch + the vitest/RTL pattern are valid as written.
+
 ## Self-Review (completed)
 
 - **Spec coverage (Build B spec §2–§4):** two-pane layout (T4) ✓; object-selector strip with N-of-M/jump/progress (T3) ✓; grouped form rendering chips/curie-chips/sub-tables (T1) ✓; field-state coloring + needs-review floating (T2) ✓; group-level evidence chip → existing pdf.js highlight (T5) ✓; single envelope surface (T6, full retire in B3) ✓; theme deferred (not in scope). Density cleanup data comes from B1; B2 renders it.

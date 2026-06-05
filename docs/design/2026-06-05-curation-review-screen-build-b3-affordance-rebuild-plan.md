@@ -195,6 +195,20 @@ git commit -m "refactor(curation-ui): retire EntityTagTable; single envelope rev
 
 ---
 
+## gpt-5.5 Review Corrections (fold in before implementing)
+
+Verdict: **Sound-with-corrections.** The central claim (handlers + routes exist; UI re-threading) is verified. Apply these:
+
+1. **Manual candidates are real and non-envelope — the single surface must list ALL candidates.** `create_manual_candidate` creates `source = manual` candidates **without** envelope fields, so their `projection_ref` is `None` (`session_mutation_service.py:378`, `session_serializers.py:258`). The envelope review-rows builder **filters out** non-`projection_ref` candidates (`envelopeObjectReviewRows.ts:65`). So the new object selector / work pane (B2) must enumerate **`workspace.candidates`** (all of them), not only envelope review rows — otherwise a manually-added object disappears. Fix the Task 1/Task 3 wiring and the Task 5 retire-safety: "all candidates are envelope-backed" is a current **DB audit**, not a code invariant.
+
+2. **Task 5 — moving shared helpers is mandatory, not optional.** `CurationWorkspacePage` imports `EntityTag`, `buildEntityTagFieldChanges`, `buildManualCandidateDraft` from `entityTable/`, and **`frontend/src/features/curation/types.ts` imports `EntityTag` from `entityTable/types.ts`** (`types.ts:43`). Deleting `entityTable/` wholesale breaks these. Before deletion, **move** `types.ts` (the `EntityTag` type), `literatureEntityTypeCatalog.ts`, and `workspaceEntityTags.ts` (the bridges) out of `entityTable/` into a kept location and update imports. Only then delete the table/row/toolbar/inline-edit components.
+
+3. **Task 1 — define "validated pending" via envelope validation.** Legacy keyed on `db_status === 'validated'`; the envelope candidate has no `db_status`. Define `countValidatedPending` from the candidate's validation summary: `status === 'pending'` **and** no open blocking findings (e.g. `open_finding_count === 0` / strongest status not `unresolved`/`blocked`). Specify this concretely in Task 1 Step 3.
+
+4. **Wording:** `handleSaveTag` does **not** flush autosave (the plan's "all four flush autosave" applies to accept/reject/delete, not save). And inline-edit parity runs through the field editor's `autosave.queueFieldChange` + "Save draft" (`autosave.flush()`, `CandidateFieldEditor.tsx:777,986`), **not** `handleSaveTag`. Correct Task 4's parity note.
+
+5. **Sequencing confirmed:** B3 depends on B2 (the `ObjectSelectorStrip`/work pane don't exist yet). Page handlers (`:349/:377/:424/:471`), backend routes (`:564/:661/:681/:701`), and the legacy affordance sources are all verified present.
+
 ## Self-Review (completed)
 
 - **Spec coverage:** the four legacy affordances (delete T2, manual-add T3, accept-all T1, inline-edit T4) rebuilt; single surface achieved (T5). Backend untouched (routes already exist). Matches Build B spec §3 "rebuild affordances before retiring the legacy table."
