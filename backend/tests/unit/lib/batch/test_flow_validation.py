@@ -1,8 +1,22 @@
 """Tests for flow batch validation."""
-import pytest
 
 from src.lib.batch.validation import validate_flow_for_batch
-from src.schemas.batch import BatchValidationResponse
+
+
+def _flow_ending_in(exit_agent_id: str) -> dict:
+    return {
+        "version": "1.0",
+        "entry_node_id": "1",
+        "nodes": [
+            {"id": "1", "type": "agent", "data": {"agent_id": "pdf_extraction"}},
+            {"id": "2", "type": "agent", "data": {"agent_id": "gene"}},
+            {"id": "3", "type": "agent", "data": {"agent_id": exit_agent_id}},
+        ],
+        "edges": [
+            {"id": "e1", "source": "1", "target": "2"},
+            {"id": "e2", "source": "2", "target": "3"},
+        ],
+    }
 
 
 class TestFlowValidation:
@@ -85,3 +99,15 @@ class TestFlowValidation:
 
         assert result.valid is False
         assert any("file output" in e.lower() for e in result.errors)
+
+    def test_flow_ending_in_curation_handoff_is_valid_for_batch(self):
+        result = validate_flow_for_batch(_flow_ending_in("curation_handoff"))
+
+        assert result.valid is True
+        assert result.errors == []
+
+    def test_flow_ending_in_chat_output_still_rejected(self):
+        result = validate_flow_for_batch(_flow_ending_in("chat_output_formatter"))
+
+        assert result.valid is False
+        assert any("Chat Output" in e for e in result.errors)

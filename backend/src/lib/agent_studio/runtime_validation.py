@@ -122,6 +122,7 @@ def _allow_unseeded_core_only_runtime(
             {"supervisor"},
             {"supervisor", "chat_output"},
             {"supervisor", "chat_output", "curation_prep"},
+            {"supervisor", "chat_output", "curation_handoff", "curation_prep"},
         )
     )
 

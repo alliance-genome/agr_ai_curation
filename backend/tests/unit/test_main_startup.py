@@ -5,6 +5,7 @@ import os
 import shutil
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -438,11 +439,33 @@ async def test_lifespan_supports_core_only_runtime_packages(monkeypatch, tmp_pat
                  "updated": 0,
                  "reactivated": 0,
                  "deactivated": 0,
-                 "discovered": 2,
+                 "discovered": 4,
              },
          ), \
          patch("src.lib.agent_studio.catalog_service.validate_active_agent_output_schemas"), \
-         patch("src.lib.agent_studio.runtime_validation._fetch_active_agents", lambda: []), \
+         patch(
+             "src.lib.agent_studio.runtime_validation._fetch_active_agents",
+             lambda: [
+                 SimpleNamespace(
+                     agent_key=agent_key,
+                     name=agent_key,
+                     visibility="system",
+                     user_id=None,
+                     project_id=None,
+                     template_source=agent_key,
+                     model_id="gpt-5-mini",
+                     model_reasoning=None,
+                     tool_ids=[],
+                     output_schema_key=None,
+                 )
+                 for agent_key in (
+                     "chat_output",
+                     "curation_handoff",
+                     "curation_prep",
+                     "supervisor",
+                 )
+             ],
+         ), \
          patch("src.lib.config.connections_loader.load_connections", return_value={}), \
          patch("src.lib.config.connections_loader.get_required_connections", return_value=[]), \
          patch("src.lib.config.connections_loader.get_optional_connections", return_value=[]), \

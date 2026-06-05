@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
 import HighlightOffIcon from '@mui/icons-material/HighlightOff'
+import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked'
 import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined'
 import {
   Alert,
@@ -46,6 +48,11 @@ import {
   mergeSavedDraftIntoWorkspace,
   resolveEnvelopeFieldPath,
 } from '@/features/curation/workspace/workspaceState'
+import {
+  fieldState,
+  sortFieldsNeedsReviewFirst,
+  type FieldStateKind,
+} from './fieldState'
 import FieldRow from './FieldRow'
 
 interface FieldSection {
@@ -53,6 +60,7 @@ interface FieldSection {
   label: string
   order: number
   fields: CurationDraftField[]
+  needsReviewCount: number
 }
 
 interface StatusPresentation {
@@ -192,6 +200,7 @@ function buildSections(fields: CurationDraftField[]): FieldSection[] {
         label: groupLabel(field),
         order: field.order,
         fields: [field],
+        needsReviewCount: 0,
       })
       continue
     }
@@ -281,6 +290,36 @@ function objectValidationSummaries(
 
   return (candidate.validation_summary_projections ?? []).filter((summary) =>
     !summary.field_path && isProjectionForCandidate(candidate, summary.object_id))
+}
+
+function sectionWithFieldState(
+  section: FieldSection,
+  candidate: CurationCandidate,
+): FieldSection {
+  const summariesForField = (field: CurationDraftField) =>
+    validationSummariesForField(candidate, field)
+  const fields = sortFieldsNeedsReviewFirst(section.fields, summariesForField)
+  const needsReviewCount = fields.filter((field) =>
+    fieldState(field, summariesForField(field)) === 'needs-review').length
+
+  return {
+    ...section,
+    fields,
+    needsReviewCount,
+  }
+}
+
+function sectionsWithFieldState(
+  fields: CurationDraftField[],
+  candidate: CurationCandidate | null,
+): FieldSection[] {
+  const sections = buildSections(fields)
+
+  if (!candidate) {
+    return sections
+  }
+
+  return sections.map((section) => sectionWithFieldState(section, candidate))
 }
 
 function evidenceProjectionsForField(
@@ -404,12 +443,96 @@ function FieldValidationSlot({
   )
 }
 
+function FieldStateIndicator({
+  fieldKey,
+  state,
+}: {
+  fieldKey: string
+  state: FieldStateKind
+}) {
+  const theme = useTheme()
+  const presentation = {
+    'needs-review': {
+      label: 'Needs review',
+      color: theme.palette.warning.main,
+      backgroundColor: alpha(theme.palette.warning.main, 0.12),
+      icon: <ErrorOutlineIcon fontSize="small" />,
+    },
+    resolved: {
+      label: 'Resolved',
+      color: theme.palette.success.main,
+      backgroundColor: alpha(theme.palette.success.main, 0.12),
+      icon: <CheckCircleOutlineIcon fontSize="small" />,
+    },
+    'ai-unconfirmed': {
+      label: 'AI unconfirmed',
+      color: theme.palette.text.secondary,
+      backgroundColor: alpha(theme.palette.common.white, 0.06),
+      icon: <RadioButtonUncheckedIcon fontSize="small" />,
+    },
+  } satisfies Record<FieldStateKind, {
+    label: string
+    color: string
+    backgroundColor: string
+    icon: JSX.Element
+  }>
+  const current = presentation[state]
+
+  return (
+    <Tooltip arrow title={current.label}>
+      <Box
+        aria-label={current.label}
+        data-testid={`field-state-indicator-${fieldKey}`}
+        role="img"
+        sx={{
+          alignItems: 'center',
+          backgroundColor: current.backgroundColor,
+          borderRadius: 1,
+          color: current.color,
+          display: 'inline-flex',
+          height: 24,
+          justifyContent: 'center',
+          mt: 0.35,
+          width: 24,
+        }}
+      >
+        {current.icon}
+      </Box>
+    </Tooltip>
+  )
+}
+
 function evidenceQuote(projection: DomainEnvelopeEvidenceAnchorProjection): string {
   return projection.quote
     ?? projection.anchor.sentence_text
     ?? projection.anchor.snippet_text
     ?? projection.anchor.normalized_text
     ?? '[missing evidence text]'
+}
+
+function dispatchEvidenceProjection(
+  projection: DomainEnvelopeEvidenceAnchorProjection,
+  debugContext: Record<string, unknown>,
+): void {
+  const pageNumber = projection.page_number ?? projection.anchor.page_number ?? null
+  const sectionTitle = projection.section_title ?? projection.anchor.section_title ?? null
+
+  dispatchEvidenceNavigationCommand(
+    {
+      anchorId: projection.anchor_id,
+      anchor: projection.anchor,
+      searchText:
+        projection.anchor.viewer_search_text
+        ?? projection.quote
+        ?? projection.anchor.sentence_text
+        ?? projection.anchor.snippet_text
+        ?? null,
+      pageNumber,
+      sectionTitle,
+      mode: 'select',
+    },
+    debugContext,
+  )
 }
 
 function FieldEvidenceSlot({
@@ -448,26 +571,11 @@ function FieldEvidenceSlot({
               aria-label={`Highlight field evidence ${index + 1}: ${quote}`}
               data-testid={`field-evidence-projection-${projection.anchor_id}`}
               onClick={() =>
-                dispatchEvidenceNavigationCommand(
-                  {
-                    anchorId: projection.anchor_id,
-                    anchor: projection.anchor,
-                    searchText:
-                      projection.anchor.viewer_search_text
-                      ?? projection.quote
-                      ?? projection.anchor.sentence_text
-                      ?? projection.anchor.snippet_text
-                      ?? null,
-                    pageNumber,
-                    sectionTitle,
-                    mode: 'select',
-                  },
-                  {
-                    source: 'curation-field-editor',
-                    fieldPath: projection.field_path,
-                    objectId: projection.object_id,
-                  },
-                )}
+                dispatchEvidenceProjection(projection, {
+                  source: 'curation-field-editor',
+                  fieldPath: projection.field_path,
+                  objectId: projection.object_id,
+                })}
               sx={{
                 px: 0.9,
                 py: 0.35,
@@ -490,6 +598,78 @@ function FieldEvidenceSlot({
         )
       })}
     </>
+  )
+}
+
+function evidenceProjectionsForSection(
+  candidate: CurationCandidate,
+  fields: CurationDraftField[],
+): DomainEnvelopeEvidenceAnchorProjection[] {
+  const projectionsByAnchorId = new Map<string, DomainEnvelopeEvidenceAnchorProjection>()
+
+  for (const field of fields) {
+    for (const projection of evidenceProjectionsForField(candidate, field)) {
+      if (!projectionsByAnchorId.has(projection.anchor_id)) {
+        projectionsByAnchorId.set(projection.anchor_id, projection)
+      }
+    }
+  }
+
+  return [...projectionsByAnchorId.values()]
+}
+
+function SectionEvidenceSlot({
+  label,
+  projections,
+  sectionKey,
+}: {
+  label: string
+  projections: DomainEnvelopeEvidenceAnchorProjection[]
+  sectionKey: string
+}) {
+  const theme = useTheme()
+
+  if (projections.length === 0) {
+    return null
+  }
+
+  const primaryProjection = projections[0]
+  const quote = evidenceQuote(primaryProjection)
+
+  return (
+    <Tooltip arrow title={quote}>
+      <ButtonBase
+        aria-label={`Highlight ${label} evidence: ${quote}`}
+        data-testid={`field-section-evidence-${sectionKey}`}
+        onClick={() =>
+          dispatchEvidenceProjection(primaryProjection, {
+            source: 'curation-field-editor-section',
+            groupKey: sectionKey,
+            groupLabel: label,
+            objectId: primaryProjection.object_id,
+          })}
+        sx={{
+          alignItems: 'center',
+          border: `1px solid ${alpha(theme.palette.divider, 0.82)}`,
+          borderRadius: 1,
+          color: theme.palette.text.secondary,
+          display: 'inline-flex',
+          flexShrink: 0,
+          fontSize: theme.typography.caption.fontSize,
+          fontWeight: 700,
+          minHeight: 22,
+          px: 0.75,
+          py: 0.25,
+          '&:hover': {
+            borderColor: alpha(theme.palette.primary.main, 0.72),
+            backgroundColor: alpha(theme.palette.primary.main, 0.1),
+            color: theme.palette.primary.light,
+          },
+        }}
+      >
+        {projections.length} evidence
+      </ButtonBase>
+    </Tooltip>
   )
 }
 
@@ -739,12 +919,12 @@ export default function CandidateFieldEditor({
     [activeCandidate?.draft.fields],
   )
   const sections = useMemo(
-    () => buildSections(curatorFields),
-    [curatorFields],
+    () => sectionsWithFieldState(curatorFields, activeCandidate),
+    [activeCandidate, curatorFields],
   )
   const technicalSections = useMemo(
-    () => buildSections(technicalFields),
-    [technicalFields],
+    () => sectionsWithFieldState(technicalFields, activeCandidate),
+    [activeCandidate, technicalFields],
   )
   const objectSummaries = useMemo(
     () => objectValidationSummaries(activeCandidate),
@@ -954,6 +1134,29 @@ export default function CandidateFieldEditor({
             >
               {section.label}
             </Typography>
+            {section.needsReviewCount > 0 ? (
+              <Chip
+                color="warning"
+                data-testid={`field-section-needs-review-${section.key}`}
+                label={`${section.needsReviewCount} ${section.needsReviewCount === 1 ? 'needs' : 'need'} review`}
+                size="small"
+                sx={{
+                  borderRadius: 1,
+                  height: 22,
+                  '& .MuiChip-label': {
+                    fontSize: '0.68rem',
+                    fontWeight: 700,
+                    px: 0.75,
+                  },
+                }}
+                variant="outlined"
+              />
+            ) : null}
+            <SectionEvidenceSlot
+              label={section.label}
+              projections={evidenceProjectionsForSection(activeCandidate, section.fields)}
+              sectionKey={section.key}
+            />
             <Box
               sx={(theme) => ({
                 backgroundColor: alpha(theme.palette.common.white, 0.07),
@@ -965,9 +1168,20 @@ export default function CandidateFieldEditor({
           <Stack spacing={0.5}>
             {section.fields.map((field) => {
               const history = fieldPatchHistory(workspace.action_log, activeCandidate, field)
+              const summaries = validationSummariesForField(activeCandidate, field)
+              const state = fieldState(field, summaries)
 
               return (
-                <Box key={field.field_key}>
+                <Box
+                  key={field.field_key}
+                  sx={{
+                    alignItems: 'flex-start',
+                    display: 'grid',
+                    gap: 0.75,
+                    gridTemplateColumns: '24px minmax(0, 1fr)',
+                  }}
+                >
+                  <FieldStateIndicator fieldKey={field.field_key} state={state} />
                   <FieldRow
                     evidenceSlot={(
                       <FieldEvidenceSlot
@@ -1006,7 +1220,7 @@ export default function CandidateFieldEditor({
                     validationSlot={(
                       <FieldValidationSlot
                         field={field}
-                        summaries={validationSummariesForField(activeCandidate, field)}
+                        summaries={summaries}
                         unavailableCapabilities={unavailableCapabilitiesForField(field)}
                       />
                     )}
@@ -1048,9 +1262,20 @@ export default function CandidateFieldEditor({
           <Stack spacing={0.5} sx={{ mt: 1 }}>
             {technicalSections.flatMap((section) => section.fields).map((field) => {
               const history = fieldPatchHistory(workspace.action_log, activeCandidate, field)
+              const summaries = validationSummariesForField(activeCandidate, field)
+              const state = fieldState(field, summaries)
 
               return (
-                <Box key={field.field_key}>
+                <Box
+                  key={field.field_key}
+                  sx={{
+                    alignItems: 'flex-start',
+                    display: 'grid',
+                    gap: 0.75,
+                    gridTemplateColumns: '24px minmax(0, 1fr)',
+                  }}
+                >
+                  <FieldStateIndicator fieldKey={field.field_key} state={state} />
                   <FieldRow
                     labelSubtitleSlot={(
                       <FieldSupportDetails
@@ -1089,7 +1314,7 @@ export default function CandidateFieldEditor({
                     validationSlot={(
                       <FieldValidationSlot
                         field={field}
-                        summaries={validationSummariesForField(activeCandidate, field)}
+                        summaries={summaries}
                         unavailableCapabilities={unavailableCapabilitiesForField(field)}
                       />
                     )}

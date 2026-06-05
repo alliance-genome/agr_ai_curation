@@ -14,31 +14,26 @@ import {
   buildCurationPDFViewerOwner,
   dispatchPDFDocumentChanged,
 } from '@/components/pdfViewer/pdfEvents'
-import { EntityTagTable, type EntityTag } from '@/features/curation/entityTable'
-import {
-  buildEntityTagFieldChanges,
-  buildManualCandidateDraft,
-} from '@/features/curation/entityTable/workspaceEntityTags'
+import { buildManualCandidateDraft } from '@/features/curation/entityTags/workspaceEntityTags'
 import {
   readCurationQueueNavigationState,
 } from '@/features/curation/services/curationQueueNavigationService'
 import { SubmissionPreviewDialog } from '@/features/curation/submission'
 import {
-  autosaveCurationCandidateDraft,
   buildCurationWorkspaceEnvelopeReviewRowsRequests,
   createManualCurationCandidate,
   deleteCurationCandidate,
   executeCurationSubmission,
   fetchCurationWorkspaceEnvelopeReviewRows,
   fetchCurationWorkspace,
-  patchCurationEnvelopeField,
   submitCurationCandidateDecision,
-  validateCurationCandidate,
 } from '@/features/curation/services/curationWorkspaceService'
 import { CandidateFieldEditor } from '@/features/curation/editor'
+import AddManualObjectDialog, {
+  type ManualObjectDraft,
+} from '@/features/curation/workspace/AddManualObjectDialog'
 import type {
   CurationCandidate,
-  CurationDraftFieldChange,
   CurationSubmissionPreviewResponse,
   CurationWorkspace,
 } from '@/features/curation/types'
@@ -49,16 +44,21 @@ import {
   useCurationWorkspaceHydration,
 } from '@/features/curation/workspace/CurationWorkspaceContext'
 import { CurationWorkspaceRuntimeProvider } from '@/features/curation/workspace/CurationWorkspaceRuntimeProvider'
-import EnvelopeObjectReviewTable from '@/features/curation/workspace/EnvelopeObjectReviewTable'
 import WorkspaceHeader from '@/features/curation/workspace/WorkspaceHeader'
 import WorkspaceShell from '@/features/curation/workspace/WorkspaceShell'
 import WorkspaceSessionNavigation from '@/features/curation/workspace/WorkspaceSessionNavigation'
 import { buildWorkspaceEnvelopeObjectReviewRows } from '@/features/curation/workspace/envelopeObjectReviewRows'
+import ObjectSelectorStrip from '@/features/curation/workspace/ObjectSelectorStrip'
+import WorkPaneToolbar from '@/features/curation/workspace/WorkPaneToolbar'
+import {
+  countValidatedPending,
+  isValidatedPendingCandidate,
+} from '@/features/curation/workspace/workPaneToolbar'
+import type { ObjectSelectorRow } from '@/features/curation/workspace/objectSelector'
 import {
   buildWorkspaceExpectedEnvelopeRevisions,
   mergeSubmissionExecutionIntoWorkspace,
   updateWorkspaceActiveCandidate,
-  resolveEnvelopeFieldPath,
 } from '@/features/curation/workspace/workspaceState'
 
 const WORKSPACE_STALE_TIME_MS = 60_000
@@ -100,64 +100,6 @@ function selectEntityTemplateCandidate(
   return candidates[0] ?? null
 }
 
-function fieldValueForChange(
-  candidate: CurationCandidate,
-  fieldChange: CurationDraftFieldChange,
-): unknown {
-  const field = candidate.draft.fields.find(
-    (draftField) => draftField.field_key === fieldChange.field_key,
-  )
-
-  if (!field) {
-    throw new Error(
-      `Candidate ${candidate.candidate_id} is missing field ${fieldChange.field_key}.`,
-    )
-  }
-
-  return fieldChange.revert_to_seed
-    ? field.seed_value ?? null
-    : fieldChange.value ?? null
-}
-
-async function patchEnvelopeFieldChanges(args: {
-  sessionId: string
-  candidate: CurationCandidate
-  fieldChanges: CurationDraftFieldChange[]
-}): Promise<void> {
-  const projectionRef = args.candidate.projection_ref
-  if (!projectionRef) {
-    throw new Error(
-      `Candidate ${args.candidate.candidate_id} is not backed by a domain envelope.`,
-    )
-  }
-
-  let expectedRevision = projectionRef.envelope_revision
-
-  for (const fieldChange of args.fieldChanges) {
-    const field = args.candidate.draft.fields.find(
-      (draftField) => draftField.field_key === fieldChange.field_key,
-    )
-
-    if (!field) {
-      throw new Error(
-        `Candidate ${args.candidate.candidate_id} is missing field ${fieldChange.field_key}.`,
-      )
-    }
-
-    const response = await patchCurationEnvelopeField({
-      session_id: args.sessionId,
-      envelope_id: projectionRef.envelope_id,
-      expected_revision: expectedRevision,
-      object_id: projectionRef.object_id,
-      field_path: resolveEnvelopeFieldPath(field),
-      operation: 'replace',
-      before: field.value ?? null,
-      value: fieldValueForChange(args.candidate, fieldChange),
-    })
-    expectedRevision = response.envelope_revision
-  }
-}
-
 function CurationWorkspacePageContent({
   queueNavigationState,
 }: {
@@ -183,9 +125,10 @@ function CurationWorkspacePageContent({
     () => buildCurationPDFViewerOwner(workspace.session.session_id),
     [workspace.session.session_id],
   )
+  const [manualObjectDialogOpen, setManualObjectDialogOpen] = useState(false)
+  const [manualObjectCreating, setManualObjectCreating] = useState(false)
   const [submissionDialogOpen, setSubmissionDialogOpen] = useState(false)
   const [tableError, setTableError] = useState<string | null>(null)
-  const entityTags = workspace.entity_tags
   const envelopeReviewRequests = useMemo(
     () => buildCurationWorkspaceEnvelopeReviewRowsRequests(workspace),
     [workspace],
@@ -219,14 +162,38 @@ function CurationWorkspacePageContent({
     () => buildWorkspaceExpectedEnvelopeRevisions(candidates),
     [candidates],
   )
-  const candidateEvidenceByTagId = useMemo(
-    () =>
-      candidates.reduce<Record<string, CurationCandidate['evidence_anchors']>>((index, candidate) => {
-        index[candidate.candidate_id] = candidate.evidence_anchors ?? []
-        return index
-      }, {}),
+  const objectSelectorRows = useMemo<ObjectSelectorRow[]>(() => {
+    const envelopeRowsByCandidateId = new Map(
+      envelopeObjectRows.map((row) => [row.candidate.candidate_id, row]),
+    )
+
+    return candidates.map((candidate) => {
+      const envelopeRow = envelopeRowsByCandidateId.get(candidate.candidate_id)
+      if (envelopeRow) {
+        return envelopeRow
+      }
+
+      return {
+        candidate,
+        reviewRow: null,
+      }
+    })
+  }, [candidates, envelopeObjectRows])
+  const pendingCandidateCount = useMemo(
+    () => candidates.filter((candidate) => candidate.status === 'pending').length,
     [candidates],
   )
+  const validatedPendingCandidateIds = useMemo(
+    () => candidates
+      .filter(isValidatedPendingCandidate)
+      .map((candidate) => candidate.candidate_id),
+    [candidates],
+  )
+  const validatedPendingCount = useMemo(
+    () => countValidatedPending(candidates),
+    [candidates],
+  )
+  const envelopeReviewRowsError = queryErrorMessage(envelopeRowsQuery.error)
 
   const handleSubmitPreview = useCallback(async (
     previewResponse: CurationSubmissionPreviewResponse,
@@ -421,54 +388,7 @@ function CurationWorkspacePageContent({
     }
   }, [activeCandidateId, autosave, refreshWorkspace, workspace.session.session_id])
 
-  const handleSaveTag = useCallback(async (tagId: string, updates: Partial<EntityTag>) => {
-    setTableError(null)
-
-    const candidate = candidates.find((currentCandidate) => currentCandidate.candidate_id === tagId)
-    if (!candidate) {
-      const missingCandidateError = new Error(`Unable to find candidate ${tagId} in the workspace.`)
-      setTableError(missingCandidateError.message)
-      throw missingCandidateError
-    }
-
-    try {
-      const fieldChanges = buildEntityTagFieldChanges(candidate, updates)
-      if (fieldChanges.length === 0) {
-        return
-      }
-
-      if (candidate.projection_ref) {
-        await patchEnvelopeFieldChanges({
-          sessionId: workspace.session.session_id,
-          candidate,
-          fieldChanges,
-        })
-        await refreshWorkspace(tagId)
-        return
-      }
-
-      await autosaveCurationCandidateDraft({
-        session_id: workspace.session.session_id,
-        candidate_id: candidate.candidate_id,
-        draft_id: candidate.draft.draft_id,
-        expected_version: candidate.draft.version,
-        field_changes: fieldChanges,
-      })
-
-      await validateCurationCandidate({
-        session_id: workspace.session.session_id,
-        candidate_id: candidate.candidate_id,
-        field_keys: fieldChanges.map((fieldChange) => fieldChange.field_key),
-      })
-      await refreshWorkspace(tagId)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to save this entity row.'
-      setTableError(message)
-      throw error
-    }
-  }, [candidates, refreshWorkspace, workspace.session.session_id])
-
-  const handleCreateManualTag = useCallback(async (tag: EntityTag) => {
+  const handleCreateManualTag = useCallback(async (tag: ManualObjectDraft) => {
     setTableError(null)
 
     const templateCandidate = selectEntityTemplateCandidate(candidates, activeCandidateId)
@@ -501,8 +421,8 @@ function CurationWorkspacePageContent({
         draft,
         evidence_anchors: [],
       })
-      setActiveCandidate(response.candidate.candidate_id)
       await refreshWorkspace(response.candidate.candidate_id)
+      setActiveCandidate(response.candidate.candidate_id)
       return response.candidate.candidate_id
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to create this manual entity.'
@@ -510,6 +430,17 @@ function CurationWorkspacePageContent({
       throw error
     }
   }, [activeCandidateId, candidates, refreshWorkspace, setActiveCandidate, workspace.session.session_id])
+
+  const handleCreateManualObject = useCallback(async (draft: ManualObjectDraft) => {
+    setManualObjectCreating(true)
+
+    try {
+      await handleCreateManualTag(draft)
+      setManualObjectDialogOpen(false)
+    } finally {
+      setManualObjectCreating(false)
+    }
+  }, [handleCreateManualTag])
 
   return (
     <Box
@@ -534,8 +465,13 @@ function CurationWorkspacePageContent({
         </Alert>
       ) : null}
 
+      {envelopeReviewRowsError ? (
+        <Alert severity="error">
+          {envelopeReviewRowsError}
+        </Alert>
+      ) : null}
+
       <WorkspaceShell
-        reviewTableLabel={hasEnvelopeObjectRows ? 'Envelope object table panel' : undefined}
         headerSlot={(
           <WorkspaceHeader
             navigationSlot={(
@@ -566,34 +502,26 @@ function CurationWorkspacePageContent({
             session={workspace.session}
           />
         )}
-        entityTableSlot={(
-          hasEnvelopeObjectRows ? (
-            <EnvelopeObjectReviewTable
-              errorMessage={queryErrorMessage(envelopeRowsQuery.error)}
-              isLoading={envelopeRowsQuery.isLoading || envelopeRowsQuery.isFetching}
-              onAcceptRow={handleAcceptTag}
-              onRejectRow={handleRejectTag}
-              onRetry={() => {
-                void envelopeRowsQuery.refetch()
+        selectorSlot={(
+          <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
+            <WorkPaneToolbar
+              totalCount={candidates.length}
+              pendingCount={pendingCandidateCount}
+              validatedPendingCount={validatedPendingCount}
+              onAcceptAllValidated={() => {
+                void handleAcceptAllValidated(validatedPendingCandidateIds)
               }}
-              onSelectRow={handleSelectTag}
-              rows={envelopeObjectRows}
-              selectedCandidateId={activeCandidateId}
+              onAddObject={() => setManualObjectDialogOpen(true)}
             />
-          ) : (
-            <EntityTagTable
-              tags={entityTags}
-              candidateEvidenceByTagId={candidateEvidenceByTagId}
-              selectedTagId={activeCandidateId}
-              onSelectTag={handleSelectTag}
-              onAcceptTag={handleAcceptTag}
-              onRejectTag={handleRejectTag}
-              onDeleteTag={handleDeleteTag}
-              onAcceptAllValidated={handleAcceptAllValidated}
-              onSaveTag={handleSaveTag}
-              onCreateManualTag={handleCreateManualTag}
+            <ObjectSelectorStrip
+              activeCandidateId={activeCandidateId}
+              onDelete={(candidateId) => {
+                void handleDeleteTag(candidateId)
+              }}
+              onSelect={handleSelectTag}
+              rows={objectSelectorRows}
             />
-          )
+          </Box>
         )}
         fieldEditorSlot={(
           <CandidateFieldEditor
@@ -610,6 +538,15 @@ function CurationWorkspacePageContent({
         onSubmit={handleSubmitPreview}
         open={submissionDialogOpen}
         session={workspace.session}
+      />
+
+      <AddManualObjectDialog
+        isCreating={manualObjectCreating}
+        onCancel={() => setManualObjectDialogOpen(false)}
+        onCreate={(draft) => {
+          void handleCreateManualObject(draft)
+        }}
+        open={manualObjectDialogOpen}
       />
     </Box>
   )

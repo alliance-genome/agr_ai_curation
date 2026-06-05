@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { ThemeProvider } from '@mui/material/styles'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -116,39 +117,6 @@ function buildWorkspace(): CurationWorkspace {
       session_version: 1,
       extraction_results: [],
     },
-    entity_tags: [
-      {
-        tag_id: 'candidate-accepted',
-        entity_name: 'BRCA1',
-        entity_type: 'ATP:0000005',
-        species: '',
-        topic: '',
-        db_status: 'validated',
-        db_entity_id: 'HGNC:1100',
-        source: 'ai',
-        decision: 'accepted',
-        evidence: null,
-        notes: null,
-      },
-      {
-        tag_id: 'candidate-pending',
-        entity_name: 'APOE',
-        entity_type: 'ATP:0000005',
-        species: '',
-        topic: '',
-        db_status: 'ambiguous',
-        db_entity_id: 'HGNC:613',
-        source: 'manual',
-        decision: 'pending',
-        evidence: {
-          sentence_text: 'APOE evidence sentence',
-          page_number: 1,
-          section_title: 'Results and Discussion',
-          chunk_ids: ['chunk-1'],
-        },
-        notes: null,
-      },
-    ],
     candidates: [
       {
         candidate_id: 'candidate-accepted',
@@ -338,6 +306,52 @@ function buildWorkspace(): CurationWorkspace {
 
 function buildEnvelopeWorkspace(): CurationWorkspace {
   const baseWorkspace = buildWorkspace()
+  const evidenceProjection = {
+    anchor_id: 'projection-anchor-1',
+    evidence_record_id: 'evidence-record-1',
+    envelope_id: 'tmem67-envelope',
+    object_id: 'tmem67-gene-object',
+    object_type: 'GeneAssertion',
+    field_path: 'gene.symbol',
+    envelope_revision: 4,
+    document_id: 'document-1',
+    quote: 'Projected evidence sentence for TMEM67.',
+    page_number: 3,
+    page_label: '3',
+    chunk_id: 'chunk-1',
+    chunk_ids: ['chunk-1'],
+    section_title: 'Results',
+    subsection_title: null,
+    figure_reference: null,
+    table_reference: null,
+    source_id: null,
+    source_title: null,
+    source_url: null,
+    anchor: {
+      anchor_kind: 'snippet' as const,
+      locator_quality: 'exact_quote' as const,
+      supports_decision: 'supports' as const,
+      snippet_text: 'Projected evidence sentence for TMEM67.',
+      chunk_ids: ['chunk-1'],
+    },
+    metadata: {},
+  }
+  const validationSummaryProjection = {
+    summary_id: 'validation-summary-1',
+    envelope_id: 'tmem67-envelope',
+    object_id: 'tmem67-gene-object',
+    object_type: 'GeneAssertion',
+    field_path: 'gene.symbol',
+    envelope_revision: 4,
+    status: 'unresolved' as const,
+    highest_severity: 'warning' as const,
+    finding_count: 1,
+    open_finding_count: 1,
+    finding_ids: ['finding-1'],
+    codes: ['fixture.warning'],
+    messages: ['Needs curator review'],
+    findings: [],
+  }
   const candidate = {
     ...baseWorkspace.candidates[1],
     candidate_id: 'candidate-tmem67',
@@ -356,70 +370,23 @@ function buildEnvelopeWorkspace(): CurationWorkspace {
       fields: [
         {
           ...baseWorkspace.candidates[1].draft.fields[0],
-          field_key: 'legacy_gene_symbol',
-          label: 'Legacy should not render',
-          value: 'LEGACY',
-          seed_value: 'LEGACY',
+          field_key: 'gene.symbol',
+          label: 'Gene symbol',
+          value: 'TMEM67',
+          seed_value: 'TMEM67',
         },
       ],
     },
     evidence_anchors: [],
+    evidence_anchor_projections: [evidenceProjection],
+    validation_summary_projections: [validationSummaryProjection],
   }
 
   return {
     ...baseWorkspace,
-    entity_tags: [],
     candidates: [candidate],
-    evidence_anchor_projections: [
-      {
-        anchor_id: 'projection-anchor-1',
-        evidence_record_id: 'evidence-record-1',
-        envelope_id: 'tmem67-envelope',
-        object_id: 'tmem67-gene-object',
-        object_type: 'GeneAssertion',
-        field_path: 'gene.symbol',
-        envelope_revision: 4,
-        document_id: 'document-1',
-        quote: 'Projected evidence sentence for TMEM67.',
-        page_number: 3,
-        page_label: '3',
-        chunk_id: 'chunk-1',
-        chunk_ids: ['chunk-1'],
-        section_title: 'Results',
-        subsection_title: null,
-        figure_reference: null,
-        table_reference: null,
-        source_id: null,
-        source_title: null,
-        source_url: null,
-        anchor: {
-          anchor_kind: 'snippet',
-          locator_quality: 'exact_quote',
-          supports_decision: 'supports',
-          snippet_text: 'Projected evidence sentence for TMEM67.',
-          chunk_ids: ['chunk-1'],
-        },
-        metadata: {},
-      },
-    ],
-    validation_summary_projections: [
-      {
-        summary_id: 'validation-summary-1',
-        envelope_id: 'tmem67-envelope',
-        object_id: 'tmem67-gene-object',
-        object_type: 'GeneAssertion',
-        field_path: 'gene.symbol',
-        envelope_revision: 4,
-        status: 'unresolved',
-        highest_severity: 'warning',
-        finding_count: 1,
-        open_finding_count: 1,
-        finding_ids: ['finding-1'],
-        codes: ['fixture.warning'],
-        messages: ['Needs curator review'],
-        findings: [],
-      },
-    ],
+    evidence_anchor_projections: [evidenceProjection],
+    validation_summary_projections: [validationSummaryProjection],
     active_candidate_id: 'candidate-tmem67',
     session: {
       ...baseWorkspace.session,
@@ -603,7 +570,7 @@ describe('CurationWorkspacePage', () => {
     vi.clearAllMocks()
   })
 
-  it('renders backend-provided entity tag rows from the workspace payload', async () => {
+  it('renders workspace candidates on the selector-over-form review surface', async () => {
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace())
 
     renderPage('/curation/session-1')
@@ -616,17 +583,16 @@ describe('CurationWorkspacePage', () => {
       expect(screen.getByTestId('workspace-shell')).toBeInTheDocument()
     })
 
-    expect(
-      screen.getByRole('region', { name: /entity table panel/i }),
-    ).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: /review work pane/i })).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: /envelope object table panel/i })).not.toBeInTheDocument()
+    expect(screen.getByTestId('object-selector-strip')).toBeInTheDocument()
+    expect(screen.getByTestId('workspace-shell-field-editor')).toBeInTheDocument()
+    expect(screen.getByText('Review objects')).toBeInTheDocument()
 
-    expect(screen.getAllByText('BRCA1').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('APOE').length).toBeGreaterThan(0)
-    expect(screen.getByText('validated')).toBeInTheDocument()
-    expect(screen.getByText('ambiguous')).toBeInTheDocument()
+    expect(screen.getAllByText('Accepted candidate').length).toBeGreaterThan(0)
   })
 
-  it('renders domain-envelope object rows from persisted review-row projections', async () => {
+  it('uses persisted review-row projections in the object selector and field editor', async () => {
     const workspace = buildEnvelopeWorkspace()
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
     serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockResolvedValue([
@@ -657,32 +623,18 @@ describe('CurationWorkspacePage', () => {
 
     renderPage('/curation/session-1')
 
-    expect(await screen.findByText('Objects to review')).toBeInTheDocument()
-    const envelopeObjectTablePanel = screen.getByRole('region', {
-      name: /envelope object table panel/i,
-    })
-    expect(envelopeObjectTablePanel).toBeInTheDocument()
+    expect(await screen.findByTestId('object-selector-strip')).toBeInTheDocument()
 
     await waitFor(() => {
       expect(serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows).toHaveBeenCalledTimes(1)
     })
 
-    expect(within(envelopeObjectTablePanel).getAllByText('TMEM67').length).toBeGreaterThan(0)
-    expect(within(envelopeObjectTablePanel).getByText('Gene Assertion · Curatable unit')).toBeInTheDocument()
-    expect(within(envelopeObjectTablePanel).getByText('Gene assertion')).toBeInTheDocument()
-    expect(within(envelopeObjectTablePanel).getByText('Symbol')).toBeInTheDocument()
-    expect(within(envelopeObjectTablePanel).getByText('Evidence count')).toBeInTheDocument()
-    expect(within(envelopeObjectTablePanel).getByText('1 open / 1 findings')).toBeInTheDocument()
-    expect(
-      screen.getByRole('button', {
-        name: /Projected evidence sentence for TMEM67\./,
-      }),
-    ).toBeInTheDocument()
-    expect(
-      within(envelopeObjectTablePanel).queryByText('Legacy should not render'),
-    ).not.toBeInTheDocument()
+    expect(screen.getAllByText('TMEM67').length).toBeGreaterThan(0)
+    expect(screen.getByText('Gene Assertion')).toBeInTheDocument()
+    expect(screen.getByLabelText('Gene symbol')).toHaveValue('TMEM67')
+    expect(screen.getByTestId('field-evidence-projection-projection-anchor-1')).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Accept TMEM67' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }))
 
     await waitFor(() => {
       expect(serviceMocks.submitCurationCandidateDecision).toHaveBeenCalledWith({
@@ -692,6 +644,154 @@ describe('CurationWorkspacePage', () => {
         advance_queue: false,
       })
     })
+  })
+
+  it('creates a manual object from the envelope work pane toolbar', async () => {
+    const user = userEvent.setup()
+    const workspace = buildEnvelopeWorkspace()
+    const templateField = workspace.candidates[0].draft.fields[0]
+    workspace.candidates[0].draft.fields = [
+      {
+        ...templateField,
+        field_key: 'expression_annotation_subject.gene_symbol',
+        label: 'Gene symbol',
+        value: 'TMEM67',
+        seed_value: 'TMEM67',
+      },
+      {
+        ...templateField,
+        field_key: 'single_reference.reference_id',
+        label: 'Reference',
+        value: 'PMID:123456',
+        seed_value: 'PMID:123456',
+      },
+    ]
+    const manualCandidate = {
+      ...workspace.candidates[0],
+      candidate_id: 'candidate-manual-1',
+      source: 'manual' as const,
+      status: 'pending' as const,
+      display_label: 'manual gene',
+      projection_ref: null,
+      draft: {
+        ...workspace.candidates[0].draft,
+        draft_id: 'draft-manual-1',
+        candidate_id: 'candidate-manual-1',
+      },
+    }
+    const refreshedWorkspace = {
+      ...workspace,
+      candidates: [...workspace.candidates, manualCandidate],
+      active_candidate_id: 'candidate-manual-1',
+      session: {
+        ...workspace.session,
+        current_candidate_id: 'candidate-manual-1',
+      },
+    }
+    const refreshDeferred = createDeferredPromise<CurationWorkspace>()
+
+    serviceMocks.fetchCurationWorkspace
+      .mockResolvedValueOnce(workspace)
+      .mockReturnValue(refreshDeferred.promise)
+    serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockResolvedValue([
+      buildEnvelopeReviewRows(),
+    ])
+    serviceMocks.createManualCurationCandidate.mockResolvedValue({
+      candidate: manualCandidate,
+      session: refreshedWorkspace.session,
+      action_log_entry: {
+        action_id: 'action-manual-1',
+        session_id: 'session-1',
+        candidate_id: 'candidate-manual-1',
+        draft_id: 'draft-manual-1',
+        action_type: 'candidate_created',
+        actor_type: 'user',
+        occurred_at: '2026-05-10T12:20:00Z',
+        changed_field_keys: ['entity_name', 'entity_type', 'species', 'topic'],
+        evidence_anchor_ids: [],
+        metadata: {},
+      },
+    })
+    serviceMocks.updateCurationSession.mockResolvedValue({
+      session: refreshedWorkspace.session,
+      action_log_entry: null,
+    })
+
+    renderPage('/curation/session-1')
+
+    await user.click(await screen.findByRole('button', { name: 'Add object' }))
+
+    const dialog = await screen.findByRole('dialog', { name: 'Add object' })
+    await user.type(within(dialog).getByLabelText('Name'), 'manual gene')
+    await user.click(within(dialog).getByRole('combobox', { name: 'Type' }))
+    await user.click(screen.getByRole('option', { name: 'gene' }))
+    await user.type(within(dialog).getByLabelText('Species'), 'NCBITaxon:7955')
+    await user.type(within(dialog).getByLabelText('Topic'), 'gene expression')
+    await user.click(within(dialog).getByRole('button', { name: 'Add object' }))
+
+    await waitFor(() => {
+      expect(serviceMocks.createManualCurationCandidate).toHaveBeenCalledWith({
+        session_id: 'session-1',
+        adapter_key: 'entity_adapter',
+        source: 'manual',
+        display_label: 'manual gene',
+        draft: expect.objectContaining({
+          candidate_id: expect.stringContaining('manual-candidate-'),
+          metadata: expect.objectContaining({
+            manual_object: {
+              entity_name: 'manual gene',
+              entity_type: 'ATP:0000005',
+              species: 'NCBITaxon:7955',
+              topic: 'gene expression',
+            },
+          }),
+          fields: expect.arrayContaining([
+            expect.objectContaining({
+              field_key: 'expression_annotation_subject.gene_symbol',
+              value: 'manual gene',
+            }),
+            expect.objectContaining({
+              field_key: 'single_reference.reference_id',
+              value: null,
+            }),
+          ]),
+        }),
+        evidence_anchors: [],
+      })
+    })
+    await waitFor(() => {
+      expect(serviceMocks.fetchCurationWorkspace).toHaveBeenCalledTimes(2)
+    })
+    expect(serviceMocks.updateCurationSession).not.toHaveBeenCalledWith({
+      session_id: 'session-1',
+      current_candidate_id: 'candidate-manual-1',
+    })
+
+    await act(async () => {
+      refreshDeferred.resolve(refreshedWorkspace)
+      await refreshDeferred.promise
+    })
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchCurationWorkspace).toHaveBeenLastCalledWith('session-1')
+    })
+    await waitFor(() => {
+      expect(serviceMocks.updateCurationSession).toHaveBeenCalledWith({
+        session_id: 'session-1',
+        current_candidate_id: 'candidate-manual-1',
+      })
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('location')).toHaveTextContent(
+        '/curation/session-1/candidate-manual-1',
+      )
+    })
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Add object' })).not.toBeInTheDocument()
+    })
+    await user.click(screen.getByRole('button', { name: /all objects/i }))
+    expect(screen.getByRole('option', { name: /manual gene/i })).toBeInTheDocument()
+    expect(screen.getAllByText('Manual object').length).toBeGreaterThan(0)
   })
 
   it('surfaces non-Error domain-envelope review row query failures', async () => {
@@ -867,7 +967,7 @@ describe('CurationWorkspacePage', () => {
     })
   })
 
-  it('restores the route-selected entity row into the evidence pane', async () => {
+  it('restores the route-selected candidate into the field editor', async () => {
     const workspace = buildWorkspace()
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
     serviceMocks.updateCurationSession.mockResolvedValue({
@@ -881,21 +981,12 @@ describe('CurationWorkspacePage', () => {
     renderPage('/curation/session-1/candidate-pending')
 
     await waitFor(() => {
-      expect(
-        screen.getByRole('button', {
-          name: /Highlight evidence on PDF: APOE evidence sentence/i,
-        }),
-      ).toBeInTheDocument()
+      expect(screen.getByLabelText('Gene symbol')).toHaveValue('APOE')
     })
-
-    expect(screen.getByText(/Evidence for/i)).toBeInTheDocument()
-    expect(
-      screen.getByRole('button', {
-        name: /Highlight evidence on PDF: APOE follow-up evidence sentence/i,
-      }),
-    ).toBeInTheDocument()
-    expect(screen.getByText(/2 evidence quotes/)).toBeInTheDocument()
-    expect(screen.getAllByRole('button', { name: /Highlight evidence on PDF:/i })).toHaveLength(2)
+    expect(screen.getAllByText('Pending candidate').length).toBeGreaterThan(0)
+    expect(screen.getByTestId('location')).toHaveTextContent(
+      '/curation/session-1/candidate-pending',
+    )
   })
 
   it('patches active envelope fields from the field editor with revision and before value', async () => {
@@ -1013,18 +1104,17 @@ describe('CurationWorkspacePage', () => {
             }
           : candidate,
       ),
-      entity_tags: workspace.entity_tags.map((tag) =>
-        tag.tag_id === 'candidate-pending'
-          ? {
-              ...tag,
-              decision: 'accepted',
-            }
-          : tag,
-      ),
     }
     serviceMocks.fetchCurationWorkspace
       .mockResolvedValueOnce(workspace)
       .mockResolvedValueOnce(refreshedWorkspace)
+    serviceMocks.updateCurationSession.mockResolvedValue({
+      session: {
+        ...workspace.session,
+        current_candidate_id: 'candidate-pending',
+      },
+      action_log_entry: null,
+    })
     serviceMocks.submitCurationCandidateDecision.mockResolvedValue({
       candidate: {
         ...workspace.candidates[1],
@@ -1048,16 +1138,13 @@ describe('CurationWorkspacePage', () => {
       },
     })
 
-    renderPage('/curation/session-1')
+    renderPage('/curation/session-1/candidate-pending')
 
     await waitFor(() => {
-      expect(screen.getByText('APOE')).toBeInTheDocument()
+      expect(screen.getByLabelText('Gene symbol')).toHaveValue('APOE')
     })
 
-    const entityTablePanel = screen.getByRole('region', {
-      name: /entity table panel/i,
-    })
-    fireEvent.click(within(entityTablePanel).getByRole('button', { name: 'Accept' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }))
 
     await waitFor(() => {
       expect(serviceMocks.submitCurationCandidateDecision).toHaveBeenCalledWith({
@@ -1066,7 +1153,9 @@ describe('CurationWorkspacePage', () => {
         action: 'accept',
         advance_queue: false,
       })
-      expect(screen.getAllByText('Accepted').length).toBeGreaterThan(0)
+      expect(screen.getByTestId('location')).toHaveTextContent(
+        '/curation/session-1/candidate-pending',
+      )
     })
   })
 
@@ -1074,7 +1163,6 @@ describe('CurationWorkspacePage', () => {
     const workspace = buildWorkspace()
     const refreshedWorkspace: CurationWorkspace = {
       ...workspace,
-      entity_tags: workspace.entity_tags.filter((tag) => tag.tag_id !== 'candidate-pending'),
       candidates: workspace.candidates.filter((candidate) => candidate.candidate_id !== 'candidate-pending'),
       active_candidate_id: 'candidate-accepted',
       session: {
@@ -1120,19 +1208,16 @@ describe('CurationWorkspacePage', () => {
     renderPage('/curation/session-1/candidate-pending')
 
     await waitFor(() => {
-      expect(screen.getByText('APOE')).toBeInTheDocument()
+      expect(screen.getByLabelText('Gene symbol')).toHaveValue('APOE')
     })
 
-    await waitFor(() => {
-      expect(screen.getByLabelText('Delete APOE')).toBeInTheDocument()
-    })
+    fireEvent.click(screen.getByRole('button', { name: /all objects/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete object Pending candidate' }))
 
-    fireEvent.click(screen.getByLabelText('Delete APOE'))
-
-    expect(screen.getByText('Delete curation row?')).toBeInTheDocument()
+    expect(screen.getByText('Delete object?')).toBeInTheDocument()
     expect(serviceMocks.deleteCurationCandidate).not.toHaveBeenCalled()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Delete row' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete object' }))
 
     await waitFor(() => {
       expect(serviceMocks.deleteCurationCandidate).toHaveBeenCalledWith({
@@ -1142,7 +1227,6 @@ describe('CurationWorkspacePage', () => {
     })
 
     await waitFor(() => {
-      expect(screen.queryByText('APOE')).not.toBeInTheDocument()
       expect(screen.getByTestId('location')).toHaveTextContent(
         '/curation/session-1/candidate-accepted',
       )
@@ -1153,11 +1237,6 @@ describe('CurationWorkspacePage', () => {
     const workspace = buildWorkspace()
     const workspaceWithValidatedPending: CurationWorkspace = {
       ...workspace,
-      entity_tags: workspace.entity_tags.map((tag) => ({
-        ...tag,
-        decision: 'pending',
-        db_status: 'validated',
-      })),
       candidates: workspace.candidates.map((candidate) => ({
         ...candidate,
         status: 'pending',
@@ -1179,10 +1258,6 @@ describe('CurationWorkspacePage', () => {
     }
     const refreshedWorkspace: CurationWorkspace = {
       ...workspaceWithValidatedPending,
-      entity_tags: workspaceWithValidatedPending.entity_tags.map((tag) => ({
-        ...tag,
-        decision: 'accepted',
-      })),
       candidates: workspaceWithValidatedPending.candidates.map((candidate) => ({
         ...candidate,
         status: 'accepted',
@@ -1205,10 +1280,10 @@ describe('CurationWorkspacePage', () => {
     renderPage('/curation/session-1')
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Accept All Validated' })).toBeEnabled()
+      expect(screen.getByRole('button', { name: 'Accept all validated' })).toBeEnabled()
     })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Accept All Validated' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Accept all validated' }))
 
     await waitFor(() => {
       expect(serviceMocks.submitCurationCandidateDecision).toHaveBeenCalledTimes(2)
@@ -1229,7 +1304,6 @@ describe('CurationWorkspacePage', () => {
 
     await waitFor(() => {
       expect(serviceMocks.fetchCurationWorkspace).toHaveBeenCalledTimes(2)
-      expect(screen.getAllByText('Accepted').length).toBeGreaterThan(0)
     })
   }, 15000) // The deferred decision flow is intentionally async and can overrun 5s during suite-wide contention.
 

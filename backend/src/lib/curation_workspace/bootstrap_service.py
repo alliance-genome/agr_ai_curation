@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
-from typing import Any
+from typing import Any, Sequence
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -16,6 +17,11 @@ from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGE
 from src.lib.curation_workspace.curation_prep_invocation import (
     run_chat_curation_prep,
     validate_chat_curation_prep_request,
+)
+from src.lib.curation_workspace.curation_prep_service import (
+    CurationPrepPersistenceContext,
+    build_flow_scope_confirmation,
+    run_curation_prep,
 )
 from src.lib.curation_workspace.models import (
     CurationExtractionResultRecord as ExtractionResultModel,
@@ -32,6 +38,7 @@ from src.lib.curation_workspace.session_service import (
     get_session_detail,
     upsert_prepared_session,
 )
+from src.lib.context import get_current_trace_id
 from src.models.sql.pdf_document import PDFDocument
 from src.schemas.curation_prep import (
     CurationPrepAgentOutput,
@@ -44,6 +51,8 @@ from src.schemas.curation_workspace import (
     CurationDocumentBootstrapAvailabilityResponse,
     CurationDocumentBootstrapRequest,
     CurationDocumentBootstrapResponse,
+    CurationExtractionResultRecord,
+    CurationExtractionSourceKind,
     CurationSessionCreateRequest,
     CurationSessionCreateResponse,
     CurationSessionStatus,
@@ -51,6 +60,12 @@ from src.schemas.curation_workspace import (
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class FlowCurationHandoffResult:
+    review_session_ids: list[str]
+    adapter_keys: list[str]
 
 
 def create_manual_session(
@@ -129,6 +144,73 @@ async def prepare_chat_curation_sessions(
             update={
                 "prepared_sessions": prepared_sessions,
             }
+        )
+    except Exception:
+        if db.in_transaction():
+            db.rollback()
+        raise
+
+
+async def run_flow_curation_handoff(
+    *,
+    extraction_results: Sequence[CurationExtractionResultRecord],
+    document_id: str,
+    runner_user_id: str,
+    flow_run_id: str | None,
+    origin_session_id: str | None,
+    conversation_summary: str | None,
+    db: Session,
+) -> FlowCurationHandoffResult:
+    """Run curation prep and bootstrap one runner-owned session per adapter."""
+
+    try:
+        adapter_keys = _handoff_adapter_keys(extraction_results)
+        if not adapter_keys:
+            raise ValueError("Curation handoff requires extraction results for at least one adapter key.")
+
+        for adapter_key in adapter_keys:
+            adapter_records = [
+                record for record in extraction_results if record.adapter_key == adapter_key
+            ]
+            await run_curation_prep(
+                adapter_records,
+                scope_confirmation=build_flow_scope_confirmation(
+                    adapter_records,
+                    flow_name="curation handoff",
+                ),
+                persistence_context=CurationPrepPersistenceContext(
+                    document_id=document_id,
+                    source_kind=CurationExtractionSourceKind.FLOW,
+                    origin_session_id=origin_session_id,
+                    trace_id=get_current_trace_id(),
+                    flow_run_id=flow_run_id,
+                    user_id=runner_user_id,
+                    conversation_summary=conversation_summary,
+                ),
+                db=db,
+            )
+
+        review_session_ids: list[str] = []
+
+        for adapter_key in adapter_keys:
+            bootstrap_response = await bootstrap_document_session(
+                document_id,
+                CurationDocumentBootstrapRequest(
+                    adapter_key=adapter_key,
+                    flow_run_id=flow_run_id,
+                    origin_session_id=origin_session_id,
+                    curator_id=runner_user_id,
+                ),
+                current_user_id=runner_user_id,
+                db=db,
+                manage_transaction=False,
+            )
+            review_session_ids.append(bootstrap_response.session.session_id)
+
+        db.commit()
+        return FlowCurationHandoffResult(
+            review_session_ids=review_session_ids,
+            adapter_keys=adapter_keys,
         )
     except Exception:
         if db.in_transaction():
@@ -237,16 +319,13 @@ def get_document_bootstrap_availability(
             if origin_session_id is None:
                 return CurationDocumentBootstrapAvailabilityResponse(eligible=False)
 
+            adapter_key = _normalized_optional_str(request.adapter_key)
             try:
                 context, _ = validate_chat_curation_prep_request(
                     session_id=origin_session_id,
                     user_id=current_user_id,
                     db=db,
-                    requested_adapter_keys=(
-                        [request.adapter_key]
-                        if _normalized_optional_str(request.adapter_key) is not None
-                        else []
-                    ),
+                    requested_adapter_keys=[adapter_key] if adapter_key is not None else [],
                 )
             except ValueError:
                 return CurationDocumentBootstrapAvailabilityResponse(eligible=False)
@@ -262,6 +341,18 @@ def get_document_bootstrap_availability(
         raise
 
     return CurationDocumentBootstrapAvailabilityResponse(eligible=True)
+
+
+def _handoff_adapter_keys(
+    extraction_results: Sequence[CurationExtractionResultRecord],
+) -> list[str]:
+    return sorted(
+        {
+            str(record.adapter_key).strip()
+            for record in extraction_results
+            if str(record.adapter_key or "").strip()
+        }
+    )
 
 
 def _require_document(db: Session, document_id: str) -> PDFDocument:
@@ -375,16 +466,13 @@ async def _ensure_bootstrap_extraction_result(
             ),
         )
 
+    adapter_key = _normalized_optional_str(request.adapter_key)
     try:
         context, _ = validate_chat_curation_prep_request(
             session_id=origin_session_id,
             user_id=current_user_id,
             db=db,
-            requested_adapter_keys=(
-                [request.adapter_key]
-                if _normalized_optional_str(request.adapter_key) is not None
-                else []
-            ),
+            requested_adapter_keys=[adapter_key] if adapter_key is not None else [],
         )
     except ValueError as exc:
         raise_sanitized_http_exception(
@@ -413,7 +501,7 @@ async def _ensure_bootstrap_extraction_result(
         await run_chat_curation_prep(
             CurationPrepChatRunRequest(
                 session_id=origin_session_id,
-                adapter_keys=[request.adapter_key] if _normalized_optional_str(request.adapter_key) else [],
+                adapter_keys=[adapter_key] if adapter_key is not None else [],
             ),
             user_id=current_user_id,
             db=db,

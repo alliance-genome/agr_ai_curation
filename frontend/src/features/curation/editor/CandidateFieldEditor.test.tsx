@@ -1,7 +1,9 @@
-import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { ThemeProvider } from '@mui/material/styles'
 import { describe, expect, it, vi } from 'vitest'
 
+import { onPDFViewerNavigateEvidence } from '@/components/pdfViewer/pdfEvents'
 import type { CurationWorkspace } from '@/features/curation/types'
 import {
   CurationWorkspaceProvider,
@@ -39,7 +41,6 @@ function buildWorkspace(): CurationWorkspace {
       session_version: 1,
       extraction_results: [],
     },
-    entity_tags: [],
     candidates: [
       {
         candidate_id: 'candidate-1',
@@ -415,6 +416,32 @@ describe('CandidateFieldEditor', () => {
     expect(screen.queryByText('Legacy validation warning.')).not.toBeInTheDocument()
   })
 
+  it('floats needs-review fields and counts them from envelope summaries', () => {
+    renderEditor()
+
+    expect(screen.getByTestId('field-section-needs-review-details')).toHaveTextContent(
+      '2 need review',
+    )
+    expect(screen.getByTestId('field-state-indicator-field_symbol')).toHaveAccessibleName(
+      'Needs review',
+    )
+    expect(screen.getByTestId('field-state-indicator-field_score')).toHaveAccessibleName(
+      'Needs review',
+    )
+    expect(screen.getByTestId('field-state-indicator-field_label')).toHaveAccessibleName(
+      'Resolved',
+    )
+
+    const fieldRows = screen.getAllByTestId(/^field-row-/)
+    expect(fieldRows.map((row) => row.getAttribute('data-field-key'))).toEqual([
+      'field_symbol',
+      'field_score',
+      'field_curie',
+      'field_label',
+      'field_override',
+    ])
+  })
+
   it('displays under-development validator metadata without validation findings', () => {
     const workspace = buildWorkspace()
     const candidate = workspace.candidates[0]!
@@ -482,6 +509,24 @@ describe('CandidateFieldEditor', () => {
     ).toBeInTheDocument()
   })
 
+  it('dispatches pdf navigation from the section evidence chip', async () => {
+    const user = userEvent.setup()
+    const onNavigateEvidence = vi.fn()
+    const unsubscribe = onPDFViewerNavigateEvidence(onNavigateEvidence)
+
+    renderEditor()
+
+    await user.click(screen.getByTestId('field-section-evidence-details'))
+
+    expect(onNavigateEvidence).toHaveBeenCalledTimes(1)
+    const command = onNavigateEvidence.mock.calls[0][0].detail.command
+    expect(command.anchorId).toBe('evidence-1')
+    expect(command.searchText).toBe('ABC appears in the result sentence.')
+    expect(command.mode).toBe('select')
+
+    unsubscribe()
+  })
+
   it('marks unserializable curator edit values explicitly', () => {
     const workspace = buildWorkspace()
     const circular: Record<string, unknown> = {}
@@ -503,5 +548,24 @@ describe('CandidateFieldEditor', () => {
     renderEditor(workspace)
 
     expect(screen.getByText('Fields to review')).toBeInTheDocument()
+  })
+
+  it('flushes queued field edits when saving the draft', async () => {
+    const user = userEvent.setup()
+    const autosave = renderEditor()
+
+    fireEvent.change(screen.getByLabelText('Gene symbol'), {
+      target: { value: 'tmem67' },
+    })
+    await user.click(screen.getByRole('button', { name: 'Save draft' }))
+
+    expect(autosave.queueFieldChange).toHaveBeenLastCalledWith({
+      field_key: 'field_symbol',
+      value: 'tmem67',
+    })
+    expect(autosave.flush).toHaveBeenCalledTimes(1)
+    expect(autosave.queueFieldChange.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      autosave.flush.mock.invocationCallOrder[0],
+    )
   })
 })

@@ -2379,6 +2379,125 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_curation_handoff_step_runs_deterministic_handoff(
+        self, mock_get_agent, mock_streaming
+    ):
+        """Curation handoff steps should materialize review sessions without an LLM specialist."""
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        captured = {}
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                return json.dumps(
+                    {
+                        "adapter_key": "gene",
+                        "actor": "gene_specialist",
+                        "destination": "gene",
+                        "confidence": 0.92,
+                        "reasoning": "matched",
+                        "items": [{"label": "unc-54"}],
+                        "raw_mentions": [{"mention": "unc-54"}],
+                        "exclusions": [],
+                        "ambiguities": [],
+                        "run_summary": {"candidate_count": 1},
+                    }
+                )
+
+            return _tool
+
+        class _FakeSession:
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        fake_db = _FakeSession()
+
+        async def _fake_run_flow_curation_handoff(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                review_session_ids=["session-gene"],
+                adapter_keys=["gene"],
+            )
+
+        mock_streaming.side_effect = _make_streaming_tool
+        mock_get_agent.side_effect = lambda agent_id, **_kwargs: MagicMock(spec=Agent, instructions="Base")
+
+        def _fake_get_agent_metadata(agent_id, **_kwargs):
+            if agent_id == "gene":
+                return {
+                    "display_name": "Gene",
+                    "description": "Extract gene findings",
+                    "requires_document": False,
+                    "curation": {"adapter_key": "gene"},
+                }
+            if agent_id == "curation_handoff":
+                return {
+                    "display_name": "Curation Handoff",
+                    "description": "Create review sessions",
+                    "requires_document": True,
+                    "curation": None,
+                }
+            raise ValueError(agent_id)
+
+        with patch(
+            "src.lib.flows.executor.run_flow_curation_handoff",
+            _fake_run_flow_curation_handoff,
+        ), patch(
+            "src.lib.flows.executor.SessionLocal",
+            lambda: fake_db,
+        ), patch(
+            "src.lib.flows.executor.get_agent_metadata",
+            _fake_get_agent_metadata,
+        ):
+            flow = _make_flow([
+                _task_input_node("Hand extracted findings to the review workspace."),
+                _agent_node("n1", "gene", step_goal="Extract gene findings"),
+                _agent_node(
+                    "n2",
+                    "curation_handoff",
+                    step_goal="Create review sessions",
+                    custom_instructions="Hand off all supported findings.",
+                ),
+            ])
+
+            tools, created_names = get_all_agent_tools(
+                flow,
+                document_id="doc-123",
+                user_id="user-123",
+                session_id="session-123",
+                flow_run_id="flow-run-123",
+                user_query="Focus on the confirmed findings.",
+            )
+
+            assert created_names == {"ask_gene_specialist", "ask_curation_handoff_specialist"}
+
+            tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+            asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract first"})))
+            handoff_output = asyncio.run(
+                tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "prepare review"}))
+            )
+
+        payload = json.loads(handoff_output)
+        assert payload == {
+            "review_session_ids": ["session-gene"],
+            "adapter_keys": ["gene"],
+        }
+        assert len(captured["extraction_results"]) == 1
+        assert captured["extraction_results"][0].agent_key == "gene"
+        assert captured["document_id"] == "doc-123"
+        assert captured["runner_user_id"] == "user-123"
+        assert captured["flow_run_id"] == "flow-run-123"
+        assert captured["origin_session_id"] == "session-123"
+        assert captured["conversation_summary"] is not None
+        assert captured["db"] is fake_db
+        assert fake_db.closed is True
+        assert mock_get_agent.call_count == 1
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
     def test_curation_prep_step_requires_upstream_extraction_envelope(
         self, mock_get_agent, mock_streaming
     ):
@@ -3297,6 +3416,206 @@ class TestExecuteFlowTermination:
         flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
         assert flow_finished["data"]["status"] == "completed"
         assert flow_finished["data"]["failure_reason"] is None
+
+    @pytest.mark.asyncio
+    async def test_marks_completed_on_curation_handoff_ready_without_persisting_fallback(
+        self, monkeypatch
+    ):
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene", step_goal="Extract genes"),
+            _agent_node("n2", "curation_handoff", step_goal="Prepare review sessions"),
+        ])
+        completed_gene_step = _make_completed_step(
+            agent_id="gene",
+            agent_name="Gene",
+            tool_name="ask_gene_specialist",
+            step=1,
+            adapter_key="gene",
+            payload=_structured_step_output("TP53", actor="gene", destination="gene"),
+        )
+        completed_handoff_step = _make_completed_step(
+            agent_id="curation_handoff",
+            agent_name="Curation Handoff",
+            tool_name="ask_curation_handoff_specialist",
+            step=2,
+            adapter_key="gene",
+            payload={"review_session_ids": ["session-gene"], "adapter_keys": ["gene"]},
+        )
+
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(
+            completed_gene_step,
+            completed_handoff_step,
+            ordered_tool_names=[
+                "ask_gene_specialist",
+                "ask_curation_handoff_specialist",
+            ],
+        )
+        supervisor._flow_execution_state["curation_handoff"] = {
+            "review_session_ids": ["session-gene"],
+            "adapter_keys": ["gene"],
+        }
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.DocumentContext.fetch",
+            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.persist_extraction_results",
+            lambda *_args, **_kwargs: pytest.fail(
+                "curation handoff should suppress fallback extraction persistence"
+            ),
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            yield {
+                "type": "TOOL_COMPLETE",
+                "details": {"toolName": "ask_curation_handoff_specialist"},
+            }
+            yield {"type": "RUN_FINISHED", "data": {"response": "should not leak"}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [
+            event
+            async for event in execute_flow(
+                flow,
+                user_id="u1",
+                session_id="s1",
+                document_id="doc-1",
+            )
+        ]
+        event_types = [event.get("type") for event in events]
+
+        assert "CURATION_HANDOFF_READY" in event_types
+        assert "RUN_FINISHED" in event_types
+        assert "FLOW_ERROR" not in event_types
+
+        handoff_ready = next(
+            event for event in events if event.get("type") == "CURATION_HANDOFF_READY"
+        )
+        assert handoff_ready["details"] == {
+            "review_session_ids": ["session-gene"],
+            "adapter_keys": ["gene"],
+            "document_id": "doc-1",
+        }
+
+        flow_finished = next(event for event in events if event.get("type") == "FLOW_FINISHED")
+        assert flow_finished["data"]["status"] == "completed"
+        assert flow_finished["data"]["review_session_ids"] == ["session-gene"]
+
+    @pytest.mark.asyncio
+    async def test_later_run_error_fails_after_curation_handoff_ready(
+        self, monkeypatch
+    ):
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene", step_goal="Extract genes"),
+            _agent_node("n2", "curation_handoff", step_goal="Prepare review sessions"),
+        ])
+        completed_gene_step = _make_completed_step(
+            agent_id="gene",
+            agent_name="Gene",
+            tool_name="ask_gene_specialist",
+            step=1,
+            adapter_key="gene",
+            payload=_structured_step_output("TP53", actor="gene", destination="gene"),
+        )
+        completed_handoff_step = _make_completed_step(
+            agent_id="curation_handoff",
+            agent_name="Curation Handoff",
+            tool_name="ask_curation_handoff_specialist",
+            step=2,
+            adapter_key="gene",
+            payload={"review_session_ids": ["session-gene"], "adapter_keys": ["gene"]},
+        )
+
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(
+            completed_gene_step,
+            completed_handoff_step,
+            ordered_tool_names=[
+                "ask_gene_specialist",
+                "ask_curation_handoff_specialist",
+            ],
+        )
+        supervisor._flow_execution_state["curation_handoff"] = {
+            "review_session_ids": ["session-gene"],
+            "adapter_keys": ["gene"],
+        }
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.DocumentContext.fetch",
+            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.persist_extraction_results",
+            lambda *_args, **_kwargs: pytest.fail(
+                "curation handoff should suppress fallback extraction persistence"
+            ),
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            yield {
+                "type": "TOOL_COMPLETE",
+                "details": {"toolName": "ask_curation_handoff_specialist"},
+            }
+            yield {
+                "type": "RUN_ERROR",
+                "data": {"message": "terminal step failed after handoff"},
+            }
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [
+            event
+            async for event in execute_flow(
+                flow,
+                user_id="u1",
+                session_id="s1",
+                document_id="doc-1",
+            )
+        ]
+        event_types = [event.get("type") for event in events]
+
+        assert event_types.count("CURATION_HANDOFF_READY") == 1
+        assert "RUN_ERROR" in event_types
+        assert "FLOW_ERROR" in event_types
+        flow_error = next(event for event in events if event.get("type") == "FLOW_ERROR")
+        assert flow_error["details"]["reason"] == "run_error"
+        assert "terminal step failed after handoff" in flow_error["details"]["message"]
+
+        flow_finished = next(event for event in events if event.get("type") == "FLOW_FINISHED")
+        assert flow_finished["data"]["status"] == "failed"
+        assert flow_finished["data"]["failure_reason"] == "terminal step failed after handoff"
+        assert flow_finished["data"]["review_session_ids"] == ["session-gene"]
 
     @pytest.mark.asyncio
     async def test_emits_flow_step_evidence_and_generates_flow_run_id(self, monkeypatch):

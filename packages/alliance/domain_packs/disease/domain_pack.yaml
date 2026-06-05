@@ -203,6 +203,43 @@ object_definitions:
       assertion_kind: pending_disease_assertion
       semantic_source: domain_envelope.objects
       validator_binding_id: disease_pending_envelope_validator
+      workspace_display:
+        primary_label_field: disease_annotation_object.name
+        secondary_label_field: disease_annotation_subject.subject_label
+        summary_fields:
+          - disease_annotation_object.name
+          - disease_relation_name
+          - disease_annotation_subject.subject_label
+        groups:
+          - id: disease
+            label: Disease
+            fields:
+              - disease_annotation_object.curie
+              - disease_relation_name
+          - id: subject
+            label: Subject
+            fields:
+              - disease_annotation_subject.subject_identifier
+              - disease_annotation_subject.subject_type
+              - disease_annotation_subject.subject_label
+          - id: evidence_codes
+            label: Evidence & codes
+            fields:
+              - evidence_code_curies
+          - id: conditions
+            label: Experimental conditions
+            fields:
+              - condition_relations
+          - id: qualifiers
+            label: Optional qualifiers
+            fields:
+              - disease_qualifier_names
+              - genetic_sex_name
+              - with_gene_identifiers
+          - id: provenance
+            label: Provenance
+            fields:
+              - data_provider.abbreviation
       write_behavior:
         status: blocked
         blocked_by: ALL-425
@@ -332,6 +369,7 @@ object_definitions:
         description: Optional exact-CURIE fast path for the asserted disease term; label-backed candidates remain valid for ontology validation without it.
         required: false
         metadata:
+          render_as: curie-chip
           validatable: true
           validator_binding_id: disease_ontology_term_lookup
           validator_state: active
@@ -525,6 +563,8 @@ object_definitions:
         field_type: string
         display_name: Evidence code CURIEs
         metadata:
+          render_as: chip
+          hide_when_empty: true
           validatable: true
           multivalued: true
           validator_binding_id: disease_evidence_code_lookup
@@ -579,6 +619,7 @@ object_definitions:
         display_name: Genetic sex name
         description: Name of the Genetic Sex vocabulary term; staged only when the paper states the model/cohort sex.
         metadata:
+          hide_when_empty: true
           validatable: true
           validator_binding_id: disease_genetic_sex_cv_lookup
           validator_state: active
@@ -612,6 +653,8 @@ object_definitions:
         field_type: string
         display_name: Disease qualifier names
         metadata:
+          render_as: chip
+          hide_when_empty: true
           validatable: true
           multivalued: true
           validator_binding_id: disease_qualifier_cv_lookup
@@ -632,6 +675,8 @@ object_definitions:
         field_type: string
         display_name: With/from gene identifiers
         metadata:
+          render_as: chip
+          hide_when_empty: true
           validatable: true
           multivalued: true
           validator_binding_id: disease_with_gene_validation
@@ -738,6 +783,8 @@ object_definitions:
         display_name: Condition relations
         model_ref: ConditionRelationPayload
         metadata:
+          render_as: sub-table
+          hide_when_empty: true
           # condition_relations is the OUTER multivalued list: one ConditionRelation per
           # entry (relation_type + its conditions[]). Declared multivalued so the nested
           # fan-out engine indexes condition_relations[i] when fanning the inner conditions[j]
@@ -964,12 +1011,50 @@ object_definitions:
       object_role: curatable_unit
       assertion_kind: disease_assertion
       curatable_unit_object_type: GeneDiseaseAnnotation
+      workspace_display:
+        primary_label_field: disease_annotation_object.name
+        secondary_label_field: disease_annotation_subject.subject_label
+        summary_fields:
+          - disease_annotation_object.name
+          - disease_relation_name
+          - disease_annotation_subject.subject_label
+        groups:
+          - id: disease
+            label: Disease
+            fields:
+              - disease_annotation_object.curie
+              - disease_relation_name
+          - id: subject
+            label: Subject
+            fields:
+              - disease_annotation_subject.subject_identifier
+              - disease_annotation_subject.subject_type
+              - disease_annotation_subject.subject_label
+          - id: evidence_codes
+            label: Evidence & codes
+            fields:
+              - evidence_code_curies
+          - id: conditions
+            label: Experimental conditions
+            fields:
+              - condition_relations
+          - id: qualifiers
+            label: Optional qualifiers
+            fields:
+              - disease_qualifier_names
+              - genetic_sex_name
+              - with_gene_identifiers
+          - id: provenance
+            label: Provenance
+            fields:
+              - data_provider.abbreviation
     fields:
       - field_path: disease_annotation_object.curie
         field_type: string
         display_name: Disease term CURIE
         required: false
         metadata:
+          render_as: curie-chip
           validatable: true
           validator_binding_id: disease_ontology_term_lookup
           validator_state: active
@@ -1032,6 +1117,8 @@ object_definitions:
         field_type: string
         display_name: Evidence code CURIEs
         metadata:
+          render_as: chip
+          hide_when_empty: true
           validatable: true
           multivalued: true
           validator_binding_id: disease_evidence_code_lookup
@@ -1061,6 +1148,7 @@ object_definitions:
         field_type: string
         display_name: Genetic sex name
         metadata:
+          hide_when_empty: true
           validatable: true
           validator_binding_id: disease_genetic_sex_cv_lookup
           validator_state: active
@@ -1081,6 +1169,8 @@ object_definitions:
         field_type: string
         display_name: Disease qualifier names
         metadata:
+          render_as: chip
+          hide_when_empty: true
           validatable: true
           multivalued: true
           validator_binding_id: disease_qualifier_cv_lookup
@@ -1090,6 +1180,8 @@ object_definitions:
         field_type: string
         display_name: With/from gene identifiers
         metadata:
+          render_as: chip
+          hide_when_empty: true
           validatable: true
           multivalued: true
           validator_binding_id: disease_with_gene_validation
@@ -1105,6 +1197,8 @@ object_definitions:
         display_name: Condition relations
         model_ref: ConditionRelationPayload
         metadata:
+          render_as: sub-table
+          hide_when_empty: true
           multivalued: true
           definition_state_category: complete
           provider_refs:
@@ -1307,12 +1401,50 @@ object_definitions:
       object_role: curatable_unit
       assertion_kind: disease_assertion
       curatable_unit_object_type: AlleleDiseaseAnnotation
+      workspace_display:
+        primary_label_field: disease_annotation_object.name
+        secondary_label_field: disease_annotation_subject.subject_label
+        summary_fields:
+          - disease_annotation_object.name
+          - disease_relation_name
+          - disease_annotation_subject.subject_label
+        groups:
+          - id: disease
+            label: Disease
+            fields:
+              - disease_annotation_object.curie
+              - disease_relation_name
+          - id: subject
+            label: Subject
+            fields:
+              - disease_annotation_subject.subject_identifier
+              - disease_annotation_subject.subject_type
+              - disease_annotation_subject.subject_label
+          - id: evidence_codes
+            label: Evidence & codes
+            fields:
+              - evidence_code_curies
+          - id: conditions
+            label: Experimental conditions
+            fields:
+              - condition_relations
+          - id: qualifiers
+            label: Optional qualifiers
+            fields:
+              - disease_qualifier_names
+              - genetic_sex_name
+              - with_gene_identifiers
+          - id: provenance
+            label: Provenance
+            fields:
+              - data_provider.abbreviation
     fields:
       - field_path: disease_annotation_object.curie
         field_type: string
         display_name: Disease term CURIE
         required: false
         metadata:
+          render_as: curie-chip
           validatable: true
           validator_binding_id: disease_ontology_term_lookup
           validator_state: active
@@ -1372,6 +1504,8 @@ object_definitions:
         field_type: string
         display_name: Evidence code CURIEs
         metadata:
+          render_as: chip
+          hide_when_empty: true
           validatable: true
           multivalued: true
           validator_binding_id: disease_evidence_code_lookup
@@ -1401,6 +1535,7 @@ object_definitions:
         field_type: string
         display_name: Genetic sex name
         metadata:
+          hide_when_empty: true
           validatable: true
           validator_binding_id: disease_genetic_sex_cv_lookup
           validator_state: active
@@ -1421,6 +1556,8 @@ object_definitions:
         field_type: string
         display_name: Disease qualifier names
         metadata:
+          render_as: chip
+          hide_when_empty: true
           validatable: true
           multivalued: true
           validator_binding_id: disease_qualifier_cv_lookup
@@ -1430,6 +1567,8 @@ object_definitions:
         field_type: string
         display_name: With/from gene identifiers
         metadata:
+          render_as: chip
+          hide_when_empty: true
           validatable: true
           multivalued: true
           validator_binding_id: disease_with_gene_validation
@@ -1442,6 +1581,8 @@ object_definitions:
         display_name: Condition relations
         model_ref: ConditionRelationPayload
         metadata:
+          render_as: sub-table
+          hide_when_empty: true
           multivalued: true
           definition_state_category: complete
           provider_refs:
@@ -1643,12 +1784,50 @@ object_definitions:
       object_role: curatable_unit
       assertion_kind: disease_assertion
       curatable_unit_object_type: AGMDiseaseAnnotation
+      workspace_display:
+        primary_label_field: disease_annotation_object.name
+        secondary_label_field: disease_annotation_subject.subject_label
+        summary_fields:
+          - disease_annotation_object.name
+          - disease_relation_name
+          - disease_annotation_subject.subject_label
+        groups:
+          - id: disease
+            label: Disease
+            fields:
+              - disease_annotation_object.curie
+              - disease_relation_name
+          - id: subject
+            label: Subject
+            fields:
+              - disease_annotation_subject.subject_identifier
+              - disease_annotation_subject.subject_type
+              - disease_annotation_subject.subject_label
+          - id: evidence_codes
+            label: Evidence & codes
+            fields:
+              - evidence_code_curies
+          - id: conditions
+            label: Experimental conditions
+            fields:
+              - condition_relations
+          - id: qualifiers
+            label: Optional qualifiers
+            fields:
+              - disease_qualifier_names
+              - genetic_sex_name
+              - with_gene_identifiers
+          - id: provenance
+            label: Provenance
+            fields:
+              - data_provider.abbreviation
     fields:
       - field_path: disease_annotation_object.curie
         field_type: string
         display_name: Disease term CURIE
         required: false
         metadata:
+          render_as: curie-chip
           validatable: true
           validator_binding_id: disease_ontology_term_lookup
           validator_state: active
@@ -1710,6 +1889,8 @@ object_definitions:
         field_type: string
         display_name: Evidence code CURIEs
         metadata:
+          render_as: chip
+          hide_when_empty: true
           validatable: true
           multivalued: true
           validator_binding_id: disease_evidence_code_lookup
@@ -1739,6 +1920,7 @@ object_definitions:
         field_type: string
         display_name: Genetic sex name
         metadata:
+          hide_when_empty: true
           validatable: true
           validator_binding_id: disease_genetic_sex_cv_lookup
           validator_state: active
@@ -1759,6 +1941,8 @@ object_definitions:
         field_type: string
         display_name: Disease qualifier names
         metadata:
+          render_as: chip
+          hide_when_empty: true
           validatable: true
           multivalued: true
           validator_binding_id: disease_qualifier_cv_lookup
@@ -1768,6 +1952,8 @@ object_definitions:
         field_type: string
         display_name: With/from gene identifiers
         metadata:
+          render_as: chip
+          hide_when_empty: true
           validatable: true
           multivalued: true
           validator_binding_id: disease_with_gene_validation
@@ -1780,6 +1966,8 @@ object_definitions:
         display_name: Condition relations
         model_ref: ConditionRelationPayload
         metadata:
+          render_as: sub-table
+          hide_when_empty: true
           multivalued: true
           definition_state_category: complete
           provider_refs:

@@ -54,6 +54,21 @@ def _sanitize_batch_stream_event(event: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _batch_document_status_event(batch: Any, doc: Any) -> Dict[str, Any]:
+    return {
+        "type": "DOCUMENT_STATUS",
+        "batch_id": str(batch.id),
+        "document_id": str(doc.document_id),
+        "batch_document_id": str(doc.id),
+        "position": doc.position,
+        "status": doc.status.value,
+        "result_file_path": doc.result_file_path,
+        "review_session_ids": doc.review_session_ids,
+        "error_message": doc.error_message,
+        "processing_time_ms": doc.processing_time_ms,
+    }
+
+
 @router.post("", response_model=BatchResponse, status_code=201)
 async def create_batch(
     request: BatchCreateRequest,
@@ -515,17 +530,7 @@ async def stream_batch_progress(
                     current_status = doc.status.value
 
                     if doc_id not in last_doc_statuses or last_doc_statuses[doc_id] != current_status:
-                        doc_event = {
-                            "type": "DOCUMENT_STATUS",
-                            "batch_id": str(batch.id),
-                            "document_id": str(doc.document_id),
-                            "batch_document_id": doc_id,
-                            "position": doc.position,
-                            "status": current_status,
-                            "result_file_path": doc.result_file_path,
-                            "error_message": doc.error_message,
-                            "processing_time_ms": doc.processing_time_ms,
-                        }
+                        doc_event = _batch_document_status_event(batch, doc)
                         yield f"data: {json.dumps(doc_event)}\n\n"
                         last_doc_statuses[doc_id] = current_status
 

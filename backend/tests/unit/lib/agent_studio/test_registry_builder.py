@@ -211,6 +211,7 @@ class TestAgentDocumentationCoverage:
             "supervisor",
             "chat_output",
             "chat_output_formatter",
+            "curation_handoff",
             "curation_prep",
         }
         assert registry["chat_output"] == registry["chat_output_formatter"]

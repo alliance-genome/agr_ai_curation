@@ -535,6 +535,35 @@
     ],
     "summary": "Formats structured extraction results as a downloadable CSV file for spreadsheet workflows."
   },
+  "curation_handoff": {
+    "capabilities": [
+      {
+        "description": "Turns prior extraction output into one or more curator-owned review sessions.",
+        "example_query": "Hand these extracted findings to the curation workspace",
+        "example_result": "Creates review sessions in the curation inventory for the relevant adapters",
+        "name": "Review session creation"
+      },
+      {
+        "description": "Works as a terminal step for flows and batches after upstream agents have gathered evidence.",
+        "example_query": "Finish this batch by preparing curation review sessions",
+        "example_result": "Marks the handoff ready once review sessions have been materialized",
+        "name": "Batch and flow handoff"
+      },
+      {
+        "description": "Carries extraction candidates and supporting evidence into the curation interface without approving or submitting them.",
+        "example_query": "Prepare the extracted candidates for curator review",
+        "example_result": "Leaves candidates ready for curator decisions in the review workspace",
+        "name": "Evidence-preserving transition"
+      }
+    ],
+    "data_sources": [],
+    "limitations": [
+      "Requires upstream extraction or curation prep output; it does not discover new evidence on its own",
+      "Does not replace curator review, approval, or final submission",
+      "Runs as a flow or batch terminal step rather than a standalone chat specialist"
+    ],
+    "summary": "Creates curator review sessions from completed flow or batch extraction results."
+  },
   "curation_prep": {
     "capabilities": [
       {

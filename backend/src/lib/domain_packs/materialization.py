@@ -1451,6 +1451,8 @@ def _workspace_fields(
                 )
             )
         )
+        if metadata.get("hide_when_empty") is True and _is_empty_projection_value(value):
+            continue
         if value is _MISSING:
             value = None
 
@@ -1472,6 +1474,14 @@ def _workspace_fields(
         )
 
     return workspace_fields
+
+
+def _is_empty_projection_value(value: Any) -> bool:
+    if value is _MISSING or value is None:
+        return True
+    if isinstance(value, (str, list, tuple, dict, set)) and len(value) == 0:
+        return True
+    return False
 
 
 def _workspace_group_fields(

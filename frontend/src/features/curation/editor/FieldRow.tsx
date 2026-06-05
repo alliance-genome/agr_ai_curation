@@ -12,6 +12,14 @@ import {
   areDraftFieldValuesEqual,
   resolveEnvelopeFieldPath,
 } from '../workspace/workspaceState'
+import {
+  ChipFieldValue,
+  CurieChipFieldValue,
+  DivergenceFieldValue,
+  EvidenceLocatorFieldValue,
+  resolveRenderAs,
+  SubTableFieldValue,
+} from './fieldRenderers'
 
 const fieldInputSx = {
   '& .MuiOutlinedInput-root': {
@@ -166,6 +174,37 @@ function renderDefaultInput({
   onChange,
   value,
 }: FieldRowInputProps): ReactNode {
+  const renderAs = resolveRenderAs(field)
+  const useReadOnlyPresentation = disabled
+
+  if (useReadOnlyPresentation && renderAs === 'chip') {
+    return <ChipFieldValue value={value} />
+  }
+
+  if (useReadOnlyPresentation && (renderAs === 'curie-chip' || renderAs === 'term-chip')) {
+    return <CurieChipFieldValue value={value} />
+  }
+
+  if (useReadOnlyPresentation && renderAs === 'sub-table') {
+    return <SubTableFieldValue value={value} />
+  }
+
+  if (useReadOnlyPresentation && renderAs === 'evidence-locator') {
+    return <EvidenceLocatorFieldValue value={value} />
+  }
+
+  if (useReadOnlyPresentation && renderAs === 'notes') {
+    return (
+      <Typography
+        color="text.secondary"
+        sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+        variant="body2"
+      >
+        {normalizeFieldTextValue(value)}
+      </Typography>
+    )
+  }
+
   const options = resolveFieldOptions(field, value)
   const placeholder = resolvePlaceholder(field)
 
@@ -274,7 +313,7 @@ function renderDefaultInput({
     )
   }
 
-  return (
+  const defaultInput = (
     <TextField
       data-testid={`field-input-${field.field_key}`}
       disabled={disabled}
@@ -291,6 +330,17 @@ function renderDefaultInput({
       value={normalizeFieldTextValue(value)}
     />
   )
+
+  if (renderAs === 'divergence') {
+    return (
+      <>
+        {defaultInput}
+        <DivergenceFieldValue proposedValue={field.seed_value} value={value} />
+      </>
+    )
+  }
+
+  return defaultInput
 }
 
 export default function FieldRow({
