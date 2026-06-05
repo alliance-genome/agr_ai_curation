@@ -97,6 +97,40 @@ def test_get_agent_config_env_override_beats_registry_model(monkeypatch):
     assert config.model == "gpt-5.5"
 
 
+def test_get_agent_config_does_not_evaluate_unused_global_defaults(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.AGENT_REGISTRY",
+        {
+            "supervisor": {
+                "config_defaults": {
+                    "model": "gpt-5.5",
+                    "temperature": None,
+                    "reasoning": "medium",
+                    "tool_choice": "auto",
+                }
+            }
+        },
+        raising=False,
+    )
+
+    def fail_default(*_args, **_kwargs):
+        raise AssertionError("unused global default was evaluated")
+
+    monkeypatch.setattr("src.lib.openai_agents.config.get_default_model", fail_default)
+    monkeypatch.setattr(
+        "src.lib.openai_agents.config.get_default_temperature", fail_default
+    )
+    monkeypatch.setattr("src.lib.openai_agents.config.get_default_reasoning", fail_default)
+
+    with patch.dict(os.environ, {}, clear=True):
+        config = get_agent_config("supervisor")
+
+    assert config.model == "gpt-5.5"
+    assert config.temperature is None
+    assert config.reasoning == "medium"
+    assert config.tool_choice == "auto"
+
+
 def test_resolve_model_provider_uses_model_catalog_and_provider_registry(monkeypatch):
     monkeypatch.setattr(
         "src.lib.config.models_loader.get_model",

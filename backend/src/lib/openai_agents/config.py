@@ -560,11 +560,11 @@ def get_agent_config(agent_id: str) -> AgentConfig:
     # Environment variable prefix (uppercase agent_id)
     prefix = f"AGENT_{agent_id.upper()}_"
 
-    # Resolve each setting with priority: env > registry > fallback
-    model = _get_env(
-        f"{prefix}MODEL",
-        defaults.get("model", get_default_model())
-    )
+    # Resolve each setting with priority: env > registry > fallback. Keep the
+    # global defaults lazy so stale unused defaults do not break explicit agent
+    # overrides or registry-owned defaults.
+    model_default = defaults["model"] if "model" in defaults else get_default_model()
+    model = _get_env(f"{prefix}MODEL", model_default)
 
     # Temperature can be None for models that don't support it
     temperature_str = os.getenv(f"{prefix}TEMPERATURE")
@@ -572,13 +572,24 @@ def get_agent_config(agent_id: str) -> AgentConfig:
         try:
             temperature = float(temperature_str)
         except ValueError:
-            temperature = defaults.get("temperature", get_default_temperature())
+            temperature = (
+                defaults["temperature"]
+                if "temperature" in defaults
+                else get_default_temperature()
+            )
     else:
-        temperature = defaults.get("temperature", get_default_temperature())
+        temperature = (
+            defaults["temperature"]
+            if "temperature" in defaults
+            else get_default_temperature()
+        )
 
+    reasoning_default = (
+        defaults["reasoning"] if "reasoning" in defaults else get_default_reasoning()
+    )
     reasoning = _get_env_reasoning(
         f"{prefix}REASONING",
-        defaults.get("reasoning", get_default_reasoning())
+        reasoning_default,
     )
 
     tool_choice = _get_env(
