@@ -146,3 +146,20 @@ Temporary diagnosis notes for the local Incus main-sandbox run.
 - The VM private env file has been updated with non-empty `ELASTICSEARCH_HOST`,
   `ELASTICSEARCH_SCHEME=https`, `ELASTICSEARCH_PORT=443`, and
   `ELASTICSEARCH_INDEX=references_index` for the main sandbox runtime.
+
+## 2026-06-05 follow-up: main sandbox DB tunnel wiring
+
+- After the main sandbox was refreshed at commit `4c8ab411`, the backend had all expected
+  literature lookup env keys, but `LITERATURE_DB_URL` still pointed at a stale local tunnel port.
+- The curation tunnel was live on the current curation forward, while the literature tunnel was
+  live through the separate `main-literature` tunnel state.
+- Recreated only the backend with layered runtime env:
+  - VM private env file;
+  - main sandbox curation tunnel env;
+  - `main-literature` tunnel env normalized to `LITERATURE_DB_URL`.
+- Validation after backend health:
+  - frontend LAN URL returned `200`;
+  - backend health LAN URL returned `200`;
+  - curation DB `select 1` passed from the backend container;
+  - literature DB `select 1` passed from the backend container;
+  - `agr_literature_reference_lookup` resolved `PMID:39671436` with one `literature_es` result.
