@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { ThemeProvider } from '@mui/material/styles'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -691,6 +692,135 @@ describe('CurationWorkspacePage', () => {
         action: 'accept',
         advance_queue: false,
       })
+    })
+  })
+
+  it('creates a manual object from the envelope work pane toolbar', async () => {
+    const user = userEvent.setup()
+    const workspace = buildEnvelopeWorkspace()
+    const templateField = workspace.candidates[0].draft.fields[0]
+    workspace.candidates[0].draft.fields = [
+      {
+        ...templateField,
+        field_key: 'entity_name',
+        label: 'Entity name',
+        value: 'TMEM67',
+        seed_value: 'TMEM67',
+      },
+      {
+        ...templateField,
+        field_key: 'entity_type',
+        label: 'Entity type',
+        value: 'ATP:0000005',
+        seed_value: 'ATP:0000005',
+      },
+      {
+        ...templateField,
+        field_key: 'species',
+        label: 'Species',
+        value: '',
+        seed_value: '',
+      },
+      {
+        ...templateField,
+        field_key: 'topic',
+        label: 'Topic',
+        value: '',
+        seed_value: '',
+      },
+    ]
+    const manualCandidate = {
+      ...workspace.candidates[0],
+      candidate_id: 'candidate-manual-1',
+      source: 'manual' as const,
+      status: 'pending' as const,
+      display_label: 'manual gene',
+      projection_ref: null,
+      draft: {
+        ...workspace.candidates[0].draft,
+        draft_id: 'draft-manual-1',
+        candidate_id: 'candidate-manual-1',
+      },
+    }
+    const refreshedWorkspace = {
+      ...workspace,
+      candidates: [...workspace.candidates, manualCandidate],
+      active_candidate_id: 'candidate-manual-1',
+      session: {
+        ...workspace.session,
+        current_candidate_id: 'candidate-manual-1',
+      },
+    }
+
+    serviceMocks.fetchCurationWorkspace
+      .mockResolvedValueOnce(workspace)
+      .mockResolvedValue(refreshedWorkspace)
+    serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockResolvedValue([
+      buildEnvelopeReviewRows(),
+    ])
+    serviceMocks.createManualCurationCandidate.mockResolvedValue({
+      candidate: manualCandidate,
+      session: refreshedWorkspace.session,
+      action_log_entry: {
+        action_id: 'action-manual-1',
+        session_id: 'session-1',
+        candidate_id: 'candidate-manual-1',
+        draft_id: 'draft-manual-1',
+        action_type: 'candidate_created',
+        actor_type: 'user',
+        occurred_at: '2026-05-10T12:20:00Z',
+        changed_field_keys: ['entity_name', 'entity_type', 'species', 'topic'],
+        evidence_anchor_ids: [],
+        metadata: {},
+      },
+    })
+    serviceMocks.updateCurationSession.mockResolvedValue({
+      session: refreshedWorkspace.session,
+      action_log_entry: null,
+    })
+
+    renderPage('/curation/session-1')
+
+    await user.click(await screen.findByRole('button', { name: 'Add object' }))
+
+    const dialog = await screen.findByRole('dialog', { name: 'Add object' })
+    await user.type(within(dialog).getByLabelText('Name'), 'manual gene')
+    await user.click(within(dialog).getByRole('combobox', { name: 'Type' }))
+    await user.click(screen.getByRole('option', { name: 'gene' }))
+    await user.type(within(dialog).getByLabelText('Species'), 'NCBITaxon:7955')
+    await user.type(within(dialog).getByLabelText('Topic'), 'gene expression')
+    await user.click(within(dialog).getByRole('button', { name: 'Add object' }))
+
+    await waitFor(() => {
+      expect(serviceMocks.createManualCurationCandidate).toHaveBeenCalledWith({
+        session_id: 'session-1',
+        adapter_key: 'entity_adapter',
+        source: 'manual',
+        display_label: 'manual gene',
+        draft: expect.objectContaining({
+          candidate_id: expect.stringContaining('manual-candidate-'),
+          fields: expect.arrayContaining([
+            expect.objectContaining({ field_key: 'entity_name', value: 'manual gene' }),
+            expect.objectContaining({ field_key: 'entity_type', value: 'ATP:0000005' }),
+            expect.objectContaining({ field_key: 'species', value: 'NCBITaxon:7955' }),
+            expect.objectContaining({ field_key: 'topic', value: 'gene expression' }),
+          ]),
+        }),
+        evidence_anchors: [],
+      })
+    })
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchCurationWorkspace).toHaveBeenLastCalledWith('session-1')
+    })
+    await waitFor(() => {
+      expect(serviceMocks.updateCurationSession).toHaveBeenCalledWith({
+        session_id: 'session-1',
+        current_candidate_id: 'candidate-manual-1',
+      })
+    })
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Add object' })).not.toBeInTheDocument()
     })
   })
 

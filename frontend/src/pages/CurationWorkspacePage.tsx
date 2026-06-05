@@ -36,6 +36,9 @@ import {
   validateCurationCandidate,
 } from '@/features/curation/services/curationWorkspaceService'
 import { CandidateFieldEditor } from '@/features/curation/editor'
+import AddManualObjectDialog, {
+  type ManualObjectDraft,
+} from '@/features/curation/workspace/AddManualObjectDialog'
 import type {
   CurationCandidate,
   CurationDraftFieldChange,
@@ -54,6 +57,11 @@ import WorkspaceHeader from '@/features/curation/workspace/WorkspaceHeader'
 import WorkspaceShell from '@/features/curation/workspace/WorkspaceShell'
 import WorkspaceSessionNavigation from '@/features/curation/workspace/WorkspaceSessionNavigation'
 import { buildWorkspaceEnvelopeObjectReviewRows } from '@/features/curation/workspace/envelopeObjectReviewRows'
+import WorkPaneToolbar from '@/features/curation/workspace/WorkPaneToolbar'
+import {
+  countValidatedPending,
+  isValidatedPendingCandidate,
+} from '@/features/curation/workspace/workPaneToolbar'
 import {
   buildWorkspaceExpectedEnvelopeRevisions,
   mergeSubmissionExecutionIntoWorkspace,
@@ -183,6 +191,8 @@ function CurationWorkspacePageContent({
     () => buildCurationPDFViewerOwner(workspace.session.session_id),
     [workspace.session.session_id],
   )
+  const [manualObjectDialogOpen, setManualObjectDialogOpen] = useState(false)
+  const [manualObjectCreating, setManualObjectCreating] = useState(false)
   const [submissionDialogOpen, setSubmissionDialogOpen] = useState(false)
   const [tableError, setTableError] = useState<string | null>(null)
   const entityTags = workspace.entity_tags
@@ -225,6 +235,20 @@ function CurationWorkspacePageContent({
         index[candidate.candidate_id] = candidate.evidence_anchors ?? []
         return index
       }, {}),
+    [candidates],
+  )
+  const pendingCandidateCount = useMemo(
+    () => candidates.filter((candidate) => candidate.status === 'pending').length,
+    [candidates],
+  )
+  const validatedPendingCandidateIds = useMemo(
+    () => candidates
+      .filter(isValidatedPendingCandidate)
+      .map((candidate) => candidate.candidate_id),
+    [candidates],
+  )
+  const validatedPendingCount = useMemo(
+    () => countValidatedPending(candidates),
     [candidates],
   )
 
@@ -468,7 +492,7 @@ function CurationWorkspacePageContent({
     }
   }, [candidates, refreshWorkspace, workspace.session.session_id])
 
-  const handleCreateManualTag = useCallback(async (tag: EntityTag) => {
+  const handleCreateManualTag = useCallback(async (tag: ManualObjectDraft) => {
     setTableError(null)
 
     const templateCandidate = selectEntityTemplateCandidate(candidates, activeCandidateId)
@@ -510,6 +534,17 @@ function CurationWorkspacePageContent({
       throw error
     }
   }, [activeCandidateId, candidates, refreshWorkspace, setActiveCandidate, workspace.session.session_id])
+
+  const handleCreateManualObject = useCallback(async (draft: ManualObjectDraft) => {
+    setManualObjectCreating(true)
+
+    try {
+      await handleCreateManualTag(draft)
+      setManualObjectDialogOpen(false)
+    } finally {
+      setManualObjectCreating(false)
+    }
+  }, [handleCreateManualTag])
 
   return (
     <Box
@@ -596,10 +631,25 @@ function CurationWorkspacePageContent({
           )
         )}
         fieldEditorSlot={(
-          <CandidateFieldEditor
-            onAcceptCandidate={handleAcceptTag}
-            onRejectCandidate={handleRejectTag}
-          />
+          <Box sx={{ display: 'flex', flex: 1, flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
+            {hasEnvelopeObjectRows ? (
+              <WorkPaneToolbar
+                totalCount={candidates.length}
+                pendingCount={pendingCandidateCount}
+                validatedPendingCount={validatedPendingCount}
+                onAcceptAllValidated={() => {
+                  void handleAcceptAllValidated(validatedPendingCandidateIds)
+                }}
+                onAddObject={() => setManualObjectDialogOpen(true)}
+              />
+            ) : null}
+            <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+              <CandidateFieldEditor
+                onAcceptCandidate={handleAcceptTag}
+                onRejectCandidate={handleRejectTag}
+              />
+            </Box>
+          </Box>
         )}
       />
 
@@ -610,6 +660,15 @@ function CurationWorkspacePageContent({
         onSubmit={handleSubmitPreview}
         open={submissionDialogOpen}
         session={workspace.session}
+      />
+
+      <AddManualObjectDialog
+        isCreating={manualObjectCreating}
+        onCancel={() => setManualObjectDialogOpen(false)}
+        onCreate={(draft) => {
+          void handleCreateManualObject(draft)
+        }}
+        open={manualObjectDialogOpen}
       />
     </Box>
   )
