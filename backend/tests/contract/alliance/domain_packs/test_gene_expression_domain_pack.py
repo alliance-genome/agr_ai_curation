@@ -300,28 +300,20 @@ def test_gene_expression_domain_pack_is_bundled_with_concrete_metadata():
                 "fields": [
                     "expression_annotation_subject.primary_external_id",
                     "expression_annotation_subject.gene_symbol",
-                    "expression_experiment.entity_assayed.primary_external_id",
-                    "expression_experiment.entity_assayed.gene_symbol",
                 ],
             },
             {
-                "id": "evidence_reference",
-                "label": "Evidence and reference",
+                "id": "reference",
+                "label": "Reference",
                 "fields": [
                     "single_reference.reference_id",
-                    "single_reference.curie",
-                    "single_reference.title",
-                    "single_reference.pmid",
-                    "single_reference.doi",
-                    "expression_experiment.single_reference.reference_id",
                 ],
             },
             {
-                "id": "assay_method",
-                "label": "Assay and method",
+                "id": "assay",
+                "label": "Assay",
                 "fields": [
                     "expression_experiment.expression_assay_used.curie",
-                    "expression_experiment.expression_assay_used.name",
                 ],
             },
             {
@@ -330,42 +322,21 @@ def test_gene_expression_domain_pack_is_bundled_with_concrete_metadata():
                 "fields": [
                     "where_expressed_statement",
                     "expression_pattern.where_expressed.anatomical_structure.curie",
-                    "expression_pattern.where_expressed.anatomical_structure.name",
-                    "expression_pattern.where_expressed.anatomical_structure_uberon_terms",
                     "expression_pattern.where_expressed.cellular_component.curie",
-                    "expression_pattern.where_expressed.cellular_component.name",
+                    "expression_pattern.where_expressed.anatomical_structure_uberon_terms",
                     "expression_pattern.where_expressed.cellular_component_qualifiers",
+                    "condition_relations",
                 ],
             },
             {
-                "id": "temporal_stage",
-                "label": "Temporal stage",
+                "id": "stage_relation",
+                "label": "Stage & relation",
                 "fields": [
                     "when_expressed_stage_name",
                     "expression_pattern.when_expressed.developmental_stage_start.curie",
-                    "expression_pattern.when_expressed.developmental_stage_start.name",
                     "expression_pattern.when_expressed.stage_uberon_slim_terms",
-                ],
-            },
-            {
-                "id": "relation_provider",
-                "label": "Relation and provider",
-                "fields": [
                     "relation.name",
                     "data_provider.abbreviation",
-                    "internal",
-                    "negated",
-                    "uncertain",
-                ],
-            },
-            {
-                "id": "experiment_context",
-                "label": "Experiment context",
-                "fields": [
-                    "expression_experiment.detection_reagents",
-                    "expression_experiment.specimen_genomic_model",
-                    "expression_experiment.specimen_alleles",
-                    "condition_relations",
                 ],
             },
         ],
@@ -1628,16 +1599,19 @@ def test_multi_annotation_fixture_projects_one_review_row_per_expression_stateme
         "expression_experiment.expression_assay_used.name",
     ]
     workspace_fields = rows[0].metadata["workspace_fields"]
-    assert [field["field_path"] for field in workspace_fields][:8] == [
+    workspace_paths = [field["field_path"] for field in workspace_fields]
+    assert workspace_paths[:8] == [
         "expression_annotation_subject.primary_external_id",
         "expression_annotation_subject.gene_symbol",
-        "expression_experiment.entity_assayed.primary_external_id",
-        "expression_experiment.entity_assayed.gene_symbol",
         "single_reference.reference_id",
-        "single_reference.curie",
-        "single_reference.title",
-        "single_reference.pmid",
+        "expression_experiment.expression_assay_used.curie",
+        "where_expressed_statement",
+        "expression_pattern.where_expressed.anatomical_structure.curie",
+        "expression_pattern.where_expressed.cellular_component.curie",
+        "expression_pattern.where_expressed.anatomical_structure_uberon_terms",
     ]
+    assert "expression_experiment.entity_assayed.primary_external_id" not in workspace_paths
+    assert "expression_experiment.single_reference.reference_id" not in workspace_paths
     assert workspace_fields[0]["metadata"]["workspace_group"] == {
         "id": "subject",
         "label": "Subject gene",
@@ -1649,17 +1623,6 @@ def test_multi_annotation_fixture_projects_one_review_row_per_expression_stateme
     assert workspace_fields[0]["metadata"]["materializes_to_field_paths"] == [
         "expression_experiment.entity_assayed.primary_external_id"
     ]
-    experiment_entity_field = next(
-        field
-        for field in workspace_fields
-        if field["field_path"]
-        == "expression_experiment.entity_assayed.primary_external_id"
-    )
-    assert experiment_entity_field["metadata"]["read_only"] is True
-    assert (
-        experiment_entity_field["metadata"]["derived_from_field_path"]
-        == "expression_annotation_subject.primary_external_id"
-    )
     reference_field = next(
         field
         for field in workspace_fields
@@ -1668,16 +1631,12 @@ def test_multi_annotation_fixture_projects_one_review_row_per_expression_stateme
     assert reference_field["metadata"]["materializes_to_field_paths"] == [
         "expression_experiment.single_reference.reference_id"
     ]
-    experiment_reference_field = next(
+    assay_field = next(
         field
         for field in workspace_fields
-        if field["field_path"] == "expression_experiment.single_reference.reference_id"
+        if field["field_path"] == "expression_experiment.expression_assay_used.curie"
     )
-    assert experiment_reference_field["metadata"]["read_only"] is True
-    assert (
-        experiment_reference_field["metadata"]["derived_from_field_path"]
-        == "single_reference.reference_id"
-    )
+    assert assay_field["metadata"]["render_as"] == "curie-chip"
     data_provider_field = next(
         field
         for field in workspace_fields

@@ -81,22 +81,35 @@ object_definitions:
         primary_label_field: mention
         secondary_label_field: gene_symbol
         summary_fields:
-          - mention
-          - proposed_gene_symbol
-          - data_provider_hint
           - gene_symbol
           - primary_external_id
           - taxon
-          - confidence
-          - section
-          - page
-        evidence_quote_field: verified_quote
-        evidence_locator_fields:
-          - page
-          - section
-          - subsection
-          - figure_reference
-          - chunk_id
+        groups:
+          - id: identity
+            label: Gene identity
+            fields:
+              - gene_symbol
+              - primary_external_id
+              - taxon
+              - species
+          - id: ai_proposal
+            label: AI proposal
+            fields:
+              - proposed_gene_symbol
+              - proposed_taxon
+          - id: evidence_location
+            label: Evidence location
+            fields:
+              - section
+              - page
+              - subsection
+              - figure_reference
+          - id: provenance
+            label: Provenance & notes
+            fields:
+              - data_provider_hint
+              - identity_resolution_notes
+              - confidence
       validator_bindings:
         active:
           - binding_id: alliance_gene_reference_lookup
@@ -264,15 +277,24 @@ object_definitions:
         field_type: string
         display_name: Proposed gene symbol
         description: Extractor-proposed gene symbol for validator confirmation.
+        metadata:
+          render_as: divergence
+          hide_when_empty: true
       - field_path: proposed_taxon
         field_type: string
         display_name: Proposed taxon
         description: Extractor-proposed NCBI Taxon CURIE for validator confirmation.
+        metadata:
+          render_as: divergence
+          hide_when_empty: true
       - field_path: identity_resolution_notes
         field_type: array
         display_name: Identity resolution notes
         required: true
         description: Extractor-side notes describing paper-backed species or proposed identity hints.
+        metadata:
+          render_as: notes
+          hide_when_empty: true
       - field_path: confidence
         field_type: enum
         display_name: Confidence
@@ -297,17 +319,23 @@ object_definitions:
         display_name: Page
         required: true
         metadata:
+          render_as: evidence-locator
+          hide_when_empty: true
           evidence_locator_field: true
       - field_path: section
         field_type: string
         display_name: Section
         required: true
         metadata:
+          render_as: evidence-locator
+          hide_when_empty: true
           evidence_locator_field: true
       - field_path: subsection
         field_type: string
         display_name: Subsection
         metadata:
+          render_as: evidence-locator
+          hide_when_empty: true
           evidence_locator_field: true
       - field_path: chunk_id
         field_type: string
@@ -319,6 +347,8 @@ object_definitions:
         field_type: string
         display_name: Figure/table reference
         metadata:
+          render_as: evidence-locator
+          hide_when_empty: true
           evidence_locator_field: true
 fixture_packs:
   - fixture_pack_id: tool_verified

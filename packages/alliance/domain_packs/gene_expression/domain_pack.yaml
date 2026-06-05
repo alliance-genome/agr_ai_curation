@@ -322,54 +322,31 @@ object_definitions:
             fields:
               - expression_annotation_subject.primary_external_id
               - expression_annotation_subject.gene_symbol
-              - expression_experiment.entity_assayed.primary_external_id
-              - expression_experiment.entity_assayed.gene_symbol
-          - id: evidence_reference
-            label: Evidence and reference
+          - id: reference
+            label: Reference
             fields:
               - single_reference.reference_id
-              - single_reference.curie
-              - single_reference.title
-              - single_reference.pmid
-              - single_reference.doi
-              - expression_experiment.single_reference.reference_id
-          - id: assay_method
-            label: Assay and method
+          - id: assay
+            label: Assay
             fields:
               - expression_experiment.expression_assay_used.curie
-              - expression_experiment.expression_assay_used.name
           - id: expression_site
             label: Expression site
             fields:
               - where_expressed_statement
               - expression_pattern.where_expressed.anatomical_structure.curie
-              - expression_pattern.where_expressed.anatomical_structure.name
-              - expression_pattern.where_expressed.anatomical_structure_uberon_terms
               - expression_pattern.where_expressed.cellular_component.curie
-              - expression_pattern.where_expressed.cellular_component.name
+              - expression_pattern.where_expressed.anatomical_structure_uberon_terms
               - expression_pattern.where_expressed.cellular_component_qualifiers
-          - id: temporal_stage
-            label: Temporal stage
+              - condition_relations
+          - id: stage_relation
+            label: Stage & relation
             fields:
               - when_expressed_stage_name
               - expression_pattern.when_expressed.developmental_stage_start.curie
-              - expression_pattern.when_expressed.developmental_stage_start.name
               - expression_pattern.when_expressed.stage_uberon_slim_terms
-          - id: relation_provider
-            label: Relation and provider
-            fields:
               - relation.name
               - data_provider.abbreviation
-              - internal
-              - negated
-              - uncertain
-          - id: experiment_context
-            label: Experiment context
-            fields:
-              - expression_experiment.detection_reagents
-              - expression_experiment.specimen_genomic_model
-              - expression_experiment.specimen_alleles
-              - condition_relations
       controlled_field_helper_gaps:
         - field_path: expression_experiment.detection_reagents
           status: under_development
@@ -822,6 +799,7 @@ object_definitions:
         display_name: Expression assay CURIE
         required: true
         metadata:
+          render_as: curie-chip
           editable: true
           validatable: true
           validator_binding_id: expression_assay_ontology_validation
@@ -1046,6 +1024,8 @@ object_definitions:
         display_name: Condition relations
         model_ref: ConditionRelationPayload
         metadata:
+          render_as: sub-table
+          hide_when_empty: true
           multivalued: true
           definition_state_category: complete
           provider_refs:
@@ -1385,6 +1365,7 @@ object_definitions:
         field_type: string
         display_name: Developmental stage start CURIE
         metadata:
+          render_as: curie-chip
           editable: true
           validatable: true
           validator_binding_id: expression_stage_ontology_validation
@@ -1424,6 +1405,8 @@ object_definitions:
         display_name: Stage UBERON slim terms
         model_ref: OntologyTermSnapshotPayload
         metadata:
+          render_as: chip
+          hide_when_empty: true
           validatable: true
           validator_binding_id: expression_stage_uberon_slim_validation
           validator_state: active
@@ -1585,6 +1568,7 @@ object_definitions:
         field_type: string
         display_name: Anatomical structure CURIE
         metadata:
+          render_as: curie-chip
           editable: true
           validatable: true
           validator_binding_id: expression_anatomical_structure_validation
@@ -1624,6 +1608,8 @@ object_definitions:
         display_name: Anatomical structure UBERON slim terms
         model_ref: OntologyTermSnapshotPayload
         metadata:
+          render_as: chip
+          hide_when_empty: true
           validatable: true
           validator_binding_id: expression_anatomical_uberon_slim_validation
           validator_state: active
@@ -1740,6 +1726,7 @@ object_definitions:
         field_type: string
         display_name: Cellular component CURIE
         metadata:
+          render_as: curie-chip
           editable: true
           validatable: true
           validator_binding_id: expression_cellular_component_validation
@@ -1779,6 +1766,8 @@ object_definitions:
         display_name: Cellular component qualifiers
         model_ref: OntologyTermSnapshotPayload
         metadata:
+          render_as: chip
+          hide_when_empty: true
           validatable: true
           validator_binding_id: expression_cellular_component_qualifier_validation
           validator_state: active

@@ -181,6 +181,30 @@ object_definitions:
       object_role: curatable_unit
       association_kind: phenotype_assertion
       semantic_source: domain_envelope.objects
+      workspace_display:
+        primary_label_field: phenotype_terms[0].label
+        secondary_label_field: phenotype_annotation_object
+        summary_fields:
+          - phenotype_terms[0].label
+          - phenotype_annotation_object
+        groups:
+          - id: statement
+            label: Phenotype statement
+            fields:
+              - phenotype_annotation_object
+              - negated
+          - id: term
+            label: Phenotype term
+            fields:
+              - phenotype_terms[0].curie
+          - id: subject
+            label: Subject
+            fields:
+              - phenotype_annotation_subject
+          - id: conditions
+            label: Experimental conditions
+            fields:
+              - condition_relations
       export_behavior:
         status: blocked
         exportable: false
@@ -227,6 +251,7 @@ object_definitions:
         required: true
         object_type_ref: PhenotypeSubject
         metadata:
+          render_as: chip
           validator_binding_id: phenotype_subject_entity_validator
           editable: true
           source_of_truth: alliance_linkml
@@ -248,6 +273,7 @@ object_definitions:
         required: true
         object_type_ref: PhenotypeTerm
         metadata:
+          render_as: term-chip
           validator_binding_id: phenotype_term_ontology_validator
           editable: true
           source_of_truth: alliance_linkml
@@ -388,6 +414,8 @@ object_definitions:
         display_name: Condition relations
         model_ref: ConditionRelationPayload
         metadata:
+          render_as: sub-table
+          hide_when_empty: true
           multivalued: true
           definition_state_category: complete
           provider_refs:
@@ -608,6 +636,17 @@ object_definitions:
       object_role: validated_reference
       validation_state: pending_entity_resolution
       validator_binding_id: phenotype_subject_entity_validator
+      workspace_display:
+        summary_fields:
+          - subject_label
+        groups:
+          - id: identity
+            label: Subject identity
+            fields:
+              - subject_identifier
+              - taxon
+              - subject_label
+              - subject_type
       provider_refs:
         alliance_linkml:
           schema_ref: alliance.linkml

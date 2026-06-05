@@ -129,7 +129,22 @@ def test_gene_mention_evidence_is_exporting_validated_reference():
     workspace_display = object_metadata["workspace_display"]
     assert workspace_display["primary_label_field"] == "mention"
     assert workspace_display["secondary_label_field"] == "gene_symbol"
-    assert workspace_display["evidence_quote_field"] == "verified_quote"
+    assert workspace_display["summary_fields"] == [
+        "gene_symbol",
+        "primary_external_id",
+        "taxon",
+    ]
+    assert [group["id"] for group in workspace_display["groups"]] == [
+        "identity",
+        "ai_proposal",
+        "evidence_location",
+        "provenance",
+    ]
+    assert "verified_quote" not in {
+        field
+        for group in workspace_display["groups"]
+        for field in group["fields"]
+    }
 
 
 def test_gene_validator_prompt_matches_scalar_materialization_contract():

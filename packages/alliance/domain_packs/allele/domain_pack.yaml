@@ -109,6 +109,14 @@ object_definitions:
     metadata:
       object_role: curatable_unit
       association_kind: allele_paper_evidence
+      workspace_display:
+        summary_fields:
+          - allele_identifier
+        groups:
+          - id: allele
+            label: Allele
+            fields:
+              - allele_identifier
       export_behavior:
         status: blocked
         mode: verified_association_targets_only
@@ -190,6 +198,7 @@ object_definitions:
         display_name: Allele identifier
         required: false
         metadata:
+          render_as: chip
           validation_result_binding_id: allele_mention_reference_validation
           validation_result_field: curie
           provider_refs:
@@ -223,6 +232,17 @@ object_definitions:
     definition_state: in_development
     metadata:
       object_role: validated_reference
+      workspace_display:
+        summary_fields:
+          - allele_symbol
+          - primary_external_id
+        groups:
+          - id: identity
+            label: Identity
+            fields:
+              - allele_symbol
+              - primary_external_id
+              - taxon
       provider_refs:
         alliance_linkml:
           schema_ref: alliance.linkml
