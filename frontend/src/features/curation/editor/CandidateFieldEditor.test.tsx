@@ -415,6 +415,32 @@ describe('CandidateFieldEditor', () => {
     expect(screen.queryByText('Legacy validation warning.')).not.toBeInTheDocument()
   })
 
+  it('floats needs-review fields and counts them from envelope summaries', () => {
+    renderEditor()
+
+    expect(screen.getByTestId('field-section-needs-review-details')).toHaveTextContent(
+      '2 need review',
+    )
+    expect(screen.getByTestId('field-state-indicator-field_symbol')).toHaveAccessibleName(
+      'Needs review',
+    )
+    expect(screen.getByTestId('field-state-indicator-field_score')).toHaveAccessibleName(
+      'Needs review',
+    )
+    expect(screen.getByTestId('field-state-indicator-field_label')).toHaveAccessibleName(
+      'Resolved',
+    )
+
+    const fieldRows = screen.getAllByTestId(/^field-row-/)
+    expect(fieldRows.map((row) => row.getAttribute('data-field-key'))).toEqual([
+      'field_symbol',
+      'field_score',
+      'field_curie',
+      'field_label',
+      'field_override',
+    ])
+  })
+
   it('displays under-development validator metadata without validation findings', () => {
     const workspace = buildWorkspace()
     const candidate = workspace.candidates[0]!

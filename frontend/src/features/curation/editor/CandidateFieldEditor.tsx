@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
 import HighlightOffIcon from '@mui/icons-material/HighlightOff'
+import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked'
 import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined'
 import {
   Alert,
@@ -46,6 +48,11 @@ import {
   mergeSavedDraftIntoWorkspace,
   resolveEnvelopeFieldPath,
 } from '@/features/curation/workspace/workspaceState'
+import {
+  fieldState,
+  sortFieldsNeedsReviewFirst,
+  type FieldStateKind,
+} from './fieldState'
 import FieldRow from './FieldRow'
 
 interface FieldSection {
@@ -53,6 +60,7 @@ interface FieldSection {
   label: string
   order: number
   fields: CurationDraftField[]
+  needsReviewCount: number
 }
 
 interface StatusPresentation {
@@ -192,6 +200,7 @@ function buildSections(fields: CurationDraftField[]): FieldSection[] {
         label: groupLabel(field),
         order: field.order,
         fields: [field],
+        needsReviewCount: 0,
       })
       continue
     }
@@ -281,6 +290,36 @@ function objectValidationSummaries(
 
   return (candidate.validation_summary_projections ?? []).filter((summary) =>
     !summary.field_path && isProjectionForCandidate(candidate, summary.object_id))
+}
+
+function sectionWithFieldState(
+  section: FieldSection,
+  candidate: CurationCandidate,
+): FieldSection {
+  const summariesForField = (field: CurationDraftField) =>
+    validationSummariesForField(candidate, field)
+  const fields = sortFieldsNeedsReviewFirst(section.fields, summariesForField)
+  const needsReviewCount = fields.filter((field) =>
+    fieldState(field, summariesForField(field)) === 'needs-review').length
+
+  return {
+    ...section,
+    fields,
+    needsReviewCount,
+  }
+}
+
+function sectionsWithFieldState(
+  fields: CurationDraftField[],
+  candidate: CurationCandidate | null,
+): FieldSection[] {
+  const sections = buildSections(fields)
+
+  if (!candidate) {
+    return sections
+  }
+
+  return sections.map((section) => sectionWithFieldState(section, candidate))
 }
 
 function evidenceProjectionsForField(
@@ -401,6 +440,65 @@ function FieldValidationSlot({
         </Tooltip>
       ) : null}
     </Stack>
+  )
+}
+
+function FieldStateIndicator({
+  fieldKey,
+  state,
+}: {
+  fieldKey: string
+  state: FieldStateKind
+}) {
+  const theme = useTheme()
+  const presentation = {
+    'needs-review': {
+      label: 'Needs review',
+      color: theme.palette.warning.main,
+      backgroundColor: alpha(theme.palette.warning.main, 0.12),
+      icon: <ErrorOutlineIcon fontSize="small" />,
+    },
+    resolved: {
+      label: 'Resolved',
+      color: theme.palette.success.main,
+      backgroundColor: alpha(theme.palette.success.main, 0.12),
+      icon: <CheckCircleOutlineIcon fontSize="small" />,
+    },
+    'ai-unconfirmed': {
+      label: 'AI unconfirmed',
+      color: theme.palette.text.secondary,
+      backgroundColor: alpha(theme.palette.common.white, 0.06),
+      icon: <RadioButtonUncheckedIcon fontSize="small" />,
+    },
+  } satisfies Record<FieldStateKind, {
+    label: string
+    color: string
+    backgroundColor: string
+    icon: JSX.Element
+  }>
+  const current = presentation[state]
+
+  return (
+    <Tooltip arrow title={current.label}>
+      <Box
+        aria-label={current.label}
+        data-testid={`field-state-indicator-${fieldKey}`}
+        role="img"
+        sx={{
+          alignItems: 'center',
+          backgroundColor: current.backgroundColor,
+          borderRadius: 1,
+          color: current.color,
+          display: 'inline-flex',
+          height: 24,
+          justifyContent: 'center',
+          mt: 0.35,
+          width: 24,
+        }}
+      >
+        {current.icon}
+      </Box>
+    </Tooltip>
   )
 }
 
@@ -739,12 +837,12 @@ export default function CandidateFieldEditor({
     [activeCandidate?.draft.fields],
   )
   const sections = useMemo(
-    () => buildSections(curatorFields),
-    [curatorFields],
+    () => sectionsWithFieldState(curatorFields, activeCandidate),
+    [activeCandidate, curatorFields],
   )
   const technicalSections = useMemo(
-    () => buildSections(technicalFields),
-    [technicalFields],
+    () => sectionsWithFieldState(technicalFields, activeCandidate),
+    [activeCandidate, technicalFields],
   )
   const objectSummaries = useMemo(
     () => objectValidationSummaries(activeCandidate),
@@ -954,6 +1052,24 @@ export default function CandidateFieldEditor({
             >
               {section.label}
             </Typography>
+            {section.needsReviewCount > 0 ? (
+              <Chip
+                color="warning"
+                data-testid={`field-section-needs-review-${section.key}`}
+                label={`${section.needsReviewCount} ${section.needsReviewCount === 1 ? 'needs' : 'need'} review`}
+                size="small"
+                sx={{
+                  borderRadius: 1,
+                  height: 22,
+                  '& .MuiChip-label': {
+                    fontSize: '0.68rem',
+                    fontWeight: 700,
+                    px: 0.75,
+                  },
+                }}
+                variant="outlined"
+              />
+            ) : null}
             <Box
               sx={(theme) => ({
                 backgroundColor: alpha(theme.palette.common.white, 0.07),
@@ -965,9 +1081,20 @@ export default function CandidateFieldEditor({
           <Stack spacing={0.5}>
             {section.fields.map((field) => {
               const history = fieldPatchHistory(workspace.action_log, activeCandidate, field)
+              const summaries = validationSummariesForField(activeCandidate, field)
+              const state = fieldState(field, summaries)
 
               return (
-                <Box key={field.field_key}>
+                <Box
+                  key={field.field_key}
+                  sx={{
+                    alignItems: 'flex-start',
+                    display: 'grid',
+                    gap: 0.75,
+                    gridTemplateColumns: '24px minmax(0, 1fr)',
+                  }}
+                >
+                  <FieldStateIndicator fieldKey={field.field_key} state={state} />
                   <FieldRow
                     evidenceSlot={(
                       <FieldEvidenceSlot
@@ -1006,7 +1133,7 @@ export default function CandidateFieldEditor({
                     validationSlot={(
                       <FieldValidationSlot
                         field={field}
-                        summaries={validationSummariesForField(activeCandidate, field)}
+                        summaries={summaries}
                         unavailableCapabilities={unavailableCapabilitiesForField(field)}
                       />
                     )}
@@ -1048,9 +1175,20 @@ export default function CandidateFieldEditor({
           <Stack spacing={0.5} sx={{ mt: 1 }}>
             {technicalSections.flatMap((section) => section.fields).map((field) => {
               const history = fieldPatchHistory(workspace.action_log, activeCandidate, field)
+              const summaries = validationSummariesForField(activeCandidate, field)
+              const state = fieldState(field, summaries)
 
               return (
-                <Box key={field.field_key}>
+                <Box
+                  key={field.field_key}
+                  sx={{
+                    alignItems: 'flex-start',
+                    display: 'grid',
+                    gap: 0.75,
+                    gridTemplateColumns: '24px minmax(0, 1fr)',
+                  }}
+                >
+                  <FieldStateIndicator fieldKey={field.field_key} state={state} />
                   <FieldRow
                     labelSubtitleSlot={(
                       <FieldSupportDetails
@@ -1089,7 +1227,7 @@ export default function CandidateFieldEditor({
                     validationSlot={(
                       <FieldValidationSlot
                         field={field}
-                        summaries={validationSummariesForField(activeCandidate, field)}
+                        summaries={summaries}
                         unavailableCapabilities={unavailableCapabilitiesForField(field)}
                       />
                     )}
