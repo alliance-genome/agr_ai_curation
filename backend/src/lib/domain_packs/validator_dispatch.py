@@ -25,6 +25,7 @@ from src.schemas.domain_envelope import (
 from src.schemas.domain_validator import (
     DomainValidationRequest,
     DomainValidatorResultBase,
+    ValidatorLookupAttempt,
     is_domain_validator_result_schema,
 )
 
@@ -124,6 +125,33 @@ class _ValidatorRunGroupResult:
     validator_agent_run_count: int
     batch_validator_run_count: int
     batch_summaries: tuple[dict[str, Any], ...] = ()
+
+
+@dataclass
+class _ValidatorFinalizationState:
+    accepted_result: DomainValidatorResultBase | None = None
+    accepted_results: tuple[DomainValidatorResultBase, ...] = ()
+
+
+@dataclass(frozen=True)
+class _ValidatorFinalizationFeedback:
+    accepted_result: DomainValidatorResultBase | None
+    message: str
+    accepted_results: tuple[DomainValidatorResultBase, ...] = ()
+    repair_instructions: tuple[str, ...] = ()
+    result_errors: tuple[dict[str, Any], ...] = ()
+
+
+@dataclass(frozen=True)
+class _ValidatorAgentRunOutput:
+    raw_output: Any
+    accepted_result: DomainValidatorResultBase
+
+
+@dataclass(frozen=True)
+class _ValidatorBatchAgentRunOutput:
+    raw_output: Any
+    accepted_results: tuple[DomainValidatorResultBase, ...]
 
 
 def dispatch_active_validator_bindings(
@@ -640,10 +668,13 @@ def _run_single_validator_job(
         raw_output = agent_runner(request, binding=job.match.binding)
         runner_duration_seconds = time.monotonic() - runner_started_at
         validation_started_at = time.monotonic()
-        validator_result = _validated_result_from_agent_output(
-            raw_output,
-            request=request,
-        )
+        if isinstance(raw_output, _ValidatorAgentRunOutput):
+            validator_result = raw_output.accepted_result
+        else:
+            validator_result = _validated_result_from_agent_output(
+                raw_output,
+                request=request,
+            )
         output_validation_duration_seconds = time.monotonic() - validation_started_at
         LOGGER.info(
             "Package-scoped validator agent completed for binding %s request %s "
@@ -744,7 +775,7 @@ def run_package_scoped_validator_agent(
 ) -> Any:
     """Execute the package-owned validator through the unified agent runtime."""
 
-    from agents import AgentOutputSchema, Runner
+    from agents import AgentOutputSchema, Runner, function_tool
 
     from src.lib.agent_studio.catalog_service import get_agent_by_id
     from src.lib.config.agent_loader import (
@@ -763,20 +794,32 @@ def run_package_scoped_validator_agent(
         )
 
     agent = get_agent_by_id(canonical_system_agent_key(agent_definition))
+    finalization_state = _ValidatorFinalizationState()
+    agent = _copy_agent_for_validator_runtime(agent)
     output_type = getattr(agent, "output_type", None)
     if is_domain_validator_result_schema(output_type):
-        runtime_agent = copy.copy(agent)
-        runtime_agent.output_type = AgentOutputSchema(
+        agent.output_type = AgentOutputSchema(
             output_type,
             strict_json_schema=False,
         )
-        agent = runtime_agent
+    agent.tools = [
+        *list(getattr(agent, "tools", []) or []),
+        _build_finalize_validator_result_tool(
+            request,
+            finalization_state=finalization_state,
+            function_tool_factory=function_tool,
+        ),
+    ]
+    _append_validator_finalization_instructions(agent, batch=False)
 
     payload = json.dumps(request.model_dump(mode="json"), sort_keys=True)
     if hasattr(Runner, "run_sync"):
         run_kwargs: dict[str, Any] = {"input": payload}
         if binding.max_tool_calls is not None:
-            run_kwargs["max_turns"] = binding.max_tool_calls
+            run_kwargs["max_turns"] = _max_turns_with_validator_finalization(
+                binding.max_tool_calls,
+                minimum=4,
+            )
         run_started_at = time.monotonic()
         try:
             result = Runner.run_sync(agent, **run_kwargs)
@@ -802,7 +845,15 @@ def run_package_scoped_validator_agent(
             time.monotonic() - run_started_at,
             len(payload),
         )
-        return result
+        if finalization_state.accepted_result is not None:
+            return _ValidatorAgentRunOutput(
+                raw_output=result,
+                accepted_result=finalization_state.accepted_result,
+            )
+        raise ValueError(
+            "Validator agent did not complete mandatory finalize_validator_result "
+            "tool call with status accepted."
+        )
     raise RuntimeError("OpenAI Agents Runner.run_sync is unavailable")
 
 
@@ -813,7 +864,7 @@ def run_package_scoped_validator_agent_batch(
 ) -> Any:
     """Execute one package validator batch through the unified agent runtime."""
 
-    from agents import AgentOutputSchema, Runner
+    from agents import AgentOutputSchema, Runner, function_tool
 
     from src.lib.agent_studio.catalog_service import get_agent_by_id
     from src.lib.config.agent_loader import (
@@ -840,15 +891,24 @@ def run_package_scoped_validator_agent_batch(
         )
 
     agent = get_agent_by_id(canonical_system_agent_key(agent_definition))
+    finalization_state = _ValidatorFinalizationState()
+    agent = _copy_agent_for_validator_runtime(agent)
     output_type = getattr(agent, "output_type", None)
     batch_output_type = _batch_output_schema_for_agent_output(output_type)
     if batch_output_type is not None:
-        runtime_agent = copy.copy(agent)
-        runtime_agent.output_type = AgentOutputSchema(
+        agent.output_type = AgentOutputSchema(
             batch_output_type,
             strict_json_schema=False,
         )
-        agent = runtime_agent
+    agent.tools = [
+        *list(getattr(agent, "tools", []) or []),
+        _build_finalize_validator_batch_results_tool(
+            jobs,
+            finalization_state=finalization_state,
+            function_tool_factory=function_tool,
+        ),
+    ]
+    _append_validator_finalization_instructions(agent, batch=True)
 
     payload = json.dumps(
         {
@@ -874,7 +934,10 @@ def run_package_scoped_validator_agent_batch(
     if hasattr(Runner, "run_sync"):
         run_kwargs: dict[str, Any] = {"input": payload}
         if binding.max_tool_calls is not None:
-            run_kwargs["max_turns"] = max(binding.max_tool_calls, len(jobs) + 1)
+            run_kwargs["max_turns"] = _max_turns_with_validator_finalization(
+                max(binding.max_tool_calls, len(jobs) + 1),
+                minimum=len(jobs) + 3,
+            )
         run_started_at = time.monotonic()
         try:
             result = Runner.run_sync(agent, **run_kwargs)
@@ -900,8 +963,345 @@ def run_package_scoped_validator_agent_batch(
             time.monotonic() - run_started_at,
             len(payload),
         )
-        return result
+        if finalization_state.accepted_results:
+            return _ValidatorBatchAgentRunOutput(
+                raw_output=result,
+                accepted_results=finalization_state.accepted_results,
+            )
+        raise ValueError(
+            "Validator batch agent did not complete mandatory "
+            "finalize_validator_batch_results tool call with status accepted."
+        )
     raise RuntimeError("OpenAI Agents Runner.run_sync is unavailable")
+
+
+def _copy_agent_for_validator_runtime(agent: Any) -> Any:
+    runtime_agent = copy.copy(agent)
+    runtime_agent.tools = list(getattr(agent, "tools", []) or [])
+    return runtime_agent
+
+
+def _append_validator_finalization_instructions(agent: Any, *, batch: bool) -> None:
+    tool_name = (
+        "finalize_validator_batch_results" if batch else "finalize_validator_result"
+    )
+    result_shape = (
+        "the complete results array" if batch else "the complete validator result"
+    )
+    instruction_block = (
+        "Validator finalization is mandatory. Before your final answer, call "
+        f"`{tool_name}` with {result_shape} you intend to return. If the tool "
+        "returns `status: rejected`, repair only the reported issue(s), call the "
+        "finalization tool again, and do not send the final answer until the "
+        "tool returns `status: accepted`. After acceptance, return the accepted "
+        "validator result payload as your final structured output. The backend "
+        "rejects validator runs that do not complete this tool with "
+        "`status: accepted`."
+    )
+    instructions = getattr(agent, "instructions", None)
+    if instructions is None:
+        agent.instructions = instruction_block
+    elif isinstance(instructions, str):
+        agent.instructions = f"{instructions.rstrip()}\n\n{instruction_block}"
+    else:
+        LOGGER.debug(
+            "Skipping validator finalization instruction append for non-string "
+            "instructions on agent %r",
+            getattr(agent, "name", None),
+        )
+
+
+def _max_turns_with_validator_finalization(
+    max_tool_calls: int,
+    *,
+    minimum: int,
+) -> int:
+    return max(max_tool_calls + 2, minimum)
+
+
+def _build_finalize_validator_result_tool(
+    request: DomainValidationRequest,
+    *,
+    finalization_state: _ValidatorFinalizationState,
+    function_tool_factory: Any,
+) -> Any:
+    @function_tool_factory(name_override="finalize_validator_result", strict_mode=False)
+    def finalize_validator_result(result: dict[str, Any]) -> dict[str, Any]:
+        """Validate the final DomainValidatorResultBase before answering."""
+
+        feedback = _validator_result_finalization_feedback(
+            result,
+            request=request,
+        )
+        if feedback.accepted_result is not None:
+            finalization_state.accepted_result = feedback.accepted_result
+        else:
+            finalization_state.accepted_result = None
+        return _validator_finalization_tool_payload(feedback)
+
+    return finalize_validator_result
+
+
+def _build_finalize_validator_batch_results_tool(
+    jobs: list[_DispatchJob],
+    *,
+    finalization_state: _ValidatorFinalizationState,
+    function_tool_factory: Any,
+) -> Any:
+    @function_tool_factory(
+        name_override="finalize_validator_batch_results",
+        strict_mode=False,
+    )
+    def finalize_validator_batch_results(
+        results: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Validate the final batch results before answering."""
+
+        feedback = _validator_batch_results_finalization_feedback(
+            results,
+            jobs=jobs,
+        )
+        if feedback.accepted_results:
+            finalization_state.accepted_results = feedback.accepted_results
+        else:
+            finalization_state.accepted_results = ()
+        return _validator_finalization_tool_payload(feedback)
+
+    return finalize_validator_batch_results
+
+
+def _validator_result_finalization_feedback(
+    raw_result: Any,
+    *,
+    request: DomainValidationRequest,
+) -> _ValidatorFinalizationFeedback:
+    try:
+        payload = _extract_structured_output(raw_result)
+        result = DomainValidatorResultBase.model_validate(payload)
+    except ValidationError as exc:
+        message = (
+            "Validator result rejected: incompatible DomainValidatorResultBase "
+            f"schema ({_validation_error_summary(exc)})."
+        )
+        return _ValidatorFinalizationFeedback(
+            accepted_result=None,
+            message=message,
+            repair_instructions=_validator_repair_instructions(message),
+        )
+
+    expected_agent = request.validator_agent.model_dump(mode="json")
+    if (
+        result.request_id != request.request_id
+        or result.validator_binding_id != request.validator_binding_id
+        or result.validator_agent.model_dump(mode="json") != expected_agent
+        or not _validator_result_target_matches_request_identity(
+            result,
+            request=request,
+        )
+    ):
+        message = (
+            "Validator result rejected: request_id, validator_binding_id, "
+            "validator_agent, and target must exactly match this "
+            "DomainValidationRequest."
+        )
+        return _ValidatorFinalizationFeedback(
+            accepted_result=None,
+            message=message,
+            repair_instructions=_validator_repair_instructions(message),
+        )
+
+    normalized = result.model_copy(
+        update={
+            "request_id": request.request_id,
+            "validator_binding_id": request.validator_binding_id,
+            "validator_agent": request.validator_agent,
+            "target": request.target,
+        }
+    )
+    expected_result = _enforce_expected_result_fields(
+        normalized,
+        request=request,
+    )
+    if normalized.status == "resolved" and expected_result.status != "resolved":
+        message = f"Validator result rejected: {expected_result.explanation}."
+        return _ValidatorFinalizationFeedback(
+            accepted_result=None,
+            message=message,
+            repair_instructions=_validator_repair_instructions(message),
+        )
+
+    classifiability_error = _validator_result_classifiability_error(expected_result)
+    if classifiability_error is not None:
+        message = (
+            "Validator result rejected: incompatible validator outcome "
+            f"({classifiability_error})."
+        )
+        return _ValidatorFinalizationFeedback(
+            accepted_result=None,
+            message=message,
+            repair_instructions=_validator_repair_instructions(message),
+        )
+
+    return _ValidatorFinalizationFeedback(
+        accepted_result=expected_result,
+        message="Validator result accepted.",
+    )
+
+
+def _validator_batch_results_finalization_feedback(
+    raw_results: Any,
+    *,
+    jobs: list[_DispatchJob],
+) -> _ValidatorFinalizationFeedback:
+    if not isinstance(raw_results, list):
+        message = (
+            "Validator batch rejected: pass a results list with exactly one "
+            "DomainValidatorResultBase-compatible result per request."
+        )
+        return _ValidatorFinalizationFeedback(
+            accepted_result=None,
+            message=message,
+            repair_instructions=_validator_repair_instructions(message),
+        )
+
+    expected_request_ids = {job.request.request_id for job in jobs}
+    raw_result_by_request_id: dict[str, Any] = {}
+    duplicate_request_ids: set[str] = set()
+    unexpected_request_ids: list[str] = []
+    for raw_result in raw_results:
+        request_id = _raw_result_request_id(raw_result)
+        if request_id is None:
+            unexpected_request_ids.append("<missing>")
+            continue
+        if request_id not in expected_request_ids:
+            unexpected_request_ids.append(request_id)
+            continue
+        if request_id in raw_result_by_request_id:
+            duplicate_request_ids.add(request_id)
+            continue
+        raw_result_by_request_id[request_id] = raw_result
+
+    result_errors: list[dict[str, Any]] = []
+    if unexpected_request_ids:
+        result_errors.append(
+            {
+                "request_id": None,
+                "message": (
+                    "Unexpected request_id value(s): "
+                    + ", ".join(sorted(unexpected_request_ids))
+                ),
+            }
+        )
+
+    accepted_results: list[DomainValidatorResultBase] = []
+    for job in jobs:
+        request = job.request
+        raw_result = raw_result_by_request_id.get(request.request_id)
+        if raw_result is None:
+            result_errors.append(
+                {
+                    "request_id": request.request_id,
+                    "message": "Missing result for this request_id.",
+                }
+            )
+            continue
+        if request.request_id in duplicate_request_ids:
+            result_errors.append(
+                {
+                    "request_id": request.request_id,
+                    "message": "Duplicate results for this request_id.",
+                }
+            )
+            continue
+        feedback = _validator_result_finalization_feedback(
+            raw_result,
+            request=request,
+        )
+        if feedback.accepted_result is None:
+            result_errors.append(
+                {
+                    "request_id": request.request_id,
+                    "message": feedback.message,
+                    "repair_instructions": list(feedback.repair_instructions),
+                }
+            )
+            continue
+        accepted_results.append(feedback.accepted_result)
+
+    if result_errors:
+        message = (
+            "Validator batch rejected: repair the listed result(s), then call "
+            "finalize_validator_batch_results again."
+        )
+        return _ValidatorFinalizationFeedback(
+            accepted_result=None,
+            message=message,
+            repair_instructions=_validator_repair_instructions(message),
+            result_errors=tuple(result_errors),
+        )
+
+    return _ValidatorFinalizationFeedback(
+        accepted_result=None,
+        message="Validator batch results accepted.",
+        accepted_results=tuple(accepted_results),
+    )
+
+
+def _validator_finalization_tool_payload(
+    feedback: _ValidatorFinalizationFeedback,
+) -> dict[str, Any]:
+    accepted = feedback.accepted_result is not None or bool(feedback.accepted_results)
+    payload: dict[str, Any] = {
+        "status": "accepted" if accepted else "rejected",
+        "message": feedback.message,
+    }
+    if feedback.accepted_result is not None:
+        payload["validator_result"] = feedback.accepted_result.model_dump(mode="json")
+    elif feedback.accepted_results:
+        payload["validator_results"] = [
+            result.model_dump(mode="json") for result in feedback.accepted_results
+        ]
+    else:
+        payload["repair_instructions"] = list(feedback.repair_instructions)
+        if feedback.result_errors:
+            payload["result_errors"] = list(feedback.result_errors)
+    return payload
+
+
+def _validator_repair_instructions(message: str) -> tuple[str, ...]:
+    instructions = [
+        "Return exactly the DomainValidatorResultBase fields required by the schema.",
+        (
+            "Copy request_id, validator_binding_id, validator_agent, and target "
+            "exactly from the DomainValidationRequest."
+        ),
+    ]
+    if "successful lookup_attempt" in message or "lookup_attempt" in message:
+        instructions.append(
+            "For status resolved, include at least one lookup_attempt with "
+            'outcome "success" that records the supporting lookup call.'
+        )
+        instructions.append(
+            "If no successful lookup supports the resolution, change status to "
+            "unresolved and preserve the failed or ambiguous lookup attempt."
+        )
+    if "expected resolved field" in message or "expected field" in message:
+        instructions.append(
+            "If the evidence resolves the expected field, add the missing "
+            "resolved_values entry; otherwise return status unresolved and list "
+            "the field in missing_expected_fields."
+        )
+    return tuple(instructions)
+
+
+def _validation_error_summary(exc: ValidationError) -> str:
+    errors = []
+    for error in exc.errors()[:5]:
+        loc = ".".join(str(part) for part in error.get("loc", ())) or "<root>"
+        errors.append(f"{loc}: {error.get('msg')}")
+    if len(exc.errors()) > 5:
+        errors.append(f"{len(exc.errors()) - 5} more error(s)")
+    return "; ".join(errors)
 
 
 def _batch_output_schema_for_agent_output(output_type: Any) -> type[BaseModel] | None:
@@ -988,6 +1388,8 @@ def _validated_result_from_agent_output(
     *,
     request: DomainValidationRequest,
 ) -> DomainValidatorResultBase:
+    if isinstance(raw_output, _ValidatorAgentRunOutput):
+        return raw_output.accepted_result
     payload = _extract_structured_output(raw_output)
     try:
         result = DomainValidatorResultBase.model_validate(payload)
@@ -1036,6 +1438,8 @@ def _validated_results_from_agent_batch_output(
     *,
     jobs: list[_DispatchJob],
 ) -> list[DomainValidatorResultBase]:
+    if isinstance(raw_output, _ValidatorBatchAgentRunOutput):
+        return list(raw_output.accepted_results)
     raw_results = _extract_batch_structured_outputs(raw_output)
     if not isinstance(raw_results, list):
         return [
@@ -1149,6 +1553,10 @@ def _target_identity_payload(target: Any) -> dict[str, Any]:
 
 def _extract_structured_output(raw_output: Any) -> Any:
     output = raw_output
+    if isinstance(output, _ValidatorAgentRunOutput):
+        output = output.raw_output
+    if isinstance(output, _ValidatorBatchAgentRunOutput):
+        output = output.raw_output
     # Support OpenAI SDK run results, Pydantic models, and lightweight fake runners.
     if hasattr(output, "final_output"):
         output = output.final_output
@@ -1164,6 +1572,10 @@ def _extract_structured_output(raw_output: Any) -> Any:
 
 def _extract_batch_structured_outputs(raw_output: Any) -> Any:
     output = raw_output
+    if isinstance(output, _ValidatorAgentRunOutput):
+        output = output.raw_output
+    if isinstance(output, _ValidatorBatchAgentRunOutput):
+        output = output.raw_output
     if hasattr(output, "final_output"):
         output = output.final_output
     if isinstance(output, list):
@@ -1322,17 +1734,17 @@ def _unresolved_result_for_dispatch_problem(
         missing_expected_fields=list(request.expected_result_fields),
         candidates=[],
         lookup_attempts=[
-            {
-                "provider": "domain_validator_dispatch",
-                "method": reason,
-                "query": {
+            ValidatorLookupAttempt(
+                provider="domain_validator_dispatch",
+                method=reason,
+                query={
                     "request_id": request.request_id,
                     "selected_inputs": dict(request.selected_inputs),
                 },
-                "result_count": 0,
-                "outcome": "error",
-                "message": explanation,
-            }
+                result_count=0,
+                outcome="error",
+                message=explanation,
+            )
         ],
         curator_message=explanation,
         explanation=explanation,
@@ -1370,14 +1782,14 @@ def preflight_unresolved_validator_result(
         missing_expected_fields=[],
         candidates=[],
         lookup_attempts=[
-            {
-                "provider": "domain_validator_dispatch",
-                "method": "unsupported_provider_taxon_mapping",
-                "query": query,
-                "result_count": 0,
-                "outcome": "blocked",
-                "message": explanation,
-            }
+            ValidatorLookupAttempt(
+                provider="domain_validator_dispatch",
+                method="unsupported_provider_taxon_mapping",
+                query=query,
+                result_count=0,
+                outcome="blocked",
+                message=explanation,
+            )
         ],
         curator_message=explanation,
         explanation=explanation,
@@ -1501,6 +1913,22 @@ def _ensure_classifiable_validator_result(
     *,
     request: DomainValidationRequest,
 ) -> DomainValidatorResultBase:
+    classifiability_error = _validator_result_classifiability_error(result)
+    if classifiability_error is not None:
+        return _unresolved_result_for_dispatch_problem(
+            request,
+            reason="invalid_schema",
+            explanation=(
+                "Validator agent returned incompatible output: "
+                f"{classifiability_error}"
+            ),
+        )
+    return result
+
+
+def _validator_result_classifiability_error(
+    result: DomainValidatorResultBase,
+) -> str | None:
     try:
         for attempt in result.lookup_attempts:
             lookup_status_for_validator_outcome(attempt.outcome)
@@ -1509,17 +1937,13 @@ def _ensure_classifiable_validator_result(
         ):
             raise ValueError(
                 "Resolved validator result must include at least one successful "
-                "lookup_attempt or explicit non-lookup validation attempt"
+                "lookup_attempt"
             )
         if result.status == "unresolved":
             validator_failure_classification(result)
     except ValueError as exc:
-        return _unresolved_result_for_dispatch_problem(
-            request,
-            reason="invalid_schema",
-            explanation=f"Validator agent returned incompatible output: {exc}",
-        )
-    return result
+        return str(exc)
+    return None
 
 
 def _ordered_matches(

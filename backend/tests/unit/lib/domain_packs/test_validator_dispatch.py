@@ -8,7 +8,7 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -16,6 +16,9 @@ from src.lib.config.agent_loader import AgentDefinition
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validator_dispatch import (
+    _validated_results_from_agent_batch_output,
+    _validator_finalization_tool_payload,
+    _validator_result_finalization_feedback,
     dispatch_active_validator_bindings,
     run_package_scoped_validator_agent_batch,
     run_package_scoped_validator_agent,
@@ -1865,10 +1868,17 @@ def test_ambiguous_optional_selector_still_blocks_dispatch(tmp_path: Path):
 def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    from agents import AgentOutputSchema
     from packages.alliance.agents.gene.schema import GeneResultEnvelope
+    from src.lib.agent_studio.diagnostic_tools.tool_definitions import (
+        _unwrap_function_tool,
+    )
 
-    source_agent = SimpleNamespace(output_type=GeneResultEnvelope)
+    request = _validation_request()
+    source_agent = SimpleNamespace(
+        output_type=GeneResultEnvelope,
+        tools=[],
+        instructions="Base validator instructions.",
+    )
     captured = {}
 
     monkeypatch.setattr(
@@ -1888,29 +1898,209 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
     def _fake_run_sync(agent, **kwargs):
         captured["agent"] = agent
         captured["kwargs"] = kwargs
+        tool = next(
+            tool for tool in agent.tools if tool.name == "finalize_validator_result"
+        )
+        _unwrap_function_tool(tool)(result=_result_payload(request))
         return {"status": "resolved"}
 
     monkeypatch.setattr("agents.Runner.run_sync", _fake_run_sync)
 
-    binding = SimpleNamespace(max_tool_calls=4)
-    run_package_scoped_validator_agent(_validation_request(), binding=binding)
+    binding = cast(Any, SimpleNamespace(max_tool_calls=4))
+    run_package_scoped_validator_agent(request, binding=binding)
 
     runtime_agent = captured["agent"]
     assert runtime_agent is not source_agent
-    assert isinstance(runtime_agent.output_type, AgentOutputSchema)
+    assert runtime_agent.output_type.__class__.__name__ == "AgentOutputSchema"
     assert runtime_agent.output_type.output_type is GeneResultEnvelope
     assert runtime_agent.output_type.is_strict_json_schema() is False
-    assert captured["kwargs"]["max_turns"] == 4
+    assert [tool.name for tool in runtime_agent.tools] == [
+        "finalize_validator_result"
+    ]
+    assert source_agent.tools == []
+    assert source_agent.instructions == "Base validator instructions."
+    assert "finalize_validator_result" in runtime_agent.instructions
+    assert captured["kwargs"]["max_turns"] == 6
+
+
+def test_validator_finalization_feedback_accepts_valid_result():
+    request = _validation_request()
+
+    feedback = _validator_result_finalization_feedback(
+        _result_payload(request),
+        request=request,
+    )
+    payload = _validator_finalization_tool_payload(feedback)
+
+    assert payload["status"] == "accepted"
+    assert feedback.accepted_result is not None
+    assert payload["validator_result"]["request_id"] == request.request_id
+
+
+def test_validator_finalization_feedback_rejects_resolved_without_success_lookup():
+    request = _validation_request()
+
+    feedback = _validator_result_finalization_feedback(
+        _result_payload(request, outcome="ambiguous"),
+        request=request,
+    )
+    payload = _validator_finalization_tool_payload(feedback)
+
+    assert payload["status"] == "rejected"
+    assert feedback.accepted_result is None
+    assert "successful lookup_attempt" in payload["message"]
+    assert any(
+        'outcome "success"' in instruction
+        for instruction in payload["repair_instructions"]
+    )
+
+
+def test_package_scoped_validator_agent_prefers_accepted_finalization_tool_result(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from packages.alliance.agents.gene.schema import GeneResultEnvelope
+    from src.lib.agent_studio.diagnostic_tools.tool_definitions import (
+        _unwrap_function_tool,
+    )
+
+    request = _validation_request()
+    source_agent = SimpleNamespace(
+        output_type=GeneResultEnvelope,
+        tools=[],
+        instructions="Base validator instructions.",
+    )
+
+    monkeypatch.setattr(
+        "src.lib.config.agent_loader.get_agent_definition_for_package",
+        lambda package_id, agent_id: AgentDefinition(
+            folder_name="gene",
+            agent_id=agent_id,
+            name="Gene Validation",
+            package_id=package_id,
+        ),
+    )
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        lambda agent_key: source_agent,
+    )
+
+    def _fake_run_sync(agent, **kwargs):
+        tool = next(
+            tool for tool in agent.tools if tool.name == "finalize_validator_result"
+        )
+        _unwrap_function_tool(tool)(result=_result_payload(request))
+        return {"status": "resolved"}
+
+    monkeypatch.setattr("agents.Runner.run_sync", _fake_run_sync)
+
+    raw_output = run_package_scoped_validator_agent(
+        request,
+        binding=cast(Any, SimpleNamespace(max_tool_calls=4)),
+    )
+    result = validator_result_from_agent_output(raw_output, request=request)
+
+    assert result.status == "resolved"
+    assert result.resolved_values["identifier"] == "AGR:0001"
+
+
+def test_package_scoped_validator_agent_clears_accepted_result_after_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from packages.alliance.agents.gene.schema import GeneResultEnvelope
+    from src.lib.agent_studio.diagnostic_tools.tool_definitions import (
+        _unwrap_function_tool,
+    )
+
+    request = _validation_request()
+    source_agent = SimpleNamespace(
+        output_type=GeneResultEnvelope,
+        tools=[],
+        instructions="Base validator instructions.",
+    )
+
+    monkeypatch.setattr(
+        "src.lib.config.agent_loader.get_agent_definition_for_package",
+        lambda package_id, agent_id: AgentDefinition(
+            folder_name="gene",
+            agent_id=agent_id,
+            name="Gene Validation",
+            package_id=package_id,
+        ),
+    )
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        lambda agent_key: source_agent,
+    )
+
+    def _fake_run_sync(agent, **kwargs):
+        tool = next(
+            tool for tool in agent.tools if tool.name == "finalize_validator_result"
+        )
+        finalize = _unwrap_function_tool(tool)
+        finalize(result=_result_payload(request))
+        finalize(result=_result_payload(request, outcome="ambiguous"))
+        return _result_payload(request)
+
+    monkeypatch.setattr("agents.Runner.run_sync", _fake_run_sync)
+
+    with pytest.raises(ValueError, match="mandatory finalize_validator_result"):
+        run_package_scoped_validator_agent(
+            request,
+            binding=cast(Any, SimpleNamespace(max_tool_calls=4)),
+        )
+
+
+def test_package_scoped_validator_agent_requires_accepted_finalization_tool(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from packages.alliance.agents.gene.schema import GeneResultEnvelope
+
+    request = _validation_request()
+    source_agent = SimpleNamespace(
+        output_type=GeneResultEnvelope,
+        tools=[],
+        instructions="Base validator instructions.",
+    )
+
+    monkeypatch.setattr(
+        "src.lib.config.agent_loader.get_agent_definition_for_package",
+        lambda package_id, agent_id: AgentDefinition(
+            folder_name="gene",
+            agent_id=agent_id,
+            name="Gene Validation",
+            package_id=package_id,
+        ),
+    )
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        lambda agent_key: source_agent,
+    )
+    monkeypatch.setattr(
+        "agents.Runner.run_sync",
+        lambda agent, **kwargs: _result_payload(request),
+    )
+
+    with pytest.raises(ValueError, match="mandatory finalize_validator_result"):
+        run_package_scoped_validator_agent(
+            request,
+            binding=cast(Any, SimpleNamespace(max_tool_calls=4)),
+        )
 
 
 def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    from agents import AgentOutputSchema
     from packages.alliance.agents.gene.schema import GeneResultEnvelope
+    from src.lib.agent_studio.diagnostic_tools.tool_definitions import (
+        _unwrap_function_tool,
+    )
 
     request = _validation_request()
-    source_agent = SimpleNamespace(output_type=GeneResultEnvelope)
+    source_agent = SimpleNamespace(
+        output_type=GeneResultEnvelope,
+        tools=[],
+        instructions="Base validator instructions.",
+    )
     captured = {}
 
     monkeypatch.setattr(
@@ -1931,21 +2121,31 @@ def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
     def _fake_run_sync(agent, **kwargs):
         captured["agent"] = agent
         captured["kwargs"] = kwargs
+        tool = next(
+            tool for tool in agent.tools if tool.name == "finalize_validator_batch_results"
+        )
+        _unwrap_function_tool(tool)(results=[_result_payload(request)])
         return {"results": [_result_payload(request)]}
 
     monkeypatch.setattr("agents.Runner.run_sync", _fake_run_sync)
 
-    binding = SimpleNamespace(max_tool_calls=4)
+    binding = cast(Any, SimpleNamespace(max_tool_calls=4))
     run_package_scoped_validator_agent_batch(
-        [SimpleNamespace(request=request)],
+        cast(Any, [SimpleNamespace(request=request)]),
         binding=binding,
     )
 
     runtime_agent = captured["agent"]
     assert runtime_agent is not source_agent
-    assert isinstance(runtime_agent.output_type, AgentOutputSchema)
+    assert runtime_agent.output_type.__class__.__name__ == "AgentOutputSchema"
     assert runtime_agent.output_type.output_type.__name__ == "GeneResultEnvelopeBatchEnvelope"
     assert runtime_agent.output_type.is_strict_json_schema() is False
+    assert [tool.name for tool in runtime_agent.tools] == [
+        "finalize_validator_batch_results"
+    ]
+    assert source_agent.tools == []
+    assert source_agent.instructions == "Base validator instructions."
+    assert "finalize_validator_batch_results" in runtime_agent.instructions
     payload = json.loads(captured["kwargs"]["input"])
     assert payload["mode"] == "domain_validator_batch"
     assert "one bulk lookup tool call per compatible shared lookup group" in payload[
@@ -1953,7 +2153,107 @@ def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
     ]
     assert "gene_symbols" in payload["instructions"]
     assert payload["requests"][0]["request_id"] == request.request_id
-    assert captured["kwargs"]["max_turns"] == 4
+    assert captured["kwargs"]["max_turns"] == 6
+
+
+def test_package_scoped_validator_batch_agent_prefers_accepted_finalization_results(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from packages.alliance.agents.gene.schema import GeneResultEnvelope
+    from src.lib.agent_studio.diagnostic_tools.tool_definitions import (
+        _unwrap_function_tool,
+    )
+
+    request = _validation_request()
+    job = cast(Any, SimpleNamespace(request=request))
+    source_agent = SimpleNamespace(
+        output_type=GeneResultEnvelope,
+        tools=[],
+        instructions="Base validator instructions.",
+    )
+
+    monkeypatch.setattr(
+        "src.lib.config.agent_loader.get_agent_definition_for_package",
+        lambda package_id, agent_id: AgentDefinition(
+            folder_name="gene",
+            agent_id=agent_id,
+            name="Gene Validation",
+            package_id=package_id,
+            batch_capabilities=["domain_validator_batch"],
+        ),
+    )
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        lambda agent_key: source_agent,
+    )
+
+    conflicting_final_result = _result_payload(
+        request,
+        status="unresolved",
+        resolved_values={},
+        missing_expected_fields=["identifier"],
+        outcome="ambiguous",
+    )
+
+    def _fake_run_sync(agent, **kwargs):
+        tool = next(
+            tool for tool in agent.tools if tool.name == "finalize_validator_batch_results"
+        )
+        _unwrap_function_tool(tool)(results=[_result_payload(request)])
+        return {"results": [conflicting_final_result]}
+
+    monkeypatch.setattr("agents.Runner.run_sync", _fake_run_sync)
+
+    raw_output = run_package_scoped_validator_agent_batch(
+        [job],
+        binding=cast(Any, SimpleNamespace(max_tool_calls=4)),
+    )
+    results = _validated_results_from_agent_batch_output(raw_output, jobs=[job])
+
+    assert len(results) == 1
+    assert results[0].status == "resolved"
+    assert results[0].resolved_values["identifier"] == "AGR:0001"
+
+
+def test_package_scoped_validator_batch_agent_requires_accepted_finalization_tool(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from packages.alliance.agents.gene.schema import GeneResultEnvelope
+
+    request = _validation_request()
+    source_agent = SimpleNamespace(
+        output_type=GeneResultEnvelope,
+        tools=[],
+        instructions="Base validator instructions.",
+    )
+
+    monkeypatch.setattr(
+        "src.lib.config.agent_loader.get_agent_definition_for_package",
+        lambda package_id, agent_id: AgentDefinition(
+            folder_name="gene",
+            agent_id=agent_id,
+            name="Gene Validation",
+            package_id=package_id,
+            batch_capabilities=["domain_validator_batch"],
+        ),
+    )
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        lambda agent_key: source_agent,
+    )
+    monkeypatch.setattr(
+        "agents.Runner.run_sync",
+        lambda agent, **kwargs: {"results": [_result_payload(request)]},
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="mandatory finalize_validator_batch_results",
+    ):
+        run_package_scoped_validator_agent_batch(
+            cast(Any, [SimpleNamespace(request=request)]),
+            binding=cast(Any, SimpleNamespace(max_tool_calls=4)),
+        )
 
 
 def _multivalued_dispatch_pack(tmp_path: Path) -> LoadedDomainPack:
