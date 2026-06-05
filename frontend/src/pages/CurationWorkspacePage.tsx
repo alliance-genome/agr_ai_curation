@@ -44,7 +44,6 @@ import {
   useCurationWorkspaceHydration,
 } from '@/features/curation/workspace/CurationWorkspaceContext'
 import { CurationWorkspaceRuntimeProvider } from '@/features/curation/workspace/CurationWorkspaceRuntimeProvider'
-import EnvelopeObjectReviewTable from '@/features/curation/workspace/EnvelopeObjectReviewTable'
 import WorkspaceHeader from '@/features/curation/workspace/WorkspaceHeader'
 import WorkspaceShell from '@/features/curation/workspace/WorkspaceShell'
 import WorkspaceSessionNavigation from '@/features/curation/workspace/WorkspaceSessionNavigation'
@@ -194,6 +193,7 @@ function CurationWorkspacePageContent({
     () => countValidatedPending(candidates),
     [candidates],
   )
+  const envelopeReviewRowsError = queryErrorMessage(envelopeRowsQuery.error)
 
   const handleSubmitPreview = useCallback(async (
     previewResponse: CurationSubmissionPreviewResponse,
@@ -465,8 +465,13 @@ function CurationWorkspacePageContent({
         </Alert>
       ) : null}
 
+      {envelopeReviewRowsError ? (
+        <Alert severity="error">
+          {envelopeReviewRowsError}
+        </Alert>
+      ) : null}
+
       <WorkspaceShell
-        reviewTableLabel="Envelope object table panel"
         headerSlot={(
           <WorkspaceHeader
             navigationSlot={(
@@ -497,22 +502,8 @@ function CurationWorkspacePageContent({
             session={workspace.session}
           />
         )}
-        entityTableSlot={(
-          <EnvelopeObjectReviewTable
-            errorMessage={queryErrorMessage(envelopeRowsQuery.error)}
-            isLoading={envelopeRowsQuery.isLoading || envelopeRowsQuery.isFetching}
-            onAcceptRow={handleAcceptTag}
-            onRejectRow={handleRejectTag}
-            onRetry={() => {
-              void envelopeRowsQuery.refetch()
-            }}
-            onSelectRow={handleSelectTag}
-            rows={envelopeObjectRows}
-            selectedCandidateId={activeCandidateId}
-          />
-        )}
-        fieldEditorSlot={(
-          <Box sx={{ display: 'flex', flex: 1, flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
+        selectorSlot={(
+          <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
             <WorkPaneToolbar
               totalCount={candidates.length}
               pendingCount={pendingCandidateCount}
@@ -530,13 +521,13 @@ function CurationWorkspacePageContent({
               onSelect={handleSelectTag}
               rows={objectSelectorRows}
             />
-            <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-              <CandidateFieldEditor
-                onAcceptCandidate={handleAcceptTag}
-                onRejectCandidate={handleRejectTag}
-              />
-            </Box>
           </Box>
+        )}
+        fieldEditorSlot={(
+          <CandidateFieldEditor
+            onAcceptCandidate={handleAcceptTag}
+            onRejectCandidate={handleRejectTag}
+          />
         )}
       />
 
