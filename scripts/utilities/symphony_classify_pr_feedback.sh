@@ -26,7 +26,7 @@ EOF
 }
 
 report_file=""
-default_model="gpt-5-mini"
+default_model="gpt-5.4-mini"
 default_reasoning_effort="high"
 model="${SYMPHONY_PR_FEEDBACK_CLASSIFIER_MODEL:-}"
 reasoning_effort="${SYMPHONY_PR_FEEDBACK_CLASSIFIER_REASONING_EFFORT:-}"

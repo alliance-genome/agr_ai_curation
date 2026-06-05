@@ -48,9 +48,9 @@ output_schema: OrthologsResult
 # MODEL CONFIGURATION
 # -----------------------------------------------------------------------------
 model_config:
-  model: "${AGENT_ORTHOLOGS_MODEL:-gpt-5.5}"
+  model: "${AGENT_ORTHOLOGS_MODEL:-gpt-5.4-mini}"
   temperature: 0.1
-  reasoning: "low"
+  reasoning: "high"
 
 # -----------------------------------------------------------------------------
 # EXECUTION REQUIREMENTS

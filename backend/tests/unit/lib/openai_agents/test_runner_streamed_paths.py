@@ -224,8 +224,8 @@ async def test_run_agent_streamed_passes_model_overrides_to_supervisor_builder(m
         runner.run_agent_streamed(
             context_messages=[{"role": "user", "content": "hello"}],
             user_id="user-override",
-            supervisor_model="gpt-5-mini",
-            specialist_model="gpt-5-mini",
+            supervisor_model="gpt-5.4-mini",
+            specialist_model="gpt-5.4-mini",
             supervisor_temperature=0.0,
             specialist_temperature=0.0,
             supervisor_reasoning="minimal",
@@ -234,9 +234,9 @@ async def test_run_agent_streamed_passes_model_overrides_to_supervisor_builder(m
     )
 
     assert events[0]["type"] == "RUN_STARTED"
-    assert events[0]["data"]["model"] == "gpt-5-mini"
-    assert captured["supervisor_kwargs"]["model_override"] == "gpt-5-mini"
-    assert captured["supervisor_kwargs"]["specialist_model_override"] == "gpt-5-mini"
+    assert events[0]["data"]["model"] == "gpt-5.4-mini"
+    assert captured["supervisor_kwargs"]["model_override"] == "gpt-5.4-mini"
+    assert captured["supervisor_kwargs"]["specialist_model_override"] == "gpt-5.4-mini"
     assert captured["supervisor_kwargs"]["temperature_override"] == 0.0
     assert captured["supervisor_kwargs"]["specialist_temperature_override"] == 0.0
     assert captured["supervisor_kwargs"]["reasoning_override"] == "minimal"

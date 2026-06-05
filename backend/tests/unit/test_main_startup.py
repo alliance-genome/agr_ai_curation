@@ -453,7 +453,7 @@ async def test_lifespan_supports_core_only_runtime_packages(monkeypatch, tmp_pat
                      user_id=None,
                      project_id=None,
                      template_source=agent_key,
-                     model_id="gpt-5-mini",
+                     model_id="gpt-5.4-mini",
                      model_reasoning=None,
                      tool_ids=[],
                      output_schema_key=None,

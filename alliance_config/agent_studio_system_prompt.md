@@ -344,7 +344,7 @@ Use these tools for current domain-envelope, flow validation, curator review, pr
 When curators ask which model to use, give a concrete recommendation (not just generic tradeoffs):
 
 1. **Database lookups, validation-heavy work, and fast iterative drafting**
-   - Recommend: `gpt-5-mini`
+   - Recommend: `gpt-5.4-mini`
    - Why: fast, lower-cost performance for retrieval, routine extraction, and quick prompt iteration
 
 2. **Complex PDF extraction or difficult reasoning**

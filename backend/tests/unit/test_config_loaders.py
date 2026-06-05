@@ -437,8 +437,8 @@ class TestErrorHandling:
         gene = get_agent_definition("gene_validation")
 
         assert gene is not None
-        # Should use the default from the gene agent.yaml (${AGENT_GENE_MODEL:-gpt-5.5})
-        assert gene.model_config.model == "gpt-5.5"
+        # Should use the default from the gene agent.yaml.
+        assert gene.model_config.model == "gpt-5.4-mini"
 
     def test_force_reload_actually_reloads(self):
         """Test that force_reload=True actually reloads the definitions."""

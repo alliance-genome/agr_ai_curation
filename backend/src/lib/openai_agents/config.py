@@ -9,7 +9,7 @@ Environment variable naming convention:
 
 Example:
   AGENT_SUPERVISOR_MODEL=gpt-5.5
-  AGENT_PDF_MODEL=gpt-5-mini
+  AGENT_PDF_MODEL=gpt-5.4-mini
   AGENT_PDF_TEMPERATURE=0.3
   AGENT_GENE_REASONING=medium
 
@@ -232,7 +232,7 @@ def get_model_for_agent(
     LiteLLM handles automatically. This function abstracts that complexity.
 
     Args:
-        model_name: The model name (e.g., "gpt-5-mini", "gemini-3-pro-preview")
+        model_name: The model name (e.g., "gpt-5.4-mini", "gemini-3-pro-preview")
 
     Returns:
         Model name string for OpenAI, or LitellmModel instance for Gemini
@@ -290,12 +290,12 @@ def supports_reasoning(model: str) -> bool:
     """Check if a model supports reasoning/thinking mode.
 
     All supported models use reasoning:
-    - GPT-5 series (gpt-5, gpt-5-mini) - OpenAI reasoning
+    - GPT-5 series (gpt-5, gpt-5.4-mini) - OpenAI reasoning
     - Gemini 3 Pro Preview (gemini-3-pro-preview) - "low"/"high" thinking levels
 
     For Gemini 3 models, the OpenAI SDK's reasoning_effort parameter maps to:
     - minimal/low -> "low" thinking level
-    - medium/high -> "high" thinking level
+    - medium/high/xhigh -> "high" thinking level
 
     Future: Anthropic Claude models may be added here.
     """
@@ -314,7 +314,7 @@ def supports_temperature(model: str) -> bool:
 
 
 # Type alias for reasoning effort levels
-ReasoningEffort = Literal["minimal", "low", "medium", "high"]
+ReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh"]
 ReasoningSummaryStatus = Literal["present", "not_requested", "not_supported", "unavailable"]
 
 
@@ -374,12 +374,12 @@ def build_model_settings(
     behavior across OpenAI and Gemini models (and potentially Anthropic in future).
 
     Reasoning is supported on:
-    - GPT-5 family models (gpt-5, gpt-5-mini)
+    - GPT-5 family models (gpt-5, gpt-5.4-mini)
     - Gemini 3 Pro Preview (gemini-3-pro-preview) - uses "low"/"high" thinking levels
 
     For Gemini 3, the OpenAI SDK's reasoning_effort parameter maps to:
     - minimal/low -> "low" thinking level
-    - medium/high -> "high" thinking level
+    - medium/high/xhigh -> "high" thinking level
 
     Args:
         model: The model name (e.g., "gpt-5", "gemini-3-pro-preview")
@@ -472,7 +472,7 @@ def _get_env_reasoning(key: str, default: Optional[ReasoningEffort]) -> Optional
     val = os.getenv(key)
     if val is None:
         return default
-    if val in ("minimal", "low", "medium", "high"):
+    if val in ("minimal", "low", "medium", "high", "xhigh"):
         return val  # type: ignore
     logger.warning('Invalid reasoning value for %s: %s, using default %s', key, val, default)
     return default
@@ -493,7 +493,7 @@ def get_default_model() -> str:
 
     model_id = require_env(
         "DEFAULT_AGENT_MODEL",
-        hint="gpt-4o is retired; use gpt-5.5 or newer.",
+        hint="gpt-4o is retired; use a registered GPT-5 family model such as gpt-5.4-mini or gpt-5.5.",
     )
     _get_model_definition(model_id)  # validate the model is registered in models.yaml
     return model_id
@@ -519,7 +519,7 @@ def get_default_reasoning() -> ReasoningEffort:
     from src.lib.config.env import require_env_choice
 
     return require_env_choice(  # type: ignore[return-value]
-        "DEFAULT_AGENT_REASONING", ("minimal", "low", "medium", "high")
+        "DEFAULT_AGENT_REASONING", ("minimal", "low", "medium", "high", "xhigh")
     )
 
 

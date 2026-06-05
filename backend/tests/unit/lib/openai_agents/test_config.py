@@ -66,7 +66,7 @@ class TestGetAgentConfig:
 def test_get_agent_config_prefers_registry_model_over_global_fallback(monkeypatch):
     monkeypatch.setattr(
         "src.lib.agent_studio.catalog_service.AGENT_REGISTRY",
-        {"gene_extractor": {"config_defaults": {"model": "gpt-5-mini"}}},
+        {"gene_extractor": {"config_defaults": {"model": "gpt-5.4-mini"}}},
         raising=False,
     )
     monkeypatch.setattr("src.lib.openai_agents.config.get_default_model", lambda: "gpt-5.5")
@@ -76,13 +76,13 @@ def test_get_agent_config_prefers_registry_model_over_global_fallback(monkeypatc
     with patch.dict(os.environ, {"DEFAULT_AGENT_REASONING": "low"}, clear=True):
         config = get_agent_config("gene_extractor")
 
-    assert config.model == "gpt-5-mini"
+    assert config.model == "gpt-5.4-mini"
 
 
 def test_get_agent_config_env_override_beats_registry_model(monkeypatch):
     monkeypatch.setattr(
         "src.lib.agent_studio.catalog_service.AGENT_REGISTRY",
-        {"gene_extractor": {"config_defaults": {"model": "gpt-5-mini"}}},
+        {"gene_extractor": {"config_defaults": {"model": "gpt-5.4-mini"}}},
         raising=False,
     )
     monkeypatch.setattr("src.lib.openai_agents.config.get_default_model", lambda: "gpt-5.5")
@@ -121,7 +121,7 @@ def test_resolve_model_provider_requires_known_model(monkeypatch):
 def test_resolve_model_provider_rejects_unknown_override(monkeypatch):
     monkeypatch.setattr("src.lib.config.providers_loader.get_provider", lambda _provider_id: None)
     with pytest.raises(ValueError, match="Unknown provider_id"):
-        resolve_model_provider("gpt-5-mini", provider_override="not-real")
+        resolve_model_provider("gpt-5.4-mini", provider_override="not-real")
 
 
 def test_support_flags_require_model_catalog(monkeypatch):

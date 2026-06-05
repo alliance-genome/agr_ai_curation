@@ -80,9 +80,9 @@ os.environ.setdefault("WEAVIATE_SCHEME", "http")
 os.environ.setdefault("DEFAULT_AGENT_MODEL", "gpt-5.5")
 os.environ.setdefault("DEFAULT_AGENT_REASONING", "low")
 os.environ.setdefault("EMBEDDING_MODEL", "text-embedding-3-small")
-os.environ.setdefault("HIERARCHY_LLM_MODEL", "gpt-5-mini")
+os.environ.setdefault("HIERARCHY_LLM_MODEL", "gpt-5.4-mini")
 os.environ.setdefault("HIERARCHY_LLM_REASONING", "low")
-os.environ.setdefault("ABSTRACT_EXTRACTION_MODEL", "gpt-5-mini")
+os.environ.setdefault("ABSTRACT_EXTRACTION_MODEL", "gpt-5.4-mini")
 
 
 @pytest.fixture(autouse=True)
@@ -99,9 +99,9 @@ def _ensure_required_model_env(monkeypatch):
         ("DEFAULT_AGENT_MODEL", "gpt-5.5"),
         ("DEFAULT_AGENT_REASONING", "low"),
         ("EMBEDDING_MODEL", "text-embedding-3-small"),
-        ("HIERARCHY_LLM_MODEL", "gpt-5-mini"),
+        ("HIERARCHY_LLM_MODEL", "gpt-5.4-mini"),
         ("HIERARCHY_LLM_REASONING", "low"),
-        ("ABSTRACT_EXTRACTION_MODEL", "gpt-5-mini"),
+        ("ABSTRACT_EXTRACTION_MODEL", "gpt-5.4-mini"),
     ):
         if key not in os.environ:
             monkeypatch.setenv(key, value)

@@ -57,7 +57,7 @@ models:
     provider: openai
     default: true
     curator_visible: false
-    reasoning_options: [low, medium, high]
+    reasoning_options: [low, medium, high, xhigh]
     default_reasoning: medium
     reasoning_descriptions:
       medium: Balanced reasoning
@@ -78,7 +78,7 @@ models:
     assert "gpt-4o" in loaded
     assert loaded["gpt-4o"].default is True
     assert loaded["gpt-4o"].curator_visible is False
-    assert loaded["gpt-4o"].reasoning_options == ["low", "medium", "high"]
+    assert loaded["gpt-4o"].reasoning_options == ["low", "medium", "high", "xhigh"]
     assert loaded["gpt-4o"].default_reasoning == "medium"
     assert loaded["gpt-4o"].reasoning_descriptions["medium"] == "Balanced reasoning"
     assert loaded["gpt-4o"].recommended_for == ["General curation"]

@@ -347,7 +347,7 @@ Located at: `config/models.yaml`
 
 ```yaml
 models:
-  - model_id: gpt-5-mini
+  - model_id: gpt-5.4-mini
     name: GPT-5.4 Mini
     provider: openai                    # Must match a key in providers.yaml
     description: Faster, lower-cost model for quick drafting and lightweight extraction.
@@ -367,7 +367,7 @@ models:
     description: Highest-quality model for complex reasoning.
     default: true
     supports_reasoning: true
-    reasoning_options: [low, medium, high]
+    reasoning_options: [low, medium, high, xhigh]
     default_reasoning: medium
     reasoning_descriptions:
       low: Fastest mode. Good for quick checks.
@@ -388,7 +388,7 @@ models:
 | `curator_visible` | No | Show in curator model picker (default: `true`) |
 | `supports_reasoning` | No | Whether the model supports reasoning levels |
 | `supports_temperature` | No | Whether the model supports temperature control |
-| `reasoning_options` | No | List of reasoning levels (e.g., `[low, medium, high]`) |
+| `reasoning_options` | No | List of reasoning levels (e.g., `[low, medium, high, xhigh]`) |
 | `default_reasoning` | No | Default reasoning level (must be in `reasoning_options`) |
 | `reasoning_descriptions` | No | Map of reasoning level to description text |
 | `recommended_for` | No | List of use cases where the model excels |

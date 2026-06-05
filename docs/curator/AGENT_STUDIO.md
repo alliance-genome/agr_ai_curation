@@ -226,7 +226,7 @@ Control who can see your custom agent:
 Choose the AI model that powers your custom agent:
 
 1. Select a model from the **Model** dropdown (the Workshop shows model descriptions and recommendations)
-2. If the model supports reasoning levels, choose a level (low, medium, high) -- higher levels are slower but better for difficult tasks
+2. If the model supports reasoning levels, choose a level (low, medium, high, xhigh) -- higher levels are slower but better for difficult tasks
 3. Not sure which model to pick? Click **"Confused about models? Chat with Claude"** for guidance
 
 **Using Custom Agents in Flows**

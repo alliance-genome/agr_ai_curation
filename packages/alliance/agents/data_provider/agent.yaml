@@ -36,9 +36,9 @@ tools:
 output_schema: DataProviderValidationResult
 
 model_config:
-  model: "${AGENT_DATA_PROVIDER_MODEL:-gpt-5.5}"
+  model: "${AGENT_DATA_PROVIDER_MODEL:-gpt-5.4-mini}"
   temperature: 0.1
-  reasoning: "low"
+  reasoning: "high"
 
 requires_document: false
 required_params: []

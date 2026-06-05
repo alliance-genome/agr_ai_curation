@@ -1,15 +1,26 @@
 models:
-  - model_id: gpt-5-mini
-    name: GPT-5 Mini
+  - model_id: gpt-5.4-mini
+    name: GPT-5.4 Mini
     provider: openai
-    description: Faster, lower-cost model for quick drafting and lightweight extraction.
-    guidance: Use when speed matters more than peak accuracy. GPT-5.5 is generally more reliable for nuanced or high-stakes curation decisions.
+    description: Faster, lower-cost reasoning model for routine validation and lightweight extraction.
+    guidance: Use when speed matters but validation still benefits from bounded reasoning. GPT-5.5 remains more reliable for nuanced or high-stakes curation decisions.
     default: false
-    supports_reasoning: false
+    supports_reasoning: true
     supports_temperature: false
+    reasoning_options:
+      - low
+      - medium
+      - high
+      - xhigh
+    default_reasoning: high
+    reasoning_descriptions:
+      low: Fastest GPT-5.4 Mini mode. Good for simple lookups.
+      medium: Balanced mini-model reasoning for routine validation.
+      high: Deeper mini-model reasoning for validation ambiguity.
+      xhigh: Maximum mini-model reasoning for difficult validation ambiguity while staying lower cost than GPT-5.5.
     recommended_for:
       - Interactive drafting and quick iterations
-      - Routine extraction and formatting
+      - Routine validation and lightweight extraction
       - Follow-up checks after using search/read tools
     avoid_for:
       - Deep multi-step adjudication with conflicting evidence
@@ -18,7 +29,7 @@ models:
     name: GPT-5.5
     provider: openai
     description: Highest-quality model for complex curation reasoning and nuanced judgment calls.
-    guidance: Start here for most tasks. Use medium reasoning by default; low is faster, and high is slower but best for truly difficult reasoning.
+    guidance: Start here for most tasks. Use medium reasoning by default; low is faster, while high and xhigh are slower but best for truly difficult reasoning.
     default: true
     supports_reasoning: true
     supports_temperature: false
@@ -26,11 +37,13 @@ models:
       - low
       - medium
       - high
+      - xhigh
     default_reasoning: medium
     reasoning_descriptions:
       low: Fastest GPT-5.5 mode. Good for quick checks and straightforward extraction.
       medium: Recommended default for curation. Strong balance of depth, reliability, and speed.
-      high: Deepest reasoning but slowest. Use sparingly for hard ambiguity, not routine DB lookups.
+      high: Deep reasoning for hard ambiguity.
+      xhigh: Deepest reasoning but slowest. Use sparingly for hard ambiguity, not routine DB lookups.
     recommended_for:
       - Complex evidence synthesis and conflict resolution
       - High-stakes interpretation where instruction fidelity matters
@@ -38,6 +51,6 @@ models:
     avoid_for:
       - Simple database retrieval tasks where latency is the priority
 
-  # gpt-4o is intentionally NOT registered. It is retired; the minimum model is
-  # gpt-5.5. Do not re-add it. Persisted agents that referenced gpt-4o are moved
-  # to gpt-5.5 by the alembic migration migrate_agent_gpt4o_models_to_gpt55.
+  # gpt-4o is intentionally NOT registered. It is retired; do not re-add it.
+  # Persisted agents that referenced gpt-4o are moved to gpt-5.5 by the alembic
+  # migration migrate_agent_gpt4o_models_to_gpt55.

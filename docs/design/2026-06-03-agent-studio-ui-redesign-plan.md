@@ -169,7 +169,7 @@ git commit -m "test(agent-studio): lock curator-voice prompt-layer labels in the
 // Models offered to curators in the Workshop. Keep in sync with the models
 // actually wired in packages/core/config/models.yaml. We intentionally hide
 // experimental/unused entries (e.g. gpt-oss-120b) from the curator-facing picker.
-export const WORKSHOP_MODEL_IDS = ['gpt-5.5', 'gpt-5-mini'] as const
+export const WORKSHOP_MODEL_IDS = ['gpt-5.5', 'gpt-5.4-mini'] as const
 
 export function isWorkshopModel(modelId: string): boolean {
   return (WORKSHOP_MODEL_IDS as readonly string[]).includes(modelId)
@@ -184,7 +184,7 @@ export function isWorkshopModel(modelId: string): boolean {
 import { WORKSHOP_MODEL_IDS, isWorkshopModel } from './workshopModels'
 
 it('only offers the supported models', () => {
-  expect(WORKSHOP_MODEL_IDS).toEqual(['gpt-5.5', 'gpt-5-mini'])
+  expect(WORKSHOP_MODEL_IDS).toEqual(['gpt-5.5', 'gpt-5.4-mini'])
   expect(isWorkshopModel('openai/gpt-oss-120b')).toBe(false)
 })
 

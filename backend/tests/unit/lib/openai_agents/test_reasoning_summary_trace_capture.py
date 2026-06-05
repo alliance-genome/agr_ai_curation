@@ -61,7 +61,7 @@ def test_reasoning_summary_settings_request_auto_for_openai_reasoning_model(monk
     )
 
     settings = reasoning_summary_request_settings(
-        model="gpt-5-mini",
+        model="gpt-5.4-mini",
         reasoning_effort="medium",
     )
 
@@ -69,7 +69,7 @@ def test_reasoning_summary_settings_request_auto_for_openai_reasoning_model(monk
     assert settings["requested_summary"] == "auto"
     assert settings["reasoning_effort"] == "medium"
 
-    model_settings = build_model_settings(model="gpt-5-mini", reasoning_effort="medium")
+    model_settings = build_model_settings(model="gpt-5.4-mini", reasoning_effort="medium")
     assert model_settings.reasoning.effort == "medium"
     assert model_settings.reasoning.summary == "auto"
 
@@ -123,7 +123,7 @@ def test_reasoning_summary_settings_report_not_requested_without_reasoning_effor
     )
 
     settings = reasoning_summary_request_settings(
-        model="gpt-5-mini",
+        model="gpt-5.4-mini",
         reasoning_effort=None,
     )
 
@@ -164,7 +164,7 @@ async def test_specialist_reasoning_item_persists_only_first_class_summary_text(
         tools=[],
         output_type=None,
         instructions="",
-        model="gpt-5-mini",
+        model="gpt-5.4-mini",
     )
 
     await streaming_tools.run_specialist_with_events(
@@ -224,7 +224,7 @@ async def test_specialist_reasoning_item_does_not_persist_raw_item_dump_as_summa
         tools=[],
         output_type=None,
         instructions="",
-        model="gpt-5-mini",
+        model="gpt-5.4-mini",
     )
 
     await streaming_tools.run_specialist_with_events(

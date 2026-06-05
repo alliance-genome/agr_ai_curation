@@ -162,7 +162,7 @@ installs. Repo-local agent templates remain under `config/agents/_examples/`.
 | `output_schema` | Yes | Pydantic class name from `schema.py` |
 | `model_config.model` | No | LLM model (default: `gpt-4o`) |
 | `model_config.temperature` | No | Response randomness 0.0-1.0 (default: `0.1`) |
-| `model_config.reasoning` | No | Thinking effort: `disabled` / `low` / `medium` / `high` |
+| `model_config.reasoning` | No | Thinking effort: `disabled` / `low` / `medium` / `high` / `xhigh` |
 | `group_rules_enabled` | No | Load `group_rules/*.yaml` (default: `false`) |
 
 ### prompt.yaml fields

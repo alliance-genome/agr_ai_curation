@@ -99,7 +99,7 @@ tools: []
 output_schema: null
 
 model_config:
-  model: "${AGENT_CURATION_HANDOFF_MODEL:-gpt-5-mini}"
+  model: "${AGENT_CURATION_HANDOFF_MODEL:-gpt-5.4-mini}"
   temperature: 0.1
   reasoning: "medium"
 

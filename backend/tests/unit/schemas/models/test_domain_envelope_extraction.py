@@ -67,7 +67,7 @@ def _valid_domain_envelope_payload() -> dict[str, object]:
                 "metadata": {
                     "provider_refs": {
                         "agent": "gene_extractor",
-                        "model": "gpt-5-mini",
+                        "model": "gpt-5.4-mini",
                     }
                 },
             }

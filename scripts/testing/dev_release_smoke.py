@@ -53,9 +53,9 @@ DEFAULT_FLOW_QUERY = (
     "Extract exactly one experimentally supported gene from the loaded paper: crb/Crumbs. "
     "Include the organism and one verified evidence record for that gene."
 )
-DEFAULT_FLOW_MODEL = "gpt-5-mini"
+DEFAULT_FLOW_MODEL = "gpt-5.4-mini"
 DEFAULT_CHAT_MODEL = "gpt-5.5"
-DEFAULT_SPECIALIST_MODEL = "gpt-5-mini"
+DEFAULT_SPECIALIST_MODEL = "gpt-5.4-mini"
 EXPECTED_BATCH_PLUMBING_PAYLOAD = [{"check": "batch_file_output", "status": "completed"}]
 DEFAULT_WORKSPACE_ADAPTER_KEY = "gene"
 DEFAULT_SHARED_SAMPLE_PDF = Path(

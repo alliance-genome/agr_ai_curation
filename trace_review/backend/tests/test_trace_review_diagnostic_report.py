@@ -239,7 +239,7 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
                         "id": "gen-sibling",
                         "type": "GENERATION",
                         "startTime": "2026-05-29T00:00:02Z",
-                        "model": "gpt-5-mini",
+                        "model": "gpt-5.4-mini",
                         "input": [
                             {
                                 "type": "function_call",
