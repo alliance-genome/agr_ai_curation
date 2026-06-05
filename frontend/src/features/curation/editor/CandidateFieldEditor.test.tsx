@@ -1,5 +1,5 @@
 import userEvent from '@testing-library/user-event'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { ThemeProvider } from '@mui/material/styles'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -549,5 +549,24 @@ describe('CandidateFieldEditor', () => {
     renderEditor(workspace)
 
     expect(screen.getByText('Fields to review')).toBeInTheDocument()
+  })
+
+  it('flushes queued field edits when saving the draft', async () => {
+    const user = userEvent.setup()
+    const autosave = renderEditor()
+
+    fireEvent.change(screen.getByLabelText('Gene symbol'), {
+      target: { value: 'tmem67' },
+    })
+    await user.click(screen.getByRole('button', { name: 'Save draft' }))
+
+    expect(autosave.queueFieldChange).toHaveBeenLastCalledWith({
+      field_key: 'field_symbol',
+      value: 'tmem67',
+    })
+    expect(autosave.flush).toHaveBeenCalledTimes(1)
+    expect(autosave.queueFieldChange.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      autosave.flush.mock.invocationCallOrder[0],
+    )
   })
 })
