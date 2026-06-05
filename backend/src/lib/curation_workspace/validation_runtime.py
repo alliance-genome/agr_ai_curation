@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 from src.schemas.curation_workspace import (
     CurationValidationCounts,
@@ -64,6 +64,7 @@ def domain_envelope_field_validation_results(
     envelope_revision: int,
     object_id: str,
     field_keys: Sequence[str],
+    field_aliases_by_key: Mapping[str, Sequence[str]] | None = None,
     resolver: str = "domain_envelope_validation_findings",
 ) -> tuple[dict[str, FieldValidationResult], list[str]]:
     """Map envelope validation findings into curator-facing field results."""
@@ -91,8 +92,16 @@ def domain_envelope_field_validation_results(
     results: dict[str, FieldValidationResult] = {}
     all_warnings: list[str] = []
     for field_key in field_keys:
+        field_paths = _field_validation_lookup_paths(
+            field_key,
+            field_aliases_by_key=field_aliases_by_key,
+        )
         relevant_summaries = [
-            *field_summaries_by_path.get(field_key, []),
+            *(
+                summary
+                for field_path in field_paths
+                for summary in field_summaries_by_path.get(field_path, [])
+            ),
             *object_summaries,
         ]
         if relevant_summaries:
@@ -120,6 +129,38 @@ def domain_envelope_field_validation_results(
         all_warnings.extend(warnings)
 
     return results, dedupe(all_warnings)
+
+
+def field_validation_aliases(
+    field_key: str,
+    metadata: Mapping[str, Any] | None = None,
+) -> tuple[str, ...]:
+    """Return envelope paths that should share one curator field validation state."""
+
+    aliases: list[str] = []
+
+    def add(raw_path: Any) -> None:
+        if not isinstance(raw_path, str):
+            return
+        path = raw_path.strip()
+        if not path or path in aliases:
+            return
+        aliases.append(path)
+        parent_path = _parent_selector_field_path(path)
+        if parent_path is not None and parent_path not in aliases:
+            aliases.append(parent_path)
+
+    add(field_key)
+
+    metadata_value = metadata if isinstance(metadata, Mapping) else {}
+    add(metadata_value.get("source_field_path"))
+
+    materializes_to = metadata_value.get("materializes_to_field_paths")
+    if isinstance(materializes_to, Sequence) and not isinstance(materializes_to, str):
+        for raw_path in materializes_to:
+            add(raw_path)
+
+    return tuple(aliases)
 
 
 def increment_validation_count(
@@ -166,6 +207,37 @@ def _field_result_from_validation_summaries(
         candidate_matches=_candidate_matches_for_findings(finding_projections),
         warnings=dedupe(warnings),
     )
+
+
+def _field_validation_lookup_paths(
+    field_key: str,
+    *,
+    field_aliases_by_key: Mapping[str, Sequence[str]] | None,
+) -> tuple[str, ...]:
+    if field_aliases_by_key is None:
+        return field_validation_aliases(field_key)
+
+    aliases = field_aliases_by_key.get(field_key)
+    if aliases is None:
+        return field_validation_aliases(field_key)
+
+    paths: list[str] = []
+    for alias in aliases:
+        if not isinstance(alias, str):
+            continue
+        path = alias.strip()
+        if path and path not in paths:
+            paths.append(path)
+    if field_key not in paths:
+        paths.insert(0, field_key)
+    return tuple(paths)
+
+
+def _parent_selector_field_path(path: str) -> str | None:
+    for suffix in (".curie", ".name"):
+        if path.endswith(suffix):
+            return path[: -len(suffix)]
+    return None
 
 
 def _field_status_for_finding(
@@ -319,5 +391,6 @@ __all__ = [
     "dedupe",
     "domain_envelope_field_validation_results",
     "field_validation_status",
+    "field_validation_aliases",
     "increment_validation_count",
 ]

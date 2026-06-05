@@ -18,6 +18,7 @@ from sqlalchemy.pool import StaticPool
 from src.lib.curation_workspace import session_service
 from src.lib.curation_workspace.validation_runtime import (
     domain_envelope_field_validation_results,
+    field_validation_aliases,
 )
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
@@ -462,6 +463,42 @@ def test_field_validation_maps_partial_lookup_success_to_conflict():
     assert warnings == [
         "Lookup partially succeeded but failed to return declared result value 'symbol'."
     ]
+
+
+def test_field_validation_matches_selector_leaf_aliases():
+    envelope = DomainEnvelope(
+        envelope_id="env-selector-alias",
+        domain_pack_id="fixture-pack",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneAssertion",
+                object_id="gene-1",
+                payload={"gene": {"symbol": "abc-1", "curie": "TEST:Gene00000001"}},
+            )
+        ],
+        validation_findings=[
+            ValidationFinding(
+                severity=ValidationFindingSeverity.INFO,
+                status=ValidationFindingStatus.RESOLVED,
+                code="fixture.gene_selector_resolved",
+                message="Gene selector resolved.",
+                field_ref=_field_ref("gene"),
+            )
+        ],
+    )
+
+    field_results, warnings = domain_envelope_field_validation_results(
+        envelope,
+        envelope_revision=2,
+        object_id="gene-1",
+        field_keys=["gene.curie"],
+        field_aliases_by_key={
+            "gene.curie": field_validation_aliases("gene.curie"),
+        },
+    )
+
+    assert field_results["gene.curie"].status is FieldValidationStatus.VALIDATED
+    assert warnings == []
 
 
 def test_workspace_response_includes_domain_envelope_projections():

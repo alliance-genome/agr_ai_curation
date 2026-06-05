@@ -97,3 +97,52 @@ Temporary diagnosis notes for the local Incus main-sandbox run.
 - `scripts/utilities/agent_lsp.py diagnostics ...`: Ruff passed; frontend changed-file type check passed; Pyright still reports pre-existing `streaming_tools.py` complexity and missing `agents.items` import diagnostics.
 - `PYTHONPYCACHEPREFIX=/tmp/agr-ai-curation-pycache python3 -m py_compile backend/src/lib/openai_agents/streaming_tools.py backend/tests/unit/lib/openai_agents/test_builder_finalization_handoff.py`: passed.
 - `cd frontend && npm run build`: passed.
+
+## 2026-06-05 follow-up: selector fields showing AI Unconfirmed
+
+- Current main-sandbox logs were captured before any restart at:
+  `/home/ctabone/.symphony/diagnostics/agr_ai_curation/main-sandbox/20260605T153241Z`.
+- Live workspace session inspected:
+  - session ID: `593b7992-3dbb-45a7-8106-711de19685e8`
+  - candidate count: `12`
+  - inspected PAT-3 candidate ID: `509184dc-1d37-4bf9-8780-89a21c3f1109`
+- The validator did resolve the ontology terms:
+  - `expression_experiment.expression_assay_used` resolved `MMO:0000686`.
+  - `expression_pattern.where_expressed.anatomical_structure` resolved `WBbt:0008431`.
+  - `expression_pattern.where_expressed.cellular_component` resolved `GO:0030424`.
+- The visible editor fields are scalar selector leaves:
+  - `expression_experiment.expression_assay_used.curie`
+  - `expression_pattern.where_expressed.anatomical_structure.curie`
+  - `expression_pattern.where_expressed.cellular_component.curie`
+- The curation editor was matching validation summaries only by exact field path, so the resolved
+  parent selector summaries did not attach to the `.curie` rows and those rows showed the empty
+  `AI Unconfirmed` icon.
+- The backend validation snapshot path had the same exact-path issue, producing `skipped` field
+  results and the warning `No envelope validation findings targeted this field...` even when the
+  parent selector was resolved.
+- Implemented:
+  - frontend field path candidates now include `source_field_path`, `materializes_to_field_paths`,
+    and selector parent paths for `.curie`/`.name` leaves;
+  - backend `domain_envelope_field_validation_results()` now accepts field aliases and uses the
+    same selector-parent aliasing;
+  - pipeline and explicit candidate validation now pass those aliases and refresh parent selector
+    validation findings when a leaf field is validated.
+- Follow-up validation run:
+  - `cd frontend && npm run test:symphony -- CandidateFieldEditor.test.tsx fieldState.test.ts`: `17 passed`.
+  - `docker compose -f docker-compose.test.yml run --rm backend-unit-tests bash -lc "python -m pytest tests/unit/lib/curation_workspace/test_domain_envelope_projections.py -q"`: `9 passed`.
+  - `docker compose -f docker-compose.test.yml run --rm backend-unit-tests bash -lc "python -m pytest tests/unit/lib/curation_workspace/test_pipeline.py -q"`: `16 passed`.
+  - `docker compose -f docker-compose.test.yml run --rm backend-unit-tests bash -lc "python -m pytest tests/unit/lib/curation_workspace/test_session_service.py -q"`: `70 passed`.
+  - `PYTHONPYCACHEPREFIX=/tmp/agr-ai-curation-pycache python3 -m py_compile backend/src/lib/curation_workspace/validation_runtime.py backend/src/lib/curation_workspace/pipeline.py backend/src/lib/curation_workspace/session_validation_service.py`: passed.
+  - `cd frontend && npm run type-check:changed -- --base origin/main`: `FRONTEND_TYPECHECK_STATUS=baseline_only`; changed TypeScript files passed, existing unrelated baseline TypeScript errors remain.
+
+## 2026-06-05 follow-up: literature lookup config
+
+- The curation and literature Postgres tunnels were both reachable from the backend container.
+- The failing source-reference validator was not a Postgres tunnel failure; the package-owned
+  literature reference lookup uses the Alliance literature Elasticsearch/OpenSearch index.
+- The current backend container had `ELASTICSEARCH_HOST` present but empty, while
+  `ELASTICSEARCH_PORT`, `ELASTICSEARCH_INDEX`, `LITERATURE_DB_URL`, and `CURATION_DB_URL` were
+  non-empty.
+- The VM private env file has been updated with non-empty `ELASTICSEARCH_HOST`,
+  `ELASTICSEARCH_SCHEME=https`, `ELASTICSEARCH_PORT=443`, and
+  `ELASTICSEARCH_INDEX=references_index` for the main sandbox runtime.

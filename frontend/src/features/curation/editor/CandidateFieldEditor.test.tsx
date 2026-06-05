@@ -484,6 +484,38 @@ describe('CandidateFieldEditor', () => {
     ])
   })
 
+  it('resolves selector leaf fields from parent validation summaries', () => {
+    const workspace = buildWorkspace()
+    const candidate = workspace.candidates[0]!
+    candidate.validation_summary_projections = [
+      {
+        summary_id: 'summary-gene-selector',
+        envelope_id: 'envelope-1',
+        object_id: 'object-1',
+        object_type: 'gene',
+        field_path: 'gene',
+        envelope_revision: 4,
+        status: 'resolved',
+        highest_severity: null,
+        finding_count: 1,
+        open_finding_count: 0,
+        finding_ids: ['finding-gene-selector'],
+        codes: ['gene.resolved'],
+        messages: ['Gene selector has been validated.'],
+        findings: [],
+      },
+    ]
+
+    renderEditor(workspace)
+
+    expect(screen.getByTestId('field-state-indicator-field_curie')).toHaveAccessibleName(
+      'Resolved',
+    )
+    expect(screen.getByTestId('field-validation-state-field_curie')).toHaveTextContent(
+      'Validated',
+    )
+  })
+
   it('displays under-development validator metadata without validation findings', () => {
     const workspace = buildWorkspace()
     const candidate = workspace.candidates[0]!

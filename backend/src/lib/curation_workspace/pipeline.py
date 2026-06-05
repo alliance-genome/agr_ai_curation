@@ -17,6 +17,7 @@ from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGE
 from src.lib.curation_workspace.validation_runtime import (
     dedupe,
     domain_envelope_field_validation_results,
+    field_validation_aliases,
     field_validation_status,
     increment_validation_count,
 )
@@ -863,6 +864,13 @@ def _envelope_field_results_for_candidate(
         envelope_revision=envelope_row.revision,
         object_id=candidate.object_id,
         field_keys=[draft_field.field_key for draft_field in candidate.draft_fields],
+        field_aliases_by_key={
+            draft_field.field_key: field_validation_aliases(
+                draft_field.field_key,
+                draft_field.metadata,
+            )
+            for draft_field in candidate.draft_fields
+        },
     )
     if candidate.envelope_revision != envelope_row.revision:
         warnings = [

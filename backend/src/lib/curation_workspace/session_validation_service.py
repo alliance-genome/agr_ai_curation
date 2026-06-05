@@ -35,6 +35,7 @@ from src.lib.curation_workspace.session_types import (
 from src.lib.curation_workspace.validation_runtime import (
     dedupe,
     domain_envelope_field_validation_results,
+    field_validation_aliases,
     field_validation_status,
     increment_validation_count,
 )
@@ -371,7 +372,7 @@ def _envelope_validation_results_for_candidate(
         candidate,
         envelope_row=envelope_row,
         envelope=envelope,
-        field_paths=[field.field_key for field in draft_fields],
+        field_paths=_candidate_validation_field_paths(draft_fields),
         validated_at=validated_at,
     )
     field_results, warnings = domain_envelope_field_validation_results(
@@ -379,6 +380,10 @@ def _envelope_validation_results_for_candidate(
         envelope_revision=envelope_revision,
         object_id=candidate.object_id,
         field_keys=[field.field_key for field in draft_fields],
+        field_aliases_by_key={
+            field.field_key: field_validation_aliases(field.field_key, field.metadata)
+            for field in draft_fields
+        },
     )
     warnings = [*dispatch_warnings, *warnings]
     if candidate.envelope_revision != envelope_row.revision:
@@ -391,6 +396,17 @@ def _envelope_validation_results_for_candidate(
             ),
         ]
     return field_results, dedupe(warnings), envelope.envelope_id, envelope_revision
+
+
+def _candidate_validation_field_paths(
+    draft_fields: Sequence[CurationDraftFieldSchema],
+) -> tuple[str, ...]:
+    paths: list[str] = []
+    for field in draft_fields:
+        for path in field_validation_aliases(field.field_key, field.metadata):
+            if path not in paths:
+                paths.append(path)
+    return tuple(paths)
 
 
 def _dispatch_workspace_envelope_validation(
