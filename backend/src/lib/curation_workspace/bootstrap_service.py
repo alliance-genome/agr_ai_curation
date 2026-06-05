@@ -168,8 +168,6 @@ async def run_flow_curation_handoff(
         if not adapter_keys:
             raise ValueError("Curation handoff requires extraction results for at least one adapter key.")
 
-        review_session_ids: list[str] = []
-
         for adapter_key in adapter_keys:
             adapter_records = [
                 record for record in extraction_results if record.adapter_key == adapter_key
@@ -192,10 +190,14 @@ async def run_flow_curation_handoff(
                 db=db,
             )
 
+        review_session_ids: list[str] = []
+
+        for adapter_key in adapter_keys:
             bootstrap_response = await bootstrap_document_session(
                 document_id,
                 CurationDocumentBootstrapRequest(
                     adapter_key=adapter_key,
+                    flow_run_id=flow_run_id,
                     origin_session_id=origin_session_id,
                     curator_id=runner_user_id,
                 ),
