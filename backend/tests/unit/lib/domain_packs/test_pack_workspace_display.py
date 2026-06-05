@@ -301,6 +301,28 @@ def test_disease_groups_hide_plumbing_and_keep_curatable():
     assert "annotation_type_id" not in paths
 
 
+def test_disease_term_curie_workspace_field_stays_visible_when_empty():
+    payload = {
+        "disease_annotation_object": {"name": "x"},
+        "disease_annotation_subject": {
+            "subject_identifier": "WB:WBGene1",
+            "subject_type": "gene",
+        },
+        "disease_relation_name": "is_implicated_in",
+    }
+
+    fields = _workspace_fields(
+        "agr.alliance.disease",
+        "AGMDiseaseAnnotation",
+        payload,
+    )
+    by_path = {field["field_path"]: field for field in fields}
+
+    curie_field = by_path["disease_annotation_object.curie"]
+    assert curie_field["value"] is None
+    assert curie_field["metadata"]["render_as"] == "curie-chip"
+
+
 def test_phenotype_hides_lookup_hints_and_scaffolding():
     payload = {
         "phenotype_annotation_object": "dye-filling defect",

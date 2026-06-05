@@ -370,7 +370,6 @@ object_definitions:
         required: false
         metadata:
           render_as: curie-chip
-          hide_when_empty: true
           validatable: true
           validator_binding_id: disease_ontology_term_lookup
           validator_state: active
@@ -1056,7 +1055,6 @@ object_definitions:
         required: false
         metadata:
           render_as: curie-chip
-          hide_when_empty: true
           validatable: true
           validator_binding_id: disease_ontology_term_lookup
           validator_state: active
@@ -1447,7 +1445,6 @@ object_definitions:
         required: false
         metadata:
           render_as: curie-chip
-          hide_when_empty: true
           validatable: true
           validator_binding_id: disease_ontology_term_lookup
           validator_state: active
@@ -1831,7 +1828,6 @@ object_definitions:
         required: false
         metadata:
           render_as: curie-chip
-          hide_when_empty: true
           validatable: true
           validator_binding_id: disease_ontology_term_lookup
           validator_state: active
