@@ -702,31 +702,17 @@ describe('CurationWorkspacePage', () => {
     workspace.candidates[0].draft.fields = [
       {
         ...templateField,
-        field_key: 'entity_name',
-        label: 'Entity name',
+        field_key: 'expression_annotation_subject.gene_symbol',
+        label: 'Gene symbol',
         value: 'TMEM67',
         seed_value: 'TMEM67',
       },
       {
         ...templateField,
-        field_key: 'entity_type',
-        label: 'Entity type',
-        value: 'ATP:0000005',
-        seed_value: 'ATP:0000005',
-      },
-      {
-        ...templateField,
-        field_key: 'species',
-        label: 'Species',
-        value: '',
-        seed_value: '',
-      },
-      {
-        ...templateField,
-        field_key: 'topic',
-        label: 'Topic',
-        value: '',
-        seed_value: '',
+        field_key: 'single_reference.reference_id',
+        label: 'Reference',
+        value: 'PMID:123456',
+        seed_value: 'PMID:123456',
       },
     ]
     const manualCandidate = {
@@ -800,11 +786,23 @@ describe('CurationWorkspacePage', () => {
         display_label: 'manual gene',
         draft: expect.objectContaining({
           candidate_id: expect.stringContaining('manual-candidate-'),
+          metadata: expect.objectContaining({
+            manual_object: {
+              entity_name: 'manual gene',
+              entity_type: 'ATP:0000005',
+              species: 'NCBITaxon:7955',
+              topic: 'gene expression',
+            },
+          }),
           fields: expect.arrayContaining([
-            expect.objectContaining({ field_key: 'entity_name', value: 'manual gene' }),
-            expect.objectContaining({ field_key: 'entity_type', value: 'ATP:0000005' }),
-            expect.objectContaining({ field_key: 'species', value: 'NCBITaxon:7955' }),
-            expect.objectContaining({ field_key: 'topic', value: 'gene expression' }),
+            expect.objectContaining({
+              field_key: 'expression_annotation_subject.gene_symbol',
+              value: 'manual gene',
+            }),
+            expect.objectContaining({
+              field_key: 'single_reference.reference_id',
+              value: null,
+            }),
           ]),
         }),
         evidence_anchors: [],

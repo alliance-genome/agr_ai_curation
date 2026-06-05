@@ -163,6 +163,60 @@ describe('workspaceEntityTags', () => {
     expect(manualDraft.fields[0]?.dirty).toBe(false)
   })
 
+  it('builds a manual draft from a domain template without legacy entity-type fields', () => {
+    const domainCandidate = buildCandidate({
+      draft: {
+        ...buildCandidate().draft,
+        fields: [
+          {
+            ...buildCandidate().draft.fields[0]!,
+            field_key: 'expression_annotation_subject.gene_symbol',
+            label: 'Gene symbol',
+            value: 'Tmem67',
+            seed_value: 'Tmem67',
+          },
+          {
+            ...buildCandidate().draft.fields[0]!,
+            field_key: 'single_reference.reference_id',
+            label: 'Reference',
+            value: 'PMID:123456',
+            seed_value: 'PMID:123456',
+          },
+        ],
+      },
+    })
+
+    const manualDraft = buildManualCandidateDraft(
+      domainCandidate,
+      {
+        entity_name: ' tmem67 ',
+        entity_type: 'gene',
+        species: 'NCBITaxon:7955',
+        topic: 'gene expression',
+      },
+      '2026-03-30T11:30:00Z',
+    )
+
+    expect(manualDraft.fields).toEqual([
+      expect.objectContaining({
+        field_key: 'expression_annotation_subject.gene_symbol',
+        value: 'tmem67',
+        seed_value: 'tmem67',
+      }),
+      expect.objectContaining({
+        field_key: 'single_reference.reference_id',
+        value: null,
+        seed_value: null,
+      }),
+    ])
+    expect(manualDraft.metadata.manual_object).toEqual({
+      entity_name: 'tmem67',
+      entity_type: 'ATP:0000005',
+      species: 'NCBITaxon:7955',
+      topic: 'gene expression',
+    })
+  })
+
   it('rejects unsupported ATP entity type codes in editable updates', () => {
     expect(() =>
       buildEntityTagFieldChanges(buildCandidate(), {

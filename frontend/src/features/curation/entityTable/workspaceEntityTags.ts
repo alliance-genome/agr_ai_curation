@@ -22,7 +22,9 @@ function matchesField(field: CurationDraftField, acceptedKeys: readonly string[]
 
   return acceptedKeys.some((acceptedKey) => {
     const normalizedKey = normalizeKey(acceptedKey)
-    return fieldKey === normalizedKey || fieldLabel === normalizedKey
+    return fieldKey === normalizedKey ||
+      fieldKey.endsWith(`.${normalizedKey}`) ||
+      fieldLabel === normalizedKey
   })
 }
 
@@ -79,6 +81,28 @@ function buildFieldChange(
     }
 
     throw new Error(`Candidate ${candidateId} cannot store ${logicalName} because no backing draft field exists.`)
+  }
+
+  const currentValue = field.value
+  if (currentValue !== null && currentValue !== undefined && typeof currentValue !== 'string') {
+    throw new Error(`Candidate ${candidateId} has a non-string value for ${field.field_key}.`)
+  }
+
+  return currentValue === nextValue ? null : { field_key: field.field_key, value: nextValue }
+}
+
+function buildManualFieldChange(
+  candidateId: string,
+  field: CurationDraftField | null,
+  value: string | undefined,
+): CurationDraftFieldChange | null {
+  if (value === undefined || field === null) {
+    return null
+  }
+
+  const nextValue = normalizeTextUpdate(value)
+  if (nextValue.length === 0) {
+    return null
   }
 
   const currentValue = field.value
@@ -155,6 +179,12 @@ export function buildManualCandidateDraft(
   values: Pick<EntityTag, 'entity_name' | 'entity_type' | 'species' | 'topic'>,
   timestamp: string,
 ): CurationDraft {
+  const normalizedValues = {
+    entity_name: normalizeTextUpdate(values.entity_name),
+    entity_type: normalizeSupportedEntityType(values.entity_type),
+    species: normalizeTextUpdate(values.species),
+    topic: normalizeTextUpdate(values.topic),
+  }
   const clonedFields = templateCandidate.draft.fields.map((field) => ({
     ...field,
     value: null,
@@ -177,11 +207,40 @@ export function buildManualCandidateDraft(
       created_at: timestamp,
       updated_at: timestamp,
       notes: null,
-      metadata: { ...templateCandidate.draft.metadata },
+      metadata: {
+        ...templateCandidate.draft.metadata,
+        manual_object: normalizedValues,
+      },
     },
   }
 
-  const fieldChanges = buildEntityTagFieldChanges(templateCandidateDraft, values)
+  const fields = templateCandidateDraft.draft.fields
+  const entityField = findField(fields, ENTITY_FIELD_KEYS)
+  const entityTypeField = findField(fields, ENTITY_TYPE_FIELD_KEYS)
+  const speciesField = findField(fields, SPECIES_FIELD_KEYS)
+  const topicField = findField(fields, TOPIC_FIELD_KEYS)
+  const fieldChanges = [
+    buildManualFieldChange(
+      templateCandidateDraft.candidate_id,
+      entityField,
+      normalizedValues.entity_name,
+    ),
+    buildManualFieldChange(
+      templateCandidateDraft.candidate_id,
+      entityTypeField,
+      normalizedValues.entity_type,
+    ),
+    buildManualFieldChange(
+      templateCandidateDraft.candidate_id,
+      speciesField,
+      normalizedValues.species,
+    ),
+    buildManualFieldChange(
+      templateCandidateDraft.candidate_id,
+      topicField,
+      normalizedValues.topic,
+    ),
+  ].filter((fieldChange): fieldChange is CurationDraftFieldChange => fieldChange !== null)
 
   return {
     ...templateCandidateDraft.draft,
