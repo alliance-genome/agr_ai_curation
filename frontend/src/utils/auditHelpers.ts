@@ -259,6 +259,17 @@ export function getEventSeverity(type: AuditEventType, details?: any): AuditSeve
   if (type === 'SPECIALIST_RETRY_SUCCESS') return 'warning'
 
   if (type.includes('COMPLETE')) {
+    if (type === 'TOOL_COMPLETE') {
+      if (details?.success === false) return 'error'
+      if (details?.hasError) return 'error'
+      if (details?.error) return 'error'
+      if (typeof details?.friendlyName === 'string') {
+        if (details.friendlyName.toLowerCase().includes('failed')) {
+          return 'error'
+        }
+      }
+    }
+
     if (details?.success === false) return 'warning'
 
     if (typeof details?.success === 'number' && typeof details?.total === 'number') {
@@ -269,12 +280,6 @@ export function getEventSeverity(type: AuditEventType, details?: any): AuditSeve
 
     if (details?.hasError) return 'warning'
     if (details?.error) return 'warning'
-
-    if (type === 'TOOL_COMPLETE' && typeof details?.friendlyName === 'string') {
-      if (details.friendlyName.toLowerCase().includes('failed')) {
-        return 'warning'
-      }
-    }
 
     return 'success'
   }

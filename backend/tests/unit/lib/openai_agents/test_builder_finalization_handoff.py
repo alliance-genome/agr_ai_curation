@@ -247,6 +247,87 @@ class _BuilderFinalizingRunResult:
         return [{"role": "user", "content": "extract"}]
 
 
+def _record_evidence_arguments(entity: str) -> str:
+    return json.dumps({"entity": entity, "span_ids": ["span-1"]})
+
+
+def _record_evidence_output(record: dict) -> str:
+    return json.dumps({
+        "status": "verified",
+        "entity": record["entity"],
+        "chunk_id": record["chunk_id"],
+        "verified_quote": record["verified_quote"],
+        "page": record["page"],
+        "section": record["section"],
+        "evidence_record_id": record["evidence_record_id"],
+    })
+
+
+def _tool_call_stream_event(
+    name: str,
+    *,
+    arguments: str,
+    call_id: str,
+):
+    return SimpleNamespace(
+        type="run_item_stream_event",
+        item=SimpleNamespace(
+            type="tool_call_item",
+            name=name,
+            raw_item=SimpleNamespace(arguments=arguments, call_id=call_id),
+        ),
+    )
+
+
+def _tool_output_stream_event(output: str, *, call_id: str):
+    return SimpleNamespace(
+        type="run_item_stream_event",
+        item=SimpleNamespace(
+            type="tool_call_output_item",
+            output=output,
+            raw_item=SimpleNamespace(call_id=call_id),
+        ),
+    )
+
+
+class _BuilderFinalizingRunResultWithRecordedEvidence:
+    final_output = json.dumps({"model_authored": "must not be staged"})
+
+    def __init__(self, evidence_record: dict):
+        self.evidence_record = evidence_record
+
+    async def stream_events(self):
+        call_id = "call-evidence-1"
+        yield _tool_call_stream_event(
+            "record_evidence",
+            arguments=_record_evidence_arguments(self.evidence_record["entity"]),
+            call_id=call_id,
+        )
+        yield _tool_output_stream_event(
+            _record_evidence_output(self.evidence_record),
+            call_id=call_id,
+        )
+
+        workspace = builder.get_active_extraction_builder_workspace()
+        workspace.upsert_candidate(
+            candidate_id="gex-candidate-1",
+            staged_fields={
+                "relation": {"name": "is_expressed_in"},
+                "single_reference": {"reference_id": "PMID:39550471"},
+                "expression_annotation_subject": {"gene_symbol": "pef-1"},
+                "evidence_record_ids": [self.evidence_record["evidence_record_id"]],
+            },
+            pending_ref_ids=["gene-expression-annotation-pef-1"],
+            evidence_record_ids=[self.evidence_record["evidence_record_id"]],
+            resolver_selection_refs=["call_relation"],
+            status=builder.CANDIDATE_STATUS_VALID,
+        )
+        workspace.finalize(candidate_ids=["gex-candidate-1"])
+
+    def to_input_list(self):
+        return [{"role": "user", "content": "extract"}]
+
+
 @pytest.mark.asyncio
 async def test_builder_finalized_specialist_skips_model_authored_output_staging(
     monkeypatch,
@@ -344,6 +425,74 @@ async def test_builder_finalized_specialist_skips_model_authored_output_staging(
     # A1: validators run on the builder-finalized envelope in the chat turn.
     assert dispatched["called"] is True
     assert dispatched["is_builder_envelope"] is True
+
+
+@pytest.mark.asyncio
+async def test_builder_finalized_specialist_emits_evidence_summary_from_recorded_evidence(
+    monkeypatch,
+):
+    evidence_record = {
+        "evidence_record_id": "evidence-live-1",
+        "entity": "pef-1",
+        "verified_quote": "pef-1 is expressed in mechanosensory neurons.",
+        "page": 9,
+        "section": "Results",
+        "chunk_id": "chunk-expression-1",
+    }
+    captured_events = []
+
+    async def _echo_validator_dispatch(serialized_payload, *_args, **_kwargs):
+        return serialized_payload
+
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(
+        streaming_tools,
+        "RunConfig",
+        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+    )
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _BuilderFinalizingRunResultWithRecordedEvidence(
+            evidence_record
+        ),
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "_emit_specialist_evidence_summary_or_raise",
+        lambda *args, **kwargs: pytest.fail(
+            "builder-finalized output must not require model-authored evidence"
+        ),
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "_dispatch_domain_envelope_validators_for_chat",
+        _echo_validator_dispatch,
+    )
+
+    agent = SimpleNamespace(
+        name="Gene Expression Extractor",
+        tools=[],
+        output_type=_DomainEnvelope,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    await streaming_tools.run_specialist_with_events(
+        agent=agent,
+        input_text="extract gene expression evidence",
+        specialist_name="Gene Expression Extractor",
+        max_turns=3,
+        tool_name="ask_gene_expression_specialist",
+    )
+
+    evidence_events = [
+        event for event in captured_events if event.get("type") == "evidence_summary"
+    ]
+    assert len(evidence_events) == 1
+    assert evidence_events[0]["tool_name"] == "ask_gene_expression_specialist"
+    assert evidence_events[0]["evidence_records"] == [evidence_record]
 
 
 @pytest.mark.asyncio

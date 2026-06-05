@@ -204,6 +204,41 @@ function buildWorkspace(): CurationWorkspace {
             },
             metadata: {},
           },
+          {
+            anchor_id: 'evidence-object-1',
+            evidence_record_id: 'record-object-1',
+            envelope_id: 'envelope-1',
+            object_id: 'object-1',
+            object_type: 'gene',
+            field_path: null,
+            envelope_revision: 4,
+            document_id: 'document-1',
+            quote: 'Object-level evidence quote from the loaded paper.',
+            page_number: 4,
+            page_label: null,
+            chunk_id: 'chunk-object-1',
+            chunk_ids: ['chunk-object-1'],
+            section_title: 'Results',
+            subsection_title: 'Expression findings',
+            figure_reference: null,
+            table_reference: null,
+            source_id: null,
+            source_title: null,
+            source_url: null,
+            anchor: {
+              anchor_kind: 'snippet',
+              locator_quality: 'exact_quote',
+              supports_decision: 'supports',
+              snippet_text: 'Object-level evidence quote from the loaded paper.',
+              sentence_text: 'Object-level evidence quote from the loaded paper.',
+              viewer_search_text: 'Object-level evidence quote from the loaded paper.',
+              page_number: 4,
+              section_title: 'Results',
+              subsection_title: 'Expression findings',
+              chunk_ids: ['chunk-object-1'],
+            },
+            metadata: {},
+          },
         ],
         validation_summary_projections: [
           {
@@ -389,6 +424,13 @@ describe('CandidateFieldEditor', () => {
     expect(screen.getByTestId('object-validation-state-under_development')).toHaveTextContent(
       'The object-level validator is under development.',
     )
+    expect(screen.queryByText('Editable fields')).not.toBeInTheDocument()
+    expect(screen.getByTestId('object-evidence-panel')).toHaveTextContent('Evidence')
+    expect(
+      screen.getByRole('button', {
+        name: 'Highlight object evidence 1: Object-level evidence quote from the loaded paper.',
+      }),
+    ).toBeInTheDocument()
     expect(screen.getByTestId('field-evidence-projection-evidence-1')).toHaveTextContent(
       'p. 2',
     )
@@ -522,6 +564,30 @@ describe('CandidateFieldEditor', () => {
     const command = onNavigateEvidence.mock.calls[0][0].detail.command
     expect(command.anchorId).toBe('evidence-1')
     expect(command.searchText).toBe('ABC appears in the result sentence.')
+    expect(command.mode).toBe('select')
+
+    unsubscribe()
+  })
+
+  it('dispatches pdf navigation from the object evidence quote', async () => {
+    const user = userEvent.setup()
+    const onNavigateEvidence = vi.fn()
+    const unsubscribe = onPDFViewerNavigateEvidence(onNavigateEvidence)
+
+    renderEditor()
+
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Highlight object evidence 1: Object-level evidence quote from the loaded paper.',
+      }),
+    )
+
+    expect(onNavigateEvidence).toHaveBeenCalledTimes(1)
+    const command = onNavigateEvidence.mock.calls[0][0].detail.command
+    expect(command.anchorId).toBe('evidence-object-1')
+    expect(command.searchText).toBe('Object-level evidence quote from the loaded paper.')
+    expect(command.pageNumber).toBe(4)
+    expect(command.sectionTitle).toBe('Results')
     expect(command.mode).toBe('select')
 
     unsubscribe()

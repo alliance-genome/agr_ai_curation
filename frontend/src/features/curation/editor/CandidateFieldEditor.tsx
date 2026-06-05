@@ -24,6 +24,8 @@ import { alpha, useTheme } from '@mui/material/styles'
 import {
   buildEvidenceLocationLabel,
   dispatchEvidenceNavigationCommand,
+  EvidenceNavigationQuoteCard,
+  type EvidenceNavigationCommand,
 } from '@/features/curation/evidence'
 import {
   unavailableCapabilityMessage,
@@ -334,6 +336,27 @@ function evidenceProjectionsForField(
     projection.object_id === candidate.projection_ref?.object_id)
 }
 
+function objectEvidenceProjections(
+  candidate: CurationCandidate | null,
+): DomainEnvelopeEvidenceAnchorProjection[] {
+  if (!candidate) {
+    return []
+  }
+
+  const projectionsByAnchorId = new Map<string, DomainEnvelopeEvidenceAnchorProjection>()
+
+  for (const projection of candidate.evidence_anchor_projections ?? []) {
+    if (projection.field_path || !isProjectionForCandidate(candidate, projection.object_id)) {
+      continue
+    }
+    if (!projectionsByAnchorId.has(projection.anchor_id)) {
+      projectionsByAnchorId.set(projection.anchor_id, projection)
+    }
+  }
+
+  return [...projectionsByAnchorId.values()]
+}
+
 function strongestStatus(
   summaries: DomainEnvelopeValidationSummaryProjection[],
 ): DomainEnvelopeValidationStatus | null {
@@ -510,27 +533,33 @@ function evidenceQuote(projection: DomainEnvelopeEvidenceAnchorProjection): stri
     ?? '[missing evidence text]'
 }
 
+function evidenceProjectionCommand(
+  projection: DomainEnvelopeEvidenceAnchorProjection,
+): EvidenceNavigationCommand {
+  const pageNumber = projection.page_number ?? projection.anchor.page_number ?? null
+  const sectionTitle = projection.section_title ?? projection.anchor.section_title ?? null
+
+  return {
+    anchorId: projection.anchor_id,
+    anchor: projection.anchor,
+    searchText:
+      projection.anchor.viewer_search_text
+      ?? projection.quote
+      ?? projection.anchor.sentence_text
+      ?? projection.anchor.snippet_text
+      ?? null,
+    pageNumber,
+    sectionTitle,
+    mode: 'select',
+  }
+}
+
 function dispatchEvidenceProjection(
   projection: DomainEnvelopeEvidenceAnchorProjection,
   debugContext: Record<string, unknown>,
 ): void {
-  const pageNumber = projection.page_number ?? projection.anchor.page_number ?? null
-  const sectionTitle = projection.section_title ?? projection.anchor.section_title ?? null
-
   dispatchEvidenceNavigationCommand(
-    {
-      anchorId: projection.anchor_id,
-      anchor: projection.anchor,
-      searchText:
-        projection.anchor.viewer_search_text
-        ?? projection.quote
-        ?? projection.anchor.sentence_text
-        ?? projection.anchor.snippet_text
-        ?? null,
-      pageNumber,
-      sectionTitle,
-      mode: 'select',
-    },
+    evidenceProjectionCommand(projection),
     debugContext,
   )
 }
@@ -598,6 +627,58 @@ function FieldEvidenceSlot({
         )
       })}
     </>
+  )
+}
+
+function ObjectEvidencePanel({
+  projections,
+}: {
+  projections: DomainEnvelopeEvidenceAnchorProjection[]
+}) {
+  const theme = useTheme()
+
+  if (projections.length === 0) {
+    return null
+  }
+
+  return (
+    <Stack data-testid="object-evidence-panel" spacing={0.75}>
+      <Typography
+        sx={{
+          color: (muiTheme) => alpha(muiTheme.palette.common.white, 0.86),
+          fontSize: '0.78rem',
+          fontWeight: 700,
+          letterSpacing: 0,
+        }}
+        variant="body2"
+      >
+        Evidence
+      </Typography>
+      <Stack spacing={0.6}>
+        {projections.map((projection, index) => {
+          const quote = evidenceQuote(projection)
+
+          return (
+            <EvidenceNavigationQuoteCard
+              accentColor={theme.palette.primary.main}
+              appearance="workspace"
+              ariaLabel={`Highlight object evidence ${index + 1}: ${quote}`}
+              command={evidenceProjectionCommand(projection)}
+              debugContext={{
+                source: 'curation-object-evidence',
+                anchorId: projection.anchor_id,
+                objectId: projection.object_id,
+                pageNumber: projection.page_number ?? projection.anchor.page_number ?? null,
+                sectionTitle: projection.section_title ?? projection.anchor.section_title ?? null,
+              }}
+              footerText={null}
+              key={projection.anchor_id}
+              quote={quote}
+            />
+          )
+        })}
+      </Stack>
+    </Stack>
   )
 }
 
@@ -934,6 +1015,10 @@ export default function CandidateFieldEditor({
     () => unavailableCapabilitiesForCandidate(activeCandidate),
     [activeCandidate],
   )
+  const objectEvidence = useMemo(
+    () => objectEvidenceProjections(activeCandidate),
+    [activeCandidate],
+  )
   const persistedDraftNotes = activeCandidate?.draft.notes ?? ''
   const notesDirty = draftNotes !== persistedDraftNotes
   const activeDecisionDisabled =
@@ -1029,6 +1114,8 @@ export default function CandidateFieldEditor({
     )
   }
 
+  const activeCandidateTitle = candidateDisplayTitle(activeCandidate)
+
   return (
     <Stack
       data-testid="candidate-field-editor"
@@ -1050,12 +1137,13 @@ export default function CandidateFieldEditor({
               color: (theme) => alpha(theme.palette.common.white, 0.94),
               flex: '1 1 auto',
               fontWeight: 600,
-              letterSpacing: -0.1,
+              letterSpacing: 0,
               minWidth: 180,
             }}
+            title={activeCandidateTitle}
             variant="subtitle1"
           >
-            Editable fields
+            {activeCandidateTitle}
           </Typography>
           {activeCandidate.projection_ref ? (
             <Chip
@@ -1070,15 +1158,7 @@ export default function CandidateFieldEditor({
             <Chip color="info" label="Saving" size="small" sx={{ borderRadius: 1, height: 22 }} />
           ) : null}
         </Stack>
-        <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
-          <Typography
-            color="text.secondary"
-            sx={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-            title={candidateDisplayTitle(activeCandidate)}
-            variant="body2"
-          >
-            {candidateDisplayTitle(activeCandidate)}
-          </Typography>
+        <Stack direction="row" alignItems="center" justifyContent="flex-end" spacing={1}>
           <FormControlLabel
             control={(
               <Switch
@@ -1113,6 +1193,8 @@ export default function CandidateFieldEditor({
         summaries={objectSummaries}
         unavailableCapabilities={objectUnavailableCapabilities}
       />
+
+      <ObjectEvidencePanel projections={objectEvidence} />
 
       {sections.length === 0 ? (
         <Alert severity="info" variant="outlined">

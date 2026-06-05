@@ -1081,8 +1081,12 @@ describe('getEventSeverity (T016)', () => {
     })
   })
 
-  it('returns "warning" for failed tool completion', () => {
-    expect(getEventSeverity('TOOL_COMPLETE', { success: false })).toBe('warning')
+  it('returns "error" for failed tool completion', () => {
+    expect(getEventSeverity('TOOL_COMPLETE', { success: false })).toBe('error')
+    expect(getEventSeverity('TOOL_COMPLETE', { error: 'lookup failed' })).toBe('error')
+    expect(
+      getEventSeverity('TOOL_COMPLETE', { friendlyName: 'Validator Lookup failed' }),
+    ).toBe('error')
   })
 
   it('returns "warning" for partial domain success', () => {

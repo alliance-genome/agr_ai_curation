@@ -884,24 +884,20 @@ def _emit_specialist_evidence_summary_or_raise(
     )
 
     if evidence_records and not missing_record_refs:
-        add_specialist_event({
-            "type": "evidence_summary",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "tool_name": tool_name,
-            "evidence_records": evidence_records,
-        })
+        _emit_specialist_evidence_summary(
+            tool_name=tool_name,
+            evidence_records=evidence_records,
+        )
         return
 
     if not requires_evidence:
         return
 
     if live_evidence_records and not missing_record_refs:
-        add_specialist_event({
-            "type": "evidence_summary",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "tool_name": tool_name,
-            "evidence_records": live_evidence_records,
-        })
+        _emit_specialist_evidence_summary(
+            tool_name=tool_name,
+            evidence_records=live_evidence_records,
+        )
         return
 
     output_type_name = getattr(expected_output_type, "__name__", "response")
@@ -943,6 +939,22 @@ def _emit_specialist_evidence_summary_or_raise(
         output_type_name=output_type_name,
         message=error_message,
     )
+
+
+def _emit_specialist_evidence_summary(
+    *,
+    tool_name: Optional[str],
+    evidence_records: List[Dict[str, Any]],
+) -> None:
+    if not evidence_records:
+        return
+
+    add_specialist_event({
+        "type": "evidence_summary",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "tool_name": tool_name,
+        "evidence_records": evidence_records,
+    })
 
 
 def _canonicalize_structured_output_text(
@@ -3522,6 +3534,19 @@ async def run_specialist_with_events(
                 candidate_ids=[builder_candidate_id],
             )
             raise
+    else:
+        builder_evidence_records = live_evidence_records
+        if not builder_evidence_records and builder_finalization is not None:
+            try:
+                builder_evidence_records = extract_evidence_records_from_structured_result(
+                    json.dumps(builder_finalization.payload)
+                )
+            except (TypeError, ValueError):
+                builder_evidence_records = []
+        _emit_specialist_evidence_summary(
+            tool_name=tool_name,
+            evidence_records=builder_evidence_records,
+        )
     phase_timings_ms["evidence_summary_ms"] = _elapsed_ms(
         evidence_summary_started_at
     )
