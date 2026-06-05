@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from src.lib.batch.service import BatchService
-from src.models.sql.batch import Batch, BatchDocument, BatchStatus, BatchDocumentStatus
+from src.models.sql.batch import BatchDocument, BatchStatus, BatchDocumentStatus
 
 
 class TestBatchService:
@@ -322,7 +322,7 @@ class TestCreateBatchMocked:
         added_objects = []
         mock_db.add.side_effect = lambda obj: added_objects.append(obj)
 
-        result = service.create_batch(
+        service.create_batch(
             user_id=user_id,
             flow_id=flow_id,
             document_ids=document_ids,
@@ -401,6 +401,7 @@ class TestBatchToResponseMocked:
         mock_doc1.error_message = None
         mock_doc1.processing_time_ms = 1000
         mock_doc1.processed_at = datetime.now(timezone.utc)
+        mock_doc1.review_session_ids = ["session-gene"]
 
         mock_batch.documents = [mock_doc1]
 
@@ -418,6 +419,7 @@ class TestBatchToResponseMocked:
         assert result.total_documents == 2
         assert result.completed_documents == 2
         assert len(result.documents) == 1
+        assert result.documents[0].review_session_ids == ["session-gene"]
 
     def test_batch_to_response_looks_up_flow_name(self):
         """batch_to_response should look up flow name if not provided."""
@@ -473,6 +475,7 @@ class TestBatchToResponseMocked:
         mock_doc.error_message = None
         mock_doc.processing_time_ms = 500
         mock_doc.processed_at = datetime.now(timezone.utc)
+        mock_doc.review_session_ids = None
 
         mock_batch.documents = [mock_doc]
 

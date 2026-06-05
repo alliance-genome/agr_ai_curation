@@ -46,6 +46,7 @@ from src.lib.curation_workspace import (
 )
 from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
 from src.lib.curation_workspace.curation_prep_service import (
+    build_flow_scope_confirmation as _build_flow_scope_confirmation,
     ensure_domain_envelope_materialization,
 )
 from src.lib.curation_workspace.extraction_results import list_extraction_results
@@ -97,7 +98,6 @@ from src.schemas.curation_workspace import (
     CurationExtractionResultRecord,
     CurationExtractionSourceKind,
 )
-from src.schemas.curation_prep import CurationPrepScopeConfirmation
 from src.schemas.domain_envelope import DomainEnvelope, ValidationFinding
 from src.schemas.domain_validator import DomainValidationRequest, ValidatorAgentRef
 from src.schemas.flows import DEFAULT_FLOW_EDGE_ROLE, VALIDATION_ATTACHMENT_EDGE_ROLE
@@ -702,24 +702,6 @@ def _build_flow_prep_extraction_results(
         )
 
     return extraction_results
-
-
-def _build_flow_scope_confirmation(
-    extraction_results: list[CurationExtractionResultRecord],
-    *,
-    flow_name: str,
-) -> CurationPrepScopeConfirmation:
-    """Build deterministic prep scope from upstream flow extraction results."""
-
-    adapter_keys = _unique_non_empty_scope_values(
-        [record.adapter_key for record in extraction_results]
-    )
-
-    return CurationPrepScopeConfirmation(
-        confirmed=True,
-        adapter_keys=adapter_keys,
-        notes=[f"Confirmed from flow '{flow_name}' execution context."],
-    )
 
 
 def _accumulate_step_evidence(

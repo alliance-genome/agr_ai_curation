@@ -26,6 +26,7 @@ class BatchDocumentResponse(BaseModel):
     position: int
     status: BatchDocumentStatus
     result_file_path: Optional[str] = None
+    review_session_ids: Optional[List[str]] = None
     error_message: Optional[str] = None
     processing_time_ms: Optional[int] = None
     processed_at: Optional[datetime] = None

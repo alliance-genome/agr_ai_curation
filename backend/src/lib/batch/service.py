@@ -275,6 +275,7 @@ class BatchService:
                 "position": d.position,
                 "status": d.status,
                 "result_file_path": d.result_file_path,
+                "review_session_ids": getattr(d, "review_session_ids", None),
                 "error_message": d.error_message,
                 "processing_time_ms": d.processing_time_ms,
                 "processed_at": d.processed_at,

@@ -570,6 +570,22 @@ def _resolve_single_value(values: Iterable[str | None]) -> str | None:
     return None
 
 
+def build_flow_scope_confirmation(
+    extraction_results: Sequence[CurationExtractionResultRecord],
+    *,
+    flow_name: str,
+) -> CurationPrepScopeConfirmation:
+    """Build deterministic prep scope from upstream flow extraction results."""
+
+    adapter_keys = _unique_non_empty(record.adapter_key for record in extraction_results)
+
+    return CurationPrepScopeConfirmation(
+        confirmed=True,
+        adapter_keys=adapter_keys,
+        notes=[f"Confirmed from flow '{flow_name}' execution context."],
+    )
+
+
 def normalized_optional_string(value: Any) -> str | None:
     if value is None or not isinstance(value, str):
         return None
@@ -606,6 +622,7 @@ def _dedupe_strings(values: Iterable[str]) -> list[str]:
 
 
 __all__ = [
+    "build_flow_scope_confirmation",
     "CurationPrepPersistenceContext",
     "CurationPrepScopeSummary",
     "ensure_domain_envelope_materialization",

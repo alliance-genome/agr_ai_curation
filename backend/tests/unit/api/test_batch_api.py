@@ -38,6 +38,25 @@ def _make_batch_response(batch_id=None, flow_id=None, status=BatchStatus.PENDING
     )
 
 
+def test_batch_document_status_event_includes_review_session_ids():
+    batch = SimpleNamespace(id=uuid4())
+    doc = SimpleNamespace(
+        document_id=uuid4(),
+        id=uuid4(),
+        position=0,
+        status=BatchDocumentStatus.COMPLETED,
+        result_file_path=None,
+        review_session_ids=["session-gene"],
+        error_message=None,
+        processing_time_ms=1200,
+    )
+
+    event = batch_api._batch_document_status_event(batch, doc)
+
+    assert event["type"] == "DOCUMENT_STATUS"
+    assert event["review_session_ids"] == ["session-gene"]
+
+
 def test_batch_create_request_limits_document_ids_to_ten():
     flow_id = uuid4()
     doc_ids = [uuid4() for _ in range(11)]
