@@ -117,39 +117,6 @@ function buildWorkspace(): CurationWorkspace {
       session_version: 1,
       extraction_results: [],
     },
-    entity_tags: [
-      {
-        tag_id: 'candidate-accepted',
-        entity_name: 'BRCA1',
-        entity_type: 'ATP:0000005',
-        species: '',
-        topic: '',
-        db_status: 'validated',
-        db_entity_id: 'HGNC:1100',
-        source: 'ai',
-        decision: 'accepted',
-        evidence: null,
-        notes: null,
-      },
-      {
-        tag_id: 'candidate-pending',
-        entity_name: 'APOE',
-        entity_type: 'ATP:0000005',
-        species: '',
-        topic: '',
-        db_status: 'ambiguous',
-        db_entity_id: 'HGNC:613',
-        source: 'manual',
-        decision: 'pending',
-        evidence: {
-          sentence_text: 'APOE evidence sentence',
-          page_number: 1,
-          section_title: 'Results and Discussion',
-          chunk_ids: ['chunk-1'],
-        },
-        notes: null,
-      },
-    ],
     candidates: [
       {
         candidate_id: 'candidate-accepted',
@@ -417,7 +384,6 @@ function buildEnvelopeWorkspace(): CurationWorkspace {
 
   return {
     ...baseWorkspace,
-    entity_tags: [],
     candidates: [candidate],
     evidence_anchor_projections: [evidenceProjection],
     validation_summary_projections: [validationSummaryProjection],
@@ -1138,14 +1104,6 @@ describe('CurationWorkspacePage', () => {
             }
           : candidate,
       ),
-      entity_tags: workspace.entity_tags.map((tag) =>
-        tag.tag_id === 'candidate-pending'
-          ? {
-              ...tag,
-              decision: 'accepted',
-            }
-          : tag,
-      ),
     }
     serviceMocks.fetchCurationWorkspace
       .mockResolvedValueOnce(workspace)
@@ -1205,7 +1163,6 @@ describe('CurationWorkspacePage', () => {
     const workspace = buildWorkspace()
     const refreshedWorkspace: CurationWorkspace = {
       ...workspace,
-      entity_tags: workspace.entity_tags.filter((tag) => tag.tag_id !== 'candidate-pending'),
       candidates: workspace.candidates.filter((candidate) => candidate.candidate_id !== 'candidate-pending'),
       active_candidate_id: 'candidate-accepted',
       session: {
@@ -1280,11 +1237,6 @@ describe('CurationWorkspacePage', () => {
     const workspace = buildWorkspace()
     const workspaceWithValidatedPending: CurationWorkspace = {
       ...workspace,
-      entity_tags: workspace.entity_tags.map((tag) => ({
-        ...tag,
-        decision: 'pending',
-        db_status: 'validated',
-      })),
       candidates: workspace.candidates.map((candidate) => ({
         ...candidate,
         status: 'pending',
@@ -1306,10 +1258,6 @@ describe('CurationWorkspacePage', () => {
     }
     const refreshedWorkspace: CurationWorkspace = {
       ...workspaceWithValidatedPending,
-      entity_tags: workspaceWithValidatedPending.entity_tags.map((tag) => ({
-        ...tag,
-        decision: 'accepted',
-      })),
       candidates: workspaceWithValidatedPending.candidates.map((candidate) => ({
         ...candidate,
         status: 'accepted',

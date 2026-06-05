@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { CurationCandidate } from '@/features/curation/types'
-import {
-  buildEntityTagFieldChanges,
-  buildManualCandidateDraft,
-} from './workspaceEntityTags'
+import { buildManualCandidateDraft } from './workspaceEntityTags'
 
 function buildCandidate(overrides: Partial<CurationCandidate> = {}): CurationCandidate {
   return {
@@ -101,50 +98,6 @@ function buildCandidate(overrides: Partial<CurationCandidate> = {}): CurationCan
 }
 
 describe('workspaceEntityTags', () => {
-  it('builds field changes for editable entity values', () => {
-    const candidate = buildCandidate({
-      draft: {
-        ...buildCandidate().draft,
-        fields: [
-          ...buildCandidate().draft.fields,
-          {
-            field_key: 'topic',
-            label: 'Topic',
-            value: '',
-            seed_value: '',
-            order: 1,
-            required: false,
-            read_only: false,
-            dirty: false,
-            stale_validation: false,
-            evidence_anchor_ids: [],
-            validation_result: null,
-            metadata: {},
-          },
-        ],
-      },
-    })
-
-    const fieldChanges = buildEntityTagFieldChanges(candidate, {
-      entity_name: 'BRCA2',
-      entity_type: 'ATP:0000005',
-      topic: 'phenotype',
-    })
-
-    expect(fieldChanges).toEqual([
-      { field_key: 'gene_symbol', value: 'BRCA2' },
-      { field_key: 'topic', value: 'phenotype' },
-    ])
-  })
-
-  it('fails clearly when an update cannot be stored in the draft fields', () => {
-    expect(() =>
-      buildEntityTagFieldChanges(buildCandidate(), {
-        topic: 'phenotype',
-      }),
-    ).toThrow(/cannot store topic/i)
-  })
-
   it('builds a manual draft from a template candidate', () => {
     const manualDraft = buildManualCandidateDraft(
       buildCandidate(),
@@ -217,69 +170,29 @@ describe('workspaceEntityTags', () => {
     })
   })
 
-  it('rejects unsupported ATP entity type codes in editable updates', () => {
+  it('rejects unsupported ATP entity type codes in manual drafts', () => {
     expect(() =>
-      buildEntityTagFieldChanges(buildCandidate(), {
+      buildManualCandidateDraft(buildCandidate(), {
+        entity_name: 'TP53',
         entity_type: 'ATP:9999999',
-      }),
+        species: '',
+        topic: '',
+      }, '2026-03-30T12:00:00Z'),
     ).toThrow(/not a supported entity type/i)
   })
 
-  it('normalizes canonical entity type labels to ATP codes in editable updates', () => {
-    const fieldChanges = buildEntityTagFieldChanges(
-      buildCandidate({
-        draft: {
-          ...buildCandidate().draft,
-          fields: [
-            {
-              ...buildCandidate().draft.fields[0]!,
-            },
-            {
-              ...buildCandidate().draft.fields[1]!,
-              value: 'gene',
-              seed_value: 'gene',
-            },
-          ],
-        },
-      }),
+  it('normalizes canonical entity type labels to ATP codes in manual drafts', () => {
+    const manualDraft = buildManualCandidateDraft(
+      buildCandidate(),
       {
+        entity_name: 'TP53',
         entity_type: 'gene',
+        species: '',
+        topic: '',
       },
+      '2026-03-30T12:30:00Z',
     )
 
-    expect(fieldChanges).toEqual([
-      { field_key: 'entity_type', value: 'ATP:0000005' },
-    ])
-  })
-
-  it('rejects unchanged unknown entity type identifiers to avoid silent fallback behavior', () => {
-    expect(() =>
-      buildEntityTagFieldChanges(buildCandidate({
-        draft: {
-          ...buildCandidate().draft,
-          fields: [
-            {
-              ...buildCandidate().draft.fields[0]!,
-            },
-            {
-              field_key: 'entity_type',
-              label: 'Entity type',
-              value: 'CUSTOM:entity_type',
-              seed_value: 'CUSTOM:entity_type',
-              order: 1,
-              required: true,
-              read_only: false,
-              dirty: false,
-              stale_validation: false,
-              evidence_anchor_ids: [],
-              validation_result: null,
-              metadata: {},
-            },
-          ],
-        },
-      }), {
-        entity_type: 'CUSTOM:entity_type',
-      }),
-    ).toThrow(/not a supported entity type/i)
+    expect(manualDraft.fields[1]?.value).toBe('ATP:0000005')
   })
 })
