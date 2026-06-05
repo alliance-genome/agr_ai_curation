@@ -56,3 +56,10 @@ class TestBatchCapabilities:
         assert "batch_capabilities" in agent
         assert "chat_output" in agent["batch_capabilities"]
         assert "file_output" not in agent["batch_capabilities"]
+
+    def test_curation_handoff_agent_has_curation_handoff_capability(self):
+        """Curation handoff should be a terminal batch handoff agent."""
+        agent = AGENT_REGISTRY.get("curation_handoff")
+        assert agent is not None, "curation_handoff agent must be registered"
+        assert "curation_handoff" in agent.get("batch_capabilities", [])
+        assert agent.get("supervisor", {}).get("enabled") is False
