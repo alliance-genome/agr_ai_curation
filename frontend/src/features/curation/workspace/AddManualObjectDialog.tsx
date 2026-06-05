@@ -14,7 +14,7 @@ import {
 import {
   ENTITY_TYPE_CODES,
   ENTITY_TYPE_LABELS,
-} from '../entityTable/literatureEntityTypeCatalog'
+} from '../entityTags/literatureEntityTypeCatalog'
 
 export interface ManualObjectDraft {
   entity_name: string

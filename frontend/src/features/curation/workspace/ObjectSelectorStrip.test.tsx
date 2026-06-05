@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { CurationCandidate, DomainEnvelopeReviewRow } from '@/features/curation/types'
 import theme from '@/theme'
 import ObjectSelectorStrip from './ObjectSelectorStrip'
-import type { WorkspaceEnvelopeObjectReviewRow } from './envelopeObjectReviewRows'
+import type { ObjectSelectorRow } from './objectSelector'
 
 function candidate(
   id: string,
@@ -71,19 +71,28 @@ function selectorRow(
   label: string,
   objectType: string,
   status: CurationCandidate['status'] = 'pending',
-): WorkspaceEnvelopeObjectReviewRow {
+): ObjectSelectorRow {
   const rowCandidate = candidate(id, status)
   return {
     candidate: rowCandidate,
-    projectionRef: rowCandidate.projection_ref!,
     reviewRow: reviewRow(id, label, objectType),
-    evidenceAnchors: [],
-    validationSummaries: [],
+  }
+}
+
+function manualSelectorRow(id: string, label: string): ObjectSelectorRow {
+  return {
+    candidate: {
+      ...candidate(id),
+      source: 'manual',
+      display_label: label,
+      projection_ref: null,
+    },
+    reviewRow: null,
   }
 }
 
 function renderStrip(
-  rows: WorkspaceEnvelopeObjectReviewRow[],
+  rows: ObjectSelectorRow[],
   activeCandidateId = 'b',
   onSelect = vi.fn(),
   onDelete?: (candidateId: string) => void,
@@ -134,6 +143,23 @@ describe('ObjectSelectorStrip', () => {
 
     expect(onSelect).toHaveBeenNthCalledWith(1, 'a')
     expect(onSelect).toHaveBeenNthCalledWith(2, 'c')
+  })
+
+  it('includes manual candidates without envelope review rows', async () => {
+    const user = userEvent.setup()
+    const onSelect = renderStrip([
+      selectorRow('a', 'Object A', 'GeneDiseaseAnnotation'),
+      manualSelectorRow('manual-1', 'Manual gene'),
+    ])
+
+    await user.click(screen.getByRole('button', { name: /all objects/i }))
+
+    expect(screen.getByRole('option', { name: /Manual gene/i })).toBeInTheDocument()
+    expect(screen.getByText('Manual object')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('option', { name: /Manual gene/i }))
+
+    expect(onSelect).toHaveBeenCalledWith('manual-1')
   })
 
   it('hides delete actions until an onDelete handler is provided', async () => {

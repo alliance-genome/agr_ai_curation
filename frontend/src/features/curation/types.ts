@@ -40,7 +40,7 @@ import type {
   SubmissionPayloadContract,
   SubmissionTargetKey,
 } from './contracts'
-import type { EntityTag } from '@/features/curation/entityTable/types'
+import type { EntityTag } from '@/features/curation/entityTags/types'
 
 export const CURATION_SESSION_STATUSES = [
   'new',

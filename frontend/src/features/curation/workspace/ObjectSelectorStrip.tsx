@@ -16,9 +16,9 @@ import {
 } from '@mui/material'
 import { alpha, useTheme } from '@mui/material/styles'
 
-import type { WorkspaceEnvelopeObjectReviewRow } from './envelopeObjectReviewRows'
 import {
   adjacentCandidateId,
+  type ObjectSelectorRow,
   objectSelectorLabel,
   objectSelectorType,
   progressSegments,
@@ -31,7 +31,7 @@ export interface ObjectSelectorStripProps {
   activeCandidateId: string | null
   onDelete?: (candidateId: string) => void
   onSelect: (candidateId: string) => void
-  rows: WorkspaceEnvelopeObjectReviewRow[]
+  rows: ObjectSelectorRow[]
 }
 
 const SEGMENT_COLOR: Record<ObjectSelectorProgressKind, string> = {
@@ -49,7 +49,7 @@ export default function ObjectSelectorStrip({
 }: ObjectSelectorStripProps) {
   const theme = useTheme()
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<WorkspaceEnvelopeObjectReviewRow | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<ObjectSelectorRow | null>(null)
   const candidates = useMemo(() => rows.map((row) => row.candidate), [rows])
   const activeRow = rows.find((row) => row.candidate.candidate_id === activeCandidateId) ?? null
   const position = selectorPosition(candidates, activeCandidateId)

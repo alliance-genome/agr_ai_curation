@@ -1,7 +1,14 @@
-import type { CurationCandidate } from '@/features/curation/types'
-import type { WorkspaceEnvelopeObjectReviewRow } from './envelopeObjectReviewRows'
+import type {
+  CurationCandidate,
+  DomainEnvelopeReviewRow,
+} from '@/features/curation/types'
 
 type CandidateProgressInput = Pick<CurationCandidate, 'candidate_id' | 'status'>
+
+export interface ObjectSelectorRow {
+  candidate: CurationCandidate
+  reviewRow?: DomainEnvelopeReviewRow | null
+}
 
 export type ObjectSelectorProgressKind = 'done' | 'current' | 'pending' | 'rejected'
 
@@ -61,7 +68,7 @@ export function selectorPosition(
 }
 
 export function adjacentCandidateId(
-  rows: WorkspaceEnvelopeObjectReviewRow[],
+  rows: ObjectSelectorRow[],
   activeCandidateId: string | null,
   direction: 'previous' | 'next',
 ): string | null {
@@ -91,14 +98,23 @@ export function readableObjectType(value?: string | null): string {
     : 'Curation object'
 }
 
-export function objectSelectorLabel(row: WorkspaceEnvelopeObjectReviewRow): string {
+export function objectSelectorLabel(row: ObjectSelectorRow): string {
   const reviewLabel = row.reviewRow?.display_label?.trim()
   const candidateLabel = row.candidate.display_label?.trim()
   const draftTitle = row.candidate.draft.title?.trim()
+  const objectId = row.candidate.projection_ref?.object_id
 
-  return reviewLabel || candidateLabel || draftTitle || row.projectionRef.object_id
+  return reviewLabel || candidateLabel || draftTitle || objectId || row.candidate.candidate_id
 }
 
-export function objectSelectorType(row: WorkspaceEnvelopeObjectReviewRow): string {
-  return readableObjectType(row.reviewRow?.object_type)
+export function objectSelectorType(row: ObjectSelectorRow): string {
+  if (row.reviewRow?.object_type) {
+    return readableObjectType(row.reviewRow.object_type)
+  }
+
+  if (row.candidate.source === 'manual') {
+    return 'Manual object'
+  }
+
+  return 'Curation object'
 }

@@ -604,7 +604,7 @@ describe('CurationWorkspacePage', () => {
     vi.clearAllMocks()
   })
 
-  it('renders backend-provided entity tag rows from the workspace payload', async () => {
+  it('renders workspace candidates on the single review surface', async () => {
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace())
 
     renderPage('/curation/session-1')
@@ -617,14 +617,11 @@ describe('CurationWorkspacePage', () => {
       expect(screen.getByTestId('workspace-shell')).toBeInTheDocument()
     })
 
-    expect(
-      screen.getByRole('region', { name: /entity table panel/i }),
-    ).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: /envelope object table panel/i })).toBeInTheDocument()
+    expect(screen.getByTestId('object-selector-strip')).toBeInTheDocument()
+    expect(screen.getByText('Review objects')).toBeInTheDocument()
 
-    expect(screen.getAllByText('BRCA1').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('APOE').length).toBeGreaterThan(0)
-    expect(screen.getByText('validated')).toBeInTheDocument()
-    expect(screen.getByText('ambiguous')).toBeInTheDocument()
+    expect(screen.getAllByText('Accepted candidate').length).toBeGreaterThan(0)
   })
 
   it('renders domain-envelope object rows from persisted review-row projections', async () => {
@@ -838,6 +835,9 @@ describe('CurationWorkspacePage', () => {
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: 'Add object' })).not.toBeInTheDocument()
     })
+    await user.click(screen.getByRole('button', { name: /all objects/i }))
+    expect(screen.getByRole('option', { name: /manual gene/i })).toBeInTheDocument()
+    expect(screen.getAllByText('Manual object').length).toBeGreaterThan(0)
   })
 
   it('surfaces non-Error domain-envelope review row query failures', async () => {
@@ -1013,7 +1013,7 @@ describe('CurationWorkspacePage', () => {
     })
   })
 
-  it('restores the route-selected entity row into the evidence pane', async () => {
+  it('restores the route-selected candidate into the field editor', async () => {
     const workspace = buildWorkspace()
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
     serviceMocks.updateCurationSession.mockResolvedValue({
@@ -1027,21 +1027,12 @@ describe('CurationWorkspacePage', () => {
     renderPage('/curation/session-1/candidate-pending')
 
     await waitFor(() => {
-      expect(
-        screen.getByRole('button', {
-          name: /Highlight evidence on PDF: APOE evidence sentence/i,
-        }),
-      ).toBeInTheDocument()
+      expect(screen.getByLabelText('Gene symbol')).toHaveValue('APOE')
     })
-
-    expect(screen.getByText(/Evidence for/i)).toBeInTheDocument()
-    expect(
-      screen.getByRole('button', {
-        name: /Highlight evidence on PDF: APOE follow-up evidence sentence/i,
-      }),
-    ).toBeInTheDocument()
-    expect(screen.getByText(/2 evidence quotes/)).toBeInTheDocument()
-    expect(screen.getAllByRole('button', { name: /Highlight evidence on PDF:/i })).toHaveLength(2)
+    expect(screen.getAllByText('Pending candidate').length).toBeGreaterThan(0)
+    expect(screen.getByTestId('location')).toHaveTextContent(
+      '/curation/session-1/candidate-pending',
+    )
   })
 
   it('patches active envelope fields from the field editor with revision and before value', async () => {
@@ -1171,6 +1162,13 @@ describe('CurationWorkspacePage', () => {
     serviceMocks.fetchCurationWorkspace
       .mockResolvedValueOnce(workspace)
       .mockResolvedValueOnce(refreshedWorkspace)
+    serviceMocks.updateCurationSession.mockResolvedValue({
+      session: {
+        ...workspace.session,
+        current_candidate_id: 'candidate-pending',
+      },
+      action_log_entry: null,
+    })
     serviceMocks.submitCurationCandidateDecision.mockResolvedValue({
       candidate: {
         ...workspace.candidates[1],
@@ -1194,16 +1192,13 @@ describe('CurationWorkspacePage', () => {
       },
     })
 
-    renderPage('/curation/session-1')
+    renderPage('/curation/session-1/candidate-pending')
 
     await waitFor(() => {
-      expect(screen.getByText('APOE')).toBeInTheDocument()
+      expect(screen.getByLabelText('Gene symbol')).toHaveValue('APOE')
     })
 
-    const entityTablePanel = screen.getByRole('region', {
-      name: /entity table panel/i,
-    })
-    fireEvent.click(within(entityTablePanel).getByRole('button', { name: 'Accept' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }))
 
     await waitFor(() => {
       expect(serviceMocks.submitCurationCandidateDecision).toHaveBeenCalledWith({
@@ -1212,7 +1207,9 @@ describe('CurationWorkspacePage', () => {
         action: 'accept',
         advance_queue: false,
       })
-      expect(screen.getAllByText('Accepted').length).toBeGreaterThan(0)
+      expect(screen.getByTestId('location')).toHaveTextContent(
+        '/curation/session-1/candidate-pending',
+      )
     })
   })
 
@@ -1266,19 +1263,16 @@ describe('CurationWorkspacePage', () => {
     renderPage('/curation/session-1/candidate-pending')
 
     await waitFor(() => {
-      expect(screen.getByText('APOE')).toBeInTheDocument()
+      expect(screen.getByLabelText('Gene symbol')).toHaveValue('APOE')
     })
 
-    await waitFor(() => {
-      expect(screen.getByLabelText('Delete APOE')).toBeInTheDocument()
-    })
+    fireEvent.click(screen.getByRole('button', { name: /all objects/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete object Pending candidate' }))
 
-    fireEvent.click(screen.getByLabelText('Delete APOE'))
-
-    expect(screen.getByText('Delete curation row?')).toBeInTheDocument()
+    expect(screen.getByText('Delete object?')).toBeInTheDocument()
     expect(serviceMocks.deleteCurationCandidate).not.toHaveBeenCalled()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Delete row' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete object' }))
 
     await waitFor(() => {
       expect(serviceMocks.deleteCurationCandidate).toHaveBeenCalledWith({
@@ -1288,7 +1282,6 @@ describe('CurationWorkspacePage', () => {
     })
 
     await waitFor(() => {
-      expect(screen.queryByText('APOE')).not.toBeInTheDocument()
       expect(screen.getByTestId('location')).toHaveTextContent(
         '/curation/session-1/candidate-accepted',
       )
@@ -1351,10 +1344,10 @@ describe('CurationWorkspacePage', () => {
     renderPage('/curation/session-1')
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Accept All Validated' })).toBeEnabled()
+      expect(screen.getByRole('button', { name: 'Accept all validated' })).toBeEnabled()
     })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Accept All Validated' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Accept all validated' }))
 
     await waitFor(() => {
       expect(serviceMocks.submitCurationCandidateDecision).toHaveBeenCalledTimes(2)
@@ -1375,7 +1368,6 @@ describe('CurationWorkspacePage', () => {
 
     await waitFor(() => {
       expect(serviceMocks.fetchCurationWorkspace).toHaveBeenCalledTimes(2)
-      expect(screen.getAllByText('Accepted').length).toBeGreaterThan(0)
     })
   }, 15000) // The deferred decision flow is intentionally async and can overrun 5s during suite-wide contention.
 
