@@ -40,7 +40,7 @@ def validate_flow_for_batch(flow_definition: dict) -> BatchValidationResponse:
 
     Rules:
     1. Must contain at least one node with pdf_extraction capability
-    2. All exit nodes must have file_output capability (not chat_output)
+    2. All exit nodes must have file_output or curation_handoff capability (not chat_output)
     """
     errors = []
 
@@ -61,8 +61,14 @@ def validate_flow_for_batch(flow_definition: dict) -> BatchValidationResponse:
         agent_id = get_node_agent_id(flow_definition, node_id)
         if agent_id:
             if has_batch_capability(agent_id, "chat_output"):
-                errors.append("Flow ends with Chat Output - batch requires file output (CSV, TSV, or JSON)")
-            elif not has_batch_capability(agent_id, "file_output"):
-                errors.append("Flow must end with a file output agent (CSV, TSV, or JSON Formatter)")
+                errors.append("Flow ends with Chat Output - batch requires file output or curation handoff")
+            elif not (
+                has_batch_capability(agent_id, "file_output")
+                or has_batch_capability(agent_id, "curation_handoff")
+            ):
+                errors.append(
+                    "Flow must end with a file output agent (CSV, TSV, or JSON Formatter) "
+                    "or the Curation Handoff agent"
+                )
 
     return BatchValidationResponse(valid=len(errors) == 0, errors=errors)
