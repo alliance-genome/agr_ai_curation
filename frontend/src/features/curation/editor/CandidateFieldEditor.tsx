@@ -453,6 +453,20 @@ function validationExplanationLine(
   for (const finding of summary.findings) {
     const details = finding.details
     const result = recordValue(details.validation_result)
+    const metadata = recordValue(details.validation_metadata)
+    const resultField = stringValue(metadata?.materialized_result_field)
+    const generatedFromExpectedField = metadata?.generated_from_expected_result_field === true
+    const resolvedValues = recordValue(result?.resolved_values)
+    const resolvedValue = resultField ? resolvedValues?.[resultField] : undefined
+    if (
+      generatedFromExpectedField &&
+      resultField &&
+      resolvedValue !== null &&
+      resolvedValue !== undefined &&
+      String(resolvedValue).trim()
+    ) {
+      return `${humanizeKey(resultField)} validated: ${String(resolvedValue)}`
+    }
     return stringValue(details.curator_message)
       ?? stringValue(result?.curator_message)
       ?? stringValue(finding.message)
@@ -594,30 +608,12 @@ function FieldValidationSlot({
       data-testid={`field-validation-state-${field.field_key}`}
       spacing={0.45}
       sx={{
-        maxWidth: { xs: '100%', lg: 340 },
+        maxWidth: '100%',
         minWidth: 0,
         width: '100%',
       }}
     >
       <Stack direction="row" spacing={0.65} alignItems="center" sx={{ minWidth: 0 }}>
-        {presentation ? (
-          <Chip
-            color={presentation.color}
-            label={presentation.label}
-            size="small"
-            sx={{
-              borderRadius: 1,
-              flexShrink: 0,
-              height: 22,
-              '& .MuiChip-label': {
-                fontSize: '0.68rem',
-                fontWeight: 700,
-                px: 0.75,
-              },
-            }}
-            variant={presentation.color === 'default' ? 'outlined' : 'filled'}
-          />
-        ) : null}
         {!presentation && hasUnavailableCapabilities ? (
           <Chip
             color="secondary"
@@ -647,7 +643,7 @@ function FieldValidationSlot({
             <Stack
               direction="row"
               spacing={0.45}
-              alignItems="center"
+              alignItems="flex-start"
               sx={(theme) => {
                 const accentColor = accentSeverity === 'success'
                   ? theme.palette.success.main
@@ -673,15 +669,15 @@ function FieldValidationSlot({
                 }
               }}
             >
-              <InfoOutlinedIcon sx={{ fontSize: 14, flexShrink: 0 }} />
+              <InfoOutlinedIcon sx={{ flexShrink: 0, fontSize: 14, mt: 0.1 }} />
               <Typography
                 sx={{
                   fontSize: '0.72rem',
                   lineHeight: 1.35,
                   minWidth: 0,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
+                  overflowWrap: 'anywhere',
+                  whiteSpace: 'normal',
+                  wordBreak: 'normal',
                 }}
                 variant="caption"
               >

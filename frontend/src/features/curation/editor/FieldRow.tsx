@@ -417,12 +417,7 @@ export default function FieldRow({
           alignItems: 'start',
           columnGap: 1,
           display: 'grid',
-          gridTemplateColumns: validationSlot
-            ? {
-              xs: '1fr',
-              lg: 'minmax(0, 1fr) minmax(180px, 0.42fr)',
-            }
-            : '1fr',
+          gridTemplateColumns: '1fr',
           minWidth: 0,
           rowGap: 0.45,
         }}
@@ -437,7 +432,7 @@ export default function FieldRow({
             display: validationSlot ? 'flex' : 'none',
             justifyContent: 'flex-start',
             minWidth: 0,
-            mt: { xs: 0.15, lg: 0 },
+            mt: 0.15,
             '&:empty': { display: 'none' },
           }}
         >

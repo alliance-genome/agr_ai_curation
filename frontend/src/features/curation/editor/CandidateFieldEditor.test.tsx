@@ -413,14 +413,25 @@ describe('CandidateFieldEditor', () => {
   it('displays envelope validation, evidence, metadata, and curator edit history by field', () => {
     renderEditor()
 
-    expect(screen.getByText('Unresolved')).toBeInTheDocument()
+    expect(screen.getByTestId('field-state-indicator-field_symbol')).toHaveAccessibleName(
+      'Needs review',
+    )
     expect(screen.getByText('Symbol needs curator review.')).toBeInTheDocument()
-    expect(screen.getByText('Planned')).toBeInTheDocument()
+    expect(screen.getByTestId('field-state-indicator-field_curie')).toHaveAccessibleName(
+      'AI unconfirmed',
+    )
     expect(screen.getByText('The identifier validator is planned.')).toBeInTheDocument()
-    expect(screen.getByText('Blocked')).toBeInTheDocument()
+    expect(screen.getByTestId('field-state-indicator-field_score')).toHaveAccessibleName(
+      'Needs review',
+    )
     expect(screen.getByText('Evidence score blocks export.')).toBeInTheDocument()
-    expect(screen.getByText('Validated')).toBeInTheDocument()
-    expect(screen.getByText('Waived')).toBeInTheDocument()
+    expect(screen.queryByText('Validated')).not.toBeInTheDocument()
+    expect(screen.getByTestId('field-state-indicator-field_label')).toHaveAccessibleName(
+      'Resolved',
+    )
+    expect(screen.getByTestId('field-state-indicator-field_override')).toHaveAccessibleName(
+      'Resolved',
+    )
     expect(screen.getByTestId('object-validation-state-under_development')).toHaveTextContent(
       'The object-level validator is under development.',
     )
@@ -526,8 +537,8 @@ describe('CandidateFieldEditor', () => {
     renderEditor(workspace)
 
     const validationState = screen.getByTestId('field-validation-state-field_symbol')
-    expect(validationState).toHaveTextContent('Validated')
-    expect(validationState).toHaveTextContent('Resolved abc from the gene lookup.')
+    expect(validationState).not.toHaveTextContent('Validated')
+    expect(validationState).toHaveTextContent('Symbol validated: abc')
     expect(validationState).toHaveTextContent('Validation details')
     expect(validationState).toHaveTextContent('Validator: agr.alliance/gene_validation')
     expect(validationState).toHaveTextContent('Result field: Symbol')
@@ -592,7 +603,7 @@ describe('CandidateFieldEditor', () => {
     expect(screen.getByTestId('field-state-indicator-field_curie')).toHaveAccessibleName(
       'Resolved',
     )
-    expect(screen.getByTestId('field-validation-state-field_curie')).toHaveTextContent(
+    expect(screen.getByTestId('field-validation-state-field_curie')).not.toHaveTextContent(
       'Validated',
     )
     expect(screen.getByTestId('field-validation-state-field_curie')).toHaveTextContent(
