@@ -17,7 +17,6 @@ export type {
   AgentInfo,
   AgentCategory,
   // Flow definition types
-  InputSource,
   NodeType,
   FlowNodePosition,
   FlowNodeData,

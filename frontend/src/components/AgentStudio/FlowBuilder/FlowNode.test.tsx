@@ -35,7 +35,6 @@ function buildNodeData(overrides: Partial<AgentNodeData> = {}): AgentNodeData {
     agent_display_name: 'Gene Summary',
     agent_description: 'Summarize the selected gene',
     custom_instructions: 'Summarize key findings',
-    input_source: 'previous_output',
     output_key: 'gene_summary_output',
     ...overrides,
   }

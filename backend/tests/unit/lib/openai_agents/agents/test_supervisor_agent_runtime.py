@@ -1,10 +1,14 @@
 """Runtime-focused tests for supervisor agent helpers."""
 
 import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
+from src.lib.chat_history_repository import ChatMessageRecord
+from src.lib.openai_agents import curation_context_registry, supervisor_context_tools
 from src.lib.openai_agents.agents import supervisor_agent
 
 
@@ -130,6 +134,489 @@ class _PrepExtractionRecord:
 
     def model_dump(self, mode="python"):
         return dict(self._payload)
+
+
+def _chat_message_record(**overrides):
+    payload = {
+        "message_id": uuid4(),
+        "session_id": "session-1",
+        "chat_kind": "assistant",
+        "turn_id": "turn-1",
+        "role": "assistant",
+        "message_type": "text",
+        "content": "Assistant response.",
+        "payload_json": None,
+        "trace_id": None,
+        "created_at": datetime(2026, 6, 6, tzinfo=timezone.utc),
+    }
+    payload.update(overrides)
+    return ChatMessageRecord(**payload)
+
+
+@pytest.mark.asyncio
+async def test_inspect_chat_traces_inventory_includes_main_chat_and_flow_rows(monkeypatch):
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_trace_id", lambda: None)
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "_list_session_messages",
+        lambda **_kwargs: [
+            _chat_message_record(role="user", content="Why did you extract crb?"),
+            _chat_message_record(
+                role="assistant",
+                content="I extracted crb because the Results section supported it.",
+                trace_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ),
+            _chat_message_record(
+                role="flow",
+                message_type="flow_summary",
+                content="Flow completed.",
+                payload_json={"_assistant_message": "Flow extracted one gene."},
+                trace_id="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            ),
+        ],
+    )
+
+    response = await supervisor_context_tools.inspect_chat_traces(
+        detail="inventory",
+        limit=10,
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "ok"
+    assert [trace["trace_id"] for trace in payload["traces"]] == [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    ]
+    assert payload["traces"][0]["source"] == "assistant_message"
+    assert payload["traces"][1]["source"] == "execute_flow_transcript"
+    assert payload["traces"][0]["user_question_preview"] == "Why did you extract crb?"
+
+
+@pytest.mark.asyncio
+async def test_inspect_chat_traces_rejects_unowned_trace_before_trace_review(monkeypatch):
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_trace_id", lambda: None)
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "_list_session_messages",
+        lambda **_kwargs: [
+            _chat_message_record(role="user", content="Question"),
+            _chat_message_record(
+                role="assistant",
+                content="Answer",
+                trace_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ),
+        ],
+    )
+
+    async def _unexpected_trace_review_call(_trace_id):
+        raise AssertionError("TraceReview must not be called for unauthorized trace IDs")
+
+    monkeypatch.setattr(supervisor_context_tools, "get_trace_summary", _unexpected_trace_review_call)
+
+    response = await supervisor_context_tools.inspect_chat_traces(
+        detail="summary",
+        trace_id="cccccccccccccccccccccccccccccccc",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "unauthorized_trace"
+    assert payload["authorized_trace_ids"] == ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+
+
+@pytest.mark.asyncio
+async def test_inspect_chat_traces_summary_uses_authorized_allowlist(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_trace_id", lambda: None)
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "_list_session_messages",
+        lambda **_kwargs: [
+            _chat_message_record(role="user", content="Question"),
+            _chat_message_record(
+                role="assistant",
+                content="Answer",
+                trace_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ),
+        ],
+    )
+
+    async def _fake_trace_summary(trace_id):
+        captured["trace_id"] = trace_id
+        return {
+            "status": "success",
+            "data": {"trace_id": trace_id, "tool_call_count": 2},
+            "token_info": {"estimated_tokens": 50},
+            "error": None,
+        }
+
+    monkeypatch.setattr(supervisor_context_tools, "get_trace_summary", _fake_trace_summary)
+
+    response = await supervisor_context_tools.inspect_chat_traces(
+        detail="summary",
+        trace_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "ok"
+    assert payload["data"]["tool_call_count"] == 2
+    assert captured["trace_id"] == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+
+@pytest.mark.asyncio
+async def test_inspect_chat_traces_inventory_turn_ref_selects_previous_completed_trace(monkeypatch):
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "get_current_trace_id",
+        lambda: "cccccccccccccccccccccccccccccccc",
+    )
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "_list_session_messages",
+        lambda **_kwargs: [
+            _chat_message_record(role="user", content="First question", turn_id="turn-1"),
+            _chat_message_record(
+                role="assistant",
+                content="First answer",
+                trace_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                turn_id="turn-1",
+            ),
+            _chat_message_record(role="user", content="Second question", turn_id="turn-2"),
+            _chat_message_record(
+                role="assistant",
+                content="Second answer",
+                trace_id="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                turn_id="turn-2",
+            ),
+        ],
+    )
+
+    response = await supervisor_context_tools.inspect_chat_traces(
+        detail="inventory",
+        turn_ref="previous",
+        limit=10,
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "ok"
+    assert [trace["trace_id"] for trace in payload["traces"]] == [
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ]
+    assert payload["traces"][0]["source"] == "assistant_message"
+
+
+@pytest.mark.asyncio
+async def test_inspect_chat_traces_uses_safe_trace_review_flags(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_trace_id", lambda: None)
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "_list_session_messages",
+        lambda **_kwargs: [
+            _chat_message_record(role="user", content="Question"),
+            _chat_message_record(
+                role="assistant",
+                content="Answer",
+                trace_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ),
+        ],
+    )
+
+    async def _fake_diagnostic_report(trace_id, **kwargs):
+        captured["diagnostic"] = {"trace_id": trace_id, **kwargs}
+        return {"status": "success", "data": {"ok": True}, "error": None}
+
+    async def _fake_payloads(trace_id, **kwargs):
+        captured["payloads"] = {"trace_id": trace_id, **kwargs}
+        return {"status": "success", "data": {"payloads": []}, "error": None}
+
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "get_extraction_diagnostic_report",
+        _fake_diagnostic_report,
+    )
+    monkeypatch.setattr(supervisor_context_tools, "get_trace_payloads", _fake_payloads)
+
+    diagnostic_response = await supervisor_context_tools.inspect_chat_traces(
+        detail="diagnostic_report",
+        trace_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+    payload_response = await supervisor_context_tools.inspect_chat_traces(
+        detail="payload_inventory",
+        trace_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        limit=3,
+        cursor="2",
+    )
+
+    assert json.loads(diagnostic_response)["status"] == "ok"
+    assert captured["diagnostic"]["include_raw_args"] is False
+    assert captured["diagnostic"]["include_raw_outputs"] is False
+    assert json.loads(payload_response)["status"] == "ok"
+    assert captured["payloads"]["include_values"] is False
+    assert captured["payloads"]["limit"] == 3
+    assert captured["payloads"]["offset"] == 2
+
+
+@pytest.mark.asyncio
+async def test_inspect_chat_traces_inventory_pages_recent_traces(monkeypatch):
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_trace_id", lambda: None)
+    messages = [
+        _chat_message_record(
+            role="assistant",
+            trace_id=f"{index:032d}",
+            turn_id=f"turn-{index}",
+            created_at=datetime(2026, 6, 6, 0, 0, index, tzinfo=timezone.utc),
+        )
+        for index in range(30)
+    ]
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "_list_session_messages",
+        lambda **_kwargs: messages,
+    )
+
+    first_response = await supervisor_context_tools.inspect_chat_traces(
+        detail="inventory",
+        limit=2,
+    )
+    second_response = await supervisor_context_tools.inspect_chat_traces(
+        detail="inventory",
+        limit=2,
+        cursor="2",
+    )
+
+    first_payload = json.loads(first_response)
+    second_payload = json.loads(second_response)
+    assert [trace["trace_id"] for trace in first_payload["traces"]] == [
+        f"{28:032d}",
+        f"{29:032d}",
+    ]
+    assert first_payload["truncated"] is True
+    assert first_payload["next_cursor"] == "2"
+    assert [trace["trace_id"] for trace in second_payload["traces"]] == [
+        f"{26:032d}",
+        f"{27:032d}",
+    ]
+    assert second_payload["next_cursor"] == "4"
+
+
+@pytest.mark.asyncio
+async def test_inspect_curation_context_summarizes_authorized_persisted_results(monkeypatch):
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_trace_id", lambda: None)
+    monkeypatch.setattr(supervisor_context_tools, "_active_document_id", lambda _user_id: None)
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "list_extraction_results",
+        lambda **_kwargs: [
+            _PrepExtractionRecord(
+                extraction_result_id="extract-1",
+                adapter_key="gene",
+                trace_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                payload_json={
+                    "domain_pack_id": "gene",
+                    "objects": [
+                        {
+                            "object_type": "gene_mention_evidence",
+                            "pending_ref_id": "gene-1",
+                            "status": "validated",
+                            "payload": {
+                                "mention": "crb",
+                                "primary_external_id": "FB:FBgn0259685",
+                            },
+                        }
+                    ],
+                    "validation_findings": [{"status": "resolved"}],
+                },
+            )
+        ],
+    )
+
+    response = await supervisor_context_tools.inspect_curation_context(
+        scope="current_chat",
+        detail="summary",
+        adapter_keys=["gene"],
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "ok"
+    assert payload["results"][0]["extraction_result_id"] == "extract-1"
+    assert payload["results"][0]["object_count"] == 1
+    assert payload["results"][0]["validation_finding_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_inspect_curation_context_extraction_result_scope_requires_id(monkeypatch):
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+
+    response = await supervisor_context_tools.inspect_curation_context(
+        scope="extraction_result",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "invalid_request"
+    assert "extraction_result_id is required" in payload["message"]
+
+
+@pytest.mark.asyncio
+async def test_inspect_curation_context_evidence_detail_returns_compact_records(monkeypatch):
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_trace_id", lambda: None)
+    monkeypatch.setattr(supervisor_context_tools, "_active_document_id", lambda _user_id: None)
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "list_extraction_results",
+        lambda **_kwargs: [
+            _PrepExtractionRecord(
+                extraction_result_id="extract-1",
+                adapter_key="gene",
+                payload_json={
+                    "objects": [
+                        {
+                            "pending_ref_id": "gene-1",
+                            "payload": {
+                                "mention": "crb",
+                                "large_context": "x" * 1000,
+                            },
+                            "evidence": [
+                                {
+                                    "evidence_record_id": "evidence-1",
+                                    "verified_quote": "crb was identified in the paper.",
+                                    "large_payload": {"nested": "y" * 1000},
+                                }
+                            ],
+                        }
+                    ],
+                    "evidence": [
+                        {
+                            "evidence_record_id": "evidence-2",
+                            "quote": "A second supporting quote.",
+                        }
+                    ],
+                },
+            )
+        ],
+    )
+
+    response = await supervisor_context_tools.inspect_curation_context(
+        detail="evidence",
+        limit=1,
+    )
+
+    payload = json.loads(response)
+    evidence = payload["results"][0]["evidence"]
+    assert payload["status"] == "ok"
+    assert evidence == [
+        {
+            "evidence_record_id": "evidence-1",
+            "verified_quote": "crb was identified in the paper.",
+        }
+    ]
+    assert "large_payload" not in evidence[0]
+    assert payload["results"][0]["truncated"] is True
+    assert payload["results"][0]["next_cursor"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_inspect_curation_context_evidence_detail_uses_nested_cursor(monkeypatch):
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_trace_id", lambda: None)
+    monkeypatch.setattr(supervisor_context_tools, "_active_document_id", lambda _user_id: None)
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "list_extraction_results",
+        lambda **_kwargs: [
+            _PrepExtractionRecord(
+                extraction_result_id="extract-1",
+                adapter_key="gene",
+                payload_json={
+                    "evidence": [
+                        {"evidence_record_id": "evidence-1", "quote": "First quote."},
+                        {"evidence_record_id": "evidence-2", "quote": "Second quote."},
+                        {"evidence_record_id": "evidence-3", "quote": "Third quote."},
+                    ],
+                },
+            )
+        ],
+    )
+
+    response = await supervisor_context_tools.inspect_curation_context(
+        detail="evidence",
+        extraction_result_id="extract-1",
+        limit=1,
+        cursor="1",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "ok"
+    assert payload["next_cursor"] is None
+    assert payload["results"][0]["evidence"] == [
+        {"evidence_record_id": "evidence-2", "quote": "Second quote."}
+    ]
+    assert payload["results"][0]["next_cursor"] == "2"
+
+
+@pytest.mark.asyncio
+async def test_inspect_curation_context_current_turn_reads_registry(monkeypatch):
+    curation_context_registry.clear_current_turn_curation_context()
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "get_current_trace_id",
+        lambda: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+    curation_context_registry.register_internal_extraction_event(
+        {
+            "type": "INTERNAL_EXTRACTION_RESULT",
+            "timestamp": "2026-06-06T00:00:00Z",
+            "details": {
+                "toolName": "ask_gene_extractor_specialist",
+                "friendlyName": "Gene: Internal Extraction Result",
+            },
+            "internal": {
+                "canonical_payload": {
+                    "domain_pack_id": "gene",
+                    "objects": [
+                        {
+                            "object_type": "gene_mention_evidence",
+                            "pending_ref_id": "gene-1",
+                            "status": "validated",
+                            "payload": {"mention": "crb"},
+                        }
+                    ],
+                },
+                "builder_finalization": {"builder_run_id": "builder-1"},
+            },
+        }
+    )
+
+    response = await supervisor_context_tools.inspect_curation_context(
+        scope="current_turn",
+        detail="objects",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "ok"
+    assert payload["refs"][0]["extraction_result_id"] == "current-turn:1"
+    assert payload["refs"][0]["builder_run_id"] == "builder-1"
+    assert payload["results"][0]["objects"][0]["fields"] == {"mention": "crb"}
+    curation_context_registry.clear_current_turn_curation_context()
 
 
 def test_build_model_settings_applies_reasoning_and_provider_parallel_policy(monkeypatch):
@@ -573,9 +1060,11 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
     assert "No domain specialist tools are currently installed" in created.instructions
     assert [getattr(tool, "name", "") for tool in created.tools] == [
         "prepare_for_curation",
+        "inspect_curation_context",
+        "inspect_chat_traces",
         "export_to_file",
     ]
-    assert captured_langfuse["metadata"]["specialist_count"] == 2
+    assert captured_langfuse["metadata"]["specialist_count"] == 4
 
 
 def test_create_supervisor_agent_with_document_extracts_sections_and_enables_guardrails(monkeypatch):

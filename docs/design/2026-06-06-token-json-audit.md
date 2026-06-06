@@ -13,6 +13,7 @@ Related samples:
 Related follow-up design:
 
 - `docs/design/2026-06-06-supervisor-curation-context-lookup.md`
+- `docs/design/2026-06-06-flow-guided-supervisor-simplification.md`
 
 ## Question
 
@@ -143,17 +144,17 @@ Relevant code:
 - `backend/src/lib/flows/executor.py::execute_flow`
 - `backend/src/lib/flows/executor.py::_wrap_with_step_order`
 
-Flow execution passes a single initial user prompt to `run_agent_streamed`. It does not preload the entire durable chat transcript into each flow run.
+Flow execution passes a single initial user prompt to `run_agent_streamed`. It does not preload the entire durable chat transcript into each flow run. The runtime already behaves like a guided supervisor run with strict tool-order gating.
 
-Inside a flow, step state stores full `output` internally and stores `output_preview` for compact SSE display. If a node declares an `output_key`, the full `result_text` is stored in template variables. Custom flow templates can therefore inject full prior outputs into later steps. This is powerful and sometimes necessary, but it needs explicit budgeting.
+The unnecessary risk is the old dataflow layer. Step state stores full `output` internally and stores `output_preview` for compact SSE display. If a node declares an `output_key`, the full `result_text` is stored in template variables. Custom flow templates can therefore inject full prior outputs into later steps. The clarified product contract does not need this: flows are ordered extraction/review/export plans, not inter-agent prompt dataflow graphs.
 
-After a flow completes, durable chat stores a hidden assistant memory message for follow-up grounding. It has caps:
+After a flow completes, durable chat stores a hidden assistant memory message for follow-up grounding. It currently has caps:
 
 - visible final output: 2,500 chars
 - specialist outputs: first 8, 3,500 chars each before compaction
-- hidden JSON: 18,000 chars max, with compaction fallback
+- hidden JSON: 18,000 chars max, with a current compaction path that should be removed from model-live replay
 
-This is bounded, but many flow turns can still add repeated hidden JSON to later standard chat context.
+This is bounded, but many flow turns can still add repeated hidden JSON to later standard chat context. The follow-up plan is to replace replayable hidden flow JSON with compact flow/result/trace/review/file refs and let main-chat lookup tools retrieve details.
 
 ### Batch Processing
 
@@ -180,11 +181,17 @@ Batch compatibility requires a PDF extraction step and a file-output or curation
 3. Validator request JSON should be slimmer.
    Review whether `selected_inputs` and `target.input_values` both need full copies. If both are required for contract clarity, cap long values such as evidence quotes and identity notes before retry/continuation.
 
-4. Flow template variables need explicit budget semantics.
-   Named `output_key` template substitutions should probably resolve to compact summaries by default. A separate explicit syntax can request full payloads when a formatter truly needs them.
+   Initial implementation on `codex/supervisor-context-lookup-design`: standalone, batch, and flow-attached validator model inputs now omit duplicate `target.input_values`, `input_selectors`, and full `evidence[]`, replacing evidence with compact `evidence_summary`. The canonical request/result contracts still retain the full data for materialization. Long `selected_inputs` values are intentionally preserved in this slice and remain the next validator-specific token target.
+
+4. Flow template variables should be removed as prompt inputs.
+   The current product need is a guided supervisor run where each agent step gets the original task/document context plus step-local instructions. Prior step data should remain in canonical flow artifacts for final aggregation, curation review, evidence export, and lookup tools, not be substituted into later prompts.
 
 5. Hidden flow replay should move toward lookup handles.
-   The current 18k cap prevents infinite single-turn payloads, but future standard chat will replay each hidden flow memory message. Store flow run ids, trace ids, file ids, and envelope ids in transcript text, then let agents call lookup tools for details.
+   The current 18k cap prevents infinite single-turn payloads, but future standard chat will replay each hidden flow memory message. Store flow run ids, trace ids, file ids, review session ids, extraction result ids, and adapter keys in transcript text, then let agents call lookup tools for details.
+
+   Reuse the main-chat lookup and transcript/context-budget machinery where
+   possible. Flow should not grow a separate hidden-memory system if the main
+   chat can already replay compact refs and use lookup tools for detail.
 
 6. Observability payloads need a "never live by default" rule.
    TraceReview payload inventories, reconstruction events, and Langfuse payloads should stay paged. Agent Studio prompts should emphasize summary-first, payload-id-second, full-payload-last behavior.
@@ -204,7 +211,7 @@ Batch compatibility requires a PDF extraction step and a file-output or curation
 ### P1: Make JSON Passing Intentional
 
 - Split tool outputs into `summary`, `refs`, and `full_payload_lookup` forms.
-- Add flow `output_key` template variable modes: summary by default, full only when explicitly requested.
+- Remove flow `output_key` prompt-template behavior. Preserve output aggregation through structured flow artifacts and deterministic output/review/export services.
 - Slim validator requests or add retry-specific compact validation request rendering.
 - Add unit tests for duplicate/semantic duplicate fields in validator payloads.
 
@@ -217,7 +224,9 @@ Batch compatibility requires a PDF extraction step and a file-output or curation
 ## Tests To Add
 
 - Standard chat: create 50 prior text exchanges and assert the provider-bound context stays under budget while retaining recent turns and a summary/lookup marker.
-- Flow follow-up: create several flow summary rows and assert hidden JSON replay is bounded or replaced with lookup handles.
+- Flow follow-up: create several flow summary rows and assert replay uses refs/counts rather than specialist output JSON.
+- Flow terminal output: assert a curation-handoff or file-output flow can finish
+  without injecting prior step output into a later prompt/query string.
 - Agent Studio: simulate large frontend history, workshop context, selected prompt context, and TraceReview tool results; assert the next Anthropic call receives bounded context and compact results plus payload handles.
 - Validator retry: force an empty-output retry and assert retry input has bounded evidence quote and lookup result sizes.
 - Batch: run two synthetic documents through a mocked flow and assert document 2 context does not include document 1 outputs.
@@ -235,6 +244,16 @@ Code-audited:
 - Flow execution context and hidden flow memory.
 - Batch processor context isolation.
 - Agent Studio Anthropic tool-loop context behavior.
+
+Required next runtime validation:
+
+- Run a real VM-backed flow using `backend/tests/fixtures/sample_fly_publication.pdf`.
+- Capture the flow `flow_run_id` and `trace_id`.
+- Inspect the flow in local TraceReview and compare the core observability
+  surfaces against a normal chat trace: summary, conversation, tool-call summary,
+  costs, duplicates, payload inventory, and extraction diagnostic report.
+- Confirm the flow's model-live context no longer carries full previous step
+  output once the guided-supervisor simplification is implemented.
 
 Independent review:
 

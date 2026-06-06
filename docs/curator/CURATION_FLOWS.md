@@ -1,8 +1,8 @@
 # Curation Flows Guide
 
-Curation Flows are visual workflows that let you chain multiple AI agents together. You build them once, save them, and reuse them across documents.
+Curation Flows are guided supervisor conversations that run multiple AI agents in a saved order. You build them once, save them, and reuse them across documents.
 
-> **Note:** Flows support **sequential (linear) pipelines** - each agent connects to the next in a chain. Each node can have only one outgoing connection.
+> **Note:** Flows support **sequential (linear) runs** - each agent connects to the next in a chain. Each node can have only one outgoing connection.
 
 ## Why Use Curation Flows?
 
@@ -152,27 +152,18 @@ To add a custom validation step, add a validation agent after the extraction
 node. Use its steering prompt to point at the envelope object, field path, or
 question you want it to check.
 
-**Input Source**
+**Step Context**
 
-Choose where this step gets its input:
+Each step receives the flow's Initial Instructions, the loaded document context,
+the selected agent, and that node's custom instructions. The runtime preserves
+structured artifacts from earlier steps separately for review, export, and
+follow-up lookup. Later step prompts do not use hidden previous-output text or
+custom variable templates.
 
-- **Previous Step Output** - Uses the output from the connected upstream step (default when a connection exists)
-- **Custom (with variables)** - Write a custom input template using `{{variable}}` syntax to reference outputs from any earlier step
+**Output Key**
 
-**Variable Templating**
-
-When using a custom input source, reference earlier step outputs by their variable name:
-
-```
-Validate these genes: {{pdf_output}}
-Cross-reference with: {{expression_data}}
-```
-
-Click the variable chips shown below the text field to insert available variables. Variable names must match an earlier step's output variable name exactly.
-
-**Output Variable Name**
-
-Set a name for this step's output so later steps can reference it with `{{variable_name}}`. Names can contain letters, numbers, and underscores. Example: `validated_genes`
+Set a stable key for this step's saved artifact. Names can contain letters,
+numbers, and underscores. Example: `validated_genes`
 
 **View Base Prompt & Group Rules**
 
@@ -217,7 +208,6 @@ The Flow Builder toolbar provides quick access to common operations:
 The Flow Builder validates your flow and shows error indicators when there are issues:
 
 - **Missing task instructions** - The Initial Instructions node requires non-empty instructions
-- **Ambiguous input source** - A validation agent has multiple upstream extractors without an explicit input configuration. Open the Properties Panel and select an input source.
 - **Parallel connections** - A node has more than one outgoing connection. Each node can connect to only one downstream step.
 - **Duplicate Initial Instructions** - Only one Initial Instructions node is allowed per flow
 
@@ -254,7 +244,7 @@ Understanding how flows run helps you build effective workflows:
 
 1. **Initial Instructions** provide the starting task description and context
 2. A supervisor agent receives all steps and executes them **sequentially** in the order defined by your connections
-3. Each step's output is stored under its **output variable name** and available to later steps via `{{variable}}` references
+3. Each step runs with the flow task, document context, selected agent, and node custom instructions; prior step artifacts stay saved separately for review/export lookup
 4. When a step produces a final output (e.g., a file formatter generates a CSV, or Chat Output displays results), the flow **terminates**
 5. Custom instructions for each step are applied with highest priority, overriding the agent's default behavior for that step (see [How Prompts Layer Together](#how-prompts-layer-together) above)
 6. Domain-pack extraction steps save envelope objects and schedule automatic validation according to the node's validation attachments

@@ -33,7 +33,6 @@ def _flow_definition(*, agent_id: str, agent_display_name: str, output_key: str 
                     "agent_display_name": "Initial Instructions",
                     "task_instructions": "Extract key curation-ready findings.",
                     "output_key": "task_input_text",
-                    "input_source": "user_query",
                 },
             },
             {
@@ -44,7 +43,6 @@ def _flow_definition(*, agent_id: str, agent_display_name: str, output_key: str 
                     "agent_id": agent_id,
                     "agent_display_name": agent_display_name,
                     "output_key": output_key,
-                    "input_source": "user_query",
                 },
             },
         ],

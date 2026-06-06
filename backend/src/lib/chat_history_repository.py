@@ -23,6 +23,7 @@ AGENT_STUDIO_CHAT_KIND = "agent_studio"
 ALL_CHAT_KINDS_SENTINEL = "all"
 MAX_SESSION_PAGE_SIZE = 100
 MAX_MESSAGE_PAGE_SIZE = 200
+MAX_RECENT_MESSAGE_SCAN_SIZE = 5000
 TURN_ID_UNIQUE_CONSTRAINTS = (
     "uq_chat_messages_user_turn",
     "uq_chat_messages_assistant_turn",
@@ -629,6 +630,40 @@ class ChatHistoryRepository:
             limit=limit,
             cursor=cursor,
         )
+
+    def list_recent_messages(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        chat_kind: str,
+        limit: int = MAX_MESSAGE_PAGE_SIZE,
+    ) -> list[ChatMessageRecord]:
+        """List the most recent visible transcript rows in chronological order."""
+
+        page_size = _validate_page_size(
+            limit,
+            field_name="limit",
+            max_value=MAX_RECENT_MESSAGE_SCAN_SIZE,
+        )
+        session = self._require_active_session_for_kind(
+            session_id=session_id,
+            user_auth_sub=user_auth_sub,
+            chat_kind=chat_kind,
+        )
+        messages = self._db.scalars(
+            select(ChatMessageModel)
+            .where(
+                ChatMessageModel.session_id == session.session_id,
+                ChatMessageModel.chat_kind == session.chat_kind,
+            )
+            .order_by(
+                ChatMessageModel.created_at.desc(),
+                ChatMessageModel.message_id.desc(),
+            )
+            .limit(page_size)
+        ).all()
+        return [_message_record(message) for message in reversed(messages)]
 
     def append_message(
         self,

@@ -22,6 +22,7 @@ from src.lib.domain_packs.validator_dispatch import (
     dispatch_active_validator_bindings,
     run_package_scoped_validator_agent_batch,
     run_package_scoped_validator_agent,
+    validator_request_payload_for_agent,
     validator_result_from_agent_output,
 )
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
@@ -445,6 +446,36 @@ def _validation_request() -> DomainValidationRequest:
     )
 
 
+def _verbose_validation_request() -> DomainValidationRequest:
+    return DomainValidationRequest(
+        request_id="domain-validation:verbose",
+        validator_binding_id="fixture.identifier_lookup",
+        validator_agent=ValidatorAgentRef(
+            package_id="fixture.validators",
+            agent_id="identifier_validator",
+        ),
+        target=ValidationTarget(
+            domain_pack_id="fixture.dispatch",
+            object_type="GeneAssertion",
+            field_path="gene.identifier",
+            input_values={"identifier": "BAD:0001", "evidence_quote": "crb quote"},
+        ),
+        selected_inputs={"identifier": "BAD:0001", "evidence_quote": "crb quote"},
+        input_selectors={
+            "identifier": {"source": "payload", "path": "gene.identifier"},
+            "evidence_quote": {"source": "evidence", "path": "verified_quote"},
+        },
+        evidence=[
+            {
+                "evidence_record_id": "evidence-1",
+                "verified_quote": "crb quote",
+                "chunk_id": "chunk-1",
+            }
+        ],
+        expected_result_fields={"identifier": "gene.identifier"},
+    )
+
+
 def _array_terms_validation_request() -> DomainValidationRequest:
     return DomainValidationRequest(
         request_id="domain-validation:array-terms",
@@ -492,6 +523,27 @@ def _single_result_finding(result):
             "domain_pack.validator_error",
         }
     )
+
+
+def test_validator_request_payload_for_agent_omits_semantic_duplicates():
+    request = _verbose_validation_request()
+
+    payload = validator_request_payload_for_agent(request)
+
+    assert payload["selected_inputs"] == request.selected_inputs
+    assert "input_selectors" not in payload
+    assert "evidence" not in payload
+    assert "input_values" not in payload["target"]
+    assert payload["evidence_summary"] == {
+        "evidence_count": 1,
+        "evidence_record_ids": ["evidence-1"],
+    }
+    assert payload["runtime_compaction"]["omitted_fields"] == [
+        "input_selectors",
+        "target.input_values",
+        "evidence",
+    ]
+    assert payload["runtime_compaction"]["input_values_source"] == "selected_inputs"
 
 
 def _parent_validator_findings(result):
@@ -1415,7 +1467,7 @@ def test_invalid_validator_schema_becomes_controlled_unresolved_result(
 def test_concrete_validator_envelope_projects_to_shared_result_contract():
     from packages.alliance.agents.gene.schema import GeneResultEnvelope
 
-    request = _validation_request()
+    request = _verbose_validation_request()
     payload = _result_payload(request)
     payload["gene_candidates"] = [
         {
@@ -1440,7 +1492,7 @@ def test_concrete_validator_envelope_projects_to_shared_result_contract():
 
 
 def test_validator_result_identity_mismatch_becomes_invalid_schema_result():
-    request = _validation_request()
+    request = _verbose_validation_request()
     payload = _result_payload(request)
     payload.update(
         {
@@ -1470,7 +1522,7 @@ def test_validator_result_identity_mismatch_becomes_invalid_schema_result():
 
 
 def test_validator_result_allows_target_input_value_context_drift():
-    request = _validation_request()
+    request = _verbose_validation_request()
     request = request.model_copy(
         update={
             "selected_inputs": {
@@ -1883,7 +1935,7 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
         _unwrap_function_tool,
     )
 
-    request = _validation_request()
+    request = _verbose_validation_request()
     source_agent = SimpleNamespace(
         output_type=GeneResultEnvelope,
         tools=[],
@@ -1930,11 +1982,17 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
     assert source_agent.tools == []
     assert source_agent.instructions == "Base validator instructions."
     assert "finalize_validator_result" in runtime_agent.instructions
+    runtime_payload = json.loads(captured["kwargs"]["input"])
+    assert runtime_payload["selected_inputs"] == request.selected_inputs
+    assert "input_values" not in runtime_payload["target"]
+    assert "input_selectors" not in runtime_payload
+    assert "evidence" not in runtime_payload
+    assert runtime_payload["evidence_summary"]["evidence_record_ids"] == ["evidence-1"]
     assert captured["kwargs"]["max_turns"] == 6
 
 
 def test_validator_finalization_feedback_accepts_valid_result():
-    request = _validation_request()
+    request = _verbose_validation_request()
 
     feedback = _validator_result_finalization_feedback(
         _result_payload(request),
@@ -2105,7 +2163,7 @@ def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
         _unwrap_function_tool,
     )
 
-    request = _validation_request()
+    request = _verbose_validation_request()
     source_agent = SimpleNamespace(
         output_type=GeneResultEnvelope,
         tools=[],
@@ -2163,6 +2221,14 @@ def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
     ]
     assert "gene_symbols" in payload["instructions"]
     assert payload["requests"][0]["request_id"] == request.request_id
+    assert payload["requests"][0]["selected_inputs"] == request.selected_inputs
+    assert "input_selectors" not in payload["requests"][0]
+    assert "evidence" not in payload["requests"][0]
+    assert "input_values" not in payload["requests"][0]["target"]
+    assert payload["requests"][0]["evidence_summary"] == {
+        "evidence_count": 1,
+        "evidence_record_ids": ["evidence-1"],
+    }
     assert captured["kwargs"]["max_turns"] == 6
 
 

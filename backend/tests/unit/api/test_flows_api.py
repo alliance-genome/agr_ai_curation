@@ -127,7 +127,6 @@ def _minimal_flow_definition_payload() -> dict:
                     "agent_id": "task_input",
                     "agent_display_name": "Initial Instructions",
                     "task_instructions": "Extract genes",
-                    "input_source": "user_query",
                     "output_key": "task_input",
                 },
             },
@@ -138,7 +137,6 @@ def _minimal_flow_definition_payload() -> dict:
                 "data": {
                     "agent_id": "fixture_agent_without_pack",
                     "agent_display_name": "Fixture Agent",
-                    "input_source": "previous_output",
                     "output_key": "extract_output",
                 },
             },

@@ -209,8 +209,6 @@ class FlowNodeContext(BaseModel):
     agent_display_name: str
     task_instructions: Optional[str] = None  # For task_input nodes
     custom_instructions: Optional[str] = None
-    input_source: str = "previous_output"  # 'previous_output' or 'custom'
-    custom_input: Optional[str] = None
     output_filename_template: Optional[str] = None
     output_key: str
     validation_attachments: List[Dict[str, object]] = Field(default_factory=list)

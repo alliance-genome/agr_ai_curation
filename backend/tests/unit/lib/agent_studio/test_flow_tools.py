@@ -452,8 +452,6 @@ def test_get_current_flow_handler_only_adds_preview_ellipsis_when_truncated():
                     "data": {
                         "agent_id": "chat_output_formatter",
                         "agent_display_name": "Formatter",
-                        "input_source": "custom",
-                        "custom_input": "Use {{task_input}}.",
                         "output_filename_template": "{{input_filename_stem}}.tsv",
                         "output_key": "formatted_output",
                     },
@@ -469,9 +467,8 @@ def test_get_current_flow_handler_only_adds_preview_ellipsis_when_truncated():
     markdown = result["execution_order_markdown"]
 
     assert result["success"] is True
-    assert "- **Custom Input:** Use {{task_input}}." in markdown
+    assert "- **Input:** Flow task and loaded document context" in markdown
     assert "- **Output Filename Template:** {{input_filename_stem}}.tsv" in markdown
-    assert "- **Custom Input:** Use {{task_input}}...." not in markdown
     assert (
         "- **Output Filename Template:** {{input_filename_stem}}.tsv..."
         not in markdown

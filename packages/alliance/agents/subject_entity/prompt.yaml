@@ -13,7 +13,7 @@ content: |
   </goal>
 
   <scope>
-  You route and validate the subject of a phenotype or disease annotation. Read these from `selected_inputs` and `target.input_values` when present:
+  You route and validate the subject of a phenotype or disease annotation. Read these from `selected_inputs` and the requested `target.field_path` and `target.expected_fields`:
   - `subject_type`: required route selector; accepted normalized values are `gene`, `allele`, and `agm`.
   - `subject_identifier`: required subject CURIE or primary external ID.
   - `subject_label`: optional subject symbol or label.

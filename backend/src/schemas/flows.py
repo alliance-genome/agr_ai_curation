@@ -4,6 +4,7 @@ Defines request/response schemas for Flow CRUD operations
 and validation for FlowDefinition JSONB structure.
 """
 from datetime import datetime
+import re
 from typing import List, Literal, Optional
 from uuid import UUID
 
@@ -17,6 +18,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 FlowEdgeRole = Literal["control_flow", "validation_attachment"]
 DEFAULT_FLOW_EDGE_ROLE: FlowEdgeRole = "control_flow"
 VALIDATION_ATTACHMENT_EDGE_ROLE: FlowEdgeRole = "validation_attachment"
+FLOW_OUTPUT_FILENAME_TEMPLATE_VARIABLES = frozenset(
+    {"input_filename", "input_filename_stem", "trace_id", "timestamp"}
+)
+_FLOW_TEMPLATE_VARIABLE_PATTERN = re.compile(r"{{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*}}")
 
 
 class FlowNodePosition(BaseModel):
@@ -98,6 +103,8 @@ class FlowValidationAttachmentGroup(BaseModel):
 class FlowNodeData(BaseModel):
     """Configuration data for a flow node."""
 
+    model_config = ConfigDict(extra="forbid")
+
     agent_id: str = Field(
         ...,
         min_length=1,
@@ -140,16 +147,7 @@ class FlowNodeData(BaseModel):
         description="Pinned prompt version (None = use active)"
     )
 
-    # Input/Output configuration
-    input_source: Literal["user_query", "previous_output", "custom"] = Field(
-        "previous_output",
-        description="Where this step gets its input"
-    )
-    custom_input: Optional[str] = Field(
-        None,
-        max_length=2000,
-        description="Template with {{variable}} placeholders"
-    )
+    # Output configuration
     include_evidence: Optional[bool] = Field(
         None,
         description=(
@@ -163,8 +161,8 @@ class FlowNodeData(BaseModel):
         max_length=255,
         description=(
             "For output/formatter nodes only. Template for the human-readable filename "
-            "descriptor with {{variable}} placeholders (for example "
-            "'{{input_filename_stem}}.tsv')."
+            "descriptor. Supported placeholders are {{input_filename}}, "
+            "{{input_filename_stem}}, {{trace_id}}, and {{timestamp}}."
         ),
     )
     # IMPORTANT: output_key pattern ensures valid Python identifier
@@ -173,7 +171,7 @@ class FlowNodeData(BaseModel):
         min_length=1,
         max_length=50,
         pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$",
-        description="Variable name for downstream templates"
+        description="Stable step artifact identifier for display, persistence, and export"
     )
     validation_attachments: List[FlowValidationAttachmentSelection] = Field(
         default_factory=list,
@@ -188,20 +186,31 @@ class FlowNodeData(BaseModel):
     )
 
     @model_validator(mode="after")
-    def validate_custom_input_requirements(self) -> "FlowNodeData":
-        """Require non-empty custom_input when input_source explicitly uses it."""
-        normalized_custom_input = (
-            self.custom_input.strip()
-            if isinstance(self.custom_input, str)
-            else None
+    def validate_output_filename_template_variables(self) -> "FlowNodeData":
+        """Limit formatter filename templates to bounded built-in variables."""
+
+        if not isinstance(self.output_filename_template, str):
+            return self
+
+        normalized_template = self.output_filename_template.strip()
+        if not normalized_template:
+            self.output_filename_template = None
+            return self
+
+        referenced_variables = set(
+            _FLOW_TEMPLATE_VARIABLE_PATTERN.findall(normalized_template)
         )
-        if normalized_custom_input == "":
-            normalized_custom_input = None
+        unsupported = sorted(
+            referenced_variables - FLOW_OUTPUT_FILENAME_TEMPLATE_VARIABLES
+        )
+        if unsupported:
+            allowed = ", ".join(sorted(FLOW_OUTPUT_FILENAME_TEMPLATE_VARIABLES))
+            raise ValueError(
+                "output_filename_template only supports built-in variables "
+                f"({allowed}); unsupported: {', '.join(unsupported)}"
+            )
 
-        if self.input_source == "custom" and not normalized_custom_input:
-            raise ValueError("custom_input is required when input_source='custom'")
-
-        self.custom_input = normalized_custom_input
+        self.output_filename_template = normalized_template
         return self
 
 

@@ -1,8 +1,7 @@
 /**
  * Unit tests for smart default utilities.
  *
- * Tests the helper functions that determine how validators should
- * default to using extractor output instead of previous validator output.
+ * Tests the helper functions that classify flow nodes and extractor topology.
  */
 
 import { describe, it, expect } from 'vitest'
@@ -14,8 +13,6 @@ import {
   findNearestExtractor,
   countExtractors,
   getExtractors,
-  validatorHasExplicitExtractorInput,
-  validatorNeedsConfiguration,
 } from './smartDefaultUtils'
 import type { AgentNode, AgentNodeData } from './types'
 
@@ -38,7 +35,6 @@ function createMockNode(
     data: {
       agent_id: agentId,
       agent_display_name: agentId.replace(/_/g, ' ').toUpperCase(),
-      input_source: 'custom',
       output_key: outputKey || `${agentId.replace(/-/g, '_')}_output`,
     } as AgentNodeData,
   }
@@ -420,177 +416,5 @@ describe('getExtractors', () => {
     const extractors = getExtractors(nodes)
     expect(extractors).toHaveLength(1)
     expect(extractors[0].data.agent_id).toBe('pdf_extraction')
-  })
-})
-
-// =============================================================================
-// validatorHasExplicitExtractorInput Tests
-// =============================================================================
-
-describe('validatorHasExplicitExtractorInput', () => {
-  it('returns false when input_source is not custom', () => {
-    const node = createMockNode('node_0', 'gene')
-    node.data.input_source = 'previous_output'
-    const extractors = [createMockNode('node_1', 'pdf_extraction', 'pdf_output')]
-
-    expect(validatorHasExplicitExtractorInput(node, extractors)).toBe(false)
-  })
-
-  it('returns false when custom_input is empty', () => {
-    const node = createMockNode('node_0', 'gene')
-    node.data.input_source = 'custom'
-    node.data.custom_input = ''
-    const extractors = [createMockNode('node_1', 'pdf_extraction', 'pdf_output')]
-
-    expect(validatorHasExplicitExtractorInput(node, extractors)).toBe(false)
-  })
-
-  it('returns false when custom_input has no extractor reference', () => {
-    const node = createMockNode('node_0', 'gene')
-    node.data.input_source = 'custom'
-    node.data.custom_input = 'some static text'
-    const extractors = [createMockNode('node_1', 'pdf_extraction', 'pdf_output')]
-
-    expect(validatorHasExplicitExtractorInput(node, extractors)).toBe(false)
-  })
-
-  it('returns true when custom_input references pdf_output', () => {
-    const node = createMockNode('node_0', 'gene')
-    node.data.input_source = 'custom'
-    node.data.custom_input = '{{pdf_output}}'
-    const extractors = [createMockNode('node_1', 'pdf_extraction', 'pdf_output')]
-
-    expect(validatorHasExplicitExtractorInput(node, extractors)).toBe(true)
-  })
-
-  it('returns true when custom_input references gene_expression_output', () => {
-    const node = createMockNode('node_0', 'gene')
-    node.data.input_source = 'custom'
-    node.data.custom_input = '{{gex_output}}'
-    const extractors = [createMockNode('node_1', 'gene_expression', 'gex_output')]
-
-    expect(validatorHasExplicitExtractorInput(node, extractors)).toBe(true)
-  })
-
-  it('returns true when custom_input has extractor ref among other text', () => {
-    const node = createMockNode('node_0', 'gene')
-    node.data.input_source = 'custom'
-    node.data.custom_input = 'Process this: {{pdf_output}} and validate'
-    const extractors = [createMockNode('node_1', 'pdf_extraction', 'pdf_output')]
-
-    expect(validatorHasExplicitExtractorInput(node, extractors)).toBe(true)
-  })
-
-  it('returns false when extractor ref is for a deleted extractor', () => {
-    const node = createMockNode('node_0', 'gene')
-    node.data.input_source = 'custom'
-    node.data.custom_input = '{{deleted_output}}'
-    const extractors = [createMockNode('node_1', 'pdf_extraction', 'pdf_output')]
-
-    expect(validatorHasExplicitExtractorInput(node, extractors)).toBe(false)
-  })
-})
-
-// =============================================================================
-// validatorNeedsConfiguration Tests
-// =============================================================================
-
-describe('validatorNeedsConfiguration', () => {
-  describe('when validator has explicit extractor input', () => {
-    it('returns needsConfig: false', () => {
-      const nodes = [
-        createMockNode('node_0', 'pdf_extraction', 'pdf_output'),
-        createMockNode('node_1', 'pdf_extraction', 'pdf2_output'),
-        (() => {
-          const n = createMockNode('node_2', 'gene')
-          n.data.input_source = 'custom'
-          n.data.custom_input = '{{pdf_output}}'
-          return n
-        })(),
-      ]
-
-      const result = validatorNeedsConfiguration('node_2', nodes, [])
-      expect(result.needsConfig).toBe(false)
-    })
-  })
-
-  describe('when validator is connected to upstream extractor', () => {
-    it('returns needsConfig: false regardless of global extractor count', () => {
-      const nodes = [
-        createMockNode('node_0', 'pdf_extraction', 'pdf_output'),
-        createMockNode('node_1', 'gene_expression', 'gex_output'),
-        createMockNode('node_2', 'gene'),
-      ]
-      // node_2 is connected to node_0 (pdf)
-      const edges = [{ source: 'node_0', target: 'node_2' }]
-
-      const result = validatorNeedsConfiguration('node_2', nodes, edges)
-      expect(result.needsConfig).toBe(false)
-    })
-  })
-
-  describe('when validator is disconnected', () => {
-    it('returns needsConfig: false when no extractors exist', () => {
-      const nodes = [createMockNode('node_0', 'gene')]
-
-      const result = validatorNeedsConfiguration('node_0', nodes, [])
-      expect(result.needsConfig).toBe(false)
-    })
-
-    it('returns needsConfig: false when only one extractor exists', () => {
-      const nodes = [
-        createMockNode('node_0', 'pdf_extraction', 'pdf_output'),
-        createMockNode('node_1', 'gene'),
-      ]
-
-      const result = validatorNeedsConfiguration('node_1', nodes, [])
-      expect(result.needsConfig).toBe(false)
-    })
-
-    it('returns needsConfig: true when multiple extractors exist', () => {
-      const nodes = [
-        createMockNode('node_0', 'pdf_extraction', 'pdf_output'),
-        createMockNode('node_1', 'gene_expression', 'gex_output'),
-        createMockNode('node_2', 'gene'),
-      ]
-
-      const result = validatorNeedsConfiguration('node_2', nodes, [])
-      expect(result.needsConfig).toBe(true)
-      expect(result.reason).toContain('Multiple extractors')
-    })
-  })
-
-  describe('edge cases', () => {
-    it('returns needsConfig: false for non-validator nodes', () => {
-      const nodes = [createMockNode('node_0', 'pdf_extraction', 'pdf_output')]
-
-      const result = validatorNeedsConfiguration('node_0', nodes, [])
-      expect(result.needsConfig).toBe(false)
-    })
-
-    it('returns needsConfig: false for non-existent node', () => {
-      const nodes = [createMockNode('node_0', 'gene')]
-
-      const result = validatorNeedsConfiguration('nonexistent', nodes, [])
-      expect(result.needsConfig).toBe(false)
-    })
-
-    it('handles multi-hop connections to extractors', () => {
-      // pdf -> allele -> gene
-      const nodes = [
-        createMockNode('node_0', 'pdf_extraction', 'pdf_output'),
-        createMockNode('node_1', 'gene_expression', 'gex_output'), // Another extractor, disconnected
-        createMockNode('node_2', 'allele'),
-        createMockNode('node_3', 'gene'),
-      ]
-      const edges = [
-        { source: 'node_0', target: 'node_2' },
-        { source: 'node_2', target: 'node_3' },
-      ]
-
-      const result = validatorNeedsConfiguration('node_3', nodes, edges)
-      // node_3 is connected to pdf through allele, so no error
-      expect(result.needsConfig).toBe(false)
-    })
   })
 })

@@ -676,7 +676,7 @@ This agent has group-specific rules available for: {', '.join(available_groups)}
 <flow_context>
 ## Current Context: Flow Builder
 
-The curator is designing a curation flow - a visual pipeline that chains agents together to process documents.
+The curator is designing a curation flow - a guided supervisor run that executes selected agents in sequence against the flow task and loaded document.
 
 <critical_instruction>
 **MANDATORY: ALWAYS call `get_current_flow` tool FIRST before any flow discussion.**
@@ -703,7 +703,7 @@ This tool returns:
 **When asked to verify, check for:**
 1. **Initial Instructions MUST Be First** - Every flow MUST start with the Initial Instructions node (task_input). This is the entry point that defines what the curator wants to accomplish.
 2. **All Nodes Connected** - Disconnected nodes = steps that won't execute
-3. **Logical Data Flow** - Each agent's output feeds appropriately to the next
+3. **Logical Step Order** - Each agent appears in the right sequence for the curator's task
 4. **Custom Instructions Redundancy** - For EACH node with custom instructions:
    - Call `get_prompt(agent_id)` to fetch the base prompt
    - Compare custom instructions to base prompt content
@@ -727,6 +727,12 @@ This tool returns:
 2. **Extraction/Verification agents** - Process the document
 3. **Automatic validation** - Domain-pack metadata and curator selections schedule active validators through runtime dispatch after extraction
 4. **Output agent** (if exporting data) - Format materialized projections as CSV, TSV, JSON, or chat
+
+Each step receives the flow task, loaded document context, selected agent, and
+that node's custom instructions. Do not recommend custom input templates or
+previous-step output prompts; earlier structured artifacts are preserved by the
+runtime for review/export lookup instead of being pasted into later step
+prompts.
 
 **Initial Instructions should specify:**
 - What to extract (e.g., "Extract all alleles mentioned in this paper")

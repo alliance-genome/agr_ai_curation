@@ -36,14 +36,22 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
-def _resolve_model_name(raw_model: Any) -> str:
-    model = str(raw_model or "gpt-4o")
-    match = _MODEL_ENV_PATTERN.match(model)
+def _resolve_model_config_value(raw_value: Any) -> str | None:
+    if raw_value is None:
+        return None
+
+    value = str(raw_value).strip()
+    match = _MODEL_ENV_PATTERN.match(value)
     if not match:
-        return model
+        return value
+
     env_var = match.group(1)
     default = match.group(2)
     return os.environ.get(env_var, default)
+
+
+def _resolve_model_name(raw_model: Any) -> str:
+    return _resolve_model_config_value(raw_model) or "gpt-4o"
 
 
 def _load_agent_yaml_specs() -> List[Dict[str, Any]]:
@@ -72,7 +80,9 @@ def _load_agent_yaml_specs() -> List[Dict[str, Any]]:
                 "output_schema_key": data.get("output_schema"),
                 "model_id": _resolve_model_name(model_cfg.get("model", "gpt-4o")),
                 "model_temperature": float(model_cfg.get("temperature", 0.1)),
-                "model_reasoning": model_cfg.get("reasoning"),
+                "model_reasoning": _resolve_model_config_value(
+                    model_cfg.get("reasoning")
+                ),
                 "group_rules_enabled": bool(data.get("group_rules_enabled", False)),
                 "icon": str(frontend_cfg.get("icon", "\U0001F916")),
                 "show_in_palette": bool(frontend_cfg.get("show_in_palette", True)),

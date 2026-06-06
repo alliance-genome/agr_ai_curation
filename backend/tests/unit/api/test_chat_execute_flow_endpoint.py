@@ -495,7 +495,21 @@ def test_execute_flow_endpoint_background_backfill_uses_final_assistant_aware_ti
         }
         yield {
             "type": "FLOW_FINISHED",
-            "data": {"status": "completed", "failure_reason": None},
+            "data": {
+                "status": "completed",
+                "failure_reason": None,
+                "flow_run_id": "flow-run-context",
+                "adapter_keys": ["fb_gene"],
+                "extraction_result_refs": [
+                    {
+                        "extraction_result_id": "er-flow-context-1",
+                        "adapter_key": "fb_gene",
+                        "agent_key": "gene",
+                        "candidate_count": 1,
+                    }
+                ],
+                "review_session_ids": ["review-flow-context-1"],
+            },
         }
 
     _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
@@ -737,7 +751,22 @@ def test_execute_flow_endpoint_injects_flow_context_without_leaking_internal_pay
         }
         yield {
             "type": "FLOW_FINISHED",
-            "data": {"status": "completed", "failure_reason": None},
+            "data": {
+                "status": "completed",
+                "failure_reason": None,
+                "flow_run_id": "flow-run-context-1",
+                "adapter_keys": ["gene"],
+                "extraction_result_refs": [
+                    {
+                        "extraction_result_id": "er-flow-context-1",
+                        "adapter_key": "gene",
+                        "agent_key": "gene",
+                        "candidate_count": 1,
+                        "trace_id": "trace-flow-context-1",
+                    }
+                ],
+                "review_session_ids": ["review-flow-context-1"],
+            },
         }
 
     _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
@@ -763,9 +792,11 @@ def test_execute_flow_endpoint_injects_flow_context_without_leaking_internal_pay
         chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
     ]
     assert "Flow execution summary for follow-up questions" in history_assistant_msg
-    assert "<FLOW_INTERNAL_CONTEXT_JSON>" in history_assistant_msg
-    assert "ask_gene_specialist" in history_assistant_msg
-    assert "TP53" in history_assistant_msg
+    assert "<FLOW_INTERNAL_CONTEXT_JSON>" not in history_assistant_msg
+    assert "ask_gene_specialist" not in history_assistant_msg
+    assert "{\"selected_gene\":\"TP53\"}" not in history_assistant_msg
+    assert "er-flow-context-1" in history_assistant_msg
+    assert "review-flow-context-1" in history_assistant_msg
 
 
 def test_execute_flow_endpoint_replays_completed_turn_without_rerunning(monkeypatch):
@@ -1045,35 +1076,39 @@ def test_execute_flow_endpoint_retry_reuses_persisted_trace_context(monkeypatch)
     assert trace_id == "trace-flow-first"
 
 
-def test_build_flow_memory_message_keeps_hidden_json_parseable_when_compacted():
+def test_build_flow_memory_message_contains_refs_not_hidden_payloads():
     assistant_message = chat._build_flow_memory_assistant_message(
         flow_name="Large Flow",
         flow_id="flow-123",
+        flow_run_id="flow-run-123",
         session_id="session-123",
+        document_id="document-123",
         status="completed",
         trace_id="trace-123",
         final_user_output="done",
         agents_used=["Agent A"],
-        specialist_outputs=[
+        extraction_result_refs=[
             {
-                "tool": "ask_gene_specialist",
-                "output_length": 25000,
-                "output": "X" * 25000,
+                "extraction_result_id": "er-123",
+                "adapter_key": "fb_gene",
+                "agent_key": "gene",
+                "candidate_count": 1,
             }
         ],
-        specialist_summaries=[{"specialist": "Agent A", "summary": "S" * 6000}],
-        domain_warnings=[{"reason": "warning", "message": "W" * 6000}],
-        file_outputs=[{"file_id": "f1", "filename": "result.tsv", "metadata": "M" * 6000}],
+        review_session_ids=["review-123"],
+        adapter_keys=["fb_gene"],
+        domain_warning_count=1,
+        file_outputs=[{"file_id": "f1", "filename": "result.tsv", "format": "tsv"}],
         failure_reason=None,
     )
 
-    start_marker = "<FLOW_INTERNAL_CONTEXT_JSON>\n"
-    end_marker = "\n</FLOW_INTERNAL_CONTEXT_JSON>"
-    hidden_json = assistant_message.split(start_marker, 1)[1].split(end_marker, 1)[0]
-
-    assert len(hidden_json) <= chat._FLOW_MEMORY_MAX_HIDDEN_JSON_CHARS
-    parsed_hidden = json.loads(hidden_json)
-    assert parsed_hidden["flow"]["flow_id"] == "flow-123"
+    assert "<FLOW_INTERNAL_CONTEXT_JSON>" not in assistant_message
+    assert "specialist_outputs" not in assistant_message
+    assert "flow-run-123" in assistant_message
+    assert "document-123" in assistant_message
+    assert "er-123" in assistant_message
+    assert "review-123" in assistant_message
+    assert "f1" in assistant_message
 
 
 def test_execute_flow_failure_messages_surface_missing_reason():
@@ -1085,14 +1120,17 @@ def test_execute_flow_failure_messages_surface_missing_reason():
     assistant_message = chat._build_flow_memory_assistant_message(
         flow_name="Failure Flow",
         flow_id="flow-failure",
+        flow_run_id="flow-run-failure",
         session_id="session-failure",
+        document_id=None,
         status="failed",
         trace_id="trace-failure",
         final_user_output=None,
         agents_used=[],
-        specialist_outputs=[],
-        specialist_summaries=[],
-        domain_warnings=[],
+        extraction_result_refs=[],
+        review_session_ids=[],
+        adapter_keys=[],
+        domain_warning_count=0,
         file_outputs=[],
         failure_reason=None,
     )

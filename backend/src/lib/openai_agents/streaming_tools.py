@@ -58,6 +58,7 @@ from .extraction_builder_workspace import (
     set_active_extraction_builder_workspace,
     stage_extraction_payload,
 )
+from .curation_context_registry import register_internal_extraction_event
 from .extraction_trace_events import (
     get_current_extraction_trace_run,
     write_extraction_trace_event,
@@ -2475,6 +2476,7 @@ def _reduce_specialist_output_for_supervisor(
     final_output: str,
     *,
     expected_output_type: Any,
+    finalized_domain_envelope: bool = False,
 ) -> str:
     """Return a supervisor-safe handoff without replaying raw structured JSON."""
 
@@ -2490,13 +2492,18 @@ def _reduce_specialist_output_for_supervisor(
     if answer_text:
         return answer_text
 
-    if _is_domain_envelope_extraction_output_type(
-        expected_output_type
-    ) or _looks_like_domain_envelope_payload(payload):
+    if _is_domain_envelope_extraction_output_type(expected_output_type) or finalized_domain_envelope:
         summary_text = _domain_envelope_supervisor_summary(payload)
         if summary_text:
             return summary_text
         return _domain_envelope_supervisor_minimal_summary(payload)
+
+    if _looks_like_domain_envelope_payload(payload):
+        return (
+            "A domain-envelope-shaped JSON payload was returned, but it was not "
+            "accepted through a declared or finalized curation contract. The raw "
+            "payload was not passed to the supervisor."
+        )
 
     if expected_output_type is not None:
         validator_summary = _domain_validator_supervisor_summary(
@@ -3964,6 +3971,7 @@ def add_specialist_event(event: Dict[str, Any]):
     has its own list that cannot be contaminated by other batches.
     """
     write_stream_event(event)
+    register_internal_extraction_event(event)
 
     event_list = _live_event_list_var.get()
     if event_list is not None:
@@ -5448,6 +5456,7 @@ async def run_specialist_with_events(
     final_output = _reduce_specialist_output_for_supervisor(
         final_output,
         expected_output_type=expected_output_type,
+        finalized_domain_envelope=builder_finalization is not None,
     )
     phase_timings_ms["supervisor_output_reduction_ms"] = _elapsed_ms(
         supervisor_reduction_started_at

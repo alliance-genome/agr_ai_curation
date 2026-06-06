@@ -31,7 +31,6 @@ export interface AgentCategory {
 // Flow Definition Types (matches backend Pydantic schemas)
 // ============================================================================
 
-export type InputSource = 'user_query' | 'previous_output' | 'custom'
 export type NodeType = 'agent' | 'decision' | 'output' | 'task_input'
 export type FlowEdgeRole = 'control_flow' | 'validation_attachment'
 
@@ -74,8 +73,6 @@ export interface FlowNodeData {
   /** Additional custom instructions appended to agent prompts */
   custom_instructions?: string
   prompt_version?: number
-  input_source: InputSource
-  custom_input?: string
   /** For output/formatter steps only. Defaults to true when omitted. */
   include_evidence?: boolean
   /** For output/formatter steps only. Controls the human-readable output descriptor. */
@@ -200,8 +197,6 @@ export interface FlowState {
     agent_display_name: string
     task_instructions?: string
     custom_instructions?: string
-    input_source: InputSource
-    custom_input?: string
     output_filename_template?: string
     output_key: string
     validation_attachments?: ValidationAttachmentSelection[]
@@ -249,14 +244,10 @@ export interface NodeEditorProps {
   onClose: () => void
   /** Callback to delete the node */
   onDelete?: (nodeId: string) => void
-  /** Available output keys from other nodes (for input templates) */
-  availableVariables: string[]
   /** Callback to view the agent's prompts */
   onViewPrompts?: (agentId: string, agentName: string) => void
   /** Callback to open the domain envelope inspector */
   onViewDomainEnvelope?: (nodeId: string) => void
-  /** Whether this node has an incoming edge (for enabling "Previous Step Output") */
-  hasIncomingEdge?: boolean
   /** Callback to mark node as manually configured when user saves in NodeEditor */
   onMarkManuallyConfigured?: (nodeId: string) => void
 }
@@ -281,7 +272,7 @@ export interface NodeEditorProps {
 export interface ValidationError {
   nodeId?: string
   edgeId?: string
-  type: 'disconnected' | 'missing_entry' | 'duplicate_output_key' | 'invalid_input_source' | 'cycle_detected' | 'missing_task_instructions' | 'multiple_task_inputs'
+  type: 'disconnected' | 'missing_entry' | 'duplicate_output_key' | 'cycle_detected' | 'missing_task_instructions' | 'multiple_task_inputs'
   message: string
 }
 

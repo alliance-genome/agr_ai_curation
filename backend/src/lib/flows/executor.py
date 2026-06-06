@@ -19,7 +19,6 @@ Architecture:
     events for the audit panel and PDF highlighting.
 """
 import asyncio
-import csv
 import json
 import logging
 import time
@@ -74,6 +73,7 @@ from src.lib.domain_packs.validator_dispatch import (
     preflight_unresolved_validator_result,
     run_package_scoped_validator_agent,
     unresolved_validator_result_for_dispatch_problem,
+    validator_request_payload_for_agent,
     validator_result_from_agent_output,
 )
 from src.lib.file_outputs import sanitize_output_descriptor
@@ -143,7 +143,8 @@ def _emit_flow_runtime_event(event: dict[str, Any]) -> None:
 
 def _tool_safe_agent_id(agent_id: str) -> str:
     """Normalize agent_id into a valid Python identifier segment for tool names."""
-    return agent_id.replace("-", "_")
+    normalized = re.sub(r"[^a-zA-Z0-9_]+", "_", str(agent_id or "")).strip("_")
+    return normalized or "agent"
 
 
 def _normalize_metadata_value(value: Any) -> str:
@@ -341,70 +342,24 @@ def _format_flow_template_timestamp(now: Optional[datetime] = None) -> str:
     return (now or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
 
 
-def _stringify_flow_template_value(value: Any) -> str:
-    """Normalize template variable values into stable strings."""
-
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    if isinstance(value, (dict, list)):
-        return json.dumps(value, ensure_ascii=False)
-    return str(value)
-
-
-def _get_task_input_output_key(flow: CurationFlow) -> Optional[str]:
-    """Return the configured output_key for the task_input node, if present."""
-
-    for node in flow.flow_definition.get("nodes", []):
-        data = node.get("data", {})
-        if node.get("type") == "task_input" or data.get("agent_id") == "task_input":
-            output_key = str(data.get("output_key") or "").strip()
-            return output_key or None
-    return None
-
-
-def _build_initial_flow_template_variables(flow: CurationFlow) -> dict[str, str]:
-    """Bind task_input output_key to the curator-authored task instructions."""
-
-    output_key = _get_task_input_output_key(flow)
-    if not output_key:
-        return {}
-
-    task_instructions = str(get_task_instructions(flow) or "").strip()
-    if not task_instructions:
-        return {}
-
-    return {output_key: task_instructions}
-
-
-def _build_flow_template_variables(
+def _build_flow_builtin_template_variables(
     *,
-    stored_variables: dict[str, Any],
     document_name: Optional[str],
     flow_run_id: Optional[str],
     timestamp: Optional[str] = None,
 ) -> dict[str, str]:
-    """Assemble built-in and step-bound variables for one template-render pass."""
+    """Assemble bounded built-in variables for formatter filename descriptors."""
 
-    variables = {
-        key: _stringify_flow_template_value(value)
-        for key, value in stored_variables.items()
-        if str(key or "").strip()
+    return {
+        "input_filename": _extract_flow_input_filename(document_name),
+        "input_filename_stem": _extract_flow_input_filename_stem(document_name),
+        "trace_id": (
+            get_current_trace_id()
+            or str(flow_run_id or "").strip()
+            or _FLOW_TEMPLATE_DEFAULT_TRACE_ID
+        ),
+        "timestamp": timestamp or _format_flow_template_timestamp(),
     }
-    variables.update(
-        {
-            "input_filename": _extract_flow_input_filename(document_name),
-            "input_filename_stem": _extract_flow_input_filename_stem(document_name),
-            "trace_id": (
-                get_current_trace_id()
-                or str(flow_run_id or "").strip()
-                or _FLOW_TEMPLATE_DEFAULT_TRACE_ID
-            ),
-            "timestamp": timestamp or _format_flow_template_timestamp(),
-        }
-    )
-    return variables
 
 
 def _render_flow_template(
@@ -435,33 +390,6 @@ def _render_flow_template(
     return rendered
 
 
-def _resolve_flow_step_query(
-    *,
-    input_source: Any,
-    custom_input: Optional[str],
-    default_query: str,
-    template_variables: dict[str, str],
-) -> str:
-    """Resolve the per-step query.
-
-    Only input_source='custom' overrides the supervisor-provided query. The existing
-    supervisor conversation remains authoritative for 'previous_output' and 'user_query'
-    so this ticket can ship deterministic custom-input templates without rewriting the
-    broader flow prompting model.
-    """
-
-    if str(input_source or "previous_output").strip() != "custom":
-        return default_query
-
-    rendered = _render_flow_template(custom_input, template_variables).strip()
-    if not rendered:
-        raise FlowTemplateConfigurationError(
-            "custom_input rendered empty while input_source='custom'; "
-            "check the configured template variables."
-        )
-    return rendered
-
-
 def _resolve_output_filename_descriptor(
     *,
     output_filename_template: Optional[str],
@@ -482,128 +410,155 @@ def _resolve_output_filename_descriptor(
     return sanitize_output_descriptor(rendered)
 
 
-def _extract_tsv_formatter_requested_columns(query: str) -> List[str]:
-    """Extract explicit formatter column order from a flow handoff query."""
-
-    for line in query.splitlines():
-        if "columns" not in line.lower() or ":" not in line:
-            continue
-
-        candidate = line.split(":", 1)[1].split(".", 1)[0]
-        columns = [
-            token.strip().strip("`\"'")
-            for token in candidate.split(",")
-            if token.strip()
-        ]
-        if len(columns) > 1:
-            return columns
-
-    return []
+def _append_flow_query_section(
+    sections: list[str],
+    heading: str,
+    value: Any,
+) -> None:
+    normalized = str(value or "").strip()
+    if normalized:
+        sections.append(f"{heading}:\n{normalized}")
 
 
-def _extract_tsv_formatter_data_lines(query: str) -> List[str]:
-    """Return the tab-delimited data block from a formatter handoff query."""
+def _build_flow_step_query(
+    *,
+    flow: CurationFlow,
+    node_data: Mapping[str, Any],
+    step_number: int,
+    agent_name: str,
+    user_query: Optional[str],
+    document_id: Optional[str],
+    document_name: Optional[str],
+) -> str:
+    """Build the bounded prompt passed to one configured flow step.
 
-    lines = query.splitlines()
-    start_index = 0
-    for index, line in enumerate(lines):
-        if line.strip().lower() in {"data:", "data"}:
-            start_index = index + 1
-            break
+    The supervisor's tool-call argument is intentionally ignored. Flow step input
+    comes from the authored task, loaded document identity, and step-local
+    configuration; completed step artifacts remain in runtime state.
+    """
 
-    data_lines: List[str] = []
-    started = False
-    for line in lines[start_index:]:
-        if not line.strip():
-            continue
-        if "\t" not in line:
-            if started:
-                break
-            continue
+    sections: list[str] = []
+    _append_flow_query_section(sections, "Flow task", get_task_instructions(flow))
+    _append_flow_query_section(sections, "Curator run request", user_query)
 
-        started = True
-        data_lines.append(line)
-
-    return data_lines
-
-
-def _row_matches_columns(row: List[str], columns: List[str]) -> bool:
-    """Return whether a parsed TSV row is the explicit header row."""
-
-    if len(row) != len(columns):
-        return False
-    return [cell.strip().lower() for cell in row] == [
-        column.strip().lower() for column in columns
-    ]
-
-
-def _parse_tsv_formatter_query_rows(
-    query: str,
-) -> Optional[tuple[List[str], List[Dict[str, str]]]]:
-    """Parse provided TSV rows from a formatter flow handoff query."""
-
-    requested_columns = _extract_tsv_formatter_requested_columns(query)
-    data_lines = _extract_tsv_formatter_data_lines(query)
-    if not data_lines:
-        return None
-
-    parsed_rows = [
-        [cell.strip() for cell in row]
-        for row in csv.reader(data_lines, delimiter="\t")
-        if any(cell.strip() for cell in row)
-    ]
-    if not parsed_rows:
-        return None
-
-    if requested_columns:
-        columns = requested_columns
-        value_rows = (
-            parsed_rows[1:]
-            if _row_matches_columns(parsed_rows[0], columns)
-            else parsed_rows
+    document_bits = []
+    if document_name:
+        document_bits.append(f"name={document_name}")
+    if document_id:
+        document_bits.append(f"id={document_id}")
+    if document_bits:
+        sections.append(
+            "Loaded document:\n"
+            + ", ".join(document_bits)
+            + "\nUse the document context and document tools already attached to this specialist."
         )
-    else:
-        columns = parsed_rows[0]
-        value_rows = parsed_rows[1:]
 
-    if not columns or not value_rows:
-        return None
+    _append_flow_query_section(sections, "Configured step", f"{step_number}. {agent_name}")
+    _append_flow_query_section(sections, "Step goal", node_data.get("step_goal"))
+    _append_flow_query_section(
+        sections,
+        "Step-local custom instructions",
+        node_data.get("custom_instructions"),
+    )
 
-    rows: List[Dict[str, str]] = []
-    for values in value_rows:
-        if len(values) != len(columns):
-            return None
-        rows.append(dict(zip(columns, values)))
+    sections.append(
+        "Runtime artifact policy:\n"
+        "Run only this configured step. Do not rely on, request, or receive full "
+        "previous-step output in this prompt. The flow runtime stores completed "
+        "artifacts separately for review, validation, export, and final handoff."
+    )
 
-    return columns, rows
+    if not sections:
+        return f"Run step {step_number} of the '{flow.name}' curation flow."
+    return "\n\n".join(sections)
+
+
+_FLOW_ARTIFACT_TSV_COLUMNS = [
+    "step",
+    "agent_id",
+    "agent_name",
+    "adapter_key",
+    "domain_pack_id",
+    "envelope_id",
+    "object_count",
+    "candidate_count",
+    "artifact_preview",
+]
+
+
+def _candidate_payload_artifact_fields(
+    candidate: ExtractionEnvelopeCandidate,
+) -> dict[str, str]:
+    payload = candidate.payload_json
+    if not isinstance(payload, Mapping):
+        return {"domain_pack_id": "", "envelope_id": "", "object_count": ""}
+
+    objects = payload.get("objects")
+    if not isinstance(objects, list):
+        objects = payload.get("curatable_objects")
+    object_count = len(objects) if isinstance(objects, list) else 0
+    return {
+        "domain_pack_id": str(payload.get("domain_pack_id") or "").strip(),
+        "envelope_id": str(payload.get("envelope_id") or "").strip(),
+        "object_count": str(object_count),
+    }
+
+
+def _build_flow_artifact_tsv_rows(
+    completed_steps: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    """Build deterministic file-output rows from completed structured artifacts."""
+
+    rows: list[dict[str, str]] = []
+    for step in completed_steps:
+        candidate = step.get("candidate")
+        if not isinstance(candidate, ExtractionEnvelopeCandidate):
+            continue
+
+        artifact_fields = _candidate_payload_artifact_fields(candidate)
+        rows.append(
+            {
+                "step": str(step.get("step") or "").strip(),
+                "agent_id": str(step.get("agent_id") or candidate.agent_key or "").strip(),
+                "agent_name": str(step.get("agent_name") or "").strip(),
+                "adapter_key": str(candidate.adapter_key or "").strip(),
+                "domain_pack_id": artifact_fields["domain_pack_id"],
+                "envelope_id": artifact_fields["envelope_id"],
+                "object_count": artifact_fields["object_count"],
+                "candidate_count": str(candidate.candidate_count or 0),
+                "artifact_preview": _truncate_tool_output(
+                    str(step.get("output_preview") or step.get("output") or "")
+                ),
+            }
+        )
+    return rows
 
 
 async def _try_save_tsv_formatter_flow_output(
     *,
     agent_id: str,
-    resolved_query: str,
+    completed_steps: list[dict[str, Any]],
     flow_name: str,
 ) -> Optional[str]:
-    """Deterministically save TSV flow formatter handoffs that already contain rows."""
+    """Deterministically save TSV rows from completed flow artifacts."""
 
     if agent_id not in _FLOW_TSV_FORMATTER_AGENT_IDS:
         return None
 
-    parsed = _parse_tsv_formatter_query_rows(resolved_query)
-    if parsed is None:
+    rows = _build_flow_artifact_tsv_rows(completed_steps)
+    if not rows:
         return None
 
-    columns, rows = parsed
     from src.lib.openai_agents.tools.file_output_tools import _save_tsv_impl
 
     descriptor = sanitize_output_descriptor(f"{flow_name}_tsv_export")
     result = await _save_tsv_impl(
         data_json=json.dumps(rows, ensure_ascii=False),
         filename=descriptor,
-        columns=json.dumps(columns, ensure_ascii=False),
+        columns=json.dumps(_FLOW_ARTIFACT_TSV_COLUMNS, ensure_ascii=False),
     )
     logger.info(
-        "[Flow Executor] Saved TSV formatter flow output directly for '%s' (%s rows)",
+        "[Flow Executor] Saved TSV formatter flow artifact output directly for '%s' (%s rows)",
         agent_id,
         len(rows),
     )
@@ -826,9 +781,11 @@ async def _run_custom_flow_validator_agent(
     instruction_prefix = (
         "## FLOW VALIDATOR REQUEST\n\n"
         "You are running as a Flow Builder validation attachment. Validate only the "
-        "DomainValidationRequest JSON supplied in the user message. Return one JSON "
+        "compact DomainValidationRequest JSON supplied in the user message. The "
+        "runtime payload may omit selector declarations, target.input_values, and "
+        "full evidence records when they duplicate selected_inputs or evidence_summary. Return one JSON "
         "object matching the DomainValidatorResultBase contract. Preserve the supplied "
-        "request_id, validator_binding_id, validator_agent, and target exactly.\n\n"
+        "request_id, validator_binding_id, validator_agent, and target fields exactly.\n\n"
         "---\n\n"
     )
     runtime_context = [instruction_prefix]
@@ -841,7 +798,7 @@ async def _run_custom_flow_validator_agent(
         f"{_tool_safe_agent_id(validator_agent_id)}_"
         f"{_tool_safe_agent_id(request.validator_binding_id)}"
     )
-    streaming_tool = _create_streaming_tool(
+    streaming_tool: Any = _create_streaming_tool(
         agent=agent,
         tool_name=tool_name,
         tool_description=f"Run validator attachment {validator_agent_id}",
@@ -854,7 +811,7 @@ async def _run_custom_flow_validator_agent(
                 "revision": source_envelope_revision,
             },
             "validator_binding": binding_match.binding.identity_details(),
-            "validation_request": request.model_dump(mode="json"),
+            "validation_request": validator_request_payload_for_agent(request),
         },
         sort_keys=True,
     )
@@ -1785,7 +1742,7 @@ def get_all_agent_tools(
         "ordered_tool_names": ordered_tool_names,
         "completed_steps": [],
         "evidence_registry": _EvidenceRegistry(),
-        "template_variables": _build_initial_flow_template_variables(flow),
+        "persisted_extraction_results": [],
     }
     flow_conversation_summary = _build_flow_conversation_summary(flow, user_query)
 
@@ -1830,17 +1787,19 @@ def get_all_agent_tools(
                 )
 
             template_timestamp = _format_flow_template_timestamp()
-            template_variables = _build_flow_template_variables(
-                stored_variables=execution_state["template_variables"],
+            template_variables = _build_flow_builtin_template_variables(
                 document_name=document_name,
                 flow_run_id=flow_run_id,
                 timestamp=template_timestamp,
             )
-            resolved_query = _resolve_flow_step_query(
-                input_source=node_data.get("input_source"),
-                custom_input=node_data.get("custom_input"),
-                default_query=query,
-                template_variables=template_variables,
+            resolved_query = _build_flow_step_query(
+                flow=flow,
+                node_data=node_data,
+                step_number=step_number,
+                agent_name=agent_name,
+                user_query=user_query,
+                document_id=document_id,
+                document_name=document_name,
             )
             output_filename_descriptor = _resolve_output_filename_descriptor(
                 output_filename_template=node_data.get("output_filename_template"),
@@ -1855,7 +1814,7 @@ def get_all_agent_tools(
             try:
                 direct_formatter_result = await _try_save_tsv_formatter_flow_output(
                     agent_id=agent_id,
-                    resolved_query=resolved_query,
+                    completed_steps=execution_state["completed_steps"],
                     flow_name=flow.name,
                 )
                 if direct_formatter_result is not None:
@@ -1887,9 +1846,6 @@ def get_all_agent_tools(
             if not used_internal_extraction_payload:
                 step_result = result
             result_text = _stringify_tool_output(step_result)
-            output_key = str(node_data.get("output_key") or "").strip()
-            if output_key:
-                execution_state["template_variables"][output_key] = result_text
             validation_schedule = validation_schedule_from_node_data(node_data)
             validation_schedule_metadata = (
                 {"validation_schedule": validation_schedule}
@@ -2353,7 +2309,8 @@ Guidelines:
 - If an earlier specialist discusses later-step topics, still call the later
   step tools; narrative coverage is not a substitute for configured flow steps
 - If a step is unavailable, skip it and continue to the next available step
-- Pass relevant context from previous steps to subsequent steps
+- Do not pass previous step output into later step tool calls; the runtime
+  preserves completed artifacts separately for review, export, and handoff
 - Treat validation schedules attached to extraction steps as runtime metadata;
   do not ask extractor prompts to call validators directly
 - The final step typically produces output (file or response)
@@ -2630,6 +2587,43 @@ def _is_flow_domain_envelope_payload(payload: Any) -> bool:
     return isinstance(payload.get("curatable_objects"), list)
 
 
+def _flow_extraction_result_ref(
+    record: CurationExtractionResultRecord,
+) -> dict[str, Any]:
+    return {
+        "extraction_result_id": record.extraction_result_id,
+        "adapter_key": record.adapter_key,
+        "agent_key": record.agent_key,
+        "candidate_count": record.candidate_count,
+        "trace_id": record.trace_id,
+    }
+
+
+def _merge_persisted_flow_extraction_results(
+    execution_state: dict[str, Any],
+    records: list[CurationExtractionResultRecord],
+) -> None:
+    if not records:
+        return
+
+    refs = execution_state.setdefault("persisted_extraction_results", [])
+    if not isinstance(refs, list):
+        refs = []
+        execution_state["persisted_extraction_results"] = refs
+
+    seen = {
+        str(ref.get("extraction_result_id") or "").strip()
+        for ref in refs
+        if isinstance(ref, Mapping)
+    }
+    for record in records:
+        record_id = str(record.extraction_result_id or "").strip()
+        if not record_id or record_id in seen:
+            continue
+        refs.append(_flow_extraction_result_ref(record))
+        seen.add(record_id)
+
+
 def _persist_flow_extraction_candidates_or_build_error(
     *,
     flow_name: str,
@@ -2639,11 +2633,11 @@ def _persist_flow_extraction_candidates_or_build_error(
     session_id: str,
     trace_id: Optional[str],
     flow_run_id: Optional[str],
-) -> tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
+) -> tuple[bool, Optional[str], Optional[Dict[str, Any]], list[CurationExtractionResultRecord]]:
     """Persist flow extraction candidates and return a FLOW_ERROR payload on failure."""
 
     try:
-        _persist_flow_extraction_candidates(
+        persisted_records = _persist_flow_extraction_candidates(
             candidates=candidates,
             document_id=document_id,
             user_id=user_id,
@@ -2673,9 +2667,10 @@ def _persist_flow_extraction_candidates_or_build_error(
                     "message": failure_reason,
                 },
             },
+            [],
         )
 
-    return True, None, None
+    return True, None, None, persisted_records
 
 
 def _missing_required_flow_steps(
@@ -2975,7 +2970,7 @@ async def execute_flow(
                 yield flow_error_event
                 break
 
-            persisted, failure_reason, flow_error_event = (
+            persisted, failure_reason, flow_error_event, persisted_records = (
                 _persist_flow_extraction_candidates_or_build_error(
                     flow_name=flow.name,
                     candidates=_collect_completed_step_candidates(completed_steps),
@@ -2993,6 +2988,10 @@ async def execute_flow(
                 break
 
             extraction_persisted = True
+            _merge_persisted_flow_extraction_results(
+                flow_execution_state,
+                persisted_records,
+            )
             yield event
             logger.info(
                 "[Flow Executor] %s produced - terminating flow '%s'",
@@ -3021,7 +3020,6 @@ async def execute_flow(
                 yield flow_error_event
                 break
 
-            extraction_persisted = True
             curation_handoff_emitted = True
             yield {
                 "type": CURATION_HANDOFF_READY_EVENT,
@@ -3050,7 +3048,7 @@ async def execute_flow(
             yield flow_error_event
 
     if flow_status != "failed" and not extraction_persisted:
-        persisted, failure_reason, flow_error_event = (
+        persisted, failure_reason, flow_error_event, persisted_records = (
             _persist_flow_extraction_candidates_or_build_error(
                 flow_name=flow.name,
                 candidates=_collect_completed_step_candidates(completed_steps),
@@ -3065,6 +3063,12 @@ async def execute_flow(
             flow_status = "failed"
             if flow_error_event is not None:
                 yield flow_error_event
+        else:
+            extraction_persisted = True
+            _merge_persisted_flow_extraction_results(
+                flow_execution_state,
+                persisted_records,
+            )
 
     # Emit flow-specific completion event
     yield {
@@ -3081,6 +3085,14 @@ async def execute_flow(
             "total_evidence_records": len(evidence_registry.records()),
             "step_evidence_counts": _build_step_evidence_counts(completed_steps),
             "adapter_keys": _build_completed_step_adapter_keys(completed_steps),
+            "extraction_result_refs": list(
+                flow_execution_state.get("persisted_extraction_results") or []
+            ),
+            "extraction_result_ids": [
+                ref.get("extraction_result_id")
+                for ref in flow_execution_state.get("persisted_extraction_results") or []
+                if isinstance(ref, Mapping) and ref.get("extraction_result_id")
+            ],
             "review_session_ids": list(
                 (flow_execution_state.get("curation_handoff") or {}).get(
                     "review_session_ids"

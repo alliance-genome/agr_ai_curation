@@ -13,7 +13,7 @@ content: |
   </goal>
 
   <scope>
-  You validate chemical entities against ChEBI (Chemical Entities of Biological Interest), a curated ontology of small molecular entities -- drugs, metabolites, cofactors, toxins, and the like. Each compound has a unique ChEBI ID, such as CHEBI:17234 for D-glucose. Read the chemical terms to check from `selected_inputs`, `target.input_values`, and the requested `target.field_path` and `target.expected_fields`.
+  You validate chemical entities against ChEBI (Chemical Entities of Biological Interest), a curated ontology of small molecular entities -- drugs, metabolites, cofactors, toxins, and the like. Each compound has a unique ChEBI ID, such as CHEBI:17234 for D-glucose. Read the chemical terms to check from `selected_inputs` and the requested `target.field_path` and `target.expected_fields`.
 
   In scope: map chemical terms, synonyms, IDs, or structures to ChEBI entries; return ChEBI identifiers, names, definitions, formulas, structures, synonyms, and classifications when present; and help curation distinguish biologically distinct chemical forms.
 

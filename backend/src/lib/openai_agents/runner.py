@@ -109,6 +109,7 @@ from .streaming_tools import (
     _tool_output_payload_for_finalization,
     _output_type_name,
 )
+from .curation_context_registry import clear_current_turn_curation_context
 
 # Prompt context tracking for execution logging
 from src.lib.prompts.context import (
@@ -1651,6 +1652,7 @@ async def run_agent_streamed(
 
     # Clear any leftover data from previous runs
     clear_collected_events()
+    clear_current_turn_curation_context()
     clear_pending_configs()  # Clear agent configs from previous requests
     reset_consecutive_call_tracker()  # Reset batching nudge tracker for new query
 

@@ -1,8 +1,7 @@
 /**
  * Smart Default Utilities for Flow Builder
  *
- * These utilities help configure validator agents to use extractor output
- * by default, rather than the previous validator's output.
+ * These utilities classify flow nodes and inspect extractor topology.
  */
 
 import type { AgentNode } from './types'
@@ -116,103 +115,4 @@ export const getExtractors = (
   isExtractionPredicate: AgentPredicate = isExtractionAgent
 ): AgentNode[] => {
   return nodes.filter(n => isExtractionPredicate(n.data.agent_id))
-}
-
-/**
- * Check if a validator's custom_input explicitly references an EXISTING extractor output.
- * Returns false if the referenced extractor has been deleted.
- */
-export const validatorHasExplicitExtractorInput = (
-  node: AgentNode,
-  extractors: AgentNode[]
-): boolean => {
-  if (node.data.input_source !== 'custom' || !node.data.custom_input) {
-    return false
-  }
-  // Check if custom_input contains an EXISTING extractor's output_key
-  // (not a deleted one)
-  return extractors.some(ext =>
-    node.data.custom_input?.includes(`{{${ext.data.output_key}}}`)
-  )
-}
-
-/**
- * Check if a validator needs configuration (topology-aware).
- * Uses BFS to find connected upstream extractors first, then falls back to global count.
- * Returns { needsConfig: boolean, reason?: string }
- */
-export const validatorNeedsConfiguration = (
-  validatorId: string,
-  nodes: AgentNode[],
-  edges: { source: string; target: string }[],
-  isExtractionPredicate: AgentPredicate = isExtractionAgent,
-  isValidationPredicate: AgentPredicate = isValidationAgent
-): { needsConfig: boolean; reason?: string } => {
-  const validator = nodes.find(n => n.id === validatorId)
-  if (!validator || !isValidationPredicate(validator.data.agent_id)) {
-    return { needsConfig: false }
-  }
-
-  const extractors = getExtractors(nodes, isExtractionPredicate)
-
-  // If validator already has explicit extractor input, it's configured
-  if (validatorHasExplicitExtractorInput(validator, extractors)) {
-    return { needsConfig: false }
-  }
-
-  // Step 1: Check topology via BFS for connected upstream extractor
-  // Note: findNearestExtractor has fallback behavior that returns ANY extractor
-  // even if not connected. We need to check if it's actually connected.
-  // For this, we check if there's actually a path via edges
-  const hasConnectedUpstream = (() => {
-    const nodesById = new Map(nodes.map(n => [n.id, n]))
-    const incomingByTarget = new Map<string, string[]>()
-    edges.forEach(e => {
-      const existing = incomingByTarget.get(e.target) || []
-      incomingByTarget.set(e.target, [...existing, e.source])
-    })
-
-    // BFS to find if there's actually a connected extractor
-    const queue = [...(incomingByTarget.get(validatorId) || [])]
-    const visited = new Set<string>()
-
-    while (queue.length > 0) {
-      const nodeId = queue.shift()!
-      if (visited.has(nodeId)) continue
-      visited.add(nodeId)
-
-      const node = nodesById.get(nodeId)
-      if (!node) continue
-
-      if (isExtractionPredicate(node.data.agent_id)) {
-        return true // Found connected extractor
-      }
-
-      const parents = incomingByTarget.get(nodeId) || []
-      queue.push(...parents)
-    }
-    return false
-  })()
-
-  if (hasConnectedUpstream) {
-    // Found a connected upstream extractor - no ambiguity
-    return { needsConfig: false }
-  }
-
-  // Step 2: No upstream extractor found via edges, check global count
-  const extractorCount = extractors.length
-
-  if (extractorCount === 0) {
-    // No extractors at all - user must configure manually, but no error
-    return { needsConfig: false }
-  } else if (extractorCount === 1) {
-    // Single extractor exists but not connected - fallback behavior handles it
-    return { needsConfig: false }
-  } else {
-    // Multiple extractors exist, none connected - ambiguous
-    return {
-      needsConfig: true,
-      reason: 'Ambiguous input source: Multiple extractors detected. Please explicitly select one.'
-    }
-  }
 }

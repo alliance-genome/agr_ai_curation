@@ -491,7 +491,6 @@ def _create_flow_handler():
                 "agent_description": "Define the task for this flow",
                 "task_instructions": description,  # Use flow description as instructions
                 "custom_instructions": "",
-                "input_source": "user_query",
                 "output_key": "task_input"
             }
         }
@@ -515,7 +514,6 @@ def _create_flow_handler():
                     "agent_display_name": display_name,
                     "step_goal": step.get("step_goal"),
                     "custom_instructions": step.get("custom_instructions"),
-                    "input_source": "previous_output",
                     "output_key": f"step_{i+1}_output"
                 }
             })
@@ -950,8 +948,6 @@ def _get_current_flow_handler():
             display_name = node_data.get("agent_display_name", agent_id)
             custom_instructions = node_data.get("custom_instructions")
             task_instructions = node_data.get("task_instructions")
-            input_source = node_data.get("input_source", "previous_output")
-            custom_input = node_data.get("custom_input")
             output_filename_template = node_data.get("output_filename_template")
             output_key = node_data.get("output_key", f"step_{i}_output")
             validation_attachments = node_data.get("validation_attachments") or []
@@ -965,7 +961,6 @@ def _get_current_flow_handler():
                 "node_type": node_type,
                 "agent_id": agent_id,
                 "agent_display_name": display_name,
-                "input_source": input_source,
                 "output_key": output_key
             }
             # For task_input nodes, ALWAYS include task_instructions (even if empty)
@@ -982,8 +977,6 @@ def _get_current_flow_handler():
                     })
             if custom_instructions:
                 step_info["custom_instructions"] = custom_instructions
-            if custom_input:
-                step_info["custom_input"] = custom_input
             if output_filename_template:
                 step_info["output_filename_template"] = output_filename_template
             if validation_attachments:
@@ -1004,11 +997,7 @@ def _get_current_flow_handler():
                     # Explicitly flag empty task_instructions as a warning
                     markdown_lines.append("- **Task Instructions:** ⚠️ EMPTY (this is required content)")
             else:
-                markdown_lines.append(f"- **Input:** {input_source.replace('_', ' ')}")
-                if custom_input:
-                    markdown_lines.append(
-                        f"- **Custom Input:** {_truncate_preview(custom_input, 100)}"
-                    )
+                markdown_lines.append("- **Input:** Flow task and loaded document context")
                 if custom_instructions:
                     markdown_lines.append(
                         f"- **Custom Instructions:** {_truncate_preview(custom_instructions, 200)}"

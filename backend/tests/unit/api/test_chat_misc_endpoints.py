@@ -703,7 +703,7 @@ def test_build_context_messages_from_durable_messages_rehydrates_flow_memory_fro
                     payload_json={
                         "flow_id": "flow-1",
                         "status": "completed",
-                        chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY: "hidden assistant flow memory",
+                        chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY: "Flow refs: flow_run_id=flow-run-1 extraction_result_id=er-1",
                     },
                     created_at=_ts(9, 2),
                 ),
@@ -720,7 +720,7 @@ def test_build_context_messages_from_durable_messages_rehydrates_flow_memory_fro
 
     assert context_messages == [
         {"role": "user", "content": "Run gene selection flow"},
-        {"role": "assistant", "content": "hidden assistant flow memory"},
+        {"role": "assistant", "content": "Flow refs: flow_run_id=flow-run-1 extraction_result_id=er-1"},
         {"role": "user", "content": "follow-up question"},
     ]
 
@@ -2342,7 +2342,7 @@ def test_serialize_message_omits_internal_flow_summary_payload_keys():
         payload_json={
             "flow_id": "flow-1",
             "status": "completed",
-            chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY: "hidden assistant flow memory",
+            chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY: "Flow refs: flow_run_id=flow-run-1",
             chat._FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: [{"type": "FLOW_FINISHED"}],
         },
         trace_id="trace-flow-1",

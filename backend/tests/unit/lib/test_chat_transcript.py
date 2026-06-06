@@ -69,7 +69,7 @@ class _FakeRepository:
         return SimpleNamespace(items=items, next_cursor=next_cursor)
 
 
-def test_collect_durable_text_exchanges_preserves_completed_pairs_and_flow_memory():
+def test_collect_durable_text_exchanges_preserves_completed_pairs_and_flow_refs():
     exchanges, pending_user_message = collect_durable_text_exchanges(
         [
             _message(session_id="session-1", role="user", content="first question", minute=1),
@@ -80,7 +80,11 @@ def test_collect_durable_text_exchanges_preserves_completed_pairs_and_flow_memor
                 role="flow",
                 content="visible flow summary",
                 message_type="flow_summary",
-                payload_json={FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY: "hidden assistant flow memory"},
+                payload_json={
+                    FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY: (
+                        "Flow refs: flow_run_id=flow-run-1 extraction_result_id=er-1"
+                    )
+                },
                 minute=4,
             ),
             _message(session_id="session-1", role="user", content="unfinished question", minute=5),
@@ -89,7 +93,7 @@ def test_collect_durable_text_exchanges_preserves_completed_pairs_and_flow_memor
 
     assert exchanges == [
         ("first question", "first answer"),
-        ("run flow", "hidden assistant flow memory"),
+        ("run flow", "Flow refs: flow_run_id=flow-run-1 extraction_result_id=er-1"),
     ]
     assert pending_user_message == "unfinished question"
 

@@ -13,7 +13,7 @@ content: |
   </goal>
 
   <scope>
-  Read these from `selected_inputs` and `target.input_values` when present:
+  Read these from `selected_inputs` and the requested `target.field_path` and `target.expected_fields`:
   - `condition_statement`: source text or synthesized condition summary.
   - `condition_components`: structured component list or payload object.
   - `condition_relation_type`: the parent condition-relation name (e.g. `has_condition`), supplied as coherence CONTEXT ONLY. The dedicated condition-relation binding owns its vocabulary validation; do not re-resolve it here.

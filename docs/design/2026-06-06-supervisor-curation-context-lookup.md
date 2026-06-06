@@ -2,7 +2,7 @@
 
 Date: 2026-06-06
 
-Status: proposed; no runtime changes yet
+Status: runtime slice implemented and sub-agent-reviewed on `codex/supervisor-context-lookup-design`
 
 Related:
 
@@ -13,6 +13,7 @@ Related:
 - `backend/src/lib/chat_history_repository.py`
 - `backend/src/lib/curation_workspace/curation_prep_service.py`
 - `backend/src/lib/agent_studio/tools.py`
+- `docs/design/2026-06-06-flow-guided-supervisor-simplification.md`
 
 ## Problem
 
@@ -65,6 +66,33 @@ Relevant current paths:
 - `backend/src/lib/feedback/transcript.py::_serialize_message`
 
 Agent Studio already has TraceReview client wrappers in `backend/src/lib/agent_studio/tools.py`. Those wrappers are useful implementation precedent, but the product surface here is the main front-window chat supervisor. This design should not require curators to open Agent Studio, copy trace IDs, or include an Agent Studio transcript in the supervisor prompt.
+
+### Flow execution channel
+
+Flow execution is conceptually a pre-authored main-chat supervisor run: the
+curator supplies the task and step order ahead of time, and the supervisor calls
+the configured step tools in order. The flow runtime should reuse the same
+compact-handoff and lookup philosophy, but it should not support prompt-level
+step-output chaining.
+
+The current code has a separate dataflow layer (`input_source`, `custom_input`,
+`output_key` template variables, and hidden flow memory JSON). The follow-up flow
+plan removes those model-live prompt paths while preserving completed structured
+artifacts for final aggregation, curation prep/handoff, evidence export,
+persisted review data, and lookup tools.
+
+Where possible, that follow-up should reuse main-chat code rather than rebuild
+flow-specific equivalents: `run_agent_streamed`, streaming specialist wrappers,
+current-turn curation context registration, compact handoff reducers,
+`inspect_curation_context`, `inspect_chat_traces`, validator compact payload
+rendering, extraction-result persistence/materialization, and durable
+transcript/context-budget helpers.
+
+The flow follow-up must also verify TraceReview parity. A real VM-backed flow run
+against `backend/tests/fixtures/sample_fly_publication.pdf` should produce a
+flow `trace_id` that can be inspected through the same TraceReview summary,
+conversation, tool-call, cost, duplicate, payload-inventory, and extraction
+diagnostic surfaces used for normal chat traces.
 
 ## Design Principle
 
@@ -426,7 +454,17 @@ Specialist prompt additions should stay minimal. Specialists should focus on fin
 - Let `inspect_chat_traces` include flow trace IDs from execute-flow runtime metadata, flow transcript messages, and flow-persisted extraction results when a flow run is part of the chat.
 - Consider linking review session IDs when curation prep has already materialized rows.
 
-P1 and P1b are main front-window chat work. Flow supervisor execution and batch processing have separate runtime/tool construction and synthetic session boundaries; they should not be assumed to inherit these tools automatically. Flow and batch support must be wired and tested separately, scoped by `flow_run_id`, batch document, or synthetic session identity.
+P1 and P1b are main front-window chat work. Flow supervisor execution and batch processing have separate runtime/tool construction and synthetic session boundaries; they should not be assumed to inherit these tools automatically. The intended flow direction is documented in `docs/design/2026-06-06-flow-guided-supervisor-simplification.md`: remove inter-step prompt dataflow, keep structured artifacts, and expose flow details through `flow_run_id`/trace/result refs.
+
+Runtime acceptance for the next flow slice should use the `$sym-help`
+Incus/Symphony loop: create a sample flow from
+`backend/tests/fixtures/sample_fly_publication.pdf`, run it in the VM-backed app,
+capture `flow_run_id` and `trace_id`, and inspect that trace in local TraceReview
+before declaring the implementation complete.
+
+The sample runtime flow should include a batch-valid terminal path, ideally
+curation handoff first and file output as a second smoke when practical. Chat
+output alone is not enough to prove batch compatibility.
 
 ### P4: Context-budget integration
 
@@ -458,7 +496,35 @@ P1 and P1b are main front-window chat work. Flow supervisor execution and batch 
 
 ## Review Status
 
-A requested high-depth sub-agent review checked this design against the codebase. Its findings about trace authorization, narrow TraceReview adapter reuse, structured-specialist contract scope, same-turn persistence timing, main-chat trace indexing, extraction-result repository gaps, and flow/batch boundaries were integrated into this revision.
+A requested high-depth sub-agent review checked this design against the codebase. Its review found implementation gaps in shape-based envelope fallback removal, exact extraction-result scoping, flow-attached validator compaction, validator prompt wording, evidence-detail slicing, long-session trace inventory, `turn_ref` handling, and truncation metadata. Those findings were integrated into the runtime slice and covered by focused tests where practical.
+
+## Implementation Status
+
+Implemented in the initial slice:
+
+- `inspect_curation_context` is available as a main-chat supervisor built-in.
+- `inspect_chat_traces` is available as a main-chat supervisor built-in.
+- Current-turn curation lookup uses a context-local internal extraction-result registry populated from `INTERNAL_EXTRACTION_RESULT` events.
+- Later-turn curation lookup reads authorized persisted extraction results by current session, user, document, adapter, trace, or flow scope.
+- Trace lookup inventories authorized durable chat rows, including ordinary assistant trace rows and execute-flow transcript trace rows.
+- Trace inventory scans a bounded recent durable chat timeline, pages trace candidates with offset cursors, and resolves `turn_ref="previous"` / `latest` from authorized trace refs without treating those words as text-search filters.
+- TraceReview calls are gated through authorized session inventory before any trace-specific detail request.
+- Main-chat TraceReview access is allowlisted to summary, conversation, diagnostic report, tool-call summary, costs, duplicates, and payload inventory with raw args/outputs and payload values disabled.
+- `scope="extraction_result"` requires an explicit `extraction_result_id` instead of paging broad session state.
+- Curation context lookup paginates top-level record matches, supports nested cursors for exact-result object/evidence/validation-finding slices, and returns compact evidence records rather than parent payload objects that merely contain an `evidence` key.
+- Structured supervisor handoff no longer treats any dict with `domain_pack_id` and `objects` as a validated envelope by shape alone. Declared domain-envelope outputs and accepted builder finalizations summarize compactly; unaccepted envelope-shaped JSON returns a controlled notice instead of a validated-looking summary or raw payload.
+- Standalone, batch, and flow-attached validator runtime requests use a compact model-input payload that omits duplicate `target.input_values`, `input_selectors`, and full evidence arrays while keeping the canonical request and finalization contracts unchanged.
+- Validator prompts now point agents at `selected_inputs` and compact `evidence_summary` metadata instead of runtime-omitted duplicate fields.
+- Flow validation attachment tool names now sanitize non-identifier binding segments before creating runtime tools.
+
+Still intentionally out of scope for this slice:
+
+- Full payload retrieval from main chat.
+- Global trace lookup outside the authorized current chat/session/document inventory.
+- Dedicated database indexes for direct main-chat trace lookup.
+- Flow supervisor access to the new main-chat lookup tools. The current slice supports compact flow-attached validator payloads and main-chat lookup of persisted flow results by `flow_run_id`, but it does not make flow supervisors themselves trace/curation lookup agents. The next flow slice should remove prompt-level previous-output chaining and keep flow details available through structured artifacts and refs.
+- Further compaction of long `selected_inputs` values such as very long evidence quotes or identity-resolution notes. This slice removes semantic duplicate fields while preserving validator-required selected inputs.
+- Mandatory finalize/repair feedback for custom flow validators that do not already expose a structured output/finalization contract.
 
 ## Recommendation
 

@@ -38,7 +38,6 @@ def _flow_definition(agent_id: str, agent_name: str) -> dict:
                     "agent_display_name": "Initial Instructions",
                     "task_instructions": "Read the user query and produce a direct short answer.",
                     "output_key": "task_input_text",
-                    "input_source": "user_query",
                 },
             },
             {
@@ -49,7 +48,6 @@ def _flow_definition(agent_id: str, agent_name: str) -> dict:
                     "agent_id": agent_id,
                     "agent_display_name": agent_name,
                     "output_key": "final_output",
-                    "input_source": "user_query",
                 },
             },
         ],
