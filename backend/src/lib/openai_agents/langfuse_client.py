@@ -326,7 +326,7 @@ def flush_agent_configs(root_span) -> int:
             # trace_context dict requires trace_id, parent_span_id is optional
             _langfuse_client.create_event(
                 name=event_name,
-                input=config,
+                metadata={"agent_config": config},
                 trace_context={
                     "trace_id": root_span.trace_id,
                     "parent_span_id": root_span.id

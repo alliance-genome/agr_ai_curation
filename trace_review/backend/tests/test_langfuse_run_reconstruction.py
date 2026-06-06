@@ -28,7 +28,10 @@ def _trace_data():
                 "type": "SPAN",
                 "name": "Supervisor agent",
                 "startTime": "2026-06-06T03:00:01Z",
-                "metadata": {"agent_name": "supervisor"},
+                "metadata": {
+                    "agent_name": "supervisor",
+                    "agent_config": {"agent_name": "Supervisor", "tools": ["fetch_entities"]},
+                },
                 "input": repeated,
                 "output": {"next": "tool-1"},
             },
@@ -50,7 +53,10 @@ def _trace_data():
                 "name": "tool call fetch_entities",
                 "parentObservationId": "agent-1",
                 "startTime": "2026-06-06T03:00:03Z",
-                "metadata": {"tool_name": "fetch_entities"},
+                "metadata": {
+                    "tool_name": "fetch_entities",
+                    "event_payload": {"event_type": "tool_call.completed", "sequence": 3},
+                },
                 "input": {"query": "genes"},
                 "output": {"rows": [1, 2]},
             },
@@ -93,10 +99,12 @@ def test_payload_inventory_and_exact_payload_chunks_are_langfuse_payloads():
 
     assert "trace:trace-123:input" in payload_ids
     assert "observation:tool-1:output" in payload_ids
+    assert "observation:agent-1:metadata.agent_config" in payload_ids
+    assert "observation:tool-1:metadata.event_payload" in payload_ids
 
     payload = find_payload(
         _trace_data(),
-        payload_id="observation:tool-1:output",
+        payload_id="observation:tool-1:metadata.event_payload",
         start=0,
         max_chars=8,
     )
@@ -104,7 +112,8 @@ def test_payload_inventory_and_exact_payload_chunks_are_langfuse_payloads():
     assert payload is not None
     assert payload["scope"] == "observation"
     assert payload["observation_id"] == "tool-1"
-    assert payload["serialized"] == '{"rows":'
+    assert payload["field"] == "metadata.event_payload"
+    assert payload["serialized"] == '{"event_'
     assert payload["truncated"] is True
     assert payload["next_start"] == 8
 

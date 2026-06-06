@@ -144,7 +144,7 @@ def test_writer_logs_large_payload_sizes(tmp_path, monkeypatch, caplog):
     assert "Large extraction trace payload" in caplog.text
 
 
-def test_mirror_to_langfuse_uses_event_output_to_preserve_trace_input(monkeypatch):
+def test_mirror_to_langfuse_uses_metadata_payload_to_preserve_trace_io(monkeypatch):
     captured = {}
 
     class FakeLangfuse:
@@ -165,7 +165,8 @@ def test_mirror_to_langfuse_uses_event_output_to_preserve_trace_input(monkeypatc
 
     assert captured["name"] == "extraction_trace_event"
     assert "input" not in captured
-    assert captured["output"] == event
+    assert "output" not in captured
+    assert captured["metadata"]["event_payload"] == event
     assert captured["trace_context"] == {
         "trace_id": "trace-abc",
         "parent_span_id": "span-abc",

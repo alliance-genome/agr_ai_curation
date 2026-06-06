@@ -248,4 +248,7 @@ def test_flush_agent_configs_partial_failure_counts_success(monkeypatch):
     count = lc.flush_agent_configs(SimpleNamespace(trace_id="trace-xyz", id="span-xyz"))
     assert count == 1
     assert len(client.calls) == 2
+    assert "input" not in client.calls[0]
+    assert "output" not in client.calls[0]
+    assert client.calls[0]["metadata"]["agent_config"]["agent_name"] == "Agent One"
     assert lc._get_pending_configs() == []

@@ -262,7 +262,7 @@ def build_payload_inventory(
     *,
     include_values: bool = False,
 ) -> List[Dict[str, Any]]:
-    """Return all trace and observation input/output payloads with sizes."""
+    """Return all trace/observation payloads with sizes."""
     raw_trace = trace_data.get("raw_trace") or {}
     trace_id = _trace_id(trace_data)
     payloads: List[Dict[str, Any]] = []
@@ -298,6 +298,21 @@ def build_payload_inventory(
                         include_value=include_values,
                     )
                 )
+        metadata = observation.get("metadata")
+        if isinstance(metadata, Mapping):
+            for metadata_key in ("agent_config", "event_payload"):
+                if metadata.get(metadata_key) is not None:
+                    payloads.append(
+                        _payload_item(
+                            trace_id=trace_id,
+                            scope="observation",
+                            source_id=obs_id,
+                            field=f"metadata.{metadata_key}",
+                            value=metadata.get(metadata_key),
+                            source=observation,
+                            include_value=include_values,
+                        )
+                    )
 
     return payloads
 
