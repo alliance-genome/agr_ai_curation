@@ -1,0 +1,8 @@
+timestamp	trace_id	session_id	surface	operation	model	json_chars	estimated_tokens	large_scalar_path_count	largest_paths
+2026-06-06T23:23:58.563083+00:00	2e80ae576b69ef042b452fdd433d89a7	aa299e4b-aa8d-4065-9182-6754a3ac0619	standard_chat	streamed_agent_context	gpt-5.5	246	62	0	
+2026-06-06T23:25:54.556923+00:00			validator	domain_validator_single	gpt-5.4-mini	1864	466	0	$:1864;selected_inputs:1045;selected_inputs.evidence_quote:558;selected_inputs.identity_resolution_notes:346
+2026-06-06T23:25:54.761350+00:00			validator	domain_validator_single	gpt-5.4-mini	1587	397	0	$:1587;selected_inputs:766;selected_inputs.evidence_quote:358;selected_inputs.identity_resolution_notes:267
+2026-06-06T23:25:54.816282+00:00			validator	domain_validator_single	gpt-5.4-mini	1752	438	0	$:1752;selected_inputs:933;selected_inputs.evidence_quote:499;selected_inputs.identity_resolution_notes:296
+2026-06-06T23:25:54.851111+00:00			validator	domain_validator_single	gpt-5.4-mini	1509	378	0	$:1509;selected_inputs:688;selected_inputs.evidence_quote:290;selected_inputs.identity_resolution_notes:256
+2026-06-06T23:26:42.430169+00:00	f597a39fa0a8fcbcb28d784c8bc1e2aa	a52bd733-91fe-403e-9b46-eac21fb0b5e7	standard_chat	streamed_agent_context	gpt-5.5	270	68	0	$:270
+2026-06-06T23:28:09.548591+00:00	f597a39fa0a8fcbcb28d784c8bc1e2aa	a52bd733-91fe-403e-9b46-eac21fb0b5e7	validator	domain_validator_single	gpt-5.4-mini	1831	458	0	$:1831;selected_inputs:1012;selected_inputs.identity_resolution_notes:515;selected_inputs.evidence_quote:277

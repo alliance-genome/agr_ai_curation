@@ -1,0 +1,59 @@
+{
+  "base_url": "http://127.0.0.1:8000",
+  "batch_extraction_zip_members": null,
+  "batch_plumbing_zip_members": null,
+  "chat_message": "What are the focus genes of this paper?",
+  "chat_response_preview": null,
+  "chat_stream_summary": null,
+  "checks": [],
+  "document_artifacts": {},
+  "env_file": ".env",
+  "error": "--delete-existing-sample-documents requires authenticated user verification. Do not combine it with --skip-user-info.",
+  "expected_api_principal": {
+    "auth_sub": null,
+    "email": null
+  },
+  "expected_runtime_chat_model": "gpt-5.5",
+  "expected_runtime_specialist_model": "gpt-5.4-mini",
+  "flow_model": "gpt-5.4-mini",
+  "flow_summary": null,
+  "overall_status": "fail",
+  "preflight": {},
+  "rerank_provider_smoke": {
+    "base_url": null,
+    "evidence_file": null,
+    "included": false,
+    "overall_status": "not_requested",
+    "script_path": null
+  },
+  "resources": {
+    "batch_extraction_flow_id": null,
+    "batch_extraction_id": null,
+    "batch_plumbing_flow_id": null,
+    "batch_plumbing_id": null,
+    "chat_session_id": null,
+    "chat_trace_id": null,
+    "custom_agent_id": null,
+    "custom_agent_key": null,
+    "flow_id": null,
+    "primary_document_id": null,
+    "secondary_document_id": null,
+    "stream_chat_session_id": null,
+    "workspace_session_id": null
+  },
+  "run_scope": "partial",
+  "runtime_default_specialist_model_directly_validated": false,
+  "sample_pdf": "backend/tests/fixtures/sample_fly_publication.pdf",
+  "secondary_pdf": null,
+  "skipped_stages": [
+    "user_info",
+    "workspace",
+    "batch",
+    "rerank_provider_smoke",
+    "dev_mode_fallback"
+  ],
+  "stream_chat_message": "What are the focus genes of this paper? Answer briefly and cite the loaded paper context.",
+  "timestamp_utc": "2026-06-06T23:06:52.728379+00:00",
+  "used_api_key_auth": false,
+  "workspace_summary": null
+}

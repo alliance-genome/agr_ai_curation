@@ -1,0 +1,7 @@
+trace_id	sequence	surface	operation	model	json_chars	estimated_tokens	large_scalar_path_count	largest_paths
+2e80ae576b69ef042b452fdd433d89a7	1	standard_chat	streamed_agent_context	gpt-5.5	246	62	0	
+f597a39fa0a8fcbcb28d784c8bc1e2aa	1	standard_chat	streamed_agent_context	gpt-5.5	270	68	0	$:270
+f597a39fa0a8fcbcb28d784c8bc1e2aa	808	validator	domain_validator_single	gpt-5.4-mini	1831	458	0	$:1831;selected_inputs:1012;selected_inputs.identity_resolution_notes:515;selected_inputs.evidence_quote:277
+58277312e737940d52160a3192a818d1	1	flow	streamed_agent_context	gpt-5.5	827	<redacted>	0	$:827;input_items:621;input_items[0]:619;input_items[0].content:583
+dd4aa251cbfdb93337f3bf6e19f21f3f	1	standard_chat	streamed_agent_context	gpt-5.5	246	<redacted>	0	
+dd4aa251cbfdb93337f3bf6e19f21f3f	312	validator	domain_validator_single	gpt-5.4-mini	2392	<redacted>	0	$:2392;selected_inputs:1573;selected_inputs.evidence_quote:822;selected_inputs.identity_resolution_notes:560

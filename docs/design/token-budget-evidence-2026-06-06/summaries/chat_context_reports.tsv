@@ -1,0 +1,6 @@
+session_id	chat_kind	message_count	visible_content_chars	payload_json_chars	hidden_flow_memory_chars	flow_memory_message_count	estimated_replay_tokens	threshold	trace_ids
+aa299e4b-aa8d-4065-9182-6754a3ac0619	assistant_chat	2	498	0	0	0	125		2e80ae576b69ef042b452fdd433d89a7
+a52bd733-91fe-403e-9b46-eac21fb0b5e7	assistant_chat	2	837	0	0	0	210		f597a39fa0a8fcbcb28d784c8bc1e2aa
+fcc3d369-a7d6-47c2-9b91-19c6c2317dd6	assistant_chat	2	392	0	0	0	98		dd4aa251cbfdb93337f3bf6e19f21f3f
+bf87b326-4152-475b-933f-94828244a9bc	assistant_chat	2	364	0	0	0	91		44f1a6cb5cba12fe7f883ba26c256310
+dev-release-flow-0e22c870	assistant_chat	3	268	3282	994	1	273		58277312e737940d52160a3192a818d1

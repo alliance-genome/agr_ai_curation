@@ -1,0 +1,1437 @@
+{
+  "base_url": "http://127.0.0.1:8000",
+  "batch_extraction_zip_members": null,
+  "batch_plumbing_zip_members": null,
+  "chat_message": "What are the focus genes of this paper?",
+  "chat_response_preview": "The focus gene of this paper appears to be:\n\n- crumbs (crb) \u2014 Drosophila melanogaster  \n  Central experimental focus of the study.\n\nThe gene identifier could not be validated at this time because the Alliance Gene Database lookup failed transiently. The extracted focus gene should be treated as an evidence-backed mention, not yet a normalized gene ID.",
+  "chat_stream_summary": {
+    "event_types": [
+      "RUN_STARTED",
+      "SUPERVISOR_START",
+      "AGENT_COMPLETE",
+      "CREW_START",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_ARGS",
+      "TOOL_START",
+      "TOOL_START",
+      "TOOL_START",
+      "TOOL_COMPLETE",
+      "TOOL_COMPLETE",
+      "TOOL_START",
+      "TOOL_COMPLETE",
+      "TOOL_START",
+      "TOOL_COMPLETE",
+      "TOOL_START",
+      "TOOL_COMPLETE",
+      "TOOL_START",
+      "STRUCTURED_FINALIZATION",
+      "TOOL_COMPLETE",
+      "AGENT_GENERATING",
+      "TOOL_COMPLETE",
+      "SPECIALIST_SUMMARY",
+      "AGENT_GENERATING",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "SUPERVISOR_COMPLETE",
+      "evidence_summary",
+      "turn_completed"
+    ],
+    "model": "gpt-5.5",
+    "response_preview": "This publication studies absolute protein abundance in Drosophila eyes, focusing on phototransduction and rhabdomere-associated proteins and how their organization changes in crumbs mutant eye morphogenesis.",
+    "session_id": "bf87b326-4152-475b-933f-94828244a9bc",
+    "terminal_event": "turn_completed",
+    "trace_id": "44f1a6cb5cba12fe7f883ba26c256310"
+  },
+  "checks": [
+    {
+      "ok": true,
+      "payload": {
+        "checks": {
+          "app": "running"
+        },
+        "openai_key_configured": true,
+        "service": "AI Curation Platform API",
+        "status": "healthy",
+        "timestamp": "2026-06-06T23:15:26.813320+00:00",
+        "version": "1.0.0"
+      },
+      "status_code": 200,
+      "step": "health"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "errors": [],
+        "models": [
+          {
+            "curator_visible": true,
+            "model_id": "gpt-5.4-mini",
+            "provider_exists": true,
+            "provider_id": "openai"
+          },
+          {
+            "curator_visible": true,
+            "model_id": "gpt-5.5",
+            "provider_exists": true,
+            "provider_id": "openai"
+          }
+        ],
+        "providers": [
+          {
+            "api_key_env": "GEMINI_API_KEY",
+            "api_key_present": true,
+            "api_mode": "chat_completions",
+            "base_url_configured": false,
+            "base_url_env": null,
+            "default_for_runner": false,
+            "driver": "litellm",
+            "mapped_curator_visible_model_ids": [],
+            "mapped_model_ids": [],
+            "provider_id": "gemini",
+            "readiness": "unused",
+            "supports_parallel_tool_calls": true
+          },
+          {
+            "api_key_env": "GROQ_API_KEY",
+            "api_key_present": true,
+            "api_mode": "responses",
+            "base_url_configured": true,
+            "base_url_env": "GROQ_BASE_URL",
+            "default_for_runner": false,
+            "driver": "litellm",
+            "mapped_curator_visible_model_ids": [],
+            "mapped_model_ids": [],
+            "provider_id": "groq",
+            "readiness": "unused",
+            "supports_parallel_tool_calls": true
+          },
+          {
+            "api_key_env": "OPENAI_API_KEY",
+            "api_key_present": true,
+            "api_mode": "responses",
+            "base_url_configured": false,
+            "base_url_env": "OPENAI_BASE_URL",
+            "default_for_runner": true,
+            "driver": "openai_native",
+            "mapped_curator_visible_model_ids": [
+              "gpt-5.4-mini",
+              "gpt-5.5"
+            ],
+            "mapped_model_ids": [
+              "gpt-5.4-mini",
+              "gpt-5.5"
+            ],
+            "provider_id": "openai",
+            "readiness": "ready",
+            "supports_parallel_tool_calls": true
+          }
+        ],
+        "startup_report": {
+          "errors": [],
+          "models": [
+            {
+              "curator_visible": true,
+              "model_id": "gpt-5.4-mini",
+              "provider_exists": true,
+              "provider_id": "openai"
+            },
+            {
+              "curator_visible": true,
+              "model_id": "gpt-5.5",
+              "provider_exists": true,
+              "provider_id": "openai"
+            }
+          ],
+          "providers": [
+            {
+              "api_key_env": "GEMINI_API_KEY",
+              "api_key_present": true,
+              "api_mode": "chat_completions",
+              "base_url_configured": false,
+              "base_url_env": null,
+              "default_for_runner": false,
+              "driver": "litellm",
+              "mapped_curator_visible_model_ids": [],
+              "mapped_model_ids": [],
+              "provider_id": "gemini",
+              "readiness": "unused",
+              "supports_parallel_tool_calls": true
+            },
+            {
+              "api_key_env": "GROQ_API_KEY",
+              "api_key_present": true,
+              "api_mode": "responses",
+              "base_url_configured": true,
+              "base_url_env": "GROQ_BASE_URL",
+              "default_for_runner": false,
+              "driver": "litellm",
+              "mapped_curator_visible_model_ids": [],
+              "mapped_model_ids": [],
+              "provider_id": "groq",
+              "readiness": "unused",
+              "supports_parallel_tool_calls": true
+            },
+            {
+              "api_key_env": "OPENAI_API_KEY",
+              "api_key_present": true,
+              "api_mode": "responses",
+              "base_url_configured": false,
+              "base_url_env": "OPENAI_BASE_URL",
+              "default_for_runner": true,
+              "driver": "openai_native",
+              "mapped_curator_visible_model_ids": [
+                "gpt-5.4-mini",
+                "gpt-5.5"
+              ],
+              "mapped_model_ids": [
+                "gpt-5.4-mini",
+                "gpt-5.5"
+              ],
+              "provider_id": "openai",
+              "readiness": "ready",
+              "supports_parallel_tool_calls": true
+            }
+          ],
+          "status": "healthy",
+          "strict_mode": false,
+          "summary": {
+            "mapped_model_count": 2,
+            "missing_key_provider_count": 0,
+            "model_count": 2,
+            "provider_count": 3,
+            "ready_provider_count": 1
+          },
+          "validated_at": "2026-06-06T23:01:37.603601+00:00",
+          "warnings": []
+        },
+        "status": "healthy",
+        "strict_mode": false,
+        "summary": {
+          "mapped_model_count": 2,
+          "missing_key_provider_count": 0,
+          "model_count": 2,
+          "provider_count": 3,
+          "ready_provider_count": 1
+        },
+        "validated_at": "2026-06-06T23:15:26.814520+00:00",
+        "warnings": []
+      },
+      "status_code": 200,
+      "step": "llm_provider_health"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "deep_details": {
+          "auth_check_mode": "guard_rejects_missing_header",
+          "downstream_error": null,
+          "downstream_roundtrip_ok": true,
+          "downstream_status_code": 200,
+          "ec2": "ready",
+          "proxy_auth_error": null,
+          "proxy_auth_valid": true,
+          "queue_depth": 0,
+          "queue_durable": true,
+          "status": "healthy"
+        },
+        "deep_response_code": 200,
+        "details": {
+          "active_backend_jobs": 0,
+          "active_jobs": 0,
+          "ec2": "ready",
+          "gpu_grobid": "ok",
+          "gpu_healthy": true,
+          "gpu_redis": "ok",
+          "gpu_status": "ok",
+          "gpu_workers": 1,
+          "proxy": "ok",
+          "queue_depth": 0,
+          "queue_durable": true,
+          "status": "healthy"
+        },
+        "error": null,
+        "last_checked": "2026-06-06T23:15:26.815945+00:00",
+        "response_code": 200,
+        "service_url": "https://pdfx.alliancegenome.org",
+        "status": "healthy",
+        "status_details": {
+          "active_backend_jobs": 0,
+          "active_jobs": 0,
+          "idle_minutes": 0.0,
+          "queue_durable": true,
+          "queued_jobs": 0,
+          "ready_minutes": 8.9,
+          "state": "ready",
+          "warming_up": false
+        },
+        "status_error": null,
+        "status_response_code": 200,
+        "wake_required": false,
+        "worker_available": true,
+        "worker_state": "ready"
+      },
+      "status_code": 200,
+      "step": "pdf_extraction_health_initial"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "chunk_count": null,
+        "document_id": "91570626-92bc-408e-8a6c-add1a388c315",
+        "error_message": null,
+        "file_size_bytes": 1521409,
+        "filename": "sample_fly_publication.pdf",
+        "job_id": "899ae0cb-1f6f-4ecf-8871-cd2cbd0fcd0d",
+        "processing_completed_at": null,
+        "processing_started_at": null,
+        "status": "PENDING",
+        "upload_timestamp": "2026-06-06T23:15:29.362343Z",
+        "user_id": 1,
+        "weaviate_tenant": "dev_user_123"
+      },
+      "status_code": 201,
+      "step": "upload_primary_pdf"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "cancel_requested": false,
+        "chunk_count": 50,
+        "document_id": "91570626-92bc-408e-8a6c-add1a388c315",
+        "embedding_status": "completed",
+        "job_id": "899ae0cb-1f6f-4ecf-8871-cd2cbd0fcd0d",
+        "job_status": "completed",
+        "pipeline_status": {
+          "completed_at": "2026-06-06T23:15:40.849545+00:00",
+          "current_stage": "completed",
+          "document_id": "91570626-92bc-408e-8a6c-add1a388c315",
+          "error_count": 0,
+          "message": "Processing completed successfully",
+          "progress_percentage": 100,
+          "stage_results": [],
+          "started_at": "2026-06-06T23:15:29.365777+00:00",
+          "updated_at": "2026-06-06T23:15:40.849307+00:00"
+        },
+        "processing_status": "completed",
+        "vector_count": 50
+      },
+      "status_code": 200,
+      "step": "primary_document_processing_completed"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "document_id": "91570626-92bc-408e-8a6c-add1a388c315",
+        "returned_chunks": 50,
+        "total_items": 50
+      },
+      "status_code": 200,
+      "step": "primary_chunks"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "filename": "sample_fly_publication.pdf",
+        "pdf_available": true,
+        "pdf_size": 1521409,
+        "pdfx_json_available": true,
+        "pdfx_json_size": 11505,
+        "processed_json_available": true,
+        "processed_json_size": 86694
+      },
+      "status_code": 200,
+      "step": "primary_download_info"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "byte_count": 11505,
+        "document_id": "91570626-92bc-408e-8a6c-add1a388c315",
+        "file_type": "pdfx_json",
+        "json_detected": true
+      },
+      "status_code": 200,
+      "step": "primary_pdfx_json_download"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "active": true,
+        "document": {
+          "chunk_count": 50,
+          "filename": "sample_fly_publication.pdf",
+          "id": "91570626-92bc-408e-8a6c-add1a388c315",
+          "metadata": {
+            "author": null,
+            "checksum": "a7de0c2fc3eb2b656ba8cbbb55607bdc54676231c42b77244d00bd97a5971de4",
+            "document_type": "general",
+            "last_processed_stage": "upload",
+            "page_count": 1,
+            "title": "sample_fly_publication.pdf"
+          },
+          "vector_count": 50
+        },
+        "message": "Document 'sample_fly_publication.pdf' loaded for chat"
+      },
+      "status_code": 200,
+      "step": "chat_document_load"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "active_document": {
+          "chunk_count": 50,
+          "filename": "sample_fly_publication.pdf",
+          "id": "91570626-92bc-408e-8a6c-add1a388c315",
+          "metadata": {
+            "author": null,
+            "checksum": "a7de0c2fc3eb2b656ba8cbbb55607bdc54676231c42b77244d00bd97a5971de4",
+            "document_type": "general",
+            "last_processed_stage": "upload",
+            "page_count": 1,
+            "title": "sample_fly_publication.pdf"
+          },
+          "vector_count": 50
+        },
+        "active_document_id": "91570626-92bc-408e-8a6c-add1a388c315",
+        "created_at": "2026-06-06T23:15:41.679020Z",
+        "session_id": "fcc3d369-a7d6-47c2-9b91-19c6c2317dd6",
+        "title": null,
+        "updated_at": "2026-06-06T23:15:41.679020Z"
+      },
+      "status_code": 200,
+      "step": "chat_session"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "response_preview": "The focus gene of this paper appears to be:\n\n- crumbs (crb) \u2014 Drosophila melanogaster  \n  Central experimental focus of the study.\n\nThe gene identifier could not be validated at this time because the Alliance Gene Database lookup failed transiently. The extracted focus gene should be treated as an evidence-backed mention, not yet a normalized gene ID.",
+        "session_id": "fcc3d369-a7d6-47c2-9b91-19c6c2317dd6"
+      },
+      "status_code": 200,
+      "step": "chat_question"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "active_document": {
+          "chunk_count": 50,
+          "filename": "sample_fly_publication.pdf",
+          "id": "91570626-92bc-408e-8a6c-add1a388c315",
+          "metadata": {
+            "author": null,
+            "checksum": "a7de0c2fc3eb2b656ba8cbbb55607bdc54676231c42b77244d00bd97a5971de4",
+            "document_type": "general",
+            "last_processed_stage": "upload",
+            "page_count": 1,
+            "title": "sample_fly_publication.pdf"
+          },
+          "vector_count": 50
+        },
+        "active_document_id": "91570626-92bc-408e-8a6c-add1a388c315",
+        "created_at": "2026-06-06T23:17:18.791027Z",
+        "session_id": "bf87b326-4152-475b-933f-94828244a9bc",
+        "title": null,
+        "updated_at": "2026-06-06T23:17:18.791027Z"
+      },
+      "status_code": 200,
+      "step": "chat_session"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "active": true,
+        "document": {
+          "chunk_count": 50,
+          "filename": "sample_fly_publication.pdf",
+          "id": "91570626-92bc-408e-8a6c-add1a388c315",
+          "metadata": {
+            "author": null,
+            "checksum": "a7de0c2fc3eb2b656ba8cbbb55607bdc54676231c42b77244d00bd97a5971de4",
+            "document_type": "general",
+            "last_processed_stage": "upload",
+            "page_count": 1,
+            "title": "sample_fly_publication.pdf"
+          },
+          "vector_count": 50
+        },
+        "message": "Document 'sample_fly_publication.pdf' loaded for chat"
+      },
+      "status_code": 200,
+      "step": "chat_document_load_streaming_refresh"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "event_types": [
+          "RUN_STARTED",
+          "SUPERVISOR_START",
+          "AGENT_COMPLETE",
+          "CREW_START",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_CALL_ARGS",
+          "TOOL_START",
+          "TOOL_START",
+          "TOOL_START",
+          "TOOL_COMPLETE",
+          "TOOL_COMPLETE",
+          "TOOL_START",
+          "TOOL_COMPLETE",
+          "TOOL_START",
+          "TOOL_COMPLETE",
+          "TOOL_START",
+          "TOOL_COMPLETE",
+          "TOOL_START",
+          "STRUCTURED_FINALIZATION",
+          "TOOL_COMPLETE",
+          "AGENT_GENERATING",
+          "TOOL_COMPLETE",
+          "SPECIALIST_SUMMARY",
+          "AGENT_GENERATING",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "TEXT_MESSAGE_CONTENT",
+          "SUPERVISOR_COMPLETE",
+          "evidence_summary",
+          "turn_completed"
+        ],
+        "model": "gpt-5.5",
+        "response_preview": "This publication studies absolute protein abundance in Drosophila eyes, focusing on phototransduction and rhabdomere-associated proteins and how their organization changes in crumbs mutant eye morphogenesis.",
+        "session_id": "bf87b326-4152-475b-933f-94828244a9bc",
+        "terminal_event": "turn_completed",
+        "trace_id": "44f1a6cb5cba12fe7f883ba26c256310"
+      },
+      "status_code": 200,
+      "step": "chat_stream"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "agent_id": "ca_1e1eb089-750c-4b16-a615-e026f93561f9",
+        "created_at": "2026-06-06T23:18:01.530507Z",
+        "current_parent_prompt_hash": null,
+        "custom_prompt": "",
+        "custom_prompt_overlay_status": "clean",
+        "custom_prompt_removed_layer_kinds": [],
+        "custom_prompt_warning": null,
+        "description": "Temporary dev release smoke gene extraction agent",
+        "group_prompt_overrides": {},
+        "icon": "\ud83d\udd27",
+        "id": "1e1eb089-750c-4b16-a615-e026f93561f9",
+        "include_group_rules": false,
+        "is_active": true,
+        "model_id": "gpt-5.4-mini",
+        "model_reasoning": "low",
+        "model_temperature": 0.1,
+        "name": "Dev Release Smoke Agent 2a16977d",
+        "output_schema_key": null,
+        "parent_exists": true,
+        "parent_prompt_hash": null,
+        "parent_prompt_stale": false,
+        "project_id": null,
+        "template_source": "gene_extractor",
+        "tool_ids": [
+          "search_document",
+          "read_chunk",
+          "read_section",
+          "read_subsection",
+          "record_evidence",
+          "list_recorded_evidence",
+          "get_recorded_evidence",
+          "attach_evidence_to_object",
+          "detach_evidence_from_object",
+          "discard_recorded_evidence",
+          "update_recorded_evidence_metadata",
+          "get_agent_contract",
+          "agr_species_context_lookup",
+          "stage_gene_mention_evidence",
+          "patch_gene_mention_evidence",
+          "discard_gene_mention_evidence",
+          "list_staged_gene_mention_evidence",
+          "finalize_gene_extraction"
+        ],
+        "updated_at": "2026-06-06T23:18:01.530507Z",
+        "user_id": 1,
+        "visibility": "private"
+      },
+      "status_code": 201,
+      "step": "create_custom_agent"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "created_at": "2026-06-06T23:18:01.582180Z",
+        "description": "Temporary dev release smoke flow",
+        "execution_count": 0,
+        "flow_definition": {
+          "edges": [
+            {
+              "condition": null,
+              "id": "edge_1",
+              "replaces_attachment_id": null,
+              "role": "control_flow",
+              "satisfies_binding_id": null,
+              "source": "task_input_1",
+              "target": "agent_1"
+            }
+          ],
+          "entry_node_id": "task_input_1",
+          "nodes": [
+            {
+              "data": {
+                "agent_description": null,
+                "agent_display_name": "Initial Instructions",
+                "agent_id": "task_input",
+                "custom_instructions": null,
+                "include_evidence": null,
+                "output_filename_template": null,
+                "output_key": "task_input_text",
+                "projection_plan": null,
+                "prompt_version": null,
+                "step_goal": null,
+                "task_instructions": "Read the loaded paper and extract exactly one experimentally supported gene: crb/Crumbs. Include the organism when possible. Call record_evidence for one supporting quote, and include the returned evidence_record_id on the retained item. Do not extract any other genes.",
+                "validation_attachments": [],
+                "validation_groups": []
+              },
+              "id": "task_input_1",
+              "position": {
+                "x": 0.0,
+                "y": 0.0
+              },
+              "type": "task_input"
+            },
+            {
+              "data": {
+                "agent_description": null,
+                "agent_display_name": "Dev Release Smoke Agent 2a16977d",
+                "agent_id": "ca_1e1eb089-750c-4b16-a615-e026f93561f9",
+                "custom_instructions": null,
+                "include_evidence": null,
+                "output_filename_template": null,
+                "output_key": "final_output",
+                "projection_plan": null,
+                "prompt_version": null,
+                "step_goal": "Extract only crb/Crumbs from the loaded document, retain exactly one verified evidence record, and include its evidence_record_id in the final structured result.",
+                "task_instructions": null,
+                "validation_attachments": [],
+                "validation_groups": []
+              },
+              "id": "agent_1",
+              "position": {
+                "x": 280.0,
+                "y": 0.0
+              },
+              "type": "agent"
+            }
+          ],
+          "version": "1.0"
+        },
+        "id": "a8e2c9d4-84d9-4417-b7c1-2781ef9c4124",
+        "last_executed_at": null,
+        "name": "Dev Release Smoke Flow 7d0c3ed9",
+        "updated_at": "2026-06-06T23:18:01.582180Z",
+        "user_id": 1
+      },
+      "status_code": 201,
+      "step": "create_flow"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "document_id": null,
+        "error": null,
+        "message": "Flow 'Dev Release Smoke Flow 7d0c3ed9' has been deleted",
+        "success": true
+      },
+      "status_code": 200,
+      "step": "cleanup_flow:a8e2c9d4-84d9-4417-b7c1-2781ef9c4124"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "id": "1e1eb089-750c-4b16-a615-e026f93561f9",
+        "status": "deleted"
+      },
+      "status_code": 200,
+      "step": "cleanup_custom_agent:1e1eb089-750c-4b16-a615-e026f93561f9"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "active": false,
+        "document": {
+          "chunk_count": 50,
+          "filename": "sample_fly_publication.pdf",
+          "id": "91570626-92bc-408e-8a6c-add1a388c315",
+          "metadata": {
+            "author": null,
+            "checksum": "a7de0c2fc3eb2b656ba8cbbb55607bdc54676231c42b77244d00bd97a5971de4",
+            "document_type": "general",
+            "last_processed_stage": "upload",
+            "page_count": 1,
+            "title": "sample_fly_publication.pdf"
+          },
+          "vector_count": 50
+        },
+        "message": "Document selection cleared"
+      },
+      "status_code": 200,
+      "step": "cleanup_loaded_document"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "document_id": "91570626-92bc-408e-8a6c-add1a388c315",
+        "error": null,
+        "message": "Document 91570626-92bc-408e-8a6c-add1a388c315 and 50 chunks deleted successfully",
+        "success": true
+      },
+      "status_code": 200,
+      "step": "cleanup_document:91570626-92bc-408e-8a6c-add1a388c315"
+    }
+  ],
+  "document_artifacts": {
+    "primary_chunks_total": 50,
+    "primary_download_info": {
+      "filename": "sample_fly_publication.pdf",
+      "pdf_available": true,
+      "pdf_size": 1521409,
+      "pdfx_json_available": true,
+      "pdfx_json_size": 11505,
+      "processed_json_available": true,
+      "processed_json_size": 86694
+    },
+    "primary_pdfx_json": {
+      "byte_count": 11505,
+      "json_body": {
+        "content_format": "merged_markdown",
+        "document_id": "91570626-92bc-408e-8a6c-add1a388c315",
+        "merge": true,
+        "methods": [
+          "grobid",
+          "docling",
+          "marker"
+        ],
+        "process_id": "73a256f4-eb36-45f6-8cf1-86a252575d53",
+        "service_url": "https://pdfx.alliancegenome.org",
+        "status_response": {
+          "artifacts_json": {
+            "audit": "pdfx/audit/2026/06/06/73a256f4-eb36-45f6-8cf1-86a252575d53/audit.md",
+            "docling": "pdfx/audit/2026/06/06/73a256f4-eb36-45f6-8cf1-86a252575d53/docling.md",
+            "grobid": "pdfx/audit/2026/06/06/73a256f4-eb36-45f6-8cf1-86a252575d53/grobid.md",
+            "marker": "pdfx/audit/2026/06/06/73a256f4-eb36-45f6-8cf1-86a252575d53/marker.md",
+            "merged": "pdfx/audit/2026/06/06/73a256f4-eb36-45f6-8cf1-86a252575d53/merged.md",
+            "source_pdf": "pdfx/audit/2026/06/06/73a256f4-eb36-45f6-8cf1-86a252575d53/inputs/source.pdf"
+          },
+          "consensus_metrics_json": {
+            "adaptive_conflict_ratio_threshold": 0.4,
+            "agree_exact": 41,
+            "agree_near": 31,
+            "alignment_confidence": 0.8812,
+            "assembled_dedup_removed": 9,
+            "conflict": 11,
+            "conflict_ratio": 0.1325,
+            "conflict_ratio_structured": 0.0,
+            "conflict_ratio_textual": 0.0241,
+            "conflict_span_ratio": 0.6635,
+            "conflicts_localized": false,
+            "degradation_metrics": {
+              "confidence_distribution": {
+                "below_25_pct": 31.7,
+                "below_50_pct": 31.7,
+                "max": 1.0,
+                "mean": 0.6457,
+                "median": 0.9719,
+                "min": 0.0,
+                "p10": 0.0,
+                "p25": 0.0,
+                "p75": 0.9897,
+                "p90": 0.9941,
+                "std_dev": 0.455
+              },
+              "degraded_segments": {
+                "count": 0,
+                "details": [],
+                "pct_of_resolved": 0.0,
+                "pct_of_total": 0.0,
+                "segment_ids": []
+              },
+              "numeric_integrity": {
+                "count": 1,
+                "fallback_count": 0,
+                "segment_ids": [
+                  "seg_100"
+                ]
+              },
+              "quality_grade": "A",
+              "quality_score": 0.97,
+              "rescue_segments": {
+                "count": 1,
+                "details": [
+                  {
+                    "block_type": "paragraph",
+                    "confidence": 0.5425,
+                    "context_id": "micro_seg_100",
+                    "method": "llm_conflict_numeric_guard_rescue_resolved",
+                    "rescue_explanation": "",
+                    "segment_id": "seg_100"
+                  }
+                ]
+              },
+              "resolution_summary": {
+                "by_method": {
+                  "deterministic_two_source": {
+                    "count": 0,
+                    "pct": 0.0
+                  },
+                  "llm_conflict": {
+                    "count": 21,
+                    "pct": 33.3
+                  },
+                  "llm_conflict_fallback_best_source": {
+                    "count": 0,
+                    "pct": 0.0
+                  },
+                  "llm_conflict_numeric_guard_fallback_best_source": {
+                    "count": 0,
+                    "pct": 0.0
+                  },
+                  "llm_conflict_numeric_guard_rescue_resolved": {
+                    "count": 1,
+                    "pct": 1.6
+                  },
+                  "llm_conflict_post_validation_rescue": {
+                    "count": 5,
+                    "pct": 7.9
+                  },
+                  "llm_conflict_rescue_intentional_drop": {
+                    "count": 0,
+                    "pct": 0.0
+                  },
+                  "llm_conflict_rescue_resolved": {
+                    "count": 0,
+                    "pct": 0.0
+                  },
+                  "llm_gap": {
+                    "count": 20,
+                    "pct": 31.7
+                  },
+                  "llm_gap_numeric_guard_fallback_best_source": {
+                    "count": 0,
+                    "pct": 0.0
+                  },
+                  "llm_gap_numeric_guard_rescue_resolved": {
+                    "count": 0,
+                    "pct": 0.0
+                  },
+                  "llm_near_agree": {
+                    "count": 0,
+                    "pct": 0.0
+                  },
+                  "llm_near_agree_fallback_best_source": {
+                    "count": 0,
+                    "pct": 0.0
+                  },
+                  "llm_near_agree_numeric_guard_fallback_best_source": {
+                    "count": 0,
+                    "pct": 0.0
+                  },
+                  "llm_near_agree_numeric_guard_rescue_resolved": {
+                    "count": 0,
+                    "pct": 0.0
+                  },
+                  "llm_near_agree_rescue_intentional_drop": {
+                    "count": 0,
+                    "pct": 0.0
+                  },
+                  "llm_near_agree_rescue_resolved": {
+                    "count": 0,
+                    "pct": 0.0
+                  },
+                  "llm_rescue_intentional_drop": {
+                    "count": 0,
+                    "pct": 0.0
+                  },
+                  "llm_rescue_resolved": {
+                    "count": 0,
+                    "pct": 0.0
+                  },
+                  "median_source": {
+                    "count": 15,
+                    "pct": 23.8
+                  },
+                  "structural_heading_gap_keep": {
+                    "count": 1,
+                    "pct": 1.6
+                  },
+                  "zone_fallback_best_source": {
+                    "count": 0,
+                    "pct": 0.0
+                  }
+                },
+                "by_quality_tier": {
+                  "high": {
+                    "count": 56,
+                    "methods": [
+                      "llm_conflict",
+                      "llm_conflict_rescue_intentional_drop",
+                      "llm_conflict_rescue_resolved",
+                      "llm_gap",
+                      "llm_near_agree",
+                      "llm_near_agree_rescue_intentional_drop",
+                      "llm_near_agree_rescue_resolved",
+                      "llm_rescue_intentional_drop",
+                      "llm_rescue_resolved",
+                      "median_source"
+                    ],
+                    "pct": 88.9
+                  },
+                  "medium": {
+                    "count": 6,
+                    "methods": [
+                      "llm_conflict_fallback_best_source",
+                      "llm_conflict_numeric_guard_fallback_best_source",
+                      "llm_conflict_post_validation_rescue",
+                      "llm_gap_numeric_guard_fallback_best_source",
+                      "llm_near_agree_fallback_best_source",
+                      "llm_near_agree_numeric_guard_fallback_best_source",
+                      "structural_heading_gap_keep",
+                      "zone_fallback_best_source"
+                    ],
+                    "pct": 9.5
+                  },
+                  "medium_high": {
+                    "count": 1,
+                    "methods": [
+                      "deterministic_two_source",
+                      "llm_conflict_numeric_guard_rescue_resolved",
+                      "llm_gap_numeric_guard_rescue_resolved",
+                      "llm_near_agree_numeric_guard_rescue_resolved"
+                    ],
+                    "pct": 1.6
+                  }
+                },
+                "total_resolved_segments": 63
+              },
+              "risk_flags": {
+                "degradation_concentrated": false,
+                "high_degradation_rate": false,
+                "high_risk_top_level_heading": false,
+                "low_confidence_cluster": false,
+                "numeric_integrity_fallback": false,
+                "numeric_integrity_violation": true
+              },
+              "section_risk": {
+                "Absolute Quantification of Proteins in the Eye of Drosophila melanogaster": {
+                  "degraded": 0,
+                  "heading_level": 1,
+                  "pct_degraded": 0.0,
+                  "risk": "none",
+                  "total_segments": 1
+                },
+                "Absolute Quantification of Proteins in the Eye of Drosophila melanogaster > Abstract": {
+                  "degraded": 0,
+                  "heading_level": 2,
+                  "pct_degraded": 0.0,
+                  "risk": "none",
+                  "total_segments": 12
+                },
+                "Absolute Quantification of Proteins in the Eye of Drosophila melanogaster > Acknowledgements": {
+                  "degraded": 0,
+                  "heading_level": 2,
+                  "pct_degraded": 0.0,
+                  "risk": "none",
+                  "total_segments": 2
+                },
+                "Absolute Quantification of Proteins in the Eye of Drosophila melanogaster > Author Contributions": {
+                  "degraded": 0,
+                  "heading_level": 2,
+                  "pct_degraded": 0.0,
+                  "risk": "none",
+                  "total_segments": 7
+                },
+                "Absolute Quantification of Proteins in the Eye of Drosophila melanogaster > Conflict of Interest": {
+                  "degraded": 0,
+                  "heading_level": 2,
+                  "pct_degraded": 0.0,
+                  "risk": "none",
+                  "total_segments": 1
+                },
+                "Absolute Quantification of Proteins in the Eye of Drosophila melanogaster > Significance Statement": {
+                  "degraded": 0,
+                  "heading_level": 2,
+                  "pct_degraded": 0.0,
+                  "risk": "none",
+                  "total_segments": 56
+                },
+                "Absolute Quantification of Proteins in the Eye of Drosophila melanogaster > Supporting Information": {
+                  "degraded": 0,
+                  "heading_level": 2,
+                  "pct_degraded": 0.0,
+                  "risk": "none",
+                  "total_segments": 1
+                }
+              },
+              "time_series_fields": {
+                "degraded_segment_count": 0,
+                "degraded_segment_pct": 0.0,
+                "fallback_best_source_count": 0,
+                "high_risk_top_level_heading": false,
+                "mean_confidence": 0.6457,
+                "min_confidence": 0.0,
+                "numeric_integrity_violation": true,
+                "numeric_integrity_violation_count": 1,
+                "quality_score": 0.97,
+                "rescue_attempt_count": 1,
+                "rescue_success_count": 1,
+                "rescue_success_rate": 100.0,
+                "total_consensus_tokens": 76001
+              },
+              "token_efficiency": {
+                "rescue_call_tokens": 0,
+                "total_consensus_tokens": 76001,
+                "zone_resolution_tokens": 76001
+              }
+            },
+            "failed": false,
+            "failure_reason": null,
+            "gap": 21,
+            "gap_dedup_removed": 1,
+            "micro_conflict_auto_resolved": 2,
+            "micro_conflict_by_block_type": {
+              "paragraph": 115
+            },
+            "micro_conflict_majority_agree_avg": 0.8264,
+            "micro_conflict_segments": 44,
+            "micro_conflict_total_spans": 115,
+            "qa": {
+              "global_duplicate_count": 0,
+              "html_comment_count": 0,
+              "qa_passed": true,
+              "span_tag_count": 0
+            },
+            "resolution_confidence_mean": 0.6457,
+            "resolution_methods": {
+              "llm_conflict": 21,
+              "llm_conflict_numeric_guard_rescue_resolved": 1,
+              "llm_conflict_post_validation_rescue": 5,
+              "llm_gap": 20,
+              "median_source": 15,
+              "structural_heading_gap_keep": 1
+            },
+            "schema_enforcement": {
+              "enforcement_applied": false,
+              "normalized_words": 5623,
+              "original_words": 6517,
+              "skip_reason": "content_loss"
+            },
+            "total_blocks": 104
+          },
+          "ended_at": "2026-06-06T23:15:30.994026Z",
+          "extract_images": false,
+          "image_count": 0,
+          "llm_cost_usd": null,
+          "llm_usage_json": null,
+          "log_s3_key": "pdfx/audit/2026/06/06/73a256f4-eb36-45f6-8cf1-86a252575d53.ndjson",
+          "mod_abbreviation": null,
+          "process_id": "73a256f4-eb36-45f6-8cf1-86a252575d53",
+          "reference_curie": null,
+          "review_images": false,
+          "source_pdf_md5": "3ceae64c733cc1c733b542ca5ddd38f0",
+          "started_at": "2026-06-06T23:15:30.472677Z",
+          "status": "complete"
+        },
+        "submit_response": {
+          "clear_cache_scope": "none",
+          "extract_images": false,
+          "merge": true,
+          "methods": [
+            "grobid",
+            "docling",
+            "marker"
+          ],
+          "mod_abbreviation": null,
+          "process_id": "73a256f4-eb36-45f6-8cf1-86a252575d53",
+          "reference_curie": null,
+          "review_images": false,
+          "status": "queued"
+        }
+      },
+      "json_detected": true
+    }
+  },
+  "env_file": ".env",
+  "error": "Flow finished without persisted evidence records: {'type': 'FLOW_FINISHED', 'session_id': 'dev-release-flow-0e22c870', 'turn_id': '6fbdef76312e4a44a701149b26ba29cc', 'flow_id': 'a8e2c9d4-84d9-4417-b7c1-2781ef9c4124', 'flow_name': 'Dev Release Smoke Flow 7d0c3ed9', 'flow_run_id': 'e0e8a6eb-f231-4b50-a5f8-947252b8541b', 'document_id': '91570626-92bc-408e-8a6c-add1a388c315', 'origin_session_id': 'dev-release-flow-0e22c870', 'status': 'completed', 'failure_reason': None, 'total_evidence_records': 0, 'step_evidence_counts': {'1': 0}, 'adapter_keys': [], 'extraction_result_refs': [], 'extraction_result_ids': [], 'review_session_ids': [], 'timestamp': '2026-06-06T23:18:26.496633+00:00'}",
+  "expected_api_principal": {
+    "auth_sub": null,
+    "email": null
+  },
+  "expected_runtime_chat_model": "gpt-5.5",
+  "expected_runtime_specialist_model": "gpt-5.4-mini",
+  "flow_model": "gpt-5.4-mini",
+  "flow_summary": null,
+  "overall_status": "fail",
+  "preflight": {
+    "llm_provider_health": {
+      "errors": [],
+      "models": [
+        {
+          "curator_visible": true,
+          "model_id": "gpt-5.4-mini",
+          "provider_exists": true,
+          "provider_id": "openai"
+        },
+        {
+          "curator_visible": true,
+          "model_id": "gpt-5.5",
+          "provider_exists": true,
+          "provider_id": "openai"
+        }
+      ],
+      "providers": [
+        {
+          "api_key_env": "GEMINI_API_KEY",
+          "api_key_present": true,
+          "api_mode": "chat_completions",
+          "base_url_configured": false,
+          "base_url_env": null,
+          "default_for_runner": false,
+          "driver": "litellm",
+          "mapped_curator_visible_model_ids": [],
+          "mapped_model_ids": [],
+          "provider_id": "gemini",
+          "readiness": "unused",
+          "supports_parallel_tool_calls": true
+        },
+        {
+          "api_key_env": "GROQ_API_KEY",
+          "api_key_present": true,
+          "api_mode": "responses",
+          "base_url_configured": true,
+          "base_url_env": "GROQ_BASE_URL",
+          "default_for_runner": false,
+          "driver": "litellm",
+          "mapped_curator_visible_model_ids": [],
+          "mapped_model_ids": [],
+          "provider_id": "groq",
+          "readiness": "unused",
+          "supports_parallel_tool_calls": true
+        },
+        {
+          "api_key_env": "OPENAI_API_KEY",
+          "api_key_present": true,
+          "api_mode": "responses",
+          "base_url_configured": false,
+          "base_url_env": "OPENAI_BASE_URL",
+          "default_for_runner": true,
+          "driver": "openai_native",
+          "mapped_curator_visible_model_ids": [
+            "gpt-5.4-mini",
+            "gpt-5.5"
+          ],
+          "mapped_model_ids": [
+            "gpt-5.4-mini",
+            "gpt-5.5"
+          ],
+          "provider_id": "openai",
+          "readiness": "ready",
+          "supports_parallel_tool_calls": true
+        }
+      ],
+      "startup_report": {
+        "errors": [],
+        "models": [
+          {
+            "curator_visible": true,
+            "model_id": "gpt-5.4-mini",
+            "provider_exists": true,
+            "provider_id": "openai"
+          },
+          {
+            "curator_visible": true,
+            "model_id": "gpt-5.5",
+            "provider_exists": true,
+            "provider_id": "openai"
+          }
+        ],
+        "providers": [
+          {
+            "api_key_env": "GEMINI_API_KEY",
+            "api_key_present": true,
+            "api_mode": "chat_completions",
+            "base_url_configured": false,
+            "base_url_env": null,
+            "default_for_runner": false,
+            "driver": "litellm",
+            "mapped_curator_visible_model_ids": [],
+            "mapped_model_ids": [],
+            "provider_id": "gemini",
+            "readiness": "unused",
+            "supports_parallel_tool_calls": true
+          },
+          {
+            "api_key_env": "GROQ_API_KEY",
+            "api_key_present": true,
+            "api_mode": "responses",
+            "base_url_configured": true,
+            "base_url_env": "GROQ_BASE_URL",
+            "default_for_runner": false,
+            "driver": "litellm",
+            "mapped_curator_visible_model_ids": [],
+            "mapped_model_ids": [],
+            "provider_id": "groq",
+            "readiness": "unused",
+            "supports_parallel_tool_calls": true
+          },
+          {
+            "api_key_env": "OPENAI_API_KEY",
+            "api_key_present": true,
+            "api_mode": "responses",
+            "base_url_configured": false,
+            "base_url_env": "OPENAI_BASE_URL",
+            "default_for_runner": true,
+            "driver": "openai_native",
+            "mapped_curator_visible_model_ids": [
+              "gpt-5.4-mini",
+              "gpt-5.5"
+            ],
+            "mapped_model_ids": [
+              "gpt-5.4-mini",
+              "gpt-5.5"
+            ],
+            "provider_id": "openai",
+            "readiness": "ready",
+            "supports_parallel_tool_calls": true
+          }
+        ],
+        "status": "healthy",
+        "strict_mode": false,
+        "summary": {
+          "mapped_model_count": 2,
+          "missing_key_provider_count": 0,
+          "model_count": 2,
+          "provider_count": 3,
+          "ready_provider_count": 1
+        },
+        "validated_at": "2026-06-06T23:01:37.603601+00:00",
+        "warnings": []
+      },
+      "status": "healthy",
+      "strict_mode": false,
+      "summary": {
+        "mapped_model_count": 2,
+        "missing_key_provider_count": 0,
+        "model_count": 2,
+        "provider_count": 3,
+        "ready_provider_count": 1
+      },
+      "validated_at": "2026-06-06T23:15:26.814520+00:00",
+      "warnings": []
+    }
+  },
+  "rerank_provider_smoke": {
+    "base_url": null,
+    "evidence_file": null,
+    "included": false,
+    "overall_status": "not_requested",
+    "script_path": null
+  },
+  "resources": {
+    "batch_extraction_flow_id": null,
+    "batch_extraction_id": null,
+    "batch_plumbing_flow_id": null,
+    "batch_plumbing_id": null,
+    "chat_session_id": "fcc3d369-a7d6-47c2-9b91-19c6c2317dd6",
+    "chat_trace_id": "44f1a6cb5cba12fe7f883ba26c256310",
+    "custom_agent_id": "1e1eb089-750c-4b16-a615-e026f93561f9",
+    "custom_agent_key": "<redacted-custom-agent-key>",
+    "flow_id": "a8e2c9d4-84d9-4417-b7c1-2781ef9c4124",
+    "primary_document_id": "91570626-92bc-408e-8a6c-add1a388c315",
+    "secondary_document_id": null,
+    "stream_chat_session_id": "bf87b326-4152-475b-933f-94828244a9bc",
+    "workspace_session_id": null
+  },
+  "run_scope": "partial",
+  "runtime_default_specialist_model_directly_validated": false,
+  "sample_pdf": "/home/ctabone/.symphony/sandboxes/agr_ai_curation/main/backend/tests/fixtures/sample_fly_publication.pdf",
+  "secondary_pdf": null,
+  "skipped_stages": [
+    "user_info",
+    "workspace",
+    "batch",
+    "rerank_provider_smoke",
+    "dev_mode_fallback",
+    "duplicate_reuse"
+  ],
+  "stream_chat_message": "Briefly summarize the loaded publication in one sentence for a curator. Mention the main biological topic, but do not extract, normalize, or curate entities.",
+  "timestamp_utc": "2026-06-06T23:15:26.790827+00:00",
+  "used_api_key_auth": false,
+  "workspace_summary": null
+}

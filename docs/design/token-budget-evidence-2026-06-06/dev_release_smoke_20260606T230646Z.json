@@ -1,0 +1,514 @@
+{
+  "base_url": "http://127.0.0.1:8000",
+  "batch_extraction_zip_members": null,
+  "batch_plumbing_zip_members": null,
+  "chat_message": "What are the focus genes of this paper?",
+  "chat_response_preview": null,
+  "chat_stream_summary": null,
+  "checks": [
+    {
+      "ok": true,
+      "payload": {
+        "checks": {
+          "app": "running"
+        },
+        "openai_key_configured": true,
+        "service": "AI Curation Platform API",
+        "status": "healthy",
+        "timestamp": "2026-06-06T23:06:44.000009+00:00",
+        "version": "1.0.0"
+      },
+      "status_code": 200,
+      "step": "health"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "errors": [],
+        "models": [
+          {
+            "curator_visible": true,
+            "model_id": "gpt-5.4-mini",
+            "provider_exists": true,
+            "provider_id": "openai"
+          },
+          {
+            "curator_visible": true,
+            "model_id": "gpt-5.5",
+            "provider_exists": true,
+            "provider_id": "openai"
+          }
+        ],
+        "providers": [
+          {
+            "api_key_env": "GEMINI_API_KEY",
+            "api_key_present": true,
+            "api_mode": "chat_completions",
+            "base_url_configured": false,
+            "base_url_env": null,
+            "default_for_runner": false,
+            "driver": "litellm",
+            "mapped_curator_visible_model_ids": [],
+            "mapped_model_ids": [],
+            "provider_id": "gemini",
+            "readiness": "unused",
+            "supports_parallel_tool_calls": true
+          },
+          {
+            "api_key_env": "GROQ_API_KEY",
+            "api_key_present": true,
+            "api_mode": "responses",
+            "base_url_configured": true,
+            "base_url_env": "GROQ_BASE_URL",
+            "default_for_runner": false,
+            "driver": "litellm",
+            "mapped_curator_visible_model_ids": [],
+            "mapped_model_ids": [],
+            "provider_id": "groq",
+            "readiness": "unused",
+            "supports_parallel_tool_calls": true
+          },
+          {
+            "api_key_env": "OPENAI_API_KEY",
+            "api_key_present": true,
+            "api_mode": "responses",
+            "base_url_configured": false,
+            "base_url_env": "OPENAI_BASE_URL",
+            "default_for_runner": true,
+            "driver": "openai_native",
+            "mapped_curator_visible_model_ids": [
+              "gpt-5.4-mini",
+              "gpt-5.5"
+            ],
+            "mapped_model_ids": [
+              "gpt-5.4-mini",
+              "gpt-5.5"
+            ],
+            "provider_id": "openai",
+            "readiness": "ready",
+            "supports_parallel_tool_calls": true
+          }
+        ],
+        "startup_report": {
+          "errors": [],
+          "models": [
+            {
+              "curator_visible": true,
+              "model_id": "gpt-5.4-mini",
+              "provider_exists": true,
+              "provider_id": "openai"
+            },
+            {
+              "curator_visible": true,
+              "model_id": "gpt-5.5",
+              "provider_exists": true,
+              "provider_id": "openai"
+            }
+          ],
+          "providers": [
+            {
+              "api_key_env": "GEMINI_API_KEY",
+              "api_key_present": true,
+              "api_mode": "chat_completions",
+              "base_url_configured": false,
+              "base_url_env": null,
+              "default_for_runner": false,
+              "driver": "litellm",
+              "mapped_curator_visible_model_ids": [],
+              "mapped_model_ids": [],
+              "provider_id": "gemini",
+              "readiness": "unused",
+              "supports_parallel_tool_calls": true
+            },
+            {
+              "api_key_env": "GROQ_API_KEY",
+              "api_key_present": true,
+              "api_mode": "responses",
+              "base_url_configured": true,
+              "base_url_env": "GROQ_BASE_URL",
+              "default_for_runner": false,
+              "driver": "litellm",
+              "mapped_curator_visible_model_ids": [],
+              "mapped_model_ids": [],
+              "provider_id": "groq",
+              "readiness": "unused",
+              "supports_parallel_tool_calls": true
+            },
+            {
+              "api_key_env": "OPENAI_API_KEY",
+              "api_key_present": true,
+              "api_mode": "responses",
+              "base_url_configured": false,
+              "base_url_env": "OPENAI_BASE_URL",
+              "default_for_runner": true,
+              "driver": "openai_native",
+              "mapped_curator_visible_model_ids": [
+                "gpt-5.4-mini",
+                "gpt-5.5"
+              ],
+              "mapped_model_ids": [
+                "gpt-5.4-mini",
+                "gpt-5.5"
+              ],
+              "provider_id": "openai",
+              "readiness": "ready",
+              "supports_parallel_tool_calls": true
+            }
+          ],
+          "status": "healthy",
+          "strict_mode": false,
+          "summary": {
+            "mapped_model_count": 2,
+            "missing_key_provider_count": 0,
+            "model_count": 2,
+            "provider_count": 3,
+            "ready_provider_count": 1
+          },
+          "validated_at": "2026-06-06T23:01:37.603601+00:00",
+          "warnings": []
+        },
+        "status": "healthy",
+        "strict_mode": false,
+        "summary": {
+          "mapped_model_count": 2,
+          "missing_key_provider_count": 0,
+          "model_count": 2,
+          "provider_count": 3,
+          "ready_provider_count": 1
+        },
+        "validated_at": "2026-06-06T23:06:44.002203+00:00",
+        "warnings": []
+      },
+      "status_code": 200,
+      "step": "llm_provider_health"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "deep_details": {
+          "auth_check_mode": "guard_rejects_missing_header",
+          "downstream_error": null,
+          "downstream_roundtrip_ok": true,
+          "downstream_status_code": 200,
+          "ec2": "ready",
+          "proxy_auth_error": null,
+          "proxy_auth_valid": true,
+          "queue_depth": 0,
+          "queue_durable": true,
+          "status": "healthy"
+        },
+        "deep_response_code": 200,
+        "details": {
+          "active_backend_jobs": 0,
+          "active_jobs": 0,
+          "ec2": "ready",
+          "gpu_grobid": "ok",
+          "gpu_healthy": true,
+          "gpu_redis": "ok",
+          "gpu_status": "ok",
+          "gpu_workers": 1,
+          "proxy": "ok",
+          "queue_depth": 0,
+          "queue_durable": true,
+          "status": "healthy"
+        },
+        "error": null,
+        "last_checked": "2026-06-06T23:06:44.003688+00:00",
+        "response_code": 200,
+        "service_url": "https://pdfx.alliancegenome.org",
+        "status": "healthy",
+        "status_details": {
+          "active_backend_jobs": 0,
+          "active_jobs": 0,
+          "idle_minutes": 0.0,
+          "queue_durable": true,
+          "queued_jobs": 0,
+          "ready_minutes": 0.2,
+          "state": "ready",
+          "warming_up": false
+        },
+        "status_error": null,
+        "status_response_code": 200,
+        "wake_required": false,
+        "worker_available": true,
+        "worker_state": "ready"
+      },
+      "status_code": 200,
+      "step": "pdf_extraction_health_initial"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "detail": {
+          "error": "duplicate_file",
+          "existing_document_id": "deaae8b8-c491-48f5-ba1e-4cec8ed68d57",
+          "message": "This file has already been uploaded on June 06, 2026 at 04:35 AM",
+          "suggestion": "If you want to re-process this file, delete the existing document first and then upload again.",
+          "uploaded_at": "2026-06-06T04:35:35.479679+00:00"
+        }
+      },
+      "status_code": 409,
+      "step": "upload_primary_pdf_duplicate_reused"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "cancel_requested": false,
+        "chunk_count": 50,
+        "document_id": "deaae8b8-c491-48f5-ba1e-4cec8ed68d57",
+        "embedding_status": "completed",
+        "job_id": "797bbd6c-dac8-45dd-b78f-4b7786eed972",
+        "job_status": "completed",
+        "pipeline_status": {
+          "completed_at": "2026-06-06T04:35:52.569037+00:00",
+          "current_stage": "completed",
+          "document_id": "deaae8b8-c491-48f5-ba1e-4cec8ed68d57",
+          "error_count": 0,
+          "message": "Processing completed successfully",
+          "progress_percentage": 100,
+          "stage_results": [],
+          "started_at": "2026-06-06T04:35:35.513165+00:00",
+          "updated_at": "2026-06-06T04:35:52.568727+00:00"
+        },
+        "processing_status": "completed",
+        "vector_count": 50
+      },
+      "status_code": 200,
+      "step": "primary_document_processing_completed"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "document_id": "deaae8b8-c491-48f5-ba1e-4cec8ed68d57",
+        "returned_chunks": 50,
+        "total_items": 50
+      },
+      "status_code": 200,
+      "step": "primary_chunks"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "filename": "sample_fly_publication.pdf",
+        "pdf_available": false,
+        "pdf_size": null,
+        "pdfx_json_available": false,
+        "pdfx_json_size": null,
+        "processed_json_available": false,
+        "processed_json_size": null
+      },
+      "status_code": 200,
+      "step": "primary_download_info"
+    }
+  ],
+  "document_artifacts": {
+    "primary_chunks_total": 50
+  },
+  "env_file": ".env",
+  "error": "Expected pdf_available true: {'pdf_available': False, 'pdf_size': None, 'pdfx_json_available': False, 'pdfx_json_size': None, 'processed_json_available': False, 'processed_json_size': None, 'filename': 'sample_fly_publication.pdf'}",
+  "expected_api_principal": {
+    "auth_sub": null,
+    "email": null
+  },
+  "expected_runtime_chat_model": "gpt-5.5",
+  "expected_runtime_specialist_model": "gpt-5.4-mini",
+  "flow_model": "gpt-5.4-mini",
+  "flow_summary": null,
+  "overall_status": "fail",
+  "preflight": {
+    "llm_provider_health": {
+      "errors": [],
+      "models": [
+        {
+          "curator_visible": true,
+          "model_id": "gpt-5.4-mini",
+          "provider_exists": true,
+          "provider_id": "openai"
+        },
+        {
+          "curator_visible": true,
+          "model_id": "gpt-5.5",
+          "provider_exists": true,
+          "provider_id": "openai"
+        }
+      ],
+      "providers": [
+        {
+          "api_key_env": "GEMINI_API_KEY",
+          "api_key_present": true,
+          "api_mode": "chat_completions",
+          "base_url_configured": false,
+          "base_url_env": null,
+          "default_for_runner": false,
+          "driver": "litellm",
+          "mapped_curator_visible_model_ids": [],
+          "mapped_model_ids": [],
+          "provider_id": "gemini",
+          "readiness": "unused",
+          "supports_parallel_tool_calls": true
+        },
+        {
+          "api_key_env": "GROQ_API_KEY",
+          "api_key_present": true,
+          "api_mode": "responses",
+          "base_url_configured": true,
+          "base_url_env": "GROQ_BASE_URL",
+          "default_for_runner": false,
+          "driver": "litellm",
+          "mapped_curator_visible_model_ids": [],
+          "mapped_model_ids": [],
+          "provider_id": "groq",
+          "readiness": "unused",
+          "supports_parallel_tool_calls": true
+        },
+        {
+          "api_key_env": "OPENAI_API_KEY",
+          "api_key_present": true,
+          "api_mode": "responses",
+          "base_url_configured": false,
+          "base_url_env": "OPENAI_BASE_URL",
+          "default_for_runner": true,
+          "driver": "openai_native",
+          "mapped_curator_visible_model_ids": [
+            "gpt-5.4-mini",
+            "gpt-5.5"
+          ],
+          "mapped_model_ids": [
+            "gpt-5.4-mini",
+            "gpt-5.5"
+          ],
+          "provider_id": "openai",
+          "readiness": "ready",
+          "supports_parallel_tool_calls": true
+        }
+      ],
+      "startup_report": {
+        "errors": [],
+        "models": [
+          {
+            "curator_visible": true,
+            "model_id": "gpt-5.4-mini",
+            "provider_exists": true,
+            "provider_id": "openai"
+          },
+          {
+            "curator_visible": true,
+            "model_id": "gpt-5.5",
+            "provider_exists": true,
+            "provider_id": "openai"
+          }
+        ],
+        "providers": [
+          {
+            "api_key_env": "GEMINI_API_KEY",
+            "api_key_present": true,
+            "api_mode": "chat_completions",
+            "base_url_configured": false,
+            "base_url_env": null,
+            "default_for_runner": false,
+            "driver": "litellm",
+            "mapped_curator_visible_model_ids": [],
+            "mapped_model_ids": [],
+            "provider_id": "gemini",
+            "readiness": "unused",
+            "supports_parallel_tool_calls": true
+          },
+          {
+            "api_key_env": "GROQ_API_KEY",
+            "api_key_present": true,
+            "api_mode": "responses",
+            "base_url_configured": true,
+            "base_url_env": "GROQ_BASE_URL",
+            "default_for_runner": false,
+            "driver": "litellm",
+            "mapped_curator_visible_model_ids": [],
+            "mapped_model_ids": [],
+            "provider_id": "groq",
+            "readiness": "unused",
+            "supports_parallel_tool_calls": true
+          },
+          {
+            "api_key_env": "OPENAI_API_KEY",
+            "api_key_present": true,
+            "api_mode": "responses",
+            "base_url_configured": false,
+            "base_url_env": "OPENAI_BASE_URL",
+            "default_for_runner": true,
+            "driver": "openai_native",
+            "mapped_curator_visible_model_ids": [
+              "gpt-5.4-mini",
+              "gpt-5.5"
+            ],
+            "mapped_model_ids": [
+              "gpt-5.4-mini",
+              "gpt-5.5"
+            ],
+            "provider_id": "openai",
+            "readiness": "ready",
+            "supports_parallel_tool_calls": true
+          }
+        ],
+        "status": "healthy",
+        "strict_mode": false,
+        "summary": {
+          "mapped_model_count": 2,
+          "missing_key_provider_count": 0,
+          "model_count": 2,
+          "provider_count": 3,
+          "ready_provider_count": 1
+        },
+        "validated_at": "2026-06-06T23:01:37.603601+00:00",
+        "warnings": []
+      },
+      "status": "healthy",
+      "strict_mode": false,
+      "summary": {
+        "mapped_model_count": 2,
+        "missing_key_provider_count": 0,
+        "model_count": 2,
+        "provider_count": 3,
+        "ready_provider_count": 1
+      },
+      "validated_at": "2026-06-06T23:06:44.002203+00:00",
+      "warnings": []
+    }
+  },
+  "rerank_provider_smoke": {
+    "base_url": null,
+    "evidence_file": null,
+    "included": false,
+    "overall_status": "not_requested",
+    "script_path": null
+  },
+  "resources": {
+    "batch_extraction_flow_id": null,
+    "batch_extraction_id": null,
+    "batch_plumbing_flow_id": null,
+    "batch_plumbing_id": null,
+    "chat_session_id": null,
+    "chat_trace_id": null,
+    "custom_agent_id": null,
+    "custom_agent_key": null,
+    "flow_id": null,
+    "primary_document_id": "deaae8b8-c491-48f5-ba1e-4cec8ed68d57",
+    "secondary_document_id": null,
+    "stream_chat_session_id": null,
+    "workspace_session_id": null
+  },
+  "run_scope": "partial",
+  "runtime_default_specialist_model_directly_validated": false,
+  "sample_pdf": "/home/ctabone/.symphony/sandboxes/agr_ai_curation/main/backend/tests/fixtures/sample_fly_publication.pdf",
+  "secondary_pdf": null,
+  "skipped_stages": [
+    "user_info",
+    "workspace",
+    "batch",
+    "rerank_provider_smoke",
+    "dev_mode_fallback",
+    "duplicate_reuse"
+  ],
+  "stream_chat_message": "What are the focus genes of this paper? Answer briefly and cite the loaded paper context.",
+  "timestamp_utc": "2026-06-06T23:06:43.977182+00:00",
+  "used_api_key_auth": false,
+  "workspace_summary": null
+}
