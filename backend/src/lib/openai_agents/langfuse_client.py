@@ -1,9 +1,11 @@
 """
 Langfuse client initialization for OpenAI Agents SDK.
 
-This module provides Langfuse observability integration using the drop-in
-OpenAI replacement approach. All OpenAI calls made through the SDK are
-automatically traced and sent to Langfuse.
+This module wires the Langfuse v4 OpenTelemetry exporter together with
+OpenInference's OpenAI Agents SDK tracing processor. The Agents SDK emits one
+hierarchical trace stream for agent spans, model calls, tool calls, handoffs,
+guardrails, and errors; Langfuse exports those spans without wrapping the
+OpenAI client itself.
 
 Environment Variables Required:
     LANGFUSE_HOST: Langfuse server URL (e.g., http://langfuse:3000)
@@ -56,6 +58,7 @@ LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY")
 
 # Global Langfuse client instance
 _langfuse_client = None
+_openai_agents_instrumented = False
 
 # Context-local storage for pending agent configs (async-safe)
 # These are collected during agent creation and flushed to the trace later
@@ -89,24 +92,34 @@ def initialize_langfuse():
         return None
 
     try:
-        # Set Langfuse environment variables for the drop-in replacement
-        os.environ["LANGFUSE_HOST"] = LANGFUSE_HOST
-        os.environ["LANGFUSE_PUBLIC_KEY"] = LANGFUSE_PUBLIC_KEY
-        os.environ["LANGFUSE_SECRET_KEY"] = LANGFUSE_SECRET_KEY
+        host = str(LANGFUSE_HOST)
+        public_key = str(LANGFUSE_PUBLIC_KEY)
+        secret_key = str(LANGFUSE_SECRET_KEY)
+
+        # Set Langfuse environment variables for SDK initialization and OTLP export.
+        os.environ["LANGFUSE_HOST"] = host
+        os.environ["LANGFUSE_PUBLIC_KEY"] = public_key
+        os.environ["LANGFUSE_SECRET_KEY"] = secret_key
 
         # Use internal host for Docker container networking
         # The base URL without /api path for the SDK
-        os.environ["LANGFUSE_BASEURL"] = LANGFUSE_HOST
+        os.environ["LANGFUSE_BASEURL"] = host
+        os.environ["OPENAI_AGENTS_TRACE_INCLUDE_SENSITIVE_DATA"] = "true"
 
         # Import and initialize Langfuse
         from langfuse import Langfuse
 
         # Create the global client directly (get_client() removed in 2.60.x)
         _langfuse_client = Langfuse(
-            host=LANGFUSE_HOST,
-            public_key=LANGFUSE_PUBLIC_KEY,
-            secret_key=LANGFUSE_SECRET_KEY,
+            host=host,
+            public_key=public_key,
+            secret_key=secret_key,
         )
+        if not _instrument_openai_agents_tracing():
+            logger.warning(
+                "OpenAI Agents SDK tracing was not instrumented; Langfuse will only "
+                "receive manually-created application observations."
+            )
 
         # Test connection
         try:
@@ -135,6 +148,36 @@ def get_langfuse():
     return _langfuse_client
 
 
+def _instrument_openai_agents_tracing() -> bool:
+    """Install the OpenInference processor that exports Agents SDK traces to Langfuse."""
+    global _openai_agents_instrumented
+
+    if _openai_agents_instrumented:
+        return True
+
+    try:
+        from openinference.instrumentation.openai_agents import OpenAIAgentsInstrumentor
+
+        OpenAIAgentsInstrumentor().instrument(exclusive_processor=True)
+        _openai_agents_instrumented = True
+        logger.info("OpenAI Agents SDK tracing instrumented via OpenInference")
+        return True
+    except ImportError:
+        logger.error(
+            "openinference-instrumentation-openai-agents package not installed. "
+            "Install backend requirements to enable complete Langfuse agent tracing."
+        )
+        return False
+    except Exception as e:
+        logger.warning("Failed to instrument OpenAI Agents SDK tracing: %s", e)
+        return False
+
+
+def is_openai_agents_tracing_enabled() -> bool:
+    """Return whether Agents SDK spans are currently routed to Langfuse."""
+    return _openai_agents_instrumented
+
+
 def flush_langfuse():
     """
     Flush any pending Langfuse events.
@@ -150,10 +193,10 @@ def flush_langfuse():
 
 def create_trace(
     name: str,
-    session_id: str = None,
-    user_id: str = None,
-    metadata: dict = None,
-    tags: list = None
+    session_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    metadata: Optional[dict] = None,
+    tags: Optional[list] = None
 ):
     """
     Create a new Langfuse trace manually.
@@ -211,9 +254,9 @@ def log_agent_config(
     agent_name: str,
     instructions: str,
     model: str,
-    tools: list = None,
-    model_settings: dict = None,
-    metadata: dict = None
+    tools: Optional[list] = None,
+    model_settings: Optional[dict] = None,
+    metadata: Optional[dict] = None
 ):
     """
     Queue agent configuration for later logging to Langfuse trace.

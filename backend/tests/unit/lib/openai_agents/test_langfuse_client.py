@@ -14,9 +14,11 @@ from src.lib.openai_agents import langfuse_client as lc
 @pytest.fixture(autouse=True)
 def _reset_langfuse_state(monkeypatch):
     monkeypatch.setattr(lc, "_langfuse_client", None)
+    monkeypatch.setattr(lc, "_openai_agents_instrumented", False)
     lc.clear_pending_configs()
     yield
     monkeypatch.setattr(lc, "_langfuse_client", None)
+    monkeypatch.setattr(lc, "_openai_agents_instrumented", False)
     lc.clear_pending_configs()
 
 
@@ -61,6 +63,8 @@ def test_initialize_langfuse_returns_none_when_not_configured(monkeypatch):
 
 
 def test_initialize_langfuse_success_sets_env_and_client(monkeypatch):
+    instrument_calls = []
+
     class FakeLangfuse:
         def __init__(self, host, public_key, secret_key):
             self.host = host
@@ -71,13 +75,18 @@ def test_initialize_langfuse_success_sets_env_and_client(monkeypatch):
             return {"ok": True}
 
     fake_module = ModuleType("langfuse")
-    fake_module.Langfuse = FakeLangfuse
+    setattr(fake_module, "Langfuse", FakeLangfuse)
     monkeypatch.setitem(sys.modules, "langfuse", fake_module)
 
     monkeypatch.setattr(lc, "is_langfuse_configured", lambda: True)
     monkeypatch.setattr(lc, "LANGFUSE_HOST", "http://langfuse:3000")
     monkeypatch.setattr(lc, "LANGFUSE_PUBLIC_KEY", "pub")
     monkeypatch.setattr(lc, "LANGFUSE_SECRET_KEY", "sec")
+    monkeypatch.setattr(
+        lc,
+        "_instrument_openai_agents_tracing",
+        lambda: instrument_calls.append("instrumented") or True,
+    )
 
     client = lc.initialize_langfuse()
     assert isinstance(client, FakeLangfuse)
@@ -85,6 +94,8 @@ def test_initialize_langfuse_success_sets_env_and_client(monkeypatch):
     assert os.environ["LANGFUSE_PUBLIC_KEY"] == "pub"
     assert os.environ["LANGFUSE_SECRET_KEY"] == "sec"
     assert os.environ["LANGFUSE_BASEURL"] == "http://langfuse:3000"
+    assert os.environ["OPENAI_AGENTS_TRACE_INCLUDE_SENSITIVE_DATA"] == "true"
+    assert instrument_calls == ["instrumented"]
 
 
 def test_initialize_langfuse_auth_check_failure_is_non_fatal(monkeypatch):
@@ -96,13 +107,14 @@ def test_initialize_langfuse_auth_check_failure_is_non_fatal(monkeypatch):
             raise RuntimeError("startup race")
 
     fake_module = ModuleType("langfuse")
-    fake_module.Langfuse = FakeLangfuse
+    setattr(fake_module, "Langfuse", FakeLangfuse)
     monkeypatch.setitem(sys.modules, "langfuse", fake_module)
 
     monkeypatch.setattr(lc, "is_langfuse_configured", lambda: True)
     monkeypatch.setattr(lc, "LANGFUSE_HOST", "http://langfuse:3000")
     monkeypatch.setattr(lc, "LANGFUSE_PUBLIC_KEY", "pub")
     monkeypatch.setattr(lc, "LANGFUSE_SECRET_KEY", "sec")
+    monkeypatch.setattr(lc, "_instrument_openai_agents_tracing", lambda: True)
 
     assert isinstance(lc.initialize_langfuse(), FakeLangfuse)
 
@@ -123,6 +135,31 @@ def test_initialize_langfuse_handles_import_error(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", _fake_import)
 
     assert lc.initialize_langfuse() is None
+
+
+def test_instrument_openai_agents_tracing_is_idempotent(monkeypatch):
+    calls = []
+
+    class FakeInstrumentor:
+        def instrument(self, **kwargs):
+            calls.append(kwargs)
+
+    openinference_module = ModuleType("openinference")
+    instrumentation_module = ModuleType("openinference.instrumentation")
+    agents_module = ModuleType("openinference.instrumentation.openai_agents")
+    setattr(agents_module, "OpenAIAgentsInstrumentor", FakeInstrumentor)
+    monkeypatch.setitem(sys.modules, "openinference", openinference_module)
+    monkeypatch.setitem(sys.modules, "openinference.instrumentation", instrumentation_module)
+    monkeypatch.setitem(
+        sys.modules,
+        "openinference.instrumentation.openai_agents",
+        agents_module,
+    )
+
+    assert lc._instrument_openai_agents_tracing() is True
+    assert lc._instrument_openai_agents_tracing() is True
+    assert lc.is_openai_agents_tracing_enabled() is True
+    assert calls == [{"exclusive_processor": True}]
 
 
 def test_get_and_flush_langfuse_handles_flush_exception(monkeypatch):
@@ -152,6 +189,7 @@ def test_create_trace_success_and_failures(monkeypatch):
 
     monkeypatch.setattr(lc, "_langfuse_client", FakeClient())
     created = lc.create_trace("my-trace", session_id="s1", user_id="u1", metadata={"a": 1}, tags=["t"])
+    assert created is not None
     assert created["trace"]["name"] == "my-trace"
     assert created["trace"]["session_id"] == "s1"
 

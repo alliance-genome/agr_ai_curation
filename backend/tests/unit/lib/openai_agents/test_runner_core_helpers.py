@@ -115,6 +115,7 @@ def test_create_openai_client_kwargs_includes_websocket_base_url(monkeypatch):
 
 
 def test_create_openai_client_kwargs_omits_empty_values(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(
         runner,
         "get_default_runner_provider",
@@ -124,7 +125,7 @@ def test_create_openai_client_kwargs_omits_empty_values(monkeypatch):
     monkeypatch.setattr(runner, "get_base_url", lambda _provider: None)
 
     kwargs = runner._create_openai_client_kwargs()
-    assert kwargs == {}
+    assert kwargs == {"api_key": "missing-api-key"}
 
 
 def test_now_iso_is_parseable_utc_timestamp():
@@ -325,6 +326,44 @@ def test_safe_langfuse_wrapper_sanitizes_none_metadata_for_chat():
     result = asyncio.run(client.chat.completions.create(metadata=None, messages=[]))
     assert result == {"ok": True}
     assert captured["metadata"] == {}
+
+
+def test_build_agents_run_config_enables_complete_capture_when_instrumented(monkeypatch):
+    monkeypatch.setattr(runner, "is_openai_agents_tracing_enabled", lambda: True)
+
+    config = runner._build_agents_run_config(
+        model_provider=object(),
+        agent=SimpleNamespace(name="Query Supervisor"),
+        trace_id="trace-123",
+        session_id="session-1",
+        user_id="user-1",
+        document_id="doc-1",
+        document_name="paper.pdf",
+    )
+
+    assert config.tracing_disabled is False
+    assert config.trace_include_sensitive_data is True
+    assert config.group_id == "session-1"
+    assert config.trace_metadata["langfuse_trace_id"] == "trace-123"
+    assert config.trace_metadata["openai_agents_tracing"] == "langfuse_openinference"
+
+
+def test_build_agents_run_config_disables_sdk_export_when_not_instrumented(monkeypatch):
+    monkeypatch.setattr(runner, "is_openai_agents_tracing_enabled", lambda: False)
+
+    config = runner._build_agents_run_config(
+        model_provider=object(),
+        agent=SimpleNamespace(name="Query Supervisor"),
+        trace_id="trace-123",
+        session_id=None,
+        user_id="user-1",
+        document_id=None,
+        document_name=None,
+    )
+
+    assert config.tracing_disabled is True
+    assert config.trace_include_sensitive_data is True
+    assert config.trace_metadata["openai_agents_tracing"] == "disabled"
 
 
 def test_log_used_prompts_continues_when_span_update_fails(monkeypatch):

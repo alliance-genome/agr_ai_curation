@@ -530,6 +530,18 @@ def _reasoning_summary_text(value: Any) -> str:
     return ""
 
 
+def _run_config_with_full_trace_payloads(run_config: Any) -> Any:
+    """Return a run config that preserves tracing state but includes payload data."""
+    effective_config = run_config or RunConfig(tracing_disabled=True)
+    try:
+        return replace(effective_config, trace_include_sensitive_data=True)
+    except TypeError:
+        setattr(effective_config, "trace_include_sensitive_data", True)
+        if not hasattr(effective_config, "tracing_disabled"):
+            setattr(effective_config, "tracing_disabled", True)
+        return effective_config
+
+
 def _should_use_groq_tool_json_compat(agent: Agent) -> bool:
     """Groq currently rejects response_format JSON mode combined with tool calling.
 
@@ -3961,13 +3973,7 @@ async def run_specialist_with_events(
     # This is where the agent ACTUALLY executes, so we log the prompts now
     commit_pending_prompts(runtime_agent)
 
-    # Create a run config that disables tracing to avoid OpenTelemetry context conflicts
-    # The parent supervisor run already has tracing enabled via Langfuse
-    effective_config = run_config or RunConfig()
-    effective_config = RunConfig(
-        model_provider=effective_config.model_provider if hasattr(effective_config, 'model_provider') else None,
-        tracing_disabled=True,  # Disable to avoid nested context issues
-    )
+    effective_config = _run_config_with_full_trace_payloads(run_config)
 
     # Bind the run-scoped extraction context (evidence records, builder workspace,
     # resolver ledger) BEFORE starting the streamed run. Runner.run_streamed() snapshots

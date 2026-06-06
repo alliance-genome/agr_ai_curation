@@ -5,10 +5,9 @@ This module provides a streaming runner that adapts OpenAI Agents SDK
 streaming events to SSE-compatible events for the existing frontend.
 
 Langfuse Integration:
-    Uses manual span management with start_span() and explicit span.end()
-    to avoid OTEL context cleanup issues in async generators. Context managers
-    can cause "Failed to detach context" errors when the generator is garbage
-    collected in a different async context than where the span was created.
+    Uses a manual Langfuse root observation for request metadata and the
+    OpenAI Agents SDK's native tracing pipeline for model/tool/handoff spans.
+    OpenInference exports those SDK spans to Langfuse through OpenTelemetry.
 """
 
 import asyncio
@@ -30,6 +29,7 @@ from agents import (
     set_default_openai_responses_transport,
 )
 from agents.models.openai_provider import OpenAIProvider
+from openai import AsyncOpenAI
 from openai.types.responses import (
     ResponseTextDeltaEvent,
     ResponseFunctionCallArgumentsDeltaEvent,
@@ -37,15 +37,14 @@ from openai.types.responses import (
 )
 from pydantic import ValidationError
 
-# Import Langfuse-wrapped OpenAI client for automatic tracing
 from langfuse import propagate_attributes
-from langfuse.openai import AsyncOpenAI as LangfuseAsyncOpenAI
 
 from .langfuse_client import (
     flush_langfuse,
     get_langfuse,
     flush_agent_configs,
-    clear_pending_configs
+    clear_pending_configs,
+    is_openai_agents_tracing_enabled,
 )
 from .agents.supervisor_agent import create_supervisor_agent
 from .audit_labels import (
@@ -67,6 +66,7 @@ from .config import (
 )
 from .extraction_trace_events import (
     clear_extraction_trace_run,
+    get_current_extraction_trace_run,
     start_extraction_trace_run,
     write_extraction_trace_event,
     write_stream_event,
@@ -186,6 +186,10 @@ def _create_openai_client_kwargs() -> dict:
         kwargs["api_key"] = api_key
     if base_url:
         kwargs["base_url"] = base_url
+    if "api_key" not in kwargs and not (
+        os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_ADMIN_KEY")
+    ):
+        kwargs["api_key"] = "missing-api-key"
     websocket_base_url = os.getenv("OPENAI_WEBSOCKET_BASE_URL", "").strip()
     if websocket_base_url:
         kwargs["websocket_base_url"] = websocket_base_url
@@ -256,18 +260,15 @@ def _normalize_context_messages(
     return normalized_messages, latest_message["content"]
 
 
-class SafeLangfuseAsyncOpenAI(LangfuseAsyncOpenAI):
-    """Wrapper that ensures metadata is always a dict before passing to Langfuse.
+class SafeAsyncOpenAI(AsyncOpenAI):
+    """Wrapper that ensures metadata is always a dict before passing to OpenAI.
 
-    The OpenAI Agents SDK sometimes passes metadata=None, which Langfuse rejects.
-    This wrapper ensures compatibility between the two libraries.
+    The OpenAI Agents SDK sometimes passes metadata=None, which provider APIs
+    can reject. This wrapper keeps provider compatibility without adding a
+    second Langfuse/OpenAI instrumentation path.
 
     Supports providers configured as the default runner provider
     in config/providers.yaml.
-
-    Note: Trace context is handled automatically via OpenTelemetry context propagation.
-    When used inside a start_as_current_observation() context, all calls are
-    automatically nested under that parent span.
     """
 
     def __init__(self, *args, **kwargs):
@@ -305,11 +306,49 @@ class SafeLangfuseAsyncOpenAI(LangfuseAsyncOpenAI):
             self.chat.completions.create = safe_create
 
 
-# Set our SafeLangfuseAsyncOpenAI as the default client for all agents
+# Backward-compatible alias for tests and local helpers. Despite the historic
+# name, this now uses the plain OpenAI client; Langfuse capture comes from the
+# Agents SDK tracing processor.
+SafeLangfuseAsyncOpenAI = SafeAsyncOpenAI
+
+
+# Set our SafeAsyncOpenAI as the default client for all agents
 # This ensures nested agent runs via as_tool() also use our safe wrapper
 # that handles metadata=None gracefully
-_default_client = SafeLangfuseAsyncOpenAI()
+_default_client = SafeAsyncOpenAI()
 set_default_openai_client(_default_client)
+
+
+def _build_agents_run_config(
+    *,
+    model_provider: OpenAIProvider,
+    agent: Agent,
+    trace_id: str,
+    session_id: Optional[str],
+    user_id: str,
+    document_id: Optional[str],
+    document_name: Optional[str],
+) -> RunConfig:
+    """Create a RunConfig that captures full SDK traces when Langfuse is wired."""
+    sdk_tracing_enabled = is_openai_agents_tracing_enabled()
+    return RunConfig(
+        model_provider=model_provider,
+        tracing_disabled=not sdk_tracing_enabled,
+        trace_include_sensitive_data=True,
+        workflow_name="AI Curation chat",
+        group_id=session_id,
+        trace_metadata={
+            "langfuse_trace_id": trace_id,
+            "session_id": session_id,
+            "user_id": user_id,
+            "document_id": document_id,
+            "document_name": document_name,
+            "agent_name": getattr(agent, "name", None),
+            "openai_agents_tracing": (
+                "langfuse_openinference" if sdk_tracing_enabled else "disabled"
+            ),
+        },
+    )
 
 
 def _now_iso() -> str:
@@ -704,13 +743,16 @@ async def _run_agent_with_tracing(
     is_generating = False  # Track if we've emitted AGENT_GENERATING for current generation phase
     reasoning_summary_chunks: List[str] = []
 
-    # Create Langfuse-wrapped OpenAI client
-    # It will automatically pick up the active span context via OpenTelemetry
-    langfuse_openai_client = SafeLangfuseAsyncOpenAI()
-    langfuse_provider = OpenAIProvider(openai_client=langfuse_openai_client)
-    run_config = RunConfig(
-        model_provider=langfuse_provider,
-        tracing_disabled=True,  # Disable OpenAI SDK's built-in tracing, using Langfuse
+    openai_client = SafeLangfuseAsyncOpenAI()
+    openai_provider = OpenAIProvider(openai_client=openai_client)
+    run_config = _build_agents_run_config(
+        model_provider=openai_provider,
+        agent=agent,
+        trace_id=trace_id,
+        session_id=getattr(get_current_extraction_trace_run(), "session_id", None),
+        user_id=user_id,
+        document_id=document_id,
+        document_name=document_name,
     )
 
     # Create live event list for real-time specialist event streaming
@@ -1689,9 +1731,8 @@ async def run_agent_streamed(
                     "abstract_length": len(abstract),
                 }
 
-            # Use start_as_current_observation() to set OTEL context - this is CRITICAL
-            # for the langfuse.openai wrapper to auto-nest GENERATION observations
-            # under our trace. Without this, OpenAI calls create orphaned traces.
+            # Use start_as_current_observation() to set OTEL context for the
+            # OpenInference Agents SDK processor and manual application events.
             #
             # NOTE: We manually call __enter__() and __exit__() because this is an
             # async generator - we can't use a simple `with` block as the generator

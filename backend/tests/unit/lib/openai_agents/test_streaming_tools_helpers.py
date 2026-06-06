@@ -88,6 +88,79 @@ def test_extract_model_identifier_handles_string_and_object():
     assert streaming_tools._extract_model_identifier(SimpleNamespace()) == ""
 
 
+@pytest.mark.asyncio
+async def test_run_specialist_preserves_parent_tracing_and_enables_sensitive_data(monkeypatch):
+    captured = {}
+
+    def _run_streamed(_agent, *args, **kwargs):
+        captured["run_config"] = kwargs["run_config"]
+        return _FakeRunResult(events=[], final_output="specialist output", new_items=[])
+
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent: None)
+    monkeypatch.setattr(streaming_tools.Runner, "run_streamed", _run_streamed)
+
+    parent_config = streaming_tools.RunConfig(
+        tracing_disabled=False,
+        trace_include_sensitive_data=False,
+        workflow_name="parent workflow",
+        group_id="session-1",
+    )
+    agent = SimpleNamespace(
+        name="Plain Text Specialist",
+        tools=[],
+        output_type=None,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    result = await streaming_tools.run_specialist_with_events(
+        agent=agent,
+        input_text="summarize findings",
+        specialist_name="Plain Text Specialist",
+        run_config=parent_config,
+        max_turns=3,
+        tool_name=None,
+    )
+
+    assert result == "specialist output"
+    assert captured["run_config"].tracing_disabled is False
+    assert captured["run_config"].trace_include_sensitive_data is True
+    assert captured["run_config"].workflow_name == "parent workflow"
+    assert captured["run_config"].group_id == "session-1"
+
+
+@pytest.mark.asyncio
+async def test_run_specialist_without_parent_config_keeps_sdk_tracing_disabled(monkeypatch):
+    captured = {}
+
+    def _run_streamed(_agent, *args, **kwargs):
+        captured["run_config"] = kwargs["run_config"]
+        return _FakeRunResult(events=[], final_output="specialist output", new_items=[])
+
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent: None)
+    monkeypatch.setattr(streaming_tools.Runner, "run_streamed", _run_streamed)
+
+    agent = SimpleNamespace(
+        name="Plain Text Specialist",
+        tools=[],
+        output_type=None,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    result = await streaming_tools.run_specialist_with_events(
+        agent=agent,
+        input_text="summarize findings",
+        specialist_name="Plain Text Specialist",
+        max_turns=3,
+        tool_name=None,
+    )
+
+    assert result == "specialist output"
+    assert captured["run_config"].tracing_disabled is True
+    assert captured["run_config"].trace_include_sensitive_data is True
+
+
 def test_build_json_only_instruction_includes_schema_when_available():
     text = streaming_tools._build_json_only_instruction(_Envelope)
     assert "IMPORTANT OUTPUT FORMAT REQUIREMENT" in text
