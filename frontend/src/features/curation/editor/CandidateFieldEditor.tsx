@@ -679,69 +679,96 @@ function FieldValidationSlot({
       {primaryExplanationDetails.length > 0 ? (
         <Box
           component="details"
-          sx={{
-            color: 'text.secondary',
-            maxWidth: '100%',
-            '& summary': {
-              alignItems: 'center',
-              border: (theme) => {
-                const accentColor = accentSeverity === 'success'
-                  ? theme.palette.success.main
-                  : accentSeverity === 'error'
-                    ? theme.palette.error.main
-                    : accentSeverity === 'warning'
-                      ? theme.palette.warning.main
-                      : theme.palette.info.main
-                return `1px solid ${alpha(accentColor, 0.26)}`
+          sx={(theme) => {
+            const accentColor = accentSeverity === 'success'
+              ? theme.palette.success.main
+              : accentSeverity === 'error'
+                ? theme.palette.error.main
+                : accentSeverity === 'warning'
+                  ? theme.palette.warning.main
+                  : theme.palette.info.main
+            const accentTextColor = accentSeverity === 'success'
+              ? theme.palette.success.light
+              : accentSeverity === 'error'
+                ? theme.palette.error.light
+                : accentSeverity === 'warning'
+                  ? theme.palette.warning.light
+                  : theme.palette.info.light
+
+            return {
+              color: accentTextColor,
+              maxWidth: '100%',
+              '& summary': {
+                alignItems: 'center',
+                backgroundColor: alpha(accentColor, 0.07),
+                border: `1px solid ${alpha(accentColor, 0.34)}`,
+                borderRadius: 1,
+                color: accentTextColor,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                fontSize: '0.68rem',
+                fontWeight: 700,
+                gap: 0.35,
+                lineHeight: 1.4,
+                listStyle: 'none',
+                outline: 0,
+                px: 0.75,
+                py: 0.3,
+                transition: 'background-color 160ms cubic-bezier(0.2, 0, 0, 1), border-color 160ms cubic-bezier(0.2, 0, 0, 1), color 160ms cubic-bezier(0.2, 0, 0, 1)',
+                userSelect: 'none',
+                '&:hover': {
+                  backgroundColor: alpha(accentColor, 0.12),
+                  borderColor: alpha(accentColor, 0.56),
+                  color: accentTextColor,
+                },
               },
-              borderRadius: 1,
-              cursor: 'pointer',
-              display: 'inline-flex',
-              fontSize: '0.68rem',
-              fontWeight: 700,
-              gap: 0.35,
-              lineHeight: 1.4,
-              listStyle: 'none',
-              outline: 0,
-              px: 0.75,
-              py: 0.3,
-              transition: 'background-color 160ms cubic-bezier(0.2, 0, 0, 1), border-color 160ms cubic-bezier(0.2, 0, 0, 1), color 160ms cubic-bezier(0.2, 0, 0, 1)',
-              userSelect: 'none',
-              '&:hover': {
-                backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.08),
-                borderColor: (theme) => alpha(theme.palette.primary.main, 0.42),
-                color: 'text.primary',
+              '& summary::-webkit-details-marker': {
+                display: 'none',
               },
-            },
-            '& summary::-webkit-details-marker': {
-              display: 'none',
-            },
-            '& summary .validation-details-caret': {
-              transition: 'transform 160ms cubic-bezier(0.2, 0, 0, 1)',
-            },
-            '&[open] summary .validation-details-caret': {
-              transform: 'rotate(180deg)',
-            },
-            '& summary:focus-visible': {
-              borderRadius: 0.5,
-              boxShadow: (theme) => {
-                const accentColor = accentSeverity === 'success'
-                  ? theme.palette.success.main
-                  : accentSeverity === 'error'
-                    ? theme.palette.error.main
-                    : accentSeverity === 'warning'
-                      ? theme.palette.warning.main
-                      : theme.palette.info.main
-                return `0 0 0 2px ${alpha(accentColor, 0.5)}`
+              '& summary .validation-details-caret': {
+                transition: 'transform 160ms cubic-bezier(0.2, 0, 0, 1)',
               },
-            },
+              '&[open] summary .validation-details-caret': {
+                transform: 'rotate(180deg)',
+              },
+              '& summary:focus-visible': {
+                borderRadius: 0.5,
+                boxShadow: `0 0 0 2px ${alpha(accentColor, 0.5)}`,
+              },
+            }
           }}
         >
           <Box component="summary" aria-label="Show validation details">
             <ExpandMoreIcon className="validation-details-caret" sx={{ fontSize: 16 }} />
             Validation details
           </Box>
-          <Stack spacing={0.25} sx={{ mt: 0.35 }}>
+          <Stack
+            spacing={0.25}
+            sx={(theme) => {
+              const accentColor = accentSeverity === 'success'
+                ? theme.palette.success.main
+                : accentSeverity === 'error'
+                  ? theme.palette.error.main
+                  : accentSeverity === 'warning'
+                    ? theme.palette.warning.main
+                    : theme.palette.info.main
+              const accentTextColor = accentSeverity === 'success'
+                ? theme.palette.success.light
+                : accentSeverity === 'error'
+                  ? theme.palette.error.light
+                  : accentSeverity === 'warning'
+                    ? theme.palette.warning.light
+                    : theme.palette.info.light
+
+              return {
+                borderLeft: `2px solid ${alpha(accentColor, 0.55)}`,
+                color: accentTextColor,
+                ml: 0.6,
+                mt: 0.55,
+                pl: 0.9,
+              }
+            }}
+          >
             {primaryExplanationDetails.map((detail) => (
               <Typography
                 key={detail}
