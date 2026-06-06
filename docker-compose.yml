@@ -200,6 +200,7 @@ services:
       - ANONYMIZED_TELEMETRY=False  # Disable ChromaDB telemetry (capital F required)
       - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/ai_curation}
       - HEALTH_CHECK_STRICT_MODE=${HEALTH_CHECK_STRICT_MODE:-false}
+      - HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS=${HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS:-true}
       - POSTGRES_HOST=${POSTGRES_HOST:-postgres}
       - POSTGRES_PORT=${POSTGRES_PORT:-5432}
       - POSTGRES_DB=${POSTGRES_DB:-ai_curation}
@@ -286,7 +287,7 @@ services:
       - "169.254.169.254:127.0.0.1"  # Block EC2 IMDS metadata endpoint
       - "169.254.170.2:127.0.0.1"    # Block ECS credential endpoint
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; response = urllib.request.urlopen('http://localhost:8000/health/live', timeout=2); response.read(1)"]
+      test: ["CMD", "python", "-c", "import urllib.request; response = urllib.request.urlopen('http://localhost:8000/health/ready', timeout=5); response.read(1)"]
       interval: 30s
       timeout: 10s
       retries: 3
