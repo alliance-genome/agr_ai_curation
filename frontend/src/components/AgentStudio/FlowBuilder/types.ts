@@ -248,8 +248,6 @@ export interface NodeEditorProps {
   onViewPrompts?: (agentId: string, agentName: string) => void
   /** Callback to open the domain envelope inspector */
   onViewDomainEnvelope?: (nodeId: string) => void
-  /** Callback to mark node as manually configured when user saves in NodeEditor */
-  onMarkManuallyConfigured?: (nodeId: string) => void
 }
 
 // ============================================================================

@@ -33,69 +33,6 @@ export const isExtractionAgent = (agentId: string): boolean =>
 export const isValidationAgent = (agentId: string): boolean =>
   VALIDATION_AGENTS.includes(agentId)
 
-type AgentPredicate = (agentId: string) => boolean
-
-// =============================================================================
-// Extractor Finding Logic
-// =============================================================================
-
-/**
- * Find the nearest upstream extractor by traversing edges (BFS).
- * Falls back to most recent extractor in graph if no path exists.
- *
- * @param targetNodeId - The node ID to find an extractor for
- * @param nodes - All nodes in the graph
- * @param edges - All edges in the graph
- * @returns The nearest extractor node, or null if none found
- */
-export const findNearestExtractor = (
-  targetNodeId: string,
-  nodes: AgentNode[],
-  edges: { source: string; target: string }[],
-  isExtractionPredicate: AgentPredicate = isExtractionAgent
-): AgentNode | null => {
-  // Build lookup maps
-  const nodesById = new Map(nodes.map(n => [n.id, n]))
-  const incomingByTarget = new Map<string, string[]>()
-  edges.forEach(e => {
-    const existing = incomingByTarget.get(e.target) || []
-    incomingByTarget.set(e.target, [...existing, e.source])
-  })
-
-  // BFS upstream from target
-  const queue = [...(incomingByTarget.get(targetNodeId) || [])]
-  const visited = new Set<string>()
-
-  while (queue.length > 0) {
-    const nodeId = queue.shift()!
-    if (visited.has(nodeId)) continue
-    visited.add(nodeId)
-
-    const node = nodesById.get(nodeId)
-    if (!node) continue
-
-    if (isExtractionPredicate(node.data.agent_id)) {
-      return node
-    }
-
-    // Add parents to queue
-    const parents = incomingByTarget.get(nodeId) || []
-    queue.push(...parents)
-  }
-
-  // Fallback: find any extractor in the graph (most recent by node ID)
-  const extractors = nodes
-    .filter(n => isExtractionPredicate(n.data.agent_id))
-    .sort((a, b) => {
-      // Sort by node ID number descending (most recent first)
-      const aNum = parseInt(a.id.replace('node_', '')) || 0
-      const bNum = parseInt(b.id.replace('node_', '')) || 0
-      return bNum - aNum
-    })
-
-  return extractors[0] || null
-}
-
 // =============================================================================
 // Extractor Count Helpers
 // =============================================================================
@@ -105,14 +42,4 @@ export const findNearestExtractor = (
  */
 export const countExtractors = (nodes: AgentNode[]): number => {
   return nodes.filter(n => isExtractionAgent(n.data.agent_id)).length
-}
-
-/**
- * Get all extraction agents in the flow.
- */
-export const getExtractors = (
-  nodes: AgentNode[],
-  isExtractionPredicate: AgentPredicate = isExtractionAgent
-): AgentNode[] => {
-  return nodes.filter(n => isExtractionPredicate(n.data.agent_id))
 }

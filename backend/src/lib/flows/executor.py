@@ -964,46 +964,6 @@ def _build_flow_step_query(
     return "\n\n".join(sections)
 
 
-_FLOW_ARTIFACT_TSV_COLUMNS = [
-    "step",
-    "agent_id",
-    "agent_name",
-    "adapter_key",
-    "domain_pack_id",
-    "envelope_id",
-    "object_count",
-    "candidate_count",
-    "artifact_preview",
-]
-
-
-def _build_flow_artifact_tsv_rows(
-    completed_steps: list[dict[str, Any]],
-) -> list[dict[str, str]]:
-    """Build deterministic file-output rows from completed structured artifacts."""
-
-    bundle = build_flow_output_artifact_bundle(
-        completed_steps=completed_steps,
-        flow_name="flow",
-        output_format="tsv",
-    )
-    if not bundle.rows_for_source("artifact"):
-        return []
-    result = finalize_output_projection(
-        bundle,
-        default_projection_plan(bundle, output_format="tsv", row_source="artifact"),
-    )
-    rows: list[dict[str, str]] = []
-    for row in result.rows:
-        rows.append(
-            {
-                column: str(row.get(column) or "").strip()
-                for column in _FLOW_ARTIFACT_TSV_COLUMNS
-            }
-        )
-    return rows
-
-
 def _resolve_flow_terminal_output_format(agent_id: str) -> Optional[str]:
     normalized_agent_id = str(agent_id or "").strip()
     for output_format, agent_ids in _FLOW_OUTPUT_FORMATTER_AGENT_IDS_BY_FORMAT.items():
@@ -1151,21 +1111,6 @@ async def _try_project_terminal_flow_output(
         projection.total_count,
     )
     return json.dumps(result)
-
-
-async def _try_save_tsv_formatter_flow_output(
-    *,
-    agent_id: str,
-    completed_steps: list[dict[str, Any]],
-    flow_name: str,
-) -> Optional[str]:
-    """Deterministically save TSV rows from completed flow artifacts."""
-
-    return await _try_project_terminal_flow_output(
-        agent_id=agent_id,
-        completed_steps=completed_steps,
-        flow_name=flow_name,
-    )
 
 
 def _resolve_flow_candidate_adapter_key(candidate: ExtractionEnvelopeCandidate) -> Optional[str]:

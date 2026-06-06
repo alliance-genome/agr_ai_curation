@@ -188,7 +188,7 @@ const supplementalGroupOwnerText = (group: ValidationAttachmentGroup) => {
   return parts.length > 0 ? parts.join(' / ') : 'Missing supplemental edge metadata'
 }
 
-function NodeEditor({ node, onSave, onClose, onDelete, onViewPrompts, onViewDomainEnvelope, onMarkManuallyConfigured }: NodeEditorProps) {
+function NodeEditor({ node, onSave, onClose, onDelete, onViewPrompts, onViewDomainEnvelope }: NodeEditorProps) {
   const { agents: agentMetadata } = useAgentMetadata()
 
   // Form state
@@ -266,9 +266,6 @@ function NodeEditor({ node, onSave, onClose, onDelete, onViewPrompts, onViewDoma
         ? validationAttachments.map(validationAttachmentForPersistence)
         : undefined,
     })
-
-    // Mark as manually configured when user saves (user has taken control)
-    onMarkManuallyConfigured?.(node.id)
 
     onClose()
   }

@@ -700,10 +700,7 @@ def authorize_review_session_for_context(
             )
         )
     )
-    try:
-        has_link = bool(db.scalar(linked_statement))
-    except Exception:
-        has_link = False
+    has_link = bool(db.scalar(linked_statement))
     return session if has_link else None
 
 
