@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import HighlightOffIcon from '@mui/icons-material/HighlightOff'
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked'
 import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined'
 import {
@@ -474,11 +474,20 @@ function validationExplanationLine(
   return null
 }
 
-function resolvedValuesLine(details: Record<string, unknown>): string | null {
+function resolvedValuesLine(
+  details: Record<string, unknown>,
+  resultField: string | null = null,
+): string | null {
   const result = recordValue(details.validation_result)
   const resolvedValues = recordValue(result?.resolved_values)
   if (!resolvedValues) {
     return null
+  }
+  if (resultField) {
+    const value = resolvedValues[resultField]
+    if (value !== null && value !== undefined && String(value).trim()) {
+      return `Resolved ${humanizeKey(resultField)}: ${String(value)}`
+    }
   }
   const pairs = Object.entries(resolvedValues)
     .filter(([, value]) => value !== null && value !== undefined && String(value).trim())
@@ -517,17 +526,20 @@ function validationExplanationDetails(
       stringValue(validatorAgent?.agent_id),
     ].filter(Boolean).join('/')
     const materializedField = stringValue(metadata?.materialized_result_field)
+    const generatedFromExpectedField = metadata?.generated_from_expected_result_field === true
     const explanation = stringValue(validationResult?.explanation)
       ?? stringValue(findingDetails.explanation)
-    const resolvedValues = resolvedValuesLine(findingDetails)
+    const resolvedValues = resolvedValuesLine(findingDetails, materializedField)
     const lookup = lookupAttemptLine(findingDetails)
+    const explanationLabel = materializedField && generatedFromExpectedField
+      ? 'Shared explanation'
+      : 'Explanation'
 
     for (const line of [
       validatorName ? `Validator: ${validatorName}` : null,
-      materializedField ? `Result field: ${humanizeKey(materializedField)}` : null,
       resolvedValues,
       lookup,
-      explanation ? `Explanation: ${explanation}` : null,
+      explanation ? `${explanationLabel}: ${explanation}` : null,
     ]) {
       if (line && !details.includes(line)) {
         details.push(line)
@@ -596,6 +608,11 @@ function FieldValidationSlot({
   ]
   const explanations = validationExplanations(summaries)
   const primaryExplanation = explanations[0]
+  const primaryExplanationDetails = primaryExplanation
+    ? primaryExplanation.details.length > 0
+      ? primaryExplanation.details
+      : [primaryExplanation.line]
+    : []
   const hasUnavailableCapabilities = unavailableCapabilities.length > 0
   const accentSeverity = presentation?.severity ?? 'info'
 
@@ -632,61 +649,6 @@ function FieldValidationSlot({
             variant="outlined"
           />
         ) : null}
-        {primaryExplanation ? (
-          <Tooltip
-            arrow
-            placement="top"
-            title={primaryExplanation.details.length > 0
-              ? primaryExplanation.details.join('\n')
-              : primaryExplanation.line}
-          >
-            <Stack
-              direction="row"
-              spacing={0.45}
-              alignItems="flex-start"
-              sx={(theme) => {
-                const accentColor = accentSeverity === 'success'
-                  ? theme.palette.success.main
-                  : accentSeverity === 'error'
-                    ? theme.palette.error.main
-                    : accentSeverity === 'warning'
-                      ? theme.palette.warning.main
-                      : theme.palette.info.main
-                return {
-                  border: `1px solid ${alpha(accentColor, 0.24)}`,
-                  borderRadius: 1,
-                  color: accentSeverity === 'success'
-                    ? theme.palette.success.light
-                    : theme.palette.text.secondary,
-                  minWidth: 0,
-                  px: 0.65,
-                  py: 0.25,
-                  transition: 'border-color 180ms cubic-bezier(0.2, 0, 0, 1), transform 180ms cubic-bezier(0.2, 0, 0, 1)',
-                  '&:hover': {
-                    borderColor: alpha(accentColor, 0.42),
-                    transform: 'translateY(-1px)',
-                  },
-                }
-              }}
-            >
-              <InfoOutlinedIcon sx={{ flexShrink: 0, fontSize: 14, mt: 0.1 }} />
-              <Typography
-                sx={{
-                  fontSize: '0.72rem',
-                  lineHeight: 1.35,
-                  minWidth: 0,
-                  overflowWrap: 'anywhere',
-                  whiteSpace: 'normal',
-                  wordBreak: 'normal',
-                }}
-                variant="caption"
-              >
-                {primaryExplanation.line}
-                {explanations.length > 1 ? ` +${explanations.length - 1}` : ''}
-              </Typography>
-            </Stack>
-          </Tooltip>
-        ) : null}
       </Stack>
       {field.stale_validation ? (
         <Typography color="text.secondary" variant="caption">
@@ -714,23 +676,51 @@ function FieldValidationSlot({
           </Typography>
         </Tooltip>
       ) : null}
-      {primaryExplanation?.details.length ? (
+      {primaryExplanationDetails.length > 0 ? (
         <Box
           component="details"
           sx={{
             color: 'text.secondary',
             maxWidth: '100%',
             '& summary': {
+              alignItems: 'center',
+              border: (theme) => {
+                const accentColor = accentSeverity === 'success'
+                  ? theme.palette.success.main
+                  : accentSeverity === 'error'
+                    ? theme.palette.error.main
+                    : accentSeverity === 'warning'
+                      ? theme.palette.warning.main
+                      : theme.palette.info.main
+                return `1px solid ${alpha(accentColor, 0.26)}`
+              },
+              borderRadius: 1,
               cursor: 'pointer',
-              display: 'inline-block',
+              display: 'inline-flex',
               fontSize: '0.68rem',
               fontWeight: 700,
+              gap: 0.35,
               lineHeight: 1.4,
               listStyle: 'none',
               outline: 0,
+              px: 0.75,
+              py: 0.3,
+              transition: 'background-color 160ms cubic-bezier(0.2, 0, 0, 1), border-color 160ms cubic-bezier(0.2, 0, 0, 1), color 160ms cubic-bezier(0.2, 0, 0, 1)',
+              userSelect: 'none',
+              '&:hover': {
+                backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.08),
+                borderColor: (theme) => alpha(theme.palette.primary.main, 0.42),
+                color: 'text.primary',
+              },
             },
             '& summary::-webkit-details-marker': {
               display: 'none',
+            },
+            '& summary .validation-details-caret': {
+              transition: 'transform 160ms cubic-bezier(0.2, 0, 0, 1)',
+            },
+            '&[open] summary .validation-details-caret': {
+              transform: 'rotate(180deg)',
             },
             '& summary:focus-visible': {
               borderRadius: 0.5,
@@ -747,9 +737,12 @@ function FieldValidationSlot({
             },
           }}
         >
-          <Box component="summary">Validation details</Box>
+          <Box component="summary" aria-label="Show validation details">
+            <ExpandMoreIcon className="validation-details-caret" sx={{ fontSize: 16 }} />
+            Validation details
+          </Box>
           <Stack spacing={0.25} sx={{ mt: 0.35 }}>
-            {primaryExplanation.details.map((detail) => (
+            {primaryExplanationDetails.map((detail) => (
               <Typography
                 key={detail}
                 sx={{

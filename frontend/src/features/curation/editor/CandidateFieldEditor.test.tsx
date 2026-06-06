@@ -538,15 +538,17 @@ describe('CandidateFieldEditor', () => {
 
     const validationState = screen.getByTestId('field-validation-state-field_symbol')
     expect(validationState).not.toHaveTextContent('Validated')
-    expect(validationState).toHaveTextContent('Symbol validated: abc')
     expect(validationState).toHaveTextContent('Validation details')
+    expect(validationState).not.toHaveTextContent('Symbol validated: abc')
     expect(validationState).toHaveTextContent('Validator: agr.alliance/gene_validation')
-    expect(validationState).toHaveTextContent('Result field: Symbol')
-    expect(validationState).toHaveTextContent(
-      'Resolved values: Symbol: abc, Curie: WB:WBGene00000001',
-    )
+    expect(validationState).toHaveTextContent('Resolved Symbol: abc')
+    expect(validationState).not.toHaveTextContent('Result field: Symbol')
+    expect(validationState).not.toHaveTextContent('Curie: WB:WBGene00000001')
     expect(validationState).toHaveTextContent(
       'Lookup: agr_curation_query · search_genes · success · 1 candidate',
+    )
+    expect(validationState).toHaveTextContent(
+      'Shared explanation: The lookup matched the current accepted gene symbol.',
     )
   })
 

@@ -97,6 +97,54 @@ function normalizeFieldTextValue(value: unknown): string {
   return JSON.stringify(value, null, 2)
 }
 
+function renderNotesValue(value: unknown): ReactNode {
+  if (Array.isArray(value)) {
+    const notes = value
+      .map((item) => normalizeFieldTextValue(item).trim())
+      .filter((item) => item.length > 0)
+
+    if (notes.length === 0) {
+      return null
+    }
+
+    return (
+      <Box
+        component="ul"
+        sx={{
+          m: 0,
+          pl: 2.25,
+        }}
+      >
+        {notes.map((note, index) => (
+          <Typography
+            component="li"
+            color="text.secondary"
+            key={`${index}-${note}`}
+            sx={{
+              mb: index === notes.length - 1 ? 0 : 0.45,
+              whiteSpace: 'normal',
+              wordBreak: 'break-word',
+            }}
+            variant="body2"
+          >
+            {note}
+          </Typography>
+        ))}
+      </Box>
+    )
+  }
+
+  return (
+    <Typography
+      color="text.secondary"
+      sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+      variant="body2"
+    >
+      {normalizeFieldTextValue(value)}
+    </Typography>
+  )
+}
+
 function resolvePlaceholder(field: CurationDraftField): string | undefined {
   const placeholder = field.metadata.placeholder
   return typeof placeholder === 'string' && placeholder.length > 0
@@ -194,15 +242,7 @@ function renderDefaultInput({
   }
 
   if (useReadOnlyPresentation && renderAs === 'notes') {
-    return (
-      <Typography
-        color="text.secondary"
-        sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
-        variant="body2"
-      >
-        {normalizeFieldTextValue(value)}
-      </Typography>
-    )
+    return renderNotesValue(value)
   }
 
   const options = resolveFieldOptions(field, value)

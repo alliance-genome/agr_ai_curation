@@ -180,6 +180,35 @@ describe('FieldRow', () => {
     expect(screen.queryByLabelText('Evidence code CURIEs')).not.toBeInTheDocument()
   })
 
+  it('renders read-only note arrays as readable note items', () => {
+    renderFieldRow({
+      field: createField({
+        field_key: 'identity_resolution_notes',
+        label: 'Identity resolution notes',
+        field_type: 'array',
+        value: [
+          'Paper context is C. elegans.',
+          'Figure 6 reports GFP::TLN-1 effects.',
+        ],
+        seed_value: [
+          'Paper context is C. elegans.',
+          'Figure 6 reports GFP::TLN-1 effects.',
+        ],
+        read_only: true,
+        metadata: {
+          field_metadata: {
+            render_as: 'notes',
+          },
+        },
+      }),
+    })
+
+    expect(screen.getByText('Paper context is C. elegans.')).toBeInTheDocument()
+    expect(screen.getByText('Figure 6 reports GFP::TLN-1 effects.')).toBeInTheDocument()
+    expect(screen.queryByText('[')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Identity resolution notes')).not.toBeInTheDocument()
+  })
+
   it('keeps render_as fields editable when read_only is false', () => {
     const { onChange } = renderFieldRow({
       field: createField({
