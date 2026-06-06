@@ -316,6 +316,16 @@ def _is_domain_envelope_extraction_output_type(output_type: Any) -> bool:
         return False
 
 
+def _looks_like_domain_envelope_payload(payload: Any) -> bool:
+    """Return whether a parsed payload has the shared domain-envelope shape."""
+
+    return (
+        isinstance(payload, dict)
+        and isinstance(payload.get("domain_pack_id"), str)
+        and isinstance(payload.get("objects"), list)
+    )
+
+
 def _apply_relaxed_output_schema_if_needed(agent: Agent, output_type: Any) -> Agent:
     """Relax SDK strict-schema conversion for domain-envelope outputs."""
 
@@ -2455,9 +2465,6 @@ def _reduce_specialist_output_for_supervisor(
 ) -> str:
     """Return concise answer text when structured output carries a dedicated answer field."""
 
-    if expected_output_type is None:
-        return final_output
-
     try:
         payload = json.loads(final_output)
     except Exception:
@@ -2470,7 +2477,9 @@ def _reduce_specialist_output_for_supervisor(
     if answer_text:
         return answer_text
 
-    if _is_domain_envelope_extraction_output_type(expected_output_type):
+    if _is_domain_envelope_extraction_output_type(
+        expected_output_type
+    ) or _looks_like_domain_envelope_payload(payload):
         summary_text = _domain_envelope_supervisor_summary(payload)
         if summary_text:
             return summary_text

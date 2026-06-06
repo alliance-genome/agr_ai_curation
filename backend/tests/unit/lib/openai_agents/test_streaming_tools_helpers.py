@@ -1582,6 +1582,44 @@ def test_domain_envelope_reduction_includes_resolved_validator_values():
     assert "taxon=NCBITaxon:7227" in result
 
 
+def test_builder_domain_envelope_reduction_without_output_type_stays_compact():
+    huge_note = "x" * 200_000
+    envelope_output = json.dumps(
+        {
+            "envelope_id": "env-test-builder",
+            "domain_pack_id": "agr.alliance.gene_expression",
+            "domain_pack_version": "0.1.0",
+            "objects": [
+                {
+                    "object_type": "GeneExpressionAnnotation",
+                    "object_role": "curatable_unit",
+                    "pending_ref_id": "gene-expression-1",
+                    "status": "validated",
+                    "payload": {
+                        "symbol": "rpm-1",
+                        "taxon": "NCBITaxon:6239",
+                        "where_expressed_statement": huge_note,
+                    },
+                }
+            ],
+            "validation_findings": [{"status": "resolved"}],
+        }
+    )
+
+    result = streaming_tools._reduce_specialist_output_for_supervisor(
+        envelope_output,
+        expected_output_type=None,
+    )
+
+    assert len(result) < 2000
+    assert "Validated domain envelope result for agr.alliance.gene_expression" in result
+    assert "symbol=rpm-1" in result
+    assert "taxon=NCBITaxon:6239" in result
+    assert huge_note not in result
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(result)
+
+
 def test_runtime_instruction_append_updates_pending_prompt_assembly():
     clear_prompt_context()
     prompt = PromptTemplate(
