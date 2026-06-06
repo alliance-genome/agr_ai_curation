@@ -256,6 +256,9 @@ async def test_run_agent_streamed_with_langfuse_trace_success(monkeypatch):
         def update(self, **kwargs):
             captured["update"] = kwargs
 
+        def set_trace_io(self, **kwargs):
+            captured.setdefault("trace_io", []).append(kwargs)
+
     root_span = _RootSpan()
 
     class _SpanContext:
@@ -320,6 +323,8 @@ async def test_run_agent_streamed_with_langfuse_trace_success(monkeypatch):
     assert captured["trace_attr_exit"] == (None, None, None)
     assert captured["span_exit"] == (None, None, None)
     assert captured["update"]["output"]["response"] == "grounded answer"
+    assert captured["trace_io"][0] == {"input": {"query": "longer message"}}
+    assert captured["trace_io"][-1] == {"output": {"response": "grounded answer"}}
     assert captured["logged"][0][0] == "trace-abc"
 
 

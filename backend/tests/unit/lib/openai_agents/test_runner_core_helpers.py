@@ -134,6 +134,26 @@ def test_now_iso_is_parseable_utc_timestamp():
     assert parsed.tzinfo is not None
 
 
+def test_set_langfuse_trace_io_prefers_root_span_and_falls_back_to_client():
+    captured = []
+
+    class _RootSpan:
+        def set_trace_io(self, **kwargs):
+            captured.append(("root", kwargs))
+
+    class _Client:
+        def set_current_trace_io(self, **kwargs):
+            captured.append(("client", kwargs))
+
+    runner._set_langfuse_trace_io(_Client(), _RootSpan(), input={"query": "hello"})
+    runner._set_langfuse_trace_io(_Client(), object(), output={"response": "hi"})
+
+    assert captured == [
+        ("root", {"input": {"query": "hello"}}),
+        ("client", {"output": {"response": "hi"}}),
+    ]
+
+
 def _prompt_run(prompt, *, hash_value="hash-1", layer_manifest=None):
     manifest = layer_manifest or {"agent_id": "supervisor", "layers": [], "hash": hash_value}
     return PromptRun(

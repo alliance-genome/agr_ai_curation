@@ -356,6 +356,25 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _set_langfuse_trace_io(langfuse_client: Any, root_span: Any, **kwargs: Any) -> None:
+    """Set trace-level IO while detailed payloads remain on child observations."""
+    setter = getattr(root_span, "set_trace_io", None)
+    if callable(setter):
+        try:
+            setter(**kwargs)
+            return
+        except Exception:
+            logger.warning("Failed to set Langfuse trace IO via root span", exc_info=True)
+
+    setter = getattr(langfuse_client, "set_current_trace_io", None)
+    if callable(setter):
+        try:
+            setter(**kwargs)
+            return
+        except Exception:
+            logger.warning("Failed to set Langfuse trace IO via client", exc_info=True)
+
+
 def _merge_evidence_records(
     existing: List[Dict[str, Any]],
     incoming: Any,
@@ -1715,6 +1734,8 @@ async def run_agent_streamed(
                 "supervisor_agent": agent.name,
                 "supervisor_model": agent.model,
                 "has_document": document_id is not None,
+                "document_id": document_id,
+                "document_name": document_name,
                 "active_groups": active_groups or [],  # Group-specific rules applied to this session
             }
             if hierarchy:
@@ -1757,6 +1778,11 @@ async def run_agent_streamed(
             )
             root_span = span_context_manager.__enter__()
             trace_id = root_span.trace_id
+            _set_langfuse_trace_io(
+                langfuse,
+                root_span,
+                input={"query": user_message},
+            )
             trace_attribute_context_manager = None
             trace_attribute_context_active = False
 
@@ -1851,6 +1877,11 @@ async def run_agent_streamed(
                                     "agents_used": data.get("agents_used", []),
                                 }
                             )
+                            _set_langfuse_trace_io(
+                                langfuse,
+                                root_span,
+                                output={"response": data.get("response", "")},
+                            )
                             logger.info(
                                 "Trace completed",
                                 extra={
@@ -1890,6 +1921,15 @@ async def run_agent_streamed(
                         level="ERROR",
                         status_message=str(e),
                         metadata={"specialist_retry_failed": True}
+                    )
+                    _set_langfuse_trace_io(
+                        langfuse,
+                        root_span,
+                        output={
+                            "status": "error",
+                            "error": str(e),
+                            "error_type": "SpecialistOutputError",
+                        },
                     )
                     _alert_task = asyncio.create_task(
                         notify_tool_failure(
@@ -1951,6 +1991,15 @@ async def run_agent_streamed(
                         output={"error": str(e), "error_type": type(e).__name__},
                         level="ERROR",
                         status_message=str(e)
+                    )
+                    _set_langfuse_trace_io(
+                        langfuse,
+                        root_span,
+                        output={
+                            "status": "error",
+                            "error": str(e),
+                            "error_type": type(e).__name__,
+                        },
                     )
                     _alert_task = asyncio.create_task(
                         notify_tool_failure(
