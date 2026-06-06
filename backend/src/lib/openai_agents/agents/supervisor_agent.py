@@ -945,8 +945,9 @@ def create_supervisor_agent(
         description_override=(
             "Inspect bounded canonical curation context for this main chat. Use for "
             "specific follow-up questions about persisted/current extraction results, "
-            "objects, evidence, validation findings, or exact field paths. Returns "
-            "summaries and slices, not full canonical payloads."
+            "review sessions, file outputs, objects, evidence, validation findings, "
+            "or exact field paths. Returns summaries and slices, not full canonical "
+            "payloads or full file contents."
         ),
     )
     async def inspect_curation_context_tool(
@@ -955,6 +956,8 @@ def create_supervisor_agent(
         extraction_result_id: str | None = None,
         trace_id: str | None = None,
         flow_run_id: str | None = None,
+        review_session_id: str | None = None,
+        file_id: str | None = None,
         adapter_keys: List[str] | None = None,
         object_ref: str | None = None,
         field_path: str | None = None,
@@ -969,6 +972,8 @@ def create_supervisor_agent(
             extraction_result_id=extraction_result_id,
             trace_id=trace_id,
             flow_run_id=flow_run_id,
+            review_session_id=review_session_id,
+            file_id=file_id,
             adapter_keys=adapter_keys,
             object_ref=object_ref,
             field_path=field_path,

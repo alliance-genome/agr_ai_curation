@@ -2,6 +2,23 @@
 """Execute-flow chat streaming endpoint."""
 
 from .chat_common import *
+from .chat_common import (
+    _EXECUTE_FLOW_RUNTIME_FLOW_RUN_ID_KEY,
+    _EXECUTE_FLOW_RUNTIME_STATE_KEY,
+    _EXECUTE_FLOW_RUNTIME_TRACE_ID_KEY,
+    _FLOW_MEMORY_MAX_VISIBLE_OUTPUT_CHARS,
+    _FLOW_TRANSCRIPT_REPLAY_RUN_STARTED_KEY,
+    _FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY,
+    _claim_active_stream_lifecycle,
+    _generate_title_from_turn,
+    _get_chat_history_repository,
+    _require_user_sub,
+    _resolve_session_create_active_document,
+    _rollback_and_raise,
+    _stream_error_details,
+    _stream_event_payload,
+    _stream_event_sse,
+)
 
 
 def _extract_execute_flow_runtime_identifiers(
@@ -158,7 +175,7 @@ def _build_flow_memory_assistant_message(
         *_flow_ref_lines("Review session refs", review_session_ids),
         *_flow_ref_lines("File refs", file_refs),
         "- Detail lookup:",
-        "  - Use inspect_curation_context with the flow_run_id, extraction_result_id, review session, or file refs above.",
+        "  - Use inspect_curation_context with flow_run_id/extraction_result_id for extraction details, review_session_id for review workspace details, or file_id for bounded file metadata/previews.",
         "  - Use inspect_chat_traces with the trace_id for trace details.",
         "- Final user-visible output:",
         final_output_block,

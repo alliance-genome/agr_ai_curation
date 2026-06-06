@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 from uuid import UUID
+
+from sqlalchemy import exists, or_, select
+from sqlalchemy.orm import Session
 
 from src.lib.agent_studio.tools import (
     get_extraction_diagnostic_report,
@@ -29,10 +35,21 @@ from src.lib.context import (
     get_current_user_id,
 )
 from src.lib.curation_workspace.extraction_results import list_extraction_results
+from src.lib.curation_workspace.models import (
+    CurationCandidate,
+    CurationExtractionResultRecord,
+    CurationReviewSession,
+)
+from src.lib.curation_workspace.session_queries import (
+    get_session_detail,
+    get_session_workspace,
+)
+from src.lib.file_outputs.storage import FileOutputStorageService, PathSecurityError
 from src.lib.openai_agents.curation_context_registry import (
     list_current_turn_curation_context,
 )
 from src.models.sql.database import SessionLocal
+from src.models.sql.file_output import FileOutput
 from src.schemas.curation_workspace import CurationExtractionSourceKind
 
 
@@ -43,6 +60,8 @@ _MAX_TRACE_ARRAY_ITEMS = 20
 _MAX_TRACE_TEXT = 1200
 _MAX_TRACE_INVENTORY_MESSAGES = 5000
 _MAX_EVIDENCE_SCAN_RECORDS = 200
+_MAX_FILE_PREVIEW_BYTES = 64 * 1024
+_MAX_FILE_SCHEMA_ROWS = 20
 
 
 def _tool_response(status: str, message: str, **extra: Any) -> str:
@@ -627,6 +646,745 @@ def _filter_extraction_records(
     return filtered
 
 
+def _normalize_uuid_or_none(value: str | UUID | None) -> UUID | None:
+    if isinstance(value, UUID):
+        return value
+    text = _optional_text(value)
+    if not text:
+        return None
+    try:
+        return UUID(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def authorize_review_session_for_context(
+    db: Session,
+    *,
+    review_session_id: str | UUID,
+    user_id: str,
+    current_chat_session_id: str | None,
+    flow_run_id: str | None = None,
+) -> CurationReviewSession | None:
+    """Return a review session only when this chat/user is allowed to inspect it."""
+
+    normalized_session_id = _normalize_uuid_or_none(review_session_id)
+    if normalized_session_id is None:
+        return None
+
+    session = db.get(CurationReviewSession, normalized_session_id)
+    if session is None:
+        return None
+
+    if session.created_by_id == user_id or session.assigned_curator_id == user_id:
+        return session
+
+    scope_conditions = []
+    if current_chat_session_id:
+        scope_conditions.append(
+            CurationExtractionResultRecord.origin_session_id == current_chat_session_id
+        )
+    if flow_run_id:
+        scope_conditions.append(CurationExtractionResultRecord.flow_run_id == flow_run_id)
+    if not scope_conditions:
+        return None
+    scope_condition = scope_conditions[0] if len(scope_conditions) == 1 else or_(*scope_conditions)
+
+    linked_statement = (
+        select(
+            exists().where(
+                CurationCandidate.session_id == normalized_session_id,
+                CurationCandidate.extraction_result_id == CurationExtractionResultRecord.id,
+                CurationExtractionResultRecord.user_id == user_id,
+                scope_condition,
+            )
+        )
+    )
+    try:
+        has_link = bool(db.scalar(linked_statement))
+    except Exception:
+        has_link = False
+    return session if has_link else None
+
+
+def _model_payload(value: Any) -> dict[str, Any]:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    if isinstance(value, Mapping):
+        return dict(value)
+    return {}
+
+
+def _as_mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _review_session_ref(session_payload: Mapping[str, Any]) -> dict[str, Any]:
+    adapter = _as_mapping(session_payload.get("adapter"))
+    document = _as_mapping(session_payload.get("document"))
+    return {
+        "review_session_id": session_payload.get("session_id"),
+        "flow_run_id": session_payload.get("flow_run_id"),
+        "adapter_key": adapter.get("adapter_key"),
+        "document_id": document.get("document_id"),
+    }
+
+
+def _review_session_inventory_payload(session_payload: Mapping[str, Any]) -> dict[str, Any]:
+    document = _as_mapping(session_payload.get("document"))
+    adapter = _as_mapping(session_payload.get("adapter"))
+    progress = _as_mapping(session_payload.get("progress"))
+    validation = _as_mapping(session_payload.get("validation")) or None
+    return {
+        **_review_session_ref(session_payload),
+        "status": session_payload.get("status"),
+        "adapter": adapter,
+        "document": {
+            "document_id": document.get("document_id"),
+            "title": document.get("title"),
+            "page_count": document.get("page_count"),
+        },
+        "progress": progress,
+        "validation": _bounded_json(validation, text_limit=_FIELD_TEXT_LIMIT, list_limit=5),
+        "current_candidate_id": session_payload.get("current_candidate_id"),
+        "prepared_at": session_payload.get("prepared_at"),
+        "last_worked_at": session_payload.get("last_worked_at"),
+        "available_details": [
+            "inventory",
+            "summary",
+            "candidates",
+            "objects",
+            "evidence",
+            "validation_findings",
+            "field",
+        ],
+    }
+
+
+def _review_session_summary_payload(
+    session_payload: Mapping[str, Any],
+    *,
+    db: Session,
+    user_id: str,
+) -> dict[str, Any]:
+    extraction_results = [
+        _bounded_json(item, text_limit=_FIELD_TEXT_LIMIT, list_limit=5)
+        for item in session_payload.get("extraction_results", [])
+        if isinstance(item, Mapping)
+    ]
+    file_refs = _session_file_refs(
+        db,
+        session_id=str(session_payload.get("session_id") or ""),
+        user_id=user_id,
+        limit=5,
+        cursor=None,
+    )[0]
+    return {
+        **_review_session_inventory_payload(session_payload),
+        "extraction_results": extraction_results,
+        "tags": list(session_payload.get("tags") or []),
+        "notes_preview": _preview_text(session_payload.get("notes")),
+        "warning_count": len(session_payload.get("warnings") or []),
+        "submitted_at": session_payload.get("submitted_at"),
+        "latest_submission": _bounded_json(
+            session_payload.get("latest_submission"),
+            text_limit=_FIELD_TEXT_LIMIT,
+            list_limit=5,
+        ),
+        "file_refs": file_refs,
+    }
+
+
+def _candidate_matches_ref(candidate: Mapping[str, Any], object_ref: str | None) -> bool:
+    ref = _optional_text(object_ref)
+    if not ref:
+        return True
+    projection_ref = _as_mapping(candidate.get("projection_ref"))
+    values = {
+        str(candidate.get("candidate_id") or ""),
+        str(candidate.get("display_label") or ""),
+        str(candidate.get("secondary_label") or ""),
+        str(candidate.get("adapter_key") or ""),
+        str(projection_ref.get("envelope_id") or ""),
+        str(projection_ref.get("object_id") or ""),
+    }
+    normalized_payload = candidate.get("normalized_payload")
+    if isinstance(normalized_payload, Mapping):
+        values.update(
+            str(normalized_payload.get(key) or "")
+            for key in ("object_type", "id", "object_id", "pending_ref_id")
+        )
+    return ref in values
+
+
+def _compact_review_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    projection_ref = _as_mapping(candidate.get("projection_ref"))
+    normalized_payload = _as_mapping(candidate.get("normalized_payload"))
+    return {
+        "candidate_id": candidate.get("candidate_id"),
+        "session_id": candidate.get("session_id"),
+        "envelope_id": projection_ref.get("envelope_id"),
+        "object_id": projection_ref.get("object_id"),
+        "object_type": normalized_payload.get("object_type"),
+        "status": candidate.get("status"),
+        "adapter_key": candidate.get("adapter_key"),
+        "display_label": candidate.get("display_label"),
+        "secondary_label": candidate.get("secondary_label"),
+        "fields": _selected_scalar_fields(normalized_payload),
+        "evidence_count": len(candidate.get("evidence_anchors") or [])
+        + len(candidate.get("evidence_anchor_projections") or []),
+        "validation_finding_count": len(candidate.get("validation_summary_projections") or []),
+    }
+
+
+def _review_candidates_detail(
+    workspace_payload: Mapping[str, Any],
+    *,
+    object_ref: str | None,
+    limit: int,
+    cursor: str | None,
+) -> tuple[list[dict[str, Any]], int, bool, str | None]:
+    candidates = [
+        candidate
+        for candidate in workspace_payload.get("candidates", [])
+        if isinstance(candidate, Mapping) and _candidate_matches_ref(candidate, object_ref)
+    ]
+    page, truncated, next_cursor = _offset_page(candidates, limit=limit, cursor=cursor)
+    return [_compact_review_candidate(candidate) for candidate in page], len(candidates), truncated, next_cursor
+
+
+def _review_evidence_detail(
+    workspace_payload: Mapping[str, Any],
+    *,
+    object_ref: str | None,
+    limit: int,
+    cursor: str | None,
+) -> tuple[list[dict[str, Any]], int, bool, str | None]:
+    records: list[dict[str, Any]] = []
+    for candidate in workspace_payload.get("candidates", []):
+        if not isinstance(candidate, Mapping) or not _candidate_matches_ref(candidate, object_ref):
+            continue
+        for item in [
+            *(candidate.get("evidence_anchors") or []),
+            *(candidate.get("evidence_anchor_projections") or []),
+        ]:
+            if not isinstance(item, Mapping):
+                continue
+            compact = _compact_evidence_record(item)
+            compact.setdefault("candidate_id", candidate.get("candidate_id"))
+            records.append(compact)
+    page, truncated, next_cursor = _offset_page(records, limit=limit, cursor=cursor)
+    return page, len(records), truncated, next_cursor
+
+
+def _review_validation_detail(
+    workspace_payload: Mapping[str, Any],
+    *,
+    object_ref: str | None,
+    limit: int,
+    cursor: str | None,
+) -> tuple[list[dict[str, Any]], int, bool, str | None]:
+    records: list[dict[str, Any]] = []
+    for candidate in workspace_payload.get("candidates", []):
+        if not isinstance(candidate, Mapping) or not _candidate_matches_ref(candidate, object_ref):
+            continue
+        for item in [
+            candidate.get("validation"),
+            *(candidate.get("validation_summary_projections") or []),
+        ]:
+            if not isinstance(item, Mapping):
+                continue
+            compact = _bounded_json(item, text_limit=_FIELD_TEXT_LIMIT, list_limit=5)
+            if isinstance(compact, Mapping):
+                record = dict(compact)
+                record.setdefault("candidate_id", candidate.get("candidate_id"))
+                records.append(record)
+    page, truncated, next_cursor = _offset_page(records, limit=limit, cursor=cursor)
+    return page, len(records), truncated, next_cursor
+
+
+def _review_field_detail(
+    session_payload: Mapping[str, Any],
+    workspace_payload: Mapping[str, Any],
+    *,
+    object_ref: str | None,
+    field_path: str,
+) -> dict[str, Any]:
+    ref = _optional_text(object_ref)
+    if ref:
+        for candidate in workspace_payload.get("candidates", []):
+            if isinstance(candidate, Mapping) and _candidate_matches_ref(candidate, ref):
+                return {
+                    "review_session_id": session_payload.get("session_id"),
+                    "candidate_id": candidate.get("candidate_id"),
+                    "field_path": field_path,
+                    "value": _bounded_json(
+                        _field_path_value(candidate, field_path),
+                        text_limit=_FIELD_TEXT_LIMIT,
+                        list_limit=10,
+                    ),
+                }
+    return {
+        "review_session_id": session_payload.get("session_id"),
+        "field_path": field_path,
+        "value": _bounded_json(
+            _field_path_value(session_payload, field_path),
+            text_limit=_FIELD_TEXT_LIMIT,
+            list_limit=10,
+        ),
+    }
+
+
+def _inspect_review_session_context(
+    *,
+    db: Session,
+    review_session_id: str | None,
+    user_id: str,
+    current_chat_session_id: str,
+    flow_run_id: str | None,
+    detail: str,
+    object_ref: str | None,
+    field_path: str | None,
+    limit: int,
+    cursor: str | None,
+) -> str:
+    if not review_session_id:
+        return _tool_response(
+            "invalid_request",
+            "review_session_id is required when scope=review_session.",
+            scope="review_session",
+            detail=detail,
+        )
+
+    session = authorize_review_session_for_context(
+        db,
+        review_session_id=review_session_id,
+        user_id=user_id,
+        current_chat_session_id=current_chat_session_id,
+        flow_run_id=flow_run_id,
+    )
+    if session is None:
+        return _tool_response(
+            "unauthorized_context",
+            "No authorized review session matched that curation context lookup.",
+            scope="review_session",
+            detail=detail,
+        )
+
+    session_detail = get_session_detail(db, session.id)
+    session_payload = _model_payload(session_detail)
+    refs = [_review_session_ref(session_payload)]
+
+    if detail == "inventory":
+        results = [_review_session_inventory_payload(session_payload)]
+        total_count = 1
+        truncated = False
+        next_cursor = None
+    elif detail == "summary":
+        results = [
+            _review_session_summary_payload(
+                session_payload,
+                db=db,
+                user_id=user_id,
+            )
+        ]
+        total_count = 1
+        truncated = False
+        next_cursor = None
+    elif detail in {"candidates", "objects", "evidence", "validation_findings", "field"}:
+        workspace = get_session_workspace(db, session.id)
+        workspace_payload = _model_payload(workspace).get("workspace", {})
+        if detail in {"candidates", "objects"}:
+            results, total_count, truncated, next_cursor = _review_candidates_detail(
+                workspace_payload,
+                object_ref=object_ref,
+                limit=limit,
+                cursor=cursor,
+            )
+        elif detail == "evidence":
+            results, total_count, truncated, next_cursor = _review_evidence_detail(
+                workspace_payload,
+                object_ref=object_ref,
+                limit=limit,
+                cursor=cursor,
+            )
+        elif detail == "validation_findings":
+            results, total_count, truncated, next_cursor = _review_validation_detail(
+                workspace_payload,
+                object_ref=object_ref,
+                limit=limit,
+                cursor=cursor,
+            )
+        else:
+            if not field_path:
+                return _tool_response(
+                    "invalid_request",
+                    "field_path is required when detail=field.",
+                    scope="review_session",
+                )
+            results = [
+                _review_field_detail(
+                    session_payload,
+                    workspace_payload,
+                    object_ref=object_ref,
+                    field_path=field_path,
+                )
+            ]
+            total_count = 1
+            truncated = False
+            next_cursor = None
+    else:
+        return _tool_response(
+            "invalid_detail",
+            "Unsupported review session detail. Use inventory, summary, candidates, objects, evidence, validation_findings, or field.",
+            scope="review_session",
+            detail=detail,
+        )
+
+    return _tool_response(
+        "ok",
+        "Authorized review session context matched.",
+        scope="review_session",
+        detail=detail,
+        refs=refs,
+        results=results,
+        total_count=total_count,
+        truncated=truncated,
+        next_cursor=next_cursor,
+    )
+
+
+def _file_output_response(file: FileOutput) -> dict[str, Any]:
+    return {
+        "file_id": str(file.id),
+        "filename": file.filename,
+        "file_type": file.file_type,
+        "file_size": file.file_size,
+        "curator_id": file.curator_id,
+        "session_id": file.session_id,
+        "trace_id": file.trace_id,
+        "agent_name": file.agent_name,
+        "generation_model": file.generation_model,
+        "download_count": file.download_count,
+        "last_download_at": file.last_download_at,
+        "created_at": file.created_at,
+        "download_url": f"/api/files/{file.id}/download",
+        "metadata": _bounded_json(file.file_metadata or {}, text_limit=_FIELD_TEXT_LIMIT, list_limit=10),
+    }
+
+
+def _load_authorized_file_output(
+    db: Session,
+    *,
+    file_id: str | None,
+    user_id: str,
+) -> FileOutput | None:
+    normalized_file_id = _normalize_uuid_or_none(file_id)
+    if normalized_file_id is None:
+        return None
+    file = db.get(FileOutput, normalized_file_id)
+    if file is None or file.curator_id != user_id:
+        return None
+    return file
+
+
+def _safe_file_output_path(file: FileOutput) -> Path | None:
+    storage = FileOutputStorageService()
+    try:
+        base_path = storage.base_path.resolve()
+        file_path = Path(file.file_path).resolve()
+        if not file_path.is_relative_to(base_path):
+            return None
+    except (OSError, ValueError, PathSecurityError):
+        return None
+    if not file_path.exists() or not file_path.is_file():
+        return None
+    return file_path
+
+
+def _read_bounded_text(path: Path, *, max_bytes: int = _MAX_FILE_PREVIEW_BYTES) -> tuple[str, bool]:
+    with path.open("rb") as handle:
+        data = handle.read(max_bytes + 1)
+    truncated = len(data) > max_bytes
+    text = data[:max_bytes].decode("utf-8", errors="replace")
+    return text, truncated
+
+
+def _csv_rows_preview(
+    text: str,
+    *,
+    delimiter: str,
+    limit: int,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
+    headers = list(reader.fieldnames or [])
+    rows: list[dict[str, Any]] = []
+    for index, row in enumerate(reader):
+        if index >= limit:
+            break
+        preview_row: dict[str, Any] = {}
+        for key, value in row.items():
+            preview_key = "_extra_values" if key is None else str(key)
+            preview_row[preview_key] = _bounded_json(
+                value,
+                text_limit=_FIELD_TEXT_LIMIT,
+                list_limit=10,
+            )
+        rows.append(preview_row)
+    return headers, rows
+
+
+def _json_file_data(path: Path) -> tuple[Any | None, str | None]:
+    text, truncated = _read_bounded_text(path)
+    if truncated:
+        return None, "JSON file is too large for bounded field/preview parsing; use metadata or download."
+    try:
+        return json.loads(text), None
+    except json.JSONDecodeError as exc:
+        return None, f"Malformed JSON: {exc.msg}"
+
+
+def _file_schema(file: FileOutput, path: Path, *, limit: int) -> dict[str, Any]:
+    text, truncated = _read_bounded_text(path)
+    if file.file_type in {"csv", "tsv"}:
+        delimiter = "," if file.file_type == "csv" else "\t"
+        headers, rows = _csv_rows_preview(text, delimiter=delimiter, limit=min(limit, _MAX_FILE_SCHEMA_ROWS))
+        return {
+            "file_id": str(file.id),
+            "file_type": file.file_type,
+            "delimiter": delimiter,
+            "headers": headers,
+            "preview_rows": rows,
+            "row_count_estimate": max(0, text.count("\n") - 1),
+            "truncated": truncated,
+        }
+    if file.file_type == "json":
+        data, error = _json_file_data(path)
+        if error:
+            return {"file_id": str(file.id), "file_type": "json", "error": error, "truncated": truncated}
+        if isinstance(data, Mapping):
+            return {
+                "file_id": str(file.id),
+                "file_type": "json",
+                "top_level_type": "object",
+                "object_keys": list(data.keys())[:50],
+            }
+        if isinstance(data, list):
+            key_union: list[str] = []
+            seen: set[str] = set()
+            for item in data[:limit]:
+                if isinstance(item, Mapping):
+                    for key in item:
+                        if key not in seen:
+                            seen.add(str(key))
+                            key_union.append(str(key))
+            return {
+                "file_id": str(file.id),
+                "file_type": "json",
+                "top_level_type": "array",
+                "item_count": len(data),
+                "item_key_union": key_union,
+            }
+        return {"file_id": str(file.id), "file_type": "json", "top_level_type": type(data).__name__}
+    return {"file_id": str(file.id), "file_type": file.file_type, "schema": "unsupported"}
+
+
+def _file_preview(file: FileOutput, path: Path, *, limit: int) -> dict[str, Any]:
+    text, truncated = _read_bounded_text(path)
+    if file.file_type in {"csv", "tsv"}:
+        delimiter = "," if file.file_type == "csv" else "\t"
+        headers, rows = _csv_rows_preview(text, delimiter=delimiter, limit=limit)
+        return {
+            "file_id": str(file.id),
+            "headers": headers,
+            "rows": rows,
+            "truncated": truncated,
+        }
+    if file.file_type == "json":
+        data, error = _json_file_data(path)
+        if error:
+            return {"file_id": str(file.id), "error": error, "truncated": truncated}
+        return {
+            "file_id": str(file.id),
+            "preview": _bounded_json(data, text_limit=_FIELD_TEXT_LIMIT, list_limit=limit),
+            "truncated": truncated,
+        }
+    return {
+        "file_id": str(file.id),
+        "text_preview": _preview_text(text, limit=_FIELD_TEXT_LIMIT),
+        "truncated": truncated,
+    }
+
+
+def _file_field(file: FileOutput, path: Path, *, field_path: str) -> dict[str, Any]:
+    if file.file_type != "json":
+        return {
+            "file_id": str(file.id),
+            "field_path": field_path,
+            "error": "detail=field is supported for JSON files only.",
+        }
+    data, error = _json_file_data(path)
+    if error:
+        return {"file_id": str(file.id), "field_path": field_path, "error": error}
+    return {
+        "file_id": str(file.id),
+        "field_path": field_path,
+        "value": _bounded_json(
+            _field_path_value(data, field_path),
+            text_limit=_FIELD_TEXT_LIMIT,
+            list_limit=10,
+        ),
+    }
+
+
+def _inspect_file_context(
+    *,
+    db: Session,
+    file_id: str | None,
+    user_id: str,
+    detail: str,
+    field_path: str | None,
+    limit: int,
+) -> str:
+    file = _load_authorized_file_output(db, file_id=file_id, user_id=user_id)
+    if file is None:
+        return _tool_response(
+            "unauthorized_context",
+            "No authorized file matched that curation context lookup.",
+            scope="file",
+            detail=detail,
+        )
+
+    if detail in {"metadata", "inventory"}:
+        results = [_file_output_response(file)]
+    else:
+        path = _safe_file_output_path(file)
+        if path is None:
+            return _tool_response(
+                "unavailable",
+                "The authorized file is not available in bounded storage.",
+                scope="file",
+                detail=detail,
+                refs=[{"file_id": str(file.id)}],
+            )
+        if detail == "schema":
+            results = [_file_schema(file, path, limit=limit)]
+        elif detail == "preview":
+            results = [_file_preview(file, path, limit=limit)]
+        elif detail == "field":
+            if not field_path:
+                return _tool_response(
+                    "invalid_request",
+                    "field_path is required when detail=field.",
+                    scope="file",
+                )
+            results = [_file_field(file, path, field_path=field_path)]
+        else:
+            return _tool_response(
+                "invalid_detail",
+                "Unsupported file detail. Use metadata, inventory, schema, preview, or field.",
+                scope="file",
+                detail=detail,
+            )
+
+    return _tool_response(
+        "ok",
+        "Authorized file context matched.",
+        scope="file",
+        detail=detail,
+        refs=[{"file_id": str(file.id), "session_id": file.session_id}],
+        results=results,
+        total_count=1,
+        truncated=False,
+        next_cursor=None,
+    )
+
+
+def _session_file_refs(
+    db: Session,
+    *,
+    session_id: str,
+    user_id: str,
+    limit: int,
+    cursor: str | None,
+) -> tuple[list[dict[str, Any]], int, bool, str | None]:
+    if not session_id:
+        return [], 0, False, None
+    other_user_file = (
+        db.query(FileOutput)
+        .filter(FileOutput.session_id == session_id)
+        .filter(FileOutput.curator_id != user_id)
+        .first()
+    )
+    if other_user_file:
+        return [], -1, False, None
+    query = (
+        db.query(FileOutput)
+        .filter(FileOutput.session_id == session_id)
+        .filter(FileOutput.curator_id == user_id)
+        .order_by(FileOutput.created_at.desc())
+    )
+    files = query.all()
+    page, truncated, next_cursor = _offset_page(files, limit=limit, cursor=cursor)
+    refs = [_file_output_response(file) for file in page]
+    return refs, len(files), truncated, next_cursor
+
+
+def _inspect_session_files_context(
+    *,
+    db: Session,
+    review_session_id: str | None,
+    current_chat_session_id: str,
+    user_id: str,
+    flow_run_id: str | None,
+    limit: int,
+    cursor: str | None,
+) -> str:
+    session_id = current_chat_session_id
+    refs: list[dict[str, Any]] = []
+    if review_session_id:
+        session = authorize_review_session_for_context(
+            db,
+            review_session_id=review_session_id,
+            user_id=user_id,
+            current_chat_session_id=current_chat_session_id,
+            flow_run_id=flow_run_id,
+        )
+        if session is None:
+            return _tool_response(
+                "unauthorized_context",
+                "No authorized review session matched that file lookup.",
+                scope="session_files",
+            )
+        session_id = str(session.id)
+        refs.append({"review_session_id": session_id, "flow_run_id": session.flow_run_id})
+
+    files, total_count, truncated, next_cursor = _session_file_refs(
+        db,
+        session_id=session_id,
+        user_id=user_id,
+        limit=limit,
+        cursor=cursor,
+    )
+    if total_count < 0:
+        return _tool_response(
+            "unauthorized_context",
+            "Not authorized to access files from this mixed-curator session.",
+            scope="session_files",
+        )
+    return _tool_response(
+        "ok",
+        "Authorized session file refs matched.",
+        scope="session_files",
+        detail="inventory",
+        refs=refs or [{"session_id": session_id}],
+        results=files,
+        total_count=total_count,
+        truncated=truncated,
+        next_cursor=next_cursor,
+    )
+
+
 async def inspect_curation_context(
     *,
     scope: str = "current_chat",
@@ -634,6 +1392,8 @@ async def inspect_curation_context(
     extraction_result_id: str | None = None,
     trace_id: str | None = None,
     flow_run_id: str | None = None,
+    review_session_id: str | None = None,
+    file_id: str | None = None,
     adapter_keys: list[str] | None = None,
     object_ref: str | None = None,
     field_path: str | None = None,
@@ -652,6 +1412,51 @@ async def inspect_curation_context(
 
     normalized_scope = str(scope or "current_chat").strip() or "current_chat"
     normalized_detail = str(detail or "inventory").strip() or "inventory"
+    bounded_limit = _normalize_limit(limit, default=5)
+    if normalized_scope == "review_session":
+        db = SessionLocal()
+        try:
+            return _inspect_review_session_context(
+                db=db,
+                review_session_id=review_session_id,
+                user_id=user_id,
+                current_chat_session_id=session_id,
+                flow_run_id=flow_run_id,
+                detail=normalized_detail,
+                object_ref=object_ref,
+                field_path=field_path,
+                limit=bounded_limit,
+                cursor=cursor,
+            )
+        finally:
+            db.close()
+    if normalized_scope == "file":
+        db = SessionLocal()
+        try:
+            return _inspect_file_context(
+                db=db,
+                file_id=file_id,
+                user_id=user_id,
+                detail=normalized_detail,
+                field_path=field_path,
+                limit=bounded_limit,
+            )
+        finally:
+            db.close()
+    if normalized_scope == "session_files":
+        db = SessionLocal()
+        try:
+            return _inspect_session_files_context(
+                db=db,
+                review_session_id=review_session_id,
+                current_chat_session_id=session_id,
+                user_id=user_id,
+                flow_run_id=flow_run_id,
+                limit=bounded_limit,
+                cursor=cursor,
+            )
+        finally:
+            db.close()
     if normalized_scope == "extraction_result" and not _optional_text(extraction_result_id):
         return _tool_response(
             "invalid_request",
@@ -674,7 +1479,6 @@ async def inspect_curation_context(
         flow_run_id=flow_run_id,
         adapter_keys=adapter_keys,
     )
-    bounded_limit = _normalize_limit(limit, default=5)
     total_count = len(records)
     use_nested_cursor = (
         normalized_detail in {"objects", "evidence", "validation_findings"}
@@ -1024,4 +1828,8 @@ def _compact_evidence_record(item: Mapping[str, Any]) -> dict[str, Any]:
     return compact
 
 
-__all__ = ["inspect_chat_traces", "inspect_curation_context"]
+__all__ = [
+    "authorize_review_session_for_context",
+    "inspect_chat_traces",
+    "inspect_curation_context",
+]

@@ -553,6 +553,30 @@ MOCK_REGISTRY = {
             "launchable": True,
         },
     },
+    "csv_output_formatter": {
+        "name": "CSV Output Formatter",
+        "description": "Format the final CSV file",
+        "category": "Output",
+        "subcategory": "Formatter",
+        "factory": lambda: None,
+        "requires_document": False,
+        "curation": {
+            "adapter_key": "gene",
+            "launchable": True,
+        },
+    },
+    "json_output_formatter": {
+        "name": "JSON Output Formatter",
+        "description": "Format the final JSON file",
+        "category": "Output",
+        "subcategory": "Formatter",
+        "factory": lambda: None,
+        "requires_document": False,
+        "curation": {
+            "adapter_key": "gene",
+            "launchable": True,
+        },
+    },
     "curation_prep": {
         "name": "Curation Prep Agent",
         "description": "Prepare curation candidates",
@@ -1214,6 +1238,144 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert timing_event["details"]["usedInternalExtractionPayload"] is True
         assert timing_event["details"]["candidateBuilt"] is True
         assert "specialist_tool_invoke_ms" in timing_event["details"]["phaseTimingsMs"]
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_custom_output_step_uses_projection_planner_not_formatter_model(
+        self, mock_get_agent, mock_streaming, monkeypatch
+    ):
+        """Custom terminal output should plan a projection, then save deterministically."""
+        executor = _executor_module()
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        planner_calls = []
+        formatter_invocations = []
+        save_calls = []
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                if tool_name == "ask_csv_output_formatter_specialist":
+                    formatter_invocations.append(query)
+                    raise AssertionError("Formatter model path should not run")
+                return json.dumps(_structured_step_output("TP53"))
+
+            return _tool
+
+        async def _fake_projection_planner(**kwargs):
+            planner_calls.append(kwargs)
+            plan = executor.default_projection_plan(
+                kwargs["bundle"],
+                output_format=kwargs["output_format"],
+            )
+            return executor.finalize_output_projection(kwargs["bundle"], plan)
+
+        async def _fake_save_csv_impl(
+            data_json: str,
+            filename: str,
+            columns: str | None = None,
+        ) -> dict:
+            save_calls.append(
+                {
+                    "data": json.loads(data_json),
+                    "columns": json.loads(columns or "[]"),
+                    "filename": filename,
+                }
+            )
+            return {
+                "file_id": "file-planned-flow-csv",
+                "filename": "planned-flow.csv",
+                "format": "csv",
+                "size_bytes": 123,
+                "mime_type": "text/csv",
+                "download_url": "/api/files/file-planned-flow-csv/download",
+                "created_at": "2026-04-26T00:00:00Z",
+            }
+
+        mock_streaming.side_effect = _make_streaming_tool
+        monkeypatch.setattr(
+            executor,
+            "_run_output_projection_planner",
+            _fake_projection_planner,
+        )
+        monkeypatch.setattr(
+            "src.lib.openai_agents.tools.file_output_tools._save_csv_impl",
+            _fake_save_csv_impl,
+        )
+
+        flow = _make_flow([
+            _agent_node("n1", "gene", output_key="gene_output"),
+            _agent_node(
+                "n2",
+                "csv_output_formatter",
+                custom_instructions="Use object rows and keep a compact CSV export.",
+            ),
+        ])
+
+        tools, _, _, execution_state = get_all_agent_tools(
+            flow,
+            include_unavailable=True,
+            flow_run_id="flow-run-123",
+        )
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+        asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
+        result_text = asyncio.run(
+            tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "format"}))
+        )
+
+        result = json.loads(result_text)
+        assert result["file_id"] == "file-planned-flow-csv"
+        assert len(planner_calls) == 1
+        assert planner_calls[0]["agent_id"] == "csv_output_formatter"
+        assert "compact CSV export" in planner_calls[0]["node_data"]["custom_instructions"]
+        assert formatter_invocations == []
+        assert save_calls[0]["filename"] == "Test_Flow_csv_export"
+        assert save_calls[0]["data"][0]["object_payload_label"] == "TP53"
+        assert execution_state["completed_steps"][-1]["agent_id"] == "csv_output_formatter"
+        assert execution_state["completed_steps"][-1]["output"] == result_text
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_terminal_output_without_artifacts_fails_before_formatter_model(
+        self, mock_get_agent, mock_streaming
+    ):
+        """Terminal formatter steps with no artifacts must not call the model formatter."""
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        formatter_invocations = []
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                formatter_invocations.append((tool_name, query))
+                raise AssertionError("ordinary formatter fallback must not run")
+
+            return _tool
+
+        mock_streaming.side_effect = _make_streaming_tool
+
+        for agent_id in (
+            "csv_output_formatter",
+            "json_output_formatter",
+            "chat_output_formatter",
+        ):
+            flow = _make_flow([_agent_node("n1", agent_id)])
+            tools, _, _, execution_state = get_all_agent_tools(
+                flow,
+                include_unavailable=True,
+            )
+            tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+
+            result = asyncio.run(
+                tools[0].on_invoke_tool(
+                    tool_ctx,
+                    json.dumps({"query": "format"}),
+                )
+            )
+
+            assert "no completed structured artifacts" in result
+            assert "cannot fall back to ordinary formatter models" in result
+            assert execution_state["completed_steps"] == []
+
+        assert formatter_invocations == []
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -2259,40 +2421,76 @@ class TestGetAllAgentToolsStepOrderRuntime:
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
     def test_output_filename_template_sets_step_scoped_formatter_override(
-        self, mock_get_agent, mock_streaming
+        self, mock_get_agent, mock_streaming, monkeypatch
     ):
-        """Formatter steps should expose a resolved filename stem only during that tool call."""
+        """Projected formatter steps should honor filename templates during save."""
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         observed = {}
 
         def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
-                from src.lib.context import get_current_output_filename_stem
-
-                observed["during_call"] = get_current_output_filename_stem()
-                return "formatted"
+                if tool_name == "ask_csv_output_formatter_specialist":
+                    raise AssertionError("ordinary formatter fallback must not run")
+                return json.dumps(
+                    {
+                        "domain_pack_id": "gene",
+                        "envelope_id": "env-gene-1",
+                        "objects": [
+                            {
+                                "object_type": "Gene",
+                                "payload": {"symbol": "BRCA1"},
+                            }
+                        ],
+                    }
+                )
 
             return _tool
 
+        async def _fake_save_csv_impl(
+            data_json: str,
+            filename: str,
+            columns: str | None = None,
+        ) -> dict:
+            from src.lib.context import get_current_output_filename_stem
+
+            observed["during_save"] = get_current_output_filename_stem()
+            observed["filename"] = filename
+            return {
+                "file_id": "file-template-csv",
+                "filename": "templated.csv",
+                "format": "csv",
+                "size_bytes": 123,
+                "mime_type": "text/csv",
+                "download_url": "/api/files/file-template-csv/download",
+                "created_at": "2026-04-26T00:00:00Z",
+            }
+
         mock_streaming.side_effect = _make_streaming_tool
+        monkeypatch.setattr(
+            "src.lib.openai_agents.tools.file_output_tools._save_csv_impl",
+            _fake_save_csv_impl,
+        )
 
         flow = _make_flow([
             _task_input_node(),
+            _agent_node("n1", "gene", output_key="gene_output"),
             _agent_node(
-                "n1",
-                "chat_output_formatter",
-                output_filename_template="{{input_filename_stem}}.tsv",
+                "n2",
+                "csv_output_formatter",
+                output_filename_template="{{input_filename_stem}}.csv",
             ),
         ])
 
         tools, _ = get_all_agent_tools(flow, document_name="Smith et al. (2024).pdf")
         tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
-        asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "format now"})))
+        asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
+        asyncio.run(tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "format now"})))
 
         from src.lib.context import get_current_output_filename_stem
 
-        assert observed["during_call"] == "Smith_et_al_2024"
+        assert observed["during_save"] == "Smith_et_al_2024"
+        assert observed["filename"] == "Smith_et_al_2024"
         assert get_current_output_filename_stem() is None
 
     @patch("src.lib.flows.executor._create_streaming_tool")

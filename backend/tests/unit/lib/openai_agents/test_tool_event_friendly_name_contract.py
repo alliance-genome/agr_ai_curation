@@ -141,6 +141,27 @@ def _raw_response_stream_event(data):
     return SimpleNamespace(type="raw_response_event", data=data)
 
 
+def _structured_payload_from_result_or_internal_event(result: str, captured_events: list[dict]) -> dict:
+    try:
+        payload = json.loads(result)
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict):
+        return payload
+
+    internal_events = [
+        event
+        for event in captured_events
+        if event.get("type") == streaming_tools.INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
+    ]
+    assert internal_events
+    internal = internal_events[-1]["internal"]
+    canonical_payload = internal.get("canonical_payload")
+    if isinstance(canonical_payload, dict):
+        return canonical_payload
+    return json.loads(internal["tool_output"])
+
+
 def _handoff_call_stream_event(target_name: str):
     return SimpleNamespace(
         type="run_item_stream_event",
@@ -1140,20 +1161,8 @@ async def test_specialist_emits_evidence_summary_for_structured_extraction_outpu
         tool_name="ask_gene_specialist",
     )
 
-    assert json.loads(result)["run_summary"]["kept_count"] == 1
-    assert json.loads(result)["items"] == [
-        {
-            "label": "crb",
-            "entity_type": "gene",
-            "normalized_id": "FB:FBgn0259685",
-            "source_mentions": ["crumbs", "crb"],
-            "evidence_record_ids": [
-                crumbs_record["evidence_record_id"],
-                crb_record["evidence_record_id"],
-            ],
-        }
-    ]
-    assert len(json.loads(result)["genes"]) == 1
+    assert "structured result accepted" in result
+    assert "Full validated payload is retained by the specialist runtime" in result
     evidence_events = [event for event in captured_events if event.get("type") == "evidence_summary"]
     assert len(evidence_events) == 1
     assert evidence_events[0]["tool_name"] == "ask_gene_specialist"
@@ -1269,7 +1278,8 @@ async def test_specialist_matches_concurrent_record_evidence_outputs_by_call_id(
         tool_name="ask_gene_extractor_specialist",
     )
 
-    assert json.loads(result)["summary"] == "Extracted focal genes with verified evidence."
+    assert "structured result accepted" in result
+    assert "Extracted focal genes with verified evidence" in result
     evidence_events = [event for event in captured_events if event.get("type") == "evidence_summary"]
     assert len(evidence_events) == 1
     assert evidence_events[0]["evidence_records"] == [crumbs_record, ninae_record]
@@ -1663,16 +1673,7 @@ async def test_specialist_accepts_schema_defined_retained_collection_without_ite
 
     assert not any(event.get("type") == "SPECIALIST_ERROR" for event in captured_events)
     assert any(event.get("type") == "evidence_summary" for event in captured_events)
-    try:
-        result_payload = json.loads(result)
-    except json.JSONDecodeError:
-        internal_events = [
-            event
-            for event in captured_events
-            if event.get("type") == streaming_tools.INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
-        ]
-        assert internal_events
-        result_payload = json.loads(internal_events[-1]["internal"]["tool_output"])
+    result_payload = _structured_payload_from_result_or_internal_event(result, captured_events)
 
     objects = result_payload.get("curatable_objects") or result_payload.get("objects")
     assert objects[0]["evidence_record_ids"] == [expected_record["evidence_record_id"]]
@@ -1788,8 +1789,10 @@ async def test_specialist_matches_concurrent_record_evidence_outputs_by_identity
         tool_name="ask_gene_extractor_specialist",
     )
 
-    parsed = json.loads(result)
-    assert {record["evidence_record_id"] for record in parsed["evidence_records"]} == {
+    assert "structured result accepted" in result
+    evidence_events = [event for event in captured_events if event.get("type") == "evidence_summary"]
+    assert len(evidence_events) == 1
+    assert {record["evidence_record_id"] for record in evidence_events[0]["evidence_records"]} == {
         crumbs_record["evidence_record_id"],
         ninae_record["evidence_record_id"],
     }

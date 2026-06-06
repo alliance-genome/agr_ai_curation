@@ -1109,6 +1109,10 @@ def test_build_flow_memory_message_contains_refs_not_hidden_payloads():
     assert "er-123" in assistant_message
     assert "review-123" in assistant_message
     assert "f1" in assistant_message
+    assert (
+        "Use inspect_curation_context with flow_run_id/extraction_result_id for extraction details, "
+        "review_session_id for review workspace details, or file_id for bounded file metadata/previews."
+    ) in assistant_message
 
 
 def test_execute_flow_failure_messages_surface_missing_reason():

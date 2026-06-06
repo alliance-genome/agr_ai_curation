@@ -1411,6 +1411,30 @@ def build_batch_plumbing_flow_definition() -> Dict[str, Any]:
                         '[{"check":"batch_file_output","status":"completed"}]. '
                         "Use filename batch_release_smoke_result."
                     ),
+                    "projection_plan": {
+                        "format": "json",
+                        "row_source": "artifact",
+                        "json_shape": "rows",
+                        "max_rows": 1,
+                        "columns": [
+                            {
+                                "key": "check",
+                                "header": "Check",
+                                "transform": {
+                                    "type": "literal",
+                                    "value": "batch_file_output",
+                                },
+                            },
+                            {
+                                "key": "status",
+                                "header": "Status",
+                                "transform": {
+                                    "type": "literal",
+                                    "value": "completed",
+                                },
+                            },
+                        ],
+                    },
                 },
             },
         ],
@@ -1472,6 +1496,29 @@ def build_batch_extraction_flow_definition() -> Dict[str, Any]:
                         "crb or Crumbs plus at least one available evidence_record_id. "
                         "Do not invent evidence IDs and do not include unrelated genes."
                     ),
+                    "projection_plan": {
+                        "format": "json",
+                        "row_source": "object",
+                        "json_shape": "rows",
+                        "filters": [
+                            {
+                                "field_ref": "object.evidence_record_ids",
+                                "op": "is_not_empty",
+                            }
+                        ],
+                        "columns": [
+                            {
+                                "key": "gene",
+                                "header": "Gene",
+                                "field_ref": "object.label",
+                            },
+                            {
+                                "key": "evidence_record_ids",
+                                "header": "Evidence Record IDs",
+                                "field_ref": "object.evidence_record_ids",
+                            },
+                        ],
+                    },
                 },
             },
         ],

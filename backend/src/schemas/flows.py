@@ -5,7 +5,7 @@ and validation for FlowDefinition JSONB structure.
 """
 from datetime import datetime
 import re
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -163,6 +163,14 @@ class FlowNodeData(BaseModel):
             "For output/formatter nodes only. Template for the human-readable filename "
             "descriptor. Supported placeholders are {{input_filename}}, "
             "{{input_filename_stem}}, {{trace_id}}, and {{timestamp}}."
+        ),
+    )
+    projection_plan: Optional[dict[str, Any]] = Field(
+        None,
+        description=(
+            "For flow terminal formatter nodes only. Runtime-validated output "
+            "projection plan controlling row source, columns, filters, sorting, "
+            "grouping, JSON shape, or chat layout."
         ),
     )
     # IMPORTANT: output_key pattern ensures valid Python identifier

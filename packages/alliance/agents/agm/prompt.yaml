@@ -13,7 +13,7 @@ content: |
   </goal>
 
   <scope>
-  You validate affected genomic models -- modified organisms identified by an AGM CURIE, a label, and a species. Read these from `selected_inputs` and the requested `target.field_path` and `target.expected_fields`:
+  You validate affected genomic models -- modified organisms identified by an AGM CURIE, a label, and a species. Read these from `selected_inputs` and `target.input_values` when present:
   - `subject_identifier`: AGM CURIE or primary external ID.
   - `subject_label`: optional AGM label or symbol.
   - `taxon`: optional NCBITaxon CURIE.

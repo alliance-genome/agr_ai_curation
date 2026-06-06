@@ -1,5 +1,6 @@
 """Runtime-focused tests for supervisor agent helpers."""
 
+import inspect
 import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -134,6 +135,61 @@ class _PrepExtractionRecord:
 
     def model_dump(self, mode="python"):
         return dict(self._payload)
+
+
+class _DumpablePayload:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def model_dump(self, mode="python"):
+        return dict(self._payload)
+
+
+class _FakeContextDb:
+    def __init__(self, *, row=None, scalar_value=False):
+        self.row = row
+        self.scalar_value = scalar_value
+        self.closed = False
+
+    def get(self, _model, _row_id):
+        return self.row
+
+    def scalar(self, _statement):
+        return self.scalar_value
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeFileOutputQuery:
+    def __init__(self, rows):
+        self._rows = list(rows)
+
+    def filter(self, *_args, **_kwargs):
+        return self
+
+    def order_by(self, *_args, **_kwargs):
+        return self
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+    def all(self):
+        return list(self._rows)
+
+
+class _FakeSessionFilesDb(_FakeContextDb):
+    def __init__(self, *, row=None, user_files=None, other_user_file=None, scalar_value=False):
+        super().__init__(row=row, scalar_value=scalar_value)
+        self.user_files = list(user_files or [])
+        self.other_user_file = other_user_file
+        self.query_count = 0
+
+    def query(self, _model):
+        self.query_count += 1
+        if self.query_count % 2 == 1:
+            return _FakeFileOutputQuery([self.other_user_file] if self.other_user_file else [])
+        return _FakeFileOutputQuery(self.user_files)
 
 
 def _chat_message_record(**overrides):
@@ -535,6 +591,955 @@ async def test_inspect_curation_context_extraction_result_scope_requires_id(monk
     payload = json.loads(response)
     assert payload["status"] == "invalid_request"
     assert "extraction_result_id is required" in payload["message"]
+
+
+@pytest.mark.asyncio
+async def test_inspect_curation_context_review_session_inventory_is_authorized(monkeypatch):
+    session_id = uuid4()
+    session_row = SimpleNamespace(
+        id=session_id,
+        created_by_id="user-1",
+        assigned_curator_id=None,
+        flow_run_id="flow-run-1",
+    )
+    db = _FakeContextDb(row=session_row)
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "SessionLocal", lambda: db)
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "get_session_detail",
+        lambda _db, _session_id: _DumpablePayload(
+            {
+                "session_id": str(session_id),
+                "status": "new",
+                "adapter": {"adapter_key": "gene"},
+                "document": {
+                    "document_id": "document-1",
+                    "title": "Paper",
+                    "page_count": 3,
+                },
+                "flow_run_id": "flow-run-1",
+                "progress": {
+                    "total_candidates": 2,
+                    "reviewed_candidates": 0,
+                    "pending_candidates": 2,
+                    "accepted_candidates": 0,
+                    "rejected_candidates": 0,
+                    "manual_candidates": 0,
+                },
+                "validation": None,
+                "current_candidate_id": None,
+                "prepared_at": "2026-06-06T00:00:00Z",
+                "last_worked_at": None,
+                "warnings": [],
+                "tags": [],
+            }
+        ),
+    )
+
+    response = await supervisor_context_tools.inspect_curation_context(
+        scope="review_session",
+        review_session_id=str(session_id),
+        detail="inventory",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "ok"
+    assert payload["scope"] == "review_session"
+    assert payload["refs"][0]["review_session_id"] == str(session_id)
+    assert payload["results"][0]["available_details"] == [
+        "inventory",
+        "summary",
+        "candidates",
+        "objects",
+        "evidence",
+        "validation_findings",
+        "field",
+    ]
+    assert db.closed is True
+
+
+@pytest.mark.asyncio
+async def test_inspect_curation_context_review_session_allows_assigned_curator(monkeypatch):
+    session_id = uuid4()
+    session_row = SimpleNamespace(
+        id=session_id,
+        created_by_id="user-2",
+        assigned_curator_id="user-1",
+        flow_run_id="flow-run-1",
+    )
+    db = _FakeContextDb(row=session_row, scalar_value=False)
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "SessionLocal", lambda: db)
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "get_session_detail",
+        lambda _db, _session_id: _review_session_detail_payload(session_id),
+    )
+
+    response = await supervisor_context_tools.inspect_curation_context(
+        scope="review_session",
+        review_session_id=str(session_id),
+        detail="inventory",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "ok"
+    assert payload["refs"][0]["review_session_id"] == str(session_id)
+
+
+@pytest.mark.asyncio
+async def test_inspect_curation_context_review_session_rejects_unauthorized_without_details(monkeypatch):
+    session_id = uuid4()
+    session_row = SimpleNamespace(
+        id=session_id,
+        created_by_id="user-2",
+        assigned_curator_id=None,
+        flow_run_id="flow-run-1",
+    )
+    db = _FakeContextDb(row=session_row, scalar_value=False)
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "SessionLocal", lambda: db)
+
+    response = await supervisor_context_tools.inspect_curation_context(
+        scope="review_session",
+        review_session_id=str(session_id),
+        detail="inventory",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "unauthorized_context"
+    assert "review_session_id" not in payload
+    assert "results" not in payload
+
+
+@pytest.mark.asyncio
+async def test_inspect_curation_context_review_session_rejects_missing_without_details(monkeypatch):
+    session_id = uuid4()
+    db = _FakeContextDb(row=None)
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "SessionLocal", lambda: db)
+
+    response = await supervisor_context_tools.inspect_curation_context(
+        scope="review_session",
+        review_session_id=str(session_id),
+        detail="inventory",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "unauthorized_context"
+    assert "review_session_id" not in payload
+    assert "results" not in payload
+
+
+def _review_session_detail_payload(session_id, *, flow_run_id="flow-run-1"):
+    return _DumpablePayload(
+        {
+            "session_id": str(session_id),
+            "status": "in_review",
+            "adapter": {"adapter_key": "gene"},
+            "document": {"document_id": "document-1", "title": "Paper"},
+            "flow_run_id": flow_run_id,
+            "progress": {"total_candidates": 2},
+            "validation": {"status": "needs_review"},
+            "current_candidate_id": "cand-1",
+            "prepared_at": "2026-06-06T00:00:00Z",
+            "last_worked_at": None,
+            "warnings": [],
+            "tags": ["flow"],
+            "notes": "Curator note " + ("x" * 1000),
+            "extraction_results": [],
+        }
+    )
+
+
+def _review_workspace_payload(session_id):
+    return _DumpablePayload(
+        {
+            "workspace": {
+                "candidates": [
+                    {
+                        "candidate_id": "cand-1",
+                        "session_id": str(session_id),
+                        "projection_ref": {
+                            "envelope_id": "env-1",
+                            "object_id": "obj-1",
+                        },
+                        "normalized_payload": {
+                            "object_type": "Gene",
+                            "symbol": "BRCA1",
+                            "large_note": "x" * 1000,
+                        },
+                        "status": "accepted",
+                        "adapter_key": "gene",
+                        "display_label": "BRCA1",
+                        "secondary_label": "TEST:1",
+                        "evidence_anchors": [
+                            {
+                                "evidence_record_id": "ev-1",
+                                "verified_quote": "BRCA1 was found.",
+                                "large_payload": "y" * 1000,
+                            }
+                        ],
+                        "validation_summary_projections": [
+                            {
+                                "finding_id": "vf-1",
+                                "status": "resolved",
+                                "message": "Identifier resolved.",
+                                "large_payload": "z" * 1000,
+                            }
+                        ],
+                    },
+                    {
+                        "candidate_id": "cand-2",
+                        "session_id": str(session_id),
+                        "projection_ref": {
+                            "envelope_id": "env-1",
+                            "object_id": "obj-2",
+                        },
+                        "normalized_payload": {
+                            "object_type": "Gene",
+                            "symbol": "TP53",
+                        },
+                        "status": "pending",
+                        "adapter_key": "gene",
+                        "display_label": "TP53",
+                        "secondary_label": "TEST:2",
+                        "evidence_anchor_projections": [
+                            {"evidence_record_id": "ev-2", "quote": "TP53 quote."}
+                        ],
+                        "validation_summary_projections": [],
+                    },
+                ]
+            }
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_inspect_curation_context_review_session_candidates_paginate_and_filter(monkeypatch):
+    session_id = uuid4()
+    session_row = SimpleNamespace(
+        id=session_id,
+        created_by_id="user-1",
+        assigned_curator_id=None,
+        flow_run_id="flow-run-1",
+    )
+    db = _FakeContextDb(row=session_row)
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "SessionLocal", lambda: db)
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "get_session_detail",
+        lambda _db, _session_id: _review_session_detail_payload(session_id),
+    )
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "get_session_workspace",
+        lambda _db, _session_id: _review_workspace_payload(session_id),
+    )
+
+    first_response = await supervisor_context_tools.inspect_curation_context(
+        scope="review_session",
+        review_session_id=str(session_id),
+        detail="candidates",
+        limit=1,
+    )
+    filtered_response = await supervisor_context_tools.inspect_curation_context(
+        scope="review_session",
+        review_session_id=str(session_id),
+        detail="objects",
+        object_ref="obj-2",
+    )
+
+    first_payload = json.loads(first_response)
+    filtered_payload = json.loads(filtered_response)
+    assert first_payload["status"] == "ok"
+    assert first_payload["total_count"] == 2
+    assert first_payload["truncated"] is True
+    assert first_payload["next_cursor"] == "1"
+    assert first_payload["results"][0]["candidate_id"] == "cand-1"
+    assert filtered_payload["results"] == [
+        {
+            "candidate_id": "cand-2",
+            "session_id": str(session_id),
+            "envelope_id": "env-1",
+            "object_id": "obj-2",
+            "object_type": "Gene",
+            "status": "pending",
+            "adapter_key": "gene",
+            "display_label": "TP53",
+            "secondary_label": "TEST:2",
+            "fields": {"object_type": "Gene", "symbol": "TP53"},
+            "evidence_count": 1,
+            "validation_finding_count": 0,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_inspect_curation_context_review_session_evidence_validation_and_field(monkeypatch):
+    session_id = uuid4()
+    session_row = SimpleNamespace(
+        id=session_id,
+        created_by_id="user-1",
+        assigned_curator_id=None,
+        flow_run_id="flow-run-1",
+    )
+    db = _FakeContextDb(row=session_row)
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "SessionLocal", lambda: db)
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "get_session_detail",
+        lambda _db, _session_id: _review_session_detail_payload(session_id),
+    )
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "get_session_workspace",
+        lambda _db, _session_id: _review_workspace_payload(session_id),
+    )
+
+    evidence_response = await supervisor_context_tools.inspect_curation_context(
+        scope="review_session",
+        review_session_id=str(session_id),
+        detail="evidence",
+        object_ref="cand-1",
+    )
+    validation_response = await supervisor_context_tools.inspect_curation_context(
+        scope="review_session",
+        review_session_id=str(session_id),
+        detail="validation_findings",
+        object_ref="cand-1",
+    )
+    field_missing_response = await supervisor_context_tools.inspect_curation_context(
+        scope="review_session",
+        review_session_id=str(session_id),
+        detail="field",
+    )
+    field_response = await supervisor_context_tools.inspect_curation_context(
+        scope="review_session",
+        review_session_id=str(session_id),
+        detail="field",
+        object_ref="cand-1",
+        field_path="normalized_payload.large_note",
+    )
+
+    evidence_payload = json.loads(evidence_response)
+    validation_payload = json.loads(validation_response)
+    field_missing_payload = json.loads(field_missing_response)
+    field_payload = json.loads(field_response)
+    assert evidence_payload["results"] == [
+        {
+            "evidence_record_id": "ev-1",
+            "verified_quote": "BRCA1 was found.",
+            "candidate_id": "cand-1",
+        }
+    ]
+    assert validation_payload["results"][0]["candidate_id"] == "cand-1"
+    assert validation_payload["results"][0]["status"] == "resolved"
+    assert "z" * 600 not in json.dumps(validation_payload)
+    assert field_missing_payload["status"] == "invalid_request"
+    assert field_payload["results"][0]["candidate_id"] == "cand-1"
+    assert field_payload["results"][0]["value"].endswith("...")
+    assert "x" * 600 not in json.dumps(field_payload)
+
+
+@pytest.mark.asyncio
+async def test_inspect_curation_context_review_session_linked_flow_authorization(monkeypatch):
+    session_id = uuid4()
+    session_row = SimpleNamespace(
+        id=session_id,
+        created_by_id="other-user",
+        assigned_curator_id=None,
+        flow_run_id="flow-run-1",
+    )
+    db = _FakeContextDb(row=session_row, scalar_value=True)
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "SessionLocal", lambda: db)
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "get_session_detail",
+        lambda _db, _session_id: _review_session_detail_payload(session_id),
+    )
+
+    response = await supervisor_context_tools.inspect_curation_context(
+        scope="review_session",
+        review_session_id=str(session_id),
+        flow_run_id="flow-run-1",
+        detail="inventory",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "ok"
+    assert payload["refs"][0]["review_session_id"] == str(session_id)
+
+
+@pytest.mark.asyncio
+async def test_inspect_curation_context_file_metadata_enforces_owner(monkeypatch):
+    file_id = uuid4()
+    file_row = SimpleNamespace(
+        id=file_id,
+        filename="results.csv",
+        file_type="csv",
+        file_size=42,
+        curator_id="user-1",
+        session_id="session-1",
+        trace_id="a" * 32,
+        agent_name="csv_formatter",
+        generation_model="configured-model",
+        download_count=0,
+        last_download_at=None,
+        created_at="2026-06-06T00:00:00Z",
+        file_metadata={"projection": "artifact"},
+    )
+    db = _FakeContextDb(row=file_row)
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "SessionLocal", lambda: db)
+
+    response = await supervisor_context_tools.inspect_curation_context(
+        scope="file",
+        file_id=str(file_id),
+        detail="metadata",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "ok"
+    assert payload["results"][0]["file_id"] == str(file_id)
+    assert payload["results"][0]["download_url"] == f"/api/files/{file_id}/download"
+
+
+@pytest.mark.asyncio
+async def test_inspect_curation_context_file_rejects_unauthorized_without_details(monkeypatch):
+    file_id = uuid4()
+    file_row = SimpleNamespace(
+        id=file_id,
+        filename="hidden.csv",
+        file_type="csv",
+        file_size=42,
+        curator_id="user-2",
+        session_id="session-2",
+        trace_id=None,
+        agent_name="csv_formatter",
+        generation_model=None,
+        download_count=0,
+        last_download_at=None,
+        created_at="2026-06-06T00:00:00Z",
+        file_metadata={},
+    )
+    db = _FakeContextDb(row=file_row)
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "SessionLocal", lambda: db)
+
+    response = await supervisor_context_tools.inspect_curation_context(
+        scope="file",
+        file_id=str(file_id),
+        detail="metadata",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "unauthorized_context"
+    assert "hidden.csv" not in json.dumps(payload)
+    assert "results" not in payload
+
+
+@pytest.mark.asyncio
+async def test_inspect_curation_context_file_rejects_missing_without_details(monkeypatch):
+    file_id = uuid4()
+    db = _FakeContextDb(row=None)
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "SessionLocal", lambda: db)
+
+    response = await supervisor_context_tools.inspect_curation_context(
+        scope="file",
+        file_id=str(file_id),
+        detail="metadata",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "unauthorized_context"
+    assert "file_id" not in payload
+    assert "results" not in payload
+
+
+@pytest.mark.asyncio
+async def test_inspect_curation_context_file_schema_is_bounded_under_storage(
+    monkeypatch,
+    tmp_path,
+):
+    file_id = uuid4()
+    storage_base = tmp_path / "storage"
+    storage_base.mkdir()
+    file_path = storage_base / "results.csv"
+    file_path.write_text("symbol,status\nBRCA1,validated\nTP53,needs_review\n", encoding="utf-8")
+    file_row = SimpleNamespace(
+        id=file_id,
+        filename="results.csv",
+        file_type="csv",
+        file_size=file_path.stat().st_size,
+        curator_id="user-1",
+        session_id="session-1",
+        trace_id="a" * 32,
+        agent_name="csv_formatter",
+        generation_model=None,
+        download_count=0,
+        last_download_at=None,
+        created_at="2026-06-06T00:00:00Z",
+        file_metadata={},
+        file_path=str(file_path),
+    )
+    db = _FakeContextDb(row=file_row)
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "SessionLocal", lambda: db)
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "FileOutputStorageService",
+        lambda: SimpleNamespace(base_path=storage_base),
+    )
+
+    response = await supervisor_context_tools.inspect_curation_context(
+        scope="file",
+        file_id=str(file_id),
+        detail="schema",
+        limit=1,
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "ok"
+    assert payload["results"][0]["headers"] == ["symbol", "status"]
+    assert payload["results"][0]["preview_rows"] == [
+        {"symbol": "BRCA1", "status": "validated"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_inspect_curation_context_tsv_file_preview_is_bounded(
+    monkeypatch,
+    tmp_path,
+):
+    file_id = uuid4()
+    storage_base = tmp_path / "storage"
+    storage_base.mkdir()
+    file_path = storage_base / "results.tsv"
+    file_path.write_text("symbol\tstatus\nBRCA1\tvalidated\nTP53\tneeds_review\n", encoding="utf-8")
+    file_row = SimpleNamespace(
+        id=file_id,
+        filename="results.tsv",
+        file_type="tsv",
+        file_size=file_path.stat().st_size,
+        curator_id="user-1",
+        session_id="session-1",
+        trace_id="a" * 32,
+        agent_name="tsv_formatter",
+        generation_model=None,
+        download_count=0,
+        last_download_at=None,
+        created_at="2026-06-06T00:00:00Z",
+        file_metadata={},
+        file_path=str(file_path),
+    )
+    db = _FakeContextDb(row=file_row)
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "SessionLocal", lambda: db)
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "FileOutputStorageService",
+        lambda: SimpleNamespace(base_path=storage_base),
+    )
+
+    response = await supervisor_context_tools.inspect_curation_context(
+        scope="file",
+        file_id=str(file_id),
+        detail="preview",
+        limit=1,
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "ok"
+    assert payload["results"][0]["headers"] == ["symbol", "status"]
+    assert payload["results"][0]["rows"] == [{"symbol": "BRCA1", "status": "validated"}]
+
+
+@pytest.mark.asyncio
+async def test_inspect_curation_context_ragged_csv_preview_is_bounded(
+    monkeypatch,
+    tmp_path,
+):
+    file_id = uuid4()
+    storage_base = tmp_path / "storage"
+    storage_base.mkdir()
+    file_path = storage_base / "results.csv"
+    long_extra = "x" * 1000
+    file_path.write_text(
+        f"symbol,status\nBRCA1,validated,{long_extra}\n",
+        encoding="utf-8",
+    )
+    file_row = SimpleNamespace(
+        id=file_id,
+        filename="results.csv",
+        file_type="csv",
+        file_size=file_path.stat().st_size,
+        curator_id="user-1",
+        session_id="session-1",
+        trace_id="a" * 32,
+        agent_name="csv_formatter",
+        generation_model=None,
+        download_count=0,
+        last_download_at=None,
+        created_at="2026-06-06T00:00:00Z",
+        file_metadata={},
+        file_path=str(file_path),
+    )
+    db = _FakeContextDb(row=file_row)
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "SessionLocal", lambda: db)
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "FileOutputStorageService",
+        lambda: SimpleNamespace(base_path=storage_base),
+    )
+
+    response = await supervisor_context_tools.inspect_curation_context(
+        scope="file",
+        file_id=str(file_id),
+        detail="preview",
+        limit=1,
+    )
+
+    payload = json.loads(response)
+    row = payload["results"][0]["rows"][0]
+    assert payload["status"] == "ok"
+    assert row["symbol"] == "BRCA1"
+    assert row["status"] == "validated"
+    assert row["_extra_values"][0].endswith("...")
+    assert "x" * 600 not in json.dumps(payload)
+
+
+@pytest.mark.asyncio
+async def test_inspect_curation_context_json_file_preview_and_field_are_bounded(
+    monkeypatch,
+    tmp_path,
+):
+    file_id = uuid4()
+    storage_base = tmp_path / "storage"
+    storage_base.mkdir()
+    file_path = storage_base / "results.json"
+    file_path.write_text(
+        json.dumps(
+            [
+                {
+                    "gene": "BRCA1",
+                    "status": "validated",
+                    "note": "x" * 1000,
+                },
+                {"gene": "TP53", "status": "needs_review"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    file_row = SimpleNamespace(
+        id=file_id,
+        filename="results.json",
+        file_type="json",
+        file_size=file_path.stat().st_size,
+        curator_id="user-1",
+        session_id="session-1",
+        trace_id="a" * 32,
+        agent_name="json_formatter",
+        generation_model=None,
+        download_count=0,
+        last_download_at=None,
+        created_at="2026-06-06T00:00:00Z",
+        file_metadata={},
+        file_path=str(file_path),
+    )
+    db = _FakeContextDb(row=file_row)
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "SessionLocal", lambda: db)
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "FileOutputStorageService",
+        lambda: SimpleNamespace(base_path=storage_base),
+    )
+
+    preview_response = await supervisor_context_tools.inspect_curation_context(
+        scope="file",
+        file_id=str(file_id),
+        detail="preview",
+        limit=1,
+    )
+    field_response = await supervisor_context_tools.inspect_curation_context(
+        scope="file",
+        file_id=str(file_id),
+        detail="field",
+        field_path="0.note",
+    )
+
+    preview_payload = json.loads(preview_response)
+    field_payload = json.loads(field_response)
+    assert preview_payload["status"] == "ok"
+    assert preview_payload["results"][0]["preview"][0]["gene"] == "BRCA1"
+    assert len(preview_payload["results"][0]["preview"]) == 2
+    assert preview_payload["results"][0]["preview"][1]["truncated_count"] == 1
+    assert field_payload["results"][0]["value"].endswith("...")
+    assert "x" * 600 not in json.dumps(field_payload)
+
+
+@pytest.mark.asyncio
+async def test_inspect_curation_context_malformed_json_file_returns_bounded_error(
+    monkeypatch,
+    tmp_path,
+):
+    file_id = uuid4()
+    storage_base = tmp_path / "storage"
+    storage_base.mkdir()
+    file_path = storage_base / "broken.json"
+    file_path.write_text('{"gene": "BRCA1", "note": "' + ("x" * 1000), encoding="utf-8")
+    file_row = SimpleNamespace(
+        id=file_id,
+        filename="broken.json",
+        file_type="json",
+        file_size=file_path.stat().st_size,
+        curator_id="user-1",
+        session_id="session-1",
+        trace_id="a" * 32,
+        agent_name="json_formatter",
+        generation_model=None,
+        download_count=0,
+        last_download_at=None,
+        created_at="2026-06-06T00:00:00Z",
+        file_metadata={},
+        file_path=str(file_path),
+    )
+    db = _FakeContextDb(row=file_row)
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "SessionLocal", lambda: db)
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "FileOutputStorageService",
+        lambda: SimpleNamespace(base_path=storage_base),
+    )
+
+    response = await supervisor_context_tools.inspect_curation_context(
+        scope="file",
+        file_id=str(file_id),
+        detail="preview",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "ok"
+    assert payload["results"][0]["error"].startswith("Malformed JSON:")
+    assert "x" * 600 not in json.dumps(payload)
+
+
+@pytest.mark.asyncio
+async def test_inspect_curation_context_large_json_file_refuses_bounded_preview(
+    monkeypatch,
+    tmp_path,
+):
+    file_id = uuid4()
+    storage_base = tmp_path / "storage"
+    storage_base.mkdir()
+    file_path = storage_base / "large.json"
+    file_path.write_text(
+        json.dumps(
+            [
+                {
+                    "gene": "BRCA1",
+                    "note": "x" * (supervisor_context_tools._MAX_FILE_PREVIEW_BYTES + 100),
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    file_row = SimpleNamespace(
+        id=file_id,
+        filename="large.json",
+        file_type="json",
+        file_size=file_path.stat().st_size,
+        curator_id="user-1",
+        session_id="session-1",
+        trace_id="a" * 32,
+        agent_name="json_formatter",
+        generation_model=None,
+        download_count=0,
+        last_download_at=None,
+        created_at="2026-06-06T00:00:00Z",
+        file_metadata={},
+        file_path=str(file_path),
+    )
+    db = _FakeContextDb(row=file_row)
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "SessionLocal", lambda: db)
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "FileOutputStorageService",
+        lambda: SimpleNamespace(base_path=storage_base),
+    )
+
+    response = await supervisor_context_tools.inspect_curation_context(
+        scope="file",
+        file_id=str(file_id),
+        detail="preview",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "ok"
+    assert "too large" in payload["results"][0]["error"]
+    assert payload["results"][0]["truncated"] is True
+    assert "x" * 600 not in json.dumps(payload)
+
+
+@pytest.mark.asyncio
+async def test_inspect_curation_context_file_preview_rejects_path_escape(
+    monkeypatch,
+    tmp_path,
+):
+    file_id = uuid4()
+    storage_base = tmp_path / "storage"
+    storage_base.mkdir()
+    outside_path = tmp_path / "outside.csv"
+    outside_path.write_text("secret\nleak\n", encoding="utf-8")
+    symlink_path = storage_base / "linked-outside.csv"
+    symlink_path.symlink_to(outside_path)
+    file_row = SimpleNamespace(
+        id=file_id,
+        filename="linked-outside.csv",
+        file_type="csv",
+        file_size=outside_path.stat().st_size,
+        curator_id="user-1",
+        session_id="session-1",
+        trace_id="a" * 32,
+        agent_name="csv_formatter",
+        generation_model=None,
+        download_count=0,
+        last_download_at=None,
+        created_at="2026-06-06T00:00:00Z",
+        file_metadata={},
+        file_path=str(symlink_path),
+    )
+    db = _FakeContextDb(row=file_row)
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "SessionLocal", lambda: db)
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "FileOutputStorageService",
+        lambda: SimpleNamespace(base_path=storage_base),
+    )
+
+    response = await supervisor_context_tools.inspect_curation_context(
+        scope="file",
+        file_id=str(file_id),
+        detail="preview",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "unavailable"
+    assert "secret" not in json.dumps(payload)
+
+
+@pytest.mark.asyncio
+async def test_inspect_curation_context_session_files_preserves_mixed_curator_policy(monkeypatch):
+    user_file = SimpleNamespace(
+        id=uuid4(),
+        filename="mine.csv",
+        file_type="csv",
+        file_size=12,
+        curator_id="user-1",
+        session_id="session-1",
+        trace_id=None,
+        agent_name="csv_formatter",
+        generation_model=None,
+        download_count=0,
+        last_download_at=None,
+        created_at=datetime(2026, 6, 6, tzinfo=timezone.utc),
+        file_metadata={},
+    )
+    other_file = SimpleNamespace(
+        id=uuid4(),
+        filename="other.csv",
+        file_type="csv",
+        file_size=12,
+        curator_id="user-2",
+        session_id="session-1",
+        trace_id=None,
+        agent_name="csv_formatter",
+        generation_model=None,
+        download_count=0,
+        last_download_at=None,
+        created_at=datetime(2026, 6, 6, tzinfo=timezone.utc),
+        file_metadata={},
+    )
+    db = _FakeSessionFilesDb(user_files=[user_file], other_user_file=other_file)
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "SessionLocal", lambda: db)
+
+    response = await supervisor_context_tools.inspect_curation_context(
+        scope="session_files",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "unauthorized_context"
+    assert "mixed-curator" in payload["message"]
+    assert "mine.csv" not in json.dumps(payload)
+
+
+@pytest.mark.asyncio
+async def test_inspect_curation_context_session_files_authorizes_review_session(monkeypatch):
+    session_id = uuid4()
+    session_row = SimpleNamespace(
+        id=session_id,
+        created_by_id="user-1",
+        assigned_curator_id=None,
+        flow_run_id="flow-run-1",
+    )
+    user_file = SimpleNamespace(
+        id=uuid4(),
+        filename="review-output.csv",
+        file_type="csv",
+        file_size=12,
+        curator_id="user-1",
+        session_id=str(session_id),
+        trace_id=None,
+        agent_name="csv_formatter",
+        generation_model=None,
+        download_count=0,
+        last_download_at=None,
+        created_at=datetime(2026, 6, 6, tzinfo=timezone.utc),
+        file_metadata={},
+    )
+    db = _FakeSessionFilesDb(row=session_row, user_files=[user_file])
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "SessionLocal", lambda: db)
+
+    response = await supervisor_context_tools.inspect_curation_context(
+        scope="session_files",
+        review_session_id=str(session_id),
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "ok"
+    assert payload["refs"][0]["review_session_id"] == str(session_id)
+    assert payload["results"][0]["filename"] == "review-output.csv"
 
 
 @pytest.mark.asyncio
@@ -1083,6 +2088,83 @@ def test_create_supervisor_agent_without_document_adds_unavailable_note(monkeypa
     assert captured_langfuse["metadata"]["specialist_count"] == len(created.tools)
 
 
+@pytest.mark.asyncio
+async def test_ordinary_non_flow_export_to_file_uses_standard_csv_save_tool(monkeypatch):
+    captured_save = {}
+
+    monkeypatch.setattr(
+        "src.lib.openai_agents.config.get_agent_config",
+        lambda _name: SimpleNamespace(model="gpt-4o", temperature=None, reasoning=None),
+    )
+    monkeypatch.setattr("src.lib.openai_agents.config.log_agent_config", lambda *_a, **_k: None)
+    monkeypatch.setattr("src.lib.openai_agents.config.resolve_model_provider", lambda _model: "openai")
+    monkeypatch.setattr(
+        "src.lib.openai_agents.config.get_model_for_agent",
+        lambda model, provider_override=None: model,
+    )
+    monkeypatch.setattr(supervisor_agent, "_build_model_settings", lambda **_kwargs: None)
+    monkeypatch.setattr(supervisor_agent, "_get_supervisor_specialist_specs", lambda: [])
+    _patch_supervisor_prompt_bundle(monkeypatch, version=17)
+    monkeypatch.setattr(supervisor_agent, "set_pending_prompts", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "src.lib.openai_agents.langfuse_client.log_agent_config",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "function_tool",
+        lambda **decorator_kwargs: (
+            lambda fn: (
+                setattr(fn, "name", decorator_kwargs.get("name_override", fn.__name__)),
+                fn,
+            )[1]
+        ),
+    )
+    monkeypatch.setattr(supervisor_agent, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+
+    async def _fake_save_csv_impl(data_json, filename, columns=None):
+        captured_save.update(
+            {
+                "data_json": data_json,
+                "filename": filename,
+                "columns": columns,
+            }
+        )
+        return {
+            "file_id": "file-chat-csv",
+            "filename": "chat_export.csv",
+            "format": "csv",
+            "download_url": "/api/files/file-chat-csv/download",
+        }
+
+    monkeypatch.setattr(
+        "src.lib.openai_agents.tools.file_output_tools._save_csv_impl",
+        _fake_save_csv_impl,
+    )
+
+    created = supervisor_agent.create_supervisor_agent(document_id=None, user_id=None)
+    export_tool = next(
+        tool
+        for tool in created.tools
+        if getattr(tool, "name", "") == "export_to_file"
+    )
+
+    response = await export_tool(
+        format_type="csv",
+        data='[{"gene":"BRCA1","status":"validated"}]',
+        filename_hint="chat_export",
+    )
+
+    payload = json.loads(response)
+    assert captured_save == {
+        "data_json": '[{"gene":"BRCA1","status":"validated"}]',
+        "filename": "chat_export",
+        "columns": None,
+    }
+    assert payload["file_id"] == "file-chat-csv"
+    assert payload["download_url"].endswith("/download")
+
+
 def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(monkeypatch):
     captured_langfuse = {}
 
@@ -1130,6 +2212,14 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
         "inspect_chat_traces",
         "export_to_file",
     ]
+    inspect_tool = next(
+        tool
+        for tool in created.tools
+        if getattr(tool, "name", "") == "inspect_curation_context"
+    )
+    inspect_params = inspect.signature(inspect_tool).parameters
+    assert "review_session_id" in inspect_params
+    assert "file_id" in inspect_params
     assert captured_langfuse["metadata"]["specialist_count"] == 4
 
 

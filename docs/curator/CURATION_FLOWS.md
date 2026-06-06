@@ -245,7 +245,7 @@ Understanding how flows run helps you build effective workflows:
 1. **Initial Instructions** provide the starting task description and context
 2. A supervisor agent receives all steps and executes them **sequentially** in the order defined by your connections
 3. Each step runs with the flow task, document context, selected agent, and node custom instructions; prior step artifacts stay saved separately for review/export lookup
-4. When a step produces a final output (e.g., a file formatter generates a CSV, or Chat Output displays results), the flow **terminates**
+4. When an output step projects completed artifacts into a final result (e.g., a downloadable CSV/TSV/JSON file, or Chat Output displays a result), the flow **terminates**
 5. Custom instructions for each step are applied with highest priority, overriding the agent's default behavior for that step (see [How Prompts Layer Together](#how-prompts-layer-together) above)
 6. Domain-pack extraction steps save envelope objects and schedule automatic validation according to the node's validation attachments
 
@@ -265,7 +265,11 @@ The flow executes and results appear based on your output agent (chat message or
 
 ## Output Options
 
-Flows can output results in different ways. Choose the output agent that fits your needs.
+Flows can output results in different ways. Choose the output agent that fits
+your needs. Output agents project the structured artifacts produced by earlier
+flow steps; their custom instructions can shape presentation, such as column
+names, column order, filters, sorting, or whether to show object, evidence, or
+validation rows.
 
 ### Chat Output Agent
 
@@ -278,7 +282,7 @@ Sends results directly to the chat interface.
 
 ### CSV File Formatter
 
-Creates comma-separated value files for spreadsheet applications.
+Creates comma-separated value files from completed flow artifacts for spreadsheet applications.
 
 **Use cases:**
 - Import into Excel or Google Sheets
@@ -287,7 +291,7 @@ Creates comma-separated value files for spreadsheet applications.
 
 ### TSV File Formatter
 
-Creates tab-separated value files, preferred by many databases.
+Creates tab-separated value files from completed flow artifacts, preferred by many databases.
 
 **Use cases:**
 - Database import
@@ -296,7 +300,7 @@ Creates tab-separated value files, preferred by many databases.
 
 ### JSON File Formatter
 
-Creates structured JSON files that preserve complex nested data.
+Creates structured JSON files from completed flow artifacts that preserve complex nested data.
 
 **Use cases:**
 - Data with hierarchical structure
@@ -408,6 +412,7 @@ Use names like "C. elegans Expression to WBbt CSV" rather than "Flow 1".
 
 - **Check output agent:** Make sure you have Chat Output or a File Formatter connected
 - **Verify connections:** The output agent must be connected to receive data
+- **Check upstream artifacts:** The output agent needs a completed structured extraction or validation artifact to project
 
 ### Wrong Data Extracted
 
@@ -428,7 +433,7 @@ Generated files are available during your session. Download files you want to ke
 ### What's the difference between Chat Output and File Formatters?
 
 - **Chat Output:** Shows results in the chat for review and discussion
-- **File Formatters:** Generate downloadable files (CSV, TSV, JSON)
+- **File Formatters:** Generate downloadable files (CSV, TSV, JSON) from completed flow artifacts
 
 Use Chat Output first to review results, then switch to a File Formatter when ready to export.
 

@@ -14,7 +14,7 @@ content: |
   </goal>
 
   <scope>
-  You validate ontology-backed CURIE and label fields across any ontology family the request names -- phenotype, evidence, taxon, anatomy, life stage, GO, disease, condition, and the MMO/ZECO/XCO families among them. Read these from `selected_inputs` and the requested `target.field_path` and `target.expected_fields`:
+  You validate ontology-backed CURIE and label fields across any ontology family the request names -- phenotype, evidence, taxon, anatomy, life stage, GO, disease, condition, and the MMO/ZECO/XCO families among them. Read these from `selected_inputs` and `target.input_values` when present:
   - `curie`: ontology CURIE supplied by the payload.
   - `label` or `name`: free-text term label supplied by the payload.
   - `terms`: ordered repeated ontology term inputs for one array-valued field. Each item may be a CURIE string, a label string, or an object with `curie`, `label`, or `name`.

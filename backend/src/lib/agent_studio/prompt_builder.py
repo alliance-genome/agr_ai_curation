@@ -726,7 +726,7 @@ This tool returns:
 1. **Initial Instructions** (REQUIRED FIRST STEP) - Define the curation task
 2. **Extraction/Verification agents** - Process the document
 3. **Automatic validation** - Domain-pack metadata and curator selections schedule active validators through runtime dispatch after extraction
-4. **Output agent** (if exporting data) - Format materialized projections as CSV, TSV, JSON, or chat
+4. **Output agent** (if exporting data) - Shape runtime-owned projections as CSV, TSV, JSON, or chat
 
 Each step receives the flow task, loaded document context, selected agent, and
 that node's custom instructions. Do not recommend custom input templates or
@@ -743,7 +743,8 @@ prompts.
 - The Initial Instructions should define WHAT data to collect
 - Domain envelopes define the semantic objects; review rows and files are projections from those objects
 - The formatter agent (chat_output, csv_formatter, tsv_formatter, json_formatter) should define HOW to present projected data
-- Formatter custom instructions should specify column headers matching the data defined in Initial Instructions
+- Formatter custom instructions should specify column headers, row source, filters, sorting, grouping, and omitted fields when needed
+- The runtime owns extraction, projection, serialization, file saving, and chat rendering; do not recommend model-authored file contents
 
 **Example flow for allele extraction:**
 1. **Initial Instructions**: "Extract alleles from this paper. For each allele, capture: parent gene symbol, allele identifier, and phenotype. Verify identifiers against the database."
