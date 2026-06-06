@@ -8,8 +8,11 @@ import yaml
 
 
 WORKSPACE_ROOT = Path("/workspace")
+if not (WORKSPACE_ROOT / "docker-compose.production.yml").exists():
+    WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
 
 COMPOSE_PATH = WORKSPACE_ROOT / "docker-compose.production.yml"
+DEV_COMPOSE_PATH = WORKSPACE_ROOT / "docker-compose.yml"
 ENV_TEMPLATE_PATH = WORKSPACE_ROOT / "scripts/install/lib/templates/env.standalone"
 START_VERIFY_PATH = WORKSPACE_ROOT / "scripts/install/06_start_verify.sh"
 WEAVIATE_IMAGE = (
@@ -25,6 +28,10 @@ EXPECTED_DEFAULT_IMAGE_TAG = "latest"
 
 def _load_compose() -> dict:
     return yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))
+
+
+def _load_dev_compose() -> dict:
+    return yaml.safe_load(DEV_COMPOSE_PATH.read_text(encoding="utf-8"))
 
 
 def _bind_targets(service: dict) -> dict[str, str]:
@@ -61,6 +68,39 @@ def test_production_compose_uses_published_app_images_without_local_builds():
     assert "${TRACE_REVIEW_BACKEND_IMAGE_TAG:-" in trace_review_backend["image"]
     assert services["weaviate"]["image"] == WEAVIATE_IMAGE
     assert services["minio"]["image"] == MINIO_IMAGE
+
+
+def test_dev_compose_trace_review_defaults_to_local_langfuse_bootstrap_keys():
+    compose = _load_dev_compose()
+    env_entries = compose["services"]["trace_review_backend"]["environment"]
+    env = dict(entry.split("=", 1) for entry in env_entries)
+
+    assert env["LANGFUSE_HOST"] == "${TRACE_REVIEW_LANGFUSE_HOST:-http://langfuse:3000}"
+    assert env["LANGFUSE_LOCAL_HOST"] == (
+        "${TRACE_REVIEW_LANGFUSE_LOCAL_HOST:-http://langfuse:3000}"
+    )
+    assert env["LANGFUSE_PUBLIC_KEY"] == (
+        "${TRACE_REVIEW_LANGFUSE_PUBLIC_KEY:-"
+        "${LANGFUSE_LOCAL_PUBLIC_KEY:-"
+        "${LANGFUSE_PUBLIC_KEY:-"
+        "${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:-pk-lf-local-public-key-default}}}}"
+    )
+    assert env["LANGFUSE_SECRET_KEY"] == (
+        "${TRACE_REVIEW_LANGFUSE_SECRET_KEY:-"
+        "${LANGFUSE_LOCAL_SECRET_KEY:-"
+        "${LANGFUSE_SECRET_KEY:-"
+        "${LANGFUSE_INIT_PROJECT_SECRET_KEY:-sk-lf-local-secret-key-default}}}}"
+    )
+    assert env["LANGFUSE_LOCAL_PUBLIC_KEY"] == (
+        "${TRACE_REVIEW_LANGFUSE_LOCAL_PUBLIC_KEY:-"
+        "${LANGFUSE_LOCAL_PUBLIC_KEY:-"
+        "${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:-pk-lf-local-public-key-default}}}"
+    )
+    assert env["LANGFUSE_LOCAL_SECRET_KEY"] == (
+        "${TRACE_REVIEW_LANGFUSE_LOCAL_SECRET_KEY:-"
+        "${LANGFUSE_LOCAL_SECRET_KEY:-"
+        "${LANGFUSE_INIT_PROJECT_SECRET_KEY:-sk-lf-local-secret-key-default}}}"
+    )
 
 
 def test_production_compose_fallback_image_tags_match_standalone_template_defaults():
