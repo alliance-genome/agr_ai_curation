@@ -696,7 +696,7 @@ function FieldValidationSlot({
                   : theme.palette.info.light
 
             return {
-              color: accentTextColor,
+              color: 'text.secondary',
               maxWidth: '100%',
               '& summary': {
                 alignItems: 'center',
@@ -752,17 +752,10 @@ function FieldValidationSlot({
                   : accentSeverity === 'warning'
                     ? theme.palette.warning.main
                     : theme.palette.info.main
-              const accentTextColor = accentSeverity === 'success'
-                ? theme.palette.success.light
-                : accentSeverity === 'error'
-                  ? theme.palette.error.light
-                  : accentSeverity === 'warning'
-                    ? theme.palette.warning.light
-                    : theme.palette.info.light
 
               return {
                 borderLeft: `2px solid ${alpha(accentColor, 0.55)}`,
-                color: accentTextColor,
+                color: theme.palette.text.secondary,
                 ml: 0.6,
                 mt: 0.55,
                 pl: 0.9,
