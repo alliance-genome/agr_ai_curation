@@ -6,6 +6,10 @@ import {
   Box,
   Button,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Stack,
   Typography,
 } from '@mui/material'
@@ -62,6 +66,8 @@ import {
 } from '@/features/curation/workspace/workspaceState'
 
 const WORKSPACE_STALE_TIME_MS = 60_000
+// Temporary curator-facing WIP gate. Set true to restore the existing SubmissionPreviewDialog path.
+const SUBMISSION_PREVIEW_ENABLED = false
 
 function queryErrorMessage(error: unknown): string | null {
   if (error === null || error === undefined) {
@@ -128,6 +134,7 @@ function CurationWorkspacePageContent({
   const [manualObjectDialogOpen, setManualObjectDialogOpen] = useState(false)
   const [manualObjectCreating, setManualObjectCreating] = useState(false)
   const [submissionDialogOpen, setSubmissionDialogOpen] = useState(false)
+  const [submissionWipDialogOpen, setSubmissionWipDialogOpen] = useState(false)
   const [tableError, setTableError] = useState<string | null>(null)
   const envelopeReviewRequests = useMemo(
     () => buildCurationWorkspaceEnvelopeReviewRowsRequests(workspace),
@@ -482,7 +489,13 @@ function CurationWorkspacePageContent({
                   queueRequest={queueNavigationState?.queueRequest}
                 />
                 <Button
-                  onClick={() => setSubmissionDialogOpen(true)}
+                  onClick={() => {
+                    if (SUBMISSION_PREVIEW_ENABLED) {
+                      setSubmissionDialogOpen(true)
+                      return
+                    }
+                    setSubmissionWipDialogOpen(true)
+                  }}
                   size="small"
                   variant="contained"
                   sx={{
@@ -531,14 +544,38 @@ function CurationWorkspacePageContent({
         )}
       />
 
-      <SubmissionPreviewDialog
-        candidates={candidates}
-        expectedEnvelopeRevisions={expectedEnvelopeRevisions}
-        onClose={() => setSubmissionDialogOpen(false)}
-        onSubmit={handleSubmitPreview}
-        open={submissionDialogOpen}
-        session={workspace.session}
-      />
+      {SUBMISSION_PREVIEW_ENABLED ? (
+        <SubmissionPreviewDialog
+          candidates={candidates}
+          expectedEnvelopeRevisions={expectedEnvelopeRevisions}
+          onClose={() => setSubmissionDialogOpen(false)}
+          onSubmit={handleSubmitPreview}
+          open={submissionDialogOpen}
+          session={workspace.session}
+        />
+      ) : null}
+
+      {/* Submission preview is intentionally disabled while the export/submit workflow is being rebuilt. */}
+      <Dialog
+        open={submissionWipDialogOpen}
+        onClose={() => setSubmissionWipDialogOpen(false)}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>Submission preview is in progress</DialogTitle>
+        <DialogContent dividers>
+          <Typography color="text.secondary" variant="body2">
+            Submission preview and submission actions are a work in progress and are disabled
+            at the moment. Curators can continue reviewing and validating objects here; the
+            submission workflow will be re-enabled when it is ready.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setSubmissionWipDialogOpen(false)} variant="contained">
+            OK
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <AddManualObjectDialog
         isCreating={manualObjectCreating}
