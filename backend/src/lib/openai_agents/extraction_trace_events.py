@@ -355,7 +355,9 @@ def _mirror_to_langfuse(event: dict[str, Any]) -> None:
             trace_context["parent_span_id"] = observation_id
         langfuse.create_event(
             name="extraction_trace_event",
-            input=event,
+            # Store mirrored app events as event output so Langfuse does not
+            # promote the latest event payload into the root trace input.
+            output=event,
             trace_context=trace_context,
         )
     except Exception:

@@ -142,3 +142,31 @@ def test_writer_logs_large_payload_sizes(tmp_path, monkeypatch, caplog):
     assert event["output_summary"]["size"]["string_chars"] == 2000
     assert event["payload_size_summary"]["output_json_chars"] >= 2000
     assert "Large extraction trace payload" in caplog.text
+
+
+def test_mirror_to_langfuse_uses_event_output_to_preserve_trace_input(monkeypatch):
+    captured = {}
+
+    class FakeLangfuse:
+        def create_event(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "src.lib.openai_agents.langfuse_client.get_langfuse",
+        lambda: FakeLangfuse(),
+    )
+
+    event = {
+        "trace_id": "trace-abc",
+        "observation_id": "span-abc",
+        "event_type": "runtime.run_finished",
+    }
+    events._mirror_to_langfuse(event)
+
+    assert captured["name"] == "extraction_trace_event"
+    assert "input" not in captured
+    assert captured["output"] == event
+    assert captured["trace_context"] == {
+        "trace_id": "trace-abc",
+        "parent_span_id": "span-abc",
+    }
