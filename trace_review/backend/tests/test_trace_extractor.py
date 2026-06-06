@@ -129,6 +129,23 @@ class TraceExtractorTests(unittest.TestCase):
         extractor.client.api.trace.get.assert_called_once_with("trace-1", fields=TRACE_FIELDS)
         self.assertEqual(trace["id"], "trace-1")
 
+    def test_get_trace_details_retries_without_fields_for_older_sdk(self):
+        extractor = self._make_extractor()
+        extractor.client.api.trace.get.side_effect = [
+            TypeError("TraceClient.get() got an unexpected keyword argument 'fields'"),
+            SimpleNamespace(dict=lambda: {"id": "trace-1"}),
+        ]
+
+        trace = extractor.get_trace_details("trace-1")
+
+        self.assertEqual(extractor.client.api.trace.get.call_count, 2)
+        self.assertEqual(
+            extractor.client.api.trace.get.call_args_list[0].kwargs,
+            {"fields": TRACE_FIELDS},
+        )
+        self.assertEqual(extractor.client.api.trace.get.call_args_list[1].args, ("trace-1",))
+        self.assertEqual(trace["id"], "trace-1")
+
     def test_list_traces_uses_metadata_filters(self):
         extractor = self._make_extractor()
         extractor.client.api.trace.list.return_value = SimpleNamespace(
@@ -174,6 +191,22 @@ class TraceExtractorTests(unittest.TestCase):
         second_call = extractor.client.api.observations.get_many.call_args_list[1]
         self.assertEqual(first_call.kwargs["cursor"], None)
         self.assertEqual(second_call.kwargs["cursor"], "next-cursor")
+
+    def test_get_observations_retries_without_fields_for_older_sdk(self):
+        extractor = self._make_extractor()
+        extractor.client.api.observations.get_many.side_effect = [
+            TypeError("ObservationsClient.get_many() got an unexpected keyword argument 'fields'"),
+            SimpleNamespace(data=[SimpleNamespace(dict=lambda: {"id": "obs-1"})]),
+        ]
+
+        observations = extractor.get_observations("trace-1", trace={"id": "trace-1"})
+
+        self.assertEqual(extractor.client.api.observations.get_many.call_count, 2)
+        first_call = extractor.client.api.observations.get_many.call_args_list[0]
+        second_call = extractor.client.api.observations.get_many.call_args_list[1]
+        self.assertEqual(first_call.kwargs["fields"], OBSERVATION_FIELDS)
+        self.assertNotIn("fields", second_call.kwargs)
+        self.assertEqual(observations, [{"id": "obs-1"}])
 
     def test_get_scores_falls_back_to_scores_client(self):
         extractor = self._make_extractor()

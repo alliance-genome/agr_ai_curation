@@ -70,7 +70,16 @@ class TraceExtractor:
 
     def get_trace_details(self, trace_id: str) -> Dict:
         """Get detailed trace information with all fields"""
-        trace = self.client.api.trace.get(trace_id, fields=TRACE_FIELDS)
+        try:
+            trace = self.client.api.trace.get(trace_id, fields=TRACE_FIELDS)
+        except TypeError as exc:
+            if "fields" not in str(exc):
+                raise
+            logger.debug(
+                "Langfuse trace.get() does not support fields; retrying without fields",
+                exc_info=True,
+            )
+            trace = self.client.api.trace.get(trace_id)
         return self._normalize_item(trace)
 
     def list_traces(
@@ -214,12 +223,26 @@ class TraceExtractor:
         cursor: Optional[str] = None
 
         while True:
-            response = self.client.api.observations.get_many(
-                trace_id=trace_id,
-                fields=OBSERVATION_FIELDS,
-                limit=1000,
-                cursor=cursor,
-            )
+            try:
+                response = self.client.api.observations.get_many(
+                    trace_id=trace_id,
+                    fields=OBSERVATION_FIELDS,
+                    limit=1000,
+                    cursor=cursor,
+                )
+            except TypeError as exc:
+                if "fields" not in str(exc):
+                    raise
+                logger.debug(
+                    "Langfuse observations.get_many() does not support fields; "
+                    "retrying without fields",
+                    exc_info=True,
+                )
+                response = self.client.api.observations.get_many(
+                    trace_id=trace_id,
+                    limit=1000,
+                    cursor=cursor,
+                )
             response_data = getattr(response, "data", None)
             if response_data:
                 observations.extend(self._normalize_item(obs) for obs in response_data)
