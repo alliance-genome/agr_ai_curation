@@ -458,6 +458,72 @@ async def test_inspect_curation_context_summarizes_authorized_persisted_results(
 
 
 @pytest.mark.asyncio
+async def test_inspect_curation_context_current_chat_includes_flow_results(monkeypatch):
+    monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_context_tools, "get_current_trace_id", lambda: None)
+    monkeypatch.setattr(supervisor_context_tools, "_active_document_id", lambda _user_id: None)
+
+    calls = []
+
+    def fake_list_extraction_results(**kwargs):
+        calls.append(kwargs)
+        if kwargs.get("source_kind") == supervisor_context_tools.CurationExtractionSourceKind.FLOW:
+            return [
+                _PrepExtractionRecord(
+                    extraction_result_id="flow-extract-1",
+                    source_kind="flow",
+                    flow_run_id="flow-run-1",
+                    adapter_key="gene",
+                    payload_json={
+                        "evidence": [
+                            {
+                                "evidence_record_id": "evidence-1",
+                                "verified_quote": "crb was found in the flow result.",
+                            }
+                        ],
+                    },
+                )
+            ]
+        return [
+            _PrepExtractionRecord(
+                extraction_result_id="chat-extract-1",
+                source_kind="chat",
+                flow_run_id=None,
+                adapter_key="gene",
+                payload_json={"evidence": []},
+            )
+        ]
+
+    monkeypatch.setattr(
+        supervisor_context_tools,
+        "list_extraction_results",
+        fake_list_extraction_results,
+    )
+
+    response = await supervisor_context_tools.inspect_curation_context(
+        detail="evidence",
+        extraction_result_id="flow-extract-1",
+        flow_run_id="flow-run-1",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "ok"
+    assert payload["refs"][0]["extraction_result_id"] == "flow-extract-1"
+    assert payload["results"][0]["evidence"] == [
+        {
+            "evidence_record_id": "evidence-1",
+            "verified_quote": "crb was found in the flow result.",
+        }
+    ]
+    assert any(
+        call.get("origin_session_id") == "session-1"
+        and call.get("source_kind") == supervisor_context_tools.CurationExtractionSourceKind.FLOW
+        for call in calls
+    )
+
+
+@pytest.mark.asyncio
 async def test_inspect_curation_context_extraction_result_scope_requires_id(monkeypatch):
     monkeypatch.setattr(supervisor_context_tools, "get_current_session_id", lambda: "session-1")
     monkeypatch.setattr(supervisor_context_tools, "get_current_user_id", lambda: "user-1")

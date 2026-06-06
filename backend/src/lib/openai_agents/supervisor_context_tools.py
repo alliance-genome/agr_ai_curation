@@ -497,6 +497,19 @@ def _current_turn_records() -> list[dict[str, Any]]:
     return records
 
 
+def _dedupe_extraction_records(records: Iterable[Any]) -> list[Any]:
+    deduped: list[Any] = []
+    seen: set[str] = set()
+    for record in records:
+        record_id = str(_record_attr(record, "extraction_result_id") or "").strip()
+        key = record_id or str(id(record))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(record)
+    return deduped
+
+
 def _authorized_extraction_results(
     *,
     scope: str,
@@ -525,11 +538,21 @@ def _authorized_extraction_results(
     if scope == "current_document":
         if not document_id:
             return []
-        return list_extraction_results(
-            origin_session_id=session_id,
-            user_id=user_id,
-            source_kind=CurationExtractionSourceKind.CHAT,
-            document_id=document_id,
+        return _dedupe_extraction_records(
+            [
+                *list_extraction_results(
+                    origin_session_id=session_id,
+                    user_id=user_id,
+                    source_kind=CurationExtractionSourceKind.CHAT,
+                    document_id=document_id,
+                ),
+                *list_extraction_results(
+                    origin_session_id=session_id,
+                    user_id=user_id,
+                    source_kind=CurationExtractionSourceKind.FLOW,
+                    document_id=document_id,
+                ),
+            ]
         )
     if scope == "flow_run":
         if not flow_run_id:
@@ -547,6 +570,11 @@ def _authorized_extraction_results(
                 user_id=user_id,
                 source_kind=CurationExtractionSourceKind.CHAT,
             ),
+            *list_extraction_results(
+                origin_session_id=session_id,
+                user_id=user_id,
+                source_kind=CurationExtractionSourceKind.FLOW,
+            ),
         ]
         if flow_run_id:
             records.extend(
@@ -556,11 +584,20 @@ def _authorized_extraction_results(
                     flow_run_id=flow_run_id,
                 )
             )
-        return records
-    return list_extraction_results(
-        origin_session_id=session_id,
-        user_id=user_id,
-        source_kind=CurationExtractionSourceKind.CHAT,
+        return _dedupe_extraction_records(records)
+    return _dedupe_extraction_records(
+        [
+            *list_extraction_results(
+                origin_session_id=session_id,
+                user_id=user_id,
+                source_kind=CurationExtractionSourceKind.CHAT,
+            ),
+            *list_extraction_results(
+                origin_session_id=session_id,
+                user_id=user_id,
+                source_kind=CurationExtractionSourceKind.FLOW,
+            ),
+        ]
     )
 
 
@@ -569,16 +606,20 @@ def _filter_extraction_records(
     *,
     extraction_result_id: str | None,
     trace_id: str | None,
+    flow_run_id: str | None,
     adapter_keys: Sequence[str] | None,
 ) -> list[Any]:
     allowed_adapters = {str(key).strip() for key in adapter_keys or [] if str(key).strip()}
     result_id = _optional_text(extraction_result_id)
     trace = _optional_text(trace_id)
+    flow = _optional_text(flow_run_id)
     filtered: list[Any] = []
     for record in records:
         if result_id and str(_record_attr(record, "extraction_result_id") or "") != result_id:
             continue
         if trace and str(_record_attr(record, "trace_id") or "") != trace:
+            continue
+        if flow and str(_record_attr(record, "flow_run_id") or "") != flow:
             continue
         if allowed_adapters and str(_record_attr(record, "adapter_key") or "") not in allowed_adapters:
             continue
@@ -630,6 +671,7 @@ async def inspect_curation_context(
         records,
         extraction_result_id=extraction_result_id,
         trace_id=trace_id,
+        flow_run_id=flow_run_id,
         adapter_keys=adapter_keys,
     )
     bounded_limit = _normalize_limit(limit, default=5)
