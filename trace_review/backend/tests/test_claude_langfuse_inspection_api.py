@@ -227,7 +227,14 @@ async def test_claude_model_live_context_uses_preflight_and_generation_inputs(ex
         "total_input_json_chars": 1200,
         "total_estimated_input_tokens": 300,
     }
+    assert model_live["totals_by_classification"]["inferred_generation_input"] == {
+        "call_count": 1,
+        "total_input_json_chars": 11,
+        "total_estimated_input_tokens": 3,
+    }
     assert model_live["calls"][0]["classification_source"] == "inferred_generation_input"
+    assert model_live["calls"][0]["input_json_chars"] == 11
+    assert model_live["calls"][0]["estimated_input_tokens"] == 3
     assert model_live["calls"][1]["classification_source"] == "provider_context_preflight"
     assert model_live["calls"][1]["largest_paths"][0]["path"] == "requests"
     assert response.data["observability_payloads"]["exact_payload_requires_explicit_lookup"] is True

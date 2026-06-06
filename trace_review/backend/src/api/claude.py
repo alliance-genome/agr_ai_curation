@@ -173,12 +173,18 @@ def _generation_call_from_observation(
     obs_id = observation.get("id")
     payload_id = f"observation:{obs_id}:input"
     payload_ref = payloads_by_id.get(payload_id)
-    input_json_chars = (
-        int(payload_ref.get("json_chars") or 0)
-        if isinstance(payload_ref, Mapping)
-        else _payload_json_chars(observation.get("input"))
-    )
-    estimated_tokens = _estimate_tokens_from_chars(input_json_chars)
+    if isinstance(payload_ref, Mapping):
+        input_json_chars = _int_or_none(
+            payload_ref.get("json_chars") or payload_ref.get("char_count")
+        ) or 0
+        estimated_tokens = _int_or_none(
+            payload_ref.get("estimated_tokens") or payload_ref.get("rough_token_estimate")
+        )
+        if estimated_tokens is None:
+            estimated_tokens = _estimate_tokens_from_chars(input_json_chars)
+    else:
+        input_json_chars = _payload_json_chars(observation.get("input"))
+        estimated_tokens = _estimate_tokens_from_chars(input_json_chars)
     return {
         "ordinal": ordinal,
         "surface": "langfuse_generation",
