@@ -11,6 +11,7 @@ This folder captures real Incus/VM runs used to evaluate token-budget pressure b
   - Non-streaming chat completed and returned focus genes: `ninaE`, `crb`, `NinaC`, `Eys`.
   - Streaming chat failed the harness because validator dispatch surfaced non-fatal AGR curation DB connection failures as `SPECIALIST_ERROR` events.
 - Earlier same-session runs are retained because they show setup issues, flow behavior, and pre-redaction-fix traces.
+- Flow measurements in this bundle are comparison evidence from earlier same-session runs, not as clean as the fresh post-fix chat and validator measurements.
 
 ## Main Measurements
 
@@ -51,7 +52,7 @@ The folder also includes:
 
 - Initial extraction trace writes failed because the sandbox `extraction_trace_events/` directory was not writable by the backend container. The local run was unblocked with `chmod 777` in the sandbox. This should become an operational follow-up if it recurs.
 - AGR curation DB lookups failed with transient connection-refused errors during validator dispatch. The extraction still produced useful gene evidence, but smoke failed when streaming surfaced those validator warnings as error events.
-- TraceReview correctly parsed local trace events after the redaction fix and reported mixed explicit/inferred context. Explicit preflight events carry the usable provider-context token measurements; inferred Langfuse generation rows were kept separate to avoid overclaiming precision.
+- TraceReview correctly parsed local trace events after the redaction and inferred-sizing fixes and reported mixed explicit/inferred context. Explicit preflight events carry the direct provider-context measurements; inferred Langfuse generation rows are kept separate to avoid overclaiming precision.
 
 ## Folder Map
 

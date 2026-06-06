@@ -1,5 +1,5 @@
 trace_id	historical_precision	possible_double_count	observed_call_record_count	explicit_call_count	inferred_call_count	explicit_estimated_tokens	inferred_estimated_tokens	exact_payload_requires_explicit_lookup
-2e80ae576b69ef042b452fdd433d89a7	mixed_explicit_and_inferred	true	3	1	2	62	0	true
-f597a39fa0a8fcbcb28d784c8bc1e2aa	mixed_explicit_and_inferred	true	10	2	8	526	0	true
-58277312e737940d52160a3192a818d1	mixed_explicit_and_inferred	true	3	1	2	207	0	true
-dd4aa251cbfdb93337f3bf6e19f21f3f	mixed_explicit_and_inferred	true	12	2	10	660	0	true
+2e80ae576b69ef042b452fdd433d89a7	mixed_explicit_and_inferred	true	3	1	2	62	587	true
+f597a39fa0a8fcbcb28d784c8bc1e2aa	mixed_explicit_and_inferred	true	10	2	8	526	14272	true
+58277312e737940d52160a3192a818d1	mixed_explicit_and_inferred	true	3	1	2	207	558	true
+dd4aa251cbfdb93337f3bf6e19f21f3f	mixed_explicit_and_inferred	true	12	2	10	660	32993	true
