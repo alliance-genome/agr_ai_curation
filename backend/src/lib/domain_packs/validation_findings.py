@@ -357,7 +357,7 @@ def _history_event_for_finding(
         "target": target,
     }
     if finding.details:
-        details["validation_details"] = finding.details
+        details["validation_detail_keys"] = sorted(finding.details.keys())
         for key in (
             "lookup_attempts",
             "lookup_explanation",

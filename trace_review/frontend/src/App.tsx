@@ -36,10 +36,11 @@ import { AgentContextView } from './views/AgentContextView';
 import { TraceSummaryView } from './views/TraceSummaryView';
 import { DocumentHierarchyView } from './views/DocumentHierarchyView';
 import { AgentConfigsView } from './views/AgentConfigsView';
+import { PayloadSizesView } from './views/PayloadSizesView';
 
 const DRAWER_WIDTH = 200;
 
-type ViewName = 'summary' | 'conversation' | 'tool_calls' | 'pdf_citations' | 'token_analysis' | 'agent_context' | 'trace_summary' | 'document_hierarchy' | 'agent_configs';
+type ViewName = 'summary' | 'conversation' | 'tool_calls' | 'pdf_citations' | 'token_analysis' | 'payload_sizes' | 'agent_context' | 'trace_summary' | 'document_hierarchy' | 'agent_configs';
 
 const VIEWS: { name: ViewName; label: string }[] = [
   { name: 'summary', label: 'Summary' },
@@ -47,6 +48,7 @@ const VIEWS: { name: ViewName; label: string }[] = [
   { name: 'tool_calls', label: 'Tool Calls' },
   { name: 'pdf_citations', label: 'PDF Citations' },
   { name: 'token_analysis', label: 'Tokens' },
+  { name: 'payload_sizes', label: 'Payload Sizes' },
   { name: 'agent_context', label: 'Agents' },
   { name: 'trace_summary', label: 'Full Summary' },
   { name: 'document_hierarchy', label: 'Doc Hierarchy' },
@@ -174,7 +176,11 @@ function ProtectedContent({ themeMode, onThemeModeChange }: ProtectedContentProp
             setCurrentTraceId(analyzeResponse.trace_id);
             setCacheStatus(analyzeResponse.cache_status);
 
-            const viewResponse = await api.getTraceView(analyzeResponse.trace_id, 'summary');
+            const viewResponse = await api.getTraceView(
+              analyzeResponse.trace_id,
+              'summary',
+              (sourceParam as 'remote' | 'local') || 'remote',
+            );
             setViewData(viewResponse.data);
             setCurrentView('summary');
           } catch (err: any) {
@@ -229,7 +235,7 @@ function ProtectedContent({ themeMode, onThemeModeChange }: ProtectedContentProp
       setCacheStatus(analyzeResponse.cache_status);
 
       // Load initial view (summary)
-      const viewResponse = await api.getTraceView(analyzeResponse.trace_id, 'summary');
+      const viewResponse = await api.getTraceView(analyzeResponse.trace_id, 'summary', source);
       setViewData(viewResponse.data);
       setCurrentView('summary');
     } catch (err: any) {
@@ -248,7 +254,7 @@ function ProtectedContent({ themeMode, onThemeModeChange }: ProtectedContentProp
     setError(null);
 
     try {
-      const response = await api.getTraceView(currentTraceId, viewName);
+      const response = await api.getTraceView(currentTraceId, viewName, source);
       setViewData(response.data);
       setCurrentView(viewName);
     } catch (err: any) {
@@ -304,6 +310,8 @@ function ProtectedContent({ themeMode, onThemeModeChange }: ProtectedContentProp
         return <PDFCitationsView data={viewData} />;
       case 'token_analysis':
         return <TokenAnalysisView data={viewData} />;
+      case 'payload_sizes':
+        return <PayloadSizesView data={viewData} />;
       case 'agent_context':
         return <AgentContextView data={viewData} />;
       case 'trace_summary':

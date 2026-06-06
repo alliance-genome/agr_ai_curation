@@ -63,6 +63,9 @@ from src.lib.domain_packs.value_presence import missing_resolved_value
 
 REVIEW_ROW_PROJECTION_TYPE = "workspace_review_row"
 _MISSING = object()
+_VALIDATION_DETAIL_STRING_LIMIT = 8000
+_VALIDATION_DETAIL_LIST_LIMIT = 25
+_VALIDATION_DETAIL_MAPPING_LIMIT = 50
 
 VALIDATION_STATUS_RANK: dict[DomainEnvelopeValidationStatus, int] = {
     DomainEnvelopeValidationStatus.RESOLVED: 0,
@@ -1293,8 +1296,8 @@ def _validator_result_finding_details(
                 else {}
             ),
         },
-        "validation_request": item.request.model_dump(mode="json", exclude_none=True),
-        "validation_result": item.result.model_dump(mode="json", exclude_none=True),
+        "validation_request": _validation_request_finding_payload(item.request),
+        "validation_result": _validation_result_finding_payload(item.result),
         "lookup_attempts": _lookup_attempt_details(item),
         "candidate_matches": _candidate_matches(item.result),
     }
@@ -1325,8 +1328,12 @@ def _lookup_attempt_details(
                 },
                 "attempted_query": {
                     "request_id": item.request.request_id,
-                    "input_fields": dict(item.request.selected_inputs),
-                    "provider_query": payload["query"],
+                    "input_fields": _compact_validation_detail_value(
+                        dict(item.request.selected_inputs)
+                    ),
+                    "provider_query": _compact_validation_detail_value(
+                        payload.get("query", {})
+                    ),
                 },
                 "lookup_status": lookup_status,
                 "candidate_count": payload["result_count"],
@@ -1342,9 +1349,122 @@ def _lookup_attempt_details(
 
 def _candidate_matches(result: DomainValidatorResultBase) -> list[dict[str, Any]]:
     return [
-        candidate.model_dump(mode="json", exclude_none=True)
+        _compact_candidate_payload(candidate.model_dump(mode="json", exclude_none=True))
         for candidate in result.candidates
     ]
+
+
+def _validation_request_finding_payload(
+    request: DomainValidationRequest,
+) -> dict[str, Any]:
+    payload = request.model_dump(mode="json", exclude_none=True)
+    evidence = payload.pop("evidence", [])
+    if isinstance(evidence, list):
+        payload["evidence_count"] = len(evidence)
+        evidence_record_ids = [
+            record_id
+            for record in evidence
+            if isinstance(record, Mapping)
+            and isinstance(record_id := record.get("evidence_record_id"), str)
+            and record_id
+        ]
+        if evidence_record_ids:
+            payload["evidence_record_ids"] = evidence_record_ids[
+                :_VALIDATION_DETAIL_LIST_LIMIT
+            ]
+    return _compact_validation_detail_value(payload)
+
+
+def _validation_result_finding_payload(
+    result: DomainValidatorResultBase,
+) -> dict[str, Any]:
+    payload = result.model_dump(mode="json", exclude_none=True)
+    compact: dict[str, Any] = {
+        key: payload[key]
+        for key in (
+            "status",
+            "request_id",
+            "validator_binding_id",
+            "validator_agent",
+            "target",
+            "resolved_values",
+            "missing_expected_fields",
+            "curator_message",
+            "explanation",
+        )
+        if key in payload
+    }
+    resolved_objects = payload.get("resolved_objects")
+    if isinstance(resolved_objects, list):
+        compact["resolved_objects"] = [
+            _compact_resolved_object_payload(item)
+            for item in resolved_objects[:_VALIDATION_DETAIL_LIST_LIMIT]
+            if isinstance(item, Mapping)
+        ]
+        if len(resolved_objects) > _VALIDATION_DETAIL_LIST_LIMIT:
+            compact["resolved_object_count"] = len(resolved_objects)
+    lookup_attempts = payload.get("lookup_attempts")
+    if isinstance(lookup_attempts, list):
+        compact["lookup_attempt_count"] = len(lookup_attempts)
+    candidates = payload.get("candidates")
+    if isinstance(candidates, list):
+        compact["candidate_count"] = len(candidates)
+    return _compact_validation_detail_value(compact)
+
+
+def _compact_candidate_payload(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    compact = {
+        key: candidate[key]
+        for key in ("value", "label", "object_type", "score", "matched_fields")
+        if key in candidate
+    }
+    details = candidate.get("details")
+    if isinstance(details, Mapping):
+        compact["details"] = _compact_validation_detail_value(details)
+    return _compact_validation_detail_value(compact)
+
+
+def _compact_resolved_object_payload(item: Mapping[str, Any]) -> dict[str, Any]:
+    compact = {
+        key: item[key]
+        for key in ("object_type", "canonical_id", "label", "symbol", "name")
+        if key in item
+    }
+    payload = item.get("payload")
+    if isinstance(payload, Mapping):
+        compact["payload"] = _compact_validation_detail_value(payload)
+    return _compact_validation_detail_value(compact)
+
+
+def _compact_validation_detail_value(value: Any) -> Any:
+    if isinstance(value, str):
+        if len(value) <= _VALIDATION_DETAIL_STRING_LIMIT:
+            return value
+        return value[:_VALIDATION_DETAIL_STRING_LIMIT] + (
+            f"... [truncated {len(value) - _VALIDATION_DETAIL_STRING_LIMIT} chars]"
+        )
+    if isinstance(value, Mapping):
+        compact: dict[str, Any] = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= _VALIDATION_DETAIL_MAPPING_LIMIT:
+                compact["__truncated_keys__"] = len(value) - _VALIDATION_DETAIL_MAPPING_LIMIT
+                break
+            compact[str(key)] = _compact_validation_detail_value(item)
+        return compact
+    if (
+        isinstance(value, Sequence)
+        and not isinstance(value, (str, bytes, bytearray))
+    ):
+        compact_list = [
+            _compact_validation_detail_value(item)
+            for item in value[:_VALIDATION_DETAIL_LIST_LIMIT]
+        ]
+        if len(value) > _VALIDATION_DETAIL_LIST_LIMIT:
+            compact_list.append(
+                {"__truncated_items__": len(value) - _VALIDATION_DETAIL_LIST_LIMIT}
+            )
+        return compact_list
+    return value
 
 
 def _resolved_id(result: DomainValidatorResultBase) -> str | None:

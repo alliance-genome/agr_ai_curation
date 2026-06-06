@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from pathlib import Path
@@ -13,6 +14,8 @@ from .tool_calls import ToolCallAnalyzer
 ANALYZER_SCHEMA_VERSION = "extraction_timeline_analyzer.v1"
 EVENT_SCHEMA_VERSION = "extraction_trace_event.v1"
 SUMMARY_TEXT_LIMIT = 500
+PAYLOAD_SIZE_TOP_EVENT_COUNT = 20
+PAYLOAD_SIZE_WARNING_THRESHOLDS = (100_000, 500_000, 1_000_000)
 
 
 def _trace_event_dir() -> Path:
@@ -44,6 +47,210 @@ def _bounded_summary_text(value: Any) -> str:
     if len(text) <= SUMMARY_TEXT_LIMIT:
         return text
     return f"{text[: SUMMARY_TEXT_LIMIT - 3]}..."
+
+
+def _estimated_tokens(char_count: int) -> int:
+    return math.ceil(char_count / 4) if char_count > 0 else 0
+
+
+def _json_size(value: Any) -> Dict[str, Any]:
+    try:
+        text = json.dumps(
+            value,
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        )
+    except Exception:
+        text = str(value)
+    json_chars = len(text)
+    return {
+        "json_chars": json_chars,
+        "json_bytes": len(text.encode("utf-8")),
+        "estimated_tokens": _estimated_tokens(json_chars),
+        "source": "computed_json",
+    }
+
+
+def _coerce_int(value: Any) -> int | None:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
+
+
+def _normalized_size_payload(value: Mapping[str, Any], *, source: str) -> Dict[str, Any]:
+    json_chars = _coerce_int(value.get("json_chars"))
+    json_bytes = _coerce_int(value.get("json_bytes"))
+    string_chars = _coerce_int(value.get("string_chars"))
+    if json_chars is None:
+        json_chars = string_chars or 0
+    if json_bytes is None:
+        json_bytes = json_chars
+    estimated_tokens = _coerce_int(value.get("estimated_tokens"))
+    if estimated_tokens is None:
+        estimated_tokens = _estimated_tokens(json_chars)
+    normalized = {
+        "json_chars": json_chars,
+        "json_bytes": json_bytes,
+        "estimated_tokens": estimated_tokens,
+        "source": value.get("source") or source,
+    }
+    for key in ("kind", "string_chars", "string_bytes", "item_count", "top_level_keys"):
+        if key in value:
+            normalized[key] = value[key]
+    return normalized
+
+
+def _summary_payload_size(summary: Mapping[str, Any] | None) -> Dict[str, Any]:
+    if not isinstance(summary, Mapping):
+        return {"json_chars": 0, "json_bytes": 0, "estimated_tokens": 0, "source": "missing"}
+    size = summary.get("size")
+    if isinstance(size, Mapping):
+        return _normalized_size_payload(size, source="summary_size")
+    preview = summary.get("preview")
+    if isinstance(preview, Mapping):
+        raw_length = _coerce_int(preview.get("length"))
+        if raw_length is not None:
+            return {
+                "json_chars": raw_length,
+                "json_bytes": raw_length,
+                "estimated_tokens": _estimated_tokens(raw_length),
+                "source": "truncated_preview_length",
+                "kind": "string",
+            }
+    preview_length = _coerce_int(summary.get("preview_length"))
+    if preview_length is not None:
+        return {
+            "json_chars": preview_length,
+            "json_bytes": preview_length,
+            "estimated_tokens": _estimated_tokens(preview_length),
+            "source": "preview_length",
+        }
+    return _json_size(preview)
+
+
+def _event_payload_size(event: Mapping[str, Any]) -> Dict[str, Any]:
+    event_size = event.get("event_size")
+    if isinstance(event_size, Mapping):
+        return _normalized_size_payload(event_size, source="event_size")
+    return _json_size(event)
+
+
+def _size_chars(size: Mapping[str, Any]) -> int:
+    value = size.get("json_chars")
+    return value if isinstance(value, int) else 0
+
+
+def _build_timeline_payload_size(
+    event: Mapping[str, Any],
+    *,
+    input_size: Mapping[str, Any],
+    output_size: Mapping[str, Any],
+    event_size: Mapping[str, Any],
+) -> Dict[str, Any]:
+    input_chars = _size_chars(input_size)
+    output_chars = _size_chars(output_size)
+    event_chars = _size_chars(event_size)
+    total_exchange_chars = input_chars + output_chars
+    max_chars = max(input_chars, output_chars, event_chars)
+    payload = {
+        "input_json_chars": input_chars,
+        "output_json_chars": output_chars,
+        "event_json_chars": event_chars,
+        "exchange_json_chars": total_exchange_chars,
+        "max_json_chars": max_chars,
+        "estimated_exchange_tokens": _estimated_tokens(total_exchange_chars),
+        "estimated_max_tokens": _estimated_tokens(max_chars),
+    }
+    event_summary = event.get("payload_size_summary")
+    if isinstance(event_summary, Mapping):
+        payload["writer_summary"] = dict(event_summary)
+    return payload
+
+
+def _payload_size_summary(timeline: List[Dict[str, Any]]) -> Dict[str, Any]:
+    totals = {
+        "input_json_chars": 0,
+        "output_json_chars": 0,
+        "event_json_chars": 0,
+        "exchange_json_chars": 0,
+    }
+    by_event_type: Dict[str, Dict[str, Any]] = {}
+    largest: List[Dict[str, Any]] = []
+    threshold_counts = {str(threshold): 0 for threshold in PAYLOAD_SIZE_WARNING_THRESHOLDS}
+
+    for item in timeline:
+        payload_size = item.get("payload_size")
+        if not isinstance(payload_size, Mapping):
+            continue
+        event_type = str(item.get("event_type") or "unknown")
+        bucket = by_event_type.setdefault(
+            event_type,
+            {
+                "event_count": 0,
+                "input_json_chars": 0,
+                "output_json_chars": 0,
+                "event_json_chars": 0,
+                "exchange_json_chars": 0,
+                "max_json_chars": 0,
+            },
+        )
+        bucket["event_count"] += 1
+        for key in totals:
+            value = _coerce_int(payload_size.get(key)) or 0
+            totals[key] += value
+            bucket[key] += value
+        max_chars = _coerce_int(payload_size.get("max_json_chars")) or 0
+        bucket["max_json_chars"] = max(bucket["max_json_chars"], max_chars)
+        for threshold in PAYLOAD_SIZE_WARNING_THRESHOLDS:
+            if max_chars >= threshold:
+                threshold_counts[str(threshold)] += 1
+        for direction, size_key in (
+            ("input", "input_size"),
+            ("output", "output_size"),
+            ("event", "event_size"),
+        ):
+            size = item.get(size_key)
+            if not isinstance(size, Mapping):
+                continue
+            json_chars = _size_chars(size)
+            if json_chars <= 0:
+                continue
+            largest.append(
+                {
+                    "rank": 0,
+                    "direction": direction,
+                    "json_chars": json_chars,
+                    "json_bytes": size.get("json_bytes"),
+                    "estimated_tokens": _estimated_tokens(json_chars),
+                    "source": size.get("source"),
+                    "timeline_index": item.get("index"),
+                    "sequence": item.get("sequence"),
+                    "event_trace_id": item.get("event_trace_id"),
+                    "event_type": item.get("event_type"),
+                    "event_id": item.get("event_id"),
+                    "tool_name": item.get("tool_name"),
+                    "agent": item.get("agent"),
+                    "domain_pack_id": item.get("domain_pack_id"),
+                }
+            )
+
+    largest = sorted(largest, key=lambda item: int(item.get("json_chars") or 0), reverse=True)[
+        :PAYLOAD_SIZE_TOP_EVENT_COUNT
+    ]
+    for index, item in enumerate(largest, start=1):
+        item["rank"] = index
+
+    totals["estimated_exchange_tokens"] = _estimated_tokens(totals["exchange_json_chars"])
+    totals["estimated_event_tokens"] = _estimated_tokens(totals["event_json_chars"])
+    return {
+        **totals,
+        "largest_events": largest,
+        "by_event_type": by_event_type,
+        "threshold_counts": threshold_counts,
+    }
 
 
 def _summary_text(summary: Mapping[str, Any] | None) -> str:
@@ -394,6 +601,9 @@ class ExtractionTimelineAnalyzer:
 
         timeline = []
         for index, event in enumerate(filtered, start=1):
+            input_size = _summary_payload_size(event.get("input_summary"))
+            output_size = _summary_payload_size(event.get("output_summary"))
+            event_size = _event_payload_size(event)
             item = {
                 "index": index,
                 "timestamp": event.get("timestamp"),
@@ -411,6 +621,15 @@ class ExtractionTimelineAnalyzer:
                 "agent": (event.get("metadata") or {}).get("agent"),
                 "input": event.get("input_summary") if include_raw_args else _summary_text(event.get("input_summary")),
                 "output": event.get("output_summary") if include_raw_outputs else _summary_text(event.get("output_summary")),
+                "input_size": input_size,
+                "output_size": output_size,
+                "event_size": event_size,
+                "payload_size": _build_timeline_payload_size(
+                    event,
+                    input_size=input_size,
+                    output_size=output_size,
+                    event_size=event_size,
+                ),
                 "validation": event.get("validation") or {},
             }
             timeline.append(item)
@@ -431,6 +650,7 @@ class ExtractionTimelineAnalyzer:
             "feedback_artifact_event_count": len(feedback_events),
             "observation_event_count": len(observation_events),
             "event_type_counts": counts,
+            "size_summary": _payload_size_summary(timeline),
             "reasoning_summary": {
                 "status": reasoning_status,
                 "request_settings": [
@@ -465,7 +685,15 @@ class ExtractionTimelineAnalyzer:
                 "validation_failure_count": len(validation_failures),
                 "finalization_event_count": len(finalization_events),
                 "reasoning_summary_status": timeline.get("reasoning_summary", {}).get("status"),
+                "payload_exchange_json_chars": timeline.get("size_summary", {}).get(
+                    "exchange_json_chars",
+                    0,
+                ),
+                "estimated_payload_exchange_tokens": timeline.get(
+                    "size_summary", {}
+                ).get("estimated_exchange_tokens", 0),
             },
+            "size_summary": timeline.get("size_summary", {}),
             "reasoning_summary": timeline.get("reasoning_summary", {}),
             "validation_failures": validation_failures,
             "timeline": timeline.get("timeline", []),

@@ -643,6 +643,59 @@ def test_validator_result_materialization_creates_reference_object_and_finding()
     DomainEnvelope.model_validate(result.envelope.model_dump(mode="json"))
 
 
+def test_validator_result_materialization_compacts_finding_audit_payloads():
+    metadata = _validator_metadata()
+    huge_quote = "crb 11A22 supporting evidence. " * 4000
+    envelope = _validator_envelope().model_copy(
+        update={
+            "objects": [
+                CuratableObjectEnvelope(
+                    object_type="AlleleMention",
+                    object_id="allele-mention-1",
+                    payload={
+                        "mention": {"text": "crb 11A22"},
+                        "evidence_records": [
+                            {
+                                "evidence_record_id": "evidence-1",
+                                "quote": huge_quote,
+                            }
+                        ],
+                    },
+                    evidence_record_ids=["evidence-1"],
+                )
+            ]
+        }
+    )
+    item = _validator_item(
+        metadata,
+        envelope,
+        candidates=[
+            {
+                "value": "DEMO:Allele0001817",
+                "label": "crb 11A22",
+                "details": {"raw_provider_payload": huge_quote},
+            }
+        ],
+    )
+
+    result = materialize_validator_results_into_envelope(envelope, metadata, [item])
+
+    finding = result.appended_findings[0]
+    assert finding.details["validation_request"]["evidence_count"] == 1
+    assert finding.details["validation_request"]["evidence_record_ids"] == [
+        "evidence-1"
+    ]
+    assert "evidence" not in finding.details["validation_request"]
+    assert finding.details["candidate_matches"][0]["details"][
+        "raw_provider_payload"
+    ].endswith("]")
+    history_event = result.envelope.history[-1]
+    assert "validation_details" not in history_event.details
+    assert "validation_detail_keys" in history_event.details
+    assert huge_quote not in str(finding.details)
+    assert huge_quote not in str(history_event.details)
+
+
 def test_validator_result_materialization_patches_target_payload_from_resolved_values():
     metadata = DomainPackMetadata(
         pack_id="fixture.target_patch",

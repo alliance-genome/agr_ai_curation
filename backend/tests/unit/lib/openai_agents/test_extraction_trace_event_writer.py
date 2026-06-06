@@ -45,6 +45,12 @@ def test_writer_persists_versioned_redacted_bounded_events(tmp_path, monkeypatch
     assert first["domain_pack_id"] == "agr.alliance.gene_expression"
     assert first["input_summary"]["preview"]["api_key"] == "<redacted>"
     assert first["input_summary"]["preview"]["paper_text"]["truncated"] is True
+    assert first["input_summary"]["size"]["json_chars"] > 200
+    assert first["input_summary"]["size"]["estimated_tokens"] > 0
+    assert first["payload_size_summary"]["input_json_chars"] == first["input_summary"][
+        "size"
+    ]["json_chars"]
+    assert first["event_size"]["json_chars"] > 0
     assert second["input_summary"]["preview"]["token"] == "<redacted>"
 
     lines = events.trace_event_path("trace-123").read_text(encoding="utf-8").splitlines()
@@ -115,3 +121,24 @@ def test_writer_logs_debug_when_event_has_no_trace_context(caplog):
 
     assert event is None
     assert "Dropping extraction trace event without trace context" in caplog.text
+
+
+def test_writer_logs_large_payload_sizes(tmp_path, monkeypatch, caplog):
+    monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(tmp_path))
+    monkeypatch.setenv("EXTRACTION_TRACE_EVENT_SIZE_LOG_THRESHOLD_CHARS", "1000")
+    monkeypatch.setattr(events, "_mirror_to_langfuse", lambda _event: None)
+    events.start_extraction_trace_run(trace_id="trace-large")
+    try:
+        with caplog.at_level(logging.WARNING, logger=events.logger.name):
+            event = events.write_extraction_trace_event(
+                event_type="tool_call.completed",
+                output_summary="x" * 2000,
+                metadata={"tool_name": "huge_tool"},
+            )
+    finally:
+        events.clear_extraction_trace_run()
+
+    assert event is not None
+    assert event["output_summary"]["size"]["string_chars"] == 2000
+    assert event["payload_size_summary"]["output_json_chars"] >= 2000
+    assert "Large extraction trace payload" in caplog.text

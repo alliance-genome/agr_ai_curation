@@ -234,6 +234,74 @@ export interface TokenAnalysisData {
   };
 }
 
+export interface PayloadSizeDetail {
+  json_chars: number;
+  json_bytes?: number;
+  estimated_tokens: number;
+  source?: string;
+  kind?: string;
+}
+
+export interface PayloadSizeEvent {
+  rank: number;
+  direction: 'input' | 'output' | 'event';
+  json_chars: number;
+  json_bytes?: number;
+  estimated_tokens: number;
+  source?: string;
+  timeline_index?: number;
+  sequence?: number;
+  event_trace_id?: string;
+  event_type?: string;
+  event_id?: string;
+  tool_name?: string;
+  agent?: string;
+  domain_pack_id?: string;
+}
+
+export interface PayloadSizeSummary {
+  input_json_chars: number;
+  output_json_chars: number;
+  event_json_chars: number;
+  exchange_json_chars: number;
+  estimated_exchange_tokens: number;
+  estimated_event_tokens: number;
+  largest_events: PayloadSizeEvent[];
+  by_event_type: Record<string, {
+    event_count: number;
+    input_json_chars: number;
+    output_json_chars: number;
+    event_json_chars: number;
+    exchange_json_chars: number;
+    max_json_chars: number;
+  }>;
+  threshold_counts: Record<string, number>;
+}
+
+export interface ExtractionTimelineData {
+  schema_version: string;
+  trace_id: string;
+  event_count: number;
+  durable_event_count: number;
+  observation_event_count: number;
+  event_type_counts: Record<string, number>;
+  size_summary?: PayloadSizeSummary;
+  timeline: Array<{
+    index: number;
+    timestamp?: string;
+    sequence?: number;
+    event_trace_id?: string;
+    event_type?: string;
+    tool_name?: string;
+    agent?: string;
+    domain_pack_id?: string;
+    input_size?: PayloadSizeDetail;
+    output_size?: PayloadSizeDetail;
+    event_size?: PayloadSizeDetail;
+    payload_size?: Record<string, number>;
+  }>;
+}
+
 // Agent Context Types
 export interface AgentConfig {
   agent_type: string;

@@ -106,6 +106,7 @@ def test_analyzer_merges_durable_events_and_agents_sdk_tool_observations(tmp_pat
     assert timeline["reasoning_summary"]["status"] == "present"
     assert timeline["reasoning_summary"]["summaries"] == ["Checked resolver evidence."]
     assert timeline["event_type_counts"]["openai_agents.function_call"] == 1
+    assert timeline["size_summary"]["largest_events"]
     assert [item["event_type"] for item in timeline["timeline"]] == [
         "model.reasoning_summary.request",
         "model.reasoning_summary.output",
@@ -272,6 +273,69 @@ def test_analyzer_renders_concise_structured_output_summaries(tmp_path, monkeypa
         include_raw_outputs=True,
     )
     assert raw_timeline["timeline"][0]["output"]["preview"]["term_id"] == "FBbt:00000001"
+
+
+def test_analyzer_reports_payload_sizes_from_new_and_legacy_trace_events(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(tmp_path))
+    _write_event(
+        tmp_path,
+        "trace-main",
+        _event(
+            "trace-main",
+            1,
+            "specialist_tool_call.completed",
+            metadata={"tool_name": "ask_gene_expression_specialist"},
+            output_summary={
+                "preview": {
+                    "preview": "x" * 100,
+                    "truncated": True,
+                    "length": 6_700_000,
+                },
+                "bounded": True,
+            },
+        ),
+    )
+    _write_event(
+        tmp_path,
+        "trace-main",
+        _event(
+            "trace-main",
+            2,
+            "tool_call.completed",
+            metadata={"tool_name": "compact_tool"},
+            output_summary={
+                "preview": {"status": "ok"},
+                "size": {
+                    "kind": "object",
+                    "json_chars": 42,
+                    "json_bytes": 42,
+                    "estimated_tokens": 11,
+                },
+                "bounded": True,
+            },
+        ),
+    )
+
+    timeline = ExtractionTimelineAnalyzer.analyze(
+        trace_id="trace-main",
+        raw_trace={},
+        observations=[],
+    )
+
+    size_summary = timeline["size_summary"]
+    assert size_summary["output_json_chars"] >= 6_700_042
+    assert size_summary["estimated_exchange_tokens"] >= 1_675_000
+    assert size_summary["threshold_counts"]["1000000"] == 1
+    largest = size_summary["largest_events"][0]
+    assert largest["direction"] == "output"
+    assert largest["json_chars"] == 6_700_000
+    assert largest["event_type"] == "specialist_tool_call.completed"
+    assert timeline["timeline"][0]["output_size"]["source"] == (
+        "truncated_preview_length"
+    )
 
 
 def test_analyzer_reads_langfuse_mirrored_extraction_trace_events(monkeypatch, tmp_path):

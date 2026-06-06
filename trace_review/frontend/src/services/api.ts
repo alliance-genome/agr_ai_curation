@@ -21,8 +21,11 @@ export const api = {
     return response.data;
   },
 
-  async getTraceView(traceId: string, viewName: string): Promise<TraceViewResponse> {
-    const response = await axios.get(`${API_BASE_URL}/traces/${traceId}/views/${viewName}`);
+  async getTraceView(traceId: string, viewName: string, source: 'remote' | 'local' = 'remote'): Promise<TraceViewResponse> {
+    const backendViewName = viewName === 'payload_sizes' ? 'extraction_timeline' : viewName;
+    const response = await axios.get(`${API_BASE_URL}/traces/${traceId}/views/${backendViewName}`, {
+      params: { source },
+    });
     return response.data;
   },
 

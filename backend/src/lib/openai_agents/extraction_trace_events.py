@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import uuid
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = "extraction_trace_event.v1"
 DEFAULT_PREVIEW_LIMIT = 1200
+DEFAULT_PAYLOAD_SIZE_LOG_THRESHOLD_CHARS = 500_000
 MAX_EVENTS_PER_TRACE = 10000
 _SECRET_KEY_PATTERN = re.compile(
     r"(api[_-]?key|authorization|bearer|password|secret|token|credential)",
@@ -53,6 +55,16 @@ def _preview_limit() -> int:
         return max(100, min(int(raw), 10000))
     except ValueError:
         return DEFAULT_PREVIEW_LIMIT
+
+
+def _payload_size_log_threshold_chars() -> int:
+    raw = os.getenv("EXTRACTION_TRACE_EVENT_SIZE_LOG_THRESHOLD_CHARS", "").strip()
+    if not raw:
+        return DEFAULT_PAYLOAD_SIZE_LOG_THRESHOLD_CHARS
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return DEFAULT_PAYLOAD_SIZE_LOG_THRESHOLD_CHARS
 
 
 def trace_event_dir() -> Path:
@@ -138,13 +150,140 @@ def _redact_value(value: Any, *, depth: int = 0) -> Any:
     return _redact_value(str(value), depth=depth + 1)
 
 
+def _json_size(value: Any) -> tuple[int | None, int | None]:
+    try:
+        text = json.dumps(
+            value,
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        )
+    except Exception:
+        try:
+            text = str(value)
+        except Exception:
+            return None, None
+    return len(text), len(text.encode("utf-8"))
+
+
+def _size_kind(value: Any) -> str:
+    if hasattr(value, "model_dump"):
+        return value.__class__.__name__
+    if value is None:
+        return "none"
+    if isinstance(value, Mapping):
+        return "object"
+    if isinstance(value, (list, tuple)):
+        return "array"
+    if isinstance(value, str):
+        return "string"
+    return value.__class__.__name__
+
+
+def _payload_size(value: Any) -> dict[str, Any]:
+    measured = value
+    if hasattr(value, "model_dump"):
+        try:
+            measured = value.model_dump(mode="json")
+        except Exception:
+            measured = value
+    json_chars, json_bytes = _json_size(measured)
+    size: dict[str, Any] = {
+        "kind": _size_kind(value),
+        "json_chars": json_chars,
+        "json_bytes": json_bytes,
+        "estimated_tokens": math.ceil(json_chars / 4) if json_chars else 0,
+    }
+    if isinstance(value, str):
+        size["string_chars"] = len(value)
+        size["string_bytes"] = len(value.encode("utf-8"))
+    elif isinstance(value, Mapping):
+        size["top_level_keys"] = len(value)
+    elif isinstance(value, (list, tuple)):
+        size["item_count"] = len(value)
+    return size
+
+
 def _summary(value: Any) -> dict[str, Any]:
     redacted = _redact_value(value)
+    size = _payload_size(value)
     return {
         "preview": redacted,
         "preview_length": len(json.dumps(redacted, sort_keys=True, default=str)),
+        "size": size,
         "bounded": True,
     }
+
+
+def _size_json_chars(size: Mapping[str, Any] | None) -> int:
+    if not isinstance(size, Mapping):
+        return 0
+    value = size.get("json_chars")
+    return value if isinstance(value, int) else 0
+
+
+def _summary_size(summary: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    size = summary.get("size")
+    return size if isinstance(size, Mapping) else None
+
+
+def _event_payload_size_summary(
+    *,
+    input_summary: Mapping[str, Any],
+    output_summary: Mapping[str, Any],
+    validation: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+) -> dict[str, Any]:
+    input_size = _summary_size(input_summary)
+    output_size = _summary_size(output_summary)
+    validation_size = _payload_size(validation)
+    metadata_size = _payload_size(metadata)
+    total_json_chars = (
+        _size_json_chars(input_size)
+        + _size_json_chars(output_size)
+        + _size_json_chars(validation_size)
+        + _size_json_chars(metadata_size)
+    )
+    return {
+        "input_json_chars": _size_json_chars(input_size),
+        "output_json_chars": _size_json_chars(output_size),
+        "validation_json_chars": _size_json_chars(validation_size),
+        "metadata_json_chars": _size_json_chars(metadata_size),
+        "total_json_chars": total_json_chars,
+        "estimated_tokens": math.ceil(total_json_chars / 4) if total_json_chars else 0,
+    }
+
+
+def _log_large_payloads(event: Mapping[str, Any]) -> None:
+    threshold = _payload_size_log_threshold_chars()
+    if threshold <= 0:
+        return
+    for direction in ("input_summary", "output_summary"):
+        summary = event.get(direction)
+        if not isinstance(summary, Mapping):
+            continue
+        size = summary.get("size")
+        if not isinstance(size, Mapping):
+            continue
+        json_chars = size.get("json_chars")
+        if not isinstance(json_chars, int) or json_chars < threshold:
+            continue
+        logger.warning(
+            "Large extraction trace payload",
+            extra={
+                "trace_id": event.get("trace_id"),
+                "event_type": event.get("event_type"),
+                "sequence": event.get("sequence"),
+                "direction": direction.replace("_summary", ""),
+                "json_chars": json_chars,
+                "json_bytes": size.get("json_bytes"),
+                "estimated_tokens": size.get("estimated_tokens"),
+                "tool_name": (event.get("metadata") or {}).get("tool_name")
+                if isinstance(event.get("metadata"), Mapping)
+                else None,
+                "threshold_chars": threshold,
+            },
+        )
 
 
 def _domain_pack_id_from_payload(*payloads: Any) -> str | None:
@@ -265,6 +404,16 @@ def write_extraction_trace_event(
         validation,
         metadata,
     )
+    summarized_input = _summary(input_summary) if input_summary is not None else {}
+    summarized_output = _summary(output_summary) if output_summary is not None else {}
+    redacted_validation = _redact_value(dict(validation or {}))
+    redacted_metadata = _redact_value(dict(metadata or {}))
+    payload_size_summary = _event_payload_size_summary(
+        input_summary=summarized_input,
+        output_summary=summarized_output,
+        validation=dict(validation or {}),
+        metadata=dict(metadata or {}),
+    )
     event = {
         "schema_version": SCHEMA_VERSION,
         "event_type": event_type,
@@ -277,12 +426,22 @@ def write_extraction_trace_event(
         "session_id": session_id,
         "user_id_hash": user_id_hash,
         "source": source,
-        "input_summary": _summary(input_summary) if input_summary is not None else {},
-        "output_summary": _summary(output_summary) if output_summary is not None else {},
-        "validation": _redact_value(dict(validation or {})),
-        "metadata": _redact_value(dict(metadata or {})),
+        "input_summary": summarized_input,
+        "output_summary": summarized_output,
+        "validation": redacted_validation,
+        "metadata": redacted_metadata,
+        "payload_size_summary": payload_size_summary,
         "timestamp": timestamp or _now_iso(),
     }
+    event_json_chars, event_json_bytes = _json_size(event)
+    event["event_size"] = {
+        "json_chars": event_json_chars,
+        "json_bytes": event_json_bytes,
+        "estimated_tokens": math.ceil(event_json_chars / 4)
+        if event_json_chars
+        else 0,
+    }
+    _log_large_payloads(event)
     _append_jsonl(effective_trace_id, event)
     _mirror_to_langfuse(event)
     return event
