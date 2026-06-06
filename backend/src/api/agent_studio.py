@@ -1133,11 +1133,20 @@ CHAT_HISTORY_TOOL_CHAT_KINDS = opus_tools.CHAT_HISTORY_TOOL_CHAT_KINDS
 LIST_RECENT_CHATS_TOOL = opus_tools.LIST_RECENT_CHATS_TOOL
 SEARCH_CHAT_HISTORY_TOOL = opus_tools.SEARCH_CHAT_HISTORY_TOOL
 GET_CHAT_CONVERSATION_TOOL = opus_tools.GET_CHAT_CONVERSATION_TOOL
+SEARCH_TRACES_TOOL = opus_tools.SEARCH_TRACES_TOOL
 GET_TRACE_SUMMARY_TOOL = opus_tools.GET_TRACE_SUMMARY_TOOL
 GET_TOOL_CALLS_SUMMARY_TOOL = opus_tools.GET_TOOL_CALLS_SUMMARY_TOOL
 GET_TOOL_CALLS_PAGE_TOOL = opus_tools.GET_TOOL_CALLS_PAGE_TOOL
 GET_TOOL_CALL_DETAIL_TOOL = opus_tools.GET_TOOL_CALL_DETAIL_TOOL
 GET_TRACE_CONVERSATION_TOOL = opus_tools.GET_TRACE_CONVERSATION_TOOL
+GET_EXTRACTION_DIAGNOSTIC_REPORT_TOOL = opus_tools.GET_EXTRACTION_DIAGNOSTIC_REPORT_TOOL
+GET_EXTRACTION_TIMELINE_TOOL = opus_tools.GET_EXTRACTION_TIMELINE_TOOL
+GET_TRACE_TREE_TOOL = opus_tools.GET_TRACE_TREE_TOOL
+GET_TRACE_RECONSTRUCTION_TOOL = opus_tools.GET_TRACE_RECONSTRUCTION_TOOL
+GET_TRACE_PAYLOADS_TOOL = opus_tools.GET_TRACE_PAYLOADS_TOOL
+GET_TRACE_PAYLOAD_TOOL = opus_tools.GET_TRACE_PAYLOAD_TOOL
+GET_TRACE_COSTS_TOOL = opus_tools.GET_TRACE_COSTS_TOOL
+GET_TRACE_DUPLICATES_TOOL = opus_tools.GET_TRACE_DUPLICATES_TOOL
 GET_TRACE_VIEW_TOOL = opus_tools.GET_TRACE_VIEW_TOOL
 GET_SERVICE_LOGS_TOOL = opus_tools.GET_SERVICE_LOGS_TOOL
 LIST_DOMAIN_ENVELOPES_TOOL = opus_tools.LIST_DOMAIN_ENVELOPES_TOOL
@@ -1960,17 +1969,39 @@ async def _handle_tool_call(
     # Import tool functions (lazy import to avoid circular dependencies)
     from src.lib.agent_studio.tools import (
         get_service_logs,
+        search_traces,
         get_trace_summary,
         get_tool_calls_summary,
         get_tool_calls_page,
         get_tool_call_detail,
         get_trace_conversation,
+        get_extraction_diagnostic_report,
+        get_extraction_timeline,
+        get_trace_tree,
+        get_trace_reconstruction,
+        get_trace_payloads,
+        get_trace_payload,
+        get_trace_costs,
+        get_trace_duplicates,
         get_trace_view,
     )
 
     # ==========================================================================
     # Token-Aware Trace Analysis Tools (recommended)
     # ==========================================================================
+
+    if tool_name == "search_traces":
+        return await search_traces(
+            session_id=tool_input.get("session_id"),
+            user_id=tool_input.get("user_id"),
+            name=tool_input.get("name"),
+            document_id=tool_input.get("document_id"),
+            run_id=tool_input.get("run_id"),
+            extraction_id=tool_input.get("extraction_id"),
+            from_timestamp=tool_input.get("from_timestamp"),
+            to_timestamp=tool_input.get("to_timestamp"),
+            limit=tool_input.get("limit", 25),
+        )
 
     if tool_name == "get_trace_summary":
         trace_id = tool_input.get("trace_id")
@@ -2047,6 +2078,143 @@ async def _handle_tool_call(
             }
         return await get_trace_conversation(trace_id=trace_id)
 
+    elif tool_name == "get_extraction_diagnostic_report":
+        trace_id = tool_input.get("trace_id")
+        if not trace_id:
+            return {
+                "status": "error",
+                "data": None,
+                "token_info": None,
+                "error": "Missing required parameter: trace_id",
+                "help": "Call search_traces if you have a session/document/run ID instead"
+            }
+        return await get_extraction_diagnostic_report(
+            trace_id=trace_id,
+            session_id=tool_input.get("session_id"),
+            feedback_id=tool_input.get("feedback_id"),
+            include_sibling_traces=tool_input.get("include_sibling_traces", False),
+            refresh=tool_input.get("refresh", False),
+            include_raw_args=tool_input.get("include_raw_args", False),
+            include_raw_outputs=tool_input.get("include_raw_outputs", False),
+            tool_name=tool_input.get("tool_name"),
+            event_type=tool_input.get("event_type"),
+            candidate_id=tool_input.get("candidate_id"),
+        )
+
+    elif tool_name == "get_extraction_timeline":
+        trace_id = tool_input.get("trace_id")
+        if not trace_id:
+            return {
+                "status": "error",
+                "data": None,
+                "token_info": None,
+                "error": "Missing required parameter: trace_id",
+                "help": "Call search_traces if you have a session/document/run ID instead"
+            }
+        return await get_extraction_timeline(
+            trace_id=trace_id,
+            session_id=tool_input.get("session_id"),
+            feedback_id=tool_input.get("feedback_id"),
+            include_sibling_traces=tool_input.get("include_sibling_traces", False),
+            refresh=tool_input.get("refresh", False),
+            include_raw_args=tool_input.get("include_raw_args", False),
+            include_raw_outputs=tool_input.get("include_raw_outputs", False),
+            tool_name=tool_input.get("tool_name"),
+            event_type=tool_input.get("event_type"),
+            candidate_id=tool_input.get("candidate_id"),
+        )
+
+    elif tool_name == "get_trace_tree":
+        trace_id = tool_input.get("trace_id")
+        if not trace_id:
+            return {
+                "status": "error",
+                "data": None,
+                "token_info": None,
+                "error": "Missing required parameter: trace_id",
+                "help": "Call get_trace_summary first or use search_traces to find a trace"
+            }
+        return await get_trace_tree(trace_id=trace_id)
+
+    elif tool_name == "get_trace_reconstruction":
+        trace_id = tool_input.get("trace_id")
+        if not trace_id:
+            return {
+                "status": "error",
+                "data": None,
+                "token_info": None,
+                "error": "Missing required parameter: trace_id",
+                "help": "Call get_trace_summary first or use search_traces to find a trace"
+            }
+        return await get_trace_reconstruction(
+            trace_id=trace_id,
+            include_payloads=tool_input.get("include_payloads", False),
+            limit=tool_input.get("limit", 100),
+            offset=tool_input.get("offset", 0),
+        )
+
+    elif tool_name == "get_trace_payloads":
+        trace_id = tool_input.get("trace_id")
+        if not trace_id:
+            return {
+                "status": "error",
+                "data": None,
+                "token_info": None,
+                "error": "Missing required parameter: trace_id",
+                "help": "Call get_trace_summary first or use search_traces to find a trace"
+            }
+        return await get_trace_payloads(
+            trace_id=trace_id,
+            sort=tool_input.get("sort", "largest"),
+            limit=tool_input.get("limit", 50),
+            offset=tool_input.get("offset", 0),
+            include_values=tool_input.get("include_values", False),
+        )
+
+    elif tool_name == "get_trace_payload":
+        trace_id = tool_input.get("trace_id")
+        if not trace_id:
+            return {
+                "status": "error",
+                "data": None,
+                "token_info": None,
+                "error": "Missing required parameter: trace_id",
+                "help": "Call get_trace_payloads first to choose a payload"
+            }
+        return await get_trace_payload(
+            trace_id=trace_id,
+            payload_id=tool_input.get("payload_id"),
+            scope=tool_input.get("scope"),
+            observation_id=tool_input.get("observation_id"),
+            field=tool_input.get("field"),
+            start=tool_input.get("start", 0),
+            max_chars=tool_input.get("max_chars", 12000),
+        )
+
+    elif tool_name == "get_trace_costs":
+        trace_id = tool_input.get("trace_id")
+        if not trace_id:
+            return {
+                "status": "error",
+                "data": None,
+                "token_info": None,
+                "error": "Missing required parameter: trace_id",
+                "help": "Call get_trace_summary first or use search_traces to find a trace"
+            }
+        return await get_trace_costs(trace_id=trace_id)
+
+    elif tool_name == "get_trace_duplicates":
+        trace_id = tool_input.get("trace_id")
+        if not trace_id:
+            return {
+                "status": "error",
+                "data": None,
+                "token_info": None,
+                "error": "Missing required parameter: trace_id",
+                "help": "Call get_trace_summary first or use search_traces to find a trace"
+            }
+        return await get_trace_duplicates(trace_id=trace_id)
+
     elif tool_name == "get_trace_view":
         trace_id = tool_input.get("trace_id")
         view_name = tool_input.get("view_name")
@@ -2061,7 +2229,7 @@ async def _handle_tool_call(
                 "data": None,
                 "token_info": None,
                 "error": f"Missing required parameters: {', '.join(missing)}",
-                "help": "Valid view_name values: token_analysis, agent_context, pdf_citations, document_hierarchy, agent_configs, group_context, mod_context, trace_summary"
+                "help": "Valid view_name values: token_analysis, agent_context, pdf_citations, document_hierarchy, agent_configs, group_context, mod_context, trace_summary, domain_envelope, extraction_timeline"
             }
         return await get_trace_view(trace_id=trace_id, view_name=view_name)
 

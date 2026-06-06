@@ -66,6 +66,8 @@ def test_validate_helpers():
         tools.validate_trace_id("not-a-trace-id")
 
     tools.validate_view("summary")
+    tools.validate_view("domain_envelope")
+    tools.validate_view("extraction_timeline")
     with pytest.raises(ValueError):
         tools.validate_view("not-a-view")
 
@@ -173,6 +175,140 @@ async def test_get_trace_view_invalid_and_400(monkeypatch):
     bad = await tools.get_trace_view("856df16f1752cb53ee43dcb2f5ecfd16", "token_analysis")
     assert bad["status"] == "error"
     assert "invalid view detail" in bad["error"]
+
+
+@pytest.mark.asyncio
+async def test_search_traces_requires_filter_and_calls_claude_search(monkeypatch):
+    missing = await tools.search_traces()
+    assert missing["status"] == "error"
+    assert "filter" in missing["error"]
+
+    capture = {}
+    _patch_async_client(
+        monkeypatch,
+        response=_FakeResponse(200, {"data": {"trace_count": 1}, "token_info": {"estimated_tokens": 25}}),
+        capture=capture,
+    )
+
+    result = await tools.search_traces(session_id="session-1", limit=999)
+
+    assert result["status"] == "success"
+    assert result["data"]["trace_count"] == 1
+    assert capture["url"].endswith("/api/claude/traces/search")
+    assert capture["params"]["source"] == tools.get_trace_source()
+    assert capture["params"]["session_id"] == "session-1"
+    assert capture["params"]["limit"] == 100
+
+
+@pytest.mark.asyncio
+async def test_get_extraction_diagnostic_report_forwards_filters(monkeypatch):
+    capture = {}
+    _patch_async_client(
+        monkeypatch,
+        response=_FakeResponse(200, {"data": {"report": "ok"}, "token_info": {"estimated_tokens": 80}}),
+        capture=capture,
+    )
+
+    result = await tools.get_extraction_diagnostic_report(
+        "856df16f1752cb53ee43dcb2f5ecfd16",
+        session_id="session-1",
+        include_sibling_traces=True,
+        include_raw_outputs=True,
+        tool_name="resolve_domain_field_term",
+    )
+
+    assert result["status"] == "success"
+    assert capture["url"].endswith("/api/claude/traces/856df16f1752cb53ee43dcb2f5ecfd16/diagnostic_report")
+    assert capture["params"]["session_id"] == "session-1"
+    assert capture["params"]["include_sibling_traces"] is True
+    assert capture["params"]["include_raw_outputs"] is True
+    assert capture["params"]["tool_name"] == "resolve_domain_field_term"
+
+
+@pytest.mark.asyncio
+async def test_get_trace_reconstruction_clamps_pagination(monkeypatch):
+    capture = {}
+    _patch_async_client(
+        monkeypatch,
+        response=_FakeResponse(200, {"data": {"events": []}, "token_info": {"estimated_tokens": 100}}),
+        capture=capture,
+    )
+
+    result = await tools.get_trace_reconstruction(
+        "856df16f1752cb53ee43dcb2f5ecfd16",
+        include_payloads=True,
+        limit=999,
+        offset=-5,
+    )
+
+    assert result["status"] == "success"
+    assert capture["url"].endswith("/langfuse_reconstruction")
+    assert capture["params"]["include_payloads"] is True
+    assert capture["params"]["limit"] == 500
+    assert capture["params"]["offset"] == 0
+
+
+@pytest.mark.asyncio
+async def test_get_trace_payloads_and_payload_build_expected_requests(monkeypatch):
+    capture = {}
+    _patch_async_client(
+        monkeypatch,
+        response=_FakeResponse(200, {"data": {"payloads": []}, "token_info": {"estimated_tokens": 100}}),
+        capture=capture,
+    )
+
+    payloads = await tools.get_trace_payloads(
+        "856df16f1752cb53ee43dcb2f5ecfd16",
+        sort="chronological",
+        limit=999,
+        offset=3,
+    )
+    assert payloads["status"] == "success"
+    assert capture["url"].endswith("/langfuse_payloads")
+    assert capture["params"]["sort"] == "chronological"
+    assert capture["params"]["limit"] == 200
+    assert capture["params"]["offset"] == 3
+
+    capture = {}
+    _patch_async_client(
+        monkeypatch,
+        response=_FakeResponse(200, {"data": {"payload": {"serialized": "{}"}}, "token_info": {"estimated_tokens": 25}}),
+        capture=capture,
+    )
+    payload = await tools.get_trace_payload(
+        "856df16f1752cb53ee43dcb2f5ecfd16",
+        payload_id="observation:obs-1:output",
+        start=10,
+        max_chars=999999,
+    )
+    assert payload["status"] == "success"
+    assert capture["url"].endswith("/langfuse_payload")
+    assert capture["params"]["payload_id"] == "observation:obs-1:output"
+    assert capture["params"]["start"] == 10
+    assert capture["params"]["max_chars"] == 50000
+
+
+@pytest.mark.asyncio
+async def test_get_trace_costs_and_duplicates(monkeypatch):
+    capture = {}
+    _patch_async_client(
+        monkeypatch,
+        response=_FakeResponse(200, {"data": {"costs": {}}, "token_info": {"estimated_tokens": 50}}),
+        capture=capture,
+    )
+    costs = await tools.get_trace_costs("856df16f1752cb53ee43dcb2f5ecfd16")
+    assert costs["status"] == "success"
+    assert capture["url"].endswith("/langfuse_costs")
+
+    capture = {}
+    _patch_async_client(
+        monkeypatch,
+        response=_FakeResponse(200, {"data": {"duplicates": {}}, "token_info": {"estimated_tokens": 50}}),
+        capture=capture,
+    )
+    duplicates = await tools.get_trace_duplicates("856df16f1752cb53ee43dcb2f5ecfd16")
+    assert duplicates["status"] == "success"
+    assert capture["url"].endswith("/langfuse_duplicates")
 
 
 @pytest.mark.asyncio

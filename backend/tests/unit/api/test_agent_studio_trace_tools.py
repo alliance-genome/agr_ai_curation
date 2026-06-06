@@ -3,6 +3,7 @@
 import sys
 import types
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -10,6 +11,20 @@ import pytest
 import src.api.agent_studio as api_module
 from src.api import logs as logs_api
 from src.lib.agent_studio.models import ChatContext
+
+
+def _chat_context(**overrides: Any) -> ChatContext:
+    return ChatContext(
+        selected_agent_id=overrides.get("selected_agent_id"),
+        selected_group_id=overrides.get("selected_group_id"),
+        trace_id=overrides.get("trace_id"),
+        session_id=overrides.get("session_id"),
+        view_mode=overrides.get("view_mode", "base"),
+        active_tab=overrides.get("active_tab"),
+        flow_name=overrides.get("flow_name"),
+        flow_definition=overrides.get("flow_definition"),
+        agent_workshop=overrides.get("agent_workshop"),
+    )
 
 
 def _install_langfuse(monkeypatch, trace_obj=None, observations=None, raise_on_init=False):
@@ -26,7 +41,7 @@ def _install_langfuse(monkeypatch, trace_obj=None, observations=None, raise_on_i
                 ),
             )
 
-    module.Langfuse = _Langfuse
+    setattr(module, "Langfuse", _Langfuse)
     monkeypatch.setitem(sys.modules, "langfuse", module)
 
 
@@ -50,7 +65,7 @@ def test_send_error_notification_sns_uses_profile_session(monkeypatch):
     monkeypatch.setenv("SNS_REGION", "us-west-2")
     monkeypatch.setattr(api_module.boto3, "Session", lambda profile_name: fake_session)
 
-    context = ChatContext(trace_id="trace-1", selected_agent_id="gene")
+    context = _chat_context(trace_id="trace-1", selected_agent_id="gene")
     api_module._send_error_notification_sns("curator@example.org", "backend failed", context)
 
     publish_client.publish.assert_called_once()
@@ -120,9 +135,43 @@ def test_get_service_logs_tool_schema_matches_logs_api_contract():
     assert "minutes ago" in schema["since"]["description"]
 
 
+def test_langfuse_trace_tools_are_registered_and_trace_scoped():
+    agents_tools = api_module._get_all_opus_tools(_chat_context(active_tab="agents"))
+    flows_tools = api_module._get_all_opus_tools(_chat_context(active_tab="flows"))
+    trace_tools = api_module._get_all_opus_tools(_chat_context(active_tab="flows", trace_id="trace-1"))
+
+    agents_tool_names = {tool["name"] for tool in agents_tools}
+    flows_tool_names = {tool["name"] for tool in flows_tools}
+    trace_tool_names = {tool["name"] for tool in trace_tools}
+
+    expected = {
+        "search_traces",
+        "get_extraction_diagnostic_report",
+        "get_extraction_timeline",
+        "get_trace_tree",
+        "get_trace_reconstruction",
+        "get_trace_payloads",
+        "get_trace_payload",
+        "get_trace_costs",
+        "get_trace_duplicates",
+    }
+    assert expected <= agents_tool_names
+    assert expected.isdisjoint(flows_tool_names)
+    assert expected <= trace_tool_names
+
+    tools_by_name = {tool["name"]: tool for tool in agents_tools}
+    assert tools_by_name["get_trace_payload"]["input_schema"]["properties"]["field"]["enum"] == [
+        "input",
+        "output",
+        "metadata.agent_config",
+        "metadata.event_payload",
+    ]
+    assert "extraction_timeline" in tools_by_name["get_trace_view"]["input_schema"]["properties"]["view_name"]["enum"]
+
+
 def test_codebase_tools_are_agents_only():
-    agents_context = ChatContext(active_tab="agents")
-    flows_context = ChatContext(active_tab="flows")
+    agents_context = _chat_context(active_tab="agents")
+    flows_context = _chat_context(active_tab="flows")
 
     assert api_module._is_tool_allowed_for_context("search_codebase", agents_context) is True
     assert api_module._is_tool_allowed_for_context("read_source_file", agents_context) is True
@@ -155,6 +204,84 @@ async def test_handle_tool_call_get_service_logs_forwards_inputs(monkeypatch):
         "level": "FATAL",
         "since": 30,
     }
+
+
+@pytest.mark.asyncio
+async def test_handle_tool_call_new_trace_tools_forward_inputs(monkeypatch):
+    from src.lib.agent_studio import tools as tools_module
+
+    captured: dict[str, dict] = {}
+
+    async def _fake_report(**kwargs):
+        captured["report"] = kwargs
+        return {"status": "ok", "tool": "report"}
+
+    async def _fake_reconstruction(**kwargs):
+        captured["reconstruction"] = kwargs
+        return {"status": "ok", "tool": "reconstruction"}
+
+    async def _fake_payload(**kwargs):
+        captured["payload"] = kwargs
+        return {"status": "ok", "tool": "payload"}
+
+    monkeypatch.setattr(tools_module, "get_extraction_diagnostic_report", _fake_report)
+    monkeypatch.setattr(tools_module, "get_trace_reconstruction", _fake_reconstruction)
+    monkeypatch.setattr(tools_module, "get_trace_payload", _fake_payload)
+
+    report = await api_module._handle_tool_call(
+        tool_name="get_extraction_diagnostic_report",
+        tool_input={
+            "trace_id": "trace-1",
+            "session_id": "session-1",
+            "include_sibling_traces": True,
+            "include_raw_args": True,
+            "tool_name": "stage",
+        },
+        context=None,
+        user_email="dev@example.org",
+        user_auth_sub="auth-sub-1",
+        messages=[],
+    )
+    assert report["tool"] == "report"
+    assert captured["report"]["trace_id"] == "trace-1"
+    assert captured["report"]["session_id"] == "session-1"
+    assert captured["report"]["include_sibling_traces"] is True
+    assert captured["report"]["include_raw_args"] is True
+    assert captured["report"]["tool_name"] == "stage"
+
+    reconstruction = await api_module._handle_tool_call(
+        tool_name="get_trace_reconstruction",
+        tool_input={"trace_id": "trace-1", "include_payloads": True, "limit": 5, "offset": 10},
+        context=None,
+        user_email="dev@example.org",
+        user_auth_sub="auth-sub-1",
+        messages=[],
+    )
+    assert reconstruction["tool"] == "reconstruction"
+    assert captured["reconstruction"] == {
+        "trace_id": "trace-1",
+        "include_payloads": True,
+        "limit": 5,
+        "offset": 10,
+    }
+
+    payload = await api_module._handle_tool_call(
+        tool_name="get_trace_payload",
+        tool_input={
+            "trace_id": "trace-1",
+            "payload_id": "observation:obs-1:output",
+            "start": 12,
+            "max_chars": 120,
+        },
+        context=None,
+        user_email="dev@example.org",
+        user_auth_sub="auth-sub-1",
+        messages=[],
+    )
+    assert payload["tool"] == "payload"
+    assert captured["payload"]["payload_id"] == "observation:obs-1:output"
+    assert captured["payload"]["start"] == 12
+    assert captured["payload"]["max_chars"] == 120
 
 
 @pytest.mark.asyncio
@@ -225,7 +352,7 @@ async def test_handle_tool_call_submit_prompt_suggestion_returns_clear_failure(m
             "detailed_reasoning": "Needs better constraints",
             "proposed_change": "Add explicit rule",
         },
-        context=ChatContext(trace_id="trace-1", selected_group_id="WB"),
+        context=_chat_context(trace_id="trace-1", selected_group_id="WB"),
         user_email="dev@example.org",
         user_auth_sub="auth-sub-1",
         messages=[{"role": "user", "content": "help"}],

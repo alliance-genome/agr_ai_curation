@@ -362,7 +362,7 @@ GET_TRACE_CONVERSATION_TOOL = {
 
 GET_TRACE_VIEW_TOOL = {
     "name": "get_trace_view",
-    "description": "Get a specific analysis view with token metadata. Use for specialized views not covered by the primary tools. Available views: token_analysis, agent_context, pdf_citations, document_hierarchy, agent_configs, group_context, trace_summary.",
+    "description": "Get a specific analysis view with token metadata. Use for specialized views not covered by the primary tools. Available views: token_analysis, agent_context, pdf_citations, document_hierarchy, agent_configs, group_context, trace_summary, domain_envelope, extraction_timeline.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -372,11 +372,199 @@ GET_TRACE_VIEW_TOOL = {
             },
             "view_name": {
                 "type": "string",
-                "enum": ["token_analysis", "agent_context", "pdf_citations", "document_hierarchy", "agent_configs", "group_context", "mod_context", "trace_summary"],
+                "enum": ["token_analysis", "agent_context", "pdf_citations", "document_hierarchy", "agent_configs", "group_context", "mod_context", "trace_summary", "domain_envelope", "extraction_timeline"],
                 "description": "Which view to fetch",
             },
         },
         "required": ["trace_id", "view_name"],
+    },
+}
+
+SEARCH_TRACES_TOOL = {
+    "name": "search_traces",
+    "description": "Search Langfuse traces by session_id, user_id, trace name, document_id, run_id, extraction_id, or bounded timestamp window. Use this when the curator has a session/document/run ID but not a specific trace ID.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "session_id": {"type": "string", "description": "Optional Langfuse session ID."},
+            "user_id": {"type": "string", "description": "Optional Langfuse user ID."},
+            "name": {"type": "string", "description": "Optional trace name filter."},
+            "document_id": {"type": "string", "description": "Optional trace metadata.document_id filter."},
+            "run_id": {"type": "string", "description": "Optional trace metadata.run_id filter."},
+            "extraction_id": {"type": "string", "description": "Optional trace metadata.extraction_id filter."},
+            "from_timestamp": {"type": "string", "description": "Optional ISO 8601 lower timestamp bound."},
+            "to_timestamp": {"type": "string", "description": "Optional ISO 8601 upper timestamp bound."},
+            "limit": {
+                "type": "integer",
+                "description": "Maximum traces to return (default: 25, max: 100).",
+                "default": 25,
+                "minimum": 1,
+                "maximum": 100,
+            },
+        },
+        "required": [],
+    },
+}
+
+GET_EXTRACTION_DIAGNOSTIC_REPORT_TOOL = {
+    "name": "get_extraction_diagnostic_report",
+    "description": "Get a concise TraceReview report of what the extraction/builder/validator flow actually did. Use early for traces involving domain envelopes, extraction events, validation failures, lookup attempts, staged objects, patches, or finalize/envelope output. Includes ordered durable events, tool-call summaries, validation signals, and reasoning-summary status when available.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "trace_id": {"type": "string", "description": "Langfuse trace ID."},
+            "session_id": {"type": "string", "description": "Optional Langfuse session ID for sibling trace expansion."},
+            "feedback_id": {"type": "string", "description": "Optional feedback ID linked to stored trace artifacts."},
+            "include_sibling_traces": {"type": "boolean", "description": "Include related traces from the same session when session_id is supplied.", "default": False},
+            "refresh": {"type": "boolean", "description": "Refresh cached TraceReview analysis before rendering.", "default": False},
+            "include_raw_args": {"type": "boolean", "description": "Include bounded raw tool argument summaries.", "default": False},
+            "include_raw_outputs": {"type": "boolean", "description": "Include bounded raw tool output summaries.", "default": False},
+            "tool_name": {"type": "string", "description": "Optional tool-name filter."},
+            "event_type": {"type": "string", "description": "Optional extraction event type filter."},
+            "candidate_id": {"type": "string", "description": "Optional candidate/object ID filter."},
+        },
+        "required": ["trace_id"],
+    },
+}
+
+GET_EXTRACTION_TIMELINE_TOOL = {
+    "name": "get_extraction_timeline",
+    "description": "Get the ordered extraction timeline and OpenAI/Agents SDK tool-call observations. Use when the diagnostic report points to a candidate, event type, or tool and you need more event-level detail.",
+    "input_schema": GET_EXTRACTION_DIAGNOSTIC_REPORT_TOOL["input_schema"],
+}
+
+GET_TRACE_TREE_TOOL = {
+    "name": "get_trace_tree",
+    "description": "Get the Langfuse parent-child observation tree with payload references, model/agent hints, metadata, status, and usage/cost summaries. Full payload values are omitted.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "trace_id": {"type": "string", "description": "Langfuse trace ID."},
+        },
+        "required": ["trace_id"],
+    },
+}
+
+GET_TRACE_RECONSTRUCTION_TOOL = {
+    "name": "get_trace_reconstruction",
+    "description": "Get chronological Langfuse trace/model/tool/event reconstruction with payload references. Use this to understand the order of model calls, tools, handoffs, validation, and trace input/output. Defaults to payload references only.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "trace_id": {"type": "string", "description": "Langfuse trace ID."},
+            "include_payloads": {
+                "type": "boolean",
+                "description": "Include full payload values inside events. Leave false unless a small page needs exact inline values.",
+                "default": False,
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Maximum events to return (default: 100, max: 500).",
+                "default": 100,
+                "minimum": 1,
+                "maximum": 500,
+            },
+            "offset": {
+                "type": "integer",
+                "description": "Event offset for pagination.",
+                "default": 0,
+                "minimum": 0,
+            },
+        },
+        "required": ["trace_id"],
+    },
+}
+
+GET_TRACE_PAYLOADS_TOOL = {
+    "name": "get_trace_payloads",
+    "description": "List exact Langfuse payloads available in a trace with payload_id, source observation, field, size, token estimate, hash, and preview. Use before get_trace_payload to find the exact prompt, model output, tool input/output, agent_config, or event_payload to inspect.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "trace_id": {"type": "string", "description": "Langfuse trace ID."},
+            "sort": {
+                "type": "string",
+                "enum": ["largest", "chronological"],
+                "description": "Sort largest first for prompt/context bloat, or chronological to follow the run.",
+                "default": "largest",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Maximum payload summaries to return (default: 50, max: 200).",
+                "default": 50,
+                "minimum": 1,
+                "maximum": 200,
+            },
+            "offset": {
+                "type": "integer",
+                "description": "Pagination offset.",
+                "default": 0,
+                "minimum": 0,
+            },
+            "include_values": {
+                "type": "boolean",
+                "description": "Include full payload values in the listing. Prefer false, then call get_trace_payload for exact chunked retrieval.",
+                "default": False,
+            },
+        },
+        "required": ["trace_id"],
+    },
+}
+
+GET_TRACE_PAYLOAD_TOOL = {
+    "name": "get_trace_payload",
+    "description": "Retrieve one exact Langfuse payload by payload_id, or by scope/observation_id/field. Returns a chunk with start/end/next_start so large prompts/results can be inspected safely.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "trace_id": {"type": "string", "description": "Langfuse trace ID."},
+            "payload_id": {"type": "string", "description": "Payload ID returned by get_trace_payloads, for example observation:<id>:output."},
+            "scope": {"type": "string", "enum": ["trace", "observation"], "description": "Payload scope when payload_id is omitted."},
+            "observation_id": {"type": "string", "description": "Observation/span ID when retrieving an observation payload."},
+            "field": {
+                "type": "string",
+                "enum": ["input", "output", "metadata.agent_config", "metadata.event_payload"],
+                "description": "Payload field when payload_id is omitted.",
+            },
+            "start": {
+                "type": "integer",
+                "description": "Start character for chunked retrieval.",
+                "default": 0,
+                "minimum": 0,
+            },
+            "max_chars": {
+                "type": "integer",
+                "description": "Maximum characters to return (default: 12000, max: 50000; 0 asks TraceReview for the full payload).",
+                "default": 12000,
+                "minimum": 0,
+                "maximum": 50000,
+            },
+        },
+        "required": ["trace_id"],
+    },
+}
+
+GET_TRACE_COSTS_TOOL = {
+    "name": "get_trace_costs",
+    "description": "Get Langfuse token and cost accounting by trace, agent, model, observation kind, and observation. Use for cost spikes, large-context investigation, and model/tool spend attribution.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "trace_id": {"type": "string", "description": "Langfuse trace ID."},
+        },
+        "required": ["trace_id"],
+    },
+}
+
+GET_TRACE_DUPLICATES_TOOL = {
+    "name": "get_trace_duplicates",
+    "description": "Get repeated payload fingerprints across trace and observation input/output payloads. Use to detect duplicate prompt stuffing, repeated context injection, or identical tool/model payloads.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "trace_id": {"type": "string", "description": "Langfuse trace ID."},
+        },
+        "required": ["trace_id"],
     },
 }
 
@@ -604,11 +792,20 @@ WORKSHOP_TOOLS = {
     "update_workshop_prompt_draft",
 }
 TRACE_TOOLS = {
+    "search_traces",
     "get_trace_summary",
     "get_tool_calls_summary",
     "get_tool_calls_page",
     "get_tool_call_detail",
     "get_trace_conversation",
+    "get_extraction_diagnostic_report",
+    "get_extraction_timeline",
+    "get_trace_tree",
+    "get_trace_reconstruction",
+    "get_trace_payloads",
+    "get_trace_payload",
+    "get_trace_costs",
+    "get_trace_duplicates",
     "get_trace_view",
     "get_service_logs",
 }
@@ -730,11 +927,20 @@ def get_all_opus_tools(
         LIST_RECENT_CHATS_TOOL,
         SEARCH_CHAT_HISTORY_TOOL,
         GET_CHAT_CONVERSATION_TOOL,
+        SEARCH_TRACES_TOOL,
         GET_TRACE_SUMMARY_TOOL,
         GET_TOOL_CALLS_SUMMARY_TOOL,
         GET_TOOL_CALLS_PAGE_TOOL,
         GET_TOOL_CALL_DETAIL_TOOL,
         GET_TRACE_CONVERSATION_TOOL,
+        GET_EXTRACTION_DIAGNOSTIC_REPORT_TOOL,
+        GET_EXTRACTION_TIMELINE_TOOL,
+        GET_TRACE_TREE_TOOL,
+        GET_TRACE_RECONSTRUCTION_TOOL,
+        GET_TRACE_PAYLOADS_TOOL,
+        GET_TRACE_PAYLOAD_TOOL,
+        GET_TRACE_COSTS_TOOL,
+        GET_TRACE_DUPLICATES_TOOL,
         GET_TRACE_VIEW_TOOL,
         GET_SERVICE_LOGS_TOOL,
         LIST_DOMAIN_ENVELOPES_TOOL,

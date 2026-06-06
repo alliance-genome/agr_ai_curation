@@ -580,6 +580,27 @@ All endpoints return:
 }
 ```
 
+### Langfuse-First Inspection Endpoints
+
+These token-aware Claude endpoints mirror TraceReview's newer Langfuse-first
+inspection API and are the preferred drill-down surface for Chat with Claude:
+
+| Endpoint | Use |
+|----------|-----|
+| `GET /api/claude/traces/search` | Find traces by `session_id`, `user_id`, trace name, `document_id`, `run_id`, `extraction_id`, or bounded timestamp window. |
+| `GET /api/claude/traces/{trace_id}/diagnostic_report` | Concise extraction, builder, tool, validation, and domain-envelope diagnostics. |
+| `GET /api/claude/traces/{trace_id}/extraction_timeline` | Ordered extraction events and OpenAI/Agents SDK tool-call observations with filters. |
+| `GET /api/claude/traces/{trace_id}/langfuse_tree` | Parent/child observation tree with payload references and usage/cost summaries. |
+| `GET /api/claude/traces/{trace_id}/langfuse_reconstruction` | Chronological model/tool/event reconstruction, paginated by `limit`/`offset`. |
+| `GET /api/claude/traces/{trace_id}/langfuse_payloads` | Payload inventory with IDs, sizes, hashes, and previews. |
+| `GET /api/claude/traces/{trace_id}/langfuse_payload` | Exact chunked payload retrieval by `payload_id` or scope/observation/field. |
+| `GET /api/claude/traces/{trace_id}/langfuse_costs` | Token/cost accounting by trace, agent, model, kind, and observation. |
+| `GET /api/claude/traces/{trace_id}/langfuse_duplicates` | Duplicate payload fingerprint report. |
+
+Use payload listings before exact payload reads. `langfuse_payload` defaults to a
+bounded chunk; use `next_start` to continue through large prompts or tool
+results.
+
 ### 1. Get Trace Summary (~500 tokens)
 
 **ALWAYS call this first** when analyzing a trace. Provides essential overview with minimal token cost.
@@ -749,10 +770,17 @@ curl -s http://localhost:8001/api/claude/traces/$TRACE_ID/summary | jq '.data'
 # 2. Get tool calls overview
 curl -s http://localhost:8001/api/claude/traces/$TRACE_ID/tool_calls/summary | jq '.data'
 
-# 3. Drill into specific calls if needed
-curl -s "http://localhost:8001/api/claude/traces/$TRACE_ID/tool_calls?page=1&page_size=5" | jq
+# 3. Get extraction/domain-envelope diagnostics when applicable
+curl -s http://localhost:8001/api/claude/traces/$TRACE_ID/diagnostic_report | jq '.data'
 
-# 4. Get conversation if analyzing response quality
+# 4. Reconstruct chronological model/tool/event flow
+curl -s "http://localhost:8001/api/claude/traces/$TRACE_ID/langfuse_reconstruction?limit=100" | jq '.data'
+
+# 5. Find and fetch exact payloads when needed
+curl -s "http://localhost:8001/api/claude/traces/$TRACE_ID/langfuse_payloads?sort=largest&limit=25" | jq '.data.payloads[] | {payload_id, byte_count, name, field}'
+curl -s "http://localhost:8001/api/claude/traces/$TRACE_ID/langfuse_payload?payload_id=<payload_id>&max_chars=12000" | jq '.data.payload'
+
+# 6. Get conversation if analyzing response quality
 curl -s http://localhost:8001/api/claude/traces/$TRACE_ID/conversation | jq '.data'
 ```
 
@@ -797,7 +825,15 @@ Opus has access to these token-aware tools during analysis:
 
 | Tool | Token Cost | Description |
 |------|------------|-------------|
+| `search_traces` | varies | Find traces by session/document/run/extraction/name/time |
 | `get_trace_summary` | ~500 | Lightweight overview (ALWAYS called first) |
+| `get_extraction_diagnostic_report` | compact/varies | Extraction, builder, validator, domain-envelope diagnostics |
+| `get_extraction_timeline` | varies | Ordered extraction events and tool observations |
+| `get_trace_reconstruction` | varies | Chronological Langfuse model/tool/event reconstruction |
+| `get_trace_payloads` | compact/varies | Payload inventory with IDs, sizes, hashes, previews |
+| `get_trace_payload` | chunked | Exact prompt/model/tool payload chunks |
+| `get_trace_costs` | varies | Token/cost accounting by agent/model/kind |
+| `get_trace_duplicates` | compact/varies | Duplicate payload fingerprints |
 | `get_tool_calls_summary` | ~100/call | List all calls without full results |
 | `get_tool_calls_page` | ~1-5K | Paginated full details with filtering |
 | `get_tool_call_detail` | ~1-5K | Single call full detail |

@@ -258,6 +258,13 @@ This opens Agent Studio with your conversation loaded, so Opus knows exactly wha
 - "Which envelope object and field path did this validation finding target?"
 - "Was this lookup attempt a final failure or just part of the audit trail?"
 
+When a trace is available, Claude can inspect the TraceReview summary,
+extraction diagnostic report, ordered model/tool/event reconstruction, exact
+prompt and tool payload chunks, validation timeline, token/cost accounting, and
+duplicate-context reports. This lets Claude explain what the AI actually did
+before suggesting whether the issue is missing routing, missing data, or prompt
+behavior.
+
 This is the best way to get help understanding unexpected AI behavior or to formulate improvement suggestions.
 
 ## Understanding Validation Findings

@@ -13,10 +13,20 @@ Endpoints:
 """
 
 import math
+from datetime import datetime
 from typing import Annotated, Dict, Any, Optional, List
 from fastapi import APIRouter, HTTPException, Request, Query, Path
 
 from ..services.trace_extractor import TraceExtractor
+from ..services.langfuse_run_reconstruction import (
+    build_cost_summary,
+    build_duplicate_report,
+    build_ordered_reconstruction,
+    build_payload_inventory,
+    build_trace_tree,
+    find_payload,
+    paginate_payloads,
+)
 from ..analyzers.conversation import ConversationAnalyzer
 from ..analyzers.tool_calls import ToolCallAnalyzer
 from ..analyzers.trace_summary import TraceSummaryAnalyzer
@@ -60,6 +70,63 @@ DEFAULT_SOURCE = "local"
 
 def _effective_source(source: str) -> str:
     return "local" if source == "auto" else source
+
+
+def _trace_id_short(trace_id: Optional[str]) -> Optional[str]:
+    if not trace_id:
+        return None
+    return trace_id[:8] if len(trace_id) >= 8 else trace_id
+
+
+def _listed_trace_reference(trace: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "trace_id": trace.get("id"),
+        "trace_id_short": _trace_id_short(trace.get("id")),
+        "trace_name": trace.get("name"),
+        "timestamp": trace.get("timestamp"),
+        "session_id": trace.get("sessionId"),
+        "user_id": trace.get("userId"),
+        "environment": trace.get("environment"),
+        "tags": trace.get("tags", []),
+        "latency": trace.get("latency"),
+        "total_cost": trace.get("totalCost"),
+        "html_path": trace.get("htmlPath"),
+    }
+
+
+def _parse_optional_datetime(value: Optional[str], param_name: str) -> Optional[datetime]:
+    if not value:
+        return None
+    normalized = value.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid {param_name}; expected ISO 8601 timestamp",
+        ) from exc
+
+
+def _ensure_search_scope(
+    *,
+    session_id: Optional[str],
+    user_id: Optional[str],
+    name: Optional[str],
+    document_id: Optional[str],
+    run_id: Optional[str],
+    extraction_id: Optional[str],
+    from_timestamp: Optional[str],
+    to_timestamp: Optional[str],
+) -> None:
+    if any([session_id, user_id, name, document_id, run_id, extraction_id, from_timestamp, to_timestamp]):
+        return
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "Provide at least one bounded search key: session_id, user_id, name, "
+            "document_id, run_id, extraction_id, from_timestamp, or to_timestamp."
+        ),
+    )
 
 
 def _cache_schema_is_current(cache_data: Dict[str, Any]) -> bool:
@@ -220,6 +287,323 @@ def _sibling_trace_ids(
         for listed_trace in session_listing.get("traces", [])
         if listed_trace.get("id") and listed_trace.get("id") != trace_id
     ]
+
+
+def _extract_langfuse_trace(trace_id: str, source: str) -> Dict[str, Any]:
+    try:
+        extractor = TraceExtractor(source=_effective_source(source))
+        return extractor.extract_complete_trace(trace_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Trace {trace_id} not found in Langfuse ({source}): {str(exc)}",
+        ) from exc
+
+
+def _offset_pagination(*, limit: int, offset: int, total_items: int) -> Dict[str, Any]:
+    next_offset = offset + limit if offset + limit < total_items else None
+    return {
+        "limit": limit,
+        "offset": offset,
+        "total_items": total_items,
+        "has_next": next_offset is not None,
+        "next_offset": next_offset,
+    }
+
+
+# =============================================================================
+# Langfuse-first Inspection Endpoints
+# =============================================================================
+
+@router.get(
+    "/search",
+    response_model=ClaudeTraceResponse,
+    summary="Search Langfuse traces",
+    description="""
+    Search Langfuse traces by session, user, trace name, indexed metadata IDs,
+    or bounded timestamp window. Use this when a curator gives a session,
+    document, run, or extraction ID instead of a trace ID.
+    """
+)
+async def search_traces(
+    source: str = Query(default=DEFAULT_SOURCE, description="Trace source: local, remote, or auto"),
+    session_id: Optional[str] = Query(default=None, description="Langfuse session ID"),
+    user_id: Optional[str] = Query(default=None, description="Langfuse user ID"),
+    name: Optional[str] = Query(default=None, description="Trace name filter"),
+    document_id: Optional[str] = Query(default=None, description="Trace metadata.document_id filter"),
+    run_id: Optional[str] = Query(default=None, description="Trace metadata.run_id filter"),
+    extraction_id: Optional[str] = Query(default=None, description="Trace metadata.extraction_id filter"),
+    from_timestamp: Optional[str] = Query(default=None, description="ISO timestamp lower bound"),
+    to_timestamp: Optional[str] = Query(default=None, description="ISO timestamp upper bound"),
+    limit: int = Query(default=25, ge=1, le=100, description="Maximum traces to return"),
+    user: Dict[str, Any] = get_auth_dependency(),
+) -> ClaudeTraceResponse:
+    _ensure_search_scope(
+        session_id=session_id,
+        user_id=user_id,
+        name=name,
+        document_id=document_id,
+        run_id=run_id,
+        extraction_id=extraction_id,
+        from_timestamp=from_timestamp,
+        to_timestamp=to_timestamp,
+    )
+
+    try:
+        extractor = TraceExtractor(source=_effective_source(source))
+        listing = extractor.list_traces(
+            session_id=session_id,
+            user_id=user_id,
+            name=name,
+            document_id=document_id,
+            run_id=run_id,
+            extraction_id=extraction_id,
+            from_timestamp=_parse_optional_datetime(from_timestamp, "from_timestamp"),
+            to_timestamp=_parse_optional_datetime(to_timestamp, "to_timestamp"),
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Unable to search Langfuse traces ({source}): {str(exc)}",
+        ) from exc
+
+    response_data = {
+        "source": source,
+        "trace_count": len(listing["traces"]),
+        "query": listing["query"],
+        "langfuse_meta": listing["meta"],
+        "traces": [_listed_trace_reference(trace) for trace in listing["traces"]],
+    }
+    token_info = create_token_info_dict(response_data)
+    return ClaudeTraceResponse(
+        status="success",
+        data=response_data,
+        token_info=TokenInfo(**token_info),
+    )
+
+
+@router.get(
+    "/{trace_id}/langfuse_tree",
+    response_model=ClaudeTraceResponse,
+    summary="Get Langfuse observation tree",
+    description="""
+    Return the trace/observation parent-child tree with payload references,
+    observation metadata, model names, agent hints, and usage/cost summaries.
+    Full payload values are omitted; use langfuse_payloads and langfuse_payload
+    to retrieve exact input/output values.
+    """
+)
+async def get_langfuse_tree(
+    trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
+    user: Dict[str, Any] = get_auth_dependency(),
+) -> ClaudeTraceResponse:
+    trace_data = _extract_langfuse_trace(trace_id, source)
+    response_data = {
+        "source": source,
+        "trace_id": trace_id,
+        "tree": build_trace_tree(trace_data),
+    }
+    token_info = create_token_info_dict(response_data)
+    return ClaudeTraceResponse(
+        status="success",
+        data=response_data,
+        token_info=TokenInfo(**token_info),
+    )
+
+
+@router.get(
+    "/{trace_id}/langfuse_reconstruction",
+    response_model=ClaudeTraceResponse,
+    summary="Get ordered Langfuse trace reconstruction",
+    description="""
+    Return chronological trace/model/tool/event reconstruction with payload
+    references. The event list is offset/limit paginated for large traces.
+    """
+)
+async def get_langfuse_reconstruction(
+    trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
+    include_payloads: bool = Query(default=False, description="Include full payload values in events"),
+    limit: int = Query(default=100, ge=1, le=500, description="Maximum events to return"),
+    offset: int = Query(default=0, ge=0, description="Event offset"),
+    user: Dict[str, Any] = get_auth_dependency(),
+) -> ClaudeTraceResponse:
+    trace_data = _extract_langfuse_trace(trace_id, source)
+    reconstruction = build_ordered_reconstruction(
+        trace_data,
+        include_payload_values=include_payloads,
+    )
+    events = reconstruction.get("events", [])
+    page = events[offset:offset + limit]
+    response_data = {
+        "source": source,
+        "trace_id": trace_id,
+        "trace": reconstruction.get("trace"),
+        "event_count": reconstruction.get("event_count", len(events)),
+        "events": page,
+        "pagination": _offset_pagination(
+            limit=limit,
+            offset=offset,
+            total_items=len(events),
+        ),
+    }
+    token_info = create_token_info_dict(response_data)
+    return ClaudeTraceResponse(
+        status="success",
+        data=response_data,
+        token_info=TokenInfo(**token_info),
+    )
+
+
+@router.get(
+    "/{trace_id}/langfuse_payloads",
+    response_model=ClaudeTraceResponse,
+    summary="List Langfuse trace payloads",
+    description="""
+    Return trace/model/tool input/output payload summaries, largest first by
+    default. Full values are omitted unless include_values is true; prefer
+    langfuse_payload for exact chunked retrieval.
+    """
+)
+async def get_langfuse_payloads(
+    trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
+    include_values: bool = Query(default=False, description="Include full payload values in page"),
+    sort: str = Query(default="largest", description="Sort order: largest or chronological"),
+    limit: int = Query(default=50, ge=1, le=200, description="Maximum payload summaries to return"),
+    offset: int = Query(default=0, ge=0, description="Pagination offset"),
+    user: Dict[str, Any] = get_auth_dependency(),
+) -> ClaudeTraceResponse:
+    if sort not in {"largest", "chronological"}:
+        raise HTTPException(status_code=400, detail="sort must be 'largest' or 'chronological'")
+    trace_data = _extract_langfuse_trace(trace_id, source)
+    payloads = build_payload_inventory(trace_data, include_values=include_values)
+    page, pagination = paginate_payloads(payloads, limit=limit, offset=offset, sort=sort)
+    response_data = {
+        "source": source,
+        "trace_id": trace_id,
+        "sort": sort,
+        "pagination": pagination,
+        "payloads": page,
+    }
+    token_info = create_token_info_dict(response_data)
+    return ClaudeTraceResponse(
+        status="success",
+        data=response_data,
+        token_info=TokenInfo(**token_info),
+    )
+
+
+@router.get(
+    "/{trace_id}/langfuse_payload",
+    response_model=ClaudeTraceResponse,
+    summary="Get one exact Langfuse payload",
+    description="""
+    Return one exact trace or observation payload by payload_id, or by
+    scope/observation_id/field. Defaults to a 12K-character chunk to keep
+    Claude responses bounded.
+    """
+)
+async def get_langfuse_payload(
+    trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
+    payload_id: Optional[str] = Query(default=None, description="Payload ID returned by langfuse_payloads"),
+    scope: Optional[str] = Query(default=None, description="Payload scope: trace or observation"),
+    observation_id: Optional[str] = Query(default=None, description="Observation/span ID"),
+    field: Optional[str] = Query(default=None, description="Payload field: input, output, metadata.agent_config, or metadata.event_payload"),
+    start: int = Query(default=0, ge=0, description="Start character for chunked retrieval"),
+    max_chars: int = Query(default=12000, ge=0, le=50000, description="Maximum characters; 0 returns the full payload"),
+    user: Dict[str, Any] = get_auth_dependency(),
+) -> ClaudeTraceResponse:
+    if not payload_id:
+        if field not in {"input", "output", "metadata.agent_config", "metadata.event_payload"}:
+            raise HTTPException(
+                status_code=400,
+                detail="field must be 'input', 'output', 'metadata.agent_config', or 'metadata.event_payload'",
+            )
+        if scope and scope not in {"trace", "observation"}:
+            raise HTTPException(status_code=400, detail="scope must be 'trace' or 'observation'")
+
+    trace_data = _extract_langfuse_trace(trace_id, source)
+    payload = find_payload(
+        trace_data,
+        payload_id=payload_id,
+        scope=scope,
+        observation_id=observation_id,
+        field=field,
+        start=start,
+        max_chars=max_chars,
+    )
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Payload not found in Langfuse trace data")
+
+    response_data = {
+        "source": source,
+        "trace_id": trace_id,
+        "payload": payload,
+    }
+    token_info = create_token_info_dict(response_data)
+    return ClaudeTraceResponse(
+        status="success",
+        data=response_data,
+        token_info=TokenInfo(**token_info),
+    )
+
+
+@router.get(
+    "/{trace_id}/langfuse_costs",
+    response_model=ClaudeTraceResponse,
+    summary="Get Langfuse cost summary",
+    description="Return token and cost accounting by trace, agent, model, kind, and observation."
+)
+async def get_langfuse_costs(
+    trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
+    user: Dict[str, Any] = get_auth_dependency(),
+) -> ClaudeTraceResponse:
+    trace_data = _extract_langfuse_trace(trace_id, source)
+    response_data = {
+        "source": source,
+        "trace_id": trace_id,
+        "costs": build_cost_summary(trace_data),
+    }
+    token_info = create_token_info_dict(response_data)
+    return ClaudeTraceResponse(
+        status="success",
+        data=response_data,
+        token_info=TokenInfo(**token_info),
+    )
+
+
+@router.get(
+    "/{trace_id}/langfuse_duplicates",
+    response_model=ClaudeTraceResponse,
+    summary="Get duplicated Langfuse payload report",
+    description="Return repeated payload fingerprints across trace and observation input/output payloads."
+)
+async def get_langfuse_duplicates(
+    trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
+    user: Dict[str, Any] = get_auth_dependency(),
+) -> ClaudeTraceResponse:
+    trace_data = _extract_langfuse_trace(trace_id, source)
+    response_data = {
+        "source": source,
+        "trace_id": trace_id,
+        "duplicates": build_duplicate_report(trace_data),
+    }
+    token_info = create_token_info_dict(response_data)
+    return ClaudeTraceResponse(
+        status="success",
+        data=response_data,
+        token_info=TokenInfo(**token_info),
+    )
 
 
 # =============================================================================

@@ -11,6 +11,15 @@ Token-Aware Tools (Claude-Specific Endpoints):
 - get_tool_call_detail: Single tool call detail
 - get_trace_conversation: User query and assistant response
 - get_trace_view: Generic view access with token metadata
+- search_traces: Find traces by session/document/run/extraction metadata
+- get_extraction_diagnostic_report: Concise extraction/builder/validation report
+- get_extraction_timeline: Ordered extraction and tool timeline
+- get_trace_tree: Langfuse parent/child observation tree
+- get_trace_reconstruction: Ordered Langfuse reconstruction with payload refs
+- get_trace_payloads: Payload inventory with sizes and previews
+- get_trace_payload: Exact chunked payload retrieval
+- get_trace_costs: Token and cost accounting
+- get_trace_duplicates: Duplicate payload report
 
 System Tools:
 - get_service_logs: Service log retrieval
@@ -93,7 +102,8 @@ def validate_view(view: str) -> None:
     valid_views = [
         "summary", "tool_calls", "conversation", "pdf_citations",
         "token_analysis", "agent_context", "trace_summary",
-        "document_hierarchy", "agent_configs", "group_context", "mod_context"
+        "document_hierarchy", "agent_configs", "group_context", "mod_context",
+        "domain_envelope", "extraction_timeline"
     ]
     if view not in valid_views:
         raise ValueError(f"Invalid view '{view}'. Must be one of: {', '.join(valid_views)}")
@@ -107,6 +117,81 @@ def _get_claude_api_url() -> str:
     """Get the Claude-specific TraceReview API base URL."""
     base = get_trace_review_url()
     return f"{base}/api/claude/traces"
+
+
+def _response_detail(resp: httpx.Response) -> str:
+    try:
+        payload = resp.json()
+    except Exception:
+        return f"HTTP {resp.status_code}"
+    detail = payload.get("detail") if isinstance(payload, dict) else None
+    if isinstance(detail, str):
+        return detail
+    return f"HTTP {resp.status_code}"
+
+
+async def _get_claude_endpoint(
+    path: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    timeout_seconds: float = 30.0,
+) -> Dict[str, Any]:
+    request_params: Dict[str, Any] = {"source": get_trace_source()}
+    if params:
+        request_params.update({key: value for key, value in params.items() if value is not None})
+
+    try:
+        timeout = httpx.Timeout(timeout_seconds)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(f"{_get_claude_api_url()}{path}", params=request_params)
+
+        if resp.status_code == 200:
+            payload = resp.json()
+            return {
+                "status": "success",
+                "data": payload.get("data"),
+                "token_info": payload.get("token_info"),
+                "error": None,
+            }
+        if resp.status_code == 404:
+            return {
+                "status": "error",
+                "data": None,
+                "token_info": None,
+                "error": _response_detail(resp),
+                "help": "Verify the trace ID, payload ID, and TraceReview source",
+            }
+        if resp.status_code == 400:
+            return {
+                "status": "error",
+                "data": None,
+                "token_info": None,
+                "error": f"Invalid request: {_response_detail(resp)}",
+                "help": "Check the tool parameters and retry with a narrower request",
+            }
+        return {
+            "status": "error",
+            "data": None,
+            "token_info": None,
+            "error": f"TraceReview API error: {resp.status_code}",
+            "help": "Check TraceReview service status",
+        }
+    except httpx.TimeoutException:
+        return {
+            "status": "error",
+            "data": None,
+            "token_info": None,
+            "error": f"TraceReview service timeout ({timeout_seconds:g}s exceeded)",
+            "help": "Retry with a narrower request or check service load",
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "data": None,
+            "token_info": None,
+            "error": f"Unexpected error: {str(e)}",
+            "help": "Contact development team if issue persists",
+        }
 
 
 async def get_trace_summary(trace_id: str) -> Dict[str, Any]:
@@ -606,7 +691,8 @@ async def get_trace_view(trace_id: str, view_name: str) -> Dict[str, Any]:
 
         valid_views = [
             "token_analysis", "agent_context", "pdf_citations",
-            "document_hierarchy", "agent_configs", "group_context", "mod_context", "trace_summary"
+            "document_hierarchy", "agent_configs", "group_context", "mod_context",
+            "trace_summary", "domain_envelope", "extraction_timeline"
         ]
         if view_name not in valid_views:
             return {
@@ -681,6 +767,276 @@ async def get_trace_view(trace_id: str, view_name: str) -> Dict[str, Any]:
             "error": f"Unexpected error: {str(e)}",
             "help": "Contact development team"
         }
+
+
+async def search_traces(
+    session_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    name: Optional[str] = None,
+    document_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    extraction_id: Optional[str] = None,
+    from_timestamp: Optional[str] = None,
+    to_timestamp: Optional[str] = None,
+    limit: int = 25,
+) -> Dict[str, Any]:
+    """Search Langfuse traces by bounded session, user, metadata, name, or time filters."""
+    if not any([session_id, user_id, name, document_id, run_id, extraction_id, from_timestamp, to_timestamp]):
+        return {
+            "status": "error",
+            "data": None,
+            "token_info": None,
+            "error": "At least one search filter is required",
+            "help": "Provide session_id, user_id, name, document_id, run_id, extraction_id, from_timestamp, or to_timestamp",
+        }
+
+    return await _get_claude_endpoint(
+        "/search",
+        params={
+            "session_id": session_id,
+            "user_id": user_id,
+            "name": name,
+            "document_id": document_id,
+            "run_id": run_id,
+            "extraction_id": extraction_id,
+            "from_timestamp": from_timestamp,
+            "to_timestamp": to_timestamp,
+            "limit": max(1, min(limit, 100)),
+        },
+    )
+
+
+async def get_extraction_diagnostic_report(
+    trace_id: str,
+    session_id: Optional[str] = None,
+    feedback_id: Optional[str] = None,
+    include_sibling_traces: bool = False,
+    refresh: bool = False,
+    include_raw_args: bool = False,
+    include_raw_outputs: bool = False,
+    tool_name: Optional[str] = None,
+    event_type: Optional[str] = None,
+    candidate_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Get concise extraction, builder, tool, and validation diagnostics for a trace."""
+    try:
+        validate_trace_id(trace_id)
+    except ValueError as e:
+        return {
+            "status": "error",
+            "data": None,
+            "token_info": None,
+            "error": str(e),
+            "help": "Check trace_id format",
+        }
+
+    return await _get_claude_endpoint(
+        f"/{trace_id}/diagnostic_report",
+        params={
+            "session_id": session_id,
+            "feedback_id": feedback_id,
+            "include_sibling_traces": include_sibling_traces,
+            "refresh": refresh,
+            "include_raw_args": include_raw_args,
+            "include_raw_outputs": include_raw_outputs,
+            "tool_name": tool_name,
+            "event_type": event_type,
+            "candidate_id": candidate_id,
+        },
+    )
+
+
+async def get_extraction_timeline(
+    trace_id: str,
+    session_id: Optional[str] = None,
+    feedback_id: Optional[str] = None,
+    include_sibling_traces: bool = False,
+    refresh: bool = False,
+    include_raw_args: bool = False,
+    include_raw_outputs: bool = False,
+    tool_name: Optional[str] = None,
+    event_type: Optional[str] = None,
+    candidate_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Get ordered extraction events and OpenAI/Agents SDK tool-call observations."""
+    try:
+        validate_trace_id(trace_id)
+    except ValueError as e:
+        return {
+            "status": "error",
+            "data": None,
+            "token_info": None,
+            "error": str(e),
+            "help": "Check trace_id format",
+        }
+
+    return await _get_claude_endpoint(
+        f"/{trace_id}/extraction_timeline",
+        params={
+            "session_id": session_id,
+            "feedback_id": feedback_id,
+            "include_sibling_traces": include_sibling_traces,
+            "refresh": refresh,
+            "include_raw_args": include_raw_args,
+            "include_raw_outputs": include_raw_outputs,
+            "tool_name": tool_name,
+            "event_type": event_type,
+            "candidate_id": candidate_id,
+        },
+    )
+
+
+async def get_trace_tree(trace_id: str) -> Dict[str, Any]:
+    """Get the Langfuse parent/child observation tree with payload references."""
+    try:
+        validate_trace_id(trace_id)
+    except ValueError as e:
+        return {
+            "status": "error",
+            "data": None,
+            "token_info": None,
+            "error": str(e),
+            "help": "Check trace_id format",
+        }
+    return await _get_claude_endpoint(f"/{trace_id}/langfuse_tree")
+
+
+async def get_trace_reconstruction(
+    trace_id: str,
+    include_payloads: bool = False,
+    limit: int = 100,
+    offset: int = 0,
+) -> Dict[str, Any]:
+    """Get chronological Langfuse reconstruction events with payload references."""
+    try:
+        validate_trace_id(trace_id)
+    except ValueError as e:
+        return {
+            "status": "error",
+            "data": None,
+            "token_info": None,
+            "error": str(e),
+            "help": "Check trace_id format",
+        }
+    return await _get_claude_endpoint(
+        f"/{trace_id}/langfuse_reconstruction",
+        params={
+            "include_payloads": include_payloads,
+            "limit": max(1, min(limit, 500)),
+            "offset": max(0, offset),
+        },
+        timeout_seconds=45.0,
+    )
+
+
+async def get_trace_payloads(
+    trace_id: str,
+    sort: str = "largest",
+    limit: int = 50,
+    offset: int = 0,
+    include_values: bool = False,
+) -> Dict[str, Any]:
+    """List Langfuse trace payload summaries with sizes, hashes, and previews."""
+    try:
+        validate_trace_id(trace_id)
+    except ValueError as e:
+        return {
+            "status": "error",
+            "data": None,
+            "token_info": None,
+            "error": str(e),
+            "help": "Check trace_id format",
+        }
+    if sort not in {"largest", "chronological"}:
+        return {
+            "status": "error",
+            "data": None,
+            "token_info": None,
+            "error": "sort must be 'largest' or 'chronological'",
+            "help": "Use sort='largest' to find big prompts/results or sort='chronological' to follow the run",
+        }
+    return await _get_claude_endpoint(
+        f"/{trace_id}/langfuse_payloads",
+        params={
+            "sort": sort,
+            "limit": max(1, min(limit, 200)),
+            "offset": max(0, offset),
+            "include_values": include_values,
+        },
+        timeout_seconds=45.0,
+    )
+
+
+async def get_trace_payload(
+    trace_id: str,
+    payload_id: Optional[str] = None,
+    scope: Optional[str] = None,
+    observation_id: Optional[str] = None,
+    field: Optional[str] = None,
+    start: int = 0,
+    max_chars: int = 12000,
+) -> Dict[str, Any]:
+    """Retrieve one exact Langfuse payload by ID or scope/observation/field."""
+    try:
+        validate_trace_id(trace_id)
+    except ValueError as e:
+        return {
+            "status": "error",
+            "data": None,
+            "token_info": None,
+            "error": str(e),
+            "help": "Check trace_id format",
+        }
+    if not payload_id and not field:
+        return {
+            "status": "error",
+            "data": None,
+            "token_info": None,
+            "error": "Missing payload selector: provide payload_id or field",
+            "help": "Call get_trace_payloads first, then pass payload_id; or provide scope/observation_id/field",
+        }
+    return await _get_claude_endpoint(
+        f"/{trace_id}/langfuse_payload",
+        params={
+            "payload_id": payload_id,
+            "scope": scope,
+            "observation_id": observation_id,
+            "field": field,
+            "start": max(0, start),
+            "max_chars": max(0, min(max_chars, 50000)),
+        },
+        timeout_seconds=45.0,
+    )
+
+
+async def get_trace_costs(trace_id: str) -> Dict[str, Any]:
+    """Get Langfuse token and cost accounting for the trace."""
+    try:
+        validate_trace_id(trace_id)
+    except ValueError as e:
+        return {
+            "status": "error",
+            "data": None,
+            "token_info": None,
+            "error": str(e),
+            "help": "Check trace_id format",
+        }
+    return await _get_claude_endpoint(f"/{trace_id}/langfuse_costs")
+
+
+async def get_trace_duplicates(trace_id: str) -> Dict[str, Any]:
+    """Get duplicate payload fingerprints across trace and observation payloads."""
+    try:
+        validate_trace_id(trace_id)
+    except ValueError as e:
+        return {
+            "status": "error",
+            "data": None,
+            "token_info": None,
+            "error": str(e),
+            "help": "Check trace_id format",
+        }
+    return await _get_claude_endpoint(f"/{trace_id}/langfuse_duplicates")
 
 
 # ============================================================================
