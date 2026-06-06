@@ -323,8 +323,6 @@ function AgentStudioPage() {
             agent_display_name: node.agent_display_name,
             task_instructions: node.task_instructions,
             custom_instructions: node.custom_instructions,
-            input_source: node.input_source,
-            custom_input: node.custom_input,
             output_filename_template: node.output_filename_template,
             output_key: node.output_key,
             validation_attachments: node.validation_attachments?.map((attachment) => ({

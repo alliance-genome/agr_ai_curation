@@ -102,8 +102,6 @@ def _agent_node(
     step_goal=None,
     display_name=None,
     include_evidence=None,
-    input_source="previous_output",
-    custom_input=None,
     output_key=None,
     output_filename_template=None,
     validation_attachments=None,
@@ -113,7 +111,6 @@ def _agent_node(
     data = {
         "agent_id": agent_id,
         "agent_display_name": display_name or agent_id.title(),
-        "input_source": input_source,
         "output_key": output_key or f"{node_id}_out",
     }
     if custom_instructions is not None:
@@ -122,8 +119,6 @@ def _agent_node(
         data["step_goal"] = step_goal
     if include_evidence is not None:
         data["include_evidence"] = include_evidence
-    if custom_input is not None:
-        data["custom_input"] = custom_input
     if output_filename_template is not None:
         data["output_filename_template"] = output_filename_template
     if validation_attachments is not None:
@@ -278,6 +273,7 @@ def _recording_persist_extraction_results(persisted_requests=None):
                     extraction_result_id=f"persisted-{index}",
                     document_id=request.document_id,
                     adapter_key=request.adapter_key,
+                    agent_key=request.agent_key,
                     source_kind=request.source_kind,
                     origin_session_id=request.origin_session_id,
                     trace_id=request.trace_id,
@@ -450,21 +446,8 @@ class TestCountAgentIds:
 class TestFlowTemplateHelpers:
     """Tests the flow template rendering helpers used by the executor."""
 
-    def test_build_initial_flow_template_variables_use_task_input_instructions(self):
-        flow = _make_flow([
-            _task_input_node(
-                "Curator-authored task instructions",
-                output_key="task_input_text",
-            ),
-        ])
-
-        variables = _executor_module()._build_initial_flow_template_variables(flow)
-
-        assert variables == {"task_input_text": "Curator-authored task instructions"}
-
-    def test_build_flow_template_variables_uses_safe_built_in_defaults(self):
-        variables = _executor_module()._build_flow_template_variables(
-            stored_variables={},
+    def test_build_flow_builtin_template_variables_uses_safe_defaults(self):
+        variables = _executor_module()._build_flow_builtin_template_variables(
             document_name=None,
             flow_run_id=None,
             timestamp="20260410T120000Z",
@@ -493,10 +476,6 @@ class TestFlowTemplateHelpers:
         assert rendered == "Use alpha and ."
         assert "Unresolved flow template variables ['missing']" in caplog.text
 
-    def test_stringify_flow_template_value_raises_for_non_serializable_values(self):
-        with pytest.raises(TypeError):
-            _executor_module()._stringify_flow_template_value({"bad": object()})
-
     def test_resolve_output_filename_descriptor_sanitizes_and_raises_on_misconfiguration(self):
         executor = _executor_module()
 
@@ -516,17 +495,6 @@ class TestFlowTemplateHelpers:
         with pytest.raises(_file_outputs_storage_module().FileValidationError):
             executor._resolve_output_filename_descriptor(
                 output_filename_template="!!!.tsv",
-                template_variables={},
-            )
-
-    def test_resolve_flow_step_query_raises_when_custom_input_renders_empty(self):
-        executor = _executor_module()
-
-        with pytest.raises(executor.FlowTemplateConfigurationError):
-            executor._resolve_flow_step_query(
-                input_source="custom",
-                custom_input="{{missing_variable}}",
-                default_query="fallback query",
                 template_variables={},
             )
 
@@ -576,6 +544,30 @@ MOCK_REGISTRY = {
     "chat_output_formatter": {
         "name": "Chat Output Formatter",
         "description": "Format the final response",
+        "category": "Output",
+        "subcategory": "Formatter",
+        "factory": lambda: None,
+        "requires_document": False,
+        "curation": {
+            "adapter_key": "gene",
+            "launchable": True,
+        },
+    },
+    "csv_output_formatter": {
+        "name": "CSV Output Formatter",
+        "description": "Format the final CSV file",
+        "category": "Output",
+        "subcategory": "Formatter",
+        "factory": lambda: None,
+        "requires_document": False,
+        "curation": {
+            "adapter_key": "gene",
+            "launchable": True,
+        },
+    },
+    "json_output_formatter": {
+        "name": "JSON Output Formatter",
+        "description": "Format the final JSON file",
         "category": "Output",
         "subcategory": "Formatter",
         "factory": lambda: None,
@@ -1081,22 +1073,27 @@ class TestGetAllAgentToolsStepOrderRuntime:
         # Step 2 executes normally.
         out3 = asyncio.run(tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "q3"})))
 
-        assert out1.startswith("ok:ask_gene_specialist:q1")
+        assert out1.startswith("ok:ask_gene_specialist:")
+        assert "Configured step:\n1. Gene Specialist" in out1
+        assert "q1" not in out1
         assert "Flow step order is strict" in out2
         assert "ask_disease_specialist" in out2
-        assert out3.startswith("ok:ask_disease_specialist:q3")
+        assert out3.startswith("ok:ask_disease_specialist:")
+        assert "Configured step:\n2. Disease Specialist" in out3
+        assert "q3" not in out3
         # Ensure blocked call did not invoke underlying step-1 specialist again.
-        assert invocations == [
-            ("ask_gene_specialist", "q1"),
-            ("ask_disease_specialist", "q3"),
+        assert [tool_name for tool_name, _query in invocations] == [
+            "ask_gene_specialist",
+            "ask_disease_specialist",
         ]
+        assert all("Runtime artifact policy:" in query for _tool_name, query in invocations)
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_custom_input_templates_bind_task_input_and_prior_step_outputs(
+    def test_second_step_query_does_not_receive_prior_step_output(
         self, mock_get_agent, mock_streaming
     ):
-        """Custom input templates should render built-ins plus stored output_key values."""
+        """Supervisor-supplied prior output must not become the next specialist query."""
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         invocations = []
 
@@ -1105,7 +1102,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             async def _tool(query: str) -> str:
                 invocations.append((tool_name, query))
                 if tool_name == "ask_gene_specialist":
-                    return "gene-result"
+                    return "LEAK_MARKER_GENE_RESULT"
                 return f"validated:{query}"
 
             return _tool
@@ -1121,36 +1118,35 @@ class TestGetAllAgentToolsStepOrderRuntime:
             _agent_node(
                 "n2",
                 "disease",
-                input_source="custom",
-                custom_input=(
-                    "Task={{task_input_text}} | "
-                    "Gene={{gene_output}} | "
-                    "File={{input_filename_stem}} | "
-                    "Trace={{trace_id}} | "
-                    "Timestamp={{timestamp}}"
-                ),
+                step_goal="Validate disease assertions without prior-step prompt text.",
             ),
         ])
 
-        with patch("src.lib.flows.executor.get_current_trace_id", lambda: "trace-123"):
-            tools, _ = get_all_agent_tools(
-                flow,
-                document_name="Smith et al. (2024).pdf",
-                user_query="Focus on the validated findings.",
-                flow_run_id="flow-run-123",
+        tools, _ = get_all_agent_tools(
+            flow,
+            document_name="Smith et al. (2024).pdf",
+            user_query="Focus on the validated findings.",
+            flow_run_id="flow-run-123",
+        )
+
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+        asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "ignored-q1"})))
+        asyncio.run(
+            tools[1].on_invoke_tool(
+                tool_ctx,
+                json.dumps({"query": "LEAK_MARKER_GENE_RESULT"}),
             )
+        )
 
-            tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
-            asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "ignored-q1"})))
-            asyncio.run(tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "ignored-q2"})))
-
-        assert invocations[0] == ("ask_gene_specialist", "ignored-q1")
+        assert invocations[0][0] == "ask_gene_specialist"
+        assert "ignored-q1" not in invocations[0][1]
+        assert "Review the paper carefully." in invocations[0][1]
         assert invocations[1][0] == "ask_disease_specialist"
-        assert "Task=Review the paper carefully." in invocations[1][1]
-        assert "Gene=gene-result" in invocations[1][1]
-        assert "File=Smith et al. (2024)" in invocations[1][1]
-        assert "Trace=trace-123" in invocations[1][1]
-        assert "Timestamp=" in invocations[1][1]
+        assert "LEAK_MARKER_GENE_RESULT" not in invocations[1][1]
+        assert "Review the paper carefully." in invocations[1][1]
+        assert "Focus on the validated findings." in invocations[1][1]
+        assert "Smith et al. (2024).pdf" in invocations[1][1]
+        assert "Validate disease assertions" in invocations[1][1]
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -1233,8 +1229,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert completed_step["candidate"].payload_json["items"][0]["label"] == "TP53"
         assert completed_step["evidence_count"] == 1
         assert completed_step["evidence_records"][0]["entity"] == "TP53"
-        assert execution_state["template_variables"]["gene_output"] != result
-        assert "TP53" in execution_state["template_variables"]["gene_output"]
+        assert "template_variables" not in execution_state
+        assert "TP53" in completed_step["output"]
         timing_event = next(
             event for event in collected_events if event.get("type") == "FLOW_STEP_TIMING"
         )
@@ -1245,10 +1241,148 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_non_custom_input_source_preserves_supervisor_query(
+    def test_custom_output_step_uses_projection_planner_not_formatter_model(
+        self, mock_get_agent, mock_streaming, monkeypatch
+    ):
+        """Custom terminal output should plan a projection, then save deterministically."""
+        executor = _executor_module()
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        planner_calls = []
+        formatter_invocations = []
+        save_calls = []
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                if tool_name == "ask_csv_output_formatter_specialist":
+                    formatter_invocations.append(query)
+                    raise AssertionError("Formatter model path should not run")
+                return json.dumps(_structured_step_output("TP53"))
+
+            return _tool
+
+        async def _fake_projection_planner(**kwargs):
+            planner_calls.append(kwargs)
+            plan = executor.default_projection_plan(
+                kwargs["bundle"],
+                output_format=kwargs["output_format"],
+            )
+            return executor.finalize_output_projection(kwargs["bundle"], plan)
+
+        async def _fake_save_csv_impl(
+            data_json: str,
+            filename: str,
+            columns: str | None = None,
+        ) -> dict:
+            save_calls.append(
+                {
+                    "data": json.loads(data_json),
+                    "columns": json.loads(columns or "[]"),
+                    "filename": filename,
+                }
+            )
+            return {
+                "file_id": "file-planned-flow-csv",
+                "filename": "planned-flow.csv",
+                "format": "csv",
+                "size_bytes": 123,
+                "mime_type": "text/csv",
+                "download_url": "/api/files/file-planned-flow-csv/download",
+                "created_at": "2026-04-26T00:00:00Z",
+            }
+
+        mock_streaming.side_effect = _make_streaming_tool
+        monkeypatch.setattr(
+            executor,
+            "_run_output_projection_planner",
+            _fake_projection_planner,
+        )
+        monkeypatch.setattr(
+            "src.lib.openai_agents.tools.file_output_tools._save_csv_impl",
+            _fake_save_csv_impl,
+        )
+
+        flow = _make_flow([
+            _agent_node("n1", "gene", output_key="gene_output"),
+            _agent_node(
+                "n2",
+                "csv_output_formatter",
+                custom_instructions="Use object rows and keep a compact CSV export.",
+            ),
+        ])
+
+        tools, _, _, execution_state = get_all_agent_tools(
+            flow,
+            include_unavailable=True,
+            flow_run_id="flow-run-123",
+        )
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+        asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
+        result_text = asyncio.run(
+            tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "format"}))
+        )
+
+        result = json.loads(result_text)
+        assert result["file_id"] == "file-planned-flow-csv"
+        assert len(planner_calls) == 1
+        assert planner_calls[0]["agent_id"] == "csv_output_formatter"
+        assert "compact CSV export" in planner_calls[0]["node_data"]["custom_instructions"]
+        assert formatter_invocations == []
+        assert save_calls[0]["filename"] == "Test_Flow_csv_export"
+        assert save_calls[0]["data"][0]["object_payload_label"] == "TP53"
+        assert execution_state["completed_steps"][-1]["agent_id"] == "csv_output_formatter"
+        assert execution_state["completed_steps"][-1]["output"] == result_text
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_terminal_output_without_artifacts_fails_before_formatter_model(
         self, mock_get_agent, mock_streaming
     ):
-        """Only input_source='custom' should override the supervisor-provided query."""
+        """Terminal formatter steps with no artifacts must not call the model formatter."""
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        formatter_invocations = []
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                formatter_invocations.append((tool_name, query))
+                raise AssertionError("ordinary formatter fallback must not run")
+
+            return _tool
+
+        mock_streaming.side_effect = _make_streaming_tool
+
+        for agent_id in (
+            "csv_output_formatter",
+            "json_output_formatter",
+            "chat_output_formatter",
+        ):
+            flow = _make_flow([_agent_node("n1", agent_id)])
+            tools, _, _, execution_state = get_all_agent_tools(
+                flow,
+                include_unavailable=True,
+            )
+            tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+
+            result = asyncio.run(
+                tools[0].on_invoke_tool(
+                    tool_ctx,
+                    json.dumps({"query": "format"}),
+                )
+            )
+
+            assert "no completed structured artifacts" in result
+            assert "cannot fall back to ordinary formatter models" in result
+            assert execution_state["completed_steps"] == []
+
+        assert formatter_invocations == []
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_flow_step_query_ignores_supervisor_tool_argument(
+        self, mock_get_agent, mock_streaming
+    ):
+        """Step input is rebuilt from flow/task state, not the tool-call argument."""
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         invocations = []
 
@@ -1267,8 +1401,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             _agent_node(
                 "n1",
                 "gene",
-                input_source="previous_output",
-                custom_input="Should not replace {{task_input_text}}",
+                step_goal="Extract gene assertions.",
             ),
         ])
 
@@ -1276,7 +1409,10 @@ class TestGetAllAgentToolsStepOrderRuntime:
         tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
         asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "supervisor-query"})))
 
-        assert invocations == ["supervisor-query"]
+        assert len(invocations) == 1
+        assert "supervisor-query" not in invocations[0]
+        assert "Original flow input" in invocations[0]
+        assert "Extract gene assertions." in invocations[0]
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -2114,6 +2250,89 @@ class TestGetAllAgentToolsStepOrderRuntime:
             }
         ]
 
+    def test_custom_flow_validator_agent_receives_compact_request_payload(self, monkeypatch):
+        executor = _executor_module()
+        from src.schemas.domain_validator import (
+            DomainValidationRequest,
+            ValidationTarget,
+            ValidatorAgentRef,
+        )
+
+        request = DomainValidationRequest(
+            request_id="env-1:object-1:custom.supplemental",
+            validator_binding_id="custom.supplemental",
+            validator_agent=ValidatorAgentRef(package_id="flow", agent_id="custom_validator"),
+            target=ValidationTarget(
+                domain_pack_id="fixture.validation",
+                object_type="GeneAssertion",
+                object_id="object-1",
+                field_path="gene.identifier",
+                expected_fields=["gene.identifier"],
+                input_values={"identifier": "AGR:0001", "evidence_quote": "paper quote"},
+            ),
+            selected_inputs={"identifier": "AGR:0001", "evidence_quote": "paper quote"},
+            input_selectors={
+                "identifier": {"source": "payload", "path": "gene.identifier"},
+                "evidence_quote": {"source": "evidence_record", "path": "quote"},
+            },
+            evidence=[
+                {
+                    "evidence_record_id": "evidence-1",
+                    "quote": "paper quote",
+                    "large_context": "x" * 1000,
+                }
+            ],
+            expected_result_fields={"identifier": "gene.identifier"},
+        )
+        captured = {}
+
+        class _FakeTool:
+            async def on_invoke_tool(self, tool_ctx, args_json):
+                captured["tool_name"] = tool_ctx.tool_name
+                captured["args"] = json.loads(args_json)
+                return {"status": "resolved"}
+
+        monkeypatch.setattr(
+            executor,
+            "get_agent_by_id",
+            lambda agent_id, **_kwargs: SimpleNamespace(agent_id=agent_id),
+        )
+        monkeypatch.setattr(
+            executor,
+            "_create_streaming_tool",
+            lambda **_kwargs: _FakeTool(),
+        )
+        binding = SimpleNamespace(
+            identity_details=lambda: {"binding_id": "custom.supplemental"}
+        )
+        binding_match = SimpleNamespace(binding=binding)
+
+        asyncio.run(
+            executor._run_custom_flow_validator_agent(
+                request,
+                binding_match=binding_match,
+                validator_node={"data": {"agent_id": "custom_validator"}},
+                agent_context={"user_id": "curator-1"},
+                source_envelope_id="env-1",
+                source_envelope_revision=3,
+            )
+        )
+
+        payload = json.loads(captured["args"]["query"])
+        validation_request = payload["validation_request"]
+        assert captured["tool_name"] == "validate_custom_validator_custom_supplemental"
+        assert validation_request["selected_inputs"] == request.selected_inputs
+        assert "input_selectors" not in validation_request
+        assert "evidence" not in validation_request
+        assert "input_values" not in validation_request["target"]
+        assert validation_request["evidence_summary"] == {
+            "evidence_count": 1,
+            "evidence_record_ids": ["evidence-1"],
+        }
+        assert validation_request["runtime_compaction"]["input_values_source"] == (
+            "selected_inputs"
+        )
+
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
     def test_validation_groups_join_before_next_flow_step(
@@ -2202,40 +2421,76 @@ class TestGetAllAgentToolsStepOrderRuntime:
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
     def test_output_filename_template_sets_step_scoped_formatter_override(
-        self, mock_get_agent, mock_streaming
+        self, mock_get_agent, mock_streaming, monkeypatch
     ):
-        """Formatter steps should expose a resolved filename stem only during that tool call."""
+        """Projected formatter steps should honor filename templates during save."""
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         observed = {}
 
         def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
-                from src.lib.context import get_current_output_filename_stem
-
-                observed["during_call"] = get_current_output_filename_stem()
-                return "formatted"
+                if tool_name == "ask_csv_output_formatter_specialist":
+                    raise AssertionError("ordinary formatter fallback must not run")
+                return json.dumps(
+                    {
+                        "domain_pack_id": "gene",
+                        "envelope_id": "env-gene-1",
+                        "objects": [
+                            {
+                                "object_type": "Gene",
+                                "payload": {"symbol": "BRCA1"},
+                            }
+                        ],
+                    }
+                )
 
             return _tool
 
+        async def _fake_save_csv_impl(
+            data_json: str,
+            filename: str,
+            columns: str | None = None,
+        ) -> dict:
+            from src.lib.context import get_current_output_filename_stem
+
+            observed["during_save"] = get_current_output_filename_stem()
+            observed["filename"] = filename
+            return {
+                "file_id": "file-template-csv",
+                "filename": "templated.csv",
+                "format": "csv",
+                "size_bytes": 123,
+                "mime_type": "text/csv",
+                "download_url": "/api/files/file-template-csv/download",
+                "created_at": "2026-04-26T00:00:00Z",
+            }
+
         mock_streaming.side_effect = _make_streaming_tool
+        monkeypatch.setattr(
+            "src.lib.openai_agents.tools.file_output_tools._save_csv_impl",
+            _fake_save_csv_impl,
+        )
 
         flow = _make_flow([
             _task_input_node(),
+            _agent_node("n1", "gene", output_key="gene_output"),
             _agent_node(
-                "n1",
-                "chat_output_formatter",
-                output_filename_template="{{input_filename_stem}}.tsv",
+                "n2",
+                "csv_output_formatter",
+                output_filename_template="{{input_filename_stem}}.csv",
             ),
         ])
 
         tools, _ = get_all_agent_tools(flow, document_name="Smith et al. (2024).pdf")
         tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
-        asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "format now"})))
+        asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
+        asyncio.run(tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "format now"})))
 
         from src.lib.context import get_current_output_filename_stem
 
-        assert observed["during_call"] == "Smith_et_al_2024"
+        assert observed["during_save"] == "Smith_et_al_2024"
+        assert observed["filename"] == "Smith_et_al_2024"
         assert get_current_output_filename_stem() is None
 
     @patch("src.lib.flows.executor._create_streaming_tool")
@@ -3418,7 +3673,7 @@ class TestExecuteFlowTermination:
         assert flow_finished["data"]["failure_reason"] is None
 
     @pytest.mark.asyncio
-    async def test_marks_completed_on_curation_handoff_ready_without_persisting_fallback(
+    async def test_marks_completed_on_curation_handoff_ready_and_preserves_extraction_refs(
         self, monkeypatch
     ):
         flow = _make_flow([
@@ -3442,6 +3697,8 @@ class TestExecuteFlowTermination:
             adapter_key="gene",
             payload={"review_session_ids": ["session-gene"], "adapter_keys": ["gene"]},
         )
+        completed_handoff_step.pop("candidate", None)
+        persisted_requests = []
 
         supervisor = MagicMock(name="Flow Supervisor")
         supervisor._flow_unavailable_steps = []
@@ -3472,9 +3729,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_extraction_results",
-            lambda *_args, **_kwargs: pytest.fail(
-                "curation handoff should suppress fallback extraction persistence"
-            ),
+            _recording_persist_extraction_results(persisted_requests),
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
@@ -3517,6 +3772,18 @@ class TestExecuteFlowTermination:
         flow_finished = next(event for event in events if event.get("type") == "FLOW_FINISHED")
         assert flow_finished["data"]["status"] == "completed"
         assert flow_finished["data"]["review_session_ids"] == ["session-gene"]
+        assert flow_finished["data"]["extraction_result_ids"] == ["persisted-0"]
+        assert flow_finished["data"]["extraction_result_refs"] == [
+            {
+                "extraction_result_id": "persisted-0",
+                "adapter_key": "gene",
+                "agent_key": "gene",
+                "candidate_count": 1,
+                "trace_id": "trace-1",
+            }
+        ]
+        assert len(persisted_requests) == 1
+        assert persisted_requests[0].agent_key == "gene"
 
     @pytest.mark.asyncio
     async def test_later_run_error_fails_after_curation_handoff_ready(

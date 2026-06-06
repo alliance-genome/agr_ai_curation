@@ -50,6 +50,10 @@ from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGE
 from src.lib.curation_workspace.extraction_results import (
     list_extraction_results,
 )
+from src.lib.openai_agents.supervisor_context_tools import (
+    inspect_chat_traces,
+    inspect_curation_context,
+)
 from src.lib.prompts.assembly import build_agent_prompt_layers, prompt_templates_for_bundle
 from src.lib.prompts.context import bind_prompt_run, set_pending_prompts
 from src.schemas.curation_prep import CurationPrepScopeConfirmation
@@ -64,7 +68,16 @@ ReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh"]
 
 CURATION_PREP_CONFIRMATION_QUESTION = "Ready to prepare these for curation?"
 _CURATION_PREP_TOOL_NAME = "prepare_for_curation"
-_SUPERVISOR_BUILTIN_TOOL_NAMES = frozenset({"export_to_file", _CURATION_PREP_TOOL_NAME})
+_INSPECT_CURATION_CONTEXT_TOOL_NAME = "inspect_curation_context"
+_INSPECT_CHAT_TRACES_TOOL_NAME = "inspect_chat_traces"
+_SUPERVISOR_BUILTIN_TOOL_NAMES = frozenset(
+    {
+        "export_to_file",
+        _CURATION_PREP_TOOL_NAME,
+        _INSPECT_CURATION_CONTEXT_TOOL_NAME,
+        _INSPECT_CHAT_TRACES_TOOL_NAME,
+    }
+)
 _EXPLICIT_PREP_CONFIRMATION_RE = re.compile(
     r"\b(?:yes|confirm(?:ed)?|i confirm|go ahead|proceed|ready|prepare (?:these|them|it)|please do|do it)\b",
     re.IGNORECASE,
@@ -656,6 +669,14 @@ def _build_runtime_tool_availability_note(
         "Use export_to_file only when the user explicitly asks to export or "
         "download results."
     )
+    notes.append(
+        "TRACE AND CURATION LOOKUP: Use inspect_curation_context for bounded "
+        "details about extraction results, evidence, validation findings, or "
+        "exact field slices. Use inspect_chat_traces for questions about why a "
+        "previous chat answer behaved a certain way or what tools ran. Start "
+        "with inventory/summary details and narrow from refs; do not ask "
+        "specialists to repeat full JSON for lookup."
+    )
 
     return "\n\n".join(notes)
 
@@ -918,6 +939,87 @@ def create_supervisor_agent(
         )
 
     specialist_tools.append(prepare_for_curation_tool)
+
+    @function_tool(
+        name_override=_INSPECT_CURATION_CONTEXT_TOOL_NAME,
+        description_override=(
+            "Inspect bounded canonical curation context for this main chat. Use for "
+            "specific follow-up questions about persisted/current extraction results, "
+            "review sessions, file outputs, objects, evidence, validation findings, "
+            "or exact field paths. Returns summaries and slices, not full canonical "
+            "payloads or full file contents."
+        ),
+    )
+    async def inspect_curation_context_tool(
+        scope: str = "current_chat",
+        detail: str = "inventory",
+        extraction_result_id: str | None = None,
+        trace_id: str | None = None,
+        flow_run_id: str | None = None,
+        review_session_id: str | None = None,
+        file_id: str | None = None,
+        adapter_keys: List[str] | None = None,
+        object_ref: str | None = None,
+        field_path: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> str:
+        """Inspect bounded extraction/review context for the active chat."""
+
+        return await inspect_curation_context(
+            scope=scope,
+            detail=detail,
+            extraction_result_id=extraction_result_id,
+            trace_id=trace_id,
+            flow_run_id=flow_run_id,
+            review_session_id=review_session_id,
+            file_id=file_id,
+            adapter_keys=adapter_keys,
+            object_ref=object_ref,
+            field_path=field_path,
+            limit=limit,
+            cursor=cursor,
+        )
+
+    specialist_tools.append(inspect_curation_context_tool)
+
+    @function_tool(
+        name_override=_INSPECT_CHAT_TRACES_TOOL_NAME,
+        description_override=(
+            "Inspect authorized TraceReview summaries for trace IDs associated with "
+            "this main chat session. Use when the curator asks why a prior answer "
+            "selected, omitted, searched, validated, or failed something. Trace IDs "
+            "must resolve from this chat inventory before TraceReview is queried."
+        ),
+    )
+    async def inspect_chat_traces_tool(
+        detail: str = "inventory",
+        trace_id: str | None = None,
+        turn_ref: str | None = None,
+        query: str | None = None,
+        tool_name: str | None = None,
+        event_type: str | None = None,
+        candidate_id: str | None = None,
+        include_sibling_traces: bool = False,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> str:
+        """Inspect bounded TraceReview detail for authorized main-chat traces."""
+
+        return await inspect_chat_traces(
+            detail=detail,
+            trace_id=trace_id,
+            turn_ref=turn_ref,
+            query=query,
+            tool_name=tool_name,
+            event_type=event_type,
+            candidate_id=candidate_id,
+            include_sibling_traces=include_sibling_traces,
+            limit=limit,
+            cursor=cursor,
+        )
+
+    specialist_tools.append(inspect_chat_traces_tool)
 
     # Export to File tool (always available - supervisor built-in, not a specialist agent)
     # Allows supervisor to export data as downloadable CSV, TSV, or JSON files

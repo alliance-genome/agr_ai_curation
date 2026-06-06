@@ -18,7 +18,6 @@ def make_task_input_node(node_id: str = "task_input_1", task_instructions: str =
             "agent_id": "task_input",
             "agent_display_name": "Initial Instructions",
             "task_instructions": task_instructions,
-            "input_source": "user_query",
             "output_key": "task_input",
         }
     }
@@ -30,23 +29,18 @@ def make_agent_node(
     output_key: str = None,
     include_evidence: bool | None = None,
     output_filename_template: str | None = None,
-    input_source: str = "previous_output",
-    custom_input: str | None = None,
     validation_attachments: list[dict] | None = None,
 ) -> dict:
     """Helper to create a valid agent node dict."""
     data = {
         "agent_id": agent_id,
         "agent_display_name": agent_id.replace("_", " ").title(),
-        "input_source": input_source,
         "output_key": output_key or f"{agent_id}_output",
     }
     if include_evidence is not None:
         data["include_evidence"] = include_evidence
     if output_filename_template is not None:
         data["output_filename_template"] = output_filename_template
-    if custom_input is not None:
-        data["custom_input"] = custom_input
     if validation_attachments is not None:
         data["validation_attachments"] = validation_attachments
 
@@ -339,7 +333,6 @@ def test_task_input_none_instructions_fails():
                     "agent_id": "task_input",
                     "agent_display_name": "Initial Instructions",
                     "task_instructions": None,  # Explicitly None
-                    "input_source": "user_query",
                     "output_key": "task_input",
                 }
             },
@@ -365,7 +358,6 @@ def test_task_input_type_requires_matching_agent_id():
                 "agent_id": "pdf_extraction",  # Wrong agent_id for task_input type
                 "agent_display_name": "Wrong Agent",
                 "task_instructions": "Test task",
-                "input_source": "user_query",
                 "output_key": "task_input",
             }
         }],
@@ -576,19 +568,24 @@ class TestFlowDefinitionOtherValidations:
 
         assert "Input should be 'active' or 'under_development'" in str(exc_info.value)
 
-    def test_custom_input_requires_non_empty_template(self):
-        """Custom input mode must provide a non-empty template."""
+    def test_legacy_prompt_dataflow_fields_are_rejected(self):
+        """Flow definitions must not accept legacy prompt-routing fields."""
         flow_data = {
             "version": "1.0",
             "nodes": [
                 make_task_input_node("task_1", "Extract alleles from the paper"),
-                make_agent_node(
-                    "n1",
-                    "allele_extractor",
-                    "allele_output",
-                    input_source="custom",
-                    custom_input="   ",
-                ),
+                {
+                    "id": "n1",
+                    "type": "agent",
+                    "position": {"x": 100, "y": 100},
+                    "data": {
+                        "agent_id": "allele_extractor",
+                        "agent_display_name": "Allele Extractor",
+                        "input_source": "previous_output",
+                        "custom_input": "{{task_input}}",
+                        "output_key": "allele_output",
+                    },
+                },
             ],
             "edges": [{"id": "e1", "source": "task_1", "target": "n1"}],
             "entry_node_id": "task_1",
@@ -597,7 +594,8 @@ class TestFlowDefinitionOtherValidations:
         with pytest.raises(ValidationError) as exc_info:
             FlowDefinition(**flow_data)
 
-        assert "custom_input is required" in str(exc_info.value)
+        assert "input_source" in str(exc_info.value)
+        assert "custom_input" in str(exc_info.value)
 
     def test_unique_node_ids(self):
         """Node IDs must be unique."""
@@ -612,7 +610,6 @@ class TestFlowDefinitionOtherValidations:
                     "data": {
                         "agent_id": "pdf_extraction",
                         "agent_display_name": "PDF",
-                        "input_source": "previous_output",
                         "output_key": "pdf_output",
                     }
                 },
@@ -637,7 +634,6 @@ class TestFlowDefinitionOtherValidations:
                     "data": {
                         "agent_id": "pdf_extraction",
                         "agent_display_name": "PDF",
-                        "input_source": "previous_output",
                         "output_key": "task_input",  # Duplicate of task_input's output_key!
                     }
                 },

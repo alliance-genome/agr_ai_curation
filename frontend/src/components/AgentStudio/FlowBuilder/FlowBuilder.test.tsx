@@ -197,7 +197,6 @@ function buildFlowResponse(overrides: Partial<Parameters<typeof serviceMocks.cre
             agent_display_name: 'Initial Instructions',
             task_instructions: '',
             custom_instructions: '',
-            input_source: 'user_query' as const,
             output_key: 'task_input',
           },
         },
@@ -372,7 +371,6 @@ describe('FlowBuilder', () => {
           data: {
             agent_id: 'allele_extractor',
             agent_display_name: 'Allele Extractor',
-            input_source: 'previous_output',
             output_key: 'alleles',
             validation_attachments: [
               {
@@ -476,7 +474,6 @@ describe('FlowBuilder', () => {
           data: {
             agent_id: 'allele_extractor',
             agent_display_name: 'Allele Extractor',
-            input_source: 'previous_output',
             output_key: 'alleles',
             validation_attachments: [
               {
@@ -532,7 +529,6 @@ describe('FlowBuilder', () => {
           data: {
             agent_id: 'allele_extractor',
             agent_display_name: 'Allele Extractor',
-            input_source: 'previous_output',
             output_key: 'alleles',
             validation_attachments: [
               {
@@ -614,7 +610,6 @@ describe('FlowBuilder', () => {
           data: {
             agent_id: 'allele_extractor',
             agent_display_name: 'Allele Extractor',
-            input_source: 'previous_output',
             output_key: 'alleles',
             validation_attachments: [
               {
@@ -752,7 +747,7 @@ describe('FlowBuilder', () => {
     })
   }, 15000) // Builder bootstrap plus save dialog interactions can exceed 5s in the full suite.
 
-  it('defaults extraction agents to previous_output when created from the palette', async () => {
+  it('creates extraction agents without prompt input-source routing', async () => {
     const user = userEvent.setup()
 
     agentMetadataMocks.agents = {
@@ -834,7 +829,6 @@ describe('FlowBuilder', () => {
                 type: 'agent',
                 data: expect.objectContaining({
                   agent_id: 'allele_extractor',
-                  input_source: 'previous_output',
                   validation_attachments: expect.arrayContaining([
                     expect.objectContaining({
                       attachment_id: 'agr.alliance.allele:binding:identifier:field:Allele:allele_identifier',

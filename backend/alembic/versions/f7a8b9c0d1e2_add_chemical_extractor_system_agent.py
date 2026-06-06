@@ -60,10 +60,13 @@ def _load_agent_spec() -> Tuple[Dict[str, Any], str, str] | None:
     agent_yaml = source.agent_yaml
     prompt_yaml = source.prompt_yaml
 
-    if agent_yaml is None or not agent_yaml.exists():
-        raise RuntimeError(f"Missing {_AGENT_KEY} agent config: {agent_yaml}")
-    if prompt_yaml is None or not prompt_yaml.exists():
-        raise RuntimeError(f"Missing {_AGENT_KEY} prompt config: {prompt_yaml}")
+    if (
+        agent_yaml is None
+        or prompt_yaml is None
+        or not agent_yaml.exists()
+        or not prompt_yaml.exists()
+    ):
+        return None
 
     with agent_yaml.open("r", encoding="utf-8") as handle:
         agent_data = yaml.safe_load(handle) or {}

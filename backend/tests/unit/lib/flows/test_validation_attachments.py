@@ -37,7 +37,6 @@ def _flow_definition(
                     "agent_id": "task_input",
                     "agent_display_name": "Initial Instructions",
                     "task_instructions": "Extract curation-ready objects",
-                    "input_source": "user_query",
                     "output_key": "task_input",
                 },
             },
@@ -48,7 +47,6 @@ def _flow_definition(
                 "data": {
                     "agent_id": agent_id,
                     "agent_display_name": agent_id,
-                    "input_source": "previous_output",
                     "output_key": "extract_output",
                     **(
                         {"validation_attachments": attachments}
@@ -72,7 +70,6 @@ def _validator_node(node_id: str, output_key: str) -> dict:
         "data": {
             "agent_id": node_id,
             "agent_display_name": node_id,
-            "input_source": "previous_output",
             "output_key": output_key,
         },
     }

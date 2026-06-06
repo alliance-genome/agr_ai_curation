@@ -89,13 +89,6 @@ import type { FlowSummaryResponse } from './types'
 import logger from '@/services/logger'
 import { notifyFlowListInvalidated } from '@/features/flows/flowListInvalidation'
 import {
-  isExtractionAgent,
-  isValidationAgent,
-  findNearestExtractor,
-  validatorNeedsConfiguration,
-} from './smartDefaultUtils'
-import {
-  isExtractionAgentFromMetadata,
   resolveOutputFormatterIncludeEvidence,
   isValidationAgentFromMetadata,
 } from './agentMetadataUtils'
@@ -115,7 +108,6 @@ const createInitialTaskInputNode = (): AgentNode => ({
     agent_description: 'Define the task for this flow',
     task_instructions: '',
     custom_instructions: '',
-    input_source: 'user_query',
     output_key: 'task_input',
   },
 })
@@ -293,9 +285,7 @@ export const rebuildValidationGroupsFromEdges = (
  */
 const computeValidationErrors = (
   currentNodes: AgentNode[],
-  currentEdges: { source: string; target: string }[],
-  isValidationPredicate: (agentId: string) => boolean = isValidationAgent,
-  isExtractionPredicate: (agentId: string) => boolean = isExtractionAgent
+  _currentEdges: { source: string; target: string }[],
 ): Array<{ nodeId: string; message: string }> => {
   const errors: Array<{ nodeId: string; message: string }> = []
 
@@ -308,45 +298,8 @@ const computeValidationErrors = (
     })
   }
 
-  // Check all nodes that explicitly use a custom template.
-  for (const node of currentNodes) {
-    if (node.data.input_source === 'custom' && !node.data.custom_input?.trim()) {
-      errors.push({
-        nodeId: node.id,
-        message: `"${node.data.agent_display_name}" needs a custom input template when Custom is selected.`,
-      })
-    }
-  }
-
-  // Check all validators for ambiguous input sources.
-  for (const node of currentNodes) {
-    if (isValidationPredicate(node.data.agent_id)) {
-      const result = validatorNeedsConfiguration(
-        node.id,
-        currentNodes,
-        currentEdges,
-        isExtractionPredicate,
-        isValidationPredicate
-      )
-      if (result.needsConfig) {
-        errors.push({
-          nodeId: node.id,
-          message: result.reason || 'Configuration required',
-        })
-      }
-    }
-  }
-
   return errors
 }
-
-/**
- * Tri-state for tracking how a node's input was configured:
- * - 'auto': System applied smart defaults (e.g., validator pointing to extractor)
- * - 'manual': User explicitly saved configuration in NodeEditor
- * - 'unset': Node dropped but no smart default applied (user hasn't touched it)
- */
-type InputConfigState = 'auto' | 'manual' | 'unset'
 
 const BuilderContainer = styled(Box)(({ theme }) => ({
   display: 'flex',
@@ -541,11 +494,6 @@ const getPrimaryShortcutLabel = (): 'Ctrl' | 'Cmd' => {
 function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }: FlowBuilderProps) {
   const { agents: agentMetadata } = useAgentMetadata()
 
-  const isExtractionAgentDynamic = useCallback(
-    (agentId: string): boolean => isExtractionAgentFromMetadata(agentId, agentMetadata),
-    [agentMetadata]
-  )
-
   const isValidationAgentDynamic = useCallback(
     (agentId: string): boolean => isValidationAgentFromMetadata(agentId, agentMetadata),
     [agentMetadata]
@@ -633,12 +581,6 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
   // Current flow ID (null for new flow)
   const [currentFlowId, setCurrentFlowId] = useState<string | null>(flowId || null)
 
-  // Track how each node's input was configured (smart defaults feature)
-  // - 'auto': System applied smart defaults (preserve on connection)
-  // - 'manual': User explicitly saved in NodeEditor (never overwrite)
-  // - 'unset': No smart default applied, user hasn't touched it (can auto-switch)
-  const [inputConfigState, setInputConfigState] = useState<Record<string, InputConfigState>>({})
-
   // Ref for cleanup of setTimeout
   const fitViewTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Ref for revalidation timeout cleanup (used in loadFlow and handleNodeDataUpdate)
@@ -679,9 +621,6 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
 
       setNodes(flowNodes)
       setEdges(flowEdges)
-
-      // Clear config state for loaded flows (absence = treated as 'unset')
-      setInputConfigState({})
 
       // Update nodeId counter to avoid collisions
       const maxId = Math.max(...flowNodes.map((n) => parseInt(n.id.replace('node_', '')) || 0), 0)
@@ -764,8 +703,6 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
           agent_display_name: n.data.agent_display_name,
           task_instructions: n.data.task_instructions,
           custom_instructions: n.data.custom_instructions,
-          input_source: n.data.input_source,
-          custom_input: n.data.custom_input,
           output_filename_template: n.data.output_filename_template,
           output_key: n.data.output_key,
           validation_attachments: n.data.validation_attachments,
@@ -791,9 +728,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       const edgeData = edges.map(e => ({ source: e.source, target: e.target }))
       const errors = computeValidationErrors(
         currentNodes as AgentNode[],
-        edgeData,
-        isValidationAgentDynamic,
-        isExtractionAgentDynamic
+        edgeData
       )
       const errorsByNodeId = new Map(errors.map(e => [e.nodeId, e.message]))
 
@@ -815,7 +750,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         return node
       })
     })
-  }, [setNodes, edges, isValidationAgentDynamic, isExtractionAgentDynamic]) // Depends on edge topology and agent classification
+  }, [setNodes, edges]) // Depends on edge topology and current node data
 
   // Keep ref in sync for use in loadFlow (which is defined before this callback)
   useEffect(() => {
@@ -894,9 +829,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     const edgeData = edges.map(e => ({ source: e.source, target: e.target }))
     const validationErrors = computeValidationErrors(
       nodes as AgentNode[],
-      edgeData,
-      isValidationAgentDynamic,
-      isExtractionAgentDynamic
+      edgeData
     )
     if (validationErrors.length > 0) {
       // Find the first error node and select it
@@ -996,7 +929,6 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     setFlowDescription('')
     setCurrentFlowId(null)
     setSelectedNode(null)
-    setInputConfigState({})  // Clear config state for new flows
     nodeIdRef.current = 1  // Start from 1 since node_0 is used
   }
 
@@ -1093,33 +1025,8 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         type: 'deletable',
         data: { role: 'control_flow' },
       } as FlowEdge, eds))
-
-      // Auto-switch target node's input_source to 'previous_output' when connected
-      // Skip for:
-      // 1. Extraction agents (fixed input - always uses PDF document)
-      // 2. Nodes with 'auto' state (preserve smart default extractor reference)
-      // 3. Nodes with 'manual' state (respect user's explicit choice)
-      // Only auto-switch for 'unset' nodes (absence in map = 'unset')
-      if (params.target) {
-        const targetNode = nodes.find((n) => n.id === params.target)
-        if (targetNode) {
-          const isExtractor = isExtractionAgentDynamic(targetNode.data.agent_id)
-          const configState = inputConfigState[params.target] // undefined = 'unset'
-          const shouldSkipAutoSwitch = isExtractor || configState === 'auto' || configState === 'manual'
-
-          if (!shouldSkipAutoSwitch) {
-            setNodes((nds) =>
-              nds.map((node) =>
-                node.id === params.target
-                  ? { ...node, data: { ...node.data, input_source: 'previous_output' } }
-                  : node
-              )
-            )
-          }
-        }
-      }
     },
-    [setEdges, setNodes, nodes, inputConfigState, isExtractionAgentDynamic, isValidationAgentDynamic, addValidationAttachmentEdge]
+    [setEdges, nodes, isValidationAgentDynamic, addValidationAttachmentEdge]
   )
 
   // Handle node selection
@@ -1189,30 +1096,6 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
 
         const newNodeId = getNodeId()
 
-        // Determine smart defaults for input_source
-        let inputSource: 'user_query' | 'previous_output' | 'custom' = 'custom'
-        let customInput: string | undefined = undefined
-        let shouldMarkAutoConfigured = false
-
-        if (isTaskInput) {
-          inputSource = 'user_query'
-        } else if (isExtractionAgentDynamic(agentId)) {
-          inputSource = 'previous_output'
-        } else if (isValidationAgentDynamic(agentId)) {
-          // Smart default: Validators should use extractor output, not previous validator output
-          const extractor = findNearestExtractor(
-            newNodeId,
-            nodes as AgentNode[],
-            edges,
-            isExtractionAgentDynamic
-          )
-          if (extractor) {
-            inputSource = 'custom'
-            customInput = `{{${extractor.data.output_key}}}`
-            shouldMarkAutoConfigured = true
-          }
-        }
-
         const newNode: AgentNode = {
           id: newNodeId,
           type: isTaskInput ? 'task_input' : 'agent',
@@ -1224,8 +1107,6 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
             task_instructions: isTaskInput ? '' : undefined,
             custom_instructions: '',
             prompt_version: promptVersion,
-            input_source: inputSource,
-            custom_input: customInput,
             include_evidence: isTaskInput
               ? undefined
               : resolveOutputFormatterIncludeEvidence(agentId, agentMetadata),
@@ -1237,19 +1118,11 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         }
 
         setNodes((nds) => [...nds, newNode])
-
-        // Set config state based on whether smart defaults were applied
-        if (shouldMarkAutoConfigured) {
-          setInputConfigState(prev => ({ ...prev, [newNodeId]: 'auto' }))
-        } else if (!isTaskInput && !isExtractionAgentDynamic(agentId)) {
-          // Non-special agents without smart defaults start as 'unset'
-          setInputConfigState(prev => ({ ...prev, [newNodeId]: 'unset' }))
-        }
       } catch (err) {
         logger.error('Failed to parse drag data', err as Error, { component: 'FlowBuilder' })
       }
     },
-    [reactFlowInstance, setNodes, getNodeId, nodes, edges, isValidationAgentDynamic, isExtractionAgentDynamic, agentMetadata]
+    [reactFlowInstance, setNodes, getNodeId, agentMetadata]
   )
 
   // Handle node data update from editor
@@ -1283,27 +1156,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       eds.filter((e) => e.source !== nodeId && e.target !== nodeId)
     )
     setSelectedNode(null)
-    // Clean up config state for deleted node (prevents memory leak)
-    setInputConfigState(prev => {
-      const next = { ...prev }
-      delete next[nodeId]
-      return next
-    })
   }, [setNodes, setEdges])
-
-  // Get available output variables from nodes before the selected node
-  const availableVariables = useMemo(() => {
-    if (!selectedEditorNode) return []
-    return nodes
-      .filter((n) => n.id !== selectedEditorNode.id && n.data.output_key && n.data.output_key.length > 0)
-      .map((n) => n.data.output_key)
-  }, [nodes, selectedEditorNode])
-
-  // Check if selected node has an incoming edge
-  const hasIncomingEdge = useMemo(() => {
-    if (!selectedEditorNode) return false
-    return edges.some((e) => e.target === selectedEditorNode.id)
-  }, [edges, selectedEditorNode])
 
   const domainEnvelopeViewerNode = useMemo(() => {
     if (!domainEnvelopeViewerNodeId) return null
@@ -1316,10 +1169,6 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
 
   // Handle marking a node as manually configured when user saves in NodeEditor
   // This prevents auto-switching on future connections
-  const handleMarkManuallyConfigured = useCallback((nodeId: string) => {
-    setInputConfigState(prev => ({ ...prev, [nodeId]: 'manual' }))
-  }, [])
-
   // Handle opening prompt viewer
   const handleViewPrompts = useCallback((agentId: string, agentName: string) => {
     setPromptViewerAgent({ id: agentId, name: agentName })
@@ -1591,12 +1440,6 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       && !selectedNodeIds.includes(e.target)
     )))
     setSelectedNode(null)
-    // Clean up config state for deleted nodes (prevents memory leak)
-    setInputConfigState(prev => {
-      const next = { ...prev }
-      selectedNodeIds.forEach(id => delete next[id])
-      return next
-    })
   }, [selectedNodeIds, selectedEdgeIds, setNodes, setEdges])
 
   // Handle delete flow - show confirmation dialog
@@ -1922,11 +1765,8 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
                   onSave={handleNodeDataUpdate}
                   onClose={() => setSelectedNode(null)}
                   onDelete={handleDeleteNode}
-                  availableVariables={availableVariables}
                   onViewPrompts={handleViewPrompts}
                   onViewDomainEnvelope={handleViewDomainEnvelope}
-                  hasIncomingEdge={hasIncomingEdge}
-                  onMarkManuallyConfigured={handleMarkManuallyConfigured}
                 />
               ) : null}
 

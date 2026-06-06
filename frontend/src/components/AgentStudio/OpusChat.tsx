@@ -1057,12 +1057,12 @@ CRITICAL ERRORS (must fail verification):
 - task_input node has EMPTY task_instructions (this is required content)
 - Disconnected nodes (won't execute)
 - Cycles (infinite loops)
-- Input sources referencing non-existent outputs
 - PARALLEL/BRANCHING FLOWS: Any node with multiple outgoing edges is NOT YET SUPPORTED (parallel flows will be supported in a future update - for now, each node can only connect to ONE next node)
 
 HIGH PRIORITY ISSUES:
 - Flow doesn't end with an output-category agent
 - Duplicate output_key values
+- Custom instructions that try to paste prior step output instead of steering the current agent
 
 SUGGESTIONS (only if evidence-based):
 - ONLY suggest alternative agents if the curator's task_instructions or custom_instructions explicitly mention something that a different agent handles better

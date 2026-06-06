@@ -404,15 +404,17 @@ async def test_builder_finalized_specialist_skips_model_authored_output_staging(
         tool_name="ask_gene_expression_specialist",
     )
 
-    payload = json.loads(final_output)
-    assert payload["relation"]["name"] == "is_expressed_in"
-    assert "model_authored" not in payload
+    assert "Full canonical envelope is retained by the specialist runtime" in final_output
 
     internal_event = next(
         event
         for event in captured_events
         if event.get("type") == "INTERNAL_EXTRACTION_RESULT"
     )
+    payload = internal_event["internal"]["canonical_payload"]
+    assert payload["relation"]["name"] == "is_expressed_in"
+    assert "model_authored" not in payload
+
     assert internal_event["internal"]["canonical_payload"] == payload
     assert internal_event["internal"]["builder_finalization"]["candidate_ids"] == [
         "gex-candidate-1"

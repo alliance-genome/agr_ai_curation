@@ -331,11 +331,10 @@ def test_build_trial_flow_uses_agent_specific_cross_domain_prompts():
         "phenotype_extractor",
         "gene_extractor",
     ]
-    assert all(node["data"]["input_source"] == "custom" for node in agent_nodes)
-    assert "mid-trunk myotome boundary" in agent_nodes[0]["data"]["custom_input"]
-    assert "zebrafish her1" in agent_nodes[1]["data"]["custom_input"]
     assert "Do not extract chemicals or genes" in agent_nodes[0]["data"]["step_goal"]
     assert "Do not extract chemicals or phenotype statements" in agent_nodes[1]["data"]["step_goal"]
+    assert "mid-trunk myotome boundary" in agent_nodes[0]["data"]["step_goal"]
+    assert "zebrafish her1" in agent_nodes[1]["data"]["step_goal"]
 
 
 def test_flow_summary_keeps_domain_validator_lookup_events():

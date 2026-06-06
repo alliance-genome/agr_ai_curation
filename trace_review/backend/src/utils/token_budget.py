@@ -220,12 +220,18 @@ def create_lightweight_tool_call_summary(tool_call: Dict) -> Dict:
     if isinstance(time_value, datetime):
         time_value = time_value.isoformat()
 
+    def display_value(value, default: str = "N/A") -> str:
+        if value is None:
+            return default
+        text = str(value)
+        return text if text else default
+
     summary = {
-        "call_id": tool_call.get("call_id", "N/A"),
-        "name": tool_call.get("name", "unknown"),
-        "time": time_value,
-        "duration": tool_call.get("duration", "N/A"),
-        "status": tool_call.get("status", "N/A"),
+        "call_id": display_value(tool_call.get("call_id"), "N/A"),
+        "name": display_value(tool_call.get("name"), "unknown"),
+        "time": display_value(time_value, "N/A"),
+        "duration": display_value(tool_call.get("duration"), "N/A"),
+        "status": display_value(tool_call.get("status"), "N/A"),
     }
     domain_envelope = tool_call.get("domain_envelope")
     if isinstance(domain_envelope, dict) and domain_envelope.get("found"):
@@ -250,7 +256,7 @@ def create_lightweight_tool_call_summary(tool_call: Dict) -> Dict:
     # Add result summary if available
     tool_result = tool_call.get("tool_result")
     if isinstance(tool_result, dict):
-        summary["result_summary"] = tool_result.get("summary", "N/A")
+        summary["result_summary"] = display_value(tool_result.get("summary"), "N/A")
     else:
         summary["result_summary"] = "N/A"
 

@@ -338,7 +338,6 @@ def build_trial_flow(trial: CorpusTrial) -> dict[str, Any]:
                 "agent_display_name": "Corpus Trial Instructions",
                 "task_instructions": trial.prompt,
                 "output_key": "trial_instructions",
-                "input_source": "user_query",
             },
         }
     ]
@@ -356,8 +355,6 @@ def build_trial_flow(trial: CorpusTrial) -> dict[str, Any]:
                     "agent_id": agent_id,
                     "agent_display_name": agent_id.replace("_", " ").title(),
                     "output_key": f"{agent_id}_output",
-                    "input_source": "custom",
-                    "custom_input": step_prompt,
                     "step_goal": step_prompt,
                 },
             }

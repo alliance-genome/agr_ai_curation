@@ -14,7 +14,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 
 from pydantic import BaseModel, Field, ValidationError, create_model
 
@@ -812,7 +812,10 @@ def run_package_scoped_validator_agent(
     ]
     _append_validator_finalization_instructions(agent, batch=False)
 
-    payload = json.dumps(request.model_dump(mode="json"), sort_keys=True)
+    payload = json.dumps(
+        validator_request_payload_for_agent(request),
+        sort_keys=True,
+    )
     if hasattr(Runner, "run_sync"):
         run_kwargs: dict[str, Any] = {"input": payload}
         if binding.max_tool_calls is not None:
@@ -925,7 +928,7 @@ def run_package_scoped_validator_agent_batch(
                 "when one shared bulk call can answer the group."
             ),
             "requests": [
-                job.request.model_dump(mode="json")
+                validator_request_payload_for_agent(job.request)
                 for job in jobs
             ],
         },
@@ -979,6 +982,54 @@ def _copy_agent_for_validator_runtime(agent: Any) -> Any:
     runtime_agent = copy.copy(agent)
     runtime_agent.tools = list(getattr(agent, "tools", []) or [])
     return runtime_agent
+
+
+def validator_request_payload_for_agent(
+    request: DomainValidationRequest,
+) -> dict[str, Any]:
+    """Return the compact request shape sent to validator agents.
+
+    The canonical ``DomainValidationRequest`` intentionally keeps dispatcher
+    metadata for persistence and materialization. The runtime model input should
+    avoid repeating that same data, especially ``target.input_values`` which is
+    a copy of ``selected_inputs`` for most bindings.
+    """
+
+    payload = request.model_dump(
+        mode="json",
+        exclude_none=True,
+        exclude={"input_selectors"},
+    )
+    target = payload.get("target")
+    if isinstance(target, dict):
+        target.pop("input_values", None)
+    evidence = payload.pop("evidence", None)
+    if isinstance(evidence, list):
+        evidence_record_ids = [
+            record_id
+            for record in evidence
+            if isinstance(record, Mapping)
+            and isinstance(record_id := record.get("evidence_record_id"), str)
+            and record_id
+        ]
+        payload["evidence_summary"] = {
+            "evidence_count": len(evidence),
+            **(
+                {"evidence_record_ids": evidence_record_ids[:20]}
+                if evidence_record_ids
+                else {}
+            ),
+        }
+    payload["runtime_compaction"] = {
+        "omitted_fields": [
+            "input_selectors",
+            "target.input_values",
+            *(["evidence"] if isinstance(evidence, list) else []),
+        ],
+        "input_values_source": "selected_inputs",
+        "canonical_identity_restored_by": "finalize_validator_result",
+    }
+    return payload
 
 
 def _append_validator_finalization_instructions(agent: Any, *, batch: bool) -> None:
@@ -1976,5 +2027,6 @@ __all__ = [
     "run_package_scoped_validator_agent_in_worker_thread",
     "run_package_scoped_validator_agent",
     "unresolved_validator_result_for_dispatch_problem",
+    "validator_request_payload_for_agent",
     "validator_result_from_agent_output",
 ]

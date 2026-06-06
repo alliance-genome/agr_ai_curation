@@ -2,7 +2,7 @@
  * NodeEditor Component
  *
  * Configuration panel for editing a selected flow node.
- * Allows setting step goal, custom instructions, input source, and output variable.
+ * Allows setting step goal, custom instructions, output options, and artifact identifiers.
  */
 
 import { useState, useEffect } from 'react'
@@ -13,11 +13,7 @@ import {
   Paper,
   IconButton,
   Checkbox,
-  Radio,
-  RadioGroup,
   FormControlLabel,
-  FormControl,
-  FormLabel,
   Button,
   Divider,
   Tooltip,
@@ -35,7 +31,6 @@ import SchemaIcon from '@mui/icons-material/Schema'
 import { validationAttachmentForPersistence } from './types'
 import type {
   NodeEditorProps,
-  InputSource,
   ValidationAttachmentGroup,
   ValidationAttachmentSelection,
 } from './types'
@@ -193,20 +188,16 @@ const supplementalGroupOwnerText = (group: ValidationAttachmentGroup) => {
   return parts.length > 0 ? parts.join(' / ') : 'Missing supplemental edge metadata'
 }
 
-function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onViewPrompts, onViewDomainEnvelope, hasIncomingEdge = false, onMarkManuallyConfigured }: NodeEditorProps) {
+function NodeEditor({ node, onSave, onClose, onDelete, onViewPrompts, onViewDomainEnvelope }: NodeEditorProps) {
   const { agents: agentMetadata } = useAgentMetadata()
 
   // Form state
   const [customInstructions, setCustomInstructions] = useState('')
-  const [inputSource, setInputSource] = useState<InputSource>('previous_output')
-  const [customInput, setCustomInput] = useState('')
   const [includeEvidence, setIncludeEvidence] = useState(false)
   const [outputFilenameTemplate, setOutputFilenameTemplate] = useState('')
   const [outputKey, setOutputKey] = useState('')
   const [validationAttachments, setValidationAttachments] = useState<ValidationAttachmentSelection[]>([])
 
-  // Check if this is a PDF agent (input source is hardcoded to PDF document)
-  const isPdfAgent = node?.data.agent_id === 'pdf_extraction'
   const agentMetadataEntry = node ? agentMetadata[node.data.agent_id] : undefined
   const domainEnvelopeMetadata = agentMetadataEntry?.domain_envelope
   const isValidationAgentNode = node
@@ -215,10 +206,6 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
   const supportsOutputFormatting = node
     ? isOutputFormatterAgentFromMetadata(node.data.agent_id, agentMetadata)
     : false
-  const customInputVariables = Array.from(
-    new Set([...availableVariables, ...BUILT_IN_TEMPLATE_VARIABLES])
-  )
-  const customInputError = inputSource === 'custom' && !customInput.trim()
   const customInstructionsLabel = isValidationAgentNode
     ? 'Validation Steering Prompt (Optional)'
     : 'Custom Instructions (Optional)'
@@ -243,14 +230,6 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
   useEffect(() => {
     if (node) {
       setCustomInstructions(node.data.custom_instructions || '')
-      // PDF agent always uses 'previous_output' (representing PDF document)
-      // Other agents default to 'previous_output' if they have incoming edge, else 'custom'
-      if (isPdfAgent) {
-        setInputSource('previous_output')
-      } else {
-        setInputSource(node.data.input_source || (hasIncomingEdge ? 'previous_output' : 'custom'))
-      }
-      setCustomInput(node.data.custom_input || '')
       setIncludeEvidence(
         resolveOutputFormatterIncludeEvidence(
           node.data.agent_id,
@@ -262,12 +241,11 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
       setOutputKey(node.data.output_key || `${node.data.agent_id}_output`)
       setValidationAttachments(node.data.validation_attachments || [])
     }
-  }, [node, isPdfAgent, hasIncomingEdge, agentMetadata])
+  }, [node, agentMetadata])
 
   // Handle save
   const handleSave = () => {
     if (!node) return
-    if (customInputError) return
 
     const nextIncludeEvidence = agentMetadataEntry
       ? resolveOutputFormatterIncludeEvidence(
@@ -279,8 +257,6 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
 
     onSave(node.id, {
       custom_instructions: customInstructions || undefined,
-      input_source: inputSource,
-      custom_input: inputSource === 'custom' ? customInput.trim() : undefined,
       include_evidence: nextIncludeEvidence,
       output_filename_template: supportsOutputFormatting
         ? outputFilenameTemplate.trim() || undefined
@@ -291,15 +267,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
         : undefined,
     })
 
-    // Mark as manually configured when user saves (user has taken control)
-    onMarkManuallyConfigured?.(node.id)
-
     onClose()
-  }
-
-  // Insert variable into custom input
-  const handleInsertVariable = (variable: string) => {
-    setCustomInput((prev) => prev + `{{${variable}}}`)
   }
 
   const handleInsertOutputFilenameVariable = (variable: string) => {
@@ -799,108 +767,6 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
           </>
         )}
 
-        {/* Input Source */}
-        {isPdfAgent ? (
-          /* PDF Agent - Fixed input source (PDF document) */
-          <Box>
-            <Typography variant="caption" fontWeight={600} sx={{ display: 'block', mb: 0.5 }}>
-              Input Source
-            </Typography>
-            <Box
-              sx={{
-                py: 1,
-                px: 1.5,
-                borderRadius: 1,
-                backgroundColor: (theme) => alpha(theme.palette.info.main, 0.08),
-                border: (theme) => `1px solid ${alpha(theme.palette.info.main, 0.3)}`,
-              }}
-            >
-              <Typography variant="body2" fontSize="0.75rem" color="text.secondary">
-                📄 PDF Document (automatic)
-              </Typography>
-              <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
-                This agent always receives the uploaded PDF as input
-              </Typography>
-            </Box>
-          </Box>
-        ) : (
-          /* Other Agents - Choice of Previous Step Output or Custom */
-          <FormControl component="fieldset">
-            <FormLabel component="legend" sx={{ fontSize: '0.75rem', fontWeight: 600 }}>
-              Input Source
-            </FormLabel>
-            <RadioGroup
-              value={inputSource}
-              onChange={(e) => setInputSource(e.target.value as InputSource)}
-            >
-              <Tooltip
-                title={!hasIncomingEdge ? 'Connect this node to a previous step to enable' : ''}
-                placement="right"
-              >
-                <FormControlLabel
-                  value="previous_output"
-                  control={<Radio size="small" />}
-                  disabled={!hasIncomingEdge}
-                  label={
-                    <Typography
-                      variant="body2"
-                      fontSize="0.75rem"
-                      color={!hasIncomingEdge ? 'text.disabled' : 'text.primary'}
-                    >
-                      Previous Step Output
-                    </Typography>
-                  }
-                />
-              </Tooltip>
-              <FormControlLabel
-                value="custom"
-                control={<Radio size="small" />}
-                label={
-                  <Typography variant="body2" fontSize="0.75rem">
-                    Custom (with variables)
-                  </Typography>
-                }
-              />
-            </RadioGroup>
-          </FormControl>
-        )}
-
-        {/* Custom Input Template */}
-        {inputSource === 'custom' && (
-          <Box>
-            <FieldLabel>
-              <Typography variant="caption" fontWeight={600}>
-                Custom Input Template
-              </Typography>
-            </FieldLabel>
-            {customInputVariables.length > 0 && (
-              <Box sx={{ mb: 1 }}>
-                <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
-                  Click to insert:
-                </Typography>
-                <Box sx={{ mt: 0.5 }}>
-                  {customInputVariables.map((v) => (
-                    <VariableChip key={v} onClick={() => handleInsertVariable(v)}>
-                      {`{{${v}}}`}
-                    </VariableChip>
-                  ))}
-                </Box>
-              </Box>
-            )}
-            <TextField
-              fullWidth
-              size="small"
-              placeholder="e.g., Validate these genes: {{pdf_output}}"
-              value={customInput}
-              onChange={(e) => setCustomInput(e.target.value)}
-              multiline
-              rows={2}
-              error={customInputError}
-              helperText={customInputError ? 'A custom input template is required for this setting.' : undefined}
-            />
-          </Box>
-        )}
-
         {supportsOutputFormatting ? (
           <>
             <Divider />
@@ -941,7 +807,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                 <Typography variant="caption" fontWeight={600}>
                   Output Filename Template
                 </Typography>
-                <Tooltip title="Controls the readable filename descriptor for formatter outputs using {{variable}} placeholders. Stored files still keep the trace ID prefix and timestamp suffix.">
+                <Tooltip title="Controls the readable filename descriptor for formatter outputs using built-in placeholders. Stored files still keep the trace ID prefix and timestamp suffix.">
                   <InfoOutlinedIcon sx={{ fontSize: 14, color: 'text.secondary' }} />
                 </Tooltip>
               </FieldLabel>
@@ -1008,7 +874,6 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
           size="small"
           startIcon={<SaveIcon />}
           onClick={handleSave}
-          disabled={customInputError}
         >
           Apply
         </Button>

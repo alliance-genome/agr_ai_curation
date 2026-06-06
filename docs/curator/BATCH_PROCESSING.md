@@ -31,6 +31,7 @@ On the Batch page, you'll see your selected documents and a flow selector:
 2. The system validates that your flow is compatible with batch processing:
    - Flow must contain a PDF input agent (to read from the selected documents)
    - Flow must end with a file output agent (CSV, TSV, or JSON formatter)
+   - The output file is generated from the flow's completed structured artifacts
 3. A green "Valid" message appears if the flow is compatible
 
 **Don't have a saved flow?** See [Curation Flows](CURATION_FLOWS.md) to learn how to build and save flows.
@@ -87,7 +88,8 @@ Click **"Download ZIP"** to get all completed results in a single ZIP file. The 
 
 ### Result Formats
 
-Results are formatted according to your flow's output agent:
+Results are projected from each completed flow run and formatted according to
+your flow's output agent:
 - **CSV Formatter** - Comma-separated values (opens in Excel, Google Sheets)
 - **TSV Formatter** - Tab-separated values (for database import)
 - **JSON Formatter** - Structured JSON data (for programmatic use)

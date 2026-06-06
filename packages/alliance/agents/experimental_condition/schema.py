@@ -44,7 +44,7 @@ class ExperimentalConditionNormalizedComponent(DomainValidatorBaseModel):
     )
     source_inputs: dict[str, Any] = Field(
         default_factory=dict,
-        description="Inputs from selected_inputs or target.input_values used for the component",
+        description="Inputs from selected_inputs used for the component",
     )
     validator_agent: Optional[ValidatorAgentRef] = Field(
         default=None,

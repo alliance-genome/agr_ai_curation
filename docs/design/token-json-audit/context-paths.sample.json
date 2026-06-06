@@ -1,0 +1,92 @@
+{
+  "audit_date": "2026-06-06",
+  "scope": [
+    "standard chat",
+    "specialist and validator handoffs",
+    "TraceReview and Langfuse payload storage",
+    "Agent Studio / Chat with Claude",
+    "flow execution",
+    "batch processing"
+  ],
+  "paths": {
+    "standard_chat": {
+      "context_builder": "backend/src/api/chat_common.py::_build_context_messages_from_durable_messages",
+      "history_reader": "backend/src/lib/chat_transcript.py::list_session_text_exchanges",
+      "runner": "backend/src/lib/openai_agents/runner.py::_normalize_context_messages",
+      "behavior": "Replays all completed durable user/assistant text exchanges, then appends the current user message.",
+      "raw_tool_json_replayed": false,
+      "server_side_turn_or_token_budget": false,
+      "risk": "Long chat sessions can grow without a hard budget even though the two-turn test was small."
+    },
+    "specialist_to_supervisor": {
+      "reducer": "backend/src/lib/openai_agents/streaming_tools.py::_reduce_specialist_output_for_supervisor",
+      "domain_envelope_summary": "backend/src/lib/openai_agents/streaming_tools.py::_domain_envelope_supervisor_summary",
+      "behavior": "Domain-envelope outputs are reduced to concise supervisor-facing summaries when recognized.",
+      "raw_full_payload_retained_for_audit": true,
+      "risk": "Unrecognized structured outputs or plain large text can still be returned in full to the supervisor."
+    },
+    "validator_agents": {
+      "observed_payload_shape": "DomainValidationRequest JSON as the user message to validator agents.",
+      "semantic_duplication": [
+        "selected_inputs",
+        "target.input_values"
+      ],
+      "retry_or_continuation_risk": "Validator model inputs grew from 4.1k chars to 31.5k chars in the live second-turn trace.",
+      "risk": "Validation retries and continuation can re-send prior request JSON, reasoning summaries, tool calls, and tool outputs."
+    },
+    "trace_review_langfuse": {
+      "behavior": "Stores rich model inputs, outputs, agent configs, extraction events, and internal tool outputs for forensic audit.",
+      "largest_second_turn_payload_examples": [
+        {
+          "payload_id": "observation:cbc164fdb9be7a08:metadata.agent_config",
+          "char_count": 41053,
+          "meaning": "Query Supervisor full runtime config"
+        },
+        {
+          "payload_id": "observation:0f7f5026c328a795:metadata.event_payload",
+          "char_count": 25878,
+          "meaning": "specialist.summary event payload"
+        },
+        {
+          "payload_id": "observation:2dda56c0866db125:output",
+          "char_count": 13391,
+          "meaning": "AGR curation lookup tool output"
+        }
+      ],
+      "risk": "Observability storage is intentionally verbose and should not be used as live model context unless explicitly summarized or paged."
+    },
+    "agent_studio_chat_with_claude": {
+      "endpoint": "backend/src/api/agent_studio.py::chat_with_opus",
+      "durable_turn_helper": "backend/src/lib/agent_studio/chat_session.py::prepare_agent_studio_turn",
+      "system_prompt_context_builder": "backend/src/lib/agent_studio/prompt_builder.py::build_opus_system_prompt",
+      "behavior": "Sends frontend-provided request.messages plus a context-sensitive system prompt to Anthropic. During a tool loop, appends assistant tool_use blocks plus full JSON tool_result messages to current_messages.",
+      "initial_call_context_risks": [
+        "frontend request.messages are passed through server-side without a token budget",
+        "Agent Workshop prompt draft is included up to 12000 chars",
+        "Agent Workshop selected group prompt draft is included up to 6000 chars",
+        "selected agent base prompt or group rules can be injected into the system prompt"
+      ],
+      "server_side_message_budget": false,
+      "durable_tool_audit_compacted": true,
+      "live_tool_result_compacted_for_model": false,
+      "risk": "Large TraceReview or domain-envelope tool results can accumulate inside one Agent Studio turn."
+    },
+    "flows": {
+      "entrypoint": "backend/src/api/chat_execute_flow.py and backend/src/lib/flows/executor.py::execute_flow",
+      "runner_context": "execute_flow passes one initial user prompt to run_agent_streamed.",
+      "step_state": "completed_steps stores full output internally and output_preview for SSE; output_key template variables store full result_text.",
+      "hidden_replay": "Completed flow turns persist a hidden assistant memory message with visible output capped at 2500 chars and hidden JSON capped at 18000 chars.",
+      "bounded_hidden_flow_json_replayed_to_later_standard_chat": "A synthesized, bounded hidden flow-memory JSON message can be replayed as assistant text after flow turns.",
+      "risk": "Custom flow templates can inject full prior outputs into later steps; future chat after many flow turns can replay multiple hidden flow summaries."
+    },
+    "batch_processing": {
+      "entrypoint": "backend/src/lib/batch/processor.py::process_batch_task",
+      "flow_call": "Each document uses execute_flow with session_id=batch-<batch_id>-doc-<document_prefix>.",
+      "cross_document_context_reuse": false,
+      "processing_order": "sequential",
+      "batch_compatibility": "Requires a PDF extraction step and file output or curation handoff exit.",
+      "session_id_caveat": "document_prefix is document_id[:8], so using the full UUID would be safer for session/trace disambiguation even though execute_flow starts each document with one prompt.",
+      "risk": "Cost scales per document and per flow step; no evidence of prior batch documents being injected into later document context."
+    }
+  }
+}

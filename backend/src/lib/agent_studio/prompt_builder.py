@@ -676,7 +676,7 @@ This agent has group-specific rules available for: {', '.join(available_groups)}
 <flow_context>
 ## Current Context: Flow Builder
 
-The curator is designing a curation flow - a visual pipeline that chains agents together to process documents.
+The curator is designing a curation flow - a guided supervisor run that executes selected agents in sequence against the flow task and loaded document.
 
 <critical_instruction>
 **MANDATORY: ALWAYS call `get_current_flow` tool FIRST before any flow discussion.**
@@ -703,7 +703,7 @@ This tool returns:
 **When asked to verify, check for:**
 1. **Initial Instructions MUST Be First** - Every flow MUST start with the Initial Instructions node (task_input). This is the entry point that defines what the curator wants to accomplish.
 2. **All Nodes Connected** - Disconnected nodes = steps that won't execute
-3. **Logical Data Flow** - Each agent's output feeds appropriately to the next
+3. **Logical Step Order** - Each agent appears in the right sequence for the curator's task
 4. **Custom Instructions Redundancy** - For EACH node with custom instructions:
    - Call `get_prompt(agent_id)` to fetch the base prompt
    - Compare custom instructions to base prompt content
@@ -726,7 +726,13 @@ This tool returns:
 1. **Initial Instructions** (REQUIRED FIRST STEP) - Define the curation task
 2. **Extraction/Verification agents** - Process the document
 3. **Automatic validation** - Domain-pack metadata and curator selections schedule active validators through runtime dispatch after extraction
-4. **Output agent** (if exporting data) - Format materialized projections as CSV, TSV, JSON, or chat
+4. **Output agent** (if exporting data) - Shape runtime-owned projections as CSV, TSV, JSON, or chat
+
+Each step receives the flow task, loaded document context, selected agent, and
+that node's custom instructions. Do not recommend custom input templates or
+previous-step output prompts; earlier structured artifacts are preserved by the
+runtime for review/export lookup instead of being pasted into later step
+prompts.
 
 **Initial Instructions should specify:**
 - What to extract (e.g., "Extract all alleles mentioned in this paper")
@@ -737,7 +743,8 @@ This tool returns:
 - The Initial Instructions should define WHAT data to collect
 - Domain envelopes define the semantic objects; review rows and files are projections from those objects
 - The formatter agent (chat_output, csv_formatter, tsv_formatter, json_formatter) should define HOW to present projected data
-- Formatter custom instructions should specify column headers matching the data defined in Initial Instructions
+- Formatter custom instructions should specify column headers, row source, filters, sorting, grouping, and omitted fields when needed
+- The runtime owns extraction, projection, serialization, file saving, and chat rendering; do not recommend model-authored file contents
 
 **Example flow for allele extraction:**
 1. **Initial Instructions**: "Extract alleles from this paper. For each allele, capture: parent gene symbol, allele identifier, and phenotype. Verify identifiers against the database."

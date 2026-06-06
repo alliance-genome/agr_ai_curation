@@ -1,0 +1,187 @@
+{
+  "audit_date": "2026-06-06",
+  "source": "local TraceReview + sandbox backend",
+  "diagnostic_metric_field_paths": {
+    "diagnostic_payload_exchange_json_chars": [
+      "diagnostic_report.data.summary.payload_exchange_json_chars",
+      "diagnostic_report.data.size_summary.exchange_json_chars"
+    ],
+    "diagnostic_estimated_payload_exchange_tokens": [
+      "diagnostic_report.data.summary.estimated_payload_exchange_tokens",
+      "diagnostic_report.data.size_summary.estimated_exchange_tokens"
+    ]
+  },
+  "session_id": "ea76b64d-552d-4e3b-b491-d40311f4df1e",
+  "scenario": "Same paper, same session: first gene extraction question followed by a second gene extraction pass.",
+  "traces": [
+    {
+      "label": "first_turn_gene_extraction",
+      "trace_id": "ac089613a87ebe149cf70b38129e9c3d",
+      "duration_seconds": 152.827,
+      "tool_call_count": 18,
+      "diagnostic_event_count": 251,
+      "diagnostic_payload_exchange_json_chars": 294715,
+      "diagnostic_estimated_payload_exchange_tokens": 73679,
+      "langfuse_cost_totals": {
+        "input_tokens": 61687,
+        "output_tokens": 5163,
+        "total_tokens": 66850,
+        "total_cost_usd": 0.059696249999,
+        "observation_count": 261
+      },
+      "model_token_breakdown": {
+        "gpt-5.5-2026-04-23": {
+          "input_tokens": 11756,
+          "output_tokens": 219,
+          "total_tokens": 11975,
+          "observation_count": 2
+        },
+        "gpt-5.4-mini-2026-03-17": {
+          "input_tokens": 49931,
+          "output_tokens": 4944,
+          "total_tokens": 54875,
+          "observation_count": 4
+        }
+      },
+      "largest_model_input_payloads": [
+        {
+          "payload_id": "observation:04c313ca59e2ec93:input",
+          "char_count": 1958,
+          "rough_token_estimate": 490
+        },
+        {
+          "payload_id": "observation:3e4be8c827a78427:input",
+          "char_count": 4514,
+          "rough_token_estimate": 1129
+        },
+        {
+          "payload_id": "observation:e6e49c3f0ee66404:input",
+          "char_count": 19002,
+          "rough_token_estimate": 4751
+        },
+        {
+          "payload_id": "observation:4f063c04b34a5548:input",
+          "char_count": 27929,
+          "rough_token_estimate": 6983
+        },
+        {
+          "payload_id": "observation:5fa767992103479d:input",
+          "char_count": 35464,
+          "rough_token_estimate": 8866
+        }
+      ],
+      "duplicate_group_count": 0
+    },
+    {
+      "label": "second_turn_same_session_gene_extraction",
+      "trace_id": "f3095edf162452743a4b31cafdf9801e",
+      "duration_seconds": 73.876,
+      "tool_call_count": 18,
+      "diagnostic_event_count": 259,
+      "diagnostic_payload_exchange_json_chars": 261198,
+      "diagnostic_estimated_payload_exchange_tokens": 65300,
+      "langfuse_cost_totals": {
+        "input_tokens": 59731,
+        "output_tokens": 4026,
+        "total_tokens": 63757,
+        "total_cost_usd": 0.05292,
+        "observation_count": 269
+      },
+      "model_token_breakdown": {
+        "gpt-5.5-2026-04-23": {
+          "input_tokens": 11983,
+          "output_tokens": 224,
+          "total_tokens": 12207,
+          "observation_count": 2
+        },
+        "gpt-5.4-mini-2026-03-17": {
+          "input_tokens": 47748,
+          "output_tokens": 3802,
+          "total_tokens": 51550,
+          "observation_count": 4
+        }
+      },
+      "first_supervisor_visible_input": {
+        "payload_id": "observation:6861c09af85f8132:input",
+        "char_count": 725,
+        "contained_messages": [
+          "prior user question",
+          "prior assistant answer",
+          "current user question"
+        ],
+        "raw_trace_json_included": false
+      },
+      "final_supervisor_visible_input": {
+        "payload_id": "observation:88b4cb0c84bdd882:input",
+        "char_count": 2433,
+        "contains_reduced_specialist_output": true
+      },
+      "largest_model_input_payloads": [
+        {
+          "payload_id": "observation:88b4cb0c84bdd882:input",
+          "char_count": 2433,
+          "rough_token_estimate": 609,
+          "agent_role": "supervisor_final_synthesis"
+        },
+        {
+          "payload_id": "observation:98962eb22a642335:input",
+          "char_count": 4144,
+          "rough_token_estimate": 1036,
+          "agent_role": "validator_initial_request"
+        },
+        {
+          "payload_id": "observation:376ed400f354bf65:input",
+          "char_count": 18734,
+          "rough_token_estimate": 4684,
+          "agent_role": "validator_continuation_or_retry"
+        },
+        {
+          "payload_id": "observation:56c516020aafa89c:input",
+          "char_count": 24175,
+          "rough_token_estimate": 6044,
+          "agent_role": "validator_continuation_or_retry"
+        },
+        {
+          "payload_id": "observation:0c29de89e6ea1b85:input",
+          "char_count": 31538,
+          "rough_token_estimate": 7885,
+          "agent_role": "validator_continuation_or_retry"
+        }
+      ],
+      "duplicate_group_count": 0
+    }
+  ],
+  "persisted_chat_history_after_second_turn": {
+    "message_count": 4,
+    "rows": [
+      {
+        "role": "user",
+        "message_type": "text",
+        "content_length": 127,
+        "trace_id": null,
+        "payload_json": null
+      },
+      {
+        "role": "assistant",
+        "message_type": "text",
+        "content_length": 288,
+        "trace_id": "ac089613a87ebe149cf70b38129e9c3d",
+        "payload_json": null
+      },
+      {
+        "role": "user",
+        "message_type": "text",
+        "content_length": 175,
+        "trace_id": null,
+        "payload_json": null
+      },
+      {
+        "role": "assistant",
+        "message_type": "text",
+        "content_length": 322,
+        "trace_id": "f3095edf162452743a4b31cafdf9801e",
+        "payload_json": null
+      }
+    ]
+  }
+}

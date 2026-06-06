@@ -74,11 +74,33 @@ def test_batch_plumbing_flow_uses_deterministic_file_output_payload():
     nodes = {node["id"]: node for node in flow["nodes"]}
     pdf_goal = nodes["pdf_1"]["data"]["step_goal"]
     formatter_goal = nodes["json_1"]["data"]["step_goal"]
+    projection_plan = nodes["json_1"]["data"]["projection_plan"]
 
     assert "prove document access" in pdf_goal
     assert "Do not include quotes" in pdf_goal
     assert '[{"check":"batch_file_output","status":"completed"}]' in formatter_goal
-    assert "do not include any previous-step prose" in formatter_goal
+    assert projection_plan["format"] == "json"
+    assert projection_plan["row_source"] == "artifact"
+    assert projection_plan["json_shape"] == "rows"
+    assert projection_plan["max_rows"] == 1
+    assert projection_plan["columns"] == [
+        {
+            "key": "check",
+            "header": "Check",
+            "transform": {
+                "type": "literal",
+                "value": "batch_file_output",
+            },
+        },
+        {
+            "key": "status",
+            "header": "Status",
+            "transform": {
+                "type": "literal",
+                "value": "completed",
+            },
+        },
+    ]
 
 
 def test_require_batch_plumbing_payload_requires_exact_json_artifact():
@@ -112,14 +134,36 @@ def test_batch_extraction_flow_preserves_real_extraction_requirements():
     task_instructions = nodes["task_input_1"]["data"]["task_instructions"]
     gene_goal = nodes["gene_1"]["data"]["step_goal"]
     formatter_goal = nodes["json_1"]["data"]["step_goal"]
+    projection_plan = nodes["json_1"]["data"]["projection_plan"]
 
     assert "crb/Crumbs" in task_instructions
     assert "record_evidence" in task_instructions
     assert "Do not extract any other genes" in task_instructions
     assert "evidence_record_id" in gene_goal
     assert "batch_extraction_smoke_result" in formatter_goal
-    assert "preserve the previous gene extraction result" in formatter_goal
+    assert "structured flow artifacts" in formatter_goal
     assert "evidence_record_id" in formatter_goal
+    assert projection_plan["format"] == "json"
+    assert projection_plan["row_source"] == "object"
+    assert projection_plan["json_shape"] == "rows"
+    assert projection_plan["filters"] == [
+        {
+            "field_ref": "object.evidence_record_ids",
+            "op": "is_not_empty",
+        }
+    ]
+    assert projection_plan["columns"] == [
+        {
+            "key": "gene",
+            "header": "Gene",
+            "field_ref": "object.label",
+        },
+        {
+            "key": "evidence_record_ids",
+            "header": "Evidence Record IDs",
+            "field_ref": "object.evidence_record_ids",
+        },
+    ]
 
 
 def test_require_batch_extraction_payload_requires_gene_and_evidence_reference():

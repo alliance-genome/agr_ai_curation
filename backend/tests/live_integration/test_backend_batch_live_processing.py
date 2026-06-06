@@ -76,7 +76,6 @@ def _flow_definition() -> dict:
                         "Include concise evidence snippets. Then format structured output."
                     ),
                     "output_key": "task_input_text",
-                    "input_source": "user_query",
                 },
             },
             {
@@ -87,7 +86,6 @@ def _flow_definition() -> dict:
                     "agent_id": "pdf_extraction",
                     "agent_display_name": "PDF Specialist",
                     "output_key": "pdf_findings",
-                    "input_source": "previous_output",
                     "step_goal": "Read the document and return concise evidence-based findings.",
                 },
             },
@@ -99,7 +97,6 @@ def _flow_definition() -> dict:
                     "agent_id": "json_formatter",
                     "agent_display_name": "JSON Formatter",
                     "output_key": "final_output",
-                    "input_source": "previous_output",
                     "step_goal": "Save the final findings as downloadable JSON output.",
                 },
             },

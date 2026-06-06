@@ -58,6 +58,7 @@ from .extraction_builder_workspace import (
     set_active_extraction_builder_workspace,
     stage_extraction_payload,
 )
+from .curation_context_registry import register_internal_extraction_event
 from .extraction_trace_events import (
     get_current_extraction_trace_run,
     write_extraction_trace_event,
@@ -80,6 +81,7 @@ from src.lib.prompts.context import (
     append_pending_prompt_runtime_context,
     commit_pending_prompts,
 )
+from src.schemas.domain_validator import is_domain_validator_result_schema
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
 logger = logging.getLogger(__name__)
@@ -2474,8 +2476,9 @@ def _reduce_specialist_output_for_supervisor(
     final_output: str,
     *,
     expected_output_type: Any,
+    finalized_domain_envelope: bool = False,
 ) -> str:
-    """Return concise answer text when structured output carries a dedicated answer field."""
+    """Return a supervisor-safe handoff without replaying raw structured JSON."""
 
     try:
         payload = json.loads(final_output)
@@ -2489,12 +2492,30 @@ def _reduce_specialist_output_for_supervisor(
     if answer_text:
         return answer_text
 
-    if _is_domain_envelope_extraction_output_type(
-        expected_output_type
-    ) or _looks_like_domain_envelope_payload(payload):
+    if _is_domain_envelope_extraction_output_type(expected_output_type) or finalized_domain_envelope:
         summary_text = _domain_envelope_supervisor_summary(payload)
         if summary_text:
             return summary_text
+        return _domain_envelope_supervisor_minimal_summary(payload)
+
+    if _looks_like_domain_envelope_payload(payload):
+        return (
+            "A domain-envelope-shaped JSON payload was returned, but it was not "
+            "accepted through a declared or finalized curation contract. The raw "
+            "payload was not passed to the supervisor."
+        )
+
+    if expected_output_type is not None:
+        validator_summary = _domain_validator_supervisor_summary(
+            payload,
+            expected_output_type=expected_output_type,
+        )
+        if validator_summary:
+            return validator_summary
+        return _structured_specialist_supervisor_summary(
+            payload,
+            expected_output_type=expected_output_type,
+        )
 
     return final_output
 
@@ -2524,14 +2545,17 @@ def _domain_envelope_supervisor_summary(payload: Dict[str, Any]) -> str:
         ).strip()
         payload_fields = _domain_envelope_supervisor_payload_fields(
             item.get("payload")
+        ) or _domain_envelope_supervisor_fallback_payload_fields(
+            item.get("payload")
         )
-        if not payload_fields:
-            continue
         label_parts = [f"{index}.", object_type]
         if pending_ref:
             label_parts.append(pending_ref)
         label_parts.append(f"({status})")
-        lines.append(f"{' '.join(label_parts)}: {payload_fields}")
+        line = " ".join(label_parts)
+        if payload_fields:
+            line = f"{line}: {payload_fields}"
+        lines.append(line)
 
     if len(lines) == 1:
         return ""
@@ -2566,6 +2590,26 @@ def _domain_envelope_supervisor_summary(payload: Dict[str, Any]) -> str:
         for message in unresolved_messages:
             lines.append(f"Unresolved validator finding: {message}")
 
+    return "\n".join(lines)
+
+
+def _domain_envelope_supervisor_minimal_summary(payload: Dict[str, Any]) -> str:
+    """Return a compact non-JSON summary for unusual domain-envelope payloads."""
+
+    domain_pack_id = str(payload.get("domain_pack_id") or "domain envelope")
+    objects = payload.get("objects")
+    object_count = len(objects) if isinstance(objects, list) else 0
+    lines = [
+        (
+            f"Validated domain envelope result for {domain_pack_id}. "
+            "Full canonical envelope is retained by the specialist runtime; "
+            "the supervisor handoff is compact to avoid replaying raw JSON."
+        ),
+        f"Object count: {object_count}.",
+    ]
+    findings = payload.get("validation_findings")
+    if isinstance(findings, list):
+        lines.append(f"Validation finding count: {len(findings)}.")
     return "\n".join(lines)
 
 
@@ -2696,6 +2740,232 @@ def _domain_envelope_supervisor_payload_fields(payload: Any) -> str:
         add_field(key)
 
     return "; ".join(f"{key}={value}" for key, value in selected)
+
+
+def _domain_envelope_supervisor_fallback_payload_fields(payload: Any) -> str:
+    """Summarize unusual scalar payload fields without raw JSON fallback."""
+
+    if not isinstance(payload, dict):
+        return ""
+
+    selected: list[tuple[str, str]] = []
+    for key in sorted(payload):
+        if len(selected) >= 8:
+            break
+        if key in _DOMAIN_ENVELOPE_SUPERVISOR_FIELD_SKIP:
+            continue
+        value = payload.get(key)
+        if not _is_supervisor_summary_scalar(value):
+            continue
+        text = _truncate_for_supervisor_summary(str(value).strip())
+        if text:
+            selected.append((key, text))
+
+    if selected:
+        return "; ".join(f"{key}={value}" for key, value in selected)
+
+    keys = [
+        str(key)
+        for key in sorted(payload)
+        if key not in _DOMAIN_ENVELOPE_SUPERVISOR_FIELD_SKIP
+    ][:8]
+    if keys:
+        return "payload_keys=" + ", ".join(keys)
+    return ""
+
+
+def _domain_validator_supervisor_summary(
+    payload: Dict[str, Any],
+    *,
+    expected_output_type: Any,
+) -> str:
+    """Build a compact supervisor handoff for finalized validator results."""
+
+    if not (
+        is_domain_validator_result_schema(expected_output_type)
+        or _looks_like_domain_validator_result_payload(payload)
+    ):
+        return ""
+
+    output_type_name = _output_type_name(expected_output_type)
+    status = str(payload.get("status") or "unknown").strip() or "unknown"
+    binding_id = str(payload.get("validator_binding_id") or "").strip()
+    target = payload.get("target")
+    target_label = _domain_validator_target_label(target)
+    label_parts = [f"{output_type_name} validator result: status={status}."]
+    if binding_id:
+        label_parts.append(f"binding={binding_id}.")
+    if target_label:
+        label_parts.append(f"target={target_label}.")
+
+    lines = [
+        " ".join(label_parts)
+        + " Full validated payload is retained by the specialist runtime."
+    ]
+
+    resolved_values = _compact_supervisor_mapping_fields(
+        payload.get("resolved_values"),
+        limit=12,
+    )
+    if resolved_values:
+        lines.append(f"Resolved values: {resolved_values}")
+
+    curator_message = str(payload.get("curator_message") or "").strip()
+    explanation = str(payload.get("explanation") or "").strip()
+    if curator_message:
+        lines.append(
+            "Curator message: "
+            + _truncate_for_supervisor_summary(curator_message, limit=220)
+        )
+    elif explanation:
+        lines.append(
+            "Explanation: "
+            + _truncate_for_supervisor_summary(explanation, limit=220)
+        )
+
+    candidates = payload.get("candidates")
+    if isinstance(candidates, list) and candidates:
+        candidate_text = _domain_validator_candidate_summary(candidates)
+        lines.append(
+            f"Candidates: {len(candidates)}"
+            + (f" ({candidate_text})" if candidate_text else "")
+            + "."
+        )
+
+    missing = payload.get("missing_expected_fields")
+    if isinstance(missing, list) and missing:
+        lines.append(
+            "Missing expected fields: "
+            + ", ".join(
+                _truncate_for_supervisor_summary(str(item), limit=80)
+                for item in missing[:8]
+            )
+            + ("." if len(missing) <= 8 else f", +{len(missing) - 8} more.")
+        )
+
+    lookup_attempts = payload.get("lookup_attempts")
+    lookup_summary = _domain_validator_lookup_attempt_summary(lookup_attempts)
+    if lookup_summary:
+        lines.append(f"Lookup attempts: {lookup_summary}")
+
+    return "\n".join(lines)
+
+
+def _structured_specialist_supervisor_summary(
+    payload: Dict[str, Any],
+    *,
+    expected_output_type: Any,
+) -> str:
+    """Summarize validated structured payloads without raw JSON transport."""
+
+    output_type_name = _output_type_name(expected_output_type)
+    lines = [
+        (
+            f"{output_type_name} structured result accepted. Full validated "
+            "payload is retained by the specialist runtime; the supervisor "
+            "handoff is compact to avoid replaying raw JSON."
+        )
+    ]
+    scalar_fields = _compact_supervisor_mapping_fields(
+        payload,
+        limit=8,
+        skip_keys={
+            "evidence_records",
+            "lookup_attempts",
+            "resolved_objects",
+            "candidates",
+            "candidate_references",
+            "metadata",
+        },
+    )
+    if scalar_fields:
+        lines.append(f"Top-level fields: {scalar_fields}")
+
+    collection_counts: list[str] = []
+    for key, value in sorted(payload.items()):
+        if isinstance(value, list):
+            collection_counts.append(f"{key}={len(value)}")
+        elif isinstance(value, dict):
+            collection_counts.append(f"{key}=object")
+        if len(collection_counts) >= 8:
+            break
+    if collection_counts:
+        lines.append("Structured collections: " + "; ".join(collection_counts))
+    return "\n".join(lines)
+
+
+def _looks_like_domain_validator_result_payload(payload: Dict[str, Any]) -> bool:
+    return {
+        "status",
+        "validator_binding_id",
+        "resolved_values",
+        "lookup_attempts",
+    }.issubset(payload)
+
+
+def _domain_validator_target_label(target: Any) -> str:
+    if not isinstance(target, dict):
+        return ""
+    parts: list[str] = []
+    for key in ("object_type", "object_id", "object_role", "field_path"):
+        value = target.get(key)
+        if _is_supervisor_summary_scalar(value):
+            parts.append(
+                f"{key}={_truncate_for_supervisor_summary(str(value), limit=80)}"
+            )
+    return "; ".join(parts)
+
+
+def _compact_supervisor_mapping_fields(
+    value: Any,
+    *,
+    limit: int,
+    skip_keys: set[str] | None = None,
+) -> str:
+    if not isinstance(value, dict):
+        return ""
+    skip_keys = skip_keys or set()
+    selected: list[str] = []
+    for key in sorted(value):
+        if len(selected) >= limit:
+            break
+        if key in skip_keys:
+            continue
+        item = value.get(key)
+        if not _is_supervisor_summary_scalar(item):
+            continue
+        selected.append(
+            f"{key}={_truncate_for_supervisor_summary(str(item), limit=120)}"
+        )
+    return "; ".join(selected)
+
+
+def _domain_validator_candidate_summary(candidates: list[Any]) -> str:
+    summaries: list[str] = []
+    for candidate in candidates[:3]:
+        if not isinstance(candidate, dict):
+            continue
+        value = _first_scalar_value(candidate, ("value", "label", "object_type"))
+        if value:
+            summaries.append(_truncate_for_supervisor_summary(value, limit=80))
+    return ", ".join(summaries)
+
+
+def _domain_validator_lookup_attempt_summary(lookup_attempts: Any) -> str:
+    if not isinstance(lookup_attempts, list) or not lookup_attempts:
+        return ""
+    outcome_counts: dict[str, int] = {}
+    for attempt in lookup_attempts:
+        if not isinstance(attempt, dict):
+            continue
+        outcome = str(attempt.get("outcome") or "unknown").strip() or "unknown"
+        outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
+    if not outcome_counts:
+        return f"{len(lookup_attempts)} total."
+    counts = ", ".join(
+        f"{outcome}={count}" for outcome, count in sorted(outcome_counts.items())
+    )
+    return f"{len(lookup_attempts)} total ({counts})."
 
 
 def _is_supervisor_summary_scalar(value: Any) -> bool:
@@ -3701,6 +3971,7 @@ def add_specialist_event(event: Dict[str, Any]):
     has its own list that cannot be contaminated by other batches.
     """
     write_stream_event(event)
+    register_internal_extraction_event(event)
 
     event_list = _live_event_list_var.get()
     if event_list is not None:
@@ -5185,6 +5456,7 @@ async def run_specialist_with_events(
     final_output = _reduce_specialist_output_for_supervisor(
         final_output,
         expected_output_type=expected_output_type,
+        finalized_domain_envelope=builder_finalization is not None,
     )
     phase_timings_ms["supervisor_output_reduction_ms"] = _elapsed_ms(
         supervisor_reduction_started_at

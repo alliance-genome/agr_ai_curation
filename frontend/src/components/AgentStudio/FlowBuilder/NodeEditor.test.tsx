@@ -37,7 +37,6 @@ function buildNode(overrides: Partial<AgentNode['data']> = {}): AgentNode {
       agent_display_name: 'Gene Extractor',
       agent_description: 'Extract gene mentions',
       custom_instructions: '',
-      input_source: 'previous_output',
       output_key: 'gene_output',
       validation_attachments: [validationAttachment],
       ...overrides,
@@ -66,7 +65,6 @@ describe('NodeEditor', () => {
         node={buildNode()}
         onSave={vi.fn()}
         onClose={vi.fn()}
-        availableVariables={[]}
         onViewDomainEnvelope={onViewDomainEnvelope}
       />
     )
@@ -96,7 +94,6 @@ describe('NodeEditor', () => {
         node={buildNode()}
         onSave={onSave}
         onClose={vi.fn()}
-        availableVariables={[]}
       />
     )
 
@@ -131,7 +128,6 @@ describe('NodeEditor', () => {
         })}
         onSave={vi.fn()}
         onClose={vi.fn()}
-        availableVariables={[]}
       />
     )
 
@@ -193,7 +189,6 @@ describe('NodeEditor', () => {
         })}
         onSave={vi.fn()}
         onClose={vi.fn()}
-        availableVariables={[]}
       />
     )
 
@@ -242,7 +237,6 @@ describe('NodeEditor', () => {
         })}
         onSave={onSave}
         onClose={vi.fn()}
-        availableVariables={[]}
       />
     )
 
@@ -288,7 +282,6 @@ describe('NodeEditor', () => {
         })}
         onSave={vi.fn()}
         onClose={vi.fn()}
-        availableVariables={[]}
       />
     )
 
@@ -318,7 +311,6 @@ describe('NodeEditor', () => {
         })}
         onSave={vi.fn()}
         onClose={vi.fn()}
-        availableVariables={[]}
       />
     )
 
@@ -348,8 +340,6 @@ describe('NodeEditor', () => {
         })}
         onSave={vi.fn()}
         onClose={vi.fn()}
-        availableVariables={['gene_output']}
-        hasIncomingEdge
       />
     )
 

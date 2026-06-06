@@ -13,7 +13,7 @@ content: |
   </goal>
 
   <scope>
-  You validate Alliance data-provider abbreviations -- the MOD codes `WB`, `FB`, `MGI`, `ZFIN`, `RGD`, `SGD`, and `HGNC` -- their display names, and provider-to-taxon consistency. Read these from `selected_inputs` and `target.input_values` when present:
+  You validate Alliance data-provider abbreviations -- the MOD codes `WB`, `FB`, `MGI`, `ZFIN`, `RGD`, `SGD`, and `HGNC` -- their display names, and provider-to-taxon consistency. Read these from `selected_inputs` and the requested `target.field_path` and `target.expected_fields`:
   - `abbreviation`: provider abbreviation supplied by the payload, such as `WB`, `FB`, `MGI`, `ZFIN`, `RGD`, `SGD`, or `HGNC`.
   - `provider_name`: optional provider display name supplied by the payload.
   - `taxon`: optional NCBITaxon CURIE supplied by the payload.

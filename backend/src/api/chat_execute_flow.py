@@ -2,6 +2,23 @@
 """Execute-flow chat streaming endpoint."""
 
 from .chat_common import *
+from .chat_common import (
+    _EXECUTE_FLOW_RUNTIME_FLOW_RUN_ID_KEY,
+    _EXECUTE_FLOW_RUNTIME_STATE_KEY,
+    _EXECUTE_FLOW_RUNTIME_TRACE_ID_KEY,
+    _FLOW_MEMORY_MAX_VISIBLE_OUTPUT_CHARS,
+    _FLOW_TRANSCRIPT_REPLAY_RUN_STARTED_KEY,
+    _FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY,
+    _claim_active_stream_lifecycle,
+    _generate_title_from_turn,
+    _get_chat_history_repository,
+    _require_user_sub,
+    _resolve_session_create_active_document,
+    _rollback_and_raise,
+    _stream_error_details,
+    _stream_event_payload,
+    _stream_event_sse,
+)
 
 
 def _extract_execute_flow_runtime_identifiers(
@@ -65,101 +82,64 @@ def _dedupe_preserve_order(values: List[str]) -> List[str]:
     return ordered
 
 
-def _serialize_hidden_flow_payload(payload: Dict[str, Any], max_chars: int) -> str:
-    """Serialize hidden payload and compact it as needed while preserving valid JSON."""
-    serialized = json.dumps(payload, default=str, ensure_ascii=True)
-    if len(serialized) <= max_chars:
-        return serialized
+def _flow_ref_lines(
+    label: str,
+    values: List[Any],
+    *,
+    max_items: int = 12,
+) -> List[str]:
+    """Render compact reference lines without embedding raw specialist payloads."""
 
-    compact_payload = dict(payload)
-    compact_payload["truncated"] = True
-    compact_payload["truncation_notice"] = "Hidden flow context compacted to fit memory budget."
+    if not values:
+        return [f"- {label}: none recorded"]
 
-    # Drop lower-priority collections first.
-    for key in ("intermediate_specialist_summaries", "domain_warnings", "files"):
-        if compact_payload.get(key):
-            compact_payload[key] = []
-            serialized = json.dumps(compact_payload, default=str, ensure_ascii=True)
-            if len(serialized) <= max_chars:
-                return serialized
-
-    # Keep at most one specialist output and tighten output text.
-    specialist_outputs = list(compact_payload.get("specialist_outputs") or [])
-    if specialist_outputs:
-        first_output = dict(specialist_outputs[0])
-        first_output["output"] = _truncate_text(
-            first_output.get("output"),
-            _FLOW_MEMORY_COMPACT_SPECIALIST_OUTPUT_CHARS,
-        )
-        compact_payload["specialist_outputs"] = [first_output]
-        serialized = json.dumps(compact_payload, default=str, ensure_ascii=True)
-        if len(serialized) <= max_chars:
-            return serialized
-
-    flow_payload = compact_payload.get("flow") or {}
-    minimal_payload = {
-        "flow": {
-            "flow_id": _truncate_text(flow_payload.get("flow_id"), 128),
-            "flow_name": _truncate_text(flow_payload.get("flow_name"), 128),
-            "session_id": _truncate_text(flow_payload.get("session_id"), 128),
-            "status": _truncate_text(flow_payload.get("status"), 64),
-            "trace_id": _truncate_text(flow_payload.get("trace_id"), 128),
-            "failure_reason": _truncate_text(flow_payload.get("failure_reason"), 512),
-        },
-        "truncated": True,
-        "truncation_notice": "Hidden flow context exceeded size limit and was reduced.",
-    }
-    serialized = json.dumps(minimal_payload, default=str, ensure_ascii=True)
-    if len(serialized) <= max_chars:
-        return serialized
-
-    return json.dumps({"truncated": True}, ensure_ascii=True)
+    lines = [f"- {label}:"]
+    for value in values[:max_items]:
+        if isinstance(value, dict):
+            ref_id = (
+                value.get("extraction_result_id")
+                or value.get("review_session_id")
+                or value.get("file_id")
+                or value.get("id")
+                or "unknown"
+            )
+            details = []
+            for key in ("adapter_key", "agent_key", "candidate_count", "filename", "format"):
+                if value.get(key) not in (None, ""):
+                    details.append(f"{key}={value.get(key)}")
+            suffix = f" ({', '.join(details)})" if details else ""
+            lines.append(f"  - {_truncate_text(ref_id, 160)}{suffix}")
+        else:
+            lines.append(f"  - {_truncate_text(value, 160)}")
+    if len(values) > max_items:
+        lines.append(f"  - ... {len(values) - max_items} more")
+    return lines
 
 
 def _build_flow_memory_assistant_message(
     *,
     flow_name: str,
     flow_id: str,
+    flow_run_id: Optional[str],
     session_id: str,
+    document_id: Optional[str],
     status: str,
     trace_id: Optional[str],
     final_user_output: Optional[str],
     agents_used: List[str],
-    specialist_outputs: List[Dict[str, Any]],
-    specialist_summaries: List[Dict[str, Any]],
-    domain_warnings: List[Dict[str, Any]],
+    extraction_result_refs: List[Dict[str, Any]],
+    review_session_ids: List[str],
+    adapter_keys: List[str],
+    domain_warning_count: int,
     file_outputs: List[Dict[str, Any]],
     failure_reason: Optional[str],
 ) -> str:
-    """Build a flow execution context message for follow-up chat grounding."""
+    """Build a ref-only flow execution context message for follow-up chat grounding."""
     agents = _dedupe_preserve_order([str(agent) for agent in agents_used if agent])
     visible_output = _truncate_text(final_user_output or "", _FLOW_MEMORY_MAX_VISIBLE_OUTPUT_CHARS)
 
-    bounded_outputs: List[Dict[str, Any]] = []
-    for output in specialist_outputs[:_FLOW_MEMORY_MAX_SPECIALIST_OUTPUTS]:
-        bounded_outputs.append({
-            "tool": output.get("tool"),
-            "output_length": output.get("output_length"),
-            "output": _truncate_text(output.get("output"), _FLOW_MEMORY_MAX_SPECIALIST_OUTPUT_CHARS),
-        })
-
-    hidden_payload = {
-        "flow": {
-            "flow_id": flow_id,
-            "flow_name": flow_name,
-            "session_id": session_id,
-            "status": status,
-            "trace_id": trace_id,
-            "failure_reason": failure_reason,
-        },
-        "specialist_outputs": bounded_outputs,
-        "intermediate_specialist_summaries": specialist_summaries[:_FLOW_MEMORY_MAX_SPECIALIST_SUMMARIES],
-        "domain_warnings": domain_warnings,
-        "files": file_outputs,
-    }
-    hidden_json = _serialize_hidden_flow_payload(hidden_payload, _FLOW_MEMORY_MAX_HIDDEN_JSON_CHARS)
-
     agents_line = ", ".join(agents) if agents else "Unknown"
+    adapters_line = ", ".join(_dedupe_preserve_order([str(key) for key in adapter_keys if key])) or "none recorded"
     if visible_output:
         final_output_block = visible_output
     elif status == "failed":
@@ -170,19 +150,38 @@ def _build_flow_memory_assistant_message(
     else:
         final_output_block = "No final user-visible output was emitted."
 
+    file_refs = [
+        {
+            "file_id": file_output.get("file_id"),
+            "filename": file_output.get("filename"),
+            "format": file_output.get("format"),
+        }
+        for file_output in file_outputs
+        if isinstance(file_output, dict)
+    ]
+
+    lines = [
+        "Flow execution summary for follow-up questions:",
+        f"- Flow: {flow_name} ({flow_id})",
+        f"- Flow run ID: {flow_run_id or 'n/a'}",
+        f"- Status: {status}",
+        f"- Session: {session_id}",
+        f"- Trace ID: {trace_id or 'n/a'}",
+        f"- Document ID: {document_id or 'n/a'}",
+        f"- Agents involved: {agents_line}",
+        f"- Adapter keys: {adapters_line}",
+        f"- Domain warning count: {domain_warning_count}",
+        *_flow_ref_lines("Extraction result refs", extraction_result_refs),
+        *_flow_ref_lines("Review session refs", review_session_ids),
+        *_flow_ref_lines("File refs", file_refs),
+        "- Detail lookup:",
+        "  - Use inspect_curation_context with flow_run_id/extraction_result_id for extraction details, review_session_id for review workspace details, or file_id for bounded file metadata/previews.",
+        "  - Use inspect_chat_traces with the trace_id for trace details.",
+        "- Final user-visible output:",
+        final_output_block,
+    ]
     return (
-        "Flow execution summary for follow-up questions:\n"
-        f"- Flow: {flow_name} ({flow_id})\n"
-        f"- Status: {status}\n"
-        f"- Session: {session_id}\n"
-        f"- Trace ID: {trace_id or 'n/a'}\n"
-        f"- Agents involved: {agents_line}\n"
-        "- Final user-visible output:\n"
-        f"{final_output_block}\n\n"
-        "Hidden flow context (internal grounding data; not user-visible output):\n"
-        "<FLOW_INTERNAL_CONTEXT_JSON>\n"
-        f"{hidden_json}\n"
-        "</FLOW_INTERNAL_CONTEXT_JSON>"
+        "\n".join(lines)
     )
 
 
@@ -768,9 +767,10 @@ async def execute_flow_endpoint(
         run_finished_response = ""
         chat_output_response = ""
         agents_used: List[str] = []
-        specialist_outputs: List[Dict[str, Any]] = []
-        specialist_summaries: List[Dict[str, Any]] = []
-        domain_warnings: List[Dict[str, Any]] = []
+        extraction_result_refs: List[Dict[str, Any]] = []
+        review_session_ids: List[str] = []
+        adapter_keys: List[str] = []
+        domain_warning_count = 0
         file_outputs: List[Dict[str, Any]] = []
         transcript_rows: List[ExecuteFlowTranscriptRow] = []
         run_started_event: Optional[Dict[str, Any]] = None
@@ -847,32 +847,28 @@ async def execute_flow_endpoint(
                     crew_name = event_details.get("crewDisplayName") or event_details.get("crewName")
                     if crew_name:
                         agents_used.append(str(crew_name))
-                elif event_type == "SPECIALIST_SUMMARY":
-                    specialist_summaries.append(dict(event_details))
                 elif event_type == "DOMAIN_WARNING":
-                    domain_warnings.append(dict(event_details))
+                    domain_warning_count += 1
                 elif event_type == "FILE_READY":
                     file_outputs.append(dict(event_details))
                 elif event_type == "FLOW_FINISHED":
                     flow_status = event_data.get("status")
                     flow_failure_reason = event_data.get("failure_reason")
-                elif event_type == "TOOL_COMPLETE":
-                    tool_name = event_details.get("toolName")
-                    internal_payload = event.get("internal")
-                    if (
-                        isinstance(internal_payload, dict)
-                        and isinstance(tool_name, str)
-                        and tool_name.startswith("ask_")
-                        and tool_name.endswith("_specialist")
-                        and "tool_output" in internal_payload
-                    ):
-                        raw_output = internal_payload.get("tool_output")
-                        output_text = str(raw_output) if raw_output is not None else ""
-                        specialist_outputs.append({
-                            "tool": tool_name,
-                            "output": output_text,
-                            "output_length": internal_payload.get("output_length", len(output_text)),
-                        })
+                    extraction_result_refs = [
+                        dict(ref)
+                        for ref in (event_data.get("extraction_result_refs") or [])
+                        if isinstance(ref, dict)
+                    ]
+                    review_session_ids = [
+                        str(ref)
+                        for ref in (event_data.get("review_session_ids") or [])
+                        if ref
+                    ]
+                    adapter_keys = [
+                        str(ref)
+                        for ref in (event_data.get("adapter_keys") or [])
+                        if ref
+                    ]
 
                 flat_event = {
                     "type": event_type,
@@ -952,14 +948,21 @@ async def execute_flow_endpoint(
                 history_assistant_message = _build_flow_memory_assistant_message(
                     flow_name=flow.name,
                     flow_id=str(flow.id),
+                    flow_run_id=str(
+                        (buffered_flow_finished_event or {}).get("flow_run_id")
+                        or prepared_turn.flow_run_id
+                        or ""
+                    ).strip() or None,
                     session_id=current_session_id,
+                    document_id=str(request.document_id) if request.document_id else None,
                     status=flow_status,
                     trace_id=trace_id,
                     final_user_output=chat_output_response or run_finished_response,
                     agents_used=agents_used,
-                    specialist_outputs=specialist_outputs,
-                    specialist_summaries=specialist_summaries,
-                    domain_warnings=domain_warnings,
+                    extraction_result_refs=extraction_result_refs,
+                    review_session_ids=review_session_ids,
+                    adapter_keys=adapter_keys,
+                    domain_warning_count=domain_warning_count,
                     file_outputs=file_outputs,
                     failure_reason=flow_failure_reason,
                 )

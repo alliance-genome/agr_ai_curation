@@ -252,9 +252,6 @@ export interface ChatMessage {
   content: string
 }
 
-// Input source type for flow nodes (matches FlowBuilder/types.ts)
-export type InputSource = 'user_query' | 'previous_output' | 'custom'
-
 // Flow definition for context (simplified version for chat)
 export interface FlowContextDefinition {
   nodes: Array<{
@@ -263,8 +260,6 @@ export interface FlowContextDefinition {
     agent_display_name: string
     task_instructions?: string  // For task_input nodes
     custom_instructions?: string
-    input_source: InputSource
-    custom_input?: string
     output_filename_template?: string
     output_key: string
     validation_attachments?: Array<Record<string, unknown>>

@@ -335,6 +335,62 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.data["summary"]["reasoning_summary_status"], "unavailable")
         self.assertGreaterEqual(response.token_info.estimated_tokens, 1)
 
+    @patch("src.analyzers.agent_config.AgentConfigAnalyzer.extract_agent_configs", return_value={})
+    @patch("src.analyzers.document_hierarchy.DocumentHierarchyAnalyzer.analyze", return_value={})
+    @patch(
+        "src.api.claude.TraceSummaryAnalyzer.analyze",
+        return_value={"has_errors": False, "domain_envelope": {"found": False, "summary": {}}},
+    )
+    @patch("src.analyzers.agent_context.AgentContextAnalyzer.analyze", return_value={})
+    @patch("src.analyzers.token_analysis.TokenAnalysisAnalyzer.analyze", return_value={})
+    @patch("src.analyzers.pdf_citations.PDFCitationsAnalyzer.analyze", return_value={})
+    @patch(
+        "src.api.claude.ToolCallAnalyzer.extract_tool_calls",
+        return_value={
+            "total_count": 1,
+            "unique_tools": ["inspect_curation_context"],
+            "duplicates": {},
+            "tool_calls": [
+                {
+                    "call_id": None,
+                    "name": "inspect_curation_context",
+                    "time": None,
+                    "duration": None,
+                    "status": None,
+                    "input": {"detail": "summary"},
+                    "tool_result": {"summary": None},
+                }
+            ],
+        },
+    )
+    @patch("src.api.claude.ConversationAnalyzer.extract_conversation", return_value={"user_input": "Question", "assistant_response": "N/A"})
+    @patch("src.api.claude.TraceExtractor")
+    async def test_claude_tool_calls_summary_handles_missing_status(
+        self,
+        extractor_cls: Mock,
+        _conversation: Mock,
+        _tool_calls: Mock,
+        _pdf_citations: Mock,
+        _token_analysis: Mock,
+        _agent_context: Mock,
+        _trace_summary: Mock,
+        _document_hierarchy: Mock,
+        _agent_configs: Mock,
+    ):
+        request = self._make_request()
+        extractor_cls.return_value.extract_complete_trace.return_value = self._make_trace_data()
+
+        response = await claude.get_tool_calls_summary(
+            "trace-extraction-123",
+            request,
+            source="auto",
+        )
+
+        self.assertEqual(response.status, "success")
+        self.assertEqual(response.data.tool_calls[0].status, "N/A")
+        self.assertEqual(response.data.tool_calls[0].call_id, "N/A")
+        self.assertEqual(response.data.tool_calls[0].result_summary, "N/A")
+
     @patch(
         "src.api.extraction_timeline_helpers.fetch_feedback_trace_artifacts",
         return_value={

@@ -1,0 +1,94 @@
+{
+  "audit_date": "2026-06-06",
+  "source": "local TraceReview payload reads",
+  "finding": "DomainValidationRequest selected_inputs is duplicated exactly under target.input_values in validator model inputs.",
+  "construction_path": {
+    "selected_inputs_built_at": "backend/src/lib/domain_packs/input_selectors.py:61",
+    "target_copy_built_at": "backend/src/lib/domain_packs/input_selectors.py:630",
+    "single_validator_prompt_serialization": "backend/src/lib/domain_packs/validator_dispatch.py:815",
+    "batch_validator_prompt_serialization": "backend/src/lib/domain_packs/validator_dispatch.py:913",
+    "flow_validator_attachment_serialization": "backend/src/lib/flows/executor.py:850"
+  },
+  "identity_behavior": {
+    "target_input_values_is_target_identity": false,
+    "identity_check_excludes_input_values": "backend/src/lib/domain_packs/validator_dispatch.py:1528",
+    "accepted_result_target_normalized_to_request_target": "backend/src/lib/domain_packs/validator_dispatch.py:1113"
+  },
+  "measurements": [
+    {
+      "trace_id": "ac089613a87ebe149cf70b38129e9c3d",
+      "validator_binding_id": "alliance_gene_reference_lookup",
+      "selected_inputs_equals_target_input_values": true,
+      "selected_inputs_json_chars": 1328,
+      "inner_request_chars_saved_by_deleting_target_input_values": 1486,
+      "normalized_outer_model_input_chars_saved_per_generation": 1528,
+      "validator_input_payloads": [
+        {
+          "payload_id": "observation:3e4be8c827a78427:input",
+          "message_count": 1,
+          "normalized_outer_model_input_chars_saved": 1528
+        },
+        {
+          "payload_id": "observation:e6e49c3f0ee66404:input",
+          "message_count": 4,
+          "normalized_outer_model_input_chars_saved": 1528
+        },
+        {
+          "payload_id": "observation:4f063c04b34a5548:input",
+          "message_count": 7,
+          "normalized_outer_model_input_chars_saved": 1528
+        },
+        {
+          "payload_id": "observation:5fa767992103479d:input",
+          "message_count": 10,
+          "normalized_outer_model_input_chars_saved": 1528
+        }
+      ],
+      "total_normalized_outer_model_input_chars_saved": 6112,
+      "rough_total_input_tokens_saved": 1528
+    },
+    {
+      "trace_id": "f3095edf162452743a4b31cafdf9801e",
+      "validator_binding_id": "alliance_gene_reference_lookup",
+      "selected_inputs_equals_target_input_values": true,
+      "selected_inputs_json_chars": 1145,
+      "inner_request_chars_saved_by_deleting_target_input_values": 1303,
+      "normalized_outer_model_input_chars_saved_per_generation": 1343,
+      "validator_input_payloads": [
+        {
+          "payload_id": "observation:98962eb22a642335:input",
+          "message_count": 1,
+          "normalized_outer_model_input_chars_saved": 1343
+        },
+        {
+          "payload_id": "observation:376ed400f354bf65:input",
+          "message_count": 4,
+          "normalized_outer_model_input_chars_saved": 1343
+        },
+        {
+          "payload_id": "observation:56c516020aafa89c:input",
+          "message_count": 7,
+          "normalized_outer_model_input_chars_saved": 1343
+        },
+        {
+          "payload_id": "observation:0c29de89e6ea1b85:input",
+          "message_count": 10,
+          "normalized_outer_model_input_chars_saved": 1343
+        }
+      ],
+      "total_normalized_outer_model_input_chars_saved": 5372,
+      "rough_total_input_tokens_saved": 1343
+    }
+  ],
+  "recommended_first_patch": {
+    "strategy": "Keep the internal schema and request ids stable; render a compact provider-bound validator prompt payload that omits target.input_values.",
+    "fallback_policy": "Do not keep fallback prompt wording for target.input_values. selected_inputs is the only canonical prompt-visible validator input context.",
+    "also_update": [
+      "single package-scoped validator prompt payload",
+      "batch package-scoped validator prompt payload",
+      "flow validator attachment validation_request payload",
+      "Alliance package prompts that mention target.input_values",
+      "validator repair instructions that currently say to copy target exactly"
+    ]
+  }
+}

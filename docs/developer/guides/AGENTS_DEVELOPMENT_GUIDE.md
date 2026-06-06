@@ -247,6 +247,12 @@ is the minimal supervisor/startup package.
 | `save_tsv_file` | Output | Persist data as downloadable TSV |
 | `save_json_file` | Output | Persist data as downloadable JSON |
 
+The `save_*_file` tools are ordinary formatter-agent tools. Flow terminal
+formatters use the executor's deterministic output-projection path instead:
+completed runtime artifacts are projected, validated, serialized, and saved by
+the runtime, and the terminal formatter must not fall back to model-authored
+`data_json`.
+
 ### Tool Bindings
 
 Each package binding declaration in `tools/bindings.yaml` declares:
@@ -536,6 +542,11 @@ docker compose exec postgres psql -U postgres ai_curation -c \
 | `csv_formatter` | Output | CSV file output |
 | `tsv_formatter` | Output | TSV file output |
 | `json_formatter` | Output | JSON file output |
+
+When these output agents are used as terminal flow steps, they define the
+requested presentation of completed artifacts. The flow executor owns the
+projection, filtering, sorting, grouping, serialization, file save, and chat
+rendering.
 
 ### Tools
 

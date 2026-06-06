@@ -1336,7 +1336,6 @@ def build_flow_definition(agent_id: str, agent_name: str) -> Dict[str, Any]:
                         "retained item. Do not extract any other genes."
                     ),
                     "output_key": "task_input_text",
-                    "input_source": "user_query",
                 },
             },
             {
@@ -1347,7 +1346,6 @@ def build_flow_definition(agent_id: str, agent_name: str) -> Dict[str, Any]:
                     "agent_id": agent_id,
                     "agent_display_name": agent_name,
                     "output_key": "final_output",
-                    "input_source": "previous_output",
                     "step_goal": (
                         "Extract only crb/Crumbs from the loaded document, retain exactly one "
                         "verified evidence record, and include its evidence_record_id in the final "
@@ -1381,7 +1379,6 @@ def build_batch_plumbing_flow_definition() -> Dict[str, Any]:
                         "the formatter step."
                     ),
                     "output_key": "task_input_text",
-                    "input_source": "user_query",
                 },
             },
             {
@@ -1392,7 +1389,6 @@ def build_batch_plumbing_flow_definition() -> Dict[str, Any]:
                     "agent_id": "pdf_extraction",
                     "agent_display_name": "PDF Specialist",
                     "output_key": "pdf_findings",
-                    "input_source": "previous_output",
                     "step_goal": (
                         "Read enough of the document to prove document access, then return exactly "
                         "this plain ASCII sentence: PDF specialist completed document access for "
@@ -1409,13 +1405,36 @@ def build_batch_plumbing_flow_definition() -> Dict[str, Any]:
                     "agent_id": "json_formatter",
                     "agent_display_name": "JSON Formatter",
                     "output_key": "final_output",
-                    "input_source": "previous_output",
                     "step_goal": (
                         "Save exactly this JSON payload as a downloadable file and do not include "
-                        "any previous-step prose in the file: "
+                        "any specialist prose in the file: "
                         '[{"check":"batch_file_output","status":"completed"}]. '
                         "Use filename batch_release_smoke_result."
                     ),
+                    "projection_plan": {
+                        "format": "json",
+                        "row_source": "artifact",
+                        "json_shape": "rows",
+                        "max_rows": 1,
+                        "columns": [
+                            {
+                                "key": "check",
+                                "header": "Check",
+                                "transform": {
+                                    "type": "literal",
+                                    "value": "batch_file_output",
+                                },
+                            },
+                            {
+                                "key": "status",
+                                "header": "Status",
+                                "transform": {
+                                    "type": "literal",
+                                    "value": "completed",
+                                },
+                            },
+                        ],
+                    },
                 },
             },
         ],
@@ -1446,7 +1465,6 @@ def build_batch_extraction_flow_definition() -> Dict[str, Any]:
                         "a compact JSON file that preserves the retained gene and evidence IDs."
                     ),
                     "output_key": "task_input_text",
-                    "input_source": "user_query",
                 },
             },
             {
@@ -1457,7 +1475,6 @@ def build_batch_extraction_flow_definition() -> Dict[str, Any]:
                     "agent_id": "gene_extractor",
                     "agent_display_name": "Gene Extractor",
                     "output_key": "gene_extraction",
-                    "input_source": "previous_output",
                     "step_goal": (
                         "Extract only crb/Crumbs from the loaded document. Keep exactly one "
                         "verified evidence record, and include its evidence_record_id in the "
@@ -1473,13 +1490,35 @@ def build_batch_extraction_flow_definition() -> Dict[str, Any]:
                     "agent_id": "json_formatter",
                     "agent_display_name": "JSON Formatter",
                     "output_key": "final_output",
-                    "input_source": "previous_output",
                     "step_goal": (
                         "Save a compact JSON file named batch_extraction_smoke_result. The file "
-                        "must preserve the previous gene extraction result and include the string "
-                        "crb or Crumbs plus at least one evidence_record_id from the extraction. "
+                        "must be built from structured flow artifacts and include the string "
+                        "crb or Crumbs plus at least one available evidence_record_id. "
                         "Do not invent evidence IDs and do not include unrelated genes."
                     ),
+                    "projection_plan": {
+                        "format": "json",
+                        "row_source": "object",
+                        "json_shape": "rows",
+                        "filters": [
+                            {
+                                "field_ref": "object.evidence_record_ids",
+                                "op": "is_not_empty",
+                            }
+                        ],
+                        "columns": [
+                            {
+                                "key": "gene",
+                                "header": "Gene",
+                                "field_ref": "object.label",
+                            },
+                            {
+                                "key": "evidence_record_ids",
+                                "header": "Evidence Record IDs",
+                                "field_ref": "object.evidence_record_ids",
+                            },
+                        ],
+                    },
                 },
             },
         ],

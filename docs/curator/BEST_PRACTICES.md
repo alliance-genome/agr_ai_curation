@@ -132,7 +132,7 @@ The task input is the starting point for your flow. Write clear, specific task d
 
 ### Flow Design
 
-**Start Simple:** Begin with a linear flow (Input → Extract → Output) before building complex pipelines.
+**Start Simple:** Begin with a linear flow (Input -> Extract -> Output) before building more complex guided runs.
 
 **Test Incrementally:** Add one agent at a time and verify results before adding more.
 
