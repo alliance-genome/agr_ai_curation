@@ -28,6 +28,11 @@ from src.schemas.domain_validator import (
     ValidatorLookupAttempt,
     is_domain_validator_result_schema,
 )
+from src.lib.runtime_payload_budget import (
+    json_size,
+    large_scalar_paths,
+    provider_context_preflight,
+)
 
 from .input_selectors import build_domain_validation_request
 from .materialization import (
@@ -812,10 +817,25 @@ def run_package_scoped_validator_agent(
     ]
     _append_validator_finalization_instructions(agent, batch=False)
 
-    payload = json.dumps(
-        validator_request_payload_for_agent(request),
-        sort_keys=True,
+    provider_payload = validator_request_payload_for_agent(request)
+    provider_context_preflight(
+        surface="validator",
+        operation="domain_validator_single",
+        provider="openai",
+        model=str(getattr(agent, "model", "") or ""),
+        payload=provider_payload,
+        metadata={
+            "validator_binding_id": request.validator_binding_id,
+            "request_id": request.request_id,
+            "validator_agent": request.validator_agent.model_dump(mode="json"),
+            "selected_input_large_scalar_paths": large_scalar_paths(
+                request.selected_inputs,
+                root_path="selected_inputs",
+            ),
+        },
+        emit_runtime_event=True,
     )
+    payload = json.dumps(provider_payload, sort_keys=True)
     if hasattr(Runner, "run_sync"):
         run_kwargs: dict[str, Any] = {"input": payload}
         if binding.max_tool_calls is not None:
@@ -913,27 +933,49 @@ def run_package_scoped_validator_agent_batch(
     ]
     _append_validator_finalization_instructions(agent, batch=True)
 
-    payload = json.dumps(
-        {
-            "mode": "domain_validator_batch",
-            "instructions": (
-                "Validate every DomainValidationRequest in requests. Return a "
-                "JSON object with a results array containing exactly one "
-                "DomainValidatorResultBase-compatible result per request_id. "
-                "Copy dispatcher-owned identity fields from each request. Use "
-                "one bulk lookup tool call per compatible shared lookup group "
-                "when a bulk method exists, using list inputs such as "
-                "gene_symbols or allele_symbols. Map the returned items back to "
-                "their request_ids, and do not loop one lookup call per request "
-                "when one shared bulk call can answer the group."
-            ),
-            "requests": [
-                validator_request_payload_for_agent(job.request)
+    provider_payload = {
+        "mode": "domain_validator_batch",
+        "instructions": (
+            "Validate every DomainValidationRequest in requests. Return a "
+            "JSON object with a results array containing exactly one "
+            "DomainValidatorResultBase-compatible result per request_id. "
+            "Copy dispatcher-owned identity fields from each request. Use "
+            "one bulk lookup tool call per compatible shared lookup group "
+            "when a bulk method exists, using list inputs such as "
+            "gene_symbols or allele_symbols. Map the returned items back to "
+            "their request_ids, and do not loop one lookup call per request "
+            "when one shared bulk call can answer the group."
+        ),
+        "requests": [
+            validator_request_payload_for_agent(job.request)
+            for job in jobs
+        ],
+    }
+    provider_context_preflight(
+        surface="validator",
+        operation="domain_validator_batch",
+        provider="openai",
+        model=str(getattr(agent, "model", "") or ""),
+        payload=provider_payload,
+        metadata={
+            "validator_binding_id": representative_request.validator_binding_id,
+            "request_count": len(jobs),
+            "request_ids": [job.request.request_id for job in jobs],
+            "validator_agent": representative_request.validator_agent.model_dump(mode="json"),
+            "selected_input_large_scalar_paths": [
+                {
+                    "request_id": job.request.request_id,
+                    "paths": large_scalar_paths(
+                        job.request.selected_inputs,
+                        root_path="selected_inputs",
+                    ),
+                }
                 for job in jobs
             ],
         },
-        sort_keys=True,
+        emit_runtime_event=True,
     )
+    payload = json.dumps(provider_payload, sort_keys=True)
     if hasattr(Runner, "run_sync"):
         run_kwargs: dict[str, Any] = {"input": payload}
         if binding.max_tool_calls is not None:
@@ -1665,6 +1707,21 @@ def _validator_batch_summary(jobs: list[_DispatchJob]) -> dict[str, Any]:
         if binding.validator_agent is not None
         else representative.request.validator_agent.model_dump(mode="json")
     )
+    request_payloads = [
+        validator_request_payload_for_agent(job.request)
+        for job in jobs
+    ]
+    request_payload_sizes = [json_size(payload) for payload in request_payloads]
+    selected_input_large_scalar_paths = [
+        {
+            "request_id": job.request.request_id,
+            "paths": large_scalar_paths(
+                job.request.selected_inputs,
+                root_path="selected_inputs",
+            ),
+        }
+        for job in jobs
+    ]
     return {
         "validator_binding_id": binding.binding_id,
         "validator_agent": validator_agent,
@@ -1672,6 +1729,16 @@ def _validator_batch_summary(jobs: list[_DispatchJob]) -> dict[str, Any]:
         "request_count": len(jobs),
         "request_ids": [job.request.request_id for job in jobs],
         "first_request_id": jobs[0].request.request_id,
+        "payload_summary": {
+            "request_payload_json_chars": sum(size.json_chars for size in request_payload_sizes),
+            "request_payload_estimated_tokens": sum(size.estimated_tokens for size in request_payload_sizes),
+            "largest_request_json_chars": max(
+                (size.json_chars for size in request_payload_sizes),
+                default=0,
+            ),
+            "omitted_target_input_values_count": len(jobs),
+            "large_selected_input_scalar_paths": selected_input_large_scalar_paths,
+        },
     }
 
 

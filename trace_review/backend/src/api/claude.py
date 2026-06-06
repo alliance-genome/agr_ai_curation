@@ -12,9 +12,10 @@ Endpoints:
 - GET /conversation - User query and assistant response
 """
 
+import json
 import math
 from datetime import datetime
-from typing import Annotated, Dict, Any, Optional, List
+from typing import Annotated, Dict, Any, Optional, List, Mapping
 from fastapi import APIRouter, HTTPException, Request, Query, Path
 
 from ..services.trace_extractor import TraceExtractor
@@ -76,6 +77,200 @@ def _trace_id_short(trace_id: Optional[str]) -> Optional[str]:
     if not trace_id:
         return None
     return trace_id[:8] if len(trace_id) >= 8 else trace_id
+
+
+def _estimate_tokens_from_chars(chars: int) -> int:
+    if chars <= 0:
+        return 0
+    return max(1, math.ceil(chars / 4))
+
+
+def _threshold_for_tokens(tokens: int) -> Optional[str]:
+    reached = [threshold for threshold in (100_000, 250_000, 1_000_000) if tokens >= threshold]
+    return str(max(reached)) if reached else None
+
+
+def _payload_json_chars(value: Any) -> int:
+    if isinstance(value, str):
+        return len(value)
+    try:
+        return len(json.dumps(value, sort_keys=True, ensure_ascii=False, default=str))
+    except Exception:
+        return len(str(value))
+
+
+def _event_payload_from_observation(observation: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    metadata = observation.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return None
+    payload = metadata.get("event_payload")
+    return payload if isinstance(payload, Mapping) else None
+
+
+def _preflight_call_from_event(
+    *,
+    ordinal: int,
+    observation: Mapping[str, Any],
+    event_payload: Mapping[str, Any],
+) -> Dict[str, Any] | None:
+    event_type = str(event_payload.get("event_type") or "").lower()
+    if "provider_context_preflight" not in event_type:
+        return None
+    input_summary = event_payload.get("input_summary")
+    preview = input_summary.get("preview") if isinstance(input_summary, Mapping) else None
+    details = (
+        preview
+        if isinstance(preview, Mapping)
+        else input_summary
+        if isinstance(input_summary, Mapping)
+        else {}
+    )
+    payload_summary = details.get("payload_summary") if isinstance(details, Mapping) else None
+    payload_summary = payload_summary if isinstance(payload_summary, Mapping) else {}
+    input_json_chars = int(payload_summary.get("json_chars") or 0)
+    estimated_tokens = int(
+        payload_summary.get("estimated_tokens")
+        or _estimate_tokens_from_chars(input_json_chars)
+    )
+    return {
+        "ordinal": ordinal,
+        "surface": details.get("surface"),
+        "operation": details.get("operation"),
+        "provider": details.get("provider"),
+        "model": details.get("model"),
+        "input_json_chars": input_json_chars,
+        "estimated_input_tokens": estimated_tokens,
+        "threshold": payload_summary.get("threshold") or _threshold_for_tokens(estimated_tokens),
+        "payload_refs": [
+            f"observation:{observation.get('id')}:metadata.event_payload",
+        ],
+        "observability_only_refs": [],
+        "largest_paths": payload_summary.get("largest_paths") or [],
+        "classification_source": "provider_context_preflight",
+    }
+
+
+def _generation_call_from_observation(
+    *,
+    ordinal: int,
+    observation: Mapping[str, Any],
+    payloads_by_id: Mapping[str, Mapping[str, Any]],
+) -> Dict[str, Any] | None:
+    obs_type = str(observation.get("type") or observation.get("observationType") or "").lower()
+    model = (
+        observation.get("providedModelName")
+        or observation.get("model")
+        or observation.get("model_name")
+    )
+    if obs_type != "generation":
+        return None
+    obs_id = observation.get("id")
+    payload_id = f"observation:{obs_id}:input"
+    payload_ref = payloads_by_id.get(payload_id)
+    input_json_chars = (
+        int(payload_ref.get("json_chars") or 0)
+        if isinstance(payload_ref, Mapping)
+        else _payload_json_chars(observation.get("input"))
+    )
+    estimated_tokens = _estimate_tokens_from_chars(input_json_chars)
+    return {
+        "ordinal": ordinal,
+        "surface": "langfuse_generation",
+        "operation": observation.get("name") or "generation",
+        "provider": None,
+        "model": model,
+        "input_json_chars": input_json_chars,
+        "estimated_input_tokens": estimated_tokens,
+        "threshold": _threshold_for_tokens(estimated_tokens),
+        "payload_refs": [payload_id] if payload_ref else [],
+        "observability_only_refs": [],
+        "largest_paths": [],
+        "classification_source": "inferred_generation_input",
+    }
+
+
+def _build_model_live_context(trace_data: Mapping[str, Any]) -> Dict[str, Any]:
+    payloads = build_payload_inventory(trace_data, include_values=False)
+    payloads_by_id = {
+        str(payload.get("payload_id")): payload
+        for payload in payloads
+        if payload.get("payload_id")
+    }
+    calls: List[Dict[str, Any]] = []
+    ordinal = 1
+    for observation in trace_data.get("observations") or []:
+        if not isinstance(observation, Mapping):
+            continue
+        event_payload = _event_payload_from_observation(observation)
+        preflight_call = (
+            _preflight_call_from_event(
+                ordinal=ordinal,
+                observation=observation,
+                event_payload=event_payload,
+            )
+            if event_payload is not None
+            else None
+        )
+        generation_call = _generation_call_from_observation(
+            ordinal=ordinal,
+            observation=observation,
+            payloads_by_id=payloads_by_id,
+        )
+        call = preflight_call or generation_call
+        if call is None:
+            continue
+        calls.append(call)
+        ordinal += 1
+
+    total_chars = sum(call["input_json_chars"] for call in calls)
+    total_tokens = sum(call["estimated_input_tokens"] for call in calls)
+    threshold_counts = {
+        "100000": sum(1 for call in calls if call["estimated_input_tokens"] >= 100_000),
+        "250000": sum(1 for call in calls if call["estimated_input_tokens"] >= 250_000),
+        "1000000": sum(1 for call in calls if call["estimated_input_tokens"] >= 1_000_000),
+    }
+    explicit_preflight_calls = [
+        call for call in calls
+        if call["classification_source"] == "provider_context_preflight"
+    ]
+    inferred_generation_calls = [
+        call for call in calls
+        if call["classification_source"] == "inferred_generation_input"
+    ]
+    possible_double_count = bool(explicit_preflight_calls and inferred_generation_calls)
+    precision = (
+        "mixed_explicit_and_inferred"
+        if possible_double_count
+        else "explicit"
+        if explicit_preflight_calls
+        else "inferred_from_langfuse_generation_inputs"
+    )
+    totals_by_classification = {}
+    for source, source_calls in (
+        ("provider_context_preflight", explicit_preflight_calls),
+        ("inferred_generation_input", inferred_generation_calls),
+    ):
+        totals_by_classification[source] = {
+            "call_count": len(source_calls),
+            "total_input_json_chars": sum(call["input_json_chars"] for call in source_calls),
+            "total_estimated_input_tokens": sum(
+                call["estimated_input_tokens"] for call in source_calls
+            ),
+        }
+    return {
+        "observed_call_record_count": len(calls),
+        "total_observed_input_json_chars": total_chars,
+        "total_observed_estimated_input_tokens": total_tokens,
+        "totals_by_classification": totals_by_classification,
+        "threshold_counts": threshold_counts,
+        "classification": {
+            "preflight_event_count": len(explicit_preflight_calls),
+            "inferred_generation_count": len(inferred_generation_calls),
+            "historical_precision": precision,
+            "possible_double_count": possible_double_count,
+        },
+        "calls": calls,
+    }
 
 
 def _listed_trace_reference(trace: Dict[str, Any]) -> Dict[str, Any]:
@@ -547,6 +742,42 @@ async def get_langfuse_payload(
         "source": source,
         "trace_id": trace_id,
         "payload": payload,
+    }
+    token_info = create_token_info_dict(response_data)
+    return ClaudeTraceResponse(
+        status="success",
+        data=response_data,
+        token_info=TokenInfo(**token_info),
+    )
+
+
+@router.get(
+    "/{trace_id}/model_live_context",
+    response_model=ClaudeTraceResponse,
+    summary="Summarize model-live provider context",
+    description="""
+    Return bounded provider-call input size summaries. Raw prompt and payload
+    values are not returned; use langfuse_payloads/langfuse_payload for explicit
+    payload retrieval when needed.
+    """
+)
+async def get_model_live_context(
+    trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
+    user: Dict[str, Any] = get_auth_dependency(),
+) -> ClaudeTraceResponse:
+    trace_data = _extract_langfuse_trace(trace_id, source)
+    model_live_context = _build_model_live_context(trace_data)
+    response_data = {
+        "source": source,
+        "trace_id": trace_id,
+        "model_live_context": model_live_context,
+        "observability_payloads": {
+            "payload_inventory_available": True,
+            "exact_payload_requires_explicit_lookup": True,
+            "inventory_endpoint": "langfuse_payloads",
+            "exact_payload_endpoint": "langfuse_payload",
+        },
     }
     token_info = create_token_info_dict(response_data)
     return ClaudeTraceResponse(

@@ -103,6 +103,7 @@ from src.lib.openai_agents.config import (
     get_max_turns,
     resolve_model_provider,
 )
+from src.lib.runtime_payload_budget import provider_context_preflight
 from src.lib.openai_agents.evidence_summary import _EvidenceRegistry
 from src.lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 from src.lib.openai_agents.agents.supervisor_agent import _create_streaming_tool
@@ -1352,17 +1353,36 @@ async def _run_custom_flow_validator_agent(
         tool_description=f"Run validator attachment {validator_agent_id}",
         specialist_name=node_data.get("agent_display_name") or validator_agent_id,
     )
-    payload = json.dumps(
-        {
-            "source_envelope": {
-                "envelope_id": source_envelope_id,
-                "revision": source_envelope_revision,
-            },
-            "validator_binding": binding_match.binding.identity_details(),
-            "validation_request": validator_request_payload_for_agent(request),
+    provider_payload = {
+        "source_envelope": {
+            "envelope_id": source_envelope_id,
+            "revision": source_envelope_revision,
         },
-        sort_keys=True,
+        "validator_binding": binding_match.binding.identity_details(),
+        "validation_request": validator_request_payload_for_agent(request),
+    }
+    try:
+        validator_model = get_model_for_agent(validator_agent_id)
+        validator_provider = resolve_model_provider(validator_model)
+    except Exception:
+        validator_model = None
+        validator_provider = None
+    provider_context_preflight(
+        surface="flow_validator",
+        operation="custom_flow_validator",
+        provider=validator_provider,
+        model=validator_model,
+        payload=provider_payload,
+        metadata={
+            "validator_binding_id": request.validator_binding_id,
+            "request_id": request.request_id,
+            "validator_agent_id": validator_agent_id,
+            "source_envelope_id": source_envelope_id,
+            "source_envelope_revision": source_envelope_revision,
+        },
+        emit_runtime_event=True,
     )
+    payload = json.dumps(provider_payload, sort_keys=True)
     if hasattr(streaming_tool, "on_invoke_tool"):
         tool_ctx = SimpleNamespace(tool_name=tool_name)
         return await streaming_tool.on_invoke_tool(

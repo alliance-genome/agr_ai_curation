@@ -114,6 +114,7 @@ from src.lib.chat_history_repository import (
 from src.lib.config import list_model_definitions
 from src.lib.context import set_current_session_id, set_current_user_id
 from src.lib.http_errors import log_exception, raise_sanitized_http_exception
+from src.lib.runtime_payload_budget import provider_context_preflight
 from src.lib.openai_agents import run_agent_streamed
 from src.lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 from src.models.sql.agent import Agent as UnifiedAgent
@@ -1979,6 +1980,7 @@ async def _handle_tool_call(
         get_extraction_timeline,
         get_trace_tree,
         get_trace_reconstruction,
+        get_trace_model_live_context,
         get_trace_payloads,
         get_trace_payload,
         get_trace_costs,
@@ -2152,6 +2154,18 @@ async def _handle_tool_call(
             limit=tool_input.get("limit", 100),
             offset=tool_input.get("offset", 0),
         )
+
+    elif tool_name == "get_trace_model_live_context":
+        trace_id = tool_input.get("trace_id")
+        if not trace_id:
+            return {
+                "status": "error",
+                "data": None,
+                "token_info": None,
+                "error": "Missing required parameter: trace_id",
+                "help": "Call get_trace_summary first or use search_traces to find a trace"
+            }
+        return await get_trace_model_live_context(trace_id=trace_id)
 
     elif tool_name == "get_trace_payloads":
         trace_id = tool_input.get("trace_id")
@@ -3004,6 +3018,7 @@ async def chat_with_opus(
             assistant_text_parts: List[str] = []
             completed_tool_calls: List[Dict[str, Any]] = []
             domain_reference_events: List[Dict[str, Any]] = []
+            provider_context_preflight_events: List[Dict[str, Any]] = []
 
             # Note: User context was set before entering generate_stream().
             # We'll clean it up in the finally block at the end of this generator.
@@ -3035,6 +3050,52 @@ async def chat_with_opus(
 
             while True:
                 collected_content = []
+                preflight_summary = provider_context_preflight(
+                    surface="agent_studio",
+                    operation=(
+                        "initial_anthropic_call"
+                        if len(current_messages) == len(messages)
+                        else "tool_loop_continuation"
+                    ),
+                    provider="anthropic",
+                    model=anthropic_model_id,
+                    payload=api_params,
+                    metadata={
+                        "session_id": prepared_turn.session_id,
+                        "turn_id": prepared_turn.turn_id,
+                        "trace_id": trace_id,
+                        "message_count": len(current_messages),
+                    },
+                    emit_trace_event=bool(trace_id),
+                )
+                preflight_event = {
+                    "operation": preflight_summary["operation"],
+                    "provider": preflight_summary["provider"],
+                    "model": preflight_summary["model"],
+                    "model_live": True,
+                    "payload_summary": {
+                        "json_chars": preflight_summary["json_chars"],
+                        "estimated_tokens": preflight_summary["estimated_tokens"],
+                        "threshold": preflight_summary["threshold"],
+                        "largest_paths": preflight_summary["largest_paths"],
+                    },
+                    "metadata": {
+                        "session_id": prepared_turn.session_id,
+                        "turn_id": prepared_turn.turn_id,
+                        "trace_id": trace_id,
+                        "message_count": len(current_messages),
+                    },
+                }
+                provider_context_preflight_events.append(preflight_event)
+                yield _opus_sse_event(
+                    session_id=prepared_turn.session_id,
+                    turn_id=prepared_turn.turn_id,
+                    event_type="PROVIDER_CONTEXT_PREFLIGHT",
+                    trace_id=trace_id,
+                    operation=preflight_event["operation"],
+                    model_live=True,
+                    payload_summary=preflight_event["payload_summary"],
+                )
 
                 # Stream the response using beta API for effort parameter support
                 async with client.beta.messages.stream(**api_params) as stream:
@@ -3151,6 +3212,11 @@ async def chat_with_opus(
                 trace_capture=_trace_capture_snapshot(trace_id),
                 domain_references=_merge_domain_reference_events(domain_reference_events),
             )
+            if provider_context_preflight_events:
+                assistant_payload = assistant_payload or {}
+                assistant_payload["provider_context_preflight_events"] = (
+                    provider_context_preflight_events
+                )
             assistant_turn = _persist_completed_agent_studio_turn(
                 session_id=prepared_turn.session_id,
                 user_id=user_id,

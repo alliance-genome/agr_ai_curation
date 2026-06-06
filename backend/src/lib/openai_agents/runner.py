@@ -64,6 +64,7 @@ from .config import (
     reasoning_summary_request_settings,
     resolve_model_provider,
 )
+from src.lib.runtime_payload_budget import provider_context_preflight
 from .extraction_trace_events import (
     clear_extraction_trace_run,
     get_current_extraction_trace_run,
@@ -1677,6 +1678,7 @@ async def run_agent_streamed(
         hierarchy = doc_context.hierarchy
         abstract = doc_context.abstract
 
+    provided_runtime_agent = agent is not None
     # Use provided agent OR create the supervisor agent with all domain specialists
     # All agent settings come from environment variables (see config.py)
     if agent is None:
@@ -1710,6 +1712,33 @@ async def run_agent_streamed(
     # Commit pending prompts for whichever agent we're using
     # (supervisor runs immediately after creation, unlike specialists which are on-demand)
     commit_pending_prompts(agent_for_prompt_commit)
+
+    def _emit_provider_context_preflight(trace_id: str) -> None:
+        model_name = str(getattr(agent, "model", "") or "")
+        try:
+            provider = resolve_model_provider(model_name)
+        except Exception:
+            provider = None
+        provider_context_preflight(
+            surface="flow" if provided_runtime_agent else "standard_chat",
+            operation="streamed_agent_context",
+            provider=provider,
+            model=model_name,
+            payload={
+                "input_items": input_items,
+                "document_id": document_id,
+                "document_name": document_name,
+                "active_groups": active_groups or [],
+                "agent_name": getattr(agent, "name", agent_name),
+            },
+            metadata={
+                "trace_id": trace_id,
+                "session_id": session_id,
+                "document_id": document_id,
+                "context_message_count": len(context_messages),
+            },
+            emit_trace_event=True,
+        )
 
     # Generate a fallback trace ID (used when Langfuse not configured)
     doc_prefix = document_id[:8] if document_id else "nodoc"
@@ -1815,6 +1844,7 @@ async def run_agent_streamed(
                     user_id=user_id,
                     observation_id=getattr(root_span, "id", None),
                 )
+                _emit_provider_context_preflight(trace_id)
 
                 logger.info(
                     "Trace created",
@@ -2088,6 +2118,7 @@ async def run_agent_streamed(
                 session_id=session_id,
                 user_id=user_id,
             )
+            _emit_provider_context_preflight(fallback_trace_id)
             run_started_event = {
                 "type": "RUN_STARTED",
                 "data": {
@@ -2134,6 +2165,7 @@ async def run_agent_streamed(
             session_id=session_id,
             user_id=user_id,
         )
+        _emit_provider_context_preflight(fallback_trace_id)
         run_started_event = {
             "type": "RUN_STARTED",
             "data": {

@@ -17,6 +17,7 @@ from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validator_dispatch import (
     _validated_results_from_agent_batch_output,
+    _validator_batch_summary,
     _validator_finalization_tool_payload,
     _validator_result_finalization_feedback,
     dispatch_active_validator_bindings,
@@ -543,7 +544,54 @@ def test_validator_request_payload_for_agent_omits_semantic_duplicates():
         "target.input_values",
         "evidence",
     ]
-    assert payload["runtime_compaction"]["input_values_source"] == "selected_inputs"
+
+
+def test_validator_request_payload_preserves_long_selected_input_scalars():
+    request = _verbose_validation_request().model_copy(
+        update={
+            "selected_inputs": {
+                "identifier": "BAD:0001",
+                "evidence_quote": "paper-supported quote " * 200,
+            }
+        },
+        deep=True,
+    )
+
+    payload = validator_request_payload_for_agent(request)
+
+    assert payload["selected_inputs"] == request.selected_inputs
+    assert payload["selected_inputs"]["evidence_quote"].endswith(
+        "paper-supported quote "
+    )
+
+
+def test_validator_batch_summary_reports_payload_sizes_and_large_scalars():
+    request = _verbose_validation_request().model_copy(
+        update={
+            "selected_inputs": {
+                "identifier": "BAD:0001",
+                "evidence_quote": "long quote " * 200,
+            }
+        },
+        deep=True,
+    )
+    binding = SimpleNamespace(
+        binding_id="fixture.identifier_lookup",
+        batch_family="fixture.family",
+        validator_agent=None,
+    )
+    job = SimpleNamespace(
+        request=request,
+        match=SimpleNamespace(binding=binding),
+    )
+
+    summary = _validator_batch_summary(cast(Any, [job]))
+
+    assert summary["payload_summary"]["request_payload_json_chars"] > 0
+    assert summary["payload_summary"]["omitted_target_input_values_count"] == 1
+    large_paths = summary["payload_summary"]["large_selected_input_scalar_paths"]
+    assert large_paths[0]["request_id"] == request.request_id
+    assert large_paths[0]["paths"][0]["path"] == "selected_inputs.evidence_quote"
 
 
 def _parent_validator_findings(result):

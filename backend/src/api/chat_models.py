@@ -128,6 +128,37 @@ class ChatSessionDetailResponse(BaseModel):
     next_message_cursor: Optional[str] = None
 
 
+class ChatContextReportMessageResponse(BaseModel):
+    """Per-message model-live replay size classification."""
+
+    message_id: str
+    role: str
+    message_type: str
+    content_chars: int
+    payload_json_chars: int
+    trace_id: Optional[str] = None
+    model_live: bool
+    model_live_source: Optional[str] = None
+    payload_json_model_live: bool
+    replay_content_chars: int
+
+
+class ChatContextReportResponse(BaseModel):
+    """Read-only size report for durable chat replay context."""
+
+    session_id: str
+    chat_kind: str
+    message_count: int
+    visible_content_chars: int
+    payload_json_chars: int
+    hidden_flow_memory_chars: int
+    flow_memory_message_count: int
+    trace_ids: List[str]
+    messages: List[ChatContextReportMessageResponse]
+    estimated_replay_tokens: int
+    threshold: Optional[str] = None
+
+
 class RenameSessionRequest(BaseModel):
     """Rename payload for one durable chat session."""
 
