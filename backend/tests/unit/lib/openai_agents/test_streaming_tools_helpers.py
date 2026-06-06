@@ -1693,6 +1693,116 @@ def test_builder_domain_envelope_reduction_without_output_type_stays_compact():
         json.loads(result)
 
 
+def test_domain_envelope_reduction_uses_unusual_payload_scalars_not_raw_json():
+    envelope_output = json.dumps(
+        {
+            "envelope_id": "env-test-unusual",
+            "domain_pack_id": "agr.alliance.unusual",
+            "objects": [
+                {
+                    "object_type": "UnusualObject",
+                    "pending_ref_id": "unusual-1",
+                    "status": "validated",
+                    "payload": {
+                        "nonstandard_curator_value": "kept compactly",
+                        "numeric_observation": 7,
+                    },
+                }
+            ],
+            "validation_findings": [],
+        }
+    )
+
+    result = streaming_tools._reduce_specialist_output_for_supervisor(
+        envelope_output,
+        expected_output_type=None,
+    )
+
+    assert "Validated domain envelope result for agr.alliance.unusual" in result
+    assert "nonstandard_curator_value=kept compactly" in result
+    assert "numeric_observation=7" in result
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(result)
+
+
+def test_domain_envelope_reduction_empty_objects_never_returns_raw_json():
+    envelope_output = json.dumps(
+        {
+            "envelope_id": "env-test-empty",
+            "domain_pack_id": "agr.alliance.empty",
+            "objects": [],
+            "validation_findings": [],
+        }
+    )
+
+    result = streaming_tools._reduce_specialist_output_for_supervisor(
+        envelope_output,
+        expected_output_type=None,
+    )
+
+    assert "Validated domain envelope result for agr.alliance.empty" in result
+    assert "Object count: 0." in result
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(result)
+
+
+def test_domain_validator_reduction_never_returns_raw_json():
+    from packages.alliance.agents.gene.schema import GeneResultEnvelope
+
+    validator_output = json.dumps(
+        {
+            "status": "resolved",
+            "request_id": "domain-validation:test",
+            "validator_binding_id": "alliance_gene_reference_lookup",
+            "validator_agent": {
+                "package_id": "alliance",
+                "agent_id": "gene_validation",
+            },
+            "target": {
+                "domain_pack_id": "gene",
+                "object_type": "gene_mention_evidence",
+                "object_id": "gene-mention-1",
+                "field_path": "primary_external_id",
+                "expected_fields": ["primary_external_id", "gene_symbol"],
+            },
+            "resolved_values": {
+                "primary_external_id": "FB:FBgn0259685",
+                "gene_symbol": "crb",
+                "taxon": "NCBITaxon:7227",
+            },
+            "resolved_objects": [],
+            "missing_expected_fields": [],
+            "candidates": [],
+            "lookup_attempts": [
+                {
+                    "provider": "agr_curation_query",
+                    "method": "gene_lookup",
+                    "query": {"symbol": "crb"},
+                    "result_count": 1,
+                    "outcome": "success",
+                }
+            ],
+            "curator_message": "Resolved crumbs to crb.",
+            "explanation": "API lookup resolved the requested gene.",
+            "gene_candidates": [],
+        }
+    )
+
+    result = streaming_tools._reduce_specialist_output_for_supervisor(
+        validator_output,
+        expected_output_type=GeneResultEnvelope,
+    )
+
+    assert "GeneResultEnvelope validator result: status=resolved" in result
+    assert "binding=alliance_gene_reference_lookup" in result
+    assert "primary_external_id=FB:FBgn0259685" in result
+    assert "gene_symbol=crb" in result
+    assert "Full validated payload is retained" in result
+    assert '"resolved_values"' not in result
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(result)
+
+
 def test_runtime_instruction_append_updates_pending_prompt_assembly():
     clear_prompt_context()
     prompt = PromptTemplate(
