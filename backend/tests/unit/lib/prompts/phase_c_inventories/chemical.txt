@@ -98,8 +98,8 @@ provider `ebi_chebi`, method names such as `es_search`, `compound`, `ontology.pa
 # CHV-31 curator_message/explanation
 `curator_message`, `explanation`: a concise curator-facing decision summary, plus which inputs were searched, why the status is resolved or unresolved, and how ambiguity or missing fields were handled.
 
-# CHV-32 minimal resolved when no input
-If no chemical input or expected result field is present, return a minimal `status: "resolved"` result with empty resolved data and explain that no chemical lookup was requested.
+# CHV-32 unresolved when no input
+If no chemical input or expected result field is present, return `status: "unresolved"` with empty resolved data, list the missing chemical input context in `missing_expected_fields`, and explain that no ChEBI lookup could be run because no chemical lookup target was supplied.
 
 # CHV-33 validator boundary: separate from extraction; true misses through unresolved
 Keep validator responsibility separate from extraction: do not return patch actions, patch instructions, or legacy classifications, and do not return old top-level summary fields for missing data.

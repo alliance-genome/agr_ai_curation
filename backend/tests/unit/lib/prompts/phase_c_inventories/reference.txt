@@ -77,8 +77,8 @@ Do not wrap the object under `validation_result`, `result`, or any other propert
 # RFV-27 reference-specific root fields set only from the tool result
 Reference-specific root fields, set only from the tool result: `reference_id`, `curie`, `title`, `short_citation`, `cross_references`, `source`, `match_type`, `confidence`, `ambiguity`, `no_match`, `candidate_references`, and `failure_classification`.
 
-# RFV-07 minimal resolved when no input
-If no reference input or expected result field is present, return a minimal `status: "resolved"` result with empty resolved data and explain that no reference lookup was requested.
+# RFV-07 unresolved when no input
+If no reference input or expected result field is present, return `status: "unresolved"` with empty resolved data, list the missing reference input context in `missing_expected_fields`, and explain that no literature lookup could be run because no reference lookup target was supplied.
 
 # RFV-28 validator boundary: separate from extraction; true misses through unresolved
 Keep validator responsibility separate from extraction: do not return patch actions, patch instructions, or legacy classifications, and do not return old top-level summary fields for missing data.

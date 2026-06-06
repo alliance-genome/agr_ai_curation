@@ -16,6 +16,7 @@ from src.lib.domain_packs.input_selectors import build_domain_validation_request
 from src.lib.domain_packs.materialization import (
     ValidatorResultMaterializationInput,
     materialize_validator_results_into_envelope,
+    project_validation_summary_projections,
 )
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
@@ -472,6 +473,21 @@ def test_allele_mention_validation_materializes_resolved_and_unresolved_paths():
             "taxon": "NCBITaxon:7227",
         }
     ]
+    resolved_allele = materialized_alleles[0]
+    summaries = project_validation_summary_projections(
+        result.envelope,
+        envelope_revision=1,
+        object_id=resolved_allele.object_id,
+    )
+    assert {
+        summary.field_path: summary.status.value
+        for summary in summaries
+        if summary.field_path is not None
+    } == {
+        "primary_external_id": "resolved",
+        "allele_symbol": "resolved",
+        "taxon": "resolved",
+    }
     unresolved_finding = next(
         finding
         for finding in result.appended_findings

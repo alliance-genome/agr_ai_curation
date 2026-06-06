@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
@@ -19,6 +20,7 @@ from src.lib.domain_packs.materialization import (
     _materialized_field_path,
     _set_payload_value,
     materialize_validator_results_into_envelope,
+    project_validation_summary_projections,
 )
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validation_registry import (
@@ -228,7 +230,7 @@ def _validator_item(
     metadata: DomainPackMetadata,
     envelope: DomainEnvelope,
     *,
-    status: str = "resolved",
+    status: Literal["resolved", "unresolved"] = "resolved",
     resolved_values: dict | None = None,
     resolved_objects: list[dict] | None = None,
     missing_expected_fields: list[str] | None = None,
@@ -269,27 +271,29 @@ def _validator_item(
             },
         }
     ]
-    result = DomainValidatorResultBase(
-        status=status,
-        request_id=request.request_id,
-        validator_binding_id=request.validator_binding_id,
-        validator_agent=request.validator_agent,
-        target=request.target,
-        resolved_values=values if status == "resolved" else {},
-        resolved_objects=objects if status == "resolved" else [],
-        missing_expected_fields=missing_expected_fields or [],
-        candidates=candidates or [],
-        lookup_attempts=[
-            {
-                "provider": "fixture_lookup",
-                "method": "exact_symbol",
-                "query": {"mention": request.selected_inputs["mention"]},
-                "result_count": 1 if lookup_outcome == "success" else 2,
-                "outcome": lookup_outcome,
-            }
-        ],
-        curator_message=None,
-        explanation="Fixture validator decision.",
+    result = DomainValidatorResultBase.model_validate(
+        {
+            "status": status,
+            "request_id": request.request_id,
+            "validator_binding_id": request.validator_binding_id,
+            "validator_agent": request.validator_agent,
+            "target": request.target,
+            "resolved_values": values if status == "resolved" else {},
+            "resolved_objects": objects if status == "resolved" else [],
+            "missing_expected_fields": missing_expected_fields or [],
+            "candidates": candidates or [],
+            "lookup_attempts": [
+                {
+                    "provider": "fixture_lookup",
+                    "method": "exact_symbol",
+                    "query": {"mention": request.selected_inputs["mention"]},
+                    "result_count": 1 if lookup_outcome == "success" else 2,
+                    "outcome": lookup_outcome,
+                }
+            ],
+            "curator_message": None,
+            "explanation": "Fixture validator decision.",
+        }
     )
     return ValidatorResultMaterializationInput(
         match=match,
@@ -621,6 +625,21 @@ def test_validator_result_materialization_creates_reference_object_and_finding()
         "DEMO:Allele0001817"
     )
     assert finding.details["lookup_attempts"][0]["lookup_status"] == "success"
+
+    summaries = project_validation_summary_projections(
+        result.envelope,
+        envelope_revision=1,
+        object_id=reference.object_id,
+    )
+    assert {
+        summary.field_path: summary.status.value
+        for summary in summaries
+        if summary.field_path is not None
+    } == {
+        "primary_external_id": "resolved",
+        "allele_symbol": "resolved",
+        "taxon": "resolved",
+    }
     DomainEnvelope.model_validate(result.envelope.model_dump(mode="json"))
 
 
@@ -743,6 +762,240 @@ def test_validator_result_materialization_patches_target_payload_from_resolved_v
     assert finding.details["validation_result"]["resolved_values"]["curie"] == (
         "FB:FBgn0259685"
     )
+
+
+def test_validator_result_materialization_projects_expected_result_fields_to_target_fields():
+    metadata = DomainPackMetadata(
+        pack_id="fixture.target_patch",
+        display_name="Fixture Target Patch Pack",
+        version="0.1.0",
+        metadata_api_version="1.0.0",
+        metadata={
+            "validator_bindings": {
+                "active": [
+                    {
+                        "binding_id": "fixture.gene_lookup",
+                        "display_name": "Gene lookup",
+                        "validator_agent": {
+                            "package_id": "fixture.validators",
+                            "agent_id": "gene_validator",
+                        },
+                        "applies_to": {
+                            "domain_pack_id": "fixture.target_patch",
+                            "object_types": ["GeneMention"],
+                        },
+                        "input_fields": {
+                            "mention": {
+                                "source": "payload",
+                                "path": "mention",
+                            }
+                        },
+                        "expected_result_fields": {
+                            "curie": "primary_external_id",
+                            "symbol": "gene_symbol",
+                            "taxon": "taxon",
+                        },
+                    }
+                ],
+                "under_development": [],
+            }
+        },
+        object_definitions=[
+            DomainPackObjectDefinition(
+                object_type="GeneMention",
+                display_name="Gene mention",
+                metadata={"object_role": "validated_reference"},
+                fields=[
+                    DomainPackFieldDefinition(
+                        field_path="mention",
+                        field_type=DomainPackFieldType.STRING,
+                        required=True,
+                    ),
+                    DomainPackFieldDefinition(
+                        field_path="primary_external_id",
+                        field_type=DomainPackFieldType.STRING,
+                    ),
+                    DomainPackFieldDefinition(
+                        field_path="gene_symbol",
+                        field_type=DomainPackFieldType.STRING,
+                    ),
+                    DomainPackFieldDefinition(
+                        field_path="taxon",
+                        field_type=DomainPackFieldType.STRING,
+                    ),
+                ],
+            )
+        ],
+    )
+    envelope = DomainEnvelope(
+        envelope_id="target-patch-env",
+        domain_pack_id="fixture.target_patch",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneMention",
+                pending_ref_id="gene-mention-1",
+                status=CuratableObjectStatus.PENDING,
+                payload={"mention": "crumbs"},
+            )
+        ],
+    )
+    item = _validator_item(
+        metadata,
+        envelope,
+        resolved_values={
+            "curie": "FB:FBgn0259685",
+            "symbol": "crb",
+            "taxon": "NCBITaxon:7227",
+        },
+        resolved_objects=[],
+    )
+
+    result = materialize_validator_results_into_envelope(envelope, metadata, [item])
+
+    field_findings = []
+    field_paths = set()
+    for finding in result.appended_findings:
+        if finding.field_ref is None:
+            continue
+        field_findings.append(finding)
+        field_paths.add(finding.field_ref.field_path)
+    assert field_paths == {
+        "primary_external_id",
+        "gene_symbol",
+        "taxon",
+    }
+    assert all(
+        finding.details["validation_metadata"][
+            "generated_from_expected_result_field"
+        ]
+        for finding in field_findings
+    )
+    assert {
+        finding.details["validation_metadata"]["materialized_result_field"]
+        for finding in field_findings
+    } == {"curie", "symbol", "taxon"}
+
+    summaries = project_validation_summary_projections(
+        result.envelope,
+        envelope_revision=1,
+        object_id="gene-mention-1",
+    )
+    field_summaries = {
+        summary.field_path: summary.status.value
+        for summary in summaries
+        if summary.field_path is not None
+    }
+    assert field_summaries == {
+        "primary_external_id": "resolved",
+        "gene_symbol": "resolved",
+        "taxon": "resolved",
+    }
+
+
+def test_validator_result_materialization_warns_for_unmapped_expected_result_fields():
+    metadata = DomainPackMetadata(
+        pack_id="fixture.target_patch",
+        display_name="Fixture Target Patch Pack",
+        version="0.1.0",
+        metadata_api_version="1.0.0",
+        metadata={
+            "validator_bindings": {
+                "active": [
+                    {
+                        "binding_id": "fixture.gene_lookup",
+                        "display_name": "Gene lookup",
+                        "validator_agent": {
+                            "package_id": "fixture.validators",
+                            "agent_id": "gene_validator",
+                        },
+                        "applies_to": {
+                            "domain_pack_id": "fixture.target_patch",
+                            "object_types": ["GeneMention"],
+                        },
+                        "input_fields": {
+                            "mention": {
+                                "source": "payload",
+                                "path": "mention",
+                            }
+                        },
+                        "expected_result_fields": {
+                            "curie": "primary_external_id",
+                            "symbol": "gene_symbol",
+                            "provider_status": "provider.status",
+                        },
+                    }
+                ],
+                "under_development": [],
+            }
+        },
+        object_definitions=[
+            DomainPackObjectDefinition(
+                object_type="GeneMention",
+                display_name="Gene mention",
+                metadata={"object_role": "validated_reference"},
+                fields=[
+                    DomainPackFieldDefinition(
+                        field_path="mention",
+                        field_type=DomainPackFieldType.STRING,
+                        required=True,
+                    ),
+                    DomainPackFieldDefinition(
+                        field_path="primary_external_id",
+                        field_type=DomainPackFieldType.STRING,
+                    ),
+                    DomainPackFieldDefinition(
+                        field_path="gene_symbol",
+                        field_type=DomainPackFieldType.STRING,
+                    ),
+                ],
+            )
+        ],
+    )
+    envelope = DomainEnvelope(
+        envelope_id="target-patch-env",
+        domain_pack_id="fixture.target_patch",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneMention",
+                pending_ref_id="gene-mention-1",
+                status=CuratableObjectStatus.PENDING,
+                payload={"mention": "crumbs"},
+            )
+        ],
+    )
+    item = _validator_item(
+        metadata,
+        envelope,
+        resolved_values={
+            "curie": "FB:FBgn0259685",
+            "symbol": "crb",
+            "provider_status": "active",
+        },
+        resolved_objects=[],
+    )
+
+    result = materialize_validator_results_into_envelope(envelope, metadata, [item])
+
+    assert result.envelope.objects[0].payload == {
+        "mention": "crumbs",
+        "primary_external_id": "FB:FBgn0259685",
+        "gene_symbol": "crb",
+    }
+    warning = next(
+        finding
+        for finding in result.appended_findings
+        if finding.code == "domain_pack.validator_expected_field_unmapped"
+    )
+    assert warning.status is ValidationFindingStatus.OPEN
+    assert warning.severity is ValidationFindingSeverity.WARNING
+    assert warning.object_ref is not None
+    assert warning.object_ref.pending_ref_id == "gene-mention-1"
+    assert warning.details["failure_classification"] == (
+        "unmapped_expected_result_field"
+    )
+    assert warning.details["validation_metadata"]["unmapped_expected_result_fields"] == [
+        {"result_field": "provider_status", "field_path": "provider.status"}
+    ]
 
 
 def test_validator_result_materialization_propagates_materializes_to_field_paths():
@@ -872,6 +1125,21 @@ def test_validator_result_materialization_propagates_materializes_to_field_paths
     entity_assayed = patched.payload["experiment"]["entity_assayed"]
     assert entity_assayed["primary_external_id"] == "WB:WBGene00003969"
     assert entity_assayed["gene_symbol"] == "pef-1"
+    summaries = project_validation_summary_projections(
+        result.envelope,
+        envelope_revision=1,
+        object_id="annotation-1",
+    )
+    assert {
+        summary.field_path: summary.status.value
+        for summary in summaries
+        if summary.field_path is not None
+    } == {
+        "subject.primary_external_id": "resolved",
+        "subject.gene_symbol": "resolved",
+        "experiment.entity_assayed.primary_external_id": "resolved",
+        "experiment.entity_assayed.gene_symbol": "resolved",
+    }
 
 
 def test_validator_result_materialization_merges_multiple_target_payload_patches():

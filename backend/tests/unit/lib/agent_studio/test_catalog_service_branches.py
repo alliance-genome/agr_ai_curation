@@ -520,6 +520,49 @@ def test_create_db_agent_uses_domain_extraction_schema_directly(monkeypatch):
     assert built.output_type is canonical_schema
 
 
+def test_create_db_agent_attaches_structured_finalization_metadata(monkeypatch):
+    fake_schema = object()
+    fake_row = SimpleNamespace(
+        id="agent-id",
+        agent_key="gene",
+        visibility="system",
+        instructions="BASE",
+        mod_prompt_overrides={},
+        group_rules_enabled=False,
+        template_source=None,
+        group_rules_component=None,
+        model_id="gpt-4o",
+        model_temperature=0.1,
+        model_reasoning="medium",
+        output_schema_key="GeneResultEnvelope",
+        tool_ids=[],
+        name="Gene",
+    )
+
+    from src.lib.openai_agents import config as agent_config
+
+    monkeypatch.setattr(catalog_service, "_resolve_output_schema", lambda _key: fake_schema)
+    monkeypatch.setattr(agent_config, "resolve_model_provider", lambda _model_id: "openai")
+    monkeypatch.setattr(agent_config, "get_model_for_agent", lambda _model_id, **_kwargs: "model")
+    monkeypatch.setattr(agent_config, "build_model_settings", lambda **kwargs: kwargs)
+    monkeypatch.setattr(
+        catalog_service,
+        "_build_runtime_instructions",
+        lambda **_kwargs: SimpleNamespace(
+            render=lambda: "INSTR",
+            hash="hash-1",
+            to_manifest=lambda: {"agent_id": "gene", "layers": [], "hash": "hash-1"},
+        ),
+    )
+    monkeypatch.setattr(catalog_service, "prompt_templates_for_bundle", lambda _bundle: [])
+    monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+
+    built = catalog_service._create_db_agent(fake_row)
+
+    assert built.output_type is fake_schema
+    assert built.structured_finalization["tool_name"] == "finalize_gene_lookup"
+
+
 def test_create_db_agent_applies_model_overrides(monkeypatch):
     fake_row = SimpleNamespace(
         id="agent-id",

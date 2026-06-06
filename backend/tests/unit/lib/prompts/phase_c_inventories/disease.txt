@@ -25,8 +25,8 @@ call it before reporting any disease term, DOID, name, definition, synonym, or o
 # DISV-04 status resolved/unresolved decision (folded into goal)
 set `status: "resolved"` only when the requested expected fields are package-tool-confirmed and unambiguous and `status: "unresolved"` otherwise
 
-# DISV-05 empty-input minimal-resolved rule (folded into goal)
-If the request carries no disease input and no disease expected result field, return a minimal `status: "resolved"` result with empty resolved data and explain that no disease lookup was requested.
+# DISV-05 empty-input unresolved rule (folded into goal)
+If the request carries no disease input and no disease expected result field, return `status: "unresolved"` with empty resolved data, list the missing disease input context in `missing_expected_fields`, and explain that no disease lookup could be run because no disease lookup target was supplied.
 
 # DISV-07 record every DB call in lookup_attempts (folded into goal)
 record every database call in `lookup_attempts`

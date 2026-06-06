@@ -14,6 +14,11 @@ from pydantic import ValidationError
 
 from src.lib.domain_packs.loader import load_domain_fixture_pack
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
+from src.lib.domain_packs.materialization import (
+    ValidatorResultMaterializationInput,
+    materialize_validator_results_into_envelope,
+    project_validation_summary_projections,
+)
 from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
@@ -26,6 +31,7 @@ from src.schemas.domain_envelope import (
     field_path_exists,
 )
 from src.schemas.domain_pack_metadata import DomainPackFieldType
+from src.schemas.domain_validator import DomainValidatorResultBase
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 ALLIANCE_PYTHON_SRC = REPO_ROOT / "packages" / "alliance" / "python" / "src"
@@ -740,6 +746,204 @@ def test_disease_qualifier_cv_lookup_validates_every_staged_element():
         "disease_qualifier_names[1]",
         "disease_qualifier_names[2]",
     ]
+
+
+def test_disease_relation_lookup_projects_sibling_expected_result_fields():
+    pack = _disease_pack()
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+    envelope = DomainEnvelope(
+        envelope_id="disease-relation-projection-env",
+        domain_pack_id=DISEASE_DOMAIN_PACK_ID,
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneDiseaseAnnotation",
+                pending_ref_id="gene-disease-1",
+                payload={
+                    "disease_relation_name": "is_implicated_in",
+                    "disease_annotation_subject": {"subject_type": "gene"},
+                },
+            )
+        ],
+    )
+    matches = [
+        match
+        for match in registry.match_bindings(
+            envelope,
+            states=[ValidationBindingState.ACTIVE],
+        )
+        if match.binding.binding_id == "disease_relation_cv_lookup"
+    ]
+    assert len(matches) == 1
+    request = build_domain_validation_request(matches[0]).request
+    assert request is not None
+
+    result = materialize_validator_results_into_envelope(
+        envelope,
+        pack.metadata,
+        [
+            ValidatorResultMaterializationInput(
+                match=matches[0],
+                request=request,
+                result=DomainValidatorResultBase(
+                    status="resolved",
+                    request_id=request.request_id,
+                    validator_binding_id=request.validator_binding_id,
+                    validator_agent=request.validator_agent,
+                    target=request.target,
+                    resolved_values={
+                        "term_name": "is_implicated_in",
+                        "vocabulary": "Gene Disease Relation",
+                        "internal_id": "4011",
+                    },
+                    resolved_objects=[],
+                    missing_expected_fields=[],
+                    candidates=[],
+                    lookup_attempts=[
+                        {
+                            "provider": "agr_curation_query",
+                            "method": "search_controlled_vocabulary",
+                            "query": {
+                                "vocabulary": "Gene Disease Relation",
+                                "term_name": "is_implicated_in",
+                            },
+                            "result_count": 1,
+                            "outcome": "success",
+                        }
+                    ],
+                    curator_message="Resolved disease relation.",
+                    explanation="Resolved relation vocabulary from fixture.",
+                ),
+            )
+        ],
+    )
+
+    payload = result.envelope.objects[0].payload
+    assert payload["disease_relation_name"] == "is_implicated_in"
+    assert payload["disease_relation_vocabulary"] == "Gene Disease Relation"
+    assert payload["disease_relation_id"] == "4011"
+    summaries = project_validation_summary_projections(
+        result.envelope,
+        envelope_revision=1,
+        object_id="gene-disease-1",
+    )
+    assert {
+        summary.field_path: summary.status.value
+        for summary in summaries
+        if summary.field_path is not None
+    } == {
+        "disease_relation_name": "resolved",
+        "disease_relation_vocabulary": "resolved",
+        "disease_relation_id": "resolved",
+    }
+
+
+def test_disease_condition_relation_lookup_projects_indexed_sibling_fields():
+    pack = _disease_pack()
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+    envelope = DomainEnvelope(
+        envelope_id="disease-condition-relation-projection-env",
+        domain_pack_id=DISEASE_DOMAIN_PACK_ID,
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneDiseaseAnnotation",
+                pending_ref_id="gene-disease-1",
+                payload={
+                    "condition_relations": [
+                        {
+                            "condition_relation_type": {
+                                "name": "has_condition",
+                            },
+                            "conditions": [
+                                {
+                                    "condition_summary": "heat shock",
+                                }
+                            ],
+                        }
+                    ],
+                },
+            )
+        ],
+    )
+    matches = [
+        match
+        for match in registry.match_bindings(
+            envelope,
+            states=[ValidationBindingState.ACTIVE],
+        )
+        if match.binding.binding_id == "disease_condition_relation_lookup"
+    ]
+    assert len(matches) == 1
+    assert matches[0].field_path == "condition_relations[0].condition_relation_type.name"
+    request = build_domain_validation_request(matches[0]).request
+    assert request is not None
+    assert request.expected_result_fields == {
+        "term_name": "condition_relations[0].condition_relation_type.name",
+        "vocabulary": "condition_relations[0].condition_relation_type.vocabulary",
+        "internal_id": "condition_relations[0].condition_relation_type.id",
+    }
+
+    result = materialize_validator_results_into_envelope(
+        envelope,
+        pack.metadata,
+        [
+            ValidatorResultMaterializationInput(
+                match=matches[0],
+                request=request,
+                result=DomainValidatorResultBase(
+                    status="resolved",
+                    request_id=request.request_id,
+                    validator_binding_id=request.validator_binding_id,
+                    validator_agent=request.validator_agent,
+                    target=request.target,
+                    resolved_values={
+                        "term_name": "has_condition",
+                        "vocabulary": "Condition Relation Type",
+                        "internal_id": "200000001",
+                    },
+                    resolved_objects=[],
+                    missing_expected_fields=[],
+                    candidates=[],
+                    lookup_attempts=[
+                        {
+                            "provider": "agr_curation_query",
+                            "method": "search_controlled_vocabulary",
+                            "query": {
+                                "vocabulary": "Condition Relation Type",
+                                "term_name": "has_condition",
+                            },
+                            "result_count": 1,
+                            "outcome": "success",
+                        }
+                    ],
+                    curator_message="Resolved condition relation.",
+                    explanation="Resolved condition relation from fixture.",
+                ),
+            )
+        ],
+    )
+
+    relation_type = result.envelope.objects[0].payload["condition_relations"][0][
+        "condition_relation_type"
+    ]
+    assert relation_type == {
+        "name": "has_condition",
+        "vocabulary": "Condition Relation Type",
+        "id": "200000001",
+    }
+    summaries = project_validation_summary_projections(
+        result.envelope,
+        envelope_revision=1,
+        object_id="gene-disease-1",
+    )
+    assert {
+        summary.field_path: summary.status.value
+        for summary in summaries
+        if summary.field_path is not None
+    } == {
+        "condition_relations[0].condition_relation_type.name": "resolved",
+        "condition_relations[0].condition_relation_type.vocabulary": "resolved",
+        "condition_relations[0].condition_relation_type.id": "resolved",
+    }
 
 
 def test_disease_with_gene_validation_validates_every_staged_element():

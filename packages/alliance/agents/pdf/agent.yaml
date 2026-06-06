@@ -45,6 +45,11 @@ tools:
 # OUTPUT SCHEMA
 # -----------------------------------------------------------------------------
 output_schema: PdfExtractionResultEnvelope
+structured_finalization:
+  enabled: true
+  tool_name: finalize_pdf_extraction
+  checks:
+    - pdf_evidence
 
 # -----------------------------------------------------------------------------
 # MODEL CONFIGURATION

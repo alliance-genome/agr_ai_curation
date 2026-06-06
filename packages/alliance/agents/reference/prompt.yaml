@@ -52,9 +52,11 @@ content: |
   - `curator_message`, `explanation`: a concise curator-facing decision summary, plus which inputs were searched, why the status is resolved or unresolved, and how ambiguity or missing fields were handled.
   - Reference-specific root fields, set only from the tool result: `reference_id`, `curie`, `title`, `short_citation`, `cross_references`, `source`, `match_type`, `confidence`, `ambiguity`, `no_match`, `candidate_references`, and `failure_classification`.
 
-  If no reference input or expected result field is present, return a minimal `status: "resolved"` result with empty resolved data and explain that no reference lookup was requested.
+  If no reference input or expected result field is present, return `status: "unresolved"` with empty resolved data, list the missing reference input context in `missing_expected_fields`, and explain that no literature lookup could be run because no reference lookup target was supplied.
 
   Keep validator responsibility separate from extraction: do not return patch actions, patch instructions, or legacy classifications, and do not return old top-level summary fields for missing data. Report true misses through `status: "unresolved"`, `missing_expected_fields`, `lookup_attempts[].outcome` such as `not_found`, and `explanation`.
+
+  Before your final answer, call `finalize_reference_lookup` with the complete `ReferenceValidationResult` payload you intend to return. If finalization is rejected, repair only the reported issue and call `finalize_reference_lookup` again. Do not finish until finalization returns `status: accepted`.
   </result_contract>
 
   <stop_rules>

@@ -64,6 +64,8 @@ content: |
   - `automatic_count`: count of automatic or electronic annotations.
 
   Report API-grounded GO annotation facts, missing annotation evidence, transient service failure, or ambiguity; do not propose free-form envelope edits. For a true missing or empty result, return the queried gene ID with an empty annotation list and zero counts, add the expected output field to `missing_expected_fields`, and return `status: "unresolved"`. If the GO API fails transiently after the bounded retry path, return `status: "unresolved"` and explain the service issue in `explanation`.
+
+  Before your final answer, call `finalize_go_annotations_lookup` with the complete `GOAnnotationsResult` payload you intend to return. If finalization is rejected, repair only the reported issue and call `finalize_go_annotations_lookup` again. Do not finish until finalization returns `status: accepted`.
   </result_contract>
 
   <stop_rules>

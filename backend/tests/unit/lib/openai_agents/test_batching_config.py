@@ -1,5 +1,5 @@
 """Tests for registry-driven batching config."""
-from src.lib.openai_agents.streaming_tools import get_batching_config, BATCHING_NUDGE_CONFIG
+from src.lib.openai_agents.streaming_tools import get_batching_config
 
 
 class TestGetBatchingConfig:
@@ -23,13 +23,14 @@ class TestGetBatchingConfig:
         # PDF agent doesn't have batching
         assert "ask_pdf_extraction_specialist" not in config
 
-    def test_get_batching_config_matches_hardcoded(self):
-        """Generated config should match original hardcoded values."""
+    def test_get_batching_config_entries_are_registry_derived(self):
+        """Generated config entries should expose the registry batching shape."""
         config = get_batching_config()
 
-        # All original entries should be present
-        for tool_name in BATCHING_NUDGE_CONFIG:
-            assert tool_name in config, f"Missing {tool_name} in generated config"
+        for tool_name, entry in config.items():
+            assert tool_name.startswith("ask_")
+            assert entry["entity"]
+            assert entry["example"]
 
     def test_get_batching_config_has_all_expected_tools(self):
         """Config should have all expected batching tools."""

@@ -494,6 +494,22 @@ def _single_result_finding(result):
     )
 
 
+def _parent_validator_findings(result):
+    return [
+        finding
+        for finding in result.envelope.validation_findings
+        if finding.code
+        in {
+            "domain_pack.validator_resolved",
+            "domain_pack.validator_unresolved",
+            "domain_pack.validator_error",
+        }
+        and not finding.details.get("validation_metadata", {}).get(
+            "generated_from_expected_result_field"
+        )
+    ]
+
+
 def test_dispatch_active_binding_sends_typed_request_and_appends_resolved_result(
     tmp_path: Path,
 ):
@@ -523,6 +539,7 @@ def test_dispatch_active_binding_sends_typed_request_and_appends_resolved_result
     finding = _single_result_finding(result)
     assert finding.status.value == "resolved"
     assert finding.code == "domain_pack.validator_resolved"
+    assert finding.field_ref is not None
     assert finding.field_ref.field_path == "gene.identifier"
     assert finding.details["validation_metadata"]["source_envelope_revision"] == 7
     assert finding.details["validation_result"]["resolved_objects"][0]["object_type"] == "Gene"
@@ -660,13 +677,12 @@ def test_dispatch_deduplicates_equivalent_identity_requests_before_validation(
     assert len(calls) == 1
     assert len(result.validator_results) == 2
     assert {item.status for item in result.validator_results} == {"resolved"}
-    assert len(
-        [
-            finding
-            for finding in result.envelope.validation_findings
-            if finding.code == "domain_pack.validator_resolved"
-        ]
-    ) == 2
+    assert [
+        finding.code for finding in _parent_validator_findings(result)
+    ] == [
+        "domain_pack.validator_resolved",
+        "domain_pack.validator_resolved",
+    ]
     materialized_gene = next(
         domain_object
         for domain_object in result.envelope.objects
@@ -842,16 +858,7 @@ def test_bad_batch_result_identity_becomes_controlled_unresolved_result(
     assert result.validator_results[0].status == "unresolved"
     assert result.validator_results[0].lookup_attempts[0].method == "invalid_schema"
     assert result.validator_results[1].status == "resolved"
-    findings = [
-        finding
-        for finding in result.envelope.validation_findings
-        if finding.code
-        in {
-            "domain_pack.validator_resolved",
-            "domain_pack.validator_unresolved",
-            "domain_pack.validator_error",
-        }
-    ]
+    findings = _parent_validator_findings(result)
     assert [finding.code for finding in findings] == [
         "domain_pack.validator_error",
         "domain_pack.validator_resolved",
@@ -1345,7 +1352,10 @@ def test_alliance_gene_expression_unresolved_gene_and_reference_remain_visible()
     } == {
         "expression_annotation_subject.primary_external_id",
         "expression_annotation_subject.gene_symbol",
+        "expression_experiment.entity_assayed.primary_external_id",
+        "expression_experiment.entity_assayed.gene_symbol",
         "single_reference.reference_id",
+        "expression_experiment.single_reference.reference_id",
         "single_reference.curie",
         "single_reference.title",
     }

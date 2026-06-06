@@ -180,7 +180,7 @@ So none is created.
 | RFV-04 | Success (folded): return only `status: "resolved"` or `status: "unresolved"`; resolved when all requested reference expected fields are API-confirmed and unambiguous, unresolved otherwise. | `<goal>` + `<result_contract>` (verbatim status tokens) |
 | RFV-05 | Success (folded): copy the tool's API source as `source`; the expected source value is `literature_es`. | `<resolution_and_validation_rules>` (the source-of-truth rule) |
 | RFV-06 | Success (folded): preserve the tool's `lookup_attempts`, resolved reference, candidate references, ambiguity, no-match, and failure classification for curator inspection. | `<resolution_and_validation_rules>` + `<result_contract>` |
-| RFV-07 | Success (folded): if no reference input or expected result field is present, return a minimal resolved result with empty resolved data and explain that no reference lookup was requested. | `<result_contract>` |
+| RFV-07 | Success (folded): if no reference input or expected result field is present, return an unresolved result with empty resolved data, identify the missing input context, and explain that no literature lookup could run because no reference lookup target was supplied. | `<result_contract>` |
 
 ## Scope / no-transfer
 

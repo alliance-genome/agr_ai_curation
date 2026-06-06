@@ -44,6 +44,48 @@ tools:
 # OUTPUT SCHEMA
 # -----------------------------------------------------------------------------
 output_schema: ChemicalValidationResult
+structured_finalization:
+  enabled: true
+  tool_name: finalize_chemical_lookup
+  checks:
+    - lookup_provenance
+  lookup:
+    tool_name: chebi_api_call
+    provider_terms: [chebi_api_call, ebi_chebi, chebi, ebi]
+    request_keys:
+      - chebi_id
+      - chebi_ids
+      - chemical_id
+      - chemical_ids
+      - chemical_name
+      - chemical_names
+      - term
+      - terms
+      - name
+      - names
+      - synonym
+      - synonyms
+    result_collections:
+      - resolved_values
+      - resolved_objects
+      - candidates
+      - missing_expected_fields
+    grounded_fact_paths:
+      - candidates[].value
+      - candidates[].label
+      - candidates[].details.chebi_id
+      - candidates[].details.curie
+      - candidates[].details.name
+    resolved_fact_paths:
+      - resolved_values
+      - "resolved_objects[]"
+    fact_identity_paths:
+      - resolved_values.chebi_id
+      - resolved_values.curie
+      - resolved_values.chemical_id
+      - "resolved_objects[].chebi_id"
+      - "resolved_objects[].curie"
+      - "resolved_objects[].id"
 
 # -----------------------------------------------------------------------------
 # MODEL CONFIGURATION

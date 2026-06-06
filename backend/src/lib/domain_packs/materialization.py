@@ -117,6 +117,7 @@ class DomainEnvelopeReviewRowMaterializer(Protocol):
         envelope_revision: int,
     ) -> list[DomainEnvelopeReviewRow]:
         """Return review rows regenerated from the supplied envelope revision."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -361,9 +362,18 @@ def materialize_validator_results_into_envelope(
                 new_objects,
             )
             materialized_objects.extend(linked_objects)
-            findings.append(
-                _finding_for_validator_result(
+            validator_finding = _finding_for_validator_result(
+                item,
+                source_envelope_revision=source_envelope_revision,
+            )
+            findings.append(validator_finding)
+            findings.extend(
+                _field_findings_for_expected_result_fields(
+                    working_envelope,
                     item,
+                    validator_finding=validator_finding,
+                    object_definitions=object_definitions,
+                    materialized_objects=new_objects,
                     source_envelope_revision=source_envelope_revision,
                 )
             )
@@ -844,7 +854,10 @@ def _append_materialized_objects(
     objects = list(envelope.objects)
     appended: list[CuratableObjectEnvelope] = []
     for new_object in new_objects:
-        if new_object.object_id not in existing_object_ids:
+        if (
+            new_object.object_id is not None
+            and new_object.object_id not in existing_object_ids
+        ):
             objects.append(new_object)
             existing_object_ids.add(new_object.object_id)
             appended.append(new_object)
@@ -987,6 +1000,284 @@ def _finding_for_validator_result(
     )
 
 
+def _field_findings_for_expected_result_fields(
+    envelope: DomainEnvelope,
+    item: ValidatorResultMaterializationInput,
+    *,
+    validator_finding: ValidationFinding,
+    object_definitions: Mapping[str, DomainPackObjectDefinition],
+    materialized_objects: Sequence[CuratableObjectEnvelope],
+    source_envelope_revision: int | None,
+) -> list[ValidationFinding]:
+    if not item.request.expected_result_fields:
+        return []
+
+    targets = _expected_result_field_targets(
+        envelope,
+        item,
+        object_definitions=object_definitions,
+        materialized_objects=materialized_objects,
+    )
+    if not targets:
+        return []
+
+    findings: list[ValidationFinding] = []
+    seen_targets: set[tuple[tuple[str, str], str, str]] = set()
+    unmapped_fields: list[tuple[str, str]] = []
+    parent_field_ref = validator_finding.field_ref
+    for result_field, raw_field_path in item.request.expected_result_fields.items():
+        if not isinstance(raw_field_path, str) or not raw_field_path.strip():
+            continue
+        mapped_result_field = False
+        for target in targets:
+            materialized_paths = _materialized_field_paths(
+                raw_field_path,
+                declared_fields=target.declared_fields,
+            )
+            if materialized_paths:
+                mapped_result_field = True
+            for materialized_field_path in materialized_paths:
+                field_ref = FieldRef(
+                    object_ref=target.domain_object.to_object_ref(),
+                    field_path=materialized_field_path,
+                )
+                if (
+                    parent_field_ref is not None
+                    and parent_field_ref.object_ref.ref_key()
+                    == field_ref.object_ref.ref_key()
+                    and parent_field_ref.field_path == field_ref.field_path
+                ):
+                    continue
+                target_key = (
+                    field_ref.object_ref.ref_key(),
+                    field_ref.field_path,
+                    result_field,
+                )
+                if target_key in seen_targets:
+                    continue
+                seen_targets.add(target_key)
+                findings.append(
+                    _field_finding_for_expected_result_field(
+                        item,
+                        validator_finding=validator_finding,
+                        field_ref=field_ref,
+                        result_field=result_field,
+                        materialized_field_path=materialized_field_path,
+                        source_envelope_revision=source_envelope_revision,
+                    )
+                )
+        if not mapped_result_field:
+            unmapped_fields.append((result_field, raw_field_path))
+    if unmapped_fields and item.result.status == "resolved":
+        findings.append(
+            _finding_for_unmapped_expected_result_fields(
+                item,
+                validator_finding=validator_finding,
+                unmapped_fields=unmapped_fields,
+                source_envelope_revision=source_envelope_revision,
+            )
+        )
+    return findings
+
+
+@dataclass(frozen=True)
+class _ExpectedResultFieldTarget:
+    domain_object: CuratableObjectEnvelope
+    declared_fields: Mapping[str, DomainPackFieldDefinition]
+
+
+def _expected_result_field_targets(
+    envelope: DomainEnvelope,
+    item: ValidatorResultMaterializationInput,
+    *,
+    object_definitions: Mapping[str, DomainPackObjectDefinition],
+    materialized_objects: Sequence[CuratableObjectEnvelope],
+) -> tuple[_ExpectedResultFieldTarget, ...]:
+    targets: list[_ExpectedResultFieldTarget] = []
+    seen_refs: set[tuple[str, str]] = set()
+
+    def add_target(domain_object: CuratableObjectEnvelope) -> None:
+        ref_key = domain_object.to_object_ref().ref_key()
+        if ref_key in seen_refs:
+            return
+        object_definition = object_definitions.get(domain_object.object_type)
+        if object_definition is None:
+            return
+        declared_fields = {field.field_path: field for field in object_definition.fields}
+        if not declared_fields:
+            return
+        seen_refs.add(ref_key)
+        targets.append(
+            _ExpectedResultFieldTarget(
+                domain_object=domain_object,
+                declared_fields=declared_fields,
+            )
+        )
+
+    if item.match.object_envelope is not None:
+        current_target = _current_object_for_match(envelope, item.match.object_envelope)
+        if current_target is not None:
+            add_target(current_target)
+
+    for materialized_object in materialized_objects:
+        add_target(materialized_object)
+
+    return tuple(targets)
+
+
+def _materialized_field_paths(
+    raw_field_path: str,
+    *,
+    declared_fields: Mapping[str, DomainPackFieldDefinition],
+) -> tuple[str, ...]:
+    materialized_field_path = _materialized_field_path(
+        raw_field_path,
+        declared_fields=declared_fields,
+    )
+    if materialized_field_path is None:
+        return ()
+
+    field_paths = [materialized_field_path]
+    field_def = declared_fields.get(materialized_field_path)
+    if field_def is not None:
+        mirror_paths = field_def.metadata.get("materializes_to_field_paths")
+        if isinstance(mirror_paths, list):
+            for mirror_raw in mirror_paths:
+                if not isinstance(mirror_raw, str) or not mirror_raw.strip():
+                    continue
+                mirror_path = _materialized_field_path(
+                    mirror_raw,
+                    declared_fields=declared_fields,
+                )
+                if mirror_path is not None and mirror_path not in field_paths:
+                    field_paths.append(mirror_path)
+    return tuple(field_paths)
+
+
+def _field_finding_for_expected_result_field(
+    item: ValidatorResultMaterializationInput,
+    *,
+    validator_finding: ValidationFinding,
+    field_ref: FieldRef,
+    result_field: str,
+    materialized_field_path: str,
+    source_envelope_revision: int | None,
+) -> ValidationFinding:
+    result = item.result
+    resolved_value = result.resolved_values.get(result_field)
+    result_field_missing = result_field in result.missing_expected_fields
+    if result.status == "resolved" and not (
+        result_field_missing or missing_resolved_value(resolved_value)
+    ):
+        severity = ValidationFindingSeverity.INFO
+        status = ValidationFindingStatus.RESOLVED
+        code = validator_finding.code
+        message = validator_finding.message
+        extra_details: dict[str, Any] = {}
+    elif result.status == "resolved":
+        severity = (
+            ValidationFindingSeverity.BLOCKER
+            if item.match.binding.blocking
+            else ValidationFindingSeverity.WARNING
+        )
+        status = ValidationFindingStatus.OPEN
+        code = "domain_pack.validator_expected_field_missing"
+        message = (
+            result.curator_message
+            or f"Validator binding '{item.request.validator_binding_id}' did not "
+            f"resolve expected field '{result_field}'."
+        )
+        extra_details = {
+            "failure_classification": "missing_expected_result_field",
+            "missing_expected_fields": list(
+                dict.fromkeys([*result.missing_expected_fields, result_field])
+            ),
+        }
+    else:
+        severity = validator_finding.severity
+        status = validator_finding.status
+        code = validator_finding.code
+        message = validator_finding.message
+        extra_details = {}
+
+    details = copy.deepcopy(validator_finding.details)
+    validation_metadata = details.get("validation_metadata")
+    if not isinstance(validation_metadata, dict):
+        validation_metadata = {}
+    validation_metadata.update(
+        {
+            "parent_request_id": result.request_id,
+            "materialized_result_field": result_field,
+            "materialized_field_path": materialized_field_path,
+            "generated_from_expected_result_field": True,
+            **(
+                {"source_envelope_revision": source_envelope_revision}
+                if source_envelope_revision is not None
+                else {}
+            ),
+        }
+    )
+    details["validation_metadata"] = validation_metadata
+    details.update(extra_details)
+    return ValidationFinding(
+        severity=severity,
+        status=status,
+        code=code,
+        message=message,
+        field_ref=field_ref,
+        details={key: value for key, value in details.items() if value not in ([], {})},
+    )
+
+
+def _finding_for_unmapped_expected_result_fields(
+    item: ValidatorResultMaterializationInput,
+    *,
+    validator_finding: ValidationFinding,
+    unmapped_fields: Sequence[tuple[str, str]],
+    source_envelope_revision: int | None,
+) -> ValidationFinding:
+    details = copy.deepcopy(validator_finding.details)
+    validation_metadata = details.get("validation_metadata")
+    if not isinstance(validation_metadata, dict):
+        validation_metadata = {}
+    validation_metadata.update(
+        {
+            "parent_request_id": item.result.request_id,
+            "generated_from_expected_result_field": True,
+            "unmapped_expected_result_fields": [
+                {"result_field": result_field, "field_path": field_path}
+                for result_field, field_path in unmapped_fields
+            ],
+            **(
+                {"source_envelope_revision": source_envelope_revision}
+                if source_envelope_revision is not None
+                else {}
+            ),
+        }
+    )
+    details["validation_metadata"] = validation_metadata
+    details["failure_classification"] = "unmapped_expected_result_field"
+    details["materialization_warning"] = (
+        "Validator expected-result field path(s) could not be mapped to declared "
+        "domain-pack fields."
+    )
+    object_ref = validator_finding.object_ref
+    if object_ref is None and validator_finding.field_ref is not None:
+        object_ref = validator_finding.field_ref.object_ref
+    return ValidationFinding(
+        severity=ValidationFindingSeverity.WARNING,
+        status=ValidationFindingStatus.OPEN,
+        code="domain_pack.validator_expected_field_unmapped",
+        message=(
+            "Validator result includes expected field path(s) that are not declared "
+            "for review: "
+            + ", ".join(field_path for _, field_path in unmapped_fields)
+        ),
+        object_ref=object_ref,
+        details={key: value for key, value in details.items() if value not in ([], {})},
+    )
+
+
 def _validator_result_finding_details(
     item: ValidatorResultMaterializationInput,
     *,
@@ -1082,7 +1373,11 @@ def _match_object_ref(match: ValidatorBindingMatch) -> ObjectRef | None:
 
 
 def _match_field_ref(match: ValidatorBindingMatch) -> FieldRef | None:
-    if match.object_envelope is None or match.field_definition is None:
+    if (
+        match.object_envelope is None
+        or match.field_definition is None
+        or match.field_path is None
+    ):
         return None
     return FieldRef(
         object_ref=match.object_envelope.to_object_ref(),
@@ -2336,7 +2631,7 @@ def _unique_strings(values: Any) -> list[str]:
     if isinstance(values, str):
         iterable: Sequence[Any] = [values]
     elif isinstance(values, Iterable):
-        iterable = values
+        iterable = list(values)
     else:
         return []
 

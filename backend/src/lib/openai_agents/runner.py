@@ -96,8 +96,18 @@ from .streaming_tools import (
     set_live_event_list,
     reset_consecutive_call_tracker,
     SpecialistOutputError,
+    SpecialistToolCall,
+    _StructuredSpecialistFinalizationState,
+    _agent_structured_finalization_config,
+    _configure_structured_specialist_finalization,
     _extract_stream_tool_call_tracking_id,
+    _max_turns_with_structured_specialist_finalization,
     _pop_matching_pending_tool_call,
+    _structured_specialist_finalization_max_attempts,
+    _structured_specialist_finalization_required,
+    _structured_specialist_finalization_tool_name,
+    _tool_output_payload_for_finalization,
+    _output_type_name,
 )
 
 # Prompt context tracking for execution logging
@@ -720,9 +730,43 @@ async def _run_agent_with_tracing(
     )
     builder_workspace_token = set_active_extraction_builder_workspace(builder_workspace)
     evidence_summary_tool_names: List[str] = []
+    structured_tool_calls: List[SpecialistToolCall] = []
 
     # max_turns from config gives agents more time to think and process complex queries
     max_turns = get_max_turns()
+    expected_output_type = getattr(agent, "output_type", None)
+    finalization_config = _agent_structured_finalization_config(
+        agent,
+        tool_name=None,
+    )
+    finalization_tool_name = _structured_specialist_finalization_tool_name(
+        finalization_config
+    )
+    structured_finalization_state = _StructuredSpecialistFinalizationState(
+        required=_structured_specialist_finalization_required(
+            agent,
+            expected_output_type=expected_output_type,
+            builder_materializer_agent=False,
+            finalization_config=finalization_config,
+        ),
+        tool_name=finalization_tool_name or "finalize_structured_result",
+        agent_name=current_agent,
+        output_type_name=_output_type_name(expected_output_type),
+        config=finalization_config,
+        max_attempts=_structured_specialist_finalization_max_attempts(
+            finalization_config
+        ),
+    )
+    if structured_finalization_state.required:
+        max_turns = _max_turns_with_structured_specialist_finalization(max_turns)
+        agent = _configure_structured_specialist_finalization(
+            agent,
+            agent,
+            expected_output_type=expected_output_type,
+            finalization_state=structured_finalization_state,
+            tool_calls=structured_tool_calls,
+            live_evidence_records=evidence_records,
+        )
     llm_run_start = time.monotonic()
     result = Runner.run_streamed(agent, input=input_items, max_turns=max_turns, run_config=run_config)
     write_extraction_trace_event(
@@ -1030,6 +1074,16 @@ async def _run_agent_with_tracing(
                                 evidence_records,
                                 [evidence_record],
                             )
+                        structured_tool_calls.append(
+                            SpecialistToolCall(
+                                tool_name=last_tool,
+                                tool_args=completed_tool.get("tool_input") or {},
+                                output_payload=_tool_output_payload_for_finalization(
+                                    last_tool,
+                                    output,
+                                ),
+                            )
+                        )
 
                         # Emit any remaining collected specialist events (fallback for batch mode)
                         # Most events should have been streamed via queue, this catches any stragglers
@@ -1254,6 +1308,63 @@ async def _run_agent_with_tracing(
             if not full_response:
                 full_response = str(final_output)
 
+    if structured_finalization_state.required:
+        if structured_finalization_state.accepted_payload is not None:
+            structured_result = stage_extraction_payload(
+                structured_finalization_state.accepted_payload,
+                workspace=builder_workspace,
+                candidate_id="runner_structured_result",
+                evidence_records=evidence_records,
+            )
+            if not full_response:
+                full_response = json.dumps(
+                    structured_finalization_state.accepted_payload,
+                    default=str,
+                )
+        else:
+            if structured_finalization_state.attempt_limit_exceeded:
+                error_message = (
+                    f"{current_agent} exceeded the "
+                    f"{structured_finalization_state.max_attempts}-attempt limit "
+                    f"for mandatory {structured_finalization_state.tool_name} "
+                    "without status accepted."
+                )
+                reason = "structured_finalization_attempt_limit_exceeded"
+            elif structured_finalization_state.last_rejection is not None:
+                error_message = (
+                    f"{current_agent} did not complete mandatory "
+                    f"{structured_finalization_state.tool_name} with status accepted. "
+                    "Last rejection: "
+                    f"{structured_finalization_state.last_rejection.get('message')}"
+                )
+                reason = "structured_finalization_rejected"
+            else:
+                error_message = (
+                    f"{current_agent} did not call mandatory "
+                    f"{structured_finalization_state.tool_name} with status accepted."
+                )
+                reason = "structured_finalization_missing"
+            builder_workspace.record_validation_failure(
+                errors=[
+                    {
+                        "message": error_message,
+                        "reason": reason,
+                    }
+                ],
+                candidate_ids=["runner_structured_result"],
+            )
+            run_error_event = {
+                "type": "RUN_ERROR",
+                "data": {
+                    "message": error_message,
+                    "error_type": "StructuredFinalizationFailed",
+                    "trace_id": trace_id,
+                },
+            }
+            write_stream_event(run_error_event, trace_id=trace_id)
+            yield run_error_event
+            return
+
     duration_ms = (time.monotonic() - llm_run_start) * 1000
     logger.info(
         "Run completed",
@@ -1444,7 +1555,7 @@ async def run_agent_streamed(
         session_id: Optional chat session UUID for Langfuse trace grouping
         document_id: Optional UUID of the PDF document (enables PDF specialist)
         document_name: Optional name of the document for context
-        active_groups: Optional list of group IDs (e.g., ["MGI", "FB"]) for injecting
+        active_groups: Optional list of group IDs (for example ["group-a", "group-b"]) for injecting
                        group-specific rules into agent prompts
         supervisor_model: Optional override for the supervisor model id
         specialist_model: Optional override for specialist model ids
@@ -1612,7 +1723,7 @@ async def run_agent_streamed(
                 # Build trace tags - include group tags for easy filtering
                 trace_tags = ["chat", "openai-agents"]
                 if active_groups:
-                    # Add group:MGI, group:FB, etc. for each active group
+                    # Add a trace tag for each active group.
                     trace_tags.extend([f"group:{grp}" for grp in active_groups])
 
                 # Propagate trace-level attributes onto the active span and all child spans.

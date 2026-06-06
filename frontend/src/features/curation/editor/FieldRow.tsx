@@ -412,24 +412,37 @@ export default function FieldRow({
         {labelSubtitleSlot}
       </Box>
 
-      <Box sx={{ minWidth: 0 }}>
-        {renderInput ? renderInput(inputProps) : renderDefaultInput(inputProps)}
-      </Box>
-
       <Box
-        data-testid={`field-validation-slot-${field.field_key}`}
         sx={{
-          gridColumn: { md: '2' },
-          display: validationSlot ? 'flex' : 'none',
-          alignItems: 'center',
-          justifyContent: {
-            xs: 'flex-start',
-            md: 'flex-start',
-          },
-          '&:empty': { display: 'none' },
+          alignItems: 'start',
+          columnGap: 1,
+          display: 'grid',
+          gridTemplateColumns: validationSlot
+            ? {
+              xs: '1fr',
+              lg: 'minmax(0, 1fr) minmax(180px, 0.42fr)',
+            }
+            : '1fr',
+          minWidth: 0,
+          rowGap: 0.45,
         }}
       >
-        {validationSlot}
+        <Box sx={{ minWidth: 0 }}>
+          {renderInput ? renderInput(inputProps) : renderDefaultInput(inputProps)}
+        </Box>
+        <Box
+          data-testid={`field-validation-slot-${field.field_key}`}
+          sx={{
+            alignItems: 'center',
+            display: validationSlot ? 'flex' : 'none',
+            justifyContent: 'flex-start',
+            minWidth: 0,
+            mt: { xs: 0.15, lg: 0 },
+            '&:empty': { display: 'none' },
+          }}
+        >
+          {validationSlot}
+        </Box>
       </Box>
 
       <Box

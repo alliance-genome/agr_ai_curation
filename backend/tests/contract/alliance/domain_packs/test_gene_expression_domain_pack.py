@@ -18,6 +18,7 @@ from src.lib.domain_packs.materialization import (
     ValidatorResultMaterializationInput,
     materialize_validator_results_into_envelope,
     project_evidence_anchor_projections,
+    project_validation_summary_projections,
 )
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
@@ -871,6 +872,20 @@ def test_gene_expression_assay_materializes_from_validator_result():
     resolved_field_ref = result.appended_findings[0].field_ref
     assert resolved_field_ref is not None
     assert resolved_field_ref.field_path == "expression_experiment.expression_assay_used"
+    summaries = project_validation_summary_projections(
+        result.envelope,
+        envelope_revision=1,
+        object_id=result.envelope.objects[0].pending_ref_id,
+    )
+    assert {
+        summary.field_path: summary.status.value
+        for summary in summaries
+        if summary.field_path is not None
+    } == {
+        "expression_experiment.expression_assay_used": "resolved",
+        "expression_experiment.expression_assay_used.curie": "resolved",
+        "expression_experiment.expression_assay_used.name": "resolved",
+    }
 
 
 def test_gene_expression_conversion_preserves_no_match_assay_label_for_validation():
@@ -983,6 +998,20 @@ def test_gene_expression_assay_unresolved_outcomes_stay_field_addressed(
         "expression_experiment.expression_assay_used"
     )
     assert finding.details["lookup_attempts"][0]["lookup_status"] == expected_status
+    summaries = project_validation_summary_projections(
+        result.envelope,
+        envelope_revision=1,
+        object_id=result.envelope.objects[0].pending_ref_id,
+    )
+    assert {
+        summary.field_path: summary.status.value
+        for summary in summaries
+        if summary.field_path is not None
+    } == {
+        "expression_experiment.expression_assay_used": "unresolved",
+        "expression_experiment.expression_assay_used.curie": "unresolved",
+        "expression_experiment.expression_assay_used.name": "unresolved",
+    }
 
 
 def test_gene_expression_uberon_slim_metadata_carries_linkml_allowlists():

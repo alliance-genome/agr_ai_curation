@@ -458,6 +458,87 @@ describe('CandidateFieldEditor', () => {
     expect(screen.queryByText('Legacy validation warning.')).not.toBeInTheDocument()
   })
 
+  it('shows compact validation explanations from envelope finding details', () => {
+    const workspace = buildWorkspace()
+    const candidate = workspace.candidates[0]!
+    candidate.validation_summary_projections = [
+      {
+        summary_id: 'summary-gene-symbol-resolved',
+        envelope_id: 'envelope-1',
+        object_id: 'object-1',
+        object_type: 'gene',
+        field_path: 'gene.symbol',
+        envelope_revision: 4,
+        status: 'resolved',
+        highest_severity: null,
+        finding_count: 1,
+        open_finding_count: 0,
+        finding_ids: ['finding-gene-symbol-resolved'],
+        codes: ['domain_pack.validator_resolved'],
+        messages: ['Fallback summary message.'],
+        findings: [
+          {
+            finding_id: 'finding-gene-symbol-resolved',
+            envelope_id: 'envelope-1',
+            object_id: 'object-1',
+            object_type: 'gene',
+            field_path: 'gene.symbol',
+            envelope_revision: 4,
+            severity: 'info',
+            finding_status: 'resolved',
+            summary_status: 'resolved',
+            code: 'domain_pack.validator_resolved',
+            message: 'Resolved gene symbol.',
+            details: {
+              curator_message: 'Resolved abc from the gene lookup.',
+              validation_metadata: {
+                parent_request_id: 'request-gene-1',
+                materialized_result_field: 'symbol',
+                generated_from_expected_result_field: true,
+              },
+              validation_result: {
+                request_id: 'request-gene-1',
+                validator_agent: {
+                  package_id: 'agr.alliance',
+                  agent_id: 'gene_validation',
+                },
+                curator_message: 'Resolved abc from the gene lookup.',
+                explanation: 'The lookup matched the current accepted gene symbol.',
+                resolved_values: {
+                  symbol: 'abc',
+                  curie: 'WB:WBGene00000001',
+                },
+              },
+              lookup_attempts: [
+                {
+                  provider: 'agr_curation_query',
+                  method: 'search_genes',
+                  lookup_status: 'success',
+                  candidate_count: 1,
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ]
+
+    renderEditor(workspace)
+
+    const validationState = screen.getByTestId('field-validation-state-field_symbol')
+    expect(validationState).toHaveTextContent('Validated')
+    expect(validationState).toHaveTextContent('Resolved abc from the gene lookup.')
+    expect(validationState).toHaveTextContent('Validation details')
+    expect(validationState).toHaveTextContent('Validator: agr.alliance/gene_validation')
+    expect(validationState).toHaveTextContent('Result field: Symbol')
+    expect(validationState).toHaveTextContent(
+      'Resolved values: Symbol: abc, Curie: WB:WBGene00000001',
+    )
+    expect(validationState).toHaveTextContent(
+      'Lookup: agr_curation_query · search_genes · success · 1 candidate',
+    )
+  })
+
   it('floats needs-review fields and counts them from envelope summaries', () => {
     renderEditor()
 
@@ -514,6 +595,10 @@ describe('CandidateFieldEditor', () => {
     expect(screen.getByTestId('field-validation-state-field_curie')).toHaveTextContent(
       'Validated',
     )
+    expect(screen.getByTestId('field-validation-state-field_curie')).toHaveTextContent(
+      'Gene selector has been validated.',
+    )
+    expect(screen.queryByText('Validation details')).not.toBeInTheDocument()
   })
 
   it('displays under-development validator metadata without validation findings', () => {

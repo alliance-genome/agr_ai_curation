@@ -18,6 +18,7 @@ from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.materialization import (
     ValidatorResultMaterializationInput,
     materialize_validator_results_into_envelope,
+    project_validation_summary_projections,
 )
 from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
 from src.lib.domain_packs.validation_registry import (
@@ -828,6 +829,19 @@ def test_phenotype_term_materializes_only_after_validator_resolution():
         "label": "reduced brood size",
     }
     assert resolved_result.appended_findings[0].code == "domain_pack.validator_resolved"
+    summaries = project_validation_summary_projections(
+        resolved_result.envelope,
+        envelope_revision=1,
+        object_id=materialized_term.object_id,
+    )
+    assert {
+        summary.field_path: summary.status.value
+        for summary in summaries
+        if summary.field_path is not None
+    } == {
+        "curie": "resolved",
+        "label": "resolved",
+    }
 
 
 def test_tool_verified_phenotype_envelope_omits_legacy_semantic_stores():

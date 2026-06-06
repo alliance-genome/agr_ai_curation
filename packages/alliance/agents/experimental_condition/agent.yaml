@@ -38,6 +38,83 @@ tools:
 
 output_schema: ExperimentalConditionValidationResult
 
+structured_finalization:
+  enabled: true
+  tool_name: finalize_experimental_condition_lookup
+  checks:
+    - lookup_provenance
+  lookup:
+    tool_name: agr_curation_query
+    provider_terms:
+      - agr_curation_query
+    request_keys:
+      - condition_id
+      - condition_class_curie
+      - condition_id_curie
+      - condition_chemical_curie
+      - condition_taxon_curie
+      - condition_relation_type
+      - condition_taxon
+      - data_provider
+      - quantity
+      - unit
+    result_collections:
+      - resolved_values
+      - resolved_objects
+      - normalized_components
+      - component_validations
+      - candidates
+      - unresolved_components
+    grounded_fact_paths:
+      - normalized_components[].resolved_values.curie
+      - normalized_components[].resolved_values.id
+      - normalized_components[].resolved_values.name
+      - normalized_components[].resolved_values.label
+      - normalized_components[].resolved_values.internal_id
+      - normalized_components[].resolved_values.abbreviation
+      - normalized_components[].resolved_values.taxon_id
+      - component_validations[].resolved_values.curie
+      - component_validations[].resolved_values.id
+      - component_validations[].resolved_values.name
+      - component_validations[].resolved_values.label
+      - component_validations[].resolved_values.internal_id
+      - component_validations[].resolved_values.abbreviation
+      - component_validations[].resolved_values.taxon_id
+      - component_validations[].candidates[].value
+      - component_validations[].candidates[].label
+      - candidates[].value
+      - candidates[].label
+    resolved_fact_paths:
+      - resolved_values
+      - resolved_objects[]
+      - normalized_components[]
+      - component_validations[]
+    fact_identity_paths:
+      - condition_id
+      - resolved_values.condition_id
+      - resolved_values.condition_class_curie
+      - resolved_values.condition_id_curie
+      - resolved_values.condition_chemical_curie
+      - resolved_values.condition_taxon_curie
+      - resolved_objects[].condition_id
+      - resolved_objects[].curie
+      - resolved_objects[].id
+      - resolved_objects[].name
+      - normalized_components[].resolved_values.curie
+      - normalized_components[].resolved_values.id
+      - normalized_components[].resolved_values.name
+      - normalized_components[].resolved_values.label
+      - normalized_components[].resolved_values.internal_id
+      - normalized_components[].resolved_values.abbreviation
+      - normalized_components[].resolved_values.taxon_id
+      - component_validations[].resolved_values.curie
+      - component_validations[].resolved_values.id
+      - component_validations[].resolved_values.name
+      - component_validations[].resolved_values.label
+      - component_validations[].resolved_values.internal_id
+      - component_validations[].resolved_values.abbreviation
+      - component_validations[].resolved_values.taxon_id
+
 model_config:
   model: "${AGENT_EXPERIMENTAL_CONDITION_MODEL:-gpt-5.4-mini}"
   temperature: 0.1

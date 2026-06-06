@@ -45,6 +45,53 @@ tools:
 # -----------------------------------------------------------------------------
 output_schema: DiseaseValidationResult
 
+structured_finalization:
+  enabled: true
+  tool_name: finalize_disease_lookup
+  checks:
+    - lookup_provenance
+  lookup:
+    tool_name: agr_curation_query
+    provider_terms:
+      - agr_curation_query
+    request_keys:
+      - curie
+      - curies
+      - doid
+      - doids
+      - disease
+      - diseases
+      - disease_name
+      - disease_names
+      - label
+      - labels
+      - name
+      - names
+    result_collections:
+      - resolved_values
+      - resolved_objects
+      - candidates
+    grounded_fact_paths:
+      - candidates[].value
+      - candidates[].label
+      - candidates[].details.curie
+      - candidates[].details.name
+      - candidates[].details.ontology_type
+    resolved_fact_paths:
+      - resolved_values
+      - resolved_objects[]
+    fact_identity_paths:
+      - resolved_values.curie
+      - resolved_values.doid
+      - resolved_values.label
+      - resolved_values.name
+      - resolved_values.ontology_term_type
+      - resolved_objects[].curie
+      - resolved_objects[].id
+      - resolved_objects[].name
+      - resolved_objects[].label
+      - resolved_objects[].ontology_type
+
 # -----------------------------------------------------------------------------
 # MODEL CONFIGURATION
 # -----------------------------------------------------------------------------

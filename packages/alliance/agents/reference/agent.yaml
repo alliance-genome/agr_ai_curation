@@ -31,6 +31,76 @@ tools:
   - agr_literature_reference_lookup
 
 output_schema: ReferenceValidationResult
+structured_finalization:
+  enabled: true
+  tool_name: finalize_reference_lookup
+  checks:
+    - lookup_provenance
+  lookup:
+    tool_name: agr_literature_reference_lookup
+    tool_output_paths:
+      - source
+      - method
+      - query
+      - count
+      - lookup_status
+      - resolved_reference
+      - candidate_references
+      - ambiguity
+      - no_match
+      - failure_classification
+      - lookup_attempts
+    provider_terms:
+      - agr_literature_reference_lookup
+      - literature
+      - literature_es
+      - reference
+    request_keys:
+      - reference_id
+      - reference_ids
+      - curie
+      - curies
+      - pmid
+      - pmids
+      - doi
+      - dois
+      - title
+      - titles
+      - short_citation
+      - citation
+    result_collections:
+      - resolved_values
+      - resolved_objects
+      - candidate_references
+      - candidates
+      - ambiguity
+      - no_match
+      - missing_expected_fields
+      - curie
+      - reference_id
+      - title
+    grounded_fact_paths:
+      - candidates[].value
+      - candidates[].label
+      - candidate_references[].reference_id
+      - candidate_references[].curie
+      - candidate_references[].title
+      - candidate_references[].short_citation
+    resolved_fact_paths:
+      - resolved_values
+      - "resolved_objects[]"
+      - curie
+      - reference_id
+    fact_identity_paths:
+      - curie
+      - reference_id
+      - title
+      - resolved_values.curie
+      - resolved_values.reference_id
+      - resolved_values.title
+      - "resolved_objects[].curie"
+      - "resolved_objects[].reference_id"
+      - "resolved_objects[].title"
 
 model_config:
   model: "${AGENT_REFERENCE_MODEL:-gpt-5.4-mini}"

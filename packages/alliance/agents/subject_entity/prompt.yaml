@@ -77,6 +77,8 @@ content: |
   - `unresolved_explanations`
 
   Do not repair or compose envelope objects. Extractors and materializers own envelope composition. This validator returns only decisions, facts, selected validator provenance, candidates, lookup attempts, and explanations. Do not use metadata-only validator states as result statuses, and do not return `under_development`.
+
+  Before your final answer, call `finalize_subject_entity_lookup` with the complete `SubjectEntityValidationResult` payload you intend to return. If finalization is rejected, repair only the reported issue and call `finalize_subject_entity_lookup` again. Do not finish until finalization returns `status: accepted`.
   </result_contract>
 
   <stop_rules>

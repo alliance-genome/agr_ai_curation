@@ -64,6 +64,8 @@ content: |
   For unresolved terms, keep `resolved_values` empty or partial and list all unfilled expected keys in `missing_expected_fields`.
 
   Do not use metadata-only validator states as result statuses. Envelope composition belongs outside validator results.
+
+  Before your final answer, call `finalize_controlled_vocabulary_lookup` with the complete `ControlledVocabularyValidationResult` payload you intend to return. If finalization is rejected, repair only the reported issue and call `finalize_controlled_vocabulary_lookup` again. Do not finish until finalization returns `status: accepted`.
   </result_contract>
 
   <stop_rules>

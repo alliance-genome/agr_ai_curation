@@ -43,6 +43,22 @@ tools:
 # OUTPUT SCHEMA
 # -----------------------------------------------------------------------------
 output_schema: GOAnnotationsResult
+structured_finalization:
+  enabled: true
+  tool_name: finalize_go_annotations_lookup
+  checks:
+    - lookup_provenance
+  lookup:
+    tool_name: go_api_call
+    provider_terms: [go_api_call, geneontology, go annotations]
+    request_keys: [gene_id, gene_ids]
+    result_collections: [gene_id, annotations]
+    resolved_fact_paths:
+      - "annotations[]"
+    fact_identity_paths:
+      - "annotations[].go_id"
+      - "annotations[].object_id"
+      - "annotations[].id"
 
 # -----------------------------------------------------------------------------
 # MODEL CONFIGURATION

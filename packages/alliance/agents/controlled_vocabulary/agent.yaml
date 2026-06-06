@@ -35,6 +35,61 @@ tools:
 
 output_schema: ControlledVocabularyValidationResult
 
+structured_finalization:
+  enabled: true
+  tool_name: finalize_controlled_vocabulary_lookup
+  checks:
+    - lookup_provenance
+  lookup:
+    tool_name: agr_curation_query
+    provider_terms:
+      - agr_curation_query
+    request_keys:
+      - internal_id
+      - internal_ids
+      - vocabulary
+      - vocabularies
+      - term_name
+      - term_names
+      - abbreviation
+      - abbreviations
+      - synonym
+      - synonyms
+      - term
+      - terms
+    result_collections:
+      - resolved_values
+      - resolved_objects
+      - controlled_vocabulary_candidates
+      - candidates
+    grounded_fact_paths:
+      - controlled_vocabulary_candidates[].internal_id
+      - controlled_vocabulary_candidates[].vocabulary
+      - controlled_vocabulary_candidates[].term_name
+      - controlled_vocabulary_candidates[].abbreviation
+      - controlled_vocabulary_candidates[].vocabulary_label
+      - candidates[].value
+      - candidates[].label
+    resolved_fact_paths:
+      - resolved_values
+      - resolved_objects[]
+      - controlled_vocabulary_candidates[]
+    fact_identity_paths:
+      - resolved_values.internal_id
+      - resolved_values.vocabulary
+      - resolved_values.term_name
+      - resolved_values.abbreviation
+      - resolved_values.vocabulary_label
+      - resolved_objects[].internal_id
+      - resolved_objects[].vocabulary
+      - resolved_objects[].term_name
+      - resolved_objects[].abbreviation
+      - controlled_vocabulary_candidates[].internal_id
+      - controlled_vocabulary_candidates[].vocabulary
+      - controlled_vocabulary_candidates[].term_name
+      - controlled_vocabulary_candidates[].abbreviation
+      - controlled_vocabulary_candidates[].vocabulary_label
+
 model_config:
   model: "${AGENT_CONTROLLED_VOCABULARY_MODEL:-gpt-5.4-mini}"
   temperature: 0.1

@@ -45,6 +45,66 @@ tools:
 # -----------------------------------------------------------------------------
 output_schema: AlleleResultEnvelope
 
+structured_finalization:
+  enabled: true
+  tool_name: finalize_allele_lookup
+  checks:
+    - lookup_provenance
+  lookup:
+    tool_name: agr_curation_query
+    provider_terms:
+      - agr_curation_query
+    request_keys:
+      - allele_id
+      - allele_ids
+      - primary_external_id
+      - primary_external_ids
+      - allele_symbol
+      - allele_symbols
+      - symbol
+      - symbols
+      - name
+      - names
+      - associated_gene
+    result_collections:
+      - resolved_values
+      - resolved_objects
+      - allele_candidates
+      - candidates
+    grounded_fact_paths:
+      - allele_candidates[].allele_id
+      - allele_candidates[].symbol
+      - allele_candidates[].data_provider
+      - allele_candidates[].name
+      - allele_candidates[].associated_gene
+      - candidates[].value
+      - candidates[].label
+    resolved_fact_paths:
+      - resolved_values
+      - resolved_objects[]
+      - allele_candidates[]
+    fact_identity_paths:
+      - resolved_values.primary_external_id
+      - resolved_values.allele_id
+      - resolved_values.allele_symbol
+      - resolved_values.symbol
+      - resolved_values.taxon
+      - resolved_values.taxon_curie
+      - resolved_values.data_provider
+      - resolved_values.name
+      - resolved_values.associated_gene
+      - resolved_objects[].primary_external_id
+      - resolved_objects[].allele_id
+      - resolved_objects[].symbol
+      - resolved_objects[].taxon
+      - resolved_objects[].data_provider
+      - resolved_objects[].name
+      - allele_candidates[].allele_id
+      - allele_candidates[].symbol
+      - allele_candidates[].data_provider
+      - allele_candidates[].name
+      - allele_candidates[].associated_gene
+
 # -----------------------------------------------------------------------------
 # MODEL CONFIGURATION
 # -----------------------------------------------------------------------------

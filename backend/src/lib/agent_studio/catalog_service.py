@@ -1128,7 +1128,7 @@ class PromptCatalogService:
 
         Args:
             agent_id: Agent identifier
-            group_id: Group identifier (for example "WB", "FB")
+            group_id: Group identifier
 
         Returns:
             Combined prompt string, or None if agent/group not found
@@ -1514,6 +1514,37 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
         output_type=output_schema,
         output_guardrails=output_guardrails,
     )
+    try:
+        from src.lib.config.agent_loader import get_agent_by_folder, get_agent_definition
+
+        agent_definition = get_agent_definition(str(db_agent.agent_key))
+        if agent_definition is None:
+            agent_definition = get_agent_by_folder(str(db_agent.agent_key))
+        if agent_definition is None:
+            for candidate_key in (
+                getattr(db_agent, "template_source", None),
+                getattr(db_agent, "group_rules_component", None),
+            ):
+                candidate_text = str(candidate_key or "")
+                agent_definition = (
+                    get_agent_definition(candidate_text)
+                    or get_agent_by_folder(candidate_text)
+                )
+                if agent_definition is not None:
+                    break
+        structured_finalization = getattr(
+            agent_definition,
+            "structured_finalization",
+            None,
+        )
+        if output_schema is not None and isinstance(structured_finalization, dict):
+            runtime_agent.structured_finalization = dict(structured_finalization)
+    except Exception:
+        logger.debug(
+            "Unable to attach structured finalization metadata for agent '%s'",
+            getattr(db_agent, "agent_key", None),
+            exc_info=True,
+        )
     prompt_run_id = set_pending_prompts(
         runtime_agent.name,
         list(prompt_templates_for_bundle(prompt_bundle)),

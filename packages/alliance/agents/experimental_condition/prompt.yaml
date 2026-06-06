@@ -67,6 +67,8 @@ content: |
   - `unresolved_components`: component types or field paths keeping the condition unresolved.
 
   Do not use metadata-only validator states as result statuses. Do not return compatibility fields, legacy summary stores, or envelope patches; envelope composition belongs outside validator results.
+
+  Before your final answer, call `finalize_experimental_condition_lookup` with the complete `ExperimentalConditionValidationResult` payload you intend to return. If finalization is rejected, repair only the reported issue and call `finalize_experimental_condition_lookup` again. Do not finish until finalization returns `status: accepted`.
   </result_contract>
 
   <stop_rules>

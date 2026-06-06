@@ -36,6 +36,59 @@ tools:
 
 output_schema: OntologyTermValidationResult
 
+structured_finalization:
+  enabled: true
+  tool_name: finalize_ontology_term_lookup
+  checks:
+    - lookup_provenance
+  lookup:
+    tool_name: agr_curation_query
+    provider_terms:
+      - agr_curation_query
+    request_keys:
+      - curie
+      - curies
+      - term
+      - terms
+      - label
+      - labels
+      - name
+      - names
+      - ontology_term_type
+      - ontology_family
+    result_collections:
+      - resolved_values
+      - resolved_objects
+      - ontology_term_candidates
+      - candidates
+    grounded_fact_paths:
+      - ontology_term_candidates[].curie
+      - ontology_term_candidates[].label
+      - ontology_term_candidates[].ontology_type
+      - ontology_term_candidates[].ontology_family
+      - candidates[].value
+      - candidates[].label
+    resolved_fact_paths:
+      - resolved_values
+      - resolved_objects[]
+      - ontology_term_candidates[]
+    fact_identity_paths:
+      - resolved_values.curie
+      - resolved_values.label
+      - resolved_values.name
+      - resolved_values.ontology_term_type
+      - resolved_values.ontology_family
+      - resolved_values.terms[]
+      - resolved_objects[].curie
+      - resolved_objects[].id
+      - resolved_objects[].name
+      - resolved_objects[].label
+      - resolved_objects[].ontology_type
+      - ontology_term_candidates[].curie
+      - ontology_term_candidates[].label
+      - ontology_term_candidates[].ontology_type
+      - ontology_term_candidates[].ontology_family
+
 model_config:
   model: "${AGENT_ONTOLOGY_TERM_MODEL:-gpt-5.4-mini}"
   temperature: 0.1

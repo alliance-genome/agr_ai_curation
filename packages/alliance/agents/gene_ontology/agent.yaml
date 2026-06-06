@@ -43,6 +43,21 @@ tools:
 # OUTPUT SCHEMA
 # -----------------------------------------------------------------------------
 output_schema: GOTermResultEnvelope
+structured_finalization:
+  enabled: true
+  tool_name: finalize_go_term_lookup
+  checks:
+    - lookup_provenance
+  lookup:
+    tool_name: quickgo_api_call
+    provider_terms: [quickgo, quickgo_api_call, ebi]
+    request_keys: [go_id, go_ids, go_term, go_terms, term, terms, name, names]
+    result_collections: [results, not_found]
+    resolved_fact_paths:
+      - "results[]"
+    fact_identity_paths:
+      - "results[].go_id"
+      - "results[].id"
 
 # -----------------------------------------------------------------------------
 # MODEL CONFIGURATION

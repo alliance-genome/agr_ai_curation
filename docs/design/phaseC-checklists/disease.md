@@ -20,7 +20,7 @@ mechanic.)
 > **LEAN skeleton (per Chris).** Each rule is stated ONCE. There is NO standalone
 > `<success_criteria>` section: the few genuinely-unique success conditions
 > (call-before-report, status decision, record-every-call, and the empty-input
-> minimal-resolved rule) are folded into `<goal>`. The
+> missing-input unresolved rule) are folded into `<goal>`. The
 > `<resolution_and_validation_rules>` carry the unique evidence rules once
 > (no-memory/no-invention, no-direct-SQL, exact_match-vs-preserve-ambiguity,
 > no-guess-on-ambiguity, domain-detail-only-in-objects/candidates),
@@ -154,7 +154,7 @@ defines no reason-code enum bound to the validator output;
 | DISV-02 | Goal: produce a shared domain-validator result for the supplied `DomainValidationRequest` with package-tool-grounded DOID decisions, candidates, lookup attempts, missing expected fields, and curator-facing explanations; return `DiseaseValidationResult`. | `<goal>` (verbatim `DomainValidationRequest` + `DiseaseValidationResult` tokens retained) |
 | DISV-03 | Success: call `agr_curation_query` before returning any disease term, DOID, synonym, definition, or ontology type (the machine imperative is CORE DISV-RTC). | `<goal>` (curator-facing call-before-report line KEPT once; literal `agr_curation_query` retained) |
 | DISV-04 | Success: return only `status: "resolved"` or `status: "unresolved"` for active validator results, status resolved only when requested fields are package-tool-confirmed and unambiguous. | `<goal>` + `<result_contract>` (verbatim status tokens) |
-| DISV-05 | Success: if no disease input or expected result field is present, return a minimal resolved result with empty resolved data and explain that no disease lookup was requested. | `<goal>` (empty-input minimal-resolved rule retained) |
+| DISV-05 | Success: if no disease input or expected result field is present, return an unresolved result with empty resolved data, identify the missing input context, and explain that no disease lookup could run because no disease lookup target was supplied. | `<goal>` (empty-input unresolved rule retained) |
 | DISV-06 | Success: put resolved scalar outputs requested by the binding in `resolved_values`; put full disease ontology records in `resolved_objects`; put alternate or ambiguous matches in `candidates`. | `<result_contract>` (DISV-18..DISV-20) |
 | DISV-07 | Success: record every database call in `lookup_attempts`. | `<goal>` + `<result_contract>` (DISV-21) |
 

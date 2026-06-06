@@ -56,6 +56,8 @@ content: |
   - `unresolved_explanations`: the specific reasons the AGM could not be resolved.
 
   Do not use metadata-only validator states as result statuses; envelope composition belongs outside validator results.
+
+  Before your final answer, call `finalize_agm_lookup` with the complete `AgmValidationResult` payload you intend to return. If finalization is rejected, repair only the reported issue and call `finalize_agm_lookup` again. Do not finish until finalization returns `status: accepted`.
   </result_contract>
 
   <stop_rules>

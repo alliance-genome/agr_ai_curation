@@ -31,6 +31,57 @@ tools:
 
 output_schema: AgmValidationResult
 
+structured_finalization:
+  enabled: true
+  tool_name: finalize_agm_lookup
+  checks:
+    - lookup_provenance
+  lookup:
+    tool_name: agr_curation_query
+    provider_terms:
+      - agr_curation_query
+    request_keys:
+      - agm_id
+      - agm_ids
+      - subject_identifier
+      - subject_identifiers
+      - subject_label
+      - subject_labels
+      - label
+      - labels
+      - taxon
+      - taxon_id
+    result_collections:
+      - resolved_values
+      - resolved_objects
+      - agm_candidates
+      - candidates
+    grounded_fact_paths:
+      - agm_candidates[].agm_id
+      - agm_candidates[].label
+      - agm_candidates[].taxon
+      - agm_candidates[].data_provider
+      - candidates[].value
+      - candidates[].label
+    resolved_fact_paths:
+      - resolved_values
+      - resolved_objects[]
+      - agm_candidates[]
+    fact_identity_paths:
+      - resolved_values.agm_id
+      - resolved_values.subject_identifier
+      - resolved_values.subject_label
+      - resolved_values.label
+      - resolved_values.taxon
+      - resolved_objects[].agm_id
+      - resolved_objects[].subject_identifier
+      - resolved_objects[].label
+      - resolved_objects[].taxon
+      - agm_candidates[].agm_id
+      - agm_candidates[].label
+      - agm_candidates[].taxon
+      - agm_candidates[].data_provider
+
 model_config:
   model: "${AGENT_AGM_MODEL:-gpt-5.4-mini}"
   temperature: 0.1

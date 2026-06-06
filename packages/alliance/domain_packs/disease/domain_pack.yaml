@@ -472,6 +472,28 @@ object_definitions:
               range: string
               db_table: vocabularyterm
               db_column: name
+      - field_path: disease_relation_vocabulary
+        field_type: string
+        display_name: Disease relation vocabulary
+        description: Disease Relation vocabulary name materialized by validation tooling.
+        metadata:
+          validatable: true
+          validator_binding_id: disease_relation_cv_lookup
+          validation_result_field: vocabulary
+          validator_state: active
+          definition_state_category: complete
+          editable: true
+      - field_path: disease_relation_id
+        field_type: string
+        display_name: Disease relation internal ID
+        description: Disease Relation vocabulary term internal identifier materialized by validation tooling.
+        metadata:
+          validatable: true
+          validator_binding_id: disease_relation_cv_lookup
+          validation_result_field: internal_id
+          validator_state: active
+          definition_state_category: complete
+          editable: true
       - field_path: disease_annotation_subject
         field_type: object
         display_name: Disease annotation subject
@@ -818,6 +840,26 @@ object_definitions:
               range: string
               db_table: vocabularyterm
               db_column: name
+      - field_path: condition_relations.condition_relation_type.vocabulary
+        field_type: string
+        display_name: Condition relation type vocabulary
+        metadata:
+          validatable: true
+          validator_binding_id: disease_condition_relation_lookup
+          validation_result_field: vocabulary
+          validator_state: active
+          definition_state_category: complete
+          editable: true
+      - field_path: condition_relations.condition_relation_type.id
+        field_type: string
+        display_name: Condition relation type internal ID
+        metadata:
+          validatable: true
+          validator_binding_id: disease_condition_relation_lookup
+          validation_result_field: internal_id
+          validator_state: active
+          definition_state_category: complete
+          editable: true
       - field_path: condition_relations.conditions
         field_type: array
         display_name: Experimental conditions
@@ -1106,6 +1148,24 @@ object_definitions:
               - is_marker_for
               - is_implicated_via_orthology
               - is_marker_via_orthology
+      - field_path: disease_relation_vocabulary
+        field_type: string
+        display_name: Disease relation vocabulary
+        metadata:
+          validatable: true
+          validator_binding_id: disease_relation_cv_lookup
+          validation_result_field: vocabulary
+          validator_state: active
+          editable: true
+      - field_path: disease_relation_id
+        field_type: string
+        display_name: Disease relation internal ID
+        metadata:
+          validatable: true
+          validator_binding_id: disease_relation_cv_lookup
+          validation_result_field: internal_id
+          validator_state: active
+          editable: true
       - field_path: data_provider.abbreviation
         field_type: string
         display_name: Data provider abbreviation
@@ -1228,6 +1288,26 @@ object_definitions:
               range: string
               db_table: vocabularyterm
               db_column: name
+      - field_path: condition_relations.condition_relation_type.vocabulary
+        field_type: string
+        display_name: Condition relation type vocabulary
+        metadata:
+          validatable: true
+          validator_binding_id: disease_condition_relation_lookup
+          validation_result_field: vocabulary
+          validator_state: active
+          definition_state_category: complete
+          editable: true
+      - field_path: condition_relations.condition_relation_type.id
+        field_type: string
+        display_name: Condition relation type internal ID
+        metadata:
+          validatable: true
+          validator_binding_id: disease_condition_relation_lookup
+          validation_result_field: internal_id
+          validator_state: active
+          definition_state_category: complete
+          editable: true
       - field_path: condition_relations.conditions
         field_type: array
         display_name: Experimental conditions
@@ -1493,6 +1573,24 @@ object_definitions:
           relation_subsets:
             allele:
               - is_implicated_in
+      - field_path: disease_relation_vocabulary
+        field_type: string
+        display_name: Disease relation vocabulary
+        metadata:
+          validatable: true
+          validator_binding_id: disease_relation_cv_lookup
+          validation_result_field: vocabulary
+          validator_state: active
+          editable: true
+      - field_path: disease_relation_id
+        field_type: string
+        display_name: Disease relation internal ID
+        metadata:
+          validatable: true
+          validator_binding_id: disease_relation_cv_lookup
+          validation_result_field: internal_id
+          validator_state: active
+          editable: true
       - field_path: data_provider.abbreviation
         field_type: string
         display_name: Data provider abbreviation
@@ -1612,6 +1710,26 @@ object_definitions:
               range: string
               db_table: vocabularyterm
               db_column: name
+      - field_path: condition_relations.condition_relation_type.vocabulary
+        field_type: string
+        display_name: Condition relation type vocabulary
+        metadata:
+          validatable: true
+          validator_binding_id: disease_condition_relation_lookup
+          validation_result_field: vocabulary
+          validator_state: active
+          definition_state_category: complete
+          editable: true
+      - field_path: condition_relations.condition_relation_type.id
+        field_type: string
+        display_name: Condition relation type internal ID
+        metadata:
+          validatable: true
+          validator_binding_id: disease_condition_relation_lookup
+          validation_result_field: internal_id
+          validator_state: active
+          definition_state_category: complete
+          editable: true
       - field_path: condition_relations.conditions
         field_type: array
         display_name: Experimental conditions
@@ -1878,6 +1996,24 @@ object_definitions:
               - is_model_of
               - is_ameliorated_model_of
               - is_exacerbated_model_of
+      - field_path: disease_relation_vocabulary
+        field_type: string
+        display_name: Disease relation vocabulary
+        metadata:
+          validatable: true
+          validator_binding_id: disease_relation_cv_lookup
+          validation_result_field: vocabulary
+          validator_state: active
+          editable: true
+      - field_path: disease_relation_id
+        field_type: string
+        display_name: Disease relation internal ID
+        metadata:
+          validatable: true
+          validator_binding_id: disease_relation_cv_lookup
+          validation_result_field: internal_id
+          validator_state: active
+          editable: true
       - field_path: data_provider.abbreviation
         field_type: string
         display_name: Data provider abbreviation
@@ -1997,6 +2133,26 @@ object_definitions:
               range: string
               db_table: vocabularyterm
               db_column: name
+      - field_path: condition_relations.condition_relation_type.vocabulary
+        field_type: string
+        display_name: Condition relation type vocabulary
+        metadata:
+          validatable: true
+          validator_binding_id: disease_condition_relation_lookup
+          validation_result_field: vocabulary
+          validator_state: active
+          definition_state_category: complete
+          editable: true
+      - field_path: condition_relations.condition_relation_type.id
+        field_type: string
+        display_name: Condition relation type internal ID
+        metadata:
+          validatable: true
+          validator_binding_id: disease_condition_relation_lookup
+          validation_result_field: internal_id
+          validator_state: active
+          definition_state_category: complete
+          editable: true
       - field_path: condition_relations.conditions
         field_type: array
         display_name: Experimental conditions

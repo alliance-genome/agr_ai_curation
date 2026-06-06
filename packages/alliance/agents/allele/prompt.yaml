@@ -121,6 +121,8 @@ content: |
   - `is_extinct`: true if the allele strain no longer exists; otherwise false.
   - `synonyms`: alternative allele symbols or names.
   - `fullname_attribution`: creator or institution info extracted from the fullname for MGI/RGD only, with `value`, `confidence` ("probable" or "uncertain"), and `source` ("fullname_suffix").
+
+  Before your final answer, call `finalize_allele_lookup` with the complete `AlleleResultEnvelope` payload you intend to return. If finalization is rejected, repair only the reported issue and call `finalize_allele_lookup` again. Do not finish until finalization returns `status: accepted`.
   </result_contract>
 
   <stop_rules>

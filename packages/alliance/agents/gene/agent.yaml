@@ -45,6 +45,64 @@ tools:
 # -----------------------------------------------------------------------------
 output_schema: GeneResultEnvelope
 
+structured_finalization:
+  enabled: true
+  tool_name: finalize_gene_lookup
+  checks:
+    - lookup_provenance
+  lookup:
+    tool_name: agr_curation_query
+    provider_terms:
+      - agr_curation_query
+    request_keys:
+      - gene_id
+      - gene_ids
+      - primary_external_id
+      - primary_external_ids
+      - gene_symbol
+      - gene_symbols
+      - symbol
+      - symbols
+      - name
+      - names
+    result_collections:
+      - resolved_values
+      - resolved_objects
+      - gene_candidates
+      - candidates
+    grounded_fact_paths:
+      - gene_candidates[].gene_id
+      - gene_candidates[].symbol
+      - gene_candidates[].taxon
+      - gene_candidates[].data_provider
+      - gene_candidates[].name
+      - candidates[].value
+      - candidates[].label
+    resolved_fact_paths:
+      - resolved_values
+      - resolved_objects[]
+      - gene_candidates[]
+    fact_identity_paths:
+      - resolved_values.primary_external_id
+      - resolved_values.gene_id
+      - resolved_values.gene_symbol
+      - resolved_values.symbol
+      - resolved_values.taxon
+      - resolved_values.taxon_curie
+      - resolved_values.data_provider
+      - resolved_values.name
+      - resolved_objects[].primary_external_id
+      - resolved_objects[].gene_id
+      - resolved_objects[].symbol
+      - resolved_objects[].taxon
+      - resolved_objects[].data_provider
+      - resolved_objects[].name
+      - gene_candidates[].gene_id
+      - gene_candidates[].symbol
+      - gene_candidates[].taxon
+      - gene_candidates[].data_provider
+      - gene_candidates[].name
+
 # -----------------------------------------------------------------------------
 # MODEL CONFIGURATION
 # -----------------------------------------------------------------------------

@@ -137,6 +137,8 @@ content: |
   - `data_provider`: the provider code -- WB, FB, MGI, HGNC, ZFIN, RGD, or SGD.
 
   Include these optional fields only when query results return them: `name`, `gene_type`, `genomic_location` (chromosome, start, end, and strand when available), `cross_references`, and `synonyms`.
+
+  Before your final answer, call `finalize_gene_lookup` with the complete `GeneResultEnvelope` payload you intend to return. If finalization is rejected, repair only the reported issue and call `finalize_gene_lookup` again. Do not finish until finalization returns `status: accepted`.
   </result_contract>
 
   <stop_rules>

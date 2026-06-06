@@ -31,6 +31,64 @@ tools:
 
 output_schema: SubjectEntityValidationResult
 
+structured_finalization:
+  enabled: true
+  tool_name: finalize_subject_entity_lookup
+  checks:
+    - lookup_provenance
+  lookup:
+    tool_name: agr_curation_query
+    provider_terms:
+      - agr_curation_query
+    request_keys:
+      - subject_identifier
+      - subject_identifiers
+      - subject_type
+      - subject_label
+      - subject_labels
+      - taxon
+      - taxon_id
+    result_collections:
+      - resolved_values
+      - resolved_objects
+      - subject_candidates
+      - candidates
+      - normalized_subject_identifier
+      - normalized_subject_type
+      - normalized_subject_label
+      - taxon
+    grounded_fact_paths:
+      - subject_candidates[].subject_identifier
+      - subject_candidates[].subject_type
+      - subject_candidates[].subject_label
+      - subject_candidates[].taxon
+      - subject_candidates[].data_provider
+      - candidates[].value
+      - candidates[].label
+    resolved_fact_paths:
+      - resolved_values
+      - resolved_objects[]
+      - subject_candidates[]
+      - normalized_subject_identifier
+    fact_identity_paths:
+      - normalized_subject_identifier
+      - normalized_subject_label
+      - normalized_subject_type
+      - taxon
+      - resolved_values.subject_identifier
+      - resolved_values.subject_type
+      - resolved_values.subject_label
+      - resolved_values.taxon
+      - resolved_objects[].subject_identifier
+      - resolved_objects[].subject_label
+      - resolved_objects[].subject_type
+      - resolved_objects[].taxon
+      - subject_candidates[].subject_identifier
+      - subject_candidates[].subject_type
+      - subject_candidates[].subject_label
+      - subject_candidates[].taxon
+      - subject_candidates[].data_provider
+
 model_config:
   model: "${AGENT_SUBJECT_ENTITY_MODEL:-gpt-5.4-mini}"
   temperature: 0.1

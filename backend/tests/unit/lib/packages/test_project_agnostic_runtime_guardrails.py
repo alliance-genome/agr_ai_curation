@@ -39,6 +39,19 @@ GENERIC_RUNTIME_GUARD_PATHS = {
     Path("backend/tests/unit/lib/agent_studio/test_runtime_validation.py"),
     Path("backend/tests/unit/lib/config/test_package_aware_loaders.py"),
 }
+GENERIC_RUNTIME_SOURCE_GUARD_PATHS = {
+    Path("backend/src/lib/agent_studio/catalog_service.py"),
+    Path("backend/src/lib/config/agent_loader.py"),
+    Path("backend/src/lib/openai_agents/runner.py"),
+    Path("backend/src/lib/openai_agents/streaming_tools.py"),
+}
+GENERIC_RUNTIME_SOURCE_PATTERNS = (
+    re.compile(r"agr\.alliance"),
+    re.compile(r"agr_curation_query"),
+    re.compile(r"alliance_api_call"),
+    re.compile(r"alliancegenome"),
+    re.compile(r"\b(?:FB|WB|MGI|RGD|SGD|ZFIN|HGNC)\b"),
+)
 GENERIC_RUNTIME_PLACEHOLDER_PATTERNS = (
     re.compile(r"agr\.alliance"),
     re.compile(r"agr_curation_query"),
@@ -193,6 +206,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("frontend/src/components/AgentStudio/FlowBuilder/FlowBuilder.test.tsx"),
     Path("frontend/src/components/AgentStudio/FlowBuilder/NodeEditor.test.tsx"),
     Path("frontend/src/components/AgentStudio/PromptWorkshop/PromptWorkshop.test.tsx"),
+    Path("frontend/src/features/curation/editor/CandidateFieldEditor.test.tsx"),
     Path("frontend/src/features/curation/entityTable/workspaceEntityTags.test.ts"),
     Path("frontend/src/features/curation/entityTags/workspaceEntityTags.test.ts"),
     Path("frontend/src/features/curation/types.test.ts"),
@@ -525,6 +539,17 @@ def test_generic_runtime_tests_keep_neutral_placeholders():
     for relative_path in sorted(GENERIC_RUNTIME_GUARD_PATHS):
         text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
         for pattern in GENERIC_RUNTIME_PLACEHOLDER_PATTERNS:
+            if pattern.search(text):
+                violations.append(f"{relative_path}: {pattern.pattern}")
+
+    assert violations == []
+
+
+def test_generic_runtime_sources_do_not_hardcode_alliance_identifiers():
+    violations = []
+    for relative_path in sorted(GENERIC_RUNTIME_SOURCE_GUARD_PATHS):
+        text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        for pattern in GENERIC_RUNTIME_SOURCE_PATTERNS:
             if pattern.search(text):
                 violations.append(f"{relative_path}: {pattern.pattern}")
 

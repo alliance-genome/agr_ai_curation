@@ -11,8 +11,12 @@ from agents import AgentOutputSchema
 from pydantic import BaseModel
 
 from src.lib.curation_workspace import adapter_registry
+from src.lib.config import schema_discovery
 from src.lib.openai_agents import streaming_tools
-from src.lib.openai_agents.models import GeneExtractionResultEnvelope
+from src.lib.openai_agents.models import (
+    GeneExtractionResultEnvelope,
+    PdfExtractionResultEnvelope,
+)
 from src.lib.prompts.context import (
     bind_prompt_run,
     clear_prompt_context,
@@ -31,6 +35,20 @@ REPO_PACKAGES_DIR = REPO_ROOT / "packages"
 
 class _Envelope(BaseModel):
     value: str
+
+
+class _FakeRunResult:
+    def __init__(self, events=None, final_output=None, new_items=None):
+        self._events = events or []
+        self.final_output = final_output
+        self.new_items = new_items or []
+
+    async def stream_events(self):
+        for event in self._events:
+            yield event
+
+    def to_input_list(self):
+        return [{"role": "user", "content": "prior query"}]
 
 
 @pytest.fixture(autouse=True)
@@ -125,6 +143,1205 @@ def test_builder_materializer_agent_detection_uses_finalization_tool_name():
     )
 
 
+def _pdf_live_evidence_record() -> dict:
+    return {
+        "evidence_record_id": "evidence-pdf-1",
+        "entity": "principal finding",
+        "verified_quote": "The principal finding is supported by this exact sentence.",
+        "page": 2,
+        "section": "Results",
+        "chunk_id": "chunk-pdf-1",
+    }
+
+
+def _pdf_finalization_payload(*, evidence_record_id: str = "evidence-pdf-1") -> dict:
+    evidence_record = _pdf_live_evidence_record()
+    if evidence_record_id != evidence_record["evidence_record_id"]:
+        evidence_record = {**evidence_record, "evidence_record_id": evidence_record_id}
+    return {
+        "answer": "The principal finding was supported.",
+        "summary": "Checked the Results section and retained one supported claim.",
+        "items": [
+            {
+                "label": "principal finding",
+                "entity_type": "claim",
+                "source_mentions": ["principal finding"],
+                "evidence_record_ids": [evidence_record_id],
+            }
+        ],
+        "raw_mentions": [],
+        "evidence_records": [evidence_record],
+        "normalization_notes": [],
+        "exclusions": [],
+        "ambiguities": [],
+        "run_summary": {
+            "candidate_count": 1,
+            "kept_count": 1,
+            "excluded_count": 0,
+            "ambiguous_count": 0,
+            "warnings": [],
+        },
+    }
+
+
+def _package_schema(schema_name: str):
+    schemas = schema_discovery.discover_agent_schemas(force_reload=True)
+    return schemas[schema_name]
+
+
+def _finalization_config(tool_name: str) -> dict:
+    return streaming_tools._agent_structured_finalization_config(
+        SimpleNamespace(),
+        tool_name=tool_name,
+    )
+
+
+def _validator_result_payload(
+    *,
+    status: str = "resolved",
+    agent_id: str = "gene_ontology_lookup",
+    target_inputs: dict | None = None,
+    expected_fields: list[str] | None = None,
+    lookup_attempts: list[dict] | None = None,
+    missing_expected_fields: list[str] | None = None,
+    resolved_values: dict | None = None,
+    resolved_objects: list[dict] | None = None,
+    **schema_fields,
+) -> dict:
+    return {
+        "status": status,
+        "request_id": "request-lookup-1",
+        "validator_binding_id": "binding-lookup-1",
+        "validator_agent": {
+            "package_id": "agr.alliance",
+            "agent_id": agent_id,
+        },
+        "target": {
+            "domain_pack_id": "lookup",
+            "object_type": "lookup_target",
+            "object_id": "lookup-target-1",
+            "object_role": "validated_reference",
+            "field_path": "payload.term",
+            "expected_fields": expected_fields or ["results"],
+            "input_values": target_inputs or {"go_id": "GO:0003677"},
+        },
+        "resolved_values": resolved_values or {},
+        "resolved_objects": resolved_objects or [],
+        "missing_expected_fields": missing_expected_fields or [],
+        "candidates": [],
+        "lookup_attempts": lookup_attempts or [],
+        "curator_message": "Lookup checked.",
+        "explanation": "Lookup result is tied to API evidence.",
+        **schema_fields,
+    }
+
+
+def _lookup_attempt(
+    *,
+    provider: str = "quickgo_api_call",
+    url: str = "https://www.ebi.ac.uk/QuickGO/services/ontology/go/terms/GO:0003677",
+    outcome: str = "success",
+    result_count: int = 1,
+) -> dict:
+    return {
+        "provider": provider,
+        "method": "GET",
+        "query": {"url": url},
+        "result_count": result_count,
+        "outcome": outcome,
+    }
+
+
+def _lookup_tool_call(
+    *,
+    tool_name: str = "quickgo_api_call",
+    url: str = "https://www.ebi.ac.uk/QuickGO/services/ontology/go/terms/GO:0003677",
+    status: str = "ok",
+    status_code: int = 200,
+    data: dict | None = None,
+) -> streaming_tools.SpecialistToolCall:
+    return streaming_tools.SpecialistToolCall(
+        tool_name=tool_name,
+        tool_args={"url": url, "method": "GET"},
+        output_payload={
+            "status": status,
+            "status_code": status_code,
+            "data": data if data is not None else {"results": [{"id": "GO:0003677"}]},
+        },
+    )
+
+
+def _search_document_stream_events() -> list[SimpleNamespace]:
+    return [
+        SimpleNamespace(
+            type="run_item_stream_event",
+            item=SimpleNamespace(
+                type="tool_call_item",
+                name="search_document",
+                raw_item=SimpleNamespace(arguments='{"query":"principal finding"}'),
+            ),
+        ),
+        SimpleNamespace(
+            type="run_item_stream_event",
+            item=SimpleNamespace(
+                type="tool_call_output_item",
+                output='{"summary":"found relevant Results passage"}',
+                raw_item=SimpleNamespace(),
+            ),
+        ),
+    ]
+
+
+def test_pdf_structured_finalization_feedback_accepts_live_evidence_payload():
+    feedback = streaming_tools._structured_specialist_finalization_feedback(
+        _pdf_finalization_payload(),
+        expected_output_type=PdfExtractionResultEnvelope,
+        finalization_config=_finalization_config("ask_pdf_extraction_specialist"),
+        tool_calls=[streaming_tools.SpecialistToolCall(tool_name="search_document")],
+        live_evidence_records=[_pdf_live_evidence_record()],
+    )
+
+    assert feedback.accepted_payload is not None
+    assert feedback.message == "PdfExtractionResultEnvelope accepted."
+    assert feedback.summary["live_evidence_record_count"] == 1
+    assert feedback.accepted_payload["items"][0]["evidence_record_ids"] == [
+        "evidence-pdf-1"
+    ]
+
+
+def test_pdf_structured_finalization_feedback_rejects_invented_evidence_id():
+    feedback = streaming_tools._structured_specialist_finalization_feedback(
+        _pdf_finalization_payload(evidence_record_id="invented-evidence"),
+        expected_output_type=PdfExtractionResultEnvelope,
+        finalization_config=_finalization_config("ask_pdf_extraction_specialist"),
+        tool_calls=[streaming_tools.SpecialistToolCall(tool_name="search_document")],
+        live_evidence_records=[_pdf_live_evidence_record()],
+    )
+
+    assert feedback.accepted_payload is None
+    assert feedback.field_errors
+    assert any(
+        error.get("field") == "evidence_record_ids"
+        for error in feedback.field_errors
+    )
+
+
+def test_pdf_structured_finalization_feedback_requires_document_retrieval():
+    feedback = streaming_tools._structured_specialist_finalization_feedback(
+        _pdf_finalization_payload(),
+        expected_output_type=PdfExtractionResultEnvelope,
+        finalization_config=_finalization_config("ask_pdf_extraction_specialist"),
+        tool_calls=[],
+        live_evidence_records=[_pdf_live_evidence_record()],
+    )
+
+    assert feedback.accepted_payload is None
+    assert any(error.get("field") == "tool_calls" for error in feedback.field_errors)
+
+
+def test_pdf_structured_finalization_rejects_hallucinated_empty_answer_evidence():
+    payload = {
+        "answer": "No relevant findings were found.",
+        "summary": "Searches did not find relevant passages.",
+        "items": [],
+        "raw_mentions": [],
+        "evidence_records": [
+            {
+                "evidence_record_id": "invented-empty-answer-evidence",
+                "entity": "negative result",
+                "verified_quote": "This quote was not returned by record_evidence.",
+                "page": 1,
+                "section": "Results",
+                "chunk_id": "chunk-invented",
+            }
+        ],
+        "normalization_notes": [],
+        "exclusions": [],
+        "ambiguities": [],
+        "run_summary": {
+            "candidate_count": 0,
+            "kept_count": 0,
+            "excluded_count": 0,
+            "ambiguous_count": 0,
+            "warnings": [],
+        },
+    }
+
+    feedback = streaming_tools._structured_specialist_finalization_feedback(
+        payload,
+        expected_output_type=PdfExtractionResultEnvelope,
+        finalization_config=_finalization_config("ask_pdf_extraction_specialist"),
+        tool_calls=[streaming_tools.SpecialistToolCall(tool_name="search_document")],
+        live_evidence_records=[],
+    )
+
+    assert feedback.accepted_payload is None
+    assert any(
+        error.get("field") == "evidence_records"
+        for error in feedback.field_errors
+    )
+
+
+def test_structured_finalization_caps_rejected_attempts():
+    def passthrough_tool_factory(**_kwargs):
+        def decorate(func):
+            return func
+
+        return decorate
+
+    state = streaming_tools._StructuredSpecialistFinalizationState(
+        required=True,
+        tool_name="finalize_pdf_extraction",
+        agent_name="General PDF Extraction Agent",
+        output_type_name="PdfExtractionResultEnvelope",
+        config={"checks": ["pdf_evidence"]},
+        max_attempts=2,
+    )
+    finalizer = streaming_tools._build_structured_specialist_finalization_tool(
+        expected_output_type=PdfExtractionResultEnvelope,
+        finalization_state=state,
+        tool_calls=[],
+        live_evidence_records=[],
+        function_tool_factory=passthrough_tool_factory,
+    )
+
+    first = finalizer(_pdf_finalization_payload())
+    assert first["status"] == "rejected"
+    assert state.attempt_limit_exceeded is False
+
+    second = finalizer(_pdf_finalization_payload())
+    assert second["status"] == "rejected"
+    assert state.attempt_limit_exceeded is True
+    assert "structured_finalization_attempt_limit_exceeded" in second["warnings"]
+
+    third = finalizer(_pdf_finalization_payload())
+    assert third["status"] == "rejected"
+    assert "structured_finalization_attempt_limit_exceeded" in third["warnings"]
+    assert third["field_errors"][0]["field"] == "finalization_attempts"
+
+
+def test_structured_finalization_attempt_config_defaults_to_six_and_hard_caps():
+    assert streaming_tools._structured_specialist_finalization_max_attempts({}) == 6
+    assert (
+        streaming_tools._structured_specialist_finalization_max_attempts(
+            {"max_attempts": "bad"}
+        )
+        == 6
+    )
+    assert (
+        streaming_tools._structured_specialist_finalization_max_attempts(
+            {"max_attempts": 0}
+        )
+        == 6
+    )
+    assert (
+        streaming_tools._structured_specialist_finalization_max_attempts(
+            {"max_attempts": 999}
+        )
+        == 20
+    )
+
+
+def test_lookup_structured_finalization_tool_names_are_enabled():
+    assert (
+        streaming_tools._structured_specialist_finalization_tool_name(
+            _finalization_config("ask_gene_specialist")
+        )
+        == "finalize_gene_lookup"
+    )
+    assert (
+        streaming_tools._structured_specialist_finalization_tool_name(
+            _finalization_config("ask_allele_specialist")
+        )
+        == "finalize_allele_lookup"
+    )
+    assert (
+        streaming_tools._structured_specialist_finalization_tool_name(
+            _finalization_config("ask_disease_specialist")
+        )
+        == "finalize_disease_lookup"
+    )
+    assert (
+        streaming_tools._structured_specialist_finalization_tool_name(
+            _finalization_config("ask_gene_ontology_specialist")
+        )
+        == "finalize_go_term_lookup"
+    )
+    assert (
+        streaming_tools._structured_specialist_finalization_tool_name(
+            _finalization_config("ask_go_annotations_specialist")
+        )
+        == "finalize_go_annotations_lookup"
+    )
+    assert (
+        streaming_tools._structured_specialist_finalization_tool_name(
+            _finalization_config("ask_orthologs_specialist")
+        )
+        == "finalize_orthologs_lookup"
+    )
+    assert (
+        streaming_tools._structured_specialist_finalization_tool_name(
+            _finalization_config("ask_chemical_specialist")
+        )
+        == "finalize_chemical_lookup"
+    )
+    assert (
+        streaming_tools._structured_specialist_finalization_tool_name(
+            _finalization_config("ask_reference_specialist")
+        )
+        == "finalize_reference_lookup"
+    )
+    assert (
+        streaming_tools._structured_specialist_finalization_tool_name(
+            _finalization_config("ask_ontology_term_validation_specialist")
+        )
+        == "finalize_ontology_term_lookup"
+    )
+    assert (
+        streaming_tools._structured_specialist_finalization_tool_name(
+            _finalization_config("ask_controlled_vocabulary_specialist")
+        )
+        == "finalize_controlled_vocabulary_lookup"
+    )
+    assert (
+        streaming_tools._structured_specialist_finalization_tool_name(
+            _finalization_config("ask_data_provider_specialist")
+        )
+        == "finalize_data_provider_lookup"
+    )
+    assert (
+        streaming_tools._structured_specialist_finalization_tool_name(
+            _finalization_config("ask_subject_entity_specialist")
+        )
+        == "finalize_subject_entity_lookup"
+    )
+    assert (
+        streaming_tools._structured_specialist_finalization_tool_name(
+            _finalization_config("ask_agm_specialist")
+        )
+        == "finalize_agm_lookup"
+    )
+    assert (
+        streaming_tools._structured_specialist_finalization_tool_name(
+            _finalization_config("ask_experimental_condition_specialist")
+        )
+        == "finalize_experimental_condition_lookup"
+    )
+
+
+def test_go_term_finalization_rejects_resolved_result_without_lookup_call(
+    _repo_package_curation_registry,
+):
+    payload = _validator_result_payload(
+        lookup_attempts=[_lookup_attempt()],
+        resolved_values={"go_id": "GO:0003677"},
+        results=[
+            {
+                "go_id": "GO:0003677",
+                "name": "DNA binding",
+                "aspect": "molecular_function",
+            }
+        ],
+        query_summary="Resolved one GO term.",
+        not_found=[],
+    )
+
+    feedback = streaming_tools._structured_specialist_finalization_feedback(
+        payload,
+        expected_output_type=_package_schema("GOTermResultEnvelope"),
+        finalization_config=_finalization_config("ask_gene_ontology_specialist"),
+        tool_calls=[],
+        live_evidence_records=[],
+    )
+
+    assert feedback.accepted_payload is None
+    assert any(error.get("field") == "tool_calls" for error in feedback.field_errors)
+
+
+def test_gene_finalization_rejects_invented_resolved_gene(
+    _repo_package_curation_registry,
+):
+    payload = _validator_result_payload(
+        agent_id="gene_validation",
+        target_inputs={"gene_symbol": "daf-16"},
+        expected_fields=["primary_external_id", "gene_symbol"],
+        lookup_attempts=[
+            {
+                "provider": "agr_curation_query",
+                "method": "search_genes",
+                "query": {"gene_symbol": "daf-16", "data_provider": "WB"},
+                "outcome": "success",
+                "result_count": 1,
+            }
+        ],
+        resolved_values={
+            "primary_external_id": "WB:FAKE00000001",
+            "gene_symbol": "daf-16",
+        },
+        gene_candidates=[
+            {
+                "gene_id": "WB:FAKE00000001",
+                "symbol": "daf-16",
+                "species": "Caenorhabditis elegans",
+                "taxon": "NCBITaxon:6239",
+                "data_provider": "WB",
+            }
+        ],
+    )
+
+    feedback = streaming_tools._structured_specialist_finalization_feedback(
+        payload,
+        expected_output_type=_package_schema("GeneResultEnvelope"),
+        finalization_config=_finalization_config("ask_gene_specialist"),
+        tool_calls=[
+            streaming_tools.SpecialistToolCall(
+                tool_name="agr_curation_query",
+                tool_args={
+                    "method": "search_genes",
+                    "gene_symbol": "daf-16",
+                    "data_provider": "WB",
+                },
+                output_payload={
+                    "status": "ok",
+                    "status_code": 200,
+                    "data": {
+                        "results": [
+                            {
+                                "primary_external_id": "WB:WBGene00000912",
+                                "gene_id": "WB:WBGene00000912",
+                                "symbol": "daf-16",
+                                "taxon": "NCBITaxon:6239",
+                                "data_provider": "WB",
+                            }
+                        ]
+                    },
+                },
+            )
+        ],
+        live_evidence_records=[],
+    )
+
+    assert feedback.accepted_payload is None
+    assert any(
+        error.get("field") in {"resolved_values.primary_external_id", "gene_candidates[].gene_id"}
+        for error in feedback.field_errors
+    )
+
+
+def test_gene_finalization_accepts_api_grounded_gene(
+    _repo_package_curation_registry,
+):
+    tool_gene_record = {
+        "primary_external_id": "WB:WBGene00000912",
+        "gene_id": "WB:WBGene00000912",
+        "symbol": "daf-16",
+        "species": "Caenorhabditis elegans",
+        "taxon": "NCBITaxon:6239",
+        "data_provider": "WB",
+    }
+    gene_candidate = {
+        key: value
+        for key, value in tool_gene_record.items()
+        if key != "primary_external_id"
+    }
+    payload = _validator_result_payload(
+        agent_id="gene_validation",
+        target_inputs={"gene_symbol": "daf-16"},
+        expected_fields=["primary_external_id", "gene_symbol"],
+        lookup_attempts=[
+            {
+                "provider": "agr_curation_query",
+                "method": "search_genes",
+                "query": {"gene_symbol": "daf-16", "data_provider": "WB"},
+                "outcome": "success",
+                "result_count": 1,
+            }
+        ],
+        resolved_values={
+            "primary_external_id": "WB:WBGene00000912",
+            "gene_symbol": "daf-16",
+        },
+        gene_candidates=[gene_candidate],
+    )
+
+    feedback = streaming_tools._structured_specialist_finalization_feedback(
+        payload,
+        expected_output_type=_package_schema("GeneResultEnvelope"),
+        finalization_config=_finalization_config("ask_gene_specialist"),
+        tool_calls=[
+            streaming_tools.SpecialistToolCall(
+                tool_name="agr_curation_query",
+                tool_args={
+                    "method": "search_genes",
+                    "gene_symbol": "daf-16",
+                    "data_provider": "WB",
+                },
+                output_payload={
+                    "status": "ok",
+                    "status_code": 200,
+                    "data": {
+                        "results": [tool_gene_record]
+                    },
+                },
+            )
+        ],
+        live_evidence_records=[],
+    )
+
+    assert feedback.accepted_payload is not None
+
+
+def test_disease_finalization_rejects_ungrounded_unresolved_candidate(
+    _repo_package_curation_registry,
+):
+    payload = _validator_result_payload(
+        status="unresolved",
+        agent_id="disease_validation",
+        target_inputs={"disease_name": "invented disease"},
+        expected_fields=["curie"],
+        missing_expected_fields=["curie"],
+        candidates=[
+            {
+                "value": "DOID:INVENTED",
+                "label": "Invented disease",
+                "object_type": "DOTerm",
+                "matched_fields": {"name": "invented disease"},
+                "details": {"curie": "DOID:INVENTED"},
+            }
+        ],
+        lookup_attempts=[],
+    )
+
+    feedback = streaming_tools._structured_specialist_finalization_feedback(
+        payload,
+        expected_output_type=_package_schema("DiseaseValidationResult"),
+        finalization_config=_finalization_config("ask_disease_specialist"),
+        tool_calls=[],
+        live_evidence_records=[],
+    )
+
+    assert feedback.accepted_payload is None
+    assert any(error.get("field") == "tool_calls" for error in feedback.field_errors)
+
+
+def test_go_annotations_finalization_accepts_unresolved_tool_error(
+    _repo_package_curation_registry,
+):
+    url = "https://api.geneontology.org/api/bioentity/gene/WB:WBGene00000898/function"
+    payload = _validator_result_payload(
+        status="unresolved",
+        agent_id="go_annotations_lookup",
+        target_inputs={"gene_id": "WB:WBGene00000898"},
+        expected_fields=["annotations"],
+        missing_expected_fields=["annotations"],
+        lookup_attempts=[
+            _lookup_attempt(
+                provider="go_api_call",
+                url=url,
+                outcome="error",
+                result_count=0,
+            )
+        ],
+        gene_id="WB:WBGene00000898",
+        gene_symbol=None,
+        annotations=[],
+        manual_count=0,
+        automatic_count=0,
+    )
+
+    feedback = streaming_tools._structured_specialist_finalization_feedback(
+        payload,
+        expected_output_type=_package_schema("GOAnnotationsResult"),
+        finalization_config=_finalization_config("ask_go_annotations_specialist"),
+        tool_calls=[
+            _lookup_tool_call(
+                tool_name="go_api_call",
+                url=url,
+                status="error",
+                status_code=503,
+                data={},
+            )
+        ],
+        live_evidence_records=[],
+    )
+
+    assert feedback.accepted_payload is not None
+    assert feedback.summary["failed_lookup_tool_call_count"] == 1
+
+
+def test_go_term_finalization_does_not_count_finalizer_as_lookup_provenance(
+    _repo_package_curation_registry,
+):
+    payload = _validator_result_payload(
+        lookup_attempts=[_lookup_attempt()],
+        resolved_values={"go_id": "GO:0003677"},
+        results=[
+            {
+                "go_id": "GO:0003677",
+                "name": "DNA binding",
+                "aspect": "molecular_function",
+            }
+        ],
+        query_summary="Resolved one GO term.",
+        not_found=[],
+    )
+
+    feedback = streaming_tools._structured_specialist_finalization_feedback(
+        payload,
+        expected_output_type=_package_schema("GOTermResultEnvelope"),
+        finalization_config=_finalization_config("ask_gene_ontology_specialist"),
+        tool_calls=[
+            streaming_tools.SpecialistToolCall(tool_name="finalize_go_term_lookup")
+        ],
+        live_evidence_records=[],
+    )
+
+    assert feedback.accepted_payload is None
+    assert any(error.get("field") == "tool_calls" for error in feedback.field_errors)
+
+
+def test_go_term_finalization_rejects_invented_resolved_fact(
+    _repo_package_curation_registry,
+):
+    url = "https://www.ebi.ac.uk/QuickGO/services/ontology/go/terms/GO:FAKE0000"
+    payload = _validator_result_payload(
+        lookup_attempts=[_lookup_attempt(url=url)],
+        resolved_values={"go_id": "GO:FAKE0000"},
+        results=[
+            {
+                "go_id": "GO:FAKE0000",
+                "name": "Invented term",
+                "aspect": "molecular_function",
+            }
+        ],
+        query_summary="Resolved an invented GO term.",
+        not_found=[],
+    )
+
+    feedback = streaming_tools._structured_specialist_finalization_feedback(
+        payload,
+        expected_output_type=_package_schema("GOTermResultEnvelope"),
+        finalization_config=_finalization_config("ask_gene_ontology_specialist"),
+        tool_calls=[
+            _lookup_tool_call(
+                url=url,
+                data={"results": [{"id": "GO:0003677", "name": "DNA binding"}]},
+            )
+        ],
+        live_evidence_records=[],
+    )
+
+    assert feedback.accepted_payload is None
+    assert any(
+        error.get("field") == "results[].go_id"
+        for error in feedback.field_errors
+    )
+
+
+def test_go_annotations_finalization_rejects_invented_annotation(
+    _repo_package_curation_registry,
+):
+    url = "https://api.geneontology.org/api/bioentity/gene/WB:WBGene00000898/function"
+    payload = _validator_result_payload(
+        agent_id="go_annotations_lookup",
+        target_inputs={"gene_id": "WB:WBGene00000898"},
+        expected_fields=["annotations"],
+        lookup_attempts=[
+            _lookup_attempt(
+                provider="go_api_call",
+                url=url,
+                outcome="success",
+                result_count=1,
+            )
+        ],
+        gene_id="WB:WBGene00000898",
+        annotations=[
+            {
+                "go_id": "GO:FAKE0000",
+                "go_name": "Invented annotation",
+                "aspect": "MF",
+                "evidence_code": "IDA",
+            }
+        ],
+        manual_count=1,
+        automatic_count=0,
+    )
+
+    feedback = streaming_tools._structured_specialist_finalization_feedback(
+        payload,
+        expected_output_type=_package_schema("GOAnnotationsResult"),
+        finalization_config=_finalization_config("ask_go_annotations_specialist"),
+        tool_calls=[
+            _lookup_tool_call(
+                tool_name="go_api_call",
+                url=url,
+                data={"associations": [{"object": {"id": "GO:0003677"}}]},
+            )
+        ],
+        live_evidence_records=[],
+    )
+
+    assert feedback.accepted_payload is None
+    assert any(
+        error.get("field") == "annotations[].go_id"
+        for error in feedback.field_errors
+    )
+
+
+def test_ortholog_finalization_rejects_invented_ortholog(
+    _repo_package_curation_registry,
+):
+    url = "https://www.alliancegenome.org/api/gene/WB:WBGene00000898/orthologs"
+    payload = _validator_result_payload(
+        agent_id="orthologs_lookup",
+        target_inputs={"gene_id": "WB:WBGene00000898"},
+        expected_fields=["orthologs"],
+        lookup_attempts=[
+            _lookup_attempt(
+                provider="alliance_api_call",
+                url=url,
+                outcome="success",
+                result_count=1,
+            )
+        ],
+        query_gene={"gene_id": "WB:WBGene00000898", "symbol": "lin-12"},
+        orthologs=[
+            {
+                "ortholog": {
+                    "gene_id": "HGNC:FAKE",
+                    "symbol": "FAKE1",
+                    "species": "Homo sapiens",
+                },
+                "confidence": "high",
+            }
+        ],
+        high_confidence_count=1,
+        species_represented=["Homo sapiens"],
+    )
+
+    feedback = streaming_tools._structured_specialist_finalization_feedback(
+        payload,
+        expected_output_type=_package_schema("OrthologsResult"),
+        finalization_config=_finalization_config("ask_orthologs_specialist"),
+        tool_calls=[
+            _lookup_tool_call(
+                tool_name="alliance_api_call",
+                url=url,
+                data={
+                    "results": [
+                        {
+                            "geneToGeneOrthologyGenerated": {
+                                "objectGene": {"primaryExternalId": "HGNC:11998"}
+                            }
+                        }
+                    ]
+                },
+            )
+        ],
+        live_evidence_records=[],
+    )
+
+    assert feedback.accepted_payload is None
+    assert any(
+        error.get("field") == "orthologs[].ortholog.gene_id"
+        for error in feedback.field_errors
+    )
+
+
+def test_go_term_finalization_rejects_missing_multi_query_coverage(
+    _repo_package_curation_registry,
+):
+    url = (
+        "https://www.ebi.ac.uk/QuickGO/services/ontology/go/terms/"
+        "GO:0003677,GO:9999999"
+    )
+    payload = _validator_result_payload(
+        target_inputs={"go_ids": ["GO:0003677", "GO:9999999"]},
+        lookup_attempts=[_lookup_attempt(url=url)],
+        resolved_values={"go_id": "GO:0003677"},
+        results=[
+            {
+                "go_id": "GO:0003677",
+                "name": "DNA binding",
+                "aspect": "molecular_function",
+            }
+        ],
+        query_summary="Resolved one GO term.",
+        not_found=[],
+    )
+
+    feedback = streaming_tools._structured_specialist_finalization_feedback(
+        payload,
+        expected_output_type=_package_schema("GOTermResultEnvelope"),
+        finalization_config=_finalization_config("ask_gene_ontology_specialist"),
+        tool_calls=[
+            _lookup_tool_call(
+                url=url,
+                data={"results": [{"id": "GO:0003677"}]},
+            )
+        ],
+        live_evidence_records=[],
+    )
+
+    assert feedback.accepted_payload is None
+    assert any(
+        error.get("field") == "result_coverage"
+        and error.get("missing_inputs") == ["GO:9999999"]
+        for error in feedback.field_errors
+    )
+
+
+def test_go_term_finalization_accepts_repaired_multi_query_coverage(
+    _repo_package_curation_registry,
+):
+    url = (
+        "https://www.ebi.ac.uk/QuickGO/services/ontology/go/terms/"
+        "GO:0003677,GO:9999999"
+    )
+    payload = _validator_result_payload(
+        status="unresolved",
+        target_inputs={"go_ids": ["GO:0003677", "GO:9999999"]},
+        expected_fields=["results"],
+        missing_expected_fields=["results"],
+        lookup_attempts=[_lookup_attempt(url=url)],
+        resolved_values={"go_id": "GO:0003677"},
+        results=[
+            {
+                "go_id": "GO:0003677",
+                "name": "DNA binding",
+                "aspect": "molecular_function",
+            }
+        ],
+        query_summary="Resolved GO:0003677; GO:9999999 was not found.",
+        not_found=["GO:9999999"],
+    )
+
+    feedback = streaming_tools._structured_specialist_finalization_feedback(
+        payload,
+        expected_output_type=_package_schema("GOTermResultEnvelope"),
+        finalization_config=_finalization_config("ask_gene_ontology_specialist"),
+        tool_calls=[
+            _lookup_tool_call(
+                url=url,
+                data={"results": [{"id": "GO:0003677"}]},
+            )
+        ],
+        live_evidence_records=[],
+    )
+
+    assert feedback.accepted_payload is not None
+    assert feedback.summary["requested_input_count"] == 2
+
+
+def test_lookup_finalization_preserves_true_result_count_above_compact_limit(
+    _repo_package_curation_registry,
+):
+    url = "https://api.geneontology.org/api/bioentity/gene/WB:WBGene00000898/function"
+    associations = [
+        {"object": {"id": f"GO:{index:07d}"}}
+        for index in range(60)
+    ]
+    output_payload = streaming_tools._tool_output_payload_for_finalization(
+        "go_api_call",
+        {
+            "status": "ok",
+            "status_code": 200,
+            "data": {"associations": associations},
+        },
+    )
+    assert output_payload is not None
+    payload = _validator_result_payload(
+        agent_id="go_annotations_lookup",
+        target_inputs={"gene_id": "WB:WBGene00000898"},
+        expected_fields=["annotations"],
+        lookup_attempts=[
+            _lookup_attempt(
+                provider="go_api_call",
+                url=url,
+                outcome="success",
+                result_count=60,
+            )
+        ],
+        gene_id="WB:WBGene00000898",
+        annotations=[
+            {
+                "go_id": "GO:0000059",
+                "go_name": "Annotation beyond compact preview",
+                "aspect": "MF",
+                "evidence_code": "IDA",
+            }
+        ],
+        manual_count=60,
+        automatic_count=0,
+    )
+
+    feedback = streaming_tools._structured_specialist_finalization_feedback(
+        payload,
+        expected_output_type=_package_schema("GOAnnotationsResult"),
+        finalization_config=_finalization_config("ask_go_annotations_specialist"),
+        tool_calls=[
+            streaming_tools.SpecialistToolCall(
+                tool_name="go_api_call",
+                tool_args={"url": url, "method": "GET"},
+                output_payload=output_payload,
+            )
+        ],
+        live_evidence_records=[],
+    )
+
+    assert feedback.accepted_payload is not None
+    assert output_payload["data"]["associations"]["__full_count"] == 60
+
+
+def test_chemical_finalization_rejects_invented_resolved_identity(
+    _repo_package_curation_registry,
+):
+    url = "https://www.ebi.ac.uk/chebi/backend/api/public/compound/CHEBI:FAKE/"
+    payload = _validator_result_payload(
+        agent_id="chemical_validation",
+        target_inputs={"chemical_name": "glucose"},
+        expected_fields=["chebi_id"],
+        lookup_attempts=[
+            _lookup_attempt(
+                provider="chebi_api_call",
+                url=url,
+                outcome="success",
+                result_count=1,
+            )
+        ],
+        resolved_values={"chebi_id": "CHEBI:FAKE", "name": "Invented chemical"},
+        resolved_objects=[{"chebi_id": "CHEBI:FAKE", "name": "Invented chemical"}],
+    )
+
+    feedback = streaming_tools._structured_specialist_finalization_feedback(
+        payload,
+        expected_output_type=_package_schema("ChemicalValidationResult"),
+        finalization_config=_finalization_config("ask_chemical_specialist"),
+        tool_calls=[
+            _lookup_tool_call(
+                tool_name="chebi_api_call",
+                url=url,
+                data={"id": "CHEBI:17234", "name": "D-glucose"},
+            )
+        ],
+        live_evidence_records=[],
+    )
+
+    assert feedback.accepted_payload is None
+    assert any(
+        error.get("field") == "resolved_values.chebi_id"
+        for error in feedback.field_errors
+    )
+
+
+def test_lookup_finalization_rejects_partial_scalar_identity_match(
+    _repo_package_curation_registry,
+):
+    url = "https://www.ebi.ac.uk/chebi/backend/api/public/compound/CHEBI:17/"
+    payload = _validator_result_payload(
+        agent_id="chemical_validation",
+        target_inputs={"chemical_name": "glucose"},
+        expected_fields=["chebi_id"],
+        lookup_attempts=[
+            _lookup_attempt(
+                provider="chebi_api_call",
+                url=url,
+                outcome="success",
+                result_count=1,
+            )
+        ],
+        resolved_values={"chebi_id": "CHEBI:17", "name": "Partial chemical"},
+        resolved_objects=[{"chebi_id": "CHEBI:17", "name": "Partial chemical"}],
+    )
+
+    feedback = streaming_tools._structured_specialist_finalization_feedback(
+        payload,
+        expected_output_type=_package_schema("ChemicalValidationResult"),
+        finalization_config=_finalization_config("ask_chemical_specialist"),
+        tool_calls=[
+            _lookup_tool_call(
+                tool_name="chebi_api_call",
+                url=url,
+                data={"id": "CHEBI:17234", "name": "D-glucose"},
+            )
+        ],
+        live_evidence_records=[],
+    )
+
+    assert feedback.accepted_payload is None
+    assert any(
+        error.get("field") == "resolved_values.chebi_id"
+        for error in feedback.field_errors
+    )
+
+
+def test_lookup_tool_output_capture_uses_package_declared_paths(monkeypatch):
+    monkeypatch.setattr(
+        streaming_tools,
+        "_lookup_finalization_config_for_tool",
+        lambda tool_name: {
+            "tool_name": tool_name,
+            "tool_output_paths": ["resolved_widget", "result.items[]"],
+        },
+    )
+
+    output_payload = streaming_tools._tool_output_payload_for_finalization(
+        "org_widget_lookup",
+        {
+            "status": "ok",
+            "resolved_widget": {"widget_id": "WIDGET:1"},
+            "result": {"items": [{"widget_id": "WIDGET:2"}]},
+            "ignored": {"widget_id": "WIDGET:IGNORED"},
+        },
+    )
+
+    assert output_payload is not None
+    assert "WIDGET:1".lower() in output_payload["scalar_tokens"]
+    assert "WIDGET:2".lower() in output_payload["scalar_tokens"]
+    assert "WIDGET:IGNORED".lower() not in output_payload["scalar_tokens"]
+
+
+def test_reference_finalization_accepts_api_grounded_reference(
+    _repo_package_curation_registry,
+):
+    reference = {
+        "reference_id": 101000000924191,
+        "curie": "AGRKB:101000000924191",
+        "title": "A curated source paper",
+        "short_citation": "Curator et al., 2026",
+        "cross_references": ["PMID:123456"],
+        "source": "literature_es",
+    }
+    payload = _validator_result_payload(
+        agent_id="reference_validation",
+        target_inputs={"pmid": "PMID:123456"},
+        expected_fields=["curie"],
+        lookup_attempts=[
+            {
+                "provider": "agr_literature_reference_lookup",
+                "method": "get_literature_reference",
+                "query": {"value": "PMID:123456"},
+                "result_count": 1,
+                "outcome": "success",
+            }
+        ],
+        resolved_values={"curie": "AGRKB:101000000924191"},
+        resolved_objects=[reference],
+        reference_id=101000000924191,
+        curie="AGRKB:101000000924191",
+        title="A curated source paper",
+        short_citation="Curator et al., 2026",
+        cross_references=["PMID:123456"],
+        source="literature_es",
+        match_type="exact_identifier",
+        confidence=1.0,
+        candidate_references=[reference],
+    )
+    output_payload = streaming_tools._tool_output_payload_for_finalization(
+        "agr_literature_reference_lookup",
+        {
+            "status": "ok",
+            "source": "literature_es",
+            "method": "get_literature_reference",
+            "query": "PMID:123456",
+            "count": 1,
+            "lookup_status": "success",
+            "resolved_reference": reference,
+            "candidate_references": [reference],
+        },
+    )
+    assert output_payload is not None
+
+    feedback = streaming_tools._structured_specialist_finalization_feedback(
+        payload,
+        expected_output_type=_package_schema("ReferenceValidationResult"),
+        finalization_config=_finalization_config("ask_reference_specialist"),
+        tool_calls=[
+            streaming_tools.SpecialistToolCall(
+                tool_name="agr_literature_reference_lookup",
+                tool_args={
+                    "method": "get_literature_reference",
+                    "identifier": "PMID:123456",
+                },
+                output_payload=output_payload,
+            )
+        ],
+        live_evidence_records=[],
+    )
+
+    assert feedback.accepted_payload is not None
+
+
+def test_reference_finalization_rejects_invented_curie(
+    _repo_package_curation_registry,
+):
+    reference = {
+        "reference_id": 101000000924191,
+        "curie": "AGRKB:101000000924191",
+        "title": "A curated source paper",
+        "cross_references": ["PMID:123456"],
+        "source": "literature_es",
+    }
+    payload = _validator_result_payload(
+        agent_id="reference_validation",
+        target_inputs={"pmid": "PMID:123456"},
+        expected_fields=["curie"],
+        lookup_attempts=[
+            {
+                "provider": "agr_literature_reference_lookup",
+                "method": "get_literature_reference",
+                "query": {"value": "PMID:123456"},
+                "result_count": 1,
+                "outcome": "success",
+            }
+        ],
+        resolved_values={"curie": "AGRKB:INVENTED"},
+        resolved_objects=[{**reference, "curie": "AGRKB:INVENTED"}],
+        reference_id=101000000924191,
+        curie="AGRKB:INVENTED",
+        title="A curated source paper",
+        cross_references=["PMID:123456"],
+        source="literature_es",
+        match_type="exact_identifier",
+        confidence=1.0,
+        candidate_references=[reference],
+    )
+    output_payload = streaming_tools._tool_output_payload_for_finalization(
+        "agr_literature_reference_lookup",
+        {
+            "status": "ok",
+            "source": "literature_es",
+            "method": "get_literature_reference",
+            "query": "PMID:123456",
+            "count": 1,
+            "lookup_status": "success",
+            "resolved_reference": reference,
+            "candidate_references": [reference],
+        },
+    )
+    assert output_payload is not None
+
+    feedback = streaming_tools._structured_specialist_finalization_feedback(
+        payload,
+        expected_output_type=_package_schema("ReferenceValidationResult"),
+        finalization_config=_finalization_config("ask_reference_specialist"),
+        tool_calls=[
+            streaming_tools.SpecialistToolCall(
+                tool_name="agr_literature_reference_lookup",
+                tool_args={
+                    "method": "get_literature_reference",
+                    "identifier": "PMID:123456",
+                },
+                output_payload=output_payload,
+            )
+        ],
+        live_evidence_records=[],
+    )
+
+    assert feedback.accepted_payload is None
+    assert any(error.get("field") == "curie" for error in feedback.field_errors)
+
+
 @pytest.mark.asyncio
 async def test_builder_materializer_agent_rejects_structured_output_schema():
     agent = SimpleNamespace(
@@ -150,6 +1367,120 @@ async def test_builder_materializer_agent_rejects_structured_output_schema():
             "output_type": "_Envelope",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_pdf_specialist_prefers_accepted_finalization_payload(monkeypatch):
+    accepted_payload = _pdf_finalization_payload()
+    captured_events = []
+    captured = {}
+
+    class _FakeFinalizePdfTool:
+        name = "finalize_pdf_extraction"
+
+        def __init__(self, state):
+            self._state = state
+
+        def accept(self):
+            self._state.accepted_payload = accepted_payload
+
+    def _fake_build_structured_finalization_tool(**kwargs):
+        state = kwargs["finalization_state"]
+        captured["state"] = state
+        return _FakeFinalizePdfTool(state)
+
+    def _run_streamed(runtime_agent, *args, **kwargs):
+        captured["tools"] = list(getattr(runtime_agent, "tools", []) or [])
+        captured["max_turns"] = kwargs.get("max_turns")
+        finalizer = next(
+            tool for tool in captured["tools"] if getattr(tool, "name", "") == "finalize_pdf_extraction"
+        )
+        finalizer.accept()
+        return _FakeRunResult(
+            events=_search_document_stream_events(),
+            final_output={"answer": "Untrusted SDK output"},
+            new_items=[],
+        )
+
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent: None)
+    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        streaming_tools,
+        "_build_structured_specialist_finalization_tool",
+        _fake_build_structured_finalization_tool,
+    )
+    monkeypatch.setattr(streaming_tools.Runner, "run_streamed", _run_streamed)
+
+    agent = SimpleNamespace(
+        name="General PDF Extraction Agent",
+        tools=[SimpleNamespace(name="search_document")],
+        output_type=PdfExtractionResultEnvelope,
+        instructions="base instructions",
+        model="gpt-4o",
+    )
+
+    result = await streaming_tools.run_specialist_with_events(
+        agent,
+        "summarize the paper",
+        "General PDF Extraction Agent",
+        max_turns=3,
+        tool_name="ask_pdf_extraction_specialist",
+    )
+
+    assert result == accepted_payload["answer"]
+    assert captured["max_turns"] == 5
+    assert captured["state"].accepted_payload == accepted_payload
+    assert any(
+        event.get("type") == "evidence_summary"
+        and event.get("evidence_records") == accepted_payload["evidence_records"]
+        for event in captured_events
+    )
+    assert not any(event.get("type") == "SPECIALIST_RETRY" for event in captured_events)
+
+
+@pytest.mark.asyncio
+async def test_pdf_specialist_requires_accepted_finalization(monkeypatch):
+    captured_events = []
+
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent: None)
+    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult(
+            events=_search_document_stream_events(),
+            final_output=_pdf_finalization_payload(),
+            new_items=[],
+        ),
+    )
+
+    agent = SimpleNamespace(
+        name="General PDF Extraction Agent",
+        tools=[SimpleNamespace(name="search_document")],
+        output_type=PdfExtractionResultEnvelope,
+        instructions="base instructions",
+        model="gpt-4o",
+    )
+
+    with pytest.raises(
+        streaming_tools.SpecialistOutputError,
+        match="mandatory finalize_pdf_extraction",
+    ):
+        await streaming_tools.run_specialist_with_events(
+            agent,
+            "summarize the paper",
+            "General PDF Extraction Agent",
+            max_turns=3,
+            tool_name="ask_pdf_extraction_specialist",
+        )
+
+    assert any(
+        event.get("type") == "SPECIALIST_ERROR"
+        and event.get("details", {}).get("reason") == "structured_finalization_missing"
+        for event in captured_events
+    )
 
 
 def test_domain_envelope_reduction_prioritizes_materialized_fields_for_supervisor():
@@ -965,7 +2296,7 @@ async def test_chat_domain_envelope_dispatch_uses_real_gene_binding(
     lookup_events = [
         event
         for event in emitted
-        if event["details"]["toolName"] == "agr_curation_query"
+        if event["details"]["toolName"] == "domain_validator_lookup"
     ]
     assert [event["type"] for event in lookup_events] == [
         "TOOL_START",

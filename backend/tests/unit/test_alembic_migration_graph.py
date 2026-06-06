@@ -47,4 +47,4 @@ def test_alembic_revision_graph_has_single_head():
 
     heads = sorted(revision for revision in revisions if revision not in children)
 
-    assert heads == ["s5t6u7v8w9x0"]
+    assert heads == ["t6u7v8w9x0y1"]

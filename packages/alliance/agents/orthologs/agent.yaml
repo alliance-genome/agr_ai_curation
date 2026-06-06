@@ -43,6 +43,25 @@ tools:
 # OUTPUT SCHEMA
 # -----------------------------------------------------------------------------
 output_schema: OrthologsResult
+structured_finalization:
+  enabled: true
+  tool_name: finalize_orthologs_lookup
+  checks:
+    - lookup_provenance
+  lookup:
+    tool_name: alliance_api_call
+    provider_terms: [alliance_api_call, alliance, alliancegenome]
+    request_keys: [gene_id, gene_ids]
+    result_collections: [query_gene, orthologs]
+    resolved_fact_paths:
+      - query_gene
+    fact_identity_paths:
+      - "orthologs[].ortholog.gene_id"
+      - "orthologs[].ortholog.id"
+      - "orthologs[].gene.gene_id"
+      - "orthologs[].gene.id"
+      - "orthologs[].gene_id"
+      - "orthologs[].id"
 
 # -----------------------------------------------------------------------------
 # MODEL CONFIGURATION

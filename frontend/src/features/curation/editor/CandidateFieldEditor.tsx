@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
 import HighlightOffIcon from '@mui/icons-material/HighlightOff'
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked'
 import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined'
 import {
@@ -428,6 +429,142 @@ function uniqueMessages(summaries: DomainEnvelopeValidationSummaryProjection[]):
   return messages
 }
 
+interface ValidationExplanation {
+  key: string
+  line: string
+  details: string[]
+}
+
+function stringValue(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const trimmed = value.trim()
+  return trimmed || null
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return isRecord(value) ? value : null
+}
+
+function validationExplanationLine(
+  summary: DomainEnvelopeValidationSummaryProjection,
+): string | null {
+  for (const finding of summary.findings) {
+    const details = finding.details
+    const result = recordValue(details.validation_result)
+    return stringValue(details.curator_message)
+      ?? stringValue(result?.curator_message)
+      ?? stringValue(finding.message)
+  }
+  return null
+}
+
+function resolvedValuesLine(details: Record<string, unknown>): string | null {
+  const result = recordValue(details.validation_result)
+  const resolvedValues = recordValue(result?.resolved_values)
+  if (!resolvedValues) {
+    return null
+  }
+  const pairs = Object.entries(resolvedValues)
+    .filter(([, value]) => value !== null && value !== undefined && String(value).trim())
+    .slice(0, 4)
+    .map(([key, value]) => `${humanizeKey(key)}: ${String(value)}`)
+  return pairs.length > 0 ? `Resolved values: ${pairs.join(', ')}` : null
+}
+
+function lookupAttemptLine(details: Record<string, unknown>): string | null {
+  const attempts = Array.isArray(details.lookup_attempts) ? details.lookup_attempts : []
+  const firstAttempt = recordValue(attempts[0])
+  if (!firstAttempt) {
+    return null
+  }
+  const provider = stringValue(firstAttempt.provider)
+  const method = stringValue(firstAttempt.method)
+  const status = stringValue(firstAttempt.lookup_status)
+  const candidateCount = typeof firstAttempt.candidate_count === 'number'
+    ? `${firstAttempt.candidate_count} candidate${firstAttempt.candidate_count === 1 ? '' : 's'}`
+    : null
+  const parts = [provider, method, status, candidateCount].filter(Boolean)
+  return parts.length > 0 ? `Lookup: ${parts.join(' · ')}` : null
+}
+
+function validationExplanationDetails(
+  summary: DomainEnvelopeValidationSummaryProjection,
+): string[] {
+  const details: string[] = []
+  for (const finding of summary.findings) {
+    const findingDetails = finding.details
+    const validationResult = recordValue(findingDetails.validation_result)
+    const metadata = recordValue(findingDetails.validation_metadata)
+    const validatorAgent = recordValue(validationResult?.validator_agent)
+    const validatorName = [
+      stringValue(validatorAgent?.package_id),
+      stringValue(validatorAgent?.agent_id),
+    ].filter(Boolean).join('/')
+    const materializedField = stringValue(metadata?.materialized_result_field)
+    const explanation = stringValue(validationResult?.explanation)
+      ?? stringValue(findingDetails.explanation)
+    const resolvedValues = resolvedValuesLine(findingDetails)
+    const lookup = lookupAttemptLine(findingDetails)
+
+    for (const line of [
+      validatorName ? `Validator: ${validatorName}` : null,
+      materializedField ? `Result field: ${humanizeKey(materializedField)}` : null,
+      resolvedValues,
+      lookup,
+      explanation ? `Explanation: ${explanation}` : null,
+    ]) {
+      if (line && !details.includes(line)) {
+        details.push(line)
+      }
+    }
+  }
+  return details
+}
+
+function validationExplanations(
+  summaries: DomainEnvelopeValidationSummaryProjection[],
+): ValidationExplanation[] {
+  const explanations: ValidationExplanation[] = []
+  const seenKeys = new Set<string>()
+
+  for (const summary of summaries) {
+    const firstFinding = summary.findings[0]
+    const metadata = firstFinding ? recordValue(firstFinding.details.validation_metadata) : null
+    const result = firstFinding ? recordValue(firstFinding.details.validation_result) : null
+    const key = stringValue(metadata?.parent_request_id)
+      ?? stringValue(result?.request_id)
+      ?? firstFinding?.finding_id
+      ?? summary.summary_id
+    if (seenKeys.has(key)) {
+      continue
+    }
+    const line = validationExplanationLine(summary)
+    if (!line) {
+      continue
+    }
+    seenKeys.add(key)
+    explanations.push({
+      key,
+      line,
+      details: validationExplanationDetails(summary),
+    })
+  }
+
+  return explanations
+}
+
+function shouldShowFieldValidationSlot(
+  field: CurationDraftField,
+  summaries: DomainEnvelopeValidationSummaryProjection[],
+  unavailableCapabilities: UnavailableValidatorCapability[],
+): boolean {
+  return strongestStatus(summaries) !== null ||
+    field.stale_validation ||
+    unavailableCapabilities.length > 0
+}
+
 function FieldValidationSlot({
   field,
   summaries,
@@ -443,7 +580,10 @@ function FieldValidationSlot({
     ...uniqueMessages(summaries),
     ...unavailableCapabilityMessages(unavailableCapabilities),
   ]
+  const explanations = validationExplanations(summaries)
+  const primaryExplanation = explanations[0]
   const hasUnavailableCapabilities = unavailableCapabilities.length > 0
+  const accentSeverity = presentation?.severity ?? 'info'
 
   if (!presentation && !field.stale_validation && !hasUnavailableCapabilities) {
     return null
@@ -452,31 +592,112 @@ function FieldValidationSlot({
   return (
     <Stack
       data-testid={`field-validation-state-${field.field_key}`}
-      spacing={0.4}
-      sx={{ maxWidth: 280 }}
+      spacing={0.45}
+      sx={{
+        maxWidth: { xs: '100%', lg: 340 },
+        minWidth: 0,
+        width: '100%',
+      }}
     >
-      {presentation ? (
-        <Chip
-          color={presentation.color}
-          label={presentation.label}
-          size="small"
-          variant={presentation.color === 'default' ? 'outlined' : 'filled'}
-        />
-      ) : null}
-      {!presentation && hasUnavailableCapabilities ? (
-        <Chip
-          color="secondary"
-          label="Under development"
-          size="small"
-          variant="outlined"
-        />
-      ) : null}
+      <Stack direction="row" spacing={0.65} alignItems="center" sx={{ minWidth: 0 }}>
+        {presentation ? (
+          <Chip
+            color={presentation.color}
+            label={presentation.label}
+            size="small"
+            sx={{
+              borderRadius: 1,
+              flexShrink: 0,
+              height: 22,
+              '& .MuiChip-label': {
+                fontSize: '0.68rem',
+                fontWeight: 700,
+                px: 0.75,
+              },
+            }}
+            variant={presentation.color === 'default' ? 'outlined' : 'filled'}
+          />
+        ) : null}
+        {!presentation && hasUnavailableCapabilities ? (
+          <Chip
+            color="secondary"
+            label="Under development"
+            size="small"
+            sx={{
+              borderRadius: 1,
+              flexShrink: 0,
+              height: 22,
+              '& .MuiChip-label': {
+                fontSize: '0.68rem',
+                fontWeight: 700,
+                px: 0.75,
+              },
+            }}
+            variant="outlined"
+          />
+        ) : null}
+        {primaryExplanation ? (
+          <Tooltip
+            arrow
+            placement="top"
+            title={primaryExplanation.details.length > 0
+              ? primaryExplanation.details.join('\n')
+              : primaryExplanation.line}
+          >
+            <Stack
+              direction="row"
+              spacing={0.45}
+              alignItems="center"
+              sx={(theme) => {
+                const accentColor = accentSeverity === 'success'
+                  ? theme.palette.success.main
+                  : accentSeverity === 'error'
+                    ? theme.palette.error.main
+                    : accentSeverity === 'warning'
+                      ? theme.palette.warning.main
+                      : theme.palette.info.main
+                return {
+                  border: `1px solid ${alpha(accentColor, 0.24)}`,
+                  borderRadius: 1,
+                  color: accentSeverity === 'success'
+                    ? theme.palette.success.light
+                    : theme.palette.text.secondary,
+                  minWidth: 0,
+                  px: 0.65,
+                  py: 0.25,
+                  transition: 'border-color 180ms cubic-bezier(0.2, 0, 0, 1), transform 180ms cubic-bezier(0.2, 0, 0, 1)',
+                  '&:hover': {
+                    borderColor: alpha(accentColor, 0.42),
+                    transform: 'translateY(-1px)',
+                  },
+                }
+              }}
+            >
+              <InfoOutlinedIcon sx={{ fontSize: 14, flexShrink: 0 }} />
+              <Typography
+                sx={{
+                  fontSize: '0.72rem',
+                  lineHeight: 1.35,
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+                variant="caption"
+              >
+                {primaryExplanation.line}
+                {explanations.length > 1 ? ` +${explanations.length - 1}` : ''}
+              </Typography>
+            </Stack>
+          </Tooltip>
+        ) : null}
+      </Stack>
       {field.stale_validation ? (
         <Typography color="text.secondary" variant="caption">
           Stale after edit
         </Typography>
       ) : null}
-      {messages[0] ? (
+      {!primaryExplanation && messages[0] ? (
         <Tooltip
           arrow
           placement="top"
@@ -496,6 +717,57 @@ function FieldValidationSlot({
             {messages.length > 1 ? ` +${messages.length - 1}` : ''}
           </Typography>
         </Tooltip>
+      ) : null}
+      {primaryExplanation?.details.length ? (
+        <Box
+          component="details"
+          sx={{
+            color: 'text.secondary',
+            maxWidth: '100%',
+            '& summary': {
+              cursor: 'pointer',
+              display: 'inline-block',
+              fontSize: '0.68rem',
+              fontWeight: 700,
+              lineHeight: 1.4,
+              listStyle: 'none',
+              outline: 0,
+            },
+            '& summary::-webkit-details-marker': {
+              display: 'none',
+            },
+            '& summary:focus-visible': {
+              borderRadius: 0.5,
+              boxShadow: (theme) => {
+                const accentColor = accentSeverity === 'success'
+                  ? theme.palette.success.main
+                  : accentSeverity === 'error'
+                    ? theme.palette.error.main
+                    : accentSeverity === 'warning'
+                      ? theme.palette.warning.main
+                      : theme.palette.info.main
+                return `0 0 0 2px ${alpha(accentColor, 0.5)}`
+              },
+            },
+          }}
+        >
+          <Box component="summary">Validation details</Box>
+          <Stack spacing={0.25} sx={{ mt: 0.35 }}>
+            {primaryExplanation.details.map((detail) => (
+              <Typography
+                key={detail}
+                sx={{
+                  fontSize: '0.68rem',
+                  lineHeight: 1.35,
+                  overflowWrap: 'anywhere',
+                }}
+                variant="caption"
+              >
+                {detail}
+              </Typography>
+            ))}
+          </Stack>
+        </Box>
       ) : null}
     </Stack>
   )
@@ -1286,7 +1558,21 @@ export default function CandidateFieldEditor({
             {section.fields.map((field) => {
               const history = fieldPatchHistory(workspace.action_log, activeCandidate, field)
               const summaries = validationSummariesForField(activeCandidate, field)
+              const unavailableCapabilities = unavailableCapabilitiesForField(field)
               const state = fieldState(field, summaries)
+              const validationSlot = shouldShowFieldValidationSlot(
+                field,
+                summaries,
+                unavailableCapabilities,
+              )
+                ? (
+                  <FieldValidationSlot
+                    field={field}
+                    summaries={summaries}
+                    unavailableCapabilities={unavailableCapabilities}
+                  />
+                )
+                : null
 
               return (
                 <Box
@@ -1334,13 +1620,7 @@ export default function CandidateFieldEditor({
                         Revert
                       </Button>
                     ) : null}
-                    validationSlot={(
-                      <FieldValidationSlot
-                        field={field}
-                        summaries={summaries}
-                        unavailableCapabilities={unavailableCapabilitiesForField(field)}
-                      />
-                    )}
+                    validationSlot={validationSlot}
                     value={field.value}
                   />
                 </Box>
@@ -1380,7 +1660,21 @@ export default function CandidateFieldEditor({
             {technicalSections.flatMap((section) => section.fields).map((field) => {
               const history = fieldPatchHistory(workspace.action_log, activeCandidate, field)
               const summaries = validationSummariesForField(activeCandidate, field)
+              const unavailableCapabilities = unavailableCapabilitiesForField(field)
               const state = fieldState(field, summaries)
+              const validationSlot = shouldShowFieldValidationSlot(
+                field,
+                summaries,
+                unavailableCapabilities,
+              )
+                ? (
+                  <FieldValidationSlot
+                    field={field}
+                    summaries={summaries}
+                    unavailableCapabilities={unavailableCapabilities}
+                  />
+                )
+                : null
 
               return (
                 <Box
@@ -1428,13 +1722,7 @@ export default function CandidateFieldEditor({
                         Revert
                       </Button>
                     ) : null}
-                    validationSlot={(
-                      <FieldValidationSlot
-                        field={field}
-                        summaries={summaries}
-                        unavailableCapabilities={unavailableCapabilitiesForField(field)}
-                      />
-                    )}
+                    validationSlot={validationSlot}
                     value={field.value}
                   />
                 </Box>

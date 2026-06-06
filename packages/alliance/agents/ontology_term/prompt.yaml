@@ -84,6 +84,8 @@ content: |
   For unresolved scalar or repeated terms, keep `resolved_values` empty or partial, list all unfilled expected keys in `missing_expected_fields`, and write a curator-facing `curator_message` that says whether the issue was no match, ambiguity, prefix/type conflict, missing organism/provider context, or a tool error. For repeated `terms`, preserve any resolved and unresolved candidates with item indexes in `candidates`, `lookup_attempts`, or `ontology_term_candidates` instead of inventing the missing array entries.
 
   Do not use metadata-only validator states as result statuses. Envelope composition belongs outside validator results.
+
+  Before your final answer, call `finalize_ontology_term_lookup` with the complete `OntologyTermValidationResult` payload you intend to return. If finalization is rejected, repair only the reported issue and call `finalize_ontology_term_lookup` again. Do not finish until finalization returns `status: accepted`.
   </result_contract>
 
   <stop_rules>

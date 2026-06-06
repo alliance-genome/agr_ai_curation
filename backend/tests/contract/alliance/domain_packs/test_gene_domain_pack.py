@@ -15,15 +15,30 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-import pytest
 import yaml
 
+from src.lib.domain_packs.input_selectors import build_domain_validation_request
 from src.lib.domain_packs.loader import load_domain_fixture_pack
+from src.lib.domain_packs.materialization import (
+    ValidatorResultMaterializationInput,
+    materialize_validator_results_into_envelope,
+    project_validation_summary_projections,
+)
+from src.lib.domain_packs.validation_registry import (
+    DomainPackValidationRegistry,
+    ValidationBindingState,
+)
 from src.lib.openai_agents.extraction_builder_workspace import (
     CANDIDATE_STATUS_VALID,
     ExtractionBuilderWorkspace,
 )
-from src.schemas.domain_envelope import field_path_exists
+from src.schemas.domain_envelope import (
+    CuratableObjectEnvelope,
+    CuratableObjectStatus,
+    DomainEnvelope,
+    field_path_exists,
+)
+from src.schemas.domain_validator import DomainValidatorResultBase
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 ALLIANCE_PYTHON_SRC = REPO_ROOT / "packages" / "alliance" / "python" / "src"
@@ -38,6 +53,7 @@ from agr_ai_curation_alliance.domain_packs.gene import (  # noqa: E402
     GENE_MATERIALIZER_ID,
     GENE_MENTION_EVIDENCE_OBJECT_TYPE,
     GENE_OBJECT_ROLE,
+    GENE_REFERENCE_VALIDATOR_BINDING_ID,
     materialize_gene_builder_state,
 )
 from agr_ai_curation_alliance.domain_packs.gene.conversion import (  # noqa: E402
@@ -165,6 +181,111 @@ def test_gene_builder_output_validates_against_object_contract():
     # Re-validating the materialized payload through the output model must succeed.
     output = GeneBuilderExtractionOutput.model_validate(result.payload)
     assert validate_gene_builder_objects(output) == ()
+
+
+def test_gene_validator_resolution_projects_materialized_fields():
+    registry = load_alliance_domain_pack_registry()
+    pack = registry.get_pack(GENE_DOMAIN_PACK_ID)
+    assert pack is not None
+    envelope = DomainEnvelope(
+        envelope_id="gene-validation-projection-fixture",
+        domain_pack_id=GENE_DOMAIN_PACK_ID,
+        objects=[
+            CuratableObjectEnvelope(
+                object_type=GENE_MENTION_EVIDENCE_OBJECT_TYPE,
+                pending_ref_id="gene-mention-evidence-1",
+                object_role=GENE_OBJECT_ROLE,
+                status=CuratableObjectStatus.PENDING,
+                payload={
+                    "mention": "daf-16",
+                    "verified_quote": "DAF-16 translocated to nuclei after heat shock.",
+                    "identity_resolution_notes": [
+                        "The paper reports daf-16 in C. elegans."
+                    ],
+                    "species": "Caenorhabditis elegans",
+                    "taxon_hint": "NCBITaxon:6239",
+                    "data_provider_hint": "WB",
+                },
+            )
+        ],
+    )
+    validation_registry = DomainPackValidationRegistry.from_domain_pack(pack)
+    matches = [
+        match
+        for match in validation_registry.match_bindings(
+            envelope,
+            states=[ValidationBindingState.ACTIVE],
+        )
+        if match.binding.binding_id == GENE_REFERENCE_VALIDATOR_BINDING_ID
+    ]
+    assert len(matches) == 1
+    request = build_domain_validation_request(matches[0]).request
+    assert request is not None
+
+    result = materialize_validator_results_into_envelope(
+        envelope,
+        pack.metadata,
+        [
+            ValidatorResultMaterializationInput(
+                match=matches[0],
+                request=request,
+                result=DomainValidatorResultBase(
+                    status="resolved",
+                    request_id=request.request_id,
+                    validator_binding_id=request.validator_binding_id,
+                    validator_agent=request.validator_agent,
+                    target=request.target,
+                    resolved_values={
+                        "curie": "WB:WBGene00000912",
+                        "symbol": "daf-16",
+                        "taxon": "NCBITaxon:6239",
+                    },
+                    resolved_objects=[
+                        {
+                            "object_type": "Gene",
+                            "resolved_id": "WB:WBGene00000912",
+                            "projection_type": "gene_reference",
+                            "projection_status": "resolved",
+                        }
+                    ],
+                    missing_expected_fields=[],
+                    candidates=[],
+                    lookup_attempts=[
+                        {
+                            "provider": "agr_curation_query",
+                            "method": "search_genes",
+                            "query": {"symbol": "daf-16", "taxon": "NCBITaxon:6239"},
+                            "result_count": 1,
+                            "outcome": "success",
+                        }
+                    ],
+                    curator_message="Resolved daf-16.",
+                    explanation="Resolved by gene validation fixture.",
+                ),
+            )
+        ],
+    )
+
+    assert result.materialized_objects == ()
+    assert result.envelope.objects[0].payload["primary_external_id"] == (
+        "WB:WBGene00000912"
+    )
+    assert result.envelope.objects[0].payload["gene_symbol"] == "daf-16"
+    assert result.envelope.objects[0].payload["taxon"] == "NCBITaxon:6239"
+    summaries = project_validation_summary_projections(
+        result.envelope,
+        envelope_revision=1,
+        object_id="gene-mention-evidence-1",
+    )
+    assert {
+        summary.field_path: summary.status.value
+        for summary in summaries
+        if summary.field_path is not None
+    } == {
+        "primary_external_id": "resolved",
+        "gene_symbol": "resolved",
+        "taxon": "resolved",
+    }
 
 
 def test_gene_builder_rejects_evidence_record_not_in_metadata():

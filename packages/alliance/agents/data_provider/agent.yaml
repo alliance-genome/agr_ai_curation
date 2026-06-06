@@ -35,6 +35,58 @@ tools:
 
 output_schema: DataProviderValidationResult
 
+structured_finalization:
+  enabled: true
+  tool_name: finalize_data_provider_lookup
+  checks:
+    - lookup_provenance
+  lookup:
+    tool_name: agr_curation_query
+    provider_terms:
+      - agr_curation_query
+    request_keys:
+      - abbreviation
+      - abbreviations
+      - provider_name
+      - provider_names
+      - display_name
+      - display_names
+      - taxon
+      - taxon_id
+      - taxon_ids
+      - species
+    result_collections:
+      - resolved_values
+      - resolved_objects
+      - data_provider_candidates
+      - candidates
+    grounded_fact_paths:
+      - data_provider_candidates[].abbreviation
+      - data_provider_candidates[].taxon_id
+      - data_provider_candidates[].display_name
+      - data_provider_candidates[].species
+      - candidates[].value
+      - candidates[].label
+    resolved_fact_paths:
+      - resolved_values
+      - resolved_objects[]
+      - data_provider_candidates[]
+    fact_identity_paths:
+      - resolved_values.abbreviation
+      - resolved_values.taxon
+      - resolved_values.taxon_id
+      - resolved_values.display_name
+      - resolved_values.species
+      - resolved_objects[].abbreviation
+      - resolved_objects[].taxon
+      - resolved_objects[].taxon_id
+      - resolved_objects[].display_name
+      - resolved_objects[].species
+      - data_provider_candidates[].abbreviation
+      - data_provider_candidates[].taxon_id
+      - data_provider_candidates[].display_name
+      - data_provider_candidates[].species
+
 model_config:
   model: "${AGENT_DATA_PROVIDER_MODEL:-gpt-5.4-mini}"
   temperature: 0.1

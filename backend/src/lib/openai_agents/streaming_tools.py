@@ -29,6 +29,7 @@ from functools import lru_cache
 from typing import List, Dict, Any, Mapping, Optional
 
 from agents import Agent, AgentOutputSchema, Runner, RunConfig
+from pydantic import ValidationError
 
 from .audit_labels import build_specialist_internal_friendly_name
 from .config import get_max_turns, reasoning_summary_request_settings, resolve_model_provider
@@ -85,6 +86,10 @@ logger = logging.getLogger(__name__)
 
 INTERNAL_EXTRACTION_RESULT_EVENT_TYPE = _INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 _DOCUMENT_REQUIRED_TOOL_NAMES = set(DOCUMENT_REQUIRED_TOOL_NAMES)
+_STRUCTURED_FINALIZATION_CHECK_PDF_EVIDENCE = "pdf_evidence"
+_STRUCTURED_FINALIZATION_CHECK_LOOKUP_PROVENANCE = "lookup_provenance"
+_STRUCTURED_FINALIZATION_DEFAULT_MAX_ATTEMPTS = 6
+_STRUCTURED_FINALIZATION_HARD_MAX_ATTEMPTS = 20
 _GROQ_SCHEMA_CONSTRAINTS_ADAPTER_KEY = "groq_schema_constraints"
 _DOMAIN_ENVELOPE_SUPERVISOR_FIELD_PRIORITY = (
     "mention",
@@ -102,7 +107,6 @@ _DOMAIN_ENVELOPE_SUPERVISOR_FIELD_PRIORITY = (
     "term_label",
     "ontology_id",
     "ontology_term_id",
-    "chebi_id",
     "disease_id",
 )
 _DOMAIN_ENVELOPE_SUPERVISOR_FIELD_SKIP = {
@@ -173,6 +177,134 @@ def _tool_output_summary(tool_name: str, output: Any) -> Optional[Dict[str, Any]
     return summary
 
 
+def _tool_output_payload_for_finalization(
+    tool_name: str,
+    output: Any,
+) -> Optional[Dict[str, Any]]:
+    """Return compact structured tool output used only by finalization checks."""
+
+    lookup_config = _lookup_finalization_config_for_tool(tool_name)
+    if lookup_config is None:
+        return None
+
+    payload = coerce_tool_event_dict(output)
+    if payload is None:
+        model_dump = getattr(output, "model_dump", None)
+        if callable(model_dump):
+            try:
+                dumped = model_dump(mode="json")
+            except TypeError:
+                dumped = model_dump()
+            if isinstance(dumped, dict):
+                payload = dumped
+    if not isinstance(payload, dict):
+        return None
+
+    compact: Dict[str, Any] = {}
+    for key in ("status", "status_code", "message"):
+        if key in payload:
+            value = payload.get(key)
+            if isinstance(value, str) and len(value) > 1000:
+                value = f"{value[:1000]}..."
+            compact[key] = value
+
+    if "data" in payload:
+        data = payload.get("data")
+    else:
+        data = _lookup_tool_configured_result_payload(payload, config=lookup_config)
+    if data is not None:
+        compact["data"] = _compact_lookup_tool_data(data)
+        compact["scalar_tokens"] = sorted(_lookup_scalar_tokens(data))
+
+    return compact
+
+
+def _lookup_tool_configured_result_payload(
+    payload: Dict[str, Any],
+    *,
+    config: Mapping[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Extract package-declared lookup facts from non-REST function-tool results."""
+
+    paths = config.get("tool_output_paths")
+    if not isinstance(paths, list):
+        return dict(payload)
+    selected: Dict[str, Any] = {}
+    for path in paths:
+        path_text = str(path or "").strip()
+        if not path_text:
+            continue
+        values = _lookup_values_at_path(payload, path_text)
+        if not values:
+            continue
+        selected[path_text] = values[0] if len(values) == 1 else values
+    return selected or None
+
+
+def _compact_lookup_tool_data(value: Any) -> Any:
+    """Preserve enough REST payload shape for provenance checks."""
+
+    if isinstance(value, list):
+        return {
+            "__items": [_compact_lookup_tool_data(item) for item in value[:50]],
+            "__full_count": len(value),
+            "__truncated": len(value) > 50,
+        }
+    if isinstance(value, dict):
+        compact: Dict[str, Any] = {}
+        preferred_keys = (
+            "results",
+            "associations",
+            "numberOfHits",
+            "total",
+            "total_count",
+            "count",
+            "id",
+            "name",
+            "label",
+            "symbol",
+            "title",
+            "short_citation",
+        )
+        for key in preferred_keys:
+            if key in value:
+                compact[key] = _compact_lookup_tool_data(value.get(key))
+        if compact:
+            return compact
+        return {
+            str(key): _compact_lookup_tool_data(child)
+            for key, child in list(value.items())[:20]
+        }
+    if isinstance(value, str):
+        return value[:1000] + "..." if len(value) > 1000 else value
+    return value
+
+
+def _lookup_scalar_tokens(value: Any, *, limit: int = 20000) -> set[str]:
+    """Collect normalized scalar API payload values for provenance checks."""
+
+    tokens: set[str] = set()
+
+    def visit(node: Any) -> None:
+        if len(tokens) >= limit:
+            return
+        if isinstance(node, dict):
+            for child in node.values():
+                visit(child)
+            return
+        if isinstance(node, list):
+            for child in node:
+                visit(child)
+            return
+        if isinstance(node, (str, int, float)) and not isinstance(node, bool):
+            text = str(node).strip().lower()
+            if text:
+                tokens.add(text)
+
+    visit(value)
+    return tokens
+
+
 def _is_domain_envelope_extraction_output_type(output_type: Any) -> bool:
     """Return whether an output type uses the shared domain-envelope contract."""
 
@@ -196,6 +328,34 @@ def _apply_relaxed_output_schema_if_needed(agent: Agent, output_type: Any) -> Ag
         strict_json_schema=False,
     )
     return runtime_agent
+
+
+@dataclass
+class _StructuredSpecialistFinalizationState:
+    required: bool
+    tool_name: str
+    agent_name: str
+    output_type_name: str
+    config: Dict[str, Any] = field(default_factory=dict)
+    max_attempts: int = _STRUCTURED_FINALIZATION_DEFAULT_MAX_ATTEMPTS
+    attempt_limit_exceeded: bool = False
+    accepted_payload: Optional[Dict[str, Any]] = None
+    last_rejection: Optional[Dict[str, Any]] = None
+    calls: List[Dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def accepted(self) -> bool:
+        return self.accepted_payload is not None
+
+
+@dataclass
+class _StructuredSpecialistFinalizationFeedback:
+    accepted_payload: Optional[Dict[str, Any]]
+    message: str
+    repair_instructions: List[str] = field(default_factory=list)
+    field_errors: List[Dict[str, Any]] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    summary: Dict[str, Any] = field(default_factory=dict)
 
 
 def _extract_stream_tool_call_tracking_id(item: Any) -> Optional[str]:
@@ -986,6 +1146,1308 @@ def _canonicalize_structured_output_text(
         return json.dumps(canonical_payload)
 
 
+def _output_type_name(output_type: Any) -> str:
+    return str(getattr(output_type, "__name__", None) or "response")
+
+
+def _normalize_structured_finalization_config(raw_config: Any) -> Dict[str, Any]:
+    if not isinstance(raw_config, dict):
+        return {}
+    if raw_config.get("enabled") is False:
+        return {}
+    tool_name = str(raw_config.get("tool_name") or "").strip()
+    if not tool_name:
+        return {}
+    return dict(raw_config)
+
+
+def _agent_structured_finalization_config(
+    agent: Agent,
+    *,
+    tool_name: Optional[str],
+) -> Dict[str, Any]:
+    direct_config = _normalize_structured_finalization_config(
+        getattr(agent, "structured_finalization", None)
+    )
+    if direct_config:
+        return direct_config
+
+    if not tool_name:
+        return {}
+
+    try:
+        from src.lib.config.agent_loader import get_agent_by_tool_name
+
+        agent_definition = get_agent_by_tool_name(tool_name)
+    except Exception:
+        logger.debug(
+            "Unable to resolve package agent definition for %s",
+            tool_name,
+            exc_info=True,
+        )
+        return {}
+
+    if agent_definition is None:
+        return {}
+    return _normalize_structured_finalization_config(
+        getattr(agent_definition, "structured_finalization", None)
+    )
+
+
+def _structured_finalization_has_check(
+    config: Mapping[str, Any],
+    check_name: str,
+) -> bool:
+    checks = config.get("checks")
+    if isinstance(checks, list):
+        return check_name in {str(check).strip() for check in checks}
+    return False
+
+
+def _structured_specialist_finalization_tool_name(
+    config: Mapping[str, Any],
+) -> Optional[str]:
+    tool_name = str(config.get("tool_name") or "").strip()
+    return tool_name or None
+
+
+def _structured_specialist_finalization_max_attempts(
+    config: Mapping[str, Any],
+) -> int:
+    raw_value = config.get("max_attempts")
+    if raw_value is None:
+        return _STRUCTURED_FINALIZATION_DEFAULT_MAX_ATTEMPTS
+    try:
+        attempts = int(raw_value)
+    except (TypeError, ValueError):
+        return _STRUCTURED_FINALIZATION_DEFAULT_MAX_ATTEMPTS
+    if attempts < 1:
+        return _STRUCTURED_FINALIZATION_DEFAULT_MAX_ATTEMPTS
+    return min(attempts, _STRUCTURED_FINALIZATION_HARD_MAX_ATTEMPTS)
+
+
+def _structured_specialist_finalization_required(
+    agent: Agent,
+    *,
+    expected_output_type: Any,
+    builder_materializer_agent: bool,
+    finalization_config: Mapping[str, Any],
+) -> bool:
+    if builder_materializer_agent or expected_output_type is None:
+        return False
+    if not callable(getattr(expected_output_type, "model_validate", None)):
+        return False
+    if _structured_specialist_finalization_tool_name(finalization_config) is None:
+        return False
+    existing_tool_names = _agent_tool_names(agent)
+    if any(name in _builder_finalization_tool_names() for name in existing_tool_names):
+        return False
+    return True
+
+
+def _validation_error_summary(exc: ValidationError) -> str:
+    errors: List[str] = []
+    for error in exc.errors()[:5]:
+        loc = ".".join(str(part) for part in error.get("loc", ())) or "<root>"
+        errors.append(f"{loc}: {error.get('msg')}")
+    if len(exc.errors()) > 5:
+        errors.append(f"{len(exc.errors()) - 5} more error(s)")
+    return "; ".join(errors)
+
+
+def _max_turns_with_structured_specialist_finalization(max_turns: int) -> int:
+    return max_turns + 2
+
+
+def _document_tool_was_called(tool_calls: List["SpecialistToolCall"]) -> bool:
+    return any(call.tool_name in _DOCUMENT_REQUIRED_TOOL_NAMES for call in tool_calls)
+
+
+def _live_evidence_records_by_id(
+    live_evidence_records: List[Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    records: Dict[str, Dict[str, Any]] = {}
+    for record in live_evidence_records:
+        if not isinstance(record, dict):
+            continue
+        record_id = str(record.get("evidence_record_id") or "").strip()
+        if record_id:
+            records[record_id] = record
+    return records
+
+
+def _evidence_reference_ids_from_payload(value: Any) -> set[str]:
+    ids: set[str] = set()
+
+    def visit(node: Any, *, inside_evidence_registry: bool = False) -> None:
+        if isinstance(node, dict):
+            for key, child in node.items():
+                child_inside_registry = inside_evidence_registry or key == "evidence_records"
+                if key == "evidence_record_ids" and isinstance(child, list):
+                    for item in child:
+                        text = str(item or "").strip()
+                        if text:
+                            ids.add(text)
+                    continue
+                if key == "evidence_record_id" and not inside_evidence_registry:
+                    text = str(child or "").strip()
+                    if text:
+                        ids.add(text)
+                    continue
+                visit(child, inside_evidence_registry=child_inside_registry)
+            return
+        if isinstance(node, list):
+            for child in node:
+                visit(child, inside_evidence_registry=inside_evidence_registry)
+
+    visit(value)
+    return ids
+
+
+def _evidence_registry_records_from_payload(value: Any) -> List[Dict[str, Any]]:
+    if not isinstance(value, dict):
+        return []
+    records = value.get("evidence_records")
+    if not isinstance(records, list):
+        return []
+    return [record for record in records if isinstance(record, dict)]
+
+
+def _pdf_evidence_registry_errors(
+    payload: Dict[str, Any],
+    *,
+    live_evidence_records: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    live_by_id = _live_evidence_records_by_id(live_evidence_records)
+    errors: List[Dict[str, Any]] = []
+    referenced_ids = _evidence_reference_ids_from_payload(payload)
+    payload_registry_records = _evidence_registry_records_from_payload(payload)
+
+    if not live_by_id:
+        if referenced_ids:
+            errors.append({
+                "field": "evidence_record_ids",
+                "message": (
+                    "Payload references evidence IDs, but no record_evidence "
+                    "records were produced in this run."
+                ),
+                "ids": sorted(referenced_ids),
+            })
+        if payload_registry_records:
+            errors.append({
+                "field": "evidence_records",
+                "message": (
+                    "Payload includes evidence registry entries, but no "
+                    "record_evidence records were produced in this run."
+                ),
+            })
+        return errors
+
+    unknown_refs = sorted(referenced_ids - set(live_by_id))
+    if unknown_refs:
+        errors.append({
+            "field": "evidence_record_ids",
+            "message": (
+                "Payload references evidence IDs that were not produced by "
+                "record_evidence in this run."
+            ),
+            "ids": unknown_refs,
+        })
+
+    for index, record in enumerate(payload_registry_records):
+        record_id = str(record.get("evidence_record_id") or "").strip()
+        if not record_id:
+            errors.append({
+                "field": f"evidence_records[{index}].evidence_record_id",
+                "message": "Evidence registry entries must include live evidence_record_id values.",
+            })
+            continue
+        live_record = live_by_id.get(record_id)
+        if live_record is None:
+            errors.append({
+                "field": f"evidence_records[{index}].evidence_record_id",
+                "message": "Evidence record was not created by record_evidence in this run.",
+                "id": record_id,
+            })
+            continue
+        mismatches = []
+        for key in (
+            "entity",
+            "verified_quote",
+            "page",
+            "section",
+            "subsection",
+            "chunk_id",
+            "document_id",
+            "figure_reference",
+        ):
+            if key not in record or key not in live_record:
+                continue
+            if record.get(key) != live_record.get(key):
+                mismatches.append(key)
+        if mismatches:
+            errors.append({
+                "field": f"evidence_records[{index}]",
+                "message": "Evidence record fields must match the live record_evidence output.",
+                "id": record_id,
+                "mismatched_fields": mismatches,
+            })
+
+    return errors
+
+
+def _lookup_finalization_config(
+    finalization_config: Mapping[str, Any],
+) -> Optional[Dict[str, Any]]:
+    if not _structured_finalization_has_check(
+        finalization_config,
+        _STRUCTURED_FINALIZATION_CHECK_LOOKUP_PROVENANCE,
+    ):
+        return None
+    lookup_config = finalization_config.get("lookup")
+    return dict(lookup_config) if isinstance(lookup_config, dict) else None
+
+
+def _lookup_finalization_config_for_tool(tool_name: str) -> Optional[Dict[str, Any]]:
+    """Return package-declared lookup finalization config for a tool."""
+
+    try:
+        from src.lib.config.agent_loader import load_agent_definitions
+
+        agent_definitions = load_agent_definitions()
+    except Exception:
+        logger.debug("Unable to load agent definitions for lookup finalization", exc_info=True)
+        return None
+
+    normalized_tool_name = str(tool_name or "").strip()
+    if not normalized_tool_name:
+        return None
+    for agent_definition in agent_definitions.values():
+        config = _normalize_structured_finalization_config(
+            getattr(agent_definition, "structured_finalization", None)
+        )
+        lookup_config = _lookup_finalization_config(config)
+        if lookup_config is None:
+            continue
+        configured_tool_name = str(lookup_config.get("tool_name") or "").strip()
+        if configured_tool_name == normalized_tool_name:
+            return lookup_config
+    return None
+
+
+def _lookup_tool_calls(
+    tool_calls: List["SpecialistToolCall"],
+    *,
+    config: Dict[str, Any],
+) -> List["SpecialistToolCall"]:
+    tool_name = str(config.get("tool_name") or "")
+    return [call for call in tool_calls if call.tool_name == tool_name]
+
+
+def _lookup_tool_call_succeeded(call: "SpecialistToolCall") -> bool:
+    payload = call.output_payload or {}
+    status = str(payload.get("status") or "").strip().lower()
+    status_code = payload.get("status_code")
+    if status in {"ok", "success"}:
+        return True
+    if isinstance(status_code, int) and 200 <= status_code < 300:
+        return True
+    return False
+
+
+def _lookup_tool_call_failed(call: "SpecialistToolCall") -> bool:
+    payload = call.output_payload or {}
+    status = str(payload.get("status") or "").strip().lower()
+    status_code = payload.get("status_code")
+    if status == "error":
+        return True
+    if isinstance(status_code, int) and status_code >= 400:
+        return True
+    return False
+
+
+def _lookup_attempts_from_payload(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    attempts = payload.get("lookup_attempts")
+    if not isinstance(attempts, list):
+        return []
+    return [attempt for attempt in attempts if isinstance(attempt, dict)]
+
+
+def _lookup_attempt_matches_provider(
+    attempt: Dict[str, Any],
+    *,
+    config: Dict[str, Any],
+) -> bool:
+    provider = str(attempt.get("provider") or "").strip().lower()
+    method = str(attempt.get("method") or "").strip().lower()
+    haystack = f"{provider} {method}"
+    return any(
+        str(term).strip().lower() in haystack
+        for term in config.get("provider_terms", ())
+        if str(term).strip()
+    )
+
+
+def _scalar_strings(value: Any) -> List[str]:
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return [str(value)]
+    if isinstance(value, list):
+        strings: List[str] = []
+        for item in value:
+            strings.extend(_scalar_strings(item))
+        return strings
+    if isinstance(value, dict):
+        strings: List[str] = []
+        for item in value.values():
+            strings.extend(_scalar_strings(item))
+        return strings
+    return []
+
+
+def _lookup_attempt_matches_tool_call(
+    attempt: Dict[str, Any],
+    call: "SpecialistToolCall",
+) -> bool:
+    tool_args = call.tool_args or {}
+    query = attempt.get("query")
+    if not isinstance(query, dict) or not query:
+        return False
+
+    call_url = str(tool_args.get("url") or "").strip()
+    query_url = str(query.get("url") or query.get("endpoint") or "").strip()
+
+    if query_url and call_url and query_url == call_url:
+        return True
+
+    tool_text = json.dumps(tool_args, sort_keys=True, default=str).lower()
+    for value in _scalar_strings(query):
+        normalized = value.lower()
+        if normalized and normalized in tool_text:
+            return True
+    return False
+
+
+def _lookup_tool_data_result_count(payload: Optional[Dict[str, Any]]) -> Optional[int]:
+    if not isinstance(payload, dict):
+        return None
+    if not _lookup_tool_call_succeeded(
+        SpecialistToolCall(tool_name="", output_payload=payload)
+    ):
+        return 0
+    data = payload.get("data")
+    if isinstance(data, list):
+        return len(data)
+    if not isinstance(data, dict):
+        return 1 if data else 0
+    full_count = data.get("__full_count")
+    if isinstance(full_count, int):
+        return full_count
+    for key in ("results", "associations", "data"):
+        value = data.get(key)
+        if isinstance(value, list):
+            return len(value)
+        if isinstance(value, dict):
+            full_count = value.get("__full_count")
+            if isinstance(full_count, int):
+                return full_count
+    for key in ("numberOfHits", "total", "total_count"):
+        value = data.get(key)
+        if isinstance(value, int):
+            return value
+    return 1 if data else 0
+
+
+def _lookup_requested_values(
+    payload: Dict[str, Any],
+    *,
+    config: Dict[str, Any],
+) -> List[str]:
+    request_keys = {str(key).lower() for key in config.get("request_keys", ())}
+    values: List[str] = []
+
+    def collect_from_mapping(mapping: Any) -> None:
+        if not isinstance(mapping, dict):
+            return
+        for key, value in mapping.items():
+            normalized_key = str(key).lower()
+            if normalized_key not in request_keys:
+                continue
+            if isinstance(value, list):
+                values.extend(_scalar_strings(value))
+            elif isinstance(value, dict):
+                values.extend(_scalar_strings(value))
+            elif _looks_like_lookup_identifier(value):
+                values.extend(_scalar_strings(value))
+
+    target = payload.get("target")
+    if isinstance(target, dict):
+        collect_from_mapping(target.get("input_values"))
+    collect_from_mapping(payload.get("selected_inputs"))
+    collect_from_mapping(payload)
+
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        key = text.lower()
+        if text and key not in seen:
+            normalized.append(text)
+            seen.add(key)
+    return normalized
+
+
+def _looks_like_lookup_identifier(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if not text:
+        return False
+    if re.search(r"\b[A-Z][A-Z0-9_]*:[A-Za-z0-9_.:-]+\b", text):
+        return True
+    return " " not in text and len(text) <= 80
+
+
+def _lookup_result_coverage_text(
+    payload: Dict[str, Any],
+    *,
+    config: Dict[str, Any],
+) -> str:
+    selected: Dict[str, Any] = {}
+    for key in config.get("result_collections", ()):
+        if key in payload:
+            selected[str(key)] = payload.get(key)
+    selected["missing_expected_fields"] = payload.get("missing_expected_fields")
+    selected["candidates"] = payload.get("candidates")
+    return json.dumps(selected, sort_keys=True, default=str).lower()
+
+
+def _lookup_has_resolved_facts(
+    payload: Dict[str, Any],
+    *,
+    config: Dict[str, Any],
+) -> bool:
+    resolved_fact_paths = config.get("resolved_fact_paths")
+    if isinstance(resolved_fact_paths, list):
+        for path in resolved_fact_paths:
+            if _lookup_path_has_value(payload, str(path)):
+                return True
+        return False
+    return bool(payload.get("resolved_values") or payload.get("resolved_objects"))
+
+
+def _lookup_fact_identity_values(
+    payload: Dict[str, Any],
+    *,
+    config: Dict[str, Any],
+) -> List[tuple[str, str]]:
+    values: List[tuple[str, str]] = []
+    identity_paths = config.get("fact_identity_paths")
+    if not isinstance(identity_paths, list):
+        return values
+
+    seen: set[tuple[str, str]] = set()
+    for path in identity_paths:
+        path_text = str(path or "").strip()
+        if not path_text:
+            continue
+        for value in _lookup_values_at_path(payload, path_text):
+            for scalar in _scalar_strings(value):
+                text = str(scalar).strip()
+                if not text:
+                    continue
+                key = (path_text, text.lower())
+                if key in seen:
+                    continue
+                values.append((path_text, text))
+                seen.add(key)
+
+    return values
+
+
+def _lookup_configured_grounded_fact_values(
+    payload: Dict[str, Any],
+    *,
+    config: Dict[str, Any],
+) -> List[tuple[str, str]]:
+    values: List[tuple[str, str]] = []
+    grounded_paths = config.get("grounded_fact_paths")
+    if not isinstance(grounded_paths, list):
+        return values
+
+    seen: set[tuple[str, str]] = set()
+    for path in grounded_paths:
+        path_text = str(path or "").strip()
+        if not path_text:
+            continue
+        for value in _lookup_values_at_path(payload, path_text):
+            for scalar in _scalar_strings(value):
+                text = str(scalar).strip()
+                if not text:
+                    continue
+                key = (path_text, text.lower())
+                if key in seen:
+                    continue
+                values.append((path_text, text))
+                seen.add(key)
+    return values
+
+
+def _lookup_path_has_value(payload: Dict[str, Any], path: str) -> bool:
+    for value in _lookup_values_at_path(payload, path):
+        if isinstance(value, (list, dict)) and value:
+            return True
+        if _scalar_strings(value):
+            return True
+    return False
+
+
+def _lookup_values_at_path(payload: Dict[str, Any], path: str) -> List[Any]:
+    parts = [part for part in str(path or "").split(".") if part]
+    current: List[Any] = [payload]
+    for part in parts:
+        next_values: List[Any] = []
+        is_list_part = part.endswith("[]")
+        key = part[:-2] if is_list_part else part
+        for item in current:
+            if not isinstance(item, dict) or key not in item:
+                continue
+            value = item.get(key)
+            if is_list_part:
+                if isinstance(value, list):
+                    next_values.extend(value)
+            else:
+                next_values.append(value)
+        current = next_values
+        if not current:
+            break
+    return current
+
+
+def _lookup_value_supported_by_tool_calls(
+    value: str,
+    *,
+    tool_calls: List["SpecialistToolCall"],
+) -> bool:
+    needle = str(value or "").strip().lower()
+    if not needle:
+        return True
+    for call in tool_calls:
+        payload = call.output_payload or {}
+        scalar_tokens = payload.get("scalar_tokens")
+        if isinstance(scalar_tokens, list):
+            tokens = {
+                str(token).strip().lower()
+                for token in scalar_tokens
+                if str(token).strip()
+            }
+        else:
+            data = payload.get("data") if isinstance(payload, dict) else None
+            tokens = _lookup_scalar_tokens(data) if data is not None else set()
+        if needle in tokens:
+            return True
+    return False
+
+
+def _lookup_fact_identity_errors(
+    payload: Dict[str, Any],
+    *,
+    config: Dict[str, Any],
+    successful_calls: List["SpecialistToolCall"],
+) -> List[Dict[str, Any]]:
+    if not successful_calls:
+        return []
+    errors: List[Dict[str, Any]] = []
+    for field_path, value in _lookup_fact_identity_values(
+        payload,
+        config=config,
+    ):
+        if _lookup_value_supported_by_tool_calls(value, tool_calls=successful_calls):
+            continue
+        errors.append({
+            "field": field_path,
+            "message": "Resolved lookup fact identity does not appear in the API tool output.",
+            "value": value,
+        })
+    return errors
+
+
+def _lookup_grounded_fact_errors(
+    payload: Dict[str, Any],
+    *,
+    config: Dict[str, Any],
+    successful_calls: List["SpecialistToolCall"],
+) -> List[Dict[str, Any]]:
+    if not successful_calls:
+        return []
+    errors: List[Dict[str, Any]] = []
+    for field_path, value in _lookup_configured_grounded_fact_values(
+        payload,
+        config=config,
+    ):
+        if _lookup_value_supported_by_tool_calls(value, tool_calls=successful_calls):
+            continue
+        errors.append({
+            "field": field_path,
+            "message": "Lookup fact does not appear in the API tool output.",
+            "value": value,
+        })
+    return errors
+
+
+def _lookup_provenance_finalization_errors(
+    payload: Dict[str, Any],
+    *,
+    output_type_name: str,
+    finalization_config: Mapping[str, Any],
+    tool_calls: List["SpecialistToolCall"],
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    config = _lookup_finalization_config(finalization_config)
+    if config is None:
+        return [], {}
+
+    expected_tool = str(config.get("tool_name") or "")
+    concrete_calls = _lookup_tool_calls(tool_calls, config=config)
+    successful_calls = [call for call in concrete_calls if _lookup_tool_call_succeeded(call)]
+    failed_calls = [call for call in concrete_calls if _lookup_tool_call_failed(call)]
+    attempts = _lookup_attempts_from_payload(payload)
+    matching_attempts = [
+        attempt
+        for attempt in attempts
+        if _lookup_attempt_matches_provider(attempt, config=config)
+    ]
+    status = str(payload.get("status") or "").strip().lower()
+    resolved_facts = _lookup_has_resolved_facts(
+        payload,
+        config=config,
+    )
+    grounded_fact_values = _lookup_configured_grounded_fact_values(
+        payload,
+        config=config,
+    )
+    grounded_facts = bool(grounded_fact_values)
+    errors: List[Dict[str, Any]] = []
+
+    if not concrete_calls and (status == "resolved" or resolved_facts or grounded_facts):
+        errors.append({
+            "field": "tool_calls",
+            "message": (
+                f"{expected_tool} must complete before returning resolved "
+                f"{output_type_name} facts."
+            ),
+        })
+
+    if status == "resolved" and not successful_calls:
+        errors.append({
+            "field": "tool_calls",
+            "message": (
+                f"Resolved {output_type_name} output requires a successful "
+                f"{expected_tool} call in this run."
+            ),
+        })
+
+    if status == "resolved" and not resolved_facts:
+        errors.append({
+            "field": "status",
+            "message": "Resolved lookup output must include resolved API-grounded facts.",
+        })
+
+    if grounded_facts and not successful_calls:
+        errors.append({
+            "field": "tool_calls",
+            "message": (
+                f"{output_type_name} lookup facts require a successful "
+                f"{expected_tool} call in this run."
+            ),
+        })
+
+    missing_expected_fields = payload.get("missing_expected_fields")
+    if status == "resolved" and missing_expected_fields:
+        errors.append({
+            "field": "missing_expected_fields",
+            "message": "Resolved lookup output cannot carry missing expected fields.",
+        })
+
+    target = payload.get("target")
+    expected_fields = []
+    if isinstance(target, dict) and isinstance(target.get("expected_fields"), list):
+        expected_fields = target.get("expected_fields") or []
+    if (
+        status == "unresolved"
+        and expected_fields
+        and not missing_expected_fields
+        and not failed_calls
+    ):
+        errors.append({
+            "field": "missing_expected_fields",
+            "message": (
+                "Unresolved lookup output with expected fields must list the "
+                "fields that could not be filled."
+            ),
+        })
+
+    if not matching_attempts and (concrete_calls or status == "resolved" or grounded_facts):
+        errors.append({
+            "field": "lookup_attempts",
+            "message": (
+                f"lookup_attempts must include at least one {expected_tool} "
+                "attempt; finalization calls do not count as lookup provenance."
+            ),
+        })
+
+    if matching_attempts and len(matching_attempts) < len(concrete_calls):
+        errors.append({
+            "field": "lookup_attempts",
+            "message": "Record one lookup_attempt for every concrete API tool call.",
+        })
+
+    success_attempts = [
+        attempt for attempt in matching_attempts if attempt.get("outcome") == "success"
+    ]
+    error_attempts = [
+        attempt for attempt in matching_attempts if attempt.get("outcome") == "error"
+    ]
+    if status == "resolved" and not success_attempts:
+        errors.append({
+            "field": "lookup_attempts[].outcome",
+            "message": "Resolved lookup output requires a successful lookup_attempt.",
+        })
+    if failed_calls and not successful_calls and status == "resolved":
+        errors.append({
+            "field": "status",
+            "message": (
+                "A failed API lookup cannot produce a resolved result unless a "
+                "later successful API call supersedes it."
+            ),
+        })
+    if failed_calls and not successful_calls and status == "unresolved" and not error_attempts:
+        errors.append({
+            "field": "lookup_attempts[].outcome",
+            "message": "Unresolved API failures must be recorded with outcome 'error'.",
+        })
+
+    if status == "resolved" or resolved_facts:
+        errors.extend(_lookup_fact_identity_errors(
+            payload,
+            config=config,
+            successful_calls=successful_calls,
+        ))
+    if grounded_facts:
+        errors.extend(_lookup_grounded_fact_errors(
+            payload,
+            config=config,
+            successful_calls=successful_calls,
+        ))
+
+    for index, attempt in enumerate(matching_attempts):
+        if not isinstance(attempt.get("query"), dict) or not attempt.get("query"):
+            errors.append({
+                "field": f"lookup_attempts[{index}].query",
+                "message": "lookup_attempts[].query must preserve the API query payload.",
+            })
+            continue
+        if concrete_calls and not any(
+            _lookup_attempt_matches_tool_call(attempt, call)
+            for call in concrete_calls
+        ):
+            errors.append({
+                "field": f"lookup_attempts[{index}].query",
+                "message": "lookup_attempts[].query must correspond to an API tool call made in this run.",
+            })
+        result_count = attempt.get("result_count")
+        if isinstance(result_count, int) and result_count > 0:
+            matching_counts = [
+                _lookup_tool_data_result_count(call.output_payload)
+                for call in concrete_calls
+                if _lookup_attempt_matches_tool_call(attempt, call)
+            ]
+            known_counts = [count for count in matching_counts if count is not None]
+            if known_counts and result_count > max(known_counts):
+                errors.append({
+                    "field": f"lookup_attempts[{index}].result_count",
+                    "message": "lookup_attempts[].result_count exceeds the API tool output count.",
+                })
+
+    requested_values = _lookup_requested_values(
+        payload,
+        config=config,
+    )
+    if len(requested_values) > 1:
+        coverage_text = _lookup_result_coverage_text(payload, config=config)
+        missing_values = [
+            value for value in requested_values if value.lower() not in coverage_text
+        ]
+        if missing_values:
+            errors.append({
+                "field": "result_coverage",
+                "message": "Every requested lookup input must be resolved or explicitly reported as not found.",
+                "missing_inputs": missing_values,
+            })
+
+    summary = {
+        "lookup_tool": expected_tool,
+        "lookup_tool_call_count": len(concrete_calls),
+        "successful_lookup_tool_call_count": len(successful_calls),
+        "failed_lookup_tool_call_count": len(failed_calls),
+        "lookup_attempt_count": len(matching_attempts),
+        "requested_input_count": len(requested_values),
+    }
+    return errors, summary
+
+
+def _structured_specialist_finalization_feedback(
+    raw_result: Any,
+    *,
+    expected_output_type: Any,
+    finalization_config: Mapping[str, Any] | None = None,
+    tool_calls: List["SpecialistToolCall"],
+    live_evidence_records: List[Dict[str, Any]],
+) -> _StructuredSpecialistFinalizationFeedback:
+    output_type_name = _output_type_name(expected_output_type)
+    finalization_config = finalization_config or {}
+    try:
+        payload = raw_result
+        if hasattr(raw_result, "model_dump"):
+            payload = raw_result.model_dump()
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        if not isinstance(payload, dict):
+            raise TypeError("finalization payload must be a JSON object")
+        validated = expected_output_type.model_validate(payload)
+    except ValidationError as exc:
+        message = (
+            f"{output_type_name} rejected: incompatible schema "
+            f"({_validation_error_summary(exc)})."
+        )
+        return _StructuredSpecialistFinalizationFeedback(
+            accepted_payload=None,
+            message=message,
+            repair_instructions=[
+                "Repair the reported schema field(s) and call the finalization tool again."
+            ],
+        )
+    except Exception as exc:
+        message = f"{output_type_name} rejected: {exc}."
+        return _StructuredSpecialistFinalizationFeedback(
+            accepted_payload=None,
+            message=message,
+            repair_instructions=[
+                "Submit one JSON object that matches the required structured output schema."
+            ],
+        )
+
+    raw_payload = validated.model_dump()
+    checks_pdf_evidence = _structured_finalization_has_check(
+        finalization_config,
+        _STRUCTURED_FINALIZATION_CHECK_PDF_EVIDENCE,
+    )
+    raw_registry_errors: List[Dict[str, Any]] = []
+    if checks_pdf_evidence:
+        raw_registry_errors = _pdf_evidence_registry_errors(
+            raw_payload,
+            live_evidence_records=live_evidence_records,
+        )
+
+    canonical_payload: Any = raw_payload
+    if checks_pdf_evidence:
+        canonical_payload = canonicalize_structured_result_payload(
+            raw_payload,
+            preferred_evidence_records=live_evidence_records,
+        )
+        if not isinstance(canonical_payload, dict):
+            canonical_payload = validated.model_dump()
+
+    try:
+        canonical_model = expected_output_type.model_validate(canonical_payload)
+        canonical_payload = canonical_model.model_dump()
+    except ValidationError as exc:
+        message = (
+            f"{output_type_name} rejected after evidence canonicalization: "
+            f"{_validation_error_summary(exc)}."
+        )
+        return _StructuredSpecialistFinalizationFeedback(
+            accepted_payload=None,
+            message=message,
+            repair_instructions=[
+                "Repair the structured fields while preserving live evidence_record_ids."
+            ],
+        )
+
+    field_errors: List[Dict[str, Any]] = []
+    repair_instructions: List[str] = []
+
+    if raw_registry_errors:
+        field_errors.extend(raw_registry_errors)
+        repair_instructions.append(
+            "Use only evidence_record_id values returned by record_evidence in this run."
+        )
+
+    evidence_report: Dict[str, Any] = {}
+    lookup_report: Dict[str, Any] = {}
+
+    if checks_pdf_evidence and not _document_tool_was_called(tool_calls):
+        field_errors.append({
+            "field": "tool_calls",
+            "message": "At least one document retrieval tool must be called before finalization.",
+        })
+        repair_instructions.append(
+            "Call search_document, read_section, read_subsection, or read_chunk before finalizing."
+        )
+
+    requires_evidence = False
+    missing_record_refs = False
+    if checks_pdf_evidence:
+        requires_evidence = structured_result_requires_evidence(
+            canonical_payload,
+            expected_output_type=expected_output_type,
+        )
+        missing_record_refs = (
+            structured_result_missing_evidence_record_refs(
+                canonical_payload,
+                expected_output_type=expected_output_type,
+            )
+            if requires_evidence
+            else False
+        )
+        evidence_report = structured_result_evidence_reference_report(
+            canonical_payload,
+            expected_output_type=expected_output_type,
+        )
+
+    if requires_evidence and not live_evidence_records:
+        field_errors.append({
+            "field": "evidence_records",
+            "message": "Retained PDF items require live record_evidence output.",
+        })
+        repair_instructions.append(
+            "Use read_chunk evidence_spans and record_evidence, then reference the returned evidence_record_id."
+        )
+    if missing_record_refs:
+        field_errors.append({
+            "field": "items[].evidence_record_ids",
+            "message": "Each retained item must reference a live evidence_record_id.",
+            "evidence_reference_report": evidence_report,
+        })
+        repair_instructions.append(
+            "Add live evidence_record_ids to every retained item, or set kept_count to 0 if no retained item is supported."
+        )
+
+    registry_errors = (
+        _pdf_evidence_registry_errors(
+            canonical_payload,
+            live_evidence_records=live_evidence_records,
+        )
+        if checks_pdf_evidence
+        else []
+    )
+    if registry_errors and not raw_registry_errors:
+        field_errors.extend(registry_errors)
+        repair_instructions.append(
+            "Use only evidence_record_id values returned by record_evidence in this run, without editing their verified quote metadata."
+        )
+
+    lookup_errors, lookup_report = _lookup_provenance_finalization_errors(
+        canonical_payload,
+        output_type_name=output_type_name,
+        finalization_config=finalization_config,
+        tool_calls=tool_calls,
+    )
+    if lookup_errors:
+        field_errors.extend(lookup_errors)
+        repair_instructions.append(
+            "Use the required lookup API tool first, record each concrete API call in lookup_attempts, and make the final status match the API evidence."
+        )
+
+    if field_errors:
+        return _StructuredSpecialistFinalizationFeedback(
+            accepted_payload=None,
+            message=f"{output_type_name} rejected by finalization checks.",
+            field_errors=field_errors,
+            repair_instructions=repair_instructions,
+            summary={**evidence_report, **lookup_report},
+        )
+
+    return _StructuredSpecialistFinalizationFeedback(
+        accepted_payload=canonical_payload,
+        message=f"{output_type_name} accepted.",
+        summary={
+            **evidence_report,
+            **lookup_report,
+            "live_evidence_record_count": len(live_evidence_records),
+        },
+    )
+
+
+def _structured_specialist_finalization_tool_payload(
+    feedback: _StructuredSpecialistFinalizationFeedback,
+) -> Dict[str, Any]:
+    if feedback.accepted_payload is not None:
+        return {
+            "status": "accepted",
+            "message": feedback.message,
+            "summary": feedback.summary,
+            "warnings": feedback.warnings,
+        }
+    return {
+        "status": "rejected",
+        "message": feedback.message,
+        "repair_instructions": feedback.repair_instructions,
+        "field_errors": feedback.field_errors,
+        "warnings": feedback.warnings,
+    }
+
+
+def _structured_finalization_rejected_attempt_count(
+    state: _StructuredSpecialistFinalizationState,
+) -> int:
+    return sum(
+        1
+        for call in state.calls
+        if call.get("details", {}).get("status") == "rejected"
+    )
+
+
+def _structured_finalization_attempt_limit_feedback(
+    state: _StructuredSpecialistFinalizationState,
+) -> _StructuredSpecialistFinalizationFeedback:
+    state.attempt_limit_exceeded = True
+    return _StructuredSpecialistFinalizationFeedback(
+        accepted_payload=None,
+        message=(
+            f"{state.output_type_name} rejected: finalization attempt limit "
+            f"exceeded after {state.max_attempts} rejected attempt(s)."
+        ),
+        repair_instructions=[
+            "Stop calling the finalization tool for this run; the specialist output failed finalization."
+        ],
+        field_errors=[
+            {
+                "field": "finalization_attempts",
+                "message": (
+                    "The structured finalization tool was rejected too many times "
+                    "in this run."
+                ),
+                "max_attempts": state.max_attempts,
+            }
+        ],
+        warnings=["structured_finalization_attempt_limit_exceeded"],
+        summary={
+            "attempt_limit_exceeded": True,
+            "max_attempts": state.max_attempts,
+        },
+    )
+
+
+def _record_structured_specialist_finalization_call(
+    *,
+    state: _StructuredSpecialistFinalizationState,
+    feedback: _StructuredSpecialistFinalizationFeedback,
+) -> None:
+    accepted = feedback.accepted_payload is not None
+    event = {
+        "type": "STRUCTURED_FINALIZATION",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "details": {
+            "agent": state.agent_name,
+            "toolName": state.tool_name,
+            "outputType": state.output_type_name,
+            "status": "accepted" if accepted else "rejected",
+            "message": feedback.message,
+            "summary": feedback.summary,
+            "fieldErrors": feedback.field_errors,
+        },
+    }
+    state.calls.append(event)
+    add_specialist_event(event)
+
+
+def _build_structured_specialist_finalization_tool(
+    *,
+    expected_output_type: Any,
+    finalization_state: _StructuredSpecialistFinalizationState,
+    tool_calls: List["SpecialistToolCall"],
+    live_evidence_records: List[Dict[str, Any]],
+    function_tool_factory: Any,
+) -> Any:
+    @function_tool_factory(
+        name_override=finalization_state.tool_name,
+        strict_mode=False,
+    )
+    def finalize_structured_specialist_result(result: dict[str, Any]) -> dict[str, Any]:
+        """Validate the final structured specialist result before answering."""
+
+        if (
+            finalization_state.attempt_limit_exceeded
+            or _structured_finalization_rejected_attempt_count(finalization_state)
+            >= finalization_state.max_attempts
+        ):
+            feedback = _structured_finalization_attempt_limit_feedback(
+                finalization_state
+            )
+        else:
+            feedback = _structured_specialist_finalization_feedback(
+                result,
+                expected_output_type=expected_output_type,
+                finalization_config=finalization_state.config,
+                tool_calls=tool_calls,
+                live_evidence_records=live_evidence_records,
+            )
+        if feedback.accepted_payload is not None:
+            finalization_state.accepted_payload = feedback.accepted_payload
+            finalization_state.last_rejection = None
+        else:
+            finalization_state.accepted_payload = None
+            if (
+                _structured_finalization_rejected_attempt_count(finalization_state) + 1
+                >= finalization_state.max_attempts
+            ):
+                finalization_state.attempt_limit_exceeded = True
+                feedback.summary.setdefault("attempt_limit_exceeded", True)
+                feedback.summary.setdefault(
+                    "max_attempts",
+                    finalization_state.max_attempts,
+                )
+                if "structured_finalization_attempt_limit_exceeded" not in feedback.warnings:
+                    feedback.warnings.append(
+                        "structured_finalization_attempt_limit_exceeded"
+                    )
+            finalization_state.last_rejection = _structured_specialist_finalization_tool_payload(
+                feedback
+            )
+        _record_structured_specialist_finalization_call(
+            state=finalization_state,
+            feedback=feedback,
+        )
+        return _structured_specialist_finalization_tool_payload(feedback)
+
+    return finalize_structured_specialist_result
+
+
+def _append_structured_specialist_finalization_instruction(
+    runtime_agent: Agent,
+    source_agent: Agent,
+    *,
+    finalization_state: _StructuredSpecialistFinalizationState,
+) -> Agent:
+    instruction = (
+        "Structured result finalization is mandatory. Before your final answer, "
+        f"call `{finalization_state.tool_name}` with the complete "
+        f"{finalization_state.output_type_name} payload you intend to return. "
+        "If the tool returns `status: rejected`, repair only the reported issue(s), "
+        "call the finalization tool again, and do not send the final answer until "
+        "the tool returns `status: accepted`. After acceptance, your final answer "
+        "may be a short acknowledgment; the backend will use the accepted tool "
+        "payload as the canonical structured result. You may make at most "
+        f"{finalization_state.max_attempts} rejected finalization attempt(s) "
+        "in this run; after that the specialist output fails finalization."
+    )
+    return _append_agent_runtime_instruction(
+        runtime_agent,
+        source_agent,
+        instruction=instruction,
+        layer_id_suffix="structured_specialist_finalization",
+        title="Structured specialist finalization runtime instruction",
+        source_ref="src.lib.openai_agents.streaming_tools:structured_specialist_finalization",
+    )
+
+
+def _configure_structured_specialist_finalization(
+    runtime_agent: Agent,
+    source_agent: Agent,
+    *,
+    expected_output_type: Any,
+    finalization_state: _StructuredSpecialistFinalizationState,
+    tool_calls: List["SpecialistToolCall"],
+    live_evidence_records: List[Dict[str, Any]],
+) -> Agent:
+    from agents import function_tool
+
+    if runtime_agent is source_agent:
+        runtime_agent = copy.copy(source_agent)
+    runtime_agent.tools = [
+        *list(getattr(runtime_agent, "tools", []) or []),
+        _build_structured_specialist_finalization_tool(
+            expected_output_type=expected_output_type,
+            finalization_state=finalization_state,
+            tool_calls=tool_calls,
+            live_evidence_records=live_evidence_records,
+            function_tool_factory=function_tool,
+        ),
+    ]
+    if getattr(runtime_agent, "output_type", None) is expected_output_type:
+        runtime_agent.output_type = AgentOutputSchema(
+            expected_output_type,
+            strict_json_schema=False,
+        )
+    return _append_structured_specialist_finalization_instruction(
+        runtime_agent,
+        source_agent,
+        finalization_state=finalization_state,
+    )
+
+
+def _raise_missing_structured_specialist_finalization(
+    *,
+    state: _StructuredSpecialistFinalizationState,
+    specialist_name: str,
+    builder_workspace: ExtractionBuilderWorkspace,
+    tool_name: Optional[str],
+    candidate_id: str,
+) -> None:
+    if state.attempt_limit_exceeded:
+        error_message = (
+            f"{specialist_name} exceeded the {state.max_attempts}-attempt limit "
+            f"for mandatory {state.tool_name} without status accepted."
+        )
+        reason = "structured_finalization_attempt_limit_exceeded"
+    elif state.last_rejection is not None:
+        error_message = (
+            f"{specialist_name} did not complete mandatory {state.tool_name} "
+            f"with status accepted. Last rejection: {state.last_rejection.get('message')}"
+        )
+        reason = "structured_finalization_rejected"
+    else:
+        error_message = (
+            f"{specialist_name} did not call mandatory {state.tool_name} "
+            "with status accepted."
+        )
+        reason = "structured_finalization_missing"
+
+    add_specialist_event({
+        "type": "SPECIALIST_ERROR",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "details": {
+            "specialist": specialist_name,
+            "output_type": state.output_type_name,
+            "error": error_message,
+            "reason": reason,
+            "severity": "error",
+        },
+    })
+    _record_builder_specialist_output_failure(
+        builder_workspace=builder_workspace,
+        specialist_name=specialist_name,
+        tool_name=tool_name,
+        output_type_name=state.output_type_name,
+        reason=reason,
+        message=error_message,
+        candidate_id=candidate_id,
+        extra={"finalization_tool": state.tool_name},
+    )
+    raise SpecialistOutputError(
+        specialist_name=specialist_name,
+        output_type_name=state.output_type_name,
+        message=error_message,
+        details=[{
+            "reason": reason,
+            "finalization_tool": state.tool_name,
+            "last_rejection": state.last_rejection,
+        }],
+    )
+
+
 def _reduce_specialist_output_for_supervisor(
     final_output: str,
     *,
@@ -1627,9 +3089,7 @@ def _emit_validator_lookup_audit_events(
             "type": "TOOL_START",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "details": {
-                "toolName": "agr_curation_query"
-                if provider == "agr_curation_query"
-                else "domain_validator_lookup",
+                "toolName": "domain_validator_lookup",
                 "friendlyName": friendly_name,
                 "agent": specialist_name,
                 "toolArgs": tool_args,
@@ -1646,9 +3106,7 @@ def _emit_validator_lookup_audit_events(
             "type": "TOOL_COMPLETE",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "details": {
-                "toolName": "agr_curation_query"
-                if provider == "agr_curation_query"
-                else "domain_validator_lookup",
+                "toolName": "domain_validator_lookup",
                 "friendlyName": _validator_lookup_complete_label(
                     specialist_name,
                     outcome,
@@ -2009,39 +3467,8 @@ async def _dispatch_domain_envelope_validators_for_chat(
 # =============================================================================
 # When the supervisor calls the same specialist multiple times in a row,
 # we gently remind it that batching is available. This helps prevent
-# inefficient patterns like calling ask_gene_specialist 20 times for
-# individual genes instead of once with all genes.
-
-BATCHING_NUDGE_CONFIG = {
-    "ask_gene_specialist": {
-        "example": 'ask_gene_specialist("Look up these genes: daf-16, lin-3, unc-54, ...")',
-        "entity": "genes",
-    },
-    "ask_allele_specialist": {
-        "example": 'ask_allele_specialist("Look up these alleles: e1370, n765, tm1234, ...")',
-        "entity": "alleles",
-    },
-    "ask_disease_specialist": {
-        "example": 'ask_disease_specialist("Look up these diseases: Alzheimer disease, diabetes mellitus, ...")',
-        "entity": "diseases",
-    },
-    "ask_chemical_specialist": {
-        "example": 'ask_chemical_specialist("Look up these chemicals: glucose, ATP, ethanol, ...")',
-        "entity": "chemicals",
-    },
-    "ask_ontology_term_validation_specialist": {
-        "example": 'ask_ontology_term_validation_specialist("Resolve these typed ontology terms: anatomy pharynx for WB, life stage L3 larval stage for WB, GO cellular component nucleus, ...")',
-        "entity": "terms",
-    },
-    "ask_gene_ontology_specialist": {
-        "example": 'ask_gene_ontology_specialist("Look up these GO terms: apoptotic process, kinase activity, ...")',
-        "entity": "GO terms",
-    },
-    "ask_go_annotations_specialist": {
-        "example": 'ask_go_annotations_specialist("Get GO annotations for these genes: WB:WBGene00000912, WB:WBGene00001234, ...")',
-        "entity": "genes",
-    },
-}
+# inefficient patterns like repeated calls where the package registry says one
+# batched call would work.
 
 # Threshold for triggering the nudge (3 consecutive calls to same specialist)
 BATCHING_NUDGE_THRESHOLD = 3
@@ -2053,14 +3480,11 @@ def get_batching_config() -> Dict[str, Any]:
 
     Returns dict keyed by supervisor tool name (e.g., "ask_gene_specialist")
     with entity and example for batching nudge prompts.
-
-    Falls back to hardcoded BATCHING_NUDGE_CONFIG if registry is not available.
     """
     try:
         from src.lib.agent_studio.catalog_service import AGENT_REGISTRY
     except ImportError:
-        # Fallback to hardcoded if registry not available
-        return BATCHING_NUDGE_CONFIG
+        return {}
 
     config: Dict[str, Any] = {}
     for agent_id, entry in AGENT_REGISTRY.items():
@@ -2128,7 +3552,7 @@ def _generate_batching_nudge(tool_name: str, consecutive_count: int) -> Optional
     Generate a batching nudge message if appropriate.
 
     Only generates a nudge if:
-    - The tool supports batching (is in BATCHING_NUDGE_CONFIG)
+    - The tool supports batching according to package/catalog metadata
     - This is exactly the Nth consecutive call (threshold hit)
 
     Args:
@@ -2197,6 +3621,7 @@ class SpecialistToolCall:
     tool_args: Optional[Dict[str, Any]] = None
     output_preview: Optional[str] = None
     output_summary: Optional[Dict[str, Any]] = None
+    output_payload: Optional[Dict[str, Any]] = None
     duration_ms: Optional[int] = None
 
 
@@ -2401,13 +3826,6 @@ async def run_specialist_with_events(
         base_max_turns=max_turns,
     )
 
-    logger.info(
-        "Starting specialist=%s (max_turns=%s)",
-        specialist_name,
-        max_turns,
-        extra={"specialist_name": specialist_name, "tool_name": tool_name},
-    )
-
     expected_output_type = getattr(agent, "output_type", None)
     builder_materializer_agent = _is_builder_materializer_agent(agent)
     if builder_materializer_agent and expected_output_type is not None:
@@ -2427,6 +3845,38 @@ async def run_specialist_with_events(
                 }
             ],
         )
+    finalization_config = _agent_structured_finalization_config(
+        agent,
+        tool_name=tool_name,
+    )
+    finalization_tool_name = _structured_specialist_finalization_tool_name(
+        finalization_config
+    )
+    structured_finalization_state = _StructuredSpecialistFinalizationState(
+        required=_structured_specialist_finalization_required(
+            agent,
+            expected_output_type=expected_output_type,
+            builder_materializer_agent=builder_materializer_agent,
+            finalization_config=finalization_config,
+        ),
+        tool_name=finalization_tool_name or "finalize_structured_result",
+        agent_name=specialist_name,
+        output_type_name=_output_type_name(expected_output_type),
+        config=finalization_config,
+        max_attempts=_structured_specialist_finalization_max_attempts(
+            finalization_config
+        ),
+    )
+    if structured_finalization_state.required:
+        max_turns = _max_turns_with_structured_specialist_finalization(max_turns)
+
+    logger.info(
+        "Starting specialist=%s (max_turns=%s, structured_finalization=%s)",
+        specialist_name,
+        max_turns,
+        structured_finalization_state.required,
+        extra={"specialist_name": specialist_name, "tool_name": tool_name},
+    )
     groq_tool_json_compat_mode = False
     runtime_agent = agent
 
@@ -2479,6 +3929,22 @@ async def run_specialist_with_events(
         logger.info(
             "%s applying tool-efficiency instruction for large list workload",
             specialist_name,
+            extra={"specialist_name": specialist_name, "tool_name": tool_name},
+        )
+
+    if structured_finalization_state.required:
+        runtime_agent = _configure_structured_specialist_finalization(
+            runtime_agent,
+            agent,
+            expected_output_type=expected_output_type,
+            finalization_state=structured_finalization_state,
+            tool_calls=tool_calls,
+            live_evidence_records=live_evidence_records,
+        )
+        logger.info(
+            "%s applying mandatory structured finalization tool %s",
+            specialist_name,
+            structured_finalization_state.tool_name,
             extra={"specialist_name": specialist_name, "tool_name": tool_name},
         )
 
@@ -2922,9 +4388,14 @@ async def run_specialist_with_events(
                         # Update the last tool call with output info
                         tool_index = completed_tool.get("tool_index")
                         output_summary = _tool_output_summary(current_tool_name, output)
+                        output_payload = _tool_output_payload_for_finalization(
+                            current_tool_name,
+                            output,
+                        )
                         if isinstance(tool_index, int) and 0 <= tool_index < len(tool_calls):
                             tool_calls[tool_index].output_preview = output_preview
                             tool_calls[tool_index].output_summary = output_summary
+                            tool_calls[tool_index].output_payload = output_payload
                             tool_calls[tool_index].duration_ms = duration_ms
 
                         evidence_record = build_record_evidence_summary_record(
@@ -3112,7 +4583,23 @@ async def run_specialist_with_events(
         type(getattr(result, "final_output", None)),
     )
 
-    if hasattr(result, "final_output") and result.final_output is not None:
+    if structured_finalization_state.required and structured_finalization_state.accepted:
+        final_output = json.dumps(structured_finalization_state.accepted_payload)
+        logger.info(
+            "%s using accepted %s payload from %s as canonical output",
+            specialist_name,
+            structured_finalization_state.output_type_name,
+            structured_finalization_state.tool_name,
+        )
+    elif structured_finalization_state.required:
+        _raise_missing_structured_specialist_finalization(
+            state=structured_finalization_state,
+            specialist_name=specialist_name,
+            builder_workspace=builder_workspace,
+            tool_name=tool_name,
+            candidate_id=builder_candidate_id,
+        )
+    elif hasattr(result, "final_output") and result.final_output is not None:
         if hasattr(result.final_output, "model_dump"):
             # Structured output (Pydantic model)
             final_output = json.dumps(result.final_output.model_dump())

@@ -161,6 +161,7 @@ class AgentDefinition:
     frontend: FrontendConfig = field(default_factory=FrontendConfig)
     curation: CurationConfig = field(default_factory=CurationConfig)
     documentation: Optional[Dict[str, Any]] = None
+    structured_finalization: Optional[Dict[str, Any]] = None
     # model_config is required for agents that are actually executed; that is
     # enforced at the real use-point (from_yaml requires a model; building the
     # agent registry / config raises on a missing model_config). It stays optional
@@ -251,6 +252,12 @@ class AgentDefinition:
             domain_pack_id=str(curation_data.get("domain_pack_id") or "").strip() or None,
             launchable=bool(curation_data.get("launchable", False)),
         )
+        structured_finalization_data = data.get("structured_finalization")
+        structured_finalization = (
+            dict(structured_finalization_data)
+            if isinstance(structured_finalization_data, dict)
+            else None
+        )
 
         return cls(
             folder_name=folder_name,
@@ -273,6 +280,7 @@ class AgentDefinition:
             frontend=frontend,
             curation=curation,
             documentation=data.get("documentation"),
+            structured_finalization=structured_finalization,
         )
 
 
