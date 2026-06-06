@@ -60,7 +60,7 @@ def _trace_data():
                                 "model": "gpt-5.5",
                                 "payload_summary": {
                                     "json_chars": 1200,
-                                    "estimated_tokens": 300,
+                                    "estimated_tokens": "<redacted>",
                                     "threshold": None,
                                     "largest_paths": [
                                         {"path": "requests", "json_chars": 900}

@@ -99,6 +99,13 @@ def _payload_json_chars(value: Any) -> int:
         return len(str(value))
 
 
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _event_payload_from_observation(observation: Mapping[str, Any]) -> Mapping[str, Any] | None:
     metadata = observation.get("metadata")
     if not isinstance(metadata, Mapping):
@@ -127,11 +134,10 @@ def _preflight_call_from_event(
     )
     payload_summary = details.get("payload_summary") if isinstance(details, Mapping) else None
     payload_summary = payload_summary if isinstance(payload_summary, Mapping) else {}
-    input_json_chars = int(payload_summary.get("json_chars") or 0)
-    estimated_tokens = int(
-        payload_summary.get("estimated_tokens")
-        or _estimate_tokens_from_chars(input_json_chars)
-    )
+    input_json_chars = _int_or_none(payload_summary.get("json_chars")) or 0
+    estimated_tokens = _int_or_none(payload_summary.get("estimated_tokens"))
+    if estimated_tokens is None:
+        estimated_tokens = _estimate_tokens_from_chars(input_json_chars)
     return {
         "ordinal": ordinal,
         "surface": details.get("surface"),

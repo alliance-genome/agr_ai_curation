@@ -25,6 +25,7 @@ _SECRET_KEY_PATTERN = re.compile(
     r"(api[_-]?key|authorization|bearer|password|secret|token|credential)",
     re.IGNORECASE,
 )
+_TOKEN_METRIC_PREFIXES = ("estimated", "input", "output", "total", "prompt", "completion")
 
 
 @dataclass
@@ -112,6 +113,21 @@ def get_current_extraction_trace_run() -> ExtractionTraceRun | None:
     return _current_run.get()
 
 
+def _is_secret_key(key: str) -> bool:
+    normalized = key.lower().replace("-", "_")
+    if normalized in {"tokens", "token_count", "estimated_tokens"}:
+        return False
+    if any(
+        normalized == f"{prefix}_tokens"
+        or normalized == f"{prefix}_token_count"
+        or normalized.endswith(f"_{prefix}_tokens")
+        or normalized.endswith(f"_{prefix}_token_count")
+        for prefix in _TOKEN_METRIC_PREFIXES
+    ):
+        return False
+    return bool(_SECRET_KEY_PATTERN.search(key))
+
+
 def _redact_value(value: Any, *, depth: int = 0) -> Any:
     limit = _preview_limit()
     if depth > 6:
@@ -131,7 +147,7 @@ def _redact_value(value: Any, *, depth: int = 0) -> Any:
         redacted: dict[str, Any] = {}
         for key, item in value.items():
             key_text = str(key)
-            if _SECRET_KEY_PATTERN.search(key_text):
+            if _is_secret_key(key_text):
                 redacted[key_text] = "<redacted>"
             else:
                 redacted[key_text] = _redact_value(item, depth=depth + 1)
