@@ -1778,6 +1778,7 @@ async def run_agent_streamed(
             )
             root_span = span_context_manager.__enter__()
             trace_id = root_span.trace_id
+            trace_final_output: Optional[Dict[str, Any]] = None
             _set_langfuse_trace_io(
                 langfuse,
                 root_span,
@@ -1869,6 +1870,7 @@ async def run_agent_streamed(
                         # Capture completion data to update span
                         if event.get("type") == "RUN_FINISHED":
                             data = event.get("data", {})
+                            trace_final_output = {"response": data.get("response", "")}
                             root_span.update(
                                 output={
                                     "response": data.get("response", ""),
@@ -1880,7 +1882,7 @@ async def run_agent_streamed(
                             _set_langfuse_trace_io(
                                 langfuse,
                                 root_span,
-                                output={"response": data.get("response", "")},
+                                output=trace_final_output,
                             )
                             logger.info(
                                 "Trace completed",
@@ -1922,14 +1924,15 @@ async def run_agent_streamed(
                         status_message=str(e),
                         metadata={"specialist_retry_failed": True}
                     )
+                    trace_final_output = {
+                        "status": "error",
+                        "error": str(e),
+                        "error_type": "SpecialistOutputError",
+                    }
                     _set_langfuse_trace_io(
                         langfuse,
                         root_span,
-                        output={
-                            "status": "error",
-                            "error": str(e),
-                            "error_type": "SpecialistOutputError",
-                        },
+                        output=trace_final_output,
                     )
                     _alert_task = asyncio.create_task(
                         notify_tool_failure(
@@ -1992,14 +1995,15 @@ async def run_agent_streamed(
                         level="ERROR",
                         status_message=str(e)
                     )
+                    trace_final_output = {
+                        "status": "error",
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    }
                     _set_langfuse_trace_io(
                         langfuse,
                         root_span,
-                        output={
-                            "status": "error",
-                            "error": str(e),
-                            "error_type": type(e).__name__,
-                        },
+                        output=trace_final_output,
                     )
                     _alert_task = asyncio.create_task(
                         notify_tool_failure(
@@ -2039,6 +2043,10 @@ async def run_agent_streamed(
                 # CRITICAL: Log prompts regardless of how the generator exits (success, error, or client disconnect)
                 # This ensures audit trail is complete even if client disconnects mid-stream
                 _log_used_prompts_to_db(trace_id=trace_id, session_id=session_id, span=root_span)
+                final_trace_io: Dict[str, Any] = {"input": {"query": user_message}}
+                if trace_final_output is not None:
+                    final_trace_io["output"] = trace_final_output
+                _set_langfuse_trace_io(langfuse, root_span, **final_trace_io)
 
                 # Close the attribute propagation context before the root span context.
                 if trace_attribute_context_active:

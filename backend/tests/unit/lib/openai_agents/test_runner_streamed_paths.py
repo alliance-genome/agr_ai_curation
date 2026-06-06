@@ -324,7 +324,10 @@ async def test_run_agent_streamed_with_langfuse_trace_success(monkeypatch):
     assert captured["span_exit"] == (None, None, None)
     assert captured["update"]["output"]["response"] == "grounded answer"
     assert captured["trace_io"][0] == {"input": {"query": "longer message"}}
-    assert captured["trace_io"][-1] == {"output": {"response": "grounded answer"}}
+    assert captured["trace_io"][-1] == {
+        "input": {"query": "longer message"},
+        "output": {"response": "grounded answer"},
+    }
     assert captured["logged"][0][0] == "trace-abc"
 
 
