@@ -516,6 +516,7 @@ function validationExplanationDetails(
   summary: DomainEnvelopeValidationSummaryProjection,
 ): string[] {
   const details: string[] = []
+  const explanationLabelsAdded = new Set<string>()
   for (const finding of summary.findings) {
     const findingDetails = finding.details
     const validationResult = recordValue(findingDetails.validation_result)
@@ -534,12 +535,18 @@ function validationExplanationDetails(
     const explanationLabel = materializedField && generatedFromExpectedField
       ? 'Shared explanation'
       : 'Explanation'
+    const explanationLine = explanation && !explanationLabelsAdded.has(explanationLabel)
+      ? `${explanationLabel}: ${explanation}`
+      : null
+    if (explanationLine) {
+      explanationLabelsAdded.add(explanationLabel)
+    }
 
     for (const line of [
       validatorName ? `Validator: ${validatorName}` : null,
       resolvedValues,
       lookup,
-      explanation ? `${explanationLabel}: ${explanation}` : null,
+      explanationLine,
     ]) {
       if (line && !details.includes(line)) {
         details.push(line)
