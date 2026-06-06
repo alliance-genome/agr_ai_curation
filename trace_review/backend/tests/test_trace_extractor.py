@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 
 import requests
 
-from src.services.trace_extractor import TraceExtractor, OBSERVATION_FIELDS
+from src.services.trace_extractor import TraceExtractor, OBSERVATION_FIELDS, TRACE_FIELDS
 
 
 class TraceExtractorTests(unittest.TestCase):
@@ -17,6 +17,7 @@ class TraceExtractorTests(unittest.TestCase):
         extractor.secret_key = credentials["private"]
         extractor.client = Mock()
         extractor.client.api = Mock()
+        extractor.client.api.trace = Mock()
         extractor.client.api.observations = Mock()
         extractor.client.api.scores = Mock()
         return extractor
@@ -116,6 +117,41 @@ class TraceExtractorTests(unittest.TestCase):
                 {"id": "obs-2", "name": "second"},
             ],
         )
+
+    def test_get_trace_details_requests_full_trace_fields(self):
+        extractor = self._make_extractor()
+        extractor.client.api.trace.get.return_value = SimpleNamespace(
+            dict=lambda: {"id": "trace-1", "input": {"q": "question"}},
+        )
+
+        trace = extractor.get_trace_details("trace-1")
+
+        extractor.client.api.trace.get.assert_called_once_with("trace-1", fields=TRACE_FIELDS)
+        self.assertEqual(trace["id"], "trace-1")
+
+    def test_list_traces_uses_metadata_filters(self):
+        extractor = self._make_extractor()
+        extractor.client.api.trace.list.return_value = SimpleNamespace(
+            data=[SimpleNamespace(dict=lambda: {"id": "trace-1", "name": "run"})],
+            meta=SimpleNamespace(dict=lambda: {"page": 1, "totalPages": 1}),
+        )
+
+        result = extractor.list_traces(
+            session_id="session-1",
+            document_id="doc-1",
+            run_id="run-1",
+            limit=10,
+        )
+
+        self.assertEqual(result["source"], "remote")
+        self.assertEqual(result["traces"], [{"id": "trace-1", "name": "run"}])
+        call = extractor.client.api.trace.list.call_args
+        self.assertEqual(call.kwargs["session_id"], "session-1")
+        self.assertEqual(call.kwargs["limit"], 10)
+        self.assertEqual(call.kwargs["order_by"], "timestamp.asc")
+        self.assertIn('"key": "document_id"', call.kwargs["filter"])
+        self.assertIn('"value": "doc-1"', call.kwargs["filter"])
+        self.assertIn('"key": "run_id"', call.kwargs["filter"])
 
     def test_get_observations_paginates_cursor_results(self):
         extractor = self._make_extractor()

@@ -130,6 +130,14 @@ trace_review/
 
 ### Trace Analysis
 - `POST /api/traces/analyze` - Analyze a trace (checks cache, fetches from Langfuse if needed)
+- `GET /api/traces/search` - Search Langfuse traces by session/user/name or trace metadata such as document/run/extraction ID
+- `GET /api/traces/{trace_id}/tree` - Fetch a complete Langfuse trace, observations, scores, and parent/child observation tree
+- `GET /api/traces/{trace_id}/reconstruction` - Return ordered trace/model/tool/event reconstruction
+- `GET /api/traces/{trace_id}/reconstruction.ndjson` - Export ordered reconstruction as NDJSON
+- `GET /api/traces/{trace_id}/payloads` - List input/output payloads with sizes, hashes, previews, and payload IDs
+- `GET /api/traces/{trace_id}/payload` - Retrieve one exact trace or observation input/output payload, with optional chunking
+- `GET /api/traces/{trace_id}/costs` - Summarize token and cost usage by trace, agent, model, and event kind
+- `GET /api/traces/{trace_id}/duplicates` - Report repeated payload fingerprints across trace and observation IO
 - `GET /api/traces/{trace_id}/views/{view_name}` - Get specific view data
 
 **Available Views**: `summary`, `conversation`, `tool_calls`, `supervisor_routing`

@@ -1,14 +1,25 @@
 """
 Trace analysis API endpoints
 """
+import json
 import logging
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import Response
 from typing import Dict, Any, List, Optional, Tuple
 
 from ..models.requests import AnalyzeTraceRequest, TraceSource
 from ..models.responses import SessionTraceExportResponse
 from ..services.trace_extractor import TraceExtractor
+from ..services.langfuse_run_reconstruction import (
+    build_cost_summary,
+    build_duplicate_report,
+    build_ordered_reconstruction,
+    build_payload_inventory,
+    build_trace_tree,
+    find_payload,
+    paginate_payloads,
+)
 from ..analyzers.conversation import ConversationAnalyzer
 from ..analyzers.tool_calls import ToolCallAnalyzer
 from ..analyzers.pdf_citations import PDFCitationsAnalyzer
@@ -289,6 +300,54 @@ def _session_timestamp_bounds(traces: List[Dict[str, Any]]) -> Tuple[Optional[st
     return timestamps[0], timestamps[-1]
 
 
+def _parse_optional_datetime(value: Optional[str], param_name: str) -> Optional[datetime]:
+    if not value:
+        return None
+    normalized = value.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid {param_name}; expected ISO 8601 timestamp",
+        ) from exc
+
+
+def _extract_langfuse_trace(trace_id: str, source: TraceSource) -> Dict[str, Any]:
+    try:
+        extractor = TraceExtractor(source=_effective_source(source))
+        return extractor.extract_complete_trace(trace_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Trace {trace_id} not found in Langfuse ({source}): {str(exc)}",
+        ) from exc
+
+
+def _ensure_search_scope(
+    *,
+    session_id: Optional[str],
+    user_id: Optional[str],
+    name: Optional[str],
+    document_id: Optional[str],
+    run_id: Optional[str],
+    extraction_id: Optional[str],
+    from_timestamp: Optional[str],
+    to_timestamp: Optional[str],
+) -> None:
+    if any([session_id, user_id, name, document_id, run_id, extraction_id, from_timestamp, to_timestamp]):
+        return
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "Provide at least one bounded search key: session_id, user_id, name, "
+            "document_id, run_id, extraction_id, from_timestamp, or to_timestamp."
+        ),
+    )
+
+
 @router.get("/test")
 async def test_route():
     """Test route to verify router is working"""
@@ -360,6 +419,224 @@ async def clear_cache(
         "status": "success",
         "message": f"Cache cleared: {cleared_count} traces removed",
         "cleared_count": cleared_count
+    }
+
+
+@router.get("/search")
+async def search_traces(
+    source: TraceSource = Query(default="local", description="Trace source: 'remote' (EC2), 'local' (Docker), or 'auto'"),
+    session_id: Optional[str] = Query(default=None, description="Langfuse session ID"),
+    user_id: Optional[str] = Query(default=None, description="Langfuse user ID"),
+    name: Optional[str] = Query(default=None, description="Trace name filter"),
+    document_id: Optional[str] = Query(default=None, description="Trace metadata.document_id filter"),
+    run_id: Optional[str] = Query(default=None, description="Trace metadata.run_id filter"),
+    extraction_id: Optional[str] = Query(default=None, description="Trace metadata.extraction_id filter"),
+    from_timestamp: Optional[str] = Query(default=None, description="ISO timestamp lower bound"),
+    to_timestamp: Optional[str] = Query(default=None, description="ISO timestamp upper bound"),
+    limit: int = Query(default=100, ge=1, le=1000, description="Maximum traces to return"),
+    user: Dict[str, Any] = get_auth_dependency(),
+) -> Dict[str, Any]:
+    """Search Langfuse traces by indexed IDs or trace metadata."""
+    _ensure_search_scope(
+        session_id=session_id,
+        user_id=user_id,
+        name=name,
+        document_id=document_id,
+        run_id=run_id,
+        extraction_id=extraction_id,
+        from_timestamp=from_timestamp,
+        to_timestamp=to_timestamp,
+    )
+
+    try:
+        extractor = TraceExtractor(source=_effective_source(source))
+        listing = extractor.list_traces(
+            session_id=session_id,
+            user_id=user_id,
+            name=name,
+            document_id=document_id,
+            run_id=run_id,
+            extraction_id=extraction_id,
+            from_timestamp=_parse_optional_datetime(from_timestamp, "from_timestamp"),
+            to_timestamp=_parse_optional_datetime(to_timestamp, "to_timestamp"),
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Error searching Langfuse traces from %s", source)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Unable to search Langfuse traces ({source}): {str(exc)}",
+        ) from exc
+
+    return {
+        "status": "success",
+        "source": source,
+        "trace_count": len(listing["traces"]),
+        "query": listing["query"],
+        "langfuse_meta": listing["meta"],
+        "traces": [_listed_trace_reference(trace) for trace in listing["traces"]],
+    }
+
+
+@router.get("/{trace_id}/tree")
+async def get_trace_tree(
+    trace_id: str,
+    source: TraceSource = Query(default="local", description="Trace source: 'remote' (EC2), 'local' (Docker), or 'auto'"),
+    user: Dict[str, Any] = get_auth_dependency(),
+) -> Dict[str, Any]:
+    """Fetch a complete Langfuse trace tree with raw observations and scores."""
+    trace_data = _extract_langfuse_trace(trace_id, source)
+    return {
+        "status": "success",
+        "source": source,
+        "trace_id": trace_id,
+        "raw_trace": trace_data["raw_trace"],
+        "observations": trace_data["observations"],
+        "scores": trace_data["scores"],
+        "metadata": trace_data["metadata"],
+        "tree": build_trace_tree(trace_data),
+    }
+
+
+@router.get("/{trace_id}/reconstruction")
+async def get_trace_reconstruction(
+    trace_id: str,
+    source: TraceSource = Query(default="local", description="Trace source: 'remote' (EC2), 'local' (Docker), or 'auto'"),
+    include_payloads: bool = Query(default=False, description="Include full payload values in ordered events"),
+    user: Dict[str, Any] = get_auth_dependency(),
+) -> Dict[str, Any]:
+    """Return chronological agent/model/tool/event reconstruction for a trace."""
+    trace_data = _extract_langfuse_trace(trace_id, source)
+    return {
+        "status": "success",
+        "source": source,
+        "data": build_ordered_reconstruction(
+            trace_data,
+            include_payload_values=include_payloads,
+        ),
+    }
+
+
+@router.get("/{trace_id}/reconstruction.ndjson")
+async def get_trace_reconstruction_ndjson(
+    trace_id: str,
+    source: TraceSource = Query(default="local", description="Trace source: 'remote' (EC2), 'local' (Docker), or 'auto'"),
+    include_payloads: bool = Query(default=False, description="Include full payload values in NDJSON events"),
+    user: Dict[str, Any] = get_auth_dependency(),
+) -> Response:
+    """Return ordered reconstruction as machine-friendly NDJSON."""
+    trace_data = _extract_langfuse_trace(trace_id, source)
+    reconstruction = build_ordered_reconstruction(
+        trace_data,
+        include_payload_values=include_payloads,
+    )
+    lines = [
+        json.dumps({"record_type": "trace", "trace": reconstruction["trace"]}, default=str),
+        *[
+            json.dumps({"record_type": "event", **event}, default=str)
+            for event in reconstruction["events"]
+        ],
+    ]
+    return Response(
+        content="\n".join(lines) + "\n",
+        media_type="application/x-ndjson",
+    )
+
+
+@router.get("/{trace_id}/payloads")
+async def get_trace_payloads(
+    trace_id: str,
+    source: TraceSource = Query(default="local", description="Trace source: 'remote' (EC2), 'local' (Docker), or 'auto'"),
+    include_values: bool = Query(default=False, description="Include full payload values in the paginated response"),
+    sort: str = Query(default="largest", description="Sort order: 'largest' or 'chronological'"),
+    limit: int = Query(default=50, ge=1, le=1000, description="Maximum payload summaries to return"),
+    offset: int = Query(default=0, ge=0, description="Pagination offset"),
+    user: Dict[str, Any] = get_auth_dependency(),
+) -> Dict[str, Any]:
+    """Return trace/model/tool input/output payload summaries, largest first by default."""
+    if sort not in {"largest", "chronological"}:
+        raise HTTPException(status_code=400, detail="sort must be 'largest' or 'chronological'")
+    trace_data = _extract_langfuse_trace(trace_id, source)
+    payloads = build_payload_inventory(trace_data, include_values=include_values)
+    page, pagination = paginate_payloads(payloads, limit=limit, offset=offset, sort=sort)
+    return {
+        "status": "success",
+        "source": source,
+        "trace_id": trace_id,
+        "sort": sort,
+        "pagination": pagination,
+        "payloads": page,
+    }
+
+
+@router.get("/{trace_id}/payload")
+async def get_trace_payload(
+    trace_id: str,
+    source: TraceSource = Query(default="local", description="Trace source: 'remote' (EC2), 'local' (Docker), or 'auto'"),
+    payload_id: Optional[str] = Query(default=None, description="Payload ID returned by /payloads, e.g. observation:obs-id:output"),
+    scope: Optional[str] = Query(default=None, description="Payload scope when payload_id is omitted: trace or observation"),
+    observation_id: Optional[str] = Query(default=None, description="Observation/span ID when retrieving observation input/output"),
+    field: Optional[str] = Query(default=None, description="Payload field: input or output"),
+    start: int = Query(default=0, ge=0, description="Start character for chunked retrieval"),
+    max_chars: int = Query(default=0, ge=0, description="Maximum characters to return; 0 returns the full payload"),
+    user: Dict[str, Any] = get_auth_dependency(),
+) -> Dict[str, Any]:
+    """Return one exact trace or observation payload from Langfuse."""
+    if not payload_id:
+        if field not in {"input", "output"}:
+            raise HTTPException(status_code=400, detail="field must be 'input' or 'output'")
+        if scope and scope not in {"trace", "observation"}:
+            raise HTTPException(status_code=400, detail="scope must be 'trace' or 'observation'")
+
+    trace_data = _extract_langfuse_trace(trace_id, source)
+    payload = find_payload(
+        trace_data,
+        payload_id=payload_id,
+        scope=scope,
+        observation_id=observation_id,
+        field=field,
+        start=start,
+        max_chars=max_chars,
+    )
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Payload not found in Langfuse trace data")
+    return {
+        "status": "success",
+        "source": source,
+        "trace_id": trace_id,
+        "payload": payload,
+    }
+
+
+@router.get("/{trace_id}/costs")
+async def get_trace_costs(
+    trace_id: str,
+    source: TraceSource = Query(default="local", description="Trace source: 'remote' (EC2), 'local' (Docker), or 'auto'"),
+    user: Dict[str, Any] = get_auth_dependency(),
+) -> Dict[str, Any]:
+    """Return token and cost accounting by trace, agent, model, and observation."""
+    trace_data = _extract_langfuse_trace(trace_id, source)
+    return {
+        "status": "success",
+        "source": source,
+        "data": build_cost_summary(trace_data),
+    }
+
+
+@router.get("/{trace_id}/duplicates")
+async def get_trace_duplicate_payloads(
+    trace_id: str,
+    source: TraceSource = Query(default="local", description="Trace source: 'remote' (EC2), 'local' (Docker), or 'auto'"),
+    user: Dict[str, Any] = get_auth_dependency(),
+) -> Dict[str, Any]:
+    """Return repeated payload fingerprints across trace and observation IO."""
+    trace_data = _extract_langfuse_trace(trace_id, source)
+    return {
+        "status": "success",
+        "source": source,
+        "data": build_duplicate_report(trace_data),
     }
 
 

@@ -2,8 +2,10 @@
 Langfuse Trace Extraction Service
 Fetches and processes trace data from Langfuse API
 """
+import json
 import logging
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Mapping, Optional, cast
 from langfuse import Langfuse
 import requests
 from requests.auth import HTTPBasicAuth
@@ -11,6 +13,7 @@ from ..analyzers.domain_envelopes import DomainEnvelopeTraceAnalyzer
 from ..config import get_trace_source_runtime_config
 
 logger = logging.getLogger(__name__)
+TRACE_FIELDS = "core,io,scores,observations,metrics"
 OBSERVATION_FIELDS = "core,basic,time,io,metadata,model,usage,prompt,metrics"
 SESSION_TRACE_LIST_LIMIT = 100
 SESSION_TRACE_LIST_TIMEOUT_SECONDS = 30
@@ -28,9 +31,9 @@ class TraceExtractor:
         """
         source_config = get_trace_source_runtime_config(source)
         self.source = source
-        self.host = source_config["host"]
-        self.public_key = source_config["public_key"]
-        self.secret_key = source_config["secret_key"]
+        self.host = source_config["host"] or ""
+        self.public_key = source_config["public_key"] or ""
+        self.secret_key = source_config["secret_key"] or ""
 
         if not self.host:
             raise ValueError(f"Langfuse host must be set for {source} source")
@@ -53,6 +56,8 @@ class TraceExtractor:
     @staticmethod
     def _normalize_item(item: Any) -> Dict:
         """Convert Langfuse SDK models into plain dictionaries."""
+        if hasattr(item, "model_dump"):
+            return item.model_dump()
         if hasattr(item, "dict"):
             return item.dict()
         return item
@@ -65,8 +70,85 @@ class TraceExtractor:
 
     def get_trace_details(self, trace_id: str) -> Dict:
         """Get detailed trace information with all fields"""
-        trace = self.client.api.trace.get(trace_id)
+        trace = self.client.api.trace.get(trace_id, fields=TRACE_FIELDS)
         return self._normalize_item(trace)
+
+    def list_traces(
+        self,
+        *,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        name: Optional[str] = None,
+        document_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        extraction_id: Optional[str] = None,
+        limit: int = SESSION_TRACE_LIST_LIMIT,
+        from_timestamp: Optional[datetime] = None,
+        to_timestamp: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        """List Langfuse traces using indexed fields and metadata filters."""
+        filters: List[Dict[str, Any]] = []
+        metadata_filters = {
+            "document_id": document_id,
+            "run_id": run_id,
+            "extraction_id": extraction_id,
+        }
+        for key, value in metadata_filters.items():
+            if value:
+                filters.append({
+                    "type": "stringObject",
+                    "column": "metadata",
+                    "key": key,
+                    "operator": "=",
+                    "value": value,
+                })
+
+        page = 1
+        traces: List[Dict[str, Any]] = []
+        meta: Dict[str, Any] = {}
+        filter_json = json.dumps(filters) if filters else None
+
+        while len(traces) < limit:
+            page_limit = min(100, limit - len(traces))
+            response = self.client.api.trace.list(
+                page=page,
+                limit=page_limit,
+                session_id=session_id,
+                user_id=user_id,
+                name=name,
+                from_timestamp=from_timestamp,
+                to_timestamp=to_timestamp,
+                order_by="timestamp.asc",
+                filter=filter_json,
+            )
+            response_data = getattr(response, "data", None) or []
+            traces.extend(self._normalize_item(trace) for trace in response_data)
+
+            response_meta = getattr(response, "meta", None)
+            meta = self._normalize_item(response_meta) if response_meta is not None else {}
+            total_pages = meta.get("totalPages") or meta.get("total_pages")
+            if total_pages is None:
+                break
+            if page >= total_pages:
+                break
+            page += 1
+
+        return {
+            "source": self.source,
+            "traces": traces,
+            "meta": meta,
+            "query": {
+                "session_id": session_id,
+                "user_id": user_id,
+                "name": name,
+                "document_id": document_id,
+                "run_id": run_id,
+                "extraction_id": extraction_id,
+                "limit": limit,
+                "from_timestamp": from_timestamp.isoformat() if from_timestamp else None,
+                "to_timestamp": to_timestamp.isoformat() if to_timestamp else None,
+            },
+        }
 
     def list_session_traces(self, session_id: str, limit: int = SESSION_TRACE_LIST_LIMIT) -> Dict[str, Any]:
         """List Langfuse traces for a session without exposing credentials."""
@@ -176,8 +258,8 @@ class TraceExtractor:
         scores = self.get_scores(trace_id, trace=trace)
         domain_envelope = DomainEnvelopeTraceAnalyzer.analyze(
             trace,
-            observations,
-            scores=scores,
+            cast(List[Mapping[str, Any]], observations),
+            scores=cast(List[Mapping[str, Any]], scores),
         )
 
         # Build structured response

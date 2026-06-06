@@ -440,6 +440,149 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(context.exception.args[0], missing_key)
                 extractor.extract_complete_trace.assert_not_called()
 
+    @patch("src.api.traces.TraceExtractor")
+    async def test_search_traces_by_document_id_uses_langfuse_listing(
+        self,
+        extractor_cls: Mock,
+    ):
+        extractor = extractor_cls.return_value
+        extractor.list_traces.return_value = {
+            "source": "local",
+            "query": {
+                "document_id": "doc-1",
+                "session_id": None,
+                "user_id": None,
+                "name": None,
+                "run_id": None,
+                "extraction_id": None,
+                "limit": 5,
+            },
+            "meta": {"page": 1, "totalPages": 1},
+            "traces": [
+                {
+                    "id": "trace-doc",
+                    "name": "AI Curation chat",
+                    "timestamp": "2026-06-06T03:00:00Z",
+                    "sessionId": "session-1",
+                    "metadata": {"document_id": "doc-1"},
+                }
+            ],
+        }
+
+        response = await traces.search_traces(
+            source="local",
+            session_id=None,
+            user_id=None,
+            name=None,
+            document_id="doc-1",
+            run_id=None,
+            extraction_id=None,
+            from_timestamp=None,
+            to_timestamp=None,
+            limit=5,
+        )
+
+        extractor_cls.assert_called_once_with(source="local")
+        extractor.list_traces.assert_called_once()
+        self.assertEqual(response["status"], "success")
+        self.assertEqual(response["trace_count"], 1)
+        self.assertEqual(response["traces"][0]["trace_id"], "trace-doc")
+
+    @patch("src.api.traces.TraceExtractor")
+    async def test_new_payload_and_reconstruction_endpoints_read_langfuse_trace(
+        self,
+        extractor_cls: Mock,
+    ):
+        trace_data = self._make_trace_data(
+            {"answer": "Done"},
+            trace_id="trace-new-api",
+            session_id="session-new",
+            name="AI Curation chat",
+        )
+        trace_data["raw_trace"]["metadata"] = {"document_id": "doc-1"}
+        trace_data["raw_trace"]["input"] = {"question": "inspect payload"}
+        trace_data["observations"] = [
+            {
+                "id": "obs-tool",
+                "type": "SPAN",
+                "name": "tool call fetch_entities",
+                "startTime": "2026-06-06T03:00:00Z",
+                "metadata": {"tool_name": "fetch_entities"},
+                "input": {"query": "genes"},
+                "output": {"rows": [1, 2]},
+            }
+        ]
+        extractor_cls.return_value.extract_complete_trace.return_value = trace_data
+
+        payloads = await traces.get_trace_payloads(
+            "trace-new-api",
+            source="local",
+            include_values=False,
+            sort="largest",
+            limit=10,
+            offset=0,
+        )
+        exact_payload = await traces.get_trace_payload(
+            "trace-new-api",
+            source="local",
+            payload_id=None,
+            scope="observation",
+            observation_id="obs-tool",
+            field="output",
+            start=0,
+            max_chars=0,
+        )
+        reconstruction = await traces.get_trace_reconstruction(
+            "trace-new-api",
+            source="local",
+            include_payloads=False,
+        )
+        costs = await traces.get_trace_costs("trace-new-api", source="local")
+        duplicates = await traces.get_trace_duplicate_payloads("trace-new-api", source="local")
+
+        self.assertEqual(payloads["status"], "success")
+        self.assertIn("observation:obs-tool:output", {item["payload_id"] for item in payloads["payloads"]})
+        self.assertEqual(exact_payload["payload"]["value"], {"rows": [1, 2]})
+        self.assertEqual(reconstruction["data"]["events"][1]["kind"], "tool")
+        self.assertEqual(costs["data"]["trace_id"], "trace-new-api")
+        self.assertEqual(duplicates["data"]["trace_id"], "trace-new-api")
+
+    @patch("src.api.traces.TraceExtractor")
+    async def test_reconstruction_ndjson_returns_event_lines(
+        self,
+        extractor_cls: Mock,
+    ):
+        trace_data = self._make_trace_data(
+            {"answer": "Done"},
+            trace_id="trace-ndjson",
+            session_id="session-ndjson",
+        )
+        trace_data["raw_trace"]["input"] = {"question": "inspect"}
+        trace_data["observations"] = [
+            {
+                "id": "obs-model",
+                "type": "GENERATION",
+                "name": "OpenAI response",
+                "startTime": "2026-06-06T03:00:00Z",
+                "providedModelName": "gpt-5-mini",
+                "input": "prompt",
+                "output": "answer",
+            }
+        ]
+        extractor_cls.return_value.extract_complete_trace.return_value = trace_data
+
+        response = await traces.get_trace_reconstruction_ndjson(
+            "trace-ndjson",
+            source="local",
+            include_payloads=False,
+        )
+
+        body = response.body.decode("utf-8").strip().splitlines()
+        self.assertEqual(response.media_type, "application/x-ndjson")
+        self.assertEqual(len(body), 4)
+        self.assertIn('"record_type": "trace"', body[0])
+        self.assertIn('"record_type": "event"', body[1])
+
 
 if __name__ == "__main__":
     unittest.main()
