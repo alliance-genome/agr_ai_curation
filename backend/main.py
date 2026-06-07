@@ -2,9 +2,11 @@
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+import json
 import logging
 import os
-import socket
+import urllib.error
+import urllib.request
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -555,14 +557,19 @@ def _check_database_url(label: str, env_name: str, *, required: bool) -> dict[st
 
     try:
         from sqlalchemy import create_engine, text
+        from sqlalchemy.pool import NullPool
 
         engine = create_engine(
             url,
             pool_pre_ping=True,
             connect_args={"connect_timeout": 3},
+            poolclass=NullPool,
         )
-        with engine.connect() as connection:
-            connection.execute(text("select 1"))
+        try:
+            with engine.connect() as connection:
+                connection.execute(text("select 1"))
+        finally:
+            engine.dispose()
         return {
             "status": "connected",
             "required": required,
@@ -577,12 +584,27 @@ def _check_database_url(label: str, env_name: str, *, required: bool) -> dict[st
 
 
 def _check_elasticsearch(*, required: bool) -> dict[str, object]:
-    """Check that the literature Elasticsearch/OpenSearch endpoint is reachable."""
+    """Check that the configured literature search index accepts a real query."""
     host = os.getenv("ELASTICSEARCH_HOST")
     if not host:
         return {
             "status": "missing" if required else "not_configured",
             "required": required,
+        }
+
+    scheme = os.getenv("ELASTICSEARCH_SCHEME")
+    index = os.getenv("ELASTICSEARCH_INDEX")
+    if scheme not in {"http", "https"}:
+        return {
+            "status": "invalid_config",
+            "required": required,
+            "error_type": "InvalidScheme",
+        }
+    if not index:
+        return {
+            "status": "invalid_config",
+            "required": required,
+            "error_type": "MissingIndex",
         }
 
     port_raw = os.getenv("ELASTICSEARCH_PORT", "443")
@@ -596,13 +618,20 @@ def _check_elasticsearch(*, required: bool) -> dict[str, object]:
         }
 
     try:
-        with socket.create_connection((host, port), timeout=3):
-            pass
+        query = json.dumps({"query": {"match_all": {}}, "size": 0}).encode("utf-8")
+        request = urllib.request.Request(
+            f"{scheme}://{host}:{port}/{index}/_search",
+            data=query,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=3) as response:
+            response.read(1)
         return {
             "status": "connected",
             "required": required,
         }
-    except OSError as e:
+    except (OSError, urllib.error.URLError, urllib.error.HTTPError) as e:
         logger.warning("Literature search readiness check failed: %s", type(e).__name__)
         return {
             "status": "disconnected",
@@ -621,11 +650,12 @@ def _service_ready(service_status: dict[str, object]) -> bool:
     return False
 
 
-async def readiness_check():
+def readiness_check():
     """Strict readiness endpoint for Docker validation stacks."""
     require_external_validation_deps = _env_flag_enabled(
         "HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS",
     )
+    require_literature_db = _env_flag_enabled("HEALTH_CHECK_REQUIRE_LITERATURE_DB")
     services = {
         "app": {"status": "running", "required": True},
         "curation_db": _check_database_url(
@@ -636,7 +666,7 @@ async def readiness_check():
         "literature_db": _check_database_url(
             "Literature database",
             "LITERATURE_DB_URL",
-            required=require_external_validation_deps,
+            required=require_literature_db,
         ),
         "literature_search": _check_elasticsearch(
             required=require_external_validation_deps,
@@ -657,6 +687,7 @@ async def readiness_check():
             "checks": {
                 "app": "running",
                 "external_validation_dependencies_required": require_external_validation_deps,
+                "literature_db_required": require_literature_db,
             },
             "services": services,
         },

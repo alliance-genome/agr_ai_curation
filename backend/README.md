@@ -125,6 +125,7 @@ config/
 - `GET /` - API information
 - `GET /health` - Lightweight liveness probe
 - `GET /health/live` - Explicit liveness alias for probes
+- `GET /health/ready` - Strict Docker readiness probe for validation dependencies
 - `GET /health/deep` - Comprehensive dependency health check
 - `GET /docs` - Swagger UI documentation
 - `GET /openapi.json` - OpenAPI specification
