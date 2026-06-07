@@ -418,6 +418,19 @@ def _merge_evidence_tool_names(existing: List[str], incoming: Any) -> List[str]:
     return merged
 
 
+def _looks_like_curation_shaped_payload(payload: Any) -> bool:
+    """Return whether a top-level structured result resembles extractor output."""
+
+    if not isinstance(payload, dict):
+        return False
+    if isinstance(payload.get("curatable_objects"), list):
+        return True
+    return isinstance(payload.get("domain_pack_id"), str) and isinstance(
+        payload.get("objects"),
+        list,
+    )
+
+
 def _close_langfuse_context(
     context_manager: Any,
     *,
@@ -1445,6 +1458,36 @@ async def _run_agent_with_tracing(
     # Run robust uncited-negative guardrail using actual tool calls (if structured Answer)
     if structured_result is not None:
         expected_output_type = getattr(agent, "output_type", None)
+        if _looks_like_curation_shaped_payload(structured_result):
+            output_type_name = _output_type_name(expected_output_type)
+            logger.warning(
+                "Top-level agent produced curation-shaped structured output; "
+                "extractor specialists should use backend builder finalization.",
+                extra={
+                    "trace_id": trace_id,
+                    "user_id": user_id,
+                    "agent": current_agent,
+                    "output_type": output_type_name,
+                    "structured_result_keys": sorted(structured_result.keys()),
+                    "operation": "top_level_curation_shaped_structured_output",
+                },
+            )
+            write_extraction_trace_event(
+                event_type="extraction_builder.top_level_curation_shaped_structured_output",
+                trace_id=trace_id,
+                output_summary={
+                    "keys": sorted(structured_result.keys()),
+                    "object_count": len(
+                        structured_result.get("curatable_objects")
+                        or structured_result.get("objects")
+                        or []
+                    ),
+                },
+                metadata={
+                    "agent": current_agent,
+                    "output_type": output_type_name,
+                },
+            )
         structured_evidence_records = extract_evidence_records_from_structured_result(structured_result)
         if (
             structured_result_requires_evidence(

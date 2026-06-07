@@ -163,6 +163,7 @@ _FLOW_OUTPUT_PROJECTION_CURATOR_REQUEST_HINT_PATTERN = re.compile(
 _FLOW_OUTPUT_PROJECTION_PLANNER_PREVIEW_LIMIT = 5
 CURATION_HANDOFF_AGENT_ID = "curation_handoff"
 CURATION_HANDOFF_READY_EVENT = "CURATION_HANDOFF_READY"
+FLOW_EXTRACTION_HANDOFF_AUDIT_EVENT = "FLOW_EXTRACTION_HANDOFF_AUDIT"
 
 
 class FlowTemplateConfigurationError(ValueError):
@@ -270,6 +271,93 @@ def _capture_internal_extraction_event_cursor() -> dict[str, Any]:
     }
 
 
+def _unique_non_empty_values(values: List[Any]) -> List[str]:
+    """Return distinct non-empty string values in first-seen order."""
+
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        normalized = str(value or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered.append(normalized)
+    return ordered
+
+
+def _internal_extraction_tool_output_with_audit_since(
+    cursor: Mapping[str, Any],
+    *,
+    tool_name: str,
+) -> tuple[Any | None, dict[str, Any]]:
+    """Return the latest full structured extraction payload plus lookup audit data."""
+
+    normalized_tool_name = str(tool_name or "").strip()
+    audit: dict[str, Any] = {
+        "internalEventEmitted": False,
+        "internalEventMatchedTool": False,
+        "internalEventFoundByFlow": False,
+        "internalPayloadFound": False,
+        "internalPayloadSource": None,
+        "internalEventSources": [],
+        "internalEventToolNames": [],
+        "builderFinalizationSeen": False,
+    }
+    if not normalized_tool_name:
+        return None, audit
+
+    sources: list[tuple[str, Any, int]] = []
+    live_events = cursor.get("live_events")
+    live_index = cursor.get("live_index")
+    if isinstance(live_events, list) and isinstance(live_index, int):
+        sources.append(("live_events", live_events, live_index))
+
+    collected_events = cursor.get("collected_events")
+    collected_index = cursor.get("collected_index")
+    if isinstance(collected_events, list) and isinstance(collected_index, int):
+        sources.append(("collected_events", collected_events, collected_index))
+
+    internal_event_sources: list[str] = []
+    internal_event_tool_names: list[str] = []
+    for source_name, events, start_index in sources:
+        for event in reversed(events[start_index:]):
+            if not isinstance(event, Mapping):
+                continue
+            if event.get("type") != INTERNAL_EXTRACTION_RESULT_EVENT_TYPE:
+                continue
+            audit["internalEventEmitted"] = True
+            internal_event_sources.append(source_name)
+            details = event.get("details") or {}
+            if not isinstance(details, Mapping):
+                continue
+            event_tool_name = str(details.get("toolName") or "").strip()
+            internal_event_tool_names.append(event_tool_name)
+            if event_tool_name != normalized_tool_name:
+                continue
+            audit["internalEventMatchedTool"] = True
+            audit["internalEventFoundByFlow"] = True
+            internal = event.get("internal") or {}
+            if isinstance(internal, Mapping):
+                audit["builderFinalizationSeen"] = bool(
+                    internal.get("builder_finalization")
+                    or details.get("builderFinalization")
+                )
+                if "tool_output" in internal and internal.get("tool_output") is not None:
+                    audit["internalPayloadFound"] = True
+                    audit["internalPayloadSource"] = source_name
+                    audit["internalEventSources"] = _unique_non_empty_values(
+                        internal_event_sources
+                    )
+                    audit["internalEventToolNames"] = _unique_non_empty_values(
+                        internal_event_tool_names
+                    )
+                    return internal.get("tool_output"), audit
+
+    audit["internalEventSources"] = _unique_non_empty_values(internal_event_sources)
+    audit["internalEventToolNames"] = _unique_non_empty_values(internal_event_tool_names)
+    return None, audit
+
+
 def _internal_extraction_tool_output_since(
     cursor: Mapping[str, Any],
     *,
@@ -277,36 +365,11 @@ def _internal_extraction_tool_output_since(
 ) -> Any | None:
     """Return the latest full structured extraction payload emitted by a step."""
 
-    normalized_tool_name = str(tool_name or "").strip()
-    if not normalized_tool_name:
-        return None
-
-    sources: list[tuple[Any, int]] = []
-    live_events = cursor.get("live_events")
-    live_index = cursor.get("live_index")
-    if isinstance(live_events, list) and isinstance(live_index, int):
-        sources.append((live_events, live_index))
-
-    collected_events = cursor.get("collected_events")
-    collected_index = cursor.get("collected_index")
-    if isinstance(collected_events, list) and isinstance(collected_index, int):
-        sources.append((collected_events, collected_index))
-
-    for events, start_index in sources:
-        for event in reversed(events[start_index:]):
-            if not isinstance(event, Mapping):
-                continue
-            if event.get("type") != INTERNAL_EXTRACTION_RESULT_EVENT_TYPE:
-                continue
-            details = event.get("details") or {}
-            if not isinstance(details, Mapping):
-                continue
-            if str(details.get("toolName") or "").strip() != normalized_tool_name:
-                continue
-            internal = event.get("internal") or {}
-            if isinstance(internal, Mapping) and "tool_output" in internal:
-                return internal.get("tool_output")
-    return None
+    payload, _audit = _internal_extraction_tool_output_with_audit_since(
+        cursor,
+        tool_name=tool_name,
+    )
+    return payload
 
 
 def _truncate_tool_output(value: Any, max_chars: int = _FLOW_STEP_OUTPUT_PREVIEW_CHARS) -> str:
@@ -1920,6 +1983,220 @@ def _build_step_evidence_preview(
     return list(evidence_records[:_FLOW_STEP_EVIDENCE_PREVIEW_LIMIT])
 
 
+def _flow_step_candidate_expected_sources(
+    *,
+    curation_adapter_key: str | None,
+    entry: Optional[dict[str, Any]],
+) -> list[str]:
+    """Return evidence sources showing a step is expected to produce extraction output."""
+
+    if not curation_adapter_key:
+        return []
+    if _is_output_formatter_entry(entry):
+        return []
+    return ["catalog_curation_metadata"]
+
+
+def _flow_candidate_reject_reason(
+    *,
+    candidate: ExtractionEnvelopeCandidate | None,
+    candidate_expected: bool,
+    used_internal_extraction_payload: bool,
+    adapter_key_resolved: bool,
+    evidence_count: int,
+) -> str | None:
+    """Explain the coarse handoff outcome without inspecting full payload values."""
+
+    if candidate is not None:
+        if candidate_expected and not adapter_key_resolved:
+            return "missing_adapter_key"
+        if candidate_expected and evidence_count <= 0:
+            return "evidence_records_empty"
+        return None
+    if not candidate_expected:
+        return "candidate_not_expected"
+    if not used_internal_extraction_payload:
+        return "internal_payload_missing"
+    if not adapter_key_resolved:
+        return "missing_adapter_key"
+    return "payload_not_extraction_envelope_or_rejected"
+
+
+def _build_flow_extraction_handoff_audit_event(
+    *,
+    flow: CurationFlow,
+    flow_run_id: Optional[str],
+    completed_step: Mapping[str, Any],
+) -> Optional[dict[str, Any]]:
+    """Build the public flow event for a completed step handoff audit."""
+
+    audit = completed_step.get("extraction_handoff_audit")
+    if not isinstance(audit, Mapping):
+        return None
+    return {
+        "type": FLOW_EXTRACTION_HANDOFF_AUDIT_EVENT,
+        "timestamp": _now_iso(),
+        "data": {
+            "flow_id": str(flow.id),
+            "flow_name": flow.name,
+            "flow_run_id": flow_run_id,
+            **dict(audit),
+        },
+    }
+
+
+def _build_flow_extraction_handoff_audits(
+    completed_steps: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return compact handoff audits for final flow status payloads."""
+
+    audits: list[dict[str, Any]] = []
+    for step in completed_steps:
+        audit = step.get("extraction_handoff_audit")
+        if isinstance(audit, Mapping):
+            audits.append(dict(audit))
+    return audits
+
+
+def _flow_extraction_output_expected(
+    completed_steps: list[dict[str, Any]],
+) -> bool:
+    """Return whether any completed step was expected to produce extraction output."""
+
+    for step in completed_steps:
+        audit = step.get("extraction_handoff_audit")
+        if isinstance(audit, Mapping) and audit.get("candidateExpected") is True:
+            return True
+    return False
+
+
+def _flow_expected_extraction_handoff_failures(
+    completed_steps: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return fail-closed diagnostics for expected extractor steps with no output."""
+
+    failures: list[dict[str, Any]] = []
+    for step in completed_steps:
+        audit = step.get("extraction_handoff_audit")
+        if not isinstance(audit, Mapping) or audit.get("candidateExpected") is not True:
+            continue
+
+        try:
+            evidence_count = int(audit.get("evidenceCount") or 0)
+        except (TypeError, ValueError):
+            evidence_count = 0
+
+        reason = None
+        if audit.get("candidateBuilt") is not True:
+            reason = str(audit.get("candidateRejectReason") or "no_extraction_candidate")
+        elif audit.get("adapterKeyResolved") is not True:
+            reason = "missing_adapter_key"
+        elif evidence_count <= 0:
+            reason = "evidence_records_empty"
+
+        if reason is None:
+            continue
+
+        failures.append(
+            {
+                "step": audit.get("step"),
+                "toolName": audit.get("toolName"),
+                "agentId": audit.get("agentId"),
+                "agentName": audit.get("agentName"),
+                "reason": reason,
+                "candidateBuilt": audit.get("candidateBuilt"),
+                "candidateRejectReason": audit.get("candidateRejectReason"),
+                "adapterKeyResolved": audit.get("adapterKeyResolved"),
+                "evidenceCount": evidence_count,
+                "internalPayloadFound": audit.get("internalPayloadFound"),
+                "internalEventFoundByFlow": audit.get("internalEventFoundByFlow"),
+            }
+        )
+    return failures
+
+
+def _flow_expected_extraction_output_error_event(
+    *,
+    flow_name: str,
+    failures: list[dict[str, Any]],
+    completed_steps: list[dict[str, Any]],
+) -> tuple[str, dict[str, Any]]:
+    """Build a FLOW_ERROR when expected extraction output is absent."""
+
+    failure_bits = []
+    for failure in failures:
+        step = failure.get("step")
+        tool_name = failure.get("toolName") or "unknown tool"
+        reason = failure.get("reason") or "unknown"
+        failure_bits.append(f"step {step} ({tool_name}): {reason}")
+    failure_summary = "; ".join(failure_bits) or "unknown extraction handoff failure"
+    failure_reason = (
+        f"Flow '{flow_name}' did not produce required extraction output for "
+        f"expected curation step(s): {failure_summary}."
+    )
+    return (
+        failure_reason,
+        {
+            "type": "FLOW_ERROR",
+            "timestamp": _now_iso(),
+            "details": {
+                "reason": "missing_expected_extraction_output",
+                "message": failure_reason,
+                "extraction_handoff_failures": failures,
+                "extraction_handoff_audits": _build_flow_extraction_handoff_audits(
+                    completed_steps
+                ),
+            },
+        },
+    )
+
+
+def _attach_extraction_handoff_audits_to_flow_error(
+    flow_error_event: Dict[str, Any],
+    completed_steps: list[dict[str, Any]],
+) -> Dict[str, Any]:
+    """Attach final handoff audits to a FLOW_ERROR event when available."""
+
+    details = flow_error_event.setdefault("details", {})
+    if isinstance(details, dict):
+        details.setdefault(
+            "extraction_handoff_audits",
+            _build_flow_extraction_handoff_audits(completed_steps),
+        )
+    return flow_error_event
+
+
+def _apply_persisted_result_counts_to_handoff_audits(
+    completed_steps: list[dict[str, Any]],
+    records: list[CurationExtractionResultRecord],
+    *,
+    persistence_status: str = "success",
+    persistence_error_reason: str | None = None,
+) -> None:
+    """Attach final persistence counts to completed-step handoff audits."""
+
+    persisted_by_key: dict[str, int] = {}
+    for record in records:
+        key = _flow_record_persistence_key(record)
+        if key:
+            persisted_by_key[key] = persisted_by_key.get(key, 0) + 1
+
+    for step in completed_steps:
+        audit = step.get("extraction_handoff_audit")
+        if not isinstance(audit, dict):
+            continue
+        audit["persistenceAttempted"] = True
+        audit["persistenceStatus"] = persistence_status
+        if persistence_error_reason:
+            audit["persistenceErrorReason"] = persistence_error_reason
+        candidate = step.get("candidate")
+        if not isinstance(candidate, ExtractionEnvelopeCandidate):
+            audit["persistedResultCount"] = 0
+            continue
+        flow_step_key = _flow_candidate_persistence_key(candidate)
+        audit["persistedResultCount"] = persisted_by_key.get(flow_step_key, 0)
+
+
 def _build_flow_validator_lookup_audit_events(
     completed_step: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
@@ -2327,6 +2604,7 @@ def get_all_agent_tools(
         agent_name: str,
         step_number: int,
         curation_adapter_key: str | None,
+        candidate_expected_from: list[str],
         node_data: dict[str, Any],
     ):
         """Enforce strict flow step ordering at runtime."""
@@ -2421,9 +2699,11 @@ def get_all_agent_tools(
                 )
 
             internal_payload_started_at = time.monotonic()
-            step_result = _internal_extraction_tool_output_since(
-                internal_event_cursor,
-                tool_name=tool_name,
+            step_result, internal_lookup_audit = (
+                _internal_extraction_tool_output_with_audit_since(
+                    internal_event_cursor,
+                    tool_name=tool_name,
+                )
             )
             used_internal_extraction_payload = step_result is not None
             phase_timings_ms["internal_payload_lookup_ms"] = _elapsed_ms(
@@ -2464,6 +2744,38 @@ def get_all_agent_tools(
                 execution_state["evidence_registry"],
                 step_evidence_metadata.get("evidence_records", []),
             )
+            evidence_count = int(step_evidence.get("evidence_count") or 0)
+            candidate_expected = bool(candidate_expected_from)
+            adapter_key_resolved = (
+                bool(_resolve_flow_candidate_adapter_key(candidate))
+                if candidate is not None
+                else bool(curation_adapter_key)
+            )
+            candidate_reject_reason = _flow_candidate_reject_reason(
+                candidate=candidate,
+                candidate_expected=candidate_expected,
+                used_internal_extraction_payload=used_internal_extraction_payload,
+                adapter_key_resolved=adapter_key_resolved,
+                evidence_count=evidence_count,
+            )
+            extraction_handoff_audit: dict[str, Any] | None = None
+            if candidate_expected:
+                extraction_handoff_audit = {
+                    "step": step_number,
+                    "toolName": tool_name,
+                    "agentId": agent_id,
+                    "agentName": agent_name,
+                    "candidateExpected": True,
+                    "candidateExpectedFrom": list(candidate_expected_from),
+                    "curationAdapterKey": curation_adapter_key,
+                    **internal_lookup_audit,
+                    "candidateBuilt": candidate is not None,
+                    "candidateRejectReason": candidate_reject_reason,
+                    "adapterKeyResolved": adapter_key_resolved,
+                    "evidenceCount": evidence_count,
+                    "persistenceAttempted": False,
+                    "persistedResultCount": None,
+                }
             phase_timings_ms["evidence_accumulation_ms"] = _elapsed_ms(
                 evidence_accumulation_started_at
             )
@@ -2488,27 +2800,49 @@ def get_all_agent_tools(
                 "totalDurationMs": total_step_duration_ms,
                 "phaseTimingsMs": dict(phase_timings_ms),
                 "usedInternalExtractionPayload": used_internal_extraction_payload,
+                "candidateExpected": candidate_expected,
+                "candidateExpectedFrom": list(candidate_expected_from),
+                "internalEventEmitted": bool(
+                    internal_lookup_audit.get("internalEventEmitted")
+                ),
+                "internalEventFoundByFlow": bool(
+                    internal_lookup_audit.get("internalEventFoundByFlow")
+                ),
+                "internalPayloadFound": bool(
+                    internal_lookup_audit.get("internalPayloadFound")
+                ),
+                "internalPayloadSource": internal_lookup_audit.get(
+                    "internalPayloadSource"
+                ),
+                "builderFinalizationSeen": bool(
+                    internal_lookup_audit.get("builderFinalizationSeen")
+                ),
+                "candidateBuilt": candidate is not None,
+                "candidateRejectReason": candidate_reject_reason,
+                "adapterKeyResolved": adapter_key_resolved,
+                "evidenceCount": evidence_count,
             }
-            execution_state["completed_steps"].append(
-                {
-                    "step": step_number,
-                    "agent_id": agent_id,
-                    "agent_name": agent_name,
-                    "tool_name": tool_name,
-                    "output": result_text,
-                    "output_preview": _truncate_tool_output(result_text),
-                    "candidate": candidate,
-                    "timing": step_timing,
-                    **(
-                        {"projected_chat_output": projected_chat_output}
-                        if projected_chat_output is not None
-                        else {}
-                    ),
-                    **validation_schedule_metadata,
-                    **validation_group_metadata,
-                    **step_evidence,
-                }
-            )
+            completed_step = {
+                "step": step_number,
+                "agent_id": agent_id,
+                "agent_name": agent_name,
+                "tool_name": tool_name,
+                "output": result_text,
+                "output_preview": _truncate_tool_output(result_text),
+                "candidate": candidate,
+                "timing": step_timing,
+                **(
+                    {"projected_chat_output": projected_chat_output}
+                    if projected_chat_output is not None
+                    else {}
+                ),
+                **validation_schedule_metadata,
+                **validation_group_metadata,
+                **step_evidence,
+            }
+            if extraction_handoff_audit is not None:
+                completed_step["extraction_handoff_audit"] = extraction_handoff_audit
+            execution_state["completed_steps"].append(completed_step)
             execution_state["next_tool_index"] = next_idx + 1
             phase_timings_ms["state_update_ms"] = _elapsed_ms(
                 state_update_started_at
@@ -2533,11 +2867,37 @@ def get_all_agent_tools(
                         "usedInternalExtractionPayload": (
                             used_internal_extraction_payload
                         ),
+                        "candidateExpected": candidate_expected,
+                        "candidateExpectedFrom": list(candidate_expected_from),
+                        "internalEventEmitted": bool(
+                            internal_lookup_audit.get("internalEventEmitted")
+                        ),
+                        "internalEventFoundByFlow": bool(
+                            internal_lookup_audit.get("internalEventFoundByFlow")
+                        ),
+                        "internalPayloadFound": bool(
+                            internal_lookup_audit.get("internalPayloadFound")
+                        ),
+                        "internalPayloadSource": internal_lookup_audit.get(
+                            "internalPayloadSource"
+                        ),
+                        "builderFinalizationSeen": bool(
+                            internal_lookup_audit.get("builderFinalizationSeen")
+                        ),
                         "candidateBuilt": candidate is not None,
-                        "evidenceCount": int(step_evidence.get("evidence_count") or 0),
+                        "candidateRejectReason": candidate_reject_reason,
+                        "adapterKeyResolved": adapter_key_resolved,
+                        "evidenceCount": evidence_count,
                     },
                 }
             )
+            flow_handoff_audit_event = _build_flow_extraction_handoff_audit_event(
+                flow=flow,
+                flow_run_id=flow_run_id,
+                completed_step=completed_step,
+            )
+            if flow_handoff_audit_event is not None:
+                _emit_flow_runtime_event(flow_handoff_audit_event)
             return result
 
         return _ordered_tool
@@ -2744,6 +3104,17 @@ def get_all_agent_tools(
                 specialist_name=specialist_name,
             )
 
+        curation = entry.get("curation")
+        curation_adapter_key = (
+            str(curation.get("adapter_key") or "").strip() or None
+            if isinstance(curation, dict)
+            else None
+        )
+        candidate_expected_from = _flow_step_candidate_expected_sources(
+            curation_adapter_key=curation_adapter_key,
+            entry=entry,
+        )
+
         ordered_tool_names.append(tool_name)
         streaming_tool = _wrap_with_step_order(
             raw_streaming_tool,
@@ -2753,11 +3124,8 @@ def get_all_agent_tools(
             agent_name=entry.get("name", agent_id),
             step_number=step_num,
             node_data=data,
-            curation_adapter_key=(
-                str(entry.get("curation", {}).get("adapter_key") or "").strip() or None
-                if isinstance(entry.get("curation"), dict)
-                else None
-            ),
+            curation_adapter_key=curation_adapter_key,
+            candidate_expected_from=candidate_expected_from,
         )
 
         logger.info('[Flow Executor] Created streaming tool: %s (%s)', tool_name, specialist_name)
@@ -3227,8 +3595,75 @@ def _persist_flow_extraction_candidates_or_build_error(
     session_id: str,
     trace_id: Optional[str],
     flow_run_id: Optional[str],
+    extraction_output_required: bool = False,
 ) -> tuple[bool, Optional[str], Optional[Dict[str, Any]], list[CurationExtractionResultRecord]]:
     """Persist flow extraction candidates and return a FLOW_ERROR payload on failure."""
+
+    if extraction_output_required:
+        if not document_id:
+            failure_reason = (
+                f"Flow '{flow_name}' could not persist required extraction output "
+                "because no document_id was provided."
+            )
+            return (
+                False,
+                failure_reason,
+                {
+                    "type": "FLOW_ERROR",
+                    "timestamp": _now_iso(),
+                    "details": {
+                        "reason": "missing_document_id_for_extraction_persistence",
+                        "message": failure_reason,
+                    },
+                },
+                [],
+            )
+        if not candidates:
+            failure_reason = (
+                f"Flow '{flow_name}' expected curation extraction output, but no "
+                "persistable extraction candidates were produced."
+            )
+            return (
+                False,
+                failure_reason,
+                {
+                    "type": "FLOW_ERROR",
+                    "timestamp": _now_iso(),
+                    "details": {
+                        "reason": "no_extraction_candidates",
+                        "message": failure_reason,
+                    },
+                },
+                [],
+            )
+
+    missing_adapter_candidates = [
+        candidate
+        for candidate in candidates
+        if not _resolve_flow_candidate_adapter_key(candidate)
+    ]
+    if missing_adapter_candidates:
+        missing_agents = _unique_non_empty_scope_values(
+            [candidate.agent_key for candidate in missing_adapter_candidates]
+        )
+        failure_reason = (
+            f"Flow '{flow_name}' produced extraction candidates without adapter keys: "
+            f"{', '.join(missing_agents) or 'unknown agent'}."
+        )
+        return (
+            False,
+            failure_reason,
+            {
+                "type": "FLOW_ERROR",
+                "timestamp": _now_iso(),
+                "details": {
+                    "reason": "missing_adapter_key",
+                    "message": failure_reason,
+                    "agent_keys": missing_agents,
+                },
+            },
+            [],
+        )
 
     try:
         persisted_records = _persist_flow_extraction_candidates(
@@ -3262,6 +3697,45 @@ def _persist_flow_extraction_candidates_or_build_error(
                 },
             },
             [],
+        )
+
+    if extraction_output_required and not persisted_records:
+        failure_reason = (
+            f"Flow '{flow_name}' expected persisted extraction results, but "
+            "persistence returned no records."
+        )
+        return (
+            False,
+            failure_reason,
+            {
+                "type": "FLOW_ERROR",
+                "timestamp": _now_iso(),
+                "details": {
+                    "reason": "extraction_persistence_empty_result",
+                    "message": failure_reason,
+                },
+            },
+            [],
+        )
+    if extraction_output_required and len(persisted_records) < len(candidates):
+        failure_reason = (
+            f"Flow '{flow_name}' persisted only {len(persisted_records)} of "
+            f"{len(candidates)} required extraction candidate(s)."
+        )
+        return (
+            False,
+            failure_reason,
+            {
+                "type": "FLOW_ERROR",
+                "timestamp": _now_iso(),
+                "details": {
+                    "reason": "extraction_persistence_partial_result",
+                    "message": failure_reason,
+                    "persisted_count": len(persisted_records),
+                    "candidate_count": len(candidates),
+                },
+            },
+            persisted_records,
         )
 
     return True, None, None, persisted_records
@@ -3591,24 +4065,58 @@ async def execute_flow(
                 yield flow_error_event
                 break
 
+            handoff_failures = _flow_expected_extraction_handoff_failures(completed_steps)
+            if handoff_failures:
+                failure_reason, flow_error_event = (
+                    _flow_expected_extraction_output_error_event(
+                        flow_name=flow.name,
+                        failures=handoff_failures,
+                        completed_steps=completed_steps,
+                    )
+                )
+                flow_status = "failed"
+                yield flow_error_event
+                break
+
+            extraction_candidates = _collect_completed_step_candidates(completed_steps)
+            extraction_output_required = (
+                _flow_extraction_output_expected(completed_steps)
+                or bool(extraction_candidates)
+            )
             persisted, failure_reason, flow_error_event, persisted_records = (
                 _persist_flow_extraction_candidates_or_build_error(
                     flow_name=flow.name,
-                    candidates=_collect_completed_step_candidates(completed_steps),
+                    candidates=extraction_candidates,
                     document_id=document_id,
                     user_id=str(user_id),
                     session_id=session_id,
                     trace_id=trace_id,
                     flow_run_id=flow_run_id,
+                    extraction_output_required=extraction_output_required,
                 )
             )
             if not persisted:
+                _apply_persisted_result_counts_to_handoff_audits(
+                    completed_steps,
+                    persisted_records,
+                    persistence_status="failed",
+                    persistence_error_reason=failure_reason,
+                )
                 flow_status = "failed"
                 if flow_error_event is not None:
+                    flow_error_event = _attach_extraction_handoff_audits_to_flow_error(
+                        flow_error_event,
+                        completed_steps,
+                    )
                     yield flow_error_event
                 break
 
             extraction_persisted = True
+            _apply_persisted_result_counts_to_handoff_audits(
+                completed_steps,
+                persisted_records,
+                persistence_status="success",
+            )
             _merge_persisted_flow_extraction_results(
                 flow_execution_state,
                 persisted_records,
@@ -3669,27 +4177,60 @@ async def execute_flow(
             yield flow_error_event
 
     if flow_status != "failed" and not extraction_persisted:
-        persisted, failure_reason, flow_error_event, persisted_records = (
-            _persist_flow_extraction_candidates_or_build_error(
-                flow_name=flow.name,
-                candidates=_collect_completed_step_candidates(completed_steps),
-                document_id=document_id,
-                user_id=str(user_id),
-                session_id=session_id,
-                trace_id=trace_id,
-                flow_run_id=flow_run_id,
+        handoff_failures = _flow_expected_extraction_handoff_failures(completed_steps)
+        if handoff_failures:
+            failure_reason, flow_error_event = (
+                _flow_expected_extraction_output_error_event(
+                    flow_name=flow.name,
+                    failures=handoff_failures,
+                    completed_steps=completed_steps,
+                )
             )
-        )
-        if not persisted:
             flow_status = "failed"
-            if flow_error_event is not None:
-                yield flow_error_event
+            yield flow_error_event
         else:
-            extraction_persisted = True
-            _merge_persisted_flow_extraction_results(
-                flow_execution_state,
-                persisted_records,
+            extraction_candidates = _collect_completed_step_candidates(completed_steps)
+            extraction_output_required = (
+                _flow_extraction_output_expected(completed_steps)
+                or bool(extraction_candidates)
             )
+            persisted, failure_reason, flow_error_event, persisted_records = (
+                _persist_flow_extraction_candidates_or_build_error(
+                    flow_name=flow.name,
+                    candidates=extraction_candidates,
+                    document_id=document_id,
+                    user_id=str(user_id),
+                    session_id=session_id,
+                    trace_id=trace_id,
+                    flow_run_id=flow_run_id,
+                    extraction_output_required=extraction_output_required,
+                )
+            )
+            if not persisted:
+                _apply_persisted_result_counts_to_handoff_audits(
+                    completed_steps,
+                    persisted_records,
+                    persistence_status="failed",
+                    persistence_error_reason=failure_reason,
+                )
+                flow_status = "failed"
+                if flow_error_event is not None:
+                    flow_error_event = _attach_extraction_handoff_audits_to_flow_error(
+                        flow_error_event,
+                        completed_steps,
+                    )
+                    yield flow_error_event
+            else:
+                extraction_persisted = True
+                _apply_persisted_result_counts_to_handoff_audits(
+                    completed_steps,
+                    persisted_records,
+                    persistence_status="success",
+                )
+                _merge_persisted_flow_extraction_results(
+                    flow_execution_state,
+                    persisted_records,
+                )
 
     # Emit flow-specific completion event
     yield {
@@ -3706,6 +4247,9 @@ async def execute_flow(
             "total_evidence_records": len(evidence_registry.records()),
             "step_evidence_counts": _build_step_evidence_counts(completed_steps),
             "adapter_keys": _build_completed_step_adapter_keys(completed_steps),
+            "extraction_handoff_audits": _build_flow_extraction_handoff_audits(
+                completed_steps
+            ),
             "extraction_result_refs": list(
                 flow_execution_state.get("persisted_extraction_results") or []
             ),

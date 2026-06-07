@@ -164,6 +164,10 @@ def test_internal_extraction_result_event_carries_canonical_builder_payload(monk
     assert event["type"] == "INTERNAL_EXTRACTION_RESULT"
     assert event["internal"]["canonical_payload"] == finalization.payload
     assert event["internal"]["builder_finalization"] == finalization.summary()
+    assert (
+        event["internal"]["builder_finalization"]["builder_invocation_id"]
+        == finalization.builder_invocation_id
+    )
     assert event["internal"]["tool_output"].startswith("{")
 
 
@@ -210,6 +214,42 @@ class _DomainEnvelope(DomainEnvelopeExtractionResult):
     pass
 
 
+def _builder_finalizer_tool(
+    name: str = "finalize_gene_expression_extraction",
+) -> SimpleNamespace:
+    return SimpleNamespace(name=name)
+
+
+def _disable_package_tool_rebinding(monkeypatch) -> None:
+    monkeypatch.setattr(
+        streaming_tools,
+        "_bind_run_state_into_tools",
+        lambda runtime_agent, **_kwargs: runtime_agent,
+    )
+
+
+def _evidence_record_ids_from_payload(payload: dict) -> list[str]:
+    evidence_record_ids: list[str] = []
+    metadata = payload.get("metadata")
+    if isinstance(metadata, dict):
+        records = metadata.get("evidence_records")
+        if isinstance(records, list):
+            for record in records:
+                if isinstance(record, dict):
+                    evidence_record_id = record.get("evidence_record_id")
+                    if evidence_record_id:
+                        evidence_record_ids.append(str(evidence_record_id))
+    for key in ("evidence_record_ids", "evidence_records"):
+        records = payload.get(key)
+        if isinstance(records, list):
+            for record in records:
+                if isinstance(record, str):
+                    evidence_record_ids.append(record)
+                elif isinstance(record, dict) and record.get("evidence_record_id"):
+                    evidence_record_ids.append(str(record["evidence_record_id"]))
+    return list(dict.fromkeys(evidence_record_ids))
+
+
 class _FakeRunResult:
     def __init__(self, *, final_output):
         self.final_output = final_output
@@ -220,6 +260,17 @@ class _FakeRunResult:
 
     def to_input_list(self):
         return [{"role": "user", "content": "extract"}]
+
+
+class _PlainTextRunResult:
+    final_output = "plain specialist answer"
+
+    async def stream_events(self):
+        if False:
+            yield None
+
+    def to_input_list(self):
+        return [{"role": "user", "content": "plain"}]
 
 
 class _BuilderFinalizingRunResult:
@@ -240,6 +291,55 @@ class _BuilderFinalizingRunResult:
             status=builder.CANDIDATE_STATUS_VALID,
         )
         workspace.finalize(candidate_ids=["gex-candidate-1"])
+        if False:
+            yield None
+
+    def to_input_list(self):
+        return [{"role": "user", "content": "extract"}]
+
+
+class _BuilderFinalizingPayloadRunResult:
+    def __init__(
+        self,
+        payload: dict,
+        *,
+        candidate_id: str = "builder-candidate-1",
+        final_output: dict | None = None,
+    ):
+        self.payload = payload
+        self.candidate_id = candidate_id
+        self.final_output = json.dumps(
+            final_output
+            or {
+                "status": "complete",
+                "finalized_run_id": "model-authored-ack-only",
+                "summary": "Finalizer acknowledged the extraction.",
+            }
+        )
+        self.workspace: builder.ExtractionBuilderWorkspace | None = None
+
+    async def stream_events(self):
+        workspace = builder.get_active_extraction_builder_workspace()
+        self.workspace = workspace
+        workspace.upsert_candidate(
+            candidate_id=self.candidate_id,
+            staged_fields=self.payload,
+            evidence_record_ids=_evidence_record_ids_from_payload(self.payload),
+            status=builder.CANDIDATE_STATUS_VALID,
+        )
+        workspace.finalize(candidate_ids=[self.candidate_id])
+        if False:
+            yield None
+
+    def to_input_list(self):
+        return [{"role": "user", "content": "extract"}]
+
+
+class _AckOnlyNoFinalizationRunResult:
+    def __init__(self, final_output: dict):
+        self.final_output = json.dumps(final_output)
+
+    async def stream_events(self):
         if False:
             yield None
 
@@ -328,6 +428,65 @@ class _BuilderFinalizingRunResultWithRecordedEvidence:
         return [{"role": "user", "content": "extract"}]
 
 
+class _FinalizedWorkspaceMissingFinalizationRunResult:
+    final_output = json.dumps(
+        {
+            "status": "complete",
+            "finalized_run_id": "trace-finalized-state",
+            "summary": "Finalizer acknowledged the extraction.",
+            "staged_count": 1,
+            "finalized_count": 1,
+        }
+    )
+
+    async def stream_events(self):
+        call_id = "call-finalize-gene-1"
+        yield _tool_call_stream_event(
+            "finalize_gene_extraction",
+            arguments=json.dumps({"candidate_ids": ["gene-candidate-1"]}),
+            call_id=call_id,
+        )
+        workspace = builder.get_active_extraction_builder_workspace()
+        workspace.upsert_candidate(
+            candidate_id="gene-candidate-1",
+            staged_fields={
+                "curatable_objects": [
+                    {
+                        "object_type": "gene_mention_evidence",
+                        "pending_ref_id": "gene-mention-evidence-crb-1",
+                        "payload": {"mention": "crb/Crumbs"},
+                        "evidence_record_ids": ["evidence-1"],
+                    }
+                ],
+                "metadata": {
+                    "evidence_records": [
+                        {
+                            "evidence_record_id": "evidence-1",
+                            "entity": "crb/Crumbs",
+                            "verified_quote": "Crb abundance was measured.",
+                        }
+                    ]
+                },
+                "run_summary": {"candidate_count": 1, "kept_count": 1},
+            },
+            evidence_record_ids=["evidence-1"],
+            status=builder.CANDIDATE_STATUS_VALID,
+        )
+        workspace.finalize(candidate_ids=["gene-candidate-1"])
+        workspace.finalization = None
+        yield _tool_output_stream_event(
+            json.dumps({
+                "status": "complete",
+                "finalized_run_id": workspace.run_id,
+                "finalized_count": 1,
+            }),
+            call_id=call_id,
+        )
+
+    def to_input_list(self):
+        return [{"role": "user", "content": "extract"}]
+
+
 @pytest.mark.asyncio
 async def test_builder_finalized_specialist_skips_model_authored_output_staging(
     monkeypatch,
@@ -335,6 +494,7 @@ async def test_builder_finalized_specialist_skips_model_authored_output_staging(
     captured_events = []
     captured_trace_events = []
     dispatched = {}
+    _disable_package_tool_rebinding(monkeypatch)
 
     async def _record_validator_dispatch(serialized_payload, *_args, **_kwargs):
         # A1: builder-finalized output DOES run domain validators inline (extraction ->
@@ -358,20 +518,6 @@ async def test_builder_finalized_specialist_skips_model_authored_output_staging(
     )
     monkeypatch.setattr(
         streaming_tools,
-        "stage_extraction_payload",
-        lambda *args, **kwargs: pytest.fail(
-            "builder-finalized output must not stage model-authored JSON"
-        ),
-    )
-    monkeypatch.setattr(
-        streaming_tools,
-        "finalize_extraction_payload",
-        lambda *args, **kwargs: pytest.fail(
-            "builder-finalized output must not finalize model-authored JSON"
-        ),
-    )
-    monkeypatch.setattr(
-        streaming_tools,
         "_emit_specialist_evidence_summary_or_raise",
         lambda *args, **kwargs: pytest.fail(
             "builder-finalized output must not require model-authored evidence"
@@ -390,8 +536,8 @@ async def test_builder_finalized_specialist_skips_model_authored_output_staging(
 
     agent = SimpleNamespace(
         name="Gene Expression Extractor",
-        tools=[],
-        output_type=_DomainEnvelope,
+        tools=[_builder_finalizer_tool()],
+        output_type=None,
         instructions="",
         model="gpt-4o",
     )
@@ -405,6 +551,10 @@ async def test_builder_finalized_specialist_skips_model_authored_output_staging(
     )
 
     assert "Full canonical envelope is retained by the specialist runtime" in final_output
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(final_output)
+    assert "curatable_objects" not in final_output
+    assert "model_authored" not in final_output
 
     internal_event = next(
         event
@@ -424,9 +574,334 @@ async def test_builder_finalized_specialist_skips_model_authored_output_staging(
         for event in captured_trace_events
         if event.get("event_type") == "extraction_builder.finalization_decision"
     ]
+    finalization_state_event = next(
+        event
+        for event in captured_events
+        if event.get("type") == "SPECIALIST_BUILDER_FINALIZATION_STATE"
+    )
+    assert finalization_state_event["details"]["finalizationPresent"] is True
+    assert finalization_state_event["details"]["builderRunId"]
     # A1: validators run on the builder-finalized envelope in the chat turn.
     assert dispatched["called"] is True
     assert dispatched["is_builder_envelope"] is True
+
+
+@pytest.mark.asyncio
+async def test_builder_materializer_rejects_structured_output_schema(monkeypatch):
+    _disable_package_tool_rebinding(monkeypatch)
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: pytest.fail(
+            "builder-materializer output-schema guard should fail before the model runs"
+        ),
+    )
+
+    agent = SimpleNamespace(
+        name="Gene Expression Extractor",
+        tools=[_builder_finalizer_tool()],
+        output_type=_DomainEnvelope,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    with pytest.raises(
+        streaming_tools.SpecialistOutputError,
+        match="also declares _DomainEnvelope structured output",
+    ) as exc_info:
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="extract gene expression evidence",
+            specialist_name="Gene Expression Extractor",
+            max_turns=3,
+            tool_name="ask_gene_expression_specialist",
+        )
+
+    assert exc_info.value.output_type_name == "_DomainEnvelope"
+    assert exc_info.value.details == [
+        {
+            "reason": "builder_materializer_output_schema_forbidden",
+            "output_type": "_DomainEnvelope",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_builder_materializer_missing_finalization_fails_with_diagnostics(
+    monkeypatch,
+):
+    captured_events = []
+    _disable_package_tool_rebinding(monkeypatch)
+
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(
+        streaming_tools,
+        "RunConfig",
+        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+    )
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FinalizedWorkspaceMissingFinalizationRunResult(),
+    )
+
+    agent = SimpleNamespace(
+        name="Gene Extractor",
+        tools=[_builder_finalizer_tool("finalize_gene_extraction")],
+        output_type=None,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    with pytest.raises(
+        streaming_tools.SpecialistOutputError,
+        match="did not leave a finalized backend builder payload",
+    ) as exc_info:
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="extract one gene",
+            specialist_name="Gene Extractor",
+            max_turns=3,
+            tool_name="ask_gene_extractor_specialist",
+        )
+
+    assert exc_info.value.output_type_name == "builder_finalization"
+    assert not [
+        event
+        for event in captured_events
+        if event.get("type") == "INTERNAL_EXTRACTION_RESULT"
+    ]
+    state_event = next(
+        event
+        for event in captured_events
+        if event.get("type") == "SPECIALIST_BUILDER_FINALIZATION_STATE"
+    )
+    assert state_event["details"]["workspaceState"] == "finalized"
+    assert state_event["details"]["finalizationPresent"] is False
+    assert state_event["details"]["candidateCount"] == 1
+    assert state_event["details"]["builderRunId"]
+    assert state_event["details"]["finalizerToolCalls"] == ["finalize_gene_extraction"]
+    missing_event = next(
+        event
+        for event in captured_events
+        if event.get("type") == "SPECIALIST_BUILDER_FINALIZATION_MISSING"
+    )
+    assert missing_event["details"]["reason"] == "builder_finalization_missing"
+    assert missing_event["details"]["workspaceState"] == "finalized"
+
+
+@pytest.mark.asyncio
+async def test_builder_materializer_ack_json_without_finalize_fails(monkeypatch):
+    captured_events = []
+    _disable_package_tool_rebinding(monkeypatch)
+    model_authored_payload = {
+        "summary": "Expression extraction",
+        "curatable_objects": [
+            {
+                "object_type": "gene_expression_annotation",
+                "payload": {"gene_symbol": "wg"},
+                "evidence_record_ids": ["evidence-record-1"],
+            }
+        ],
+        "metadata": {
+            "evidence_records": [
+                {
+                    "evidence_record_id": "evidence-record-1",
+                    "entity": "wg",
+                    "verified_quote": "wg is expressed in embryonic stripes.",
+                }
+            ]
+        },
+    }
+
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(
+        streaming_tools,
+        "RunConfig",
+        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+    )
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _AckOnlyNoFinalizationRunResult(
+            model_authored_payload
+        ),
+    )
+
+    agent = SimpleNamespace(
+        name="Gene Expression Extractor",
+        tools=[_builder_finalizer_tool()],
+        output_type=None,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    with pytest.raises(
+        streaming_tools.SpecialistOutputError,
+        match="did not leave a finalized backend builder payload",
+    ):
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="extract gene expression evidence",
+            specialist_name="Gene Expression Extractor",
+            max_turns=3,
+            tool_name="ask_gene_expression_specialist",
+        )
+
+    assert not [
+        event
+        for event in captured_events
+        if event.get("type") == "INTERNAL_EXTRACTION_RESULT"
+    ]
+    missing_event = next(
+        event
+        for event in captured_events
+        if event.get("type") == "SPECIALIST_BUILDER_FINALIZATION_MISSING"
+    )
+    assert missing_event["details"]["finalizationPresent"] is False
+    assert missing_event["details"]["candidateCount"] == 0
+
+
+@pytest.mark.asyncio
+async def test_builder_materializer_requires_tool_name_for_internal_event(monkeypatch):
+    captured_events = []
+    _disable_package_tool_rebinding(monkeypatch)
+
+    async def _echo_validator_dispatch(serialized_payload, *_args, **_kwargs):
+        return serialized_payload
+
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(
+        streaming_tools,
+        "RunConfig",
+        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+    )
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _BuilderFinalizingRunResult(),
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "_dispatch_domain_envelope_validators_for_chat",
+        _echo_validator_dispatch,
+    )
+
+    agent = SimpleNamespace(
+        name="Gene Expression Extractor",
+        tools=[_builder_finalizer_tool()],
+        output_type=None,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    with pytest.raises(
+        streaming_tools.SpecialistOutputError,
+        match="without a supervisor tool name",
+    ):
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="extract gene expression evidence",
+            specialist_name="Gene Expression Extractor",
+            max_turns=3,
+            tool_name=None,
+        )
+
+    assert not [
+        event
+        for event in captured_events
+        if event.get("type") == "INTERNAL_EXTRACTION_RESULT"
+    ]
+    missing_tool_event = next(
+        event
+        for event in captured_events
+        if event.get("type") == "SPECIALIST_BUILDER_TOOL_NAME_MISSING"
+    )
+    assert missing_tool_event["details"]["finalizationPresent"] is True
+    assert missing_tool_event["details"]["reason"] == (
+        "builder_materializer_tool_name_missing"
+    )
+
+
+@pytest.mark.asyncio
+async def test_specialist_does_not_replay_prior_finalization_in_same_trace(
+    monkeypatch,
+):
+    captured_events = []
+    run_results = [_BuilderFinalizingRunResult(), _PlainTextRunResult()]
+    _disable_package_tool_rebinding(monkeypatch)
+
+    async def _echo_validator_dispatch(serialized_payload, *_args, **_kwargs):
+        return serialized_payload
+
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(
+        streaming_tools,
+        "RunConfig",
+        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "get_current_extraction_trace_run",
+        lambda: SimpleNamespace(trace_id="trace-shared"),
+    )
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: run_results.pop(0),
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "_dispatch_domain_envelope_validators_for_chat",
+        _echo_validator_dispatch,
+    )
+
+    first_agent = SimpleNamespace(
+        name="Gene Expression Extractor",
+        tools=[_builder_finalizer_tool()],
+        output_type=None,
+        instructions="",
+        model="gpt-4o",
+    )
+    await streaming_tools.run_specialist_with_events(
+        agent=first_agent,
+        input_text="extract gene expression evidence",
+        specialist_name="Gene Expression Extractor",
+        max_turns=3,
+        tool_name="ask_gene_expression_specialist",
+    )
+    internal_event_count_after_first = sum(
+        1 for event in captured_events if event.get("type") == "INTERNAL_EXTRACTION_RESULT"
+    )
+
+    second_agent = SimpleNamespace(
+        name="Plain Specialist",
+        tools=[],
+        output_type=None,
+        instructions="",
+        model="gpt-4o",
+    )
+    second_output = await streaming_tools.run_specialist_with_events(
+        agent=second_agent,
+        input_text="answer normally",
+        specialist_name="Plain Specialist",
+        max_turns=3,
+        tool_name="ask_plain_specialist",
+    )
+
+    assert second_output == "plain specialist answer"
+    assert (
+        sum(
+            1
+            for event in captured_events
+            if event.get("type") == "INTERNAL_EXTRACTION_RESULT"
+        )
+        == internal_event_count_after_first
+    )
 
 
 @pytest.mark.asyncio
@@ -442,6 +917,7 @@ async def test_builder_finalized_specialist_emits_evidence_summary_from_recorded
         "chunk_id": "chunk-expression-1",
     }
     captured_events = []
+    _disable_package_tool_rebinding(monkeypatch)
 
     async def _echo_validator_dispatch(serialized_payload, *_args, **_kwargs):
         return serialized_payload
@@ -475,8 +951,8 @@ async def test_builder_finalized_specialist_emits_evidence_summary_from_recorded
 
     agent = SimpleNamespace(
         name="Gene Expression Extractor",
-        tools=[],
-        output_type=_DomainEnvelope,
+        tools=[_builder_finalizer_tool()],
+        output_type=None,
         instructions="",
         model="gpt-4o",
     )
@@ -500,6 +976,7 @@ async def test_builder_finalized_specialist_emits_evidence_summary_from_recorded
 @pytest.mark.asyncio
 async def test_specialist_validation_consumes_builder_finalized_payload(monkeypatch):
     payload = {
+        "domain_pack_id": "agr.test",
         "summary": "Expression extraction",
         "curatable_objects": [
             {
@@ -525,6 +1002,8 @@ async def test_specialist_validation_consumes_builder_finalized_payload(monkeypa
     }
     captured = {}
     captured_events = []
+    _disable_package_tool_rebinding(monkeypatch)
+    run_result = _BuilderFinalizingPayloadRunResult(payload)
 
     async def _capture_validator_input(final_output, **_kwargs):
         captured["validator_payload"] = json.loads(final_output)
@@ -532,7 +1011,11 @@ async def test_specialist_validation_consumes_builder_finalized_payload(monkeypa
 
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        streaming_tools,
+        "RunConfig",
+        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+    )
     monkeypatch.setattr(
         streaming_tools,
         "_dispatch_domain_envelope_validators_for_chat",
@@ -541,13 +1024,13 @@ async def test_specialist_validation_consumes_builder_finalized_payload(monkeypa
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",
-        lambda *args, **kwargs: _FakeRunResult(final_output=json.dumps(payload)),
+        lambda *args, **kwargs: run_result,
     )
 
     agent = SimpleNamespace(
         name="Gene Expression Extractor",
-        tools=[],
-        output_type=_DomainEnvelope,
+        tools=[_builder_finalizer_tool()],
+        output_type=None,
         instructions="",
         model="gpt-4o",
     )
@@ -567,6 +1050,11 @@ async def test_specialist_validation_consumes_builder_finalized_payload(monkeypa
     )
     assert captured["validator_payload"] == internal_event["internal"]["canonical_payload"]
     assert internal_event["internal"]["builder_finalization"]["status"] == "finalized"
+    assert run_result.workspace is not None
+    assert run_result.workspace.finalization is not None
+    assert run_result.workspace.finalization.payload == (
+        internal_event["internal"]["canonical_payload"]
+    )
 
 
 @pytest.mark.asyncio
@@ -596,6 +1084,8 @@ async def test_specialist_internal_event_uses_post_validator_builder_payload(mon
         "run_summary": {"candidate_count": 1, "kept_count": 1},
     }
     captured_events = []
+    _disable_package_tool_rebinding(monkeypatch)
+    run_result = _BuilderFinalizingPayloadRunResult(payload)
 
     async def _append_validator_materialization(final_output, **_kwargs):
         dispatched_payload = json.loads(final_output)
@@ -622,7 +1112,7 @@ async def test_specialist_internal_event_uses_post_validator_builder_payload(mon
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",
-        lambda *args, **kwargs: _FakeRunResult(final_output=json.dumps(payload)),
+        lambda *args, **kwargs: run_result,
     )
     monkeypatch.setattr(
         chat_common,
@@ -636,8 +1126,8 @@ async def test_specialist_internal_event_uses_post_validator_builder_payload(mon
 
     agent = SimpleNamespace(
         name="Gene Expression Extractor",
-        tools=[],
-        output_type=_DomainEnvelope,
+        tools=[_builder_finalizer_tool()],
+        output_type=None,
         instructions="",
         model="gpt-4o",
     )
@@ -656,6 +1146,9 @@ async def test_specialist_internal_event_uses_post_validator_builder_payload(mon
         if event.get("type") == "INTERNAL_EXTRACTION_RESULT"
     )
     canonical_payload = internal_event["internal"]["canonical_payload"]
+    assert run_result.workspace is not None
+    assert run_result.workspace.finalization is not None
+    assert run_result.workspace.finalization.payload == canonical_payload
     assert canonical_payload["curatable_objects"][0]["payload"][
         "validator_marker"
     ] == "post-dispatch"
@@ -706,11 +1199,10 @@ async def test_specialist_builder_events_track_document_and_domain(monkeypatch):
         "run_summary": {"candidate_count": 1, "kept_count": 1},
     }
     captured_trace_events = []
+    _disable_package_tool_rebinding(monkeypatch)
 
-    async def _materialize_domain_envelope(final_output, **_kwargs):
-        dispatched_payload = json.loads(final_output)
-        dispatched_payload["domain_pack_id"] = "agr.test"
-        return json.dumps(dispatched_payload)
+    async def _echo_validator_dispatch(final_output, **_kwargs):
+        return final_output
 
     monkeypatch.setattr(streaming_tools, "add_specialist_event", lambda _event: None)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
@@ -722,12 +1214,12 @@ async def test_specialist_builder_events_track_document_and_domain(monkeypatch):
     monkeypatch.setattr(
         streaming_tools,
         "_dispatch_domain_envelope_validators_for_chat",
-        _materialize_domain_envelope,
+        _echo_validator_dispatch,
     )
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",
-        lambda *args, **kwargs: _FakeRunResult(final_output=json.dumps(payload)),
+        lambda *args, **kwargs: _BuilderFinalizingPayloadRunResult(payload),
     )
     monkeypatch.setattr(
         streaming_tools,
@@ -743,14 +1235,15 @@ async def test_specialist_builder_events_track_document_and_domain(monkeypatch):
     parent_workspace = builder.ExtractionBuilderWorkspace(
         run_id="trace-domain",
         document_id="doc-1",
+        domain_pack_id="agr.test",
         agent_id="supervisor",
     )
     token = builder.set_active_extraction_builder_workspace(parent_workspace)
     try:
         agent = SimpleNamespace(
             name="Gene Expression Extractor",
-            tools=[],
-            output_type=_DomainEnvelope,
+            tools=[_builder_finalizer_tool()],
+            output_type=None,
             instructions="",
             model="gpt-4o",
         )
@@ -805,6 +1298,8 @@ async def test_specialist_validator_dispatch_failure_records_builder_validation_
     }
     captured_events = []
     captured_trace_events = []
+    _disable_package_tool_rebinding(monkeypatch)
+    run_result = _BuilderFinalizingPayloadRunResult(payload)
 
     async def _fail_validator_dispatch(_final_output, **_kwargs):
         raise streaming_tools.SpecialistOutputError(
@@ -838,7 +1333,7 @@ async def test_specialist_validator_dispatch_failure_records_builder_validation_
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",
-        lambda *args, **kwargs: _FakeRunResult(final_output=json.dumps(payload)),
+        lambda *args, **kwargs: run_result,
     )
     monkeypatch.setattr(
         builder,
@@ -848,8 +1343,8 @@ async def test_specialist_validator_dispatch_failure_records_builder_validation_
 
     agent = SimpleNamespace(
         name="Gene Expression Extractor",
-        tools=[],
-        output_type=_DomainEnvelope,
+        tools=[_builder_finalizer_tool()],
+        output_type=None,
         instructions="",
         model="gpt-4o",
     )
@@ -871,7 +1366,7 @@ async def test_specialist_validator_dispatch_failure_records_builder_validation_
         for event in captured_events
         if event.get("type") == "INTERNAL_EXTRACTION_RESULT"
     ]
-    assert not [
+    assert [
         event
         for event in captured_trace_events
         if event.get("event_type") == "extraction_builder.finalization_decision"
@@ -885,6 +1380,21 @@ async def test_specialist_validator_dispatch_failure_records_builder_validation_
     assert errors[0]["reason"] == "domain_validator_dispatch_failed"
     assert errors[0]["request_id"] == "request-1"
     assert errors[0]["validator_binding_id"] == "binding-1"
+    assert run_result.workspace is not None
+    candidate = run_result.workspace.get_candidate(run_result.candidate_id)
+    assert candidate.status == builder.CANDIDATE_STATUS_FINALIZED
+    assert candidate.validation_errors == [
+        {
+            "reason": "domain_validator_dispatch_failed",
+            "message": "Validator agent execution failed: resolver unavailable",
+            "request_id": "request-1",
+            "validator_binding_id": "binding-1",
+            "provider": "domain_validator_dispatch",
+            "method": "validator_agent_error",
+            "specialist_name": "Gene Expression Extractor",
+            "tool_name": "ask_gene_expression_specialist",
+        }
+    ]
 
 
 @pytest.mark.asyncio

@@ -1694,6 +1694,42 @@ def test_builder_domain_envelope_reduction_without_output_type_stays_compact():
         json.loads(result)
 
 
+def test_builder_domain_envelope_reduction_counts_curatable_objects():
+    envelope_output = json.dumps(
+        {
+            "envelope_id": "env-test-builder-curatable",
+            "domain_pack_id": "agr.alliance.gene_expression",
+            "domain_pack_version": "0.1.0",
+            "curatable_objects": [
+                {
+                    "object_type": "GeneExpressionAnnotation",
+                    "object_role": "curatable_unit",
+                    "pending_ref_id": "gene-expression-1",
+                    "status": "validated",
+                    "payload": {
+                        "symbol": "rpm-1",
+                        "taxon": "NCBITaxon:6239",
+                    },
+                }
+            ],
+            "validation_findings": [],
+        }
+    )
+
+    result = streaming_tools._reduce_specialist_output_for_supervisor(
+        envelope_output,
+        expected_output_type=None,
+        finalized_domain_envelope=True,
+    )
+
+    assert "Validated domain envelope result for agr.alliance.gene_expression" in result
+    assert "GeneExpressionAnnotation gene-expression-1 (validated)" in result
+    assert "symbol=rpm-1" in result
+    assert "Object count: 0." not in result
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(result)
+
+
 def test_domain_envelope_reduction_uses_unusual_payload_scalars_not_raw_json():
     envelope_output = json.dumps(
         {
@@ -1745,6 +1781,32 @@ def test_domain_envelope_reduction_empty_objects_never_returns_raw_json():
 
     assert "Validated domain envelope result for agr.alliance.empty" in result
     assert "Object count: 0." in result
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(result)
+
+
+def test_curatable_objects_shape_without_contract_does_not_return_raw_json():
+    envelope_output = json.dumps(
+        {
+            "summary": "Model-authored extraction that should not be replayed.",
+            "curatable_objects": [
+                {
+                    "object_type": "GeneExpressionAnnotation",
+                    "pending_ref_id": "gene-expression-1",
+                    "payload": {"symbol": "rpm-1"},
+                }
+            ],
+        }
+    )
+
+    result = streaming_tools._reduce_specialist_output_for_supervisor(
+        envelope_output,
+        expected_output_type=None,
+        finalized_domain_envelope=False,
+    )
+
+    assert "not passed to the supervisor" in result
+    assert "curatable_objects" not in result
     with pytest.raises(json.JSONDecodeError):
         json.loads(result)
 

@@ -115,6 +115,64 @@ class TestAgentLoader:
         assert gene_extractor.curation.adapter_key == "gene"
         assert gene_extractor.curation.launchable is True
 
+    def test_launchable_curation_extractors_use_builder_finalizer_contract(self):
+        """Extractor specialists must hand off through backend builder finalizers."""
+        from src.lib.config.agent_loader import load_agent_definitions
+        from src.lib.packages.tool_registry import load_tool_registry
+
+        agents = load_agent_definitions(ALLIANCE_AGENTS_PATH)
+        registry = load_tool_registry()
+        bindings_by_tool_id = registry.bindings_by_tool_id
+        builder_finalizer_tool_ids = {
+            binding.tool_id
+            for binding in registry.bindings
+            if bool(binding.metadata.get("builder_finalization"))
+        }
+        launchable_extractors = {
+            agent.agent_id: agent
+            for agent in agents.values()
+            if agent.curation.launchable
+        }
+
+        assert {
+            "gene_expression_extraction",
+            "gene_extractor",
+            "allele_extractor",
+            "disease_extractor",
+            "phenotype_extractor",
+        }.issubset(launchable_extractors)
+
+        for agent_id, agent in launchable_extractors.items():
+            assert (
+                agent.output_schema is None
+            ), f"{agent_id} must not declare model-authored structured output"
+
+            finalizer_tools = [
+                tool_name
+                for tool_name in agent.tools
+                if tool_name in builder_finalizer_tool_ids
+            ]
+            assert finalizer_tools, (
+                f"{agent_id} must include a tool binding with "
+                "metadata.builder_finalization=true"
+            )
+
+            unmarked_finalize_tools = [
+                tool_name
+                for tool_name in agent.tools
+                if tool_name.startswith("finalize_")
+                and tool_name.endswith("_extraction")
+                and tool_name not in builder_finalizer_tool_ids
+            ]
+            assert not unmarked_finalize_tools, (
+                f"{agent_id} has finalize tools missing builder_finalization metadata: "
+                f"{unmarked_finalize_tools}"
+            )
+
+            for tool_name in finalizer_tools:
+                metadata = bindings_by_tool_id[tool_name].metadata
+                assert metadata.get("builder_run_state") is True
+
     def test_get_supervisor_tools(self):
         """Test generating supervisor tool list."""
         from src.lib.config.agent_loader import load_agent_definitions, get_supervisor_tools

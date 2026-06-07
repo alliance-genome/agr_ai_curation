@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from contextvars import ContextVar, Token
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -16,6 +17,8 @@ from .evidence_summary import (
 )
 from .event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 from .extraction_trace_events import write_extraction_trace_event
+
+logger = logging.getLogger(__name__)
 
 BUILDER_STATE_ACTIVE = "active"
 BUILDER_STATE_FINALIZED = "finalized"
@@ -94,6 +97,7 @@ class ExtractionBuilderFinalization:
     evidence_record_ids: tuple[str, ...]
     resolver_selection_count: int
     builder_run_id: str
+    builder_invocation_id: str
     source_candidate_ids: tuple[str, ...] = ()
 
     def summary(self) -> dict[str, Any]:
@@ -104,6 +108,7 @@ class ExtractionBuilderFinalization:
             "evidence_record_ids": list(self.evidence_record_ids),
             "resolver_selection_count": self.resolver_selection_count,
             "builder_run_id": self.builder_run_id,
+            "builder_invocation_id": self.builder_invocation_id,
             "candidate_ids": list(self.candidate_ids),
             "source_candidate_ids": list(self.source_candidate_ids),
         }
@@ -119,11 +124,15 @@ class ExtractionBuilderWorkspace:
         document_id: str | None = None,
         domain_pack_id: str | None = None,
         agent_id: str | None = None,
+        builder_invocation_id: str | None = None,
     ) -> None:
         self.run_id = _optional_string(run_id) or _new_builder_run_id()
         self.document_id = _optional_string(document_id)
         self.domain_pack_id = _optional_string(domain_pack_id)
         self.agent_id = _optional_string(agent_id)
+        self.builder_invocation_id = (
+            _optional_string(builder_invocation_id) or f"builder-invocation-{uuid4()}"
+        )
         self.state = BUILDER_STATE_ACTIVE
         self.candidates: dict[str, ExtractionBuilderCandidate] = {}
         self.validation_errors: list[dict[str, Any]] = []
@@ -196,7 +205,11 @@ class ExtractionBuilderWorkspace:
         errors: Iterable[Mapping[str, Any]],
         candidate_ids: Iterable[str] | None = None,
     ) -> None:
-        self._ensure_mutable()
+        finalized_workspace = (
+            self.finalization is not None or self.state == BUILDER_STATE_FINALIZED
+        )
+        if not finalized_workspace:
+            self._ensure_mutable()
         normalized_errors = [dict(error) for error in errors]
         if not normalized_errors:
             return
@@ -205,12 +218,26 @@ class ExtractionBuilderWorkspace:
             candidate = self.candidates.get(candidate_id)
             if candidate is None:
                 continue
-            candidate.status = CANDIDATE_STATUS_NEEDS_PATCH
+            if not finalized_workspace:
+                candidate.status = CANDIDATE_STATUS_NEEDS_PATCH
             candidate.validation_errors = deepcopy(normalized_errors)
             candidate.updated_at = _now_iso()
         self.validation_errors = deepcopy(normalized_errors)
         self.state = BUILDER_STATE_VALIDATION_FAILED
         self.updated_at = _now_iso()
+        if finalized_workspace:
+            logger.warning(
+                "Recorded validation failure after builder finalization "
+                "run_id=%s invocation_id=%s",
+                self.run_id,
+                self.builder_invocation_id,
+                extra={
+                    "builder_run_id": self.run_id,
+                    "builder_invocation_id": self.builder_invocation_id,
+                    "candidate_ids": list(target_ids),
+                    "operation": "extraction_builder_post_finalization_validation_failure",
+                },
+            )
         self._emit(
             "extraction_builder.validation_failure",
             validation={"status": "failed", "errors": normalized_errors},
@@ -252,6 +279,21 @@ class ExtractionBuilderWorkspace:
                 self.finalization.source_candidate_ids or self.finalized_candidate_ids
             )
             if set(requested_identity_ids) == set(existing_identity_ids):
+                logger.info(
+                    "Extraction builder finalization reused for run_id=%s invocation_id=%s",
+                    self.run_id,
+                    self.builder_invocation_id,
+                    extra={
+                        "builder_run_id": self.run_id,
+                        "builder_invocation_id": self.builder_invocation_id,
+                        "builder_state": self.state,
+                        "candidate_ids": list(self.finalization.candidate_ids),
+                        "source_candidate_ids": list(
+                            self.finalization.source_candidate_ids
+                        ),
+                        "operation": "extraction_builder_finalization_reused",
+                    },
+                )
                 self._emit(
                     "extraction_builder.finalization_decision",
                     output_summary={
@@ -305,6 +347,24 @@ class ExtractionBuilderWorkspace:
             evidence_record_ids=tuple(evidence_record_ids),
             resolver_selection_count=len(resolver_selection_refs),
             builder_run_id=self.run_id,
+            builder_invocation_id=self.builder_invocation_id,
+        )
+        logger.info(
+            "Extraction builder finalized run_id=%s invocation_id=%s candidates=%s",
+            self.run_id,
+            self.builder_invocation_id,
+            list(normalized_candidate_ids),
+            extra={
+                "builder_run_id": self.run_id,
+                "builder_invocation_id": self.builder_invocation_id,
+                "builder_state": self.state,
+                "candidate_ids": list(normalized_candidate_ids),
+                "source_candidate_ids": list(normalized_source_candidate_ids),
+                "evidence_record_ids": list(evidence_record_ids),
+                "resolver_selection_count": len(resolver_selection_refs),
+                "payload_top_level_keys": sorted(payload.keys()),
+                "operation": "extraction_builder_finalized",
+            },
         )
         self._emit(
             "extraction_builder.finalization_decision",
@@ -329,6 +389,7 @@ class ExtractionBuilderWorkspace:
             "document_id": self.document_id,
             "domain_pack_id": self.domain_pack_id,
             "agent_id": self.agent_id,
+            "builder_invocation_id": self.builder_invocation_id,
             "state": self.state,
             "candidate_count": len(self.candidates),
             "candidate_ids": list(self.candidates.keys()),
@@ -421,6 +482,7 @@ class ExtractionBuilderWorkspace:
             validation=validation,
             metadata={
                 "builder_run_id": self.run_id,
+                "builder_invocation_id": self.builder_invocation_id,
                 "document_id": self.document_id,
                 "agent_id": self.agent_id,
                 "builder_state": self.state,
