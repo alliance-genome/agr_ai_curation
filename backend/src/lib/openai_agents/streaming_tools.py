@@ -3432,12 +3432,38 @@ def _emit_validator_lookup_audit_events(
         })
 
 
+def _agent_runtime_curation_adapter_key(agent: Agent) -> Optional[str]:
+    """Return curation adapter metadata attached during runtime agent creation."""
+
+    raw_metadata = getattr(agent, "curation_metadata", None)
+    if not isinstance(raw_metadata, Mapping):
+        raw_metadata = getattr(agent, "curation", None)
+    if not isinstance(raw_metadata, Mapping):
+        return None
+    if not bool(raw_metadata.get("launchable", False)):
+        return None
+    adapter_key = str(raw_metadata.get("adapter_key") or "").strip()
+    return adapter_key or None
+
+
+def _agent_runtime_canonical_agent_key(agent: Agent) -> Optional[str]:
+    """Return the canonical DB/config agent key attached during runtime creation."""
+
+    for attr_name in ("agent_key", "canonical_agent_key"):
+        agent_key = str(getattr(agent, attr_name, "") or "").strip()
+        if agent_key:
+            return agent_key
+    return None
+
+
 async def _dispatch_domain_envelope_validators_for_chat(
     final_output: str,
     *,
     expected_output_type: Any,
     specialist_name: str,
     tool_name: Optional[str],
+    adapter_key: Optional[str] = None,
+    source_agent_key: Optional[str] = None,
     is_builder_envelope: bool = False,
 ) -> str:
     """Run active domain-pack validators before extractor output reaches supervisor.
@@ -3456,7 +3482,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
     ):
         return final_output
 
-    agent_key = _agent_key_from_specialist_tool_name(tool_name)
+    agent_key = str(source_agent_key or "").strip() or _agent_key_from_specialist_tool_name(tool_name)
     if agent_key is None:
         raise SpecialistOutputError(
             specialist_name=specialist_name,
@@ -3504,6 +3530,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
         final_output,
         agent_key=agent_key,
         conversation_summary=f"{specialist_name} chat extraction",
+        adapter_key=adapter_key,
     )
     dispatch_phase_timings_ms["candidate_build_ms"] = _elapsed_ms(
         candidate_started_at
@@ -4235,6 +4262,8 @@ async def run_specialist_with_events(
     )
 
     expected_output_type = getattr(agent, "output_type", None)
+    runtime_curation_adapter_key = _agent_runtime_curation_adapter_key(agent)
+    runtime_canonical_agent_key = _agent_runtime_canonical_agent_key(agent)
     builder_materializer_agent = _is_builder_materializer_agent(agent)
     if builder_materializer_agent and expected_output_type is not None:
         output_type_name = getattr(expected_output_type, "__name__", "response")
@@ -5523,6 +5552,8 @@ async def run_specialist_with_events(
                 expected_output_type=expected_output_type,
                 specialist_name=specialist_name,
                 tool_name=tool_name,
+                adapter_key=runtime_curation_adapter_key,
+                source_agent_key=runtime_canonical_agent_key,
             )
         except SpecialistOutputError as exc:
             dispatch_errors = [
@@ -5543,6 +5574,18 @@ async def run_specialist_with_events(
                         "tool_name": tool_name,
                     }
                 ]
+            logger.warning(
+                "%s chat domain-envelope validation failed after plain output: %s",
+                specialist_name,
+                dispatch_errors,
+                extra={
+                    "specialist_name": specialist_name,
+                    "tool_name": tool_name,
+                    "adapter_key": runtime_curation_adapter_key,
+                    "source_agent_key": runtime_canonical_agent_key,
+                    "operation": "chat_domain_envelope_validation_failed",
+                },
+            )
             builder_workspace.record_validation_failure(
                 errors=dispatch_errors,
                 candidate_ids=[builder_candidate_id],
@@ -5562,6 +5605,8 @@ async def run_specialist_with_events(
                 expected_output_type=expected_output_type,
                 specialist_name=specialist_name,
                 tool_name=tool_name,
+                adapter_key=runtime_curation_adapter_key,
+                source_agent_key=runtime_canonical_agent_key,
                 is_builder_envelope=True,
             )
         except SpecialistOutputError as exc:
@@ -5583,6 +5628,18 @@ async def run_specialist_with_events(
                         "tool_name": tool_name,
                     }
                 ]
+            logger.warning(
+                "%s chat domain-envelope validation failed after builder finalization: %s",
+                specialist_name,
+                dispatch_errors,
+                extra={
+                    "specialist_name": specialist_name,
+                    "tool_name": tool_name,
+                    "adapter_key": runtime_curation_adapter_key,
+                    "source_agent_key": runtime_canonical_agent_key,
+                    "operation": "chat_domain_envelope_validation_failed",
+                },
+            )
             finalized_candidate_ids = (
                 builder_finalization.candidate_ids or (builder_candidate_id,)
             )

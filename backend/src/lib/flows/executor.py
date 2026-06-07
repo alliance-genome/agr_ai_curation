@@ -87,6 +87,7 @@ from src.lib.flows.output_projection import (
     default_projection_plan,
     finalize_output_projection,
     inspect_output_artifacts,
+    projection_plan_allows_empty_bundle,
     preview_output_projection,
 )
 from src.lib.flows.validation_attachments import validation_schedule_from_node_data
@@ -1112,25 +1113,31 @@ async def _try_project_terminal_flow_output(
     if output_format is None:
         return None
 
-    bundle = build_flow_output_artifact_bundle(
-        completed_steps=completed_steps,
-        flow_name=flow_name,
-        flow_run_id=flow_run_id,
-        document_id=document_id,
-        output_format=output_format,  # type: ignore[arg-type]
-    )
-    if not bundle.artifacts:
-        raise _flow_terminal_projection_error(
-            agent_id,
-            "no completed structured artifacts were available before the terminal formatter",
-        )
-
     try:
-        default_plan = default_projection_plan(bundle, output_format=output_format)  # type: ignore[arg-type]
+        plan_for_empty_check: FlowOutputProjectionPlan | None = None
         if projection_plan is not None:
-            plan = FlowOutputProjectionPlan.model_validate(projection_plan).model_copy(
+            plan_for_empty_check = FlowOutputProjectionPlan.model_validate(projection_plan).model_copy(
                 update={"format": output_format}
             )
+        bundle = build_flow_output_artifact_bundle(
+            completed_steps=completed_steps,
+            flow_name=flow_name,
+            flow_run_id=flow_run_id,
+            document_id=document_id,
+            output_format=output_format,  # type: ignore[arg-type]
+        )
+        if not bundle.artifacts and not (
+            plan_for_empty_check is not None
+            and projection_plan_allows_empty_bundle(plan_for_empty_check)
+        ):
+            raise _flow_terminal_projection_error(
+                agent_id,
+                "no completed structured artifacts were available before the terminal formatter",
+            )
+
+        default_plan = default_projection_plan(bundle, output_format=output_format)  # type: ignore[arg-type]
+        if plan_for_empty_check is not None:
+            plan = plan_for_empty_check
             projection = finalize_output_projection(bundle, plan)
         elif _flow_output_should_run_projection_planner(
             bundle=bundle,
@@ -3919,6 +3926,7 @@ async def execute_flow(
     trace_id: Optional[str] = None
     extraction_persisted = False
     curation_handoff_emitted = False
+    pending_terminal_output_event: Optional[dict[str, Any]] = None
     flow_execution_state = supervisor._flow_execution_state
     completed_steps = flow_execution_state["completed_steps"]
     evidence_registry = flow_execution_state["evidence_registry"]
@@ -3987,6 +3995,21 @@ async def execute_flow(
                             "output_length": len(projected_chat_output),
                         },
                     }
+            if (
+                pending_terminal_output_event is not None
+                and not _missing_required_flow_steps(flow_execution_state)
+            ):
+                yield event
+                for flow_validator_audit_event in flow_validator_audit_events:
+                    yield flow_validator_audit_event
+                if flow_step_evidence_event is not None:
+                    yield flow_step_evidence_event
+                event = pending_terminal_output_event
+                event_type = str(event.get("type") or "")
+                event_data = event.get("data", {}) or {}
+                pending_terminal_output_event = None
+                flow_validator_audit_events = []
+                flow_step_evidence_event = None
 
         if projected_chat_ready_event is not None:
             yield event
@@ -4057,6 +4080,15 @@ async def execute_flow(
         if event_type in {"FILE_READY", "CHAT_OUTPUT_READY"}:
             missing_steps = _missing_required_flow_steps(flow_execution_state)
             if missing_steps:
+                if event_type == "FILE_READY":
+                    pending_terminal_output_event = event
+                    logger.info(
+                        "[Flow Executor] Deferring terminal FILE_READY for flow '%s' "
+                        "until required step state catches up; missing=%s",
+                        flow.name,
+                        missing_steps,
+                    )
+                    continue
                 failure_reason, flow_error_event = _flow_incomplete_error_event(
                     flow_name=flow.name,
                     missing_steps=missing_steps,

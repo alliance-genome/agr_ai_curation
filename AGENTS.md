@@ -47,6 +47,14 @@ This file is a fast startup map for humans and coding agents working in `agr_ai_
   - `./scripts/testing/llm_provider_smoke_local.sh`
 - Agent PR gate (local):
   - `./scripts/testing/agent_pr_gate.sh`
+- Full Symphony/Incus evidence smoke preflight:
+  - Run `bash scripts/utilities/symphony_full_stack_smoke_preflight.sh --workspace-dir "$PWD" --compose-project <project> --backend-port <port> --langfuse-port <port> --require-langfuse` from inside the target VM sandbox/workspace before `scripts/testing/dev_release_smoke.py`, sample-paper chat/flow runs, token-budget evidence collection, TraceReview evidence gathering, or any real extraction smoke.
+  - Treat `RESULT: not evidence-ready` as a hard stop unless the user explicitly asks for a degraded diagnostic run. The helper prints `WHY:` lines; follow them literally.
+  - Langfuse is required for evidence runs because TraceReview, token analysis, trace-level debugging, and metric evidence depend on it. Do not blank or disable Langfuse to reduce noise when the goal is metrics/evidence.
+  - Backend-to-Langfuse reachability must pass from inside Docker. A host browser or curl check against the Langfuse UI is not enough if the backend container cannot deliver spans to its configured `LANGFUSE_HOST`.
+  - The curation DB tunnel and literature Elasticsearch/OpenSearch package smoke are required because validation-heavy extraction depends on live curation and literature lookup paths. Docker `Up` is not enough.
+  - Compose service DNS must be intact. A container can be `Up`/`healthy` while detached from `<project>_default`, causing failures like Langfuse `lookup clickhouse`; fix the network/service alias before running evidence smokes. Langfuse web and worker services must resolve ClickHouse and MinIO.
+  - OpenAI Responses websocket transport is the default and should stay enabled for production/default smoke stacks (`OPENAI_RESPONSES_WEBSOCKET_ENABLED=true`, which is also the runner default when unset). Why: websocket transport is intended to make streaming faster. If a websocket handshake hiccup appears, treat it as a transport/provider issue; do not disable websocket permanently or reinterpret it as a flow/finalizer failure. Temporarily setting `OPENAI_RESPONSES_WEBSOCKET_ENABLED=false` is acceptable only for a narrow diagnostic workaround, and the preflight will warn so the stack is not left slow by accident.
 
 ## 3.5) GitHub Access In Interactive Codex Sessions
 

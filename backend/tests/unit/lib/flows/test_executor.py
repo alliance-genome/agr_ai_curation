@@ -1727,6 +1727,131 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_literal_only_terminal_output_can_run_without_structured_artifacts(
+        self, mock_get_agent, mock_streaming, monkeypatch
+    ):
+        """Literal-only formatter plans can create deterministic smoke artifacts."""
+        executor = _executor_module()
+
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        formatter_invocations = []
+        save_calls = []
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                formatter_invocations.append((tool_name, query))
+                return "PDF specialist completed document access for batch smoke."
+
+            return _tool
+
+        async def _fake_save_json_impl(
+            data_json: str,
+            filename: str,
+            pretty: bool = False,
+        ) -> dict:
+            save_calls.append(
+                {
+                    "data": json.loads(data_json),
+                    "filename": filename,
+                    "pretty": pretty,
+                }
+            )
+            return {
+                "file_id": "file-literal-json",
+                "filename": "literal.json",
+                "format": "json",
+                "size_bytes": 42,
+                "mime_type": "application/json",
+                "download_url": "/api/files/file-literal-json/download",
+                "created_at": "2026-06-07T00:00:00Z",
+            }
+
+        mock_streaming.side_effect = _make_streaming_tool
+        monkeypatch.setattr(
+            executor,
+            "get_agent_metadata",
+            lambda agent_id, **_kwargs: {
+                "display_name": {
+                    "pdf_extraction": "General PDF Extraction Agent",
+                    "json_formatter": "JSON File Formatter",
+                }.get(agent_id, agent_id),
+                "description": "",
+                "category": "",
+                "requires_document": agent_id == "pdf_extraction",
+                "tool_name": {
+                    "pdf_extraction": "ask_pdf_extraction_specialist",
+                    "json_formatter": "ask_json_formatter_specialist",
+                }.get(agent_id),
+                "curation": None,
+                "curation_metadata": None,
+            },
+        )
+        monkeypatch.setattr(
+            "src.lib.openai_agents.tools.file_output_tools._save_json_impl",
+            _fake_save_json_impl,
+        )
+
+        flow = _make_flow([
+            _agent_node("n1", "pdf_extraction", output_key="pdf_output"),
+            _agent_node(
+                "n2",
+                "json_formatter",
+                output_key="final_output",
+                custom_instructions="Save the literal smoke status JSON artifact.",
+            ),
+        ])
+        flow.flow_definition["nodes"][1]["data"]["projection_plan"] = {
+            "format": "json",
+            "row_source": "artifact",
+            "json_shape": "rows",
+            "columns": [
+                {
+                    "key": "check",
+                    "transform": {
+                        "type": "literal",
+                        "value": "batch_file_output",
+                    },
+                },
+                {
+                    "key": "status",
+                    "transform": {
+                        "type": "literal",
+                        "value": "completed",
+                    },
+                },
+            ],
+        }
+
+        tools, _, _, execution_state = get_all_agent_tools(
+            flow,
+            include_unavailable=True,
+            flow_run_id="flow-run-123",
+            document_id="document-1",
+        )
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+        asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "read"})))
+        result_text = asyncio.run(
+            tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "format"}))
+        )
+
+        result = json.loads(result_text)
+        assert result["file_id"] == "file-literal-json"
+        assert save_calls == [
+            {
+                "data": [{"check": "batch_file_output", "status": "completed"}],
+                "filename": "Test_Flow_json_export",
+                "pretty": True,
+            }
+        ]
+        assert len(formatter_invocations) == 1
+        assert formatter_invocations[0][0] == "ask_pdf_extraction_specialist"
+        assert "General PDF Extraction Agent" in formatter_invocations[0][1]
+        assert execution_state["completed_steps"][-1]["agent_id"] == "json_formatter"
+        assert execution_state["completed_steps"][-1]["output"] == result_text
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
     def test_terminal_output_without_artifacts_fails_before_formatter_model(
         self, mock_get_agent, mock_streaming
     ):
@@ -4063,6 +4188,83 @@ class TestExecuteFlowTermination:
         flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
         assert flow_finished["data"]["status"] == "completed"
         assert flow_finished["data"]["failure_reason"] is None
+
+    @pytest.mark.asyncio
+    async def test_defers_file_ready_until_terminal_step_state_is_recorded(
+        self, monkeypatch
+    ):
+        """Direct formatter projection can emit FILE_READY before TOOL_COMPLETE."""
+
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "pdf_extraction", step_goal="Read document"),
+            _agent_node("n2", "json_formatter", step_goal="Save JSON"),
+        ])
+        pdf_step = {
+            "step": 1,
+            "agent_id": "pdf_extraction",
+            "agent_name": "PDF Extraction",
+            "tool_name": "ask_pdf_extraction_specialist",
+            "output": "PDF specialist completed document access for batch smoke.",
+            "candidate": None,
+            "evidence_records": [],
+            "evidence_count": 0,
+        }
+        formatter_step = {
+            "step": 2,
+            "agent_id": "json_formatter",
+            "agent_name": "JSON Formatter",
+            "tool_name": "ask_json_formatter_specialist",
+            "output": '{"file_path": "smoke.json"}',
+            "candidate": None,
+            "evidence_records": [],
+            "evidence_count": 0,
+        }
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(
+            pdf_step,
+            ordered_tool_names=[
+                "ask_pdf_extraction_specialist",
+                "ask_json_formatter_specialist",
+            ],
+        )
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            yield {
+                "type": "FILE_READY",
+                "details": {"file_path": "smoke.json", "filename": "smoke.json"},
+            }
+            supervisor._flow_execution_state["completed_steps"].append(formatter_step)
+            yield {
+                "type": "TOOL_COMPLETE",
+                "details": {"toolName": "ask_json_formatter_specialist"},
+            }
+            yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [event async for event in execute_flow(flow, user_id="u1", session_id="s1")]
+        event_types = [event.get("type") for event in events]
+
+        assert "FLOW_ERROR" not in event_types
+        assert "FILE_READY" in event_types
+        assert event_types.index("TOOL_COMPLETE") < event_types.index("FILE_READY")
+        flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
+        assert flow_finished["data"]["status"] == "completed"
 
     @pytest.mark.asyncio
     async def test_fails_when_expected_extraction_step_has_no_candidate(self, monkeypatch):

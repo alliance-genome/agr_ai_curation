@@ -1270,6 +1270,21 @@ def _transform_refs(transform: FlowOutputTransformSpec) -> list[str]:
     return refs
 
 
+def projection_plan_allows_empty_bundle(plan: FlowOutputProjectionPlan) -> bool:
+    """Return whether a projection plan can safely create one literal-only row."""
+
+    if not plan.columns:
+        return False
+    if plan.filters or plan.sort or plan.group_by:
+        return False
+    return all(
+        column.transform is not None
+        and column.transform.type == "literal"
+        and not _transform_refs(column.transform)
+        for column in plan.columns
+    )
+
+
 def validate_projection_plan(
     bundle: FlowOutputArtifactBundle,
     plan: FlowOutputProjectionPlan,
@@ -1279,8 +1294,13 @@ def validate_projection_plan(
     errors: list[str] = []
     warnings: list[str] = list(bundle.warnings)
     rows = bundle.rows_for_source(plan.row_source)
-    if not rows:
+    synthetic_literal_row = not rows and projection_plan_allows_empty_bundle(plan)
+    if not rows and not synthetic_literal_row:
         errors.append(f"Row source '{plan.row_source}' is not available for this flow output.")
+    if synthetic_literal_row:
+        warnings.append(
+            "Projected one literal-only row because no upstream flow artifacts were available."
+        )
 
     if plan.max_rows is not None and (plan.max_rows < 1 or plan.max_rows > MAX_PROJECTION_ROWS):
         errors.append(f"max_rows must be between 1 and {MAX_PROJECTION_ROWS}.")
@@ -1532,6 +1552,8 @@ def apply_projection_plan(
         raise ValueError("; ".join(errors))
 
     rows = bundle.rows_for_source(plan.row_source)
+    if not rows and projection_plan_allows_empty_bundle(plan):
+        rows = [{}]
     for filter_spec in plan.filters:
         rows = [row for row in rows if _row_matches_filter(row, filter_spec)]
     rows = _sort_rows(rows, plan.sort)
@@ -1777,6 +1799,7 @@ __all__ = [
     "default_projection_plan",
     "finalize_output_projection",
     "inspect_output_artifacts",
+    "projection_plan_allows_empty_bundle",
     "preview_output_projection",
     "render_grouped_chat_projection",
     "render_chat_projection",

@@ -18,6 +18,7 @@ still being implemented:
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import io
 import json
@@ -56,7 +57,8 @@ DEFAULT_FLOW_QUERY = (
 DEFAULT_FLOW_MODEL = "gpt-5.4-mini"
 DEFAULT_CHAT_MODEL = "gpt-5.5"
 DEFAULT_SPECIALIST_MODEL = "gpt-5.4-mini"
-EXPECTED_BATCH_PLUMBING_PAYLOAD = [{"check": "batch_file_output", "status": "completed"}]
+EXPECTED_BATCH_PLUMBING_ROW = {"check": "batch_file_output", "status": "completed"}
+EXPECTED_BATCH_PLUMBING_PAYLOAD = [EXPECTED_BATCH_PLUMBING_ROW]
 DEFAULT_WORKSPACE_ADAPTER_KEY = "gene"
 DEFAULT_SHARED_SAMPLE_PDF = Path(
     "/home/ctabone/analysis/alliance/ai_curation_new/agr_ai_curation/sample_fly_publication.pdf"
@@ -1360,7 +1362,15 @@ def build_flow_definition(agent_id: str, agent_name: str) -> Dict[str, Any]:
     }
 
 
-def build_batch_plumbing_flow_definition() -> Dict[str, Any]:
+def build_batch_plumbing_flow_definition(output_format: str = "json") -> Dict[str, Any]:
+    formatter_by_format = {
+        "json": ("json_formatter", "JSON Formatter", "JSON"),
+        "csv": ("csv_formatter", "CSV Formatter", "CSV"),
+        "tsv": ("tsv_formatter", "TSV Formatter", "TSV"),
+    }
+    require(output_format in formatter_by_format, f"Unsupported plumbing output format: {output_format}")
+    formatter_agent_id, formatter_display_name, formatter_label = formatter_by_format[output_format]
+    filename_stem = f"batch_release_smoke_result_{output_format}"
     return {
         "version": "1.0",
         "entry_node_id": "task_input_1",
@@ -1398,21 +1408,27 @@ def build_batch_plumbing_flow_definition() -> Dict[str, Any]:
                 },
             },
             {
-                "id": "json_1",
+                "id": f"{output_format}_1",
                 "type": "agent",
                 "position": {"x": 560, "y": 0},
                 "data": {
-                    "agent_id": "json_formatter",
-                    "agent_display_name": "JSON Formatter",
+                    "agent_id": formatter_agent_id,
+                    "agent_display_name": formatter_display_name,
                     "output_key": "final_output",
+                    "custom_instructions": (
+                        f"For this smoke, use the {formatter_label} save-file tool path. "
+                        "Create exactly one downloadable file from the runtime projection plan, "
+                        "do not ask the previous specialist to rewrite data, and do not include "
+                        "extra prose or alternate rows."
+                    ),
                     "step_goal": (
-                        "Save exactly this JSON payload as a downloadable file and do not include "
-                        "any specialist prose in the file: "
-                        '[{"check":"batch_file_output","status":"completed"}]. '
-                        "Use filename batch_release_smoke_result."
+                        f"Save exactly one {formatter_label} downloadable file with columns "
+                        "check and status. The only row must be "
+                        "check=batch_file_output and status=completed. Use filename "
+                        f"{filename_stem}."
                     ),
                     "projection_plan": {
-                        "format": "json",
+                        "format": output_format,
                         "row_source": "artifact",
                         "json_shape": "rows",
                         "max_rows": 1,
@@ -1440,7 +1456,7 @@ def build_batch_plumbing_flow_definition() -> Dict[str, Any]:
         ],
         "edges": [
             {"id": "edge_1", "source": "task_input_1", "target": "pdf_1"},
-            {"id": "edge_2", "source": "pdf_1", "target": "json_1"},
+            {"id": "edge_2", "source": "pdf_1", "target": f"{output_format}_1"},
         ],
     }
 
@@ -2086,7 +2102,13 @@ def download_batch_zip_payloads(
         for name in members:
             raw_payload = archive.read(name)
             text = raw_payload.decode("utf-8", errors="replace")
-            parsed_payload = decode_json(text)
+            lowered_name = name.lower()
+            if lowered_name.endswith(".csv"):
+                parsed_payload = list(csv.DictReader(io.StringIO(text)))
+            elif lowered_name.endswith(".tsv"):
+                parsed_payload = list(csv.DictReader(io.StringIO(text), delimiter="\t"))
+            else:
+                parsed_payload = decode_json(text)
             payloads[name] = parsed_payload if parsed_payload is not None else text
     require(members, "Batch ZIP archive was empty")
 
@@ -2097,7 +2119,7 @@ def download_batch_zip_payloads(
         status_code=response.status_code,
         payload={
             "members": members,
-            "json_member_count": sum(1 for payload in payloads.values() if not isinstance(payload, str)),
+            "parsed_member_count": sum(1 for payload in payloads.values() if not isinstance(payload, str)),
         },
     )
     return {"members": members, "payloads": payloads}
@@ -2114,12 +2136,38 @@ def _json_text_values(value: Any) -> Iterable[str]:
             yield from _json_text_values(item)
 
 
-def require_batch_plumbing_payload(payloads: Dict[str, Any]) -> None:
-    parsed_payloads = [payload for payload in payloads.values() if not isinstance(payload, str)]
-    require(parsed_payloads, f"Batch plumbing ZIP did not contain a parsed JSON artifact: {payloads}")
+def require_batch_plumbing_payload(payloads: Dict[str, Any], *, output_format: str) -> None:
+    matching_names = [
+        name
+        for name, payload in payloads.items()
+        if not isinstance(payload, str) and name.lower().endswith(f".{output_format}")
+    ]
+    parsed_payloads = [
+        payload
+        for name, payload in payloads.items()
+        if not isinstance(payload, str) and name.lower().endswith(f".{output_format}")
+    ]
+    require(
+        parsed_payloads,
+        f"Batch plumbing ZIP did not contain a parsed {output_format.upper()} artifact: {payloads}",
+    )
     require(
         any(payload == EXPECTED_BATCH_PLUMBING_PAYLOAD for payload in parsed_payloads),
-        f"Batch plumbing ZIP did not contain the expected deterministic payload: {payloads}",
+        (
+            f"Batch plumbing ZIP did not contain the expected deterministic "
+            f"{output_format.upper()} payload: {payloads}"
+        ),
+    )
+    filename_pattern = re.compile(
+        rf"^\d{{3}}_.+_{re.escape(output_format)}_export_\d{{8}}T\d{{6}}Z\.{re.escape(output_format)}$",
+        re.IGNORECASE,
+    )
+    require(
+        all(filename_pattern.match(name) for name in matching_names),
+        (
+            f"Batch plumbing {output_format.upper()} artifact names did not match "
+            f"runtime export naming shape: {matching_names}"
+        ),
     )
 
 
@@ -2304,8 +2352,8 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
             "custom_agent_key": None,
             "flow_id": None,
             "workspace_session_id": None,
-            "batch_plumbing_flow_id": None,
-            "batch_plumbing_id": None,
+            "batch_plumbing_flow_ids": {},
+            "batch_plumbing_ids": {},
             "batch_extraction_flow_id": None,
             "batch_extraction_id": None,
         },
@@ -2313,7 +2361,7 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
         "chat_stream_summary": None,
         "flow_summary": None,
         "workspace_summary": None,
-        "batch_plumbing_zip_members": None,
+        "batch_plumbing_zip_members": {},
         "batch_extraction_zip_members": None,
         "rerank_provider_smoke": {
             "included": args.include_rerank_provider_smoke,
@@ -2337,7 +2385,7 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
     loaded_document = False
     custom_agent_id: Optional[str] = None
     flow_id: Optional[str] = None
-    batch_plumbing_flow_id: Optional[str] = None
+    batch_plumbing_flow_ids: Dict[str, str] = {}
     batch_extraction_flow_id: Optional[str] = None
     primary_document_id: Optional[str] = None
     secondary_document_id: Optional[str] = None
@@ -2758,65 +2806,81 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
             )
             require(int(secondary_status.get("chunk_count") or 0) > 0, f"Expected chunk_count > 0: {secondary_status}")
 
-            print_step("Creating a batch plumbing flow")
-            batch_plumbing_flow_id = create_flow(
-                base_url=base_url,
-                headers=headers,
-                name=f"Dev Release Smoke Batch {uuid4().hex[:8]}",
-                description="Temporary dev release smoke batch plumbing flow",
-                flow_definition=build_batch_plumbing_flow_definition(),
-                checks=checks,
-                step_name="create_batch_plumbing_flow",
-            )
-            evidence["resources"]["batch_plumbing_flow_id"] = batch_plumbing_flow_id
-
-            print_step("Validating the batch plumbing flow")
-            validate_batch_flow(
-                base_url=base_url,
-                headers=headers,
-                flow_id=batch_plumbing_flow_id,
-                checks=checks,
-            )
-
-            print_step("Creating the batch plumbing run")
-            batch_plumbing_id = create_batch(
-                base_url=base_url,
-                headers=headers,
-                flow_id=batch_plumbing_flow_id,
-                document_ids=[primary_document_id, secondary_document_id],
-                checks=checks,
-            )
-            evidence["resources"]["batch_plumbing_id"] = batch_plumbing_id
-
-            print_step("Waiting for batch plumbing processing to complete")
-            terminal_batch = wait_for_batch_terminal(
-                base_url=base_url,
-                headers=headers,
-                batch_id=batch_plumbing_id,
-                batch_timeout_seconds=args.batch_timeout_seconds,
-                poll_interval_seconds=args.poll_interval_seconds,
-                checks=checks,
-            )
-            documents = terminal_batch.get("documents") or []
-            require(len(documents) >= 2, f"Expected at least two batch document results: {terminal_batch}")
-            for document_result in documents:
-                require(
-                    str(document_result.get("status", "")).lower() == "completed",
-                    f"Batch document did not complete successfully: {document_result}",
+            for output_format in ("json", "csv", "tsv"):
+                print_step(f"Creating a batch plumbing {output_format.upper()} flow")
+                batch_plumbing_flow_id = create_flow(
+                    base_url=base_url,
+                    headers=headers,
+                    name=f"Dev Release Smoke Batch {output_format.upper()} {uuid4().hex[:8]}",
+                    description=(
+                        f"Temporary dev release smoke batch plumbing flow for {output_format.upper()} output"
+                    ),
+                    flow_definition=build_batch_plumbing_flow_definition(output_format),
+                    checks=checks,
+                    step_name=f"create_batch_plumbing_{output_format}_flow",
                 )
-                require(document_result.get("result_file_path"), f"Missing result_file_path: {document_result}")
+                batch_plumbing_flow_ids[output_format] = batch_plumbing_flow_id
+                evidence["resources"]["batch_plumbing_flow_ids"][output_format] = (
+                    batch_plumbing_flow_id
+                )
 
-            print_step("Downloading and checking the batch plumbing ZIP")
-            plumbing_zip = download_batch_zip_payloads(
-                base_url=base_url,
-                headers=headers,
-                batch_id=batch_plumbing_id,
-                timeout_seconds=args.zip_timeout_seconds,
-                checks=checks,
-                step_name="batch_plumbing_download_zip",
-            )
-            require_batch_plumbing_payload(plumbing_zip["payloads"])
-            evidence["batch_plumbing_zip_members"] = plumbing_zip["members"]
+                print_step(f"Validating the batch plumbing {output_format.upper()} flow")
+                validate_batch_flow(
+                    base_url=base_url,
+                    headers=headers,
+                    flow_id=batch_plumbing_flow_id,
+                    checks=checks,
+                )
+
+                print_step(f"Creating the batch plumbing {output_format.upper()} run")
+                batch_plumbing_id = create_batch(
+                    base_url=base_url,
+                    headers=headers,
+                    flow_id=batch_plumbing_flow_id,
+                    document_ids=[primary_document_id, secondary_document_id],
+                    checks=checks,
+                )
+                evidence["resources"]["batch_plumbing_ids"][output_format] = (
+                    batch_plumbing_id
+                )
+
+                print_step(
+                    f"Waiting for batch plumbing {output_format.upper()} processing to complete"
+                )
+                terminal_batch = wait_for_batch_terminal(
+                    base_url=base_url,
+                    headers=headers,
+                    batch_id=batch_plumbing_id,
+                    batch_timeout_seconds=args.batch_timeout_seconds,
+                    poll_interval_seconds=args.poll_interval_seconds,
+                    checks=checks,
+                )
+                documents = terminal_batch.get("documents") or []
+                require(
+                    len(documents) >= 2,
+                    f"Expected at least two batch document results: {terminal_batch}",
+                )
+                for document_result in documents:
+                    require(
+                        str(document_result.get("status", "")).lower() == "completed",
+                        f"Batch document did not complete successfully: {document_result}",
+                    )
+                    require(document_result.get("result_file_path"), f"Missing result_file_path: {document_result}")
+
+                print_step(f"Downloading and checking the batch plumbing {output_format.upper()} ZIP")
+                plumbing_zip = download_batch_zip_payloads(
+                    base_url=base_url,
+                    headers=headers,
+                    batch_id=batch_plumbing_id,
+                    timeout_seconds=args.zip_timeout_seconds,
+                    checks=checks,
+                    step_name=f"batch_plumbing_{output_format}_download_zip",
+                )
+                require_batch_plumbing_payload(
+                    plumbing_zip["payloads"],
+                    output_format=output_format,
+                )
+                evidence["batch_plumbing_zip_members"][output_format] = plumbing_zip["members"]
 
             print_step("Creating a real batch extraction flow")
             batch_extraction_flow_id = create_flow(
@@ -2915,7 +2979,7 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
                 flow_id=batch_extraction_flow_id,
                 headers=headers,
             )
-        if batch_plumbing_flow_id:
+        for output_format, batch_plumbing_flow_id in batch_plumbing_flow_ids.items():
             attempt_cleanup(
                 step=f"cleanup_flow_exception:{batch_plumbing_flow_id}",
                 checks=checks,
@@ -3124,7 +3188,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     if payload.get("chat_response_preview"):
         print_step(f"Chat preview: {payload['chat_response_preview']}")
     if payload.get("batch_plumbing_zip_members"):
-        print_step(f"Batch plumbing ZIP members: {', '.join(payload['batch_plumbing_zip_members'][:5])}")
+        plumbing_members = payload["batch_plumbing_zip_members"]
+        if isinstance(plumbing_members, dict):
+            summary = ", ".join(
+                f"{output_format}: {', '.join(members[:2])}"
+                for output_format, members in plumbing_members.items()
+                if isinstance(members, list)
+            )
+            print_step(f"Batch plumbing ZIP members: {summary}")
+        else:
+            print_step(f"Batch plumbing ZIP members: {', '.join(plumbing_members[:5])}")
     if payload.get("batch_extraction_zip_members"):
         print_step(f"Batch extraction ZIP members: {', '.join(payload['batch_extraction_zip_members'][:5])}")
     return 0

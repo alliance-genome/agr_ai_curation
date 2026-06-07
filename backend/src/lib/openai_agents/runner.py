@@ -562,6 +562,32 @@ def _is_groq_runtime_model(model: Any) -> bool:
     return False
 
 
+def _safe_reset_run_context_token(
+    *,
+    label: str,
+    reset_fn: Any,
+    token: Any,
+    trace_id: str,
+    user_id: str,
+) -> None:
+    """Reset run-scoped ContextVar tokens without leaking async-generator close errors."""
+
+    try:
+        reset_fn(token)
+    except ValueError as exc:
+        logger.warning(
+            "Skipped %s context reset after async context switch: %s",
+            label,
+            exc,
+            extra={
+                "trace_id": trace_id,
+                "user_id": user_id,
+                "context_label": label,
+                "operation": "run_context_reset_skipped",
+            },
+        )
+
+
 async def _run_agent_with_groq_retry(
     *,
     agent: Agent,
@@ -869,13 +895,16 @@ async def _run_agent_with_tracing(
 
         # Queue for SDK events from background task
         sdk_queue: asyncio.Queue = asyncio.Queue()
+        sdk_error: Exception | None = None
 
         async def sdk_producer():
             """Background task that consumes SDK events and puts them on the queue."""
+            nonlocal sdk_error
             try:
                 async for event in result.stream_events():
                     await sdk_queue.put(("sdk", event))
             except Exception as e:
+                sdk_error = e
                 logger.error(
                     "SDK producer error: %s",
                     e,
@@ -907,37 +936,51 @@ async def _run_agent_with_tracing(
                     )
                     yield ("live", specialist_event)
 
-                # Try to get SDK event with short timeout
-                # Timeout allows us to re-check live_events periodically
+                # Try to get SDK event with short timeout.
+                # Keep only the queue wait inside this ``try``; SDK/provider
+                # TimeoutError values must propagate instead of being mistaken
+                # for an empty queue poll.
                 try:
                     item = await asyncio.wait_for(sdk_queue.get(), timeout=0.05)
-                    if item is None:
-                        # SDK stream completed
-                        logger.info(
-                            "SDK stream completed",
-                            extra={"trace_id": trace_id, "user_id": user_id},
-                        )
-                        break
-                    if item[0] == "error":
-                        # CRITICAL: Yield remaining live events BEFORE re-raising
-                        # This ensures SPECIALIST_RETRY warnings are visible to users
-                        # even when the retry ultimately fails
+                except asyncio.TimeoutError:
+                    # No SDK event yet, loop continues to check live_events
+                    continue
+
+                if item is None:
+                    # SDK stream completed
+                    logger.info(
+                        "SDK stream completed",
+                        extra={"trace_id": trace_id, "user_id": user_id},
+                    )
+                    if sdk_error is not None:
                         while live_events_yielded < len(live_events):
                             specialist_event = live_events[live_events_yielded]
                             live_events_yielded += 1
                             logger.debug(
-                                "Yielding live event before error: %s",
+                                "Yielding live event before SDK stream error: %s",
                                 specialist_event.get("type"),
                                 extra={"trace_id": trace_id, "user_id": user_id},
                             )
                             yield ("live", specialist_event)
+                        raise sdk_error
+                    break
+                if item[0] == "error":
+                    # CRITICAL: Yield remaining live events BEFORE re-raising.
+                    # This ensures SPECIALIST_RETRY warnings are visible to users
+                    # even when the retry ultimately fails.
+                    while live_events_yielded < len(live_events):
+                        specialist_event = live_events[live_events_yielded]
+                        live_events_yielded += 1
+                        logger.debug(
+                            "Yielding live event before error: %s",
+                            specialist_event.get("type"),
+                            extra={"trace_id": trace_id, "user_id": user_id},
+                        )
+                        yield ("live", specialist_event)
 
-                        # Now re-raise SDK errors
-                        raise item[1]
-                    yield item
-                except asyncio.TimeoutError:
-                    # No SDK event yet, loop continues to check live_events
-                    pass
+                    # Now re-raise SDK errors.
+                    raise item[1]
+                yield item
 
             # Yield any remaining live events after stream ends
             while live_events_yielded < len(live_events):
@@ -1360,8 +1403,20 @@ async def _run_agent_with_tracing(
     finally:
         # Clear the live event list reference
         set_live_event_list(None)
-        reset_active_evidence_records(evidence_workspace_token)
-        reset_active_extraction_builder_workspace(builder_workspace_token)
+        _safe_reset_run_context_token(
+            label="evidence_workspace",
+            reset_fn=reset_active_evidence_records,
+            token=evidence_workspace_token,
+            trace_id=trace_id,
+            user_id=user_id,
+        )
+        _safe_reset_run_context_token(
+            label="extraction_builder_workspace",
+            reset_fn=reset_active_extraction_builder_workspace,
+            token=builder_workspace_token,
+            trace_id=trace_id,
+            user_id=user_id,
+        )
 
     # Get final output if not captured from streaming
     if hasattr(result, "final_output"):

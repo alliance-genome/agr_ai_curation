@@ -80,6 +80,56 @@ As of this document:
 This document now serves as both the implementation record and the durable
 reference for why the smoke looks the way it does.
 
+## 3.0) Required local/Incus preflight for evidence runs
+
+Before running `scripts/testing/dev_release_smoke.py` in a Symphony/Incus
+sandbox, run the evidence-ready stack preflight:
+
+```bash
+bash scripts/utilities/symphony_full_stack_smoke_preflight.sh \
+  --workspace-dir "$PWD" \
+  --compose-project <compose_project> \
+  --backend-port <backend_port> \
+  --langfuse-port <langfuse_port> \
+  --require-langfuse
+```
+
+This preflight is intentionally stricter than `docker ps` or `/health`. It must
+pass before runs whose output will be used for TraceReview, token-budget
+analysis, validation diagnostics, release evidence, or design-doc conclusions.
+
+Treat `RESULT: not evidence-ready` as a hard stop unless the run is explicitly
+a degraded diagnostic. The helper prints `WHY:` lines explaining each blocker:
+
+1. Langfuse is required because TraceReview, token analysis, and trace-level
+   metrics depend on it. Do not disable or blank Langfuse env vars for evidence
+   runs.
+2. Backend-to-Langfuse reachability is required from inside Docker. A host-side
+   browser or `curl` check against Langfuse does not prove backend spans can be
+   delivered to the configured `LANGFUSE_HOST`.
+3. ClickHouse is required because Langfuse stores trace/event analytics there.
+   A Langfuse restart loop with `lookup clickhouse` means traces/metrics are
+   not reliable. The Langfuse worker must also resolve ClickHouse and MinIO so
+   trace ingestion is durable, not just visible in the web process.
+4. Compose service DNS must be intact. Containers can report `Up` or `healthy`
+   while detached from `<project>_default`, breaking service names such as
+   `clickhouse`, `minio`, `weaviate`, or `backend`.
+5. The curation DB tunnel must be up and visible from the backend container
+   because validation-heavy extraction uses live curation lookups.
+6. The literature Elasticsearch/OpenSearch package smoke must pass because
+   reference/literature validation uses the package-backed ES/OpenSearch path;
+   a direct literature SQL tunnel is not a substitute.
+7. OpenAI Responses websocket transport is the default for production/default
+   smoke stacks (`OPENAI_RESPONSES_WEBSOCKET_ENABLED=true`, also the runner
+   default when unset) because it is intended to make streaming faster. A
+   websocket handshake timeout can happen before the supervisor calls any tools;
+   if that provider error is swallowed or misreported, downstream batch/flow
+   evidence can incorrectly look like missing required tool calls. The runner
+   should surface that as a transport/provider error. Temporarily setting
+   `OPENAI_RESPONSES_WEBSOCKET_ENABLED=false` is acceptable for a narrow
+   diagnostic workaround, but the preflight warns so the stack is not left slow
+   by accident.
+
 ## 3.1) Current slice update: Bedrock rerank, flow persistence, stale-document cleanup, and chat hardening
 
 The latest completed slice changed both infrastructure assumptions and smoke

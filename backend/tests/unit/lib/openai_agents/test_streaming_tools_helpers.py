@@ -51,6 +51,27 @@ class _FakeRunResult:
         return [{"role": "user", "content": "prior query"}]
 
 
+def test_agent_runtime_curation_adapter_key_reads_attached_metadata():
+    agent = SimpleNamespace(curation_metadata={"adapter_key": "gene", "launchable": True})
+
+    assert streaming_tools._agent_runtime_curation_adapter_key(agent) == "gene"
+
+
+def test_agent_runtime_curation_adapter_key_requires_launchable_metadata():
+    agent = SimpleNamespace(curation_metadata={"adapter_key": "gene"})
+
+    assert streaming_tools._agent_runtime_curation_adapter_key(agent) is None
+
+
+def test_agent_runtime_canonical_agent_key_reads_attached_key():
+    agent = SimpleNamespace(agent_key="ca_11111111-2222-3333-4444-555555555555")
+
+    assert (
+        streaming_tools._agent_runtime_canonical_agent_key(agent)
+        == "ca_11111111-2222-3333-4444-555555555555"
+    )
+
+
 @pytest.fixture(autouse=True)
 def _reset_streaming_state():
     clear_prompt_context()
@@ -2480,10 +2501,17 @@ async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(mo
         domain_pack_id="gene",
         objects=[SimpleNamespace()],
     )
+    observed_record = {}
+
+    def _fake_domain_envelope_from_extraction_result(record):
+        observed_record["agent_key"] = record.agent_key
+        observed_record["adapter_key"] = record.adapter_key
+        return source_envelope
+
     monkeypatch.setattr(
         curation_prep_service,
         "_domain_envelope_from_extraction_result",
-        lambda _record: source_envelope,
+        _fake_domain_envelope_from_extraction_result,
     )
     monkeypatch.setattr(
         adapter_registry,
@@ -2554,6 +2582,90 @@ async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(mo
     assert dispatched["domain_pack"].pack_id == "gene"
     assert dispatched["kwargs"]["source_envelope_revision"] == 1
     assert [event["type"] for event in emitted] == ["TOOL_START", "TOOL_COMPLETE"]
+    assert emitted[0]["details"]["toolName"] == "dispatch_active_validator_bindings"
+
+
+@pytest.mark.asyncio
+async def test_chat_domain_envelope_dispatch_uses_runtime_adapter_for_custom_agent(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", emitted.append)
+
+    from src.lib.curation_workspace import adapter_registry
+    from src.lib.curation_workspace import curation_prep_service, extraction_results
+    from src.lib.domain_packs import validator_dispatch
+
+    monkeypatch.setattr(
+        extraction_results,
+        "_get_agent_curation_metadata",
+        lambda _agent_key: None,
+    )
+
+    source_envelope = SimpleNamespace(
+        domain_pack_id="gene",
+        objects=[SimpleNamespace()],
+    )
+    observed_record = {}
+
+    def _fake_domain_envelope_from_extraction_result(record):
+        observed_record["agent_key"] = record.agent_key
+        observed_record["adapter_key"] = record.adapter_key
+        return source_envelope
+
+    monkeypatch.setattr(
+        curation_prep_service,
+        "_domain_envelope_from_extraction_result",
+        _fake_domain_envelope_from_extraction_result,
+    )
+    monkeypatch.setattr(
+        adapter_registry,
+        "resolve_curation_domain_pack_by_id",
+        lambda domain_pack_id: SimpleNamespace(pack_id=domain_pack_id),
+    )
+
+    validated_envelope = SimpleNamespace(
+        metadata={},
+        model_dump=lambda mode="json": {
+            "envelope_id": "chat-runtime",
+            "domain_pack_id": "gene",
+            "objects": [{"object_type": "gene_mention_evidence", "payload": {}}],
+            "validation_findings": [],
+            "metadata": {},
+        },
+    )
+    observed = {}
+
+    def _fake_dispatch(envelope, domain_pack, **kwargs):
+        observed["envelope"] = envelope
+        observed["domain_pack"] = domain_pack
+        observed["kwargs"] = kwargs
+        return SimpleNamespace(
+            envelope=validated_envelope,
+            matched_bindings=(),
+            validator_results=(),
+            appended_findings=(),
+        )
+
+    monkeypatch.setattr(
+        validator_dispatch,
+        "dispatch_active_validator_bindings",
+        _fake_dispatch,
+    )
+
+    result = await streaming_tools._dispatch_domain_envelope_validators_for_chat(
+        _gene_extractor_domain_output(),
+        expected_output_type=None,
+        specialist_name="Custom Gene Extraction",
+        tool_name="ask_ca_11111111_2222_3333_4444_555555555555_specialist",
+        adapter_key="gene",
+        source_agent_key="ca_11111111-2222-3333-4444-555555555555",
+        is_builder_envelope=True,
+    )
+
+    assert json.loads(result)["domain_pack_id"] == "gene"
+    assert observed_record["agent_key"] == "ca_11111111-2222-3333-4444-555555555555"
+    assert observed_record["adapter_key"] == "gene"
+    assert observed["domain_pack"].pack_id == "gene"
+    assert observed["envelope"] is source_envelope
     assert emitted[0]["details"]["toolName"] == "dispatch_active_validator_bindings"
 
 

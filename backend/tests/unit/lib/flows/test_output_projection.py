@@ -453,6 +453,43 @@ def test_empty_or_unsupported_row_source_fails_usefully():
         )
 
 
+def test_literal_only_projection_can_create_plumbing_row_without_artifacts():
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[],
+        flow_name="Projection Flow",
+    )
+
+    result = apply_projection_plan(
+        bundle,
+        FlowOutputProjectionPlan(
+            format="json",
+            row_source="artifact",
+            json_shape="rows",
+            columns=[
+                FlowOutputColumnSpec(
+                    key="check",
+                    transform=FlowOutputTransformSpec(
+                        type="literal",
+                        value="batch_file_output",
+                    ),
+                ),
+                FlowOutputColumnSpec(
+                    key="status",
+                    transform=FlowOutputTransformSpec(
+                        type="literal",
+                        value="completed",
+                    ),
+                ),
+            ],
+        ),
+    )
+
+    assert result.rows == [{"check": "batch_file_output", "status": "completed"}]
+    assert result.json_data == [{"check": "batch_file_output", "status": "completed"}]
+    assert result.total_count == 1
+    assert any("literal-only row" in warning for warning in result.warnings)
+
+
 def test_ordered_numeric_filters_do_not_fall_back_to_lexicographic_comparison():
     step = _completed_domain_step()
     step["candidate"].payload_json["objects"][0]["payload"]["score"] = "10"
