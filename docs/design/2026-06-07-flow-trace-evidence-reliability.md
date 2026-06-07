@@ -6,9 +6,9 @@ Date: 2026-06-07
 
 The tunnel-backed smoke run gave us enough evidence to split the token-budget work from a more urgent reliability issue: flow extraction can finish as `completed` with no persisted extraction result, no adapter key, and no evidence records, even after the builder tools report a verified evidence record.
 
-The most concrete code hole is in flow persistence. `_persist_flow_extraction_candidates()` returns `[]` when there are no candidates, and `_persist_flow_extraction_candidates_or_build_error()` currently returns success for that empty result. That lets a flow end with `FLOW_FINISHED.status=completed` and `total_evidence_records=0`.
+There are two separate empty-state problems to fix. First, the runtime evidence registry stayed empty, which means the internal builder payload, candidate construction, or evidence extraction failed before final persistence. Second, final flow persistence accepted an empty candidate/result set as success. `_persist_flow_extraction_candidates()` returns `[]` when there are no candidates, and `_persist_flow_extraction_candidates_or_build_error()` currently returns success for that empty result. Together, those let a flow end with `FLOW_FINISHED.status=completed`, `total_evidence_records=0`, and no extraction-result refs.
 
-The next implementation should make this self-diagnosing and fail closed: if an extraction flow runs a curation extraction step but builds no candidate, extracts no evidence, or persists no extraction result, emit a specific `FLOW_ERROR` with the reason bucket instead of reporting completion.
+The next implementation should make this self-diagnosing and fail closed for steps that are expected to produce curation extraction output: if such a step builds no candidate, extracts no evidence, or persists no extraction result, emit a specific `FLOW_ERROR` with the reason bucket instead of reporting completion. The expected-output signal must be explicit so ordinary non-curation flows do not fail just because they have no extraction candidates.
 
 ## Evidence Sources
 
@@ -84,7 +84,25 @@ The completed step records:
 - `candidateBuilt`
 - `evidenceCount`
 
-Those already appear in `FLOW_STEP_TIMING`, which means we can expose the failure reason without adding a new tracing subsystem.
+Those already appear in `FLOW_STEP_TIMING`, which gives us the right event surface. It does not yet explain the reason: the event needs additional fields for payload presence, candidate rejection, adapter resolution, and evidence-extraction source.
+
+## Empty-State Split
+
+The run exposed two related but distinct empty states:
+
+1. Runtime evidence was empty.
+   `FLOW_FINISHED.total_evidence_records` is computed from the in-memory `evidence_registry.records()`. The observed `step_evidence_counts={"1": 0}` means the step did not add extracted evidence to the registry. Final persistence cannot explain that by itself; the failure is earlier in the step path.
+
+2. Persisted extraction results were empty.
+   `FLOW_FINISHED.extraction_result_refs` is populated only after extraction-result records are persisted. The observed empty refs mean the flow did not persist a reviewable extraction record.
+
+The implementation should diagnose both states separately:
+
+- internal extraction payload missing or invisible;
+- payload present but not an extraction envelope;
+- candidate rejected because adapter metadata was missing;
+- candidate built but no evidence records extracted;
+- candidate/evidence existed but persistence returned no records.
 
 ## Persistence Hole
 
@@ -96,7 +114,7 @@ The problem is lower down:
 - `_persist_flow_extraction_candidates(...)` returns `[]` if `candidates` is empty or `document_id` is missing.
 - `_persist_flow_extraction_candidates_or_build_error(...)` returns `True, None, None, persisted_records` even when `persisted_records == []`.
 
-So an extraction flow can run every required step and still finish as successful if all candidate construction failed silently.
+So a flow can run every required step and still finish as successful if all candidate construction failed silently. This should become an error only when the step was expected to produce curation extraction output. That expectation can come from catalog curation metadata, flow node metadata, extraction-builder tool usage, or explicit step state captured during specialist execution.
 
 ## Likely Root Causes
 
@@ -117,6 +135,7 @@ Fix:
 - Treat empty candidates as an error for curation extraction steps.
 - Treat empty persisted records as an error when candidates were expected.
 - Include reason codes such as `no_extraction_candidates`, `missing_document_id`, or `extraction_persistence_empty_result`.
+- Define `candidate_expected` explicitly from node/catalog curation metadata or extraction-specific step state, rather than inferring it from an empty candidate list.
 
 ### 2. Builder Finalization Did Not Reach Flow Candidate Building
 
@@ -153,11 +172,11 @@ Fix:
 - Add a backend test that a custom agent from `gene_extractor` resolves curation metadata through `get_agent_metadata(...)`.
 - If a flow node is a curation extraction node and no adapter key resolves, fail before specialist execution or emit a typed `FLOW_ERROR`.
 
-### 4. TraceReview 404 Was A Trace-Ingest Failure, Not Proof Of No Trace
+### 4. TraceReview 404 Was Likely A Trace-Ingest Failure, Not Proof Of No Trace
 
 Confidence: medium.
 
-The fresh trace IDs were not retrievable through local or remote TraceReview. Backend logs showed OTLP exporter `401 Unauthorized`, so the likely failure was Langfuse ingest/auth. TraceReview then had nothing to read.
+The fresh trace IDs were not retrievable through local or remote TraceReview. Backend logs showed OTLP exporter `401 Unauthorized`, so the likely failure was Langfuse ingest/auth. TraceReview then probably had nothing to read, but a direct ingest/readback preflight is needed before treating that as proven.
 
 Fix:
 
@@ -182,7 +201,7 @@ Fix:
 
 ### P0: Fail Closed On Empty Flow Evidence
 
-Update `_persist_flow_extraction_candidates_or_build_error(...)` to know whether a curation extraction candidate was expected. It should return failure when:
+Update `_persist_flow_extraction_candidates_or_build_error(...)` to know whether a curation extraction candidate was expected. `candidate_expected` should be derived from explicit extraction-step state, such as catalog curation metadata, flow node metadata, or extraction-builder tool usage. It should return failure when:
 
 - no candidate was collected for an extraction step;
 - candidates existed but no records persisted;
@@ -210,6 +229,8 @@ SpecialistInvocationResult
 ```
 
 Keep the existing internal event for UI/trace compatibility, but do not make flow persistence depend solely on discovering it from collected events after the fact.
+
+Add one surgical test around this boundary: an `INTERNAL_EXTRACTION_RESULT` emitted from the specialist streaming path must be visible to `_internal_extraction_tool_output_since(...)` and must become the `step_result` used for candidate/evidence construction.
 
 ### P1: Explain Candidate Rejection
 
@@ -255,6 +276,8 @@ Add a `redis.ping()` readiness check for local/docker stacks where streaming use
   - candidate list empty -> persistence helper returns failure
   - candidates present but persisted records empty -> failure
   - builder internal payload -> candidate/evidence persisted
+  - emitted `INTERNAL_EXTRACTION_RESULT` is visible to the flow cursor lookup
+  - non-curation flow with no extraction candidates does not fail the extraction-specific gate
 
 - `backend/tests/unit/lib/curation_workspace/test_extraction_results.py`
   - domain-envelope builder payload extracts evidence
