@@ -33,6 +33,30 @@ These runs do not support scalar truncation as the next first move. The measured
 
 For P1, keep scalar truncation deferred until we have traces with genuinely large scalar paths. List/result capping remains plausible, but any future compaction/truncation should preserve a lookup path to the full payload.
 
+## 2026-06-07 Rerun With Validation Tunnels
+
+The raw `validation-rerun-*` directories from this pass are intentionally local-only and gitignored because they contain bulky smoke JSON and backend log excerpts. The useful summary is retained here.
+
+TL;DR:
+
+- Backend readiness was strict and green before the run:
+  - curation DB connected and required.
+  - literature Elasticsearch connected and required.
+  - direct literature DB connected but optional.
+- The live literature Elasticsearch package smoke passed before the paper run.
+- Non-streaming chat passed on the fresh `sample_fly_publication` upload and identified `crb/crumbs`, `ninaE/Rh1`, and `Eys`.
+- Streaming chat passed and produced trace id prefix `d1840f23...`.
+- Flow execution reached the builder tools and logged verified evidence activity, but the smoke failed because the final `FLOW_FINISHED` event reported `total_evidence_records: 0`.
+- TraceReview/Langfuse did not have the fresh trace ids. Backend logs show OTLP export `401 Unauthorized`, so these rerun traces are currently represented by smoke JSON and backend structured logs rather than TraceReview API payloads.
+
+Fresh provider-context preflight measurements stayed small:
+
+- `standard_chat` preflight events ranged from 246 to 459 JSON chars.
+- validator preflight events ranged from 1,879 to 2,267 JSON chars.
+- flow streamed-agent context was 848 JSON chars.
+
+This rerun strengthens the original conclusion: there is still not evidence for truncating scalar values inside JSON structures as the next move. The issues exposed by the real run are operational readiness, duplicate/stale document reuse, TraceReview export availability, Redis auth noise, and the flow structured-output/evidence persistence mismatch.
+
 ## Full-Value Lookup Evidence
 
 TraceReview model-live responses saved under `trace_review/model_live_context_*.json` include:
