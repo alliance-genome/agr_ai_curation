@@ -16,6 +16,7 @@ Token-Aware Tools (Claude-Specific Endpoints):
 - get_extraction_timeline: Ordered extraction and tool timeline
 - get_trace_tree: Langfuse parent/child observation tree
 - get_trace_reconstruction: Ordered Langfuse reconstruction with payload refs
+- get_trace_model_live_context: Provider-call input size classification
 - get_trace_payloads: Payload inventory with sizes and previews
 - get_trace_payload: Exact chunked payload retrieval
 - get_trace_costs: Token and cost accounting
@@ -965,6 +966,21 @@ async def get_trace_payloads(
         },
         timeout_seconds=45.0,
     )
+
+
+async def get_trace_model_live_context(trace_id: str) -> Dict[str, Any]:
+    """Get bounded provider-call input size classification for a trace."""
+    try:
+        validate_trace_id(trace_id)
+    except ValueError as e:
+        return {
+            "status": "error",
+            "data": None,
+            "token_info": None,
+            "error": str(e),
+            "help": "Check trace_id format",
+        }
+    return await _get_claude_endpoint(f"/{trace_id}/model_live_context")
 
 
 async def get_trace_payload(

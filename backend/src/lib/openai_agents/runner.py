@@ -64,6 +64,7 @@ from .config import (
     reasoning_summary_request_settings,
     resolve_model_provider,
 )
+from src.lib.runtime_payload_budget import provider_context_preflight
 from .extraction_trace_events import (
     clear_extraction_trace_run,
     get_current_extraction_trace_run,
@@ -417,6 +418,19 @@ def _merge_evidence_tool_names(existing: List[str], incoming: Any) -> List[str]:
     return merged
 
 
+def _looks_like_curation_shaped_payload(payload: Any) -> bool:
+    """Return whether a top-level structured result resembles extractor output."""
+
+    if not isinstance(payload, dict):
+        return False
+    if isinstance(payload.get("curatable_objects"), list):
+        return True
+    return isinstance(payload.get("domain_pack_id"), str) and isinstance(
+        payload.get("objects"),
+        list,
+    )
+
+
 def _close_langfuse_context(
     context_manager: Any,
     *,
@@ -546,6 +560,32 @@ def _is_groq_runtime_model(model: Any) -> bool:
         return True
 
     return False
+
+
+def _safe_reset_run_context_token(
+    *,
+    label: str,
+    reset_fn: Any,
+    token: Any,
+    trace_id: str,
+    user_id: str,
+) -> None:
+    """Reset run-scoped ContextVar tokens without leaking async-generator close errors."""
+
+    try:
+        reset_fn(token)
+    except ValueError as exc:
+        logger.warning(
+            "Skipped %s context reset after async context switch: %s",
+            label,
+            exc,
+            extra={
+                "trace_id": trace_id,
+                "user_id": user_id,
+                "context_label": label,
+                "operation": "run_context_reset_skipped",
+            },
+        )
 
 
 async def _run_agent_with_groq_retry(
@@ -855,13 +895,16 @@ async def _run_agent_with_tracing(
 
         # Queue for SDK events from background task
         sdk_queue: asyncio.Queue = asyncio.Queue()
+        sdk_error: Exception | None = None
 
         async def sdk_producer():
             """Background task that consumes SDK events and puts them on the queue."""
+            nonlocal sdk_error
             try:
                 async for event in result.stream_events():
                     await sdk_queue.put(("sdk", event))
             except Exception as e:
+                sdk_error = e
                 logger.error(
                     "SDK producer error: %s",
                     e,
@@ -893,37 +936,51 @@ async def _run_agent_with_tracing(
                     )
                     yield ("live", specialist_event)
 
-                # Try to get SDK event with short timeout
-                # Timeout allows us to re-check live_events periodically
+                # Try to get SDK event with short timeout.
+                # Keep only the queue wait inside this ``try``; SDK/provider
+                # TimeoutError values must propagate instead of being mistaken
+                # for an empty queue poll.
                 try:
                     item = await asyncio.wait_for(sdk_queue.get(), timeout=0.05)
-                    if item is None:
-                        # SDK stream completed
-                        logger.info(
-                            "SDK stream completed",
-                            extra={"trace_id": trace_id, "user_id": user_id},
-                        )
-                        break
-                    if item[0] == "error":
-                        # CRITICAL: Yield remaining live events BEFORE re-raising
-                        # This ensures SPECIALIST_RETRY warnings are visible to users
-                        # even when the retry ultimately fails
+                except asyncio.TimeoutError:
+                    # No SDK event yet, loop continues to check live_events
+                    continue
+
+                if item is None:
+                    # SDK stream completed
+                    logger.info(
+                        "SDK stream completed",
+                        extra={"trace_id": trace_id, "user_id": user_id},
+                    )
+                    if sdk_error is not None:
                         while live_events_yielded < len(live_events):
                             specialist_event = live_events[live_events_yielded]
                             live_events_yielded += 1
                             logger.debug(
-                                "Yielding live event before error: %s",
+                                "Yielding live event before SDK stream error: %s",
                                 specialist_event.get("type"),
                                 extra={"trace_id": trace_id, "user_id": user_id},
                             )
                             yield ("live", specialist_event)
+                        raise sdk_error
+                    break
+                if item[0] == "error":
+                    # CRITICAL: Yield remaining live events BEFORE re-raising.
+                    # This ensures SPECIALIST_RETRY warnings are visible to users
+                    # even when the retry ultimately fails.
+                    while live_events_yielded < len(live_events):
+                        specialist_event = live_events[live_events_yielded]
+                        live_events_yielded += 1
+                        logger.debug(
+                            "Yielding live event before error: %s",
+                            specialist_event.get("type"),
+                            extra={"trace_id": trace_id, "user_id": user_id},
+                        )
+                        yield ("live", specialist_event)
 
-                        # Now re-raise SDK errors
-                        raise item[1]
-                    yield item
-                except asyncio.TimeoutError:
-                    # No SDK event yet, loop continues to check live_events
-                    pass
+                    # Now re-raise SDK errors.
+                    raise item[1]
+                yield item
 
             # Yield any remaining live events after stream ends
             while live_events_yielded < len(live_events):
@@ -1346,8 +1403,20 @@ async def _run_agent_with_tracing(
     finally:
         # Clear the live event list reference
         set_live_event_list(None)
-        reset_active_evidence_records(evidence_workspace_token)
-        reset_active_extraction_builder_workspace(builder_workspace_token)
+        _safe_reset_run_context_token(
+            label="evidence_workspace",
+            reset_fn=reset_active_evidence_records,
+            token=evidence_workspace_token,
+            trace_id=trace_id,
+            user_id=user_id,
+        )
+        _safe_reset_run_context_token(
+            label="extraction_builder_workspace",
+            reset_fn=reset_active_extraction_builder_workspace,
+            token=builder_workspace_token,
+            trace_id=trace_id,
+            user_id=user_id,
+        )
 
     # Get final output if not captured from streaming
     if hasattr(result, "final_output"):
@@ -1444,6 +1513,36 @@ async def _run_agent_with_tracing(
     # Run robust uncited-negative guardrail using actual tool calls (if structured Answer)
     if structured_result is not None:
         expected_output_type = getattr(agent, "output_type", None)
+        if _looks_like_curation_shaped_payload(structured_result):
+            output_type_name = _output_type_name(expected_output_type)
+            logger.warning(
+                "Top-level agent produced curation-shaped structured output; "
+                "extractor specialists should use backend builder finalization.",
+                extra={
+                    "trace_id": trace_id,
+                    "user_id": user_id,
+                    "agent": current_agent,
+                    "output_type": output_type_name,
+                    "structured_result_keys": sorted(structured_result.keys()),
+                    "operation": "top_level_curation_shaped_structured_output",
+                },
+            )
+            write_extraction_trace_event(
+                event_type="extraction_builder.top_level_curation_shaped_structured_output",
+                trace_id=trace_id,
+                output_summary={
+                    "keys": sorted(structured_result.keys()),
+                    "object_count": len(
+                        structured_result.get("curatable_objects")
+                        or structured_result.get("objects")
+                        or []
+                    ),
+                },
+                metadata={
+                    "agent": current_agent,
+                    "output_type": output_type_name,
+                },
+            )
         structured_evidence_records = extract_evidence_records_from_structured_result(structured_result)
         if (
             structured_result_requires_evidence(
@@ -1677,6 +1776,7 @@ async def run_agent_streamed(
         hierarchy = doc_context.hierarchy
         abstract = doc_context.abstract
 
+    provided_runtime_agent = agent is not None
     # Use provided agent OR create the supervisor agent with all domain specialists
     # All agent settings come from environment variables (see config.py)
     if agent is None:
@@ -1710,6 +1810,38 @@ async def run_agent_streamed(
     # Commit pending prompts for whichever agent we're using
     # (supervisor runs immediately after creation, unlike specialists which are on-demand)
     commit_pending_prompts(agent_for_prompt_commit)
+
+    def _emit_provider_context_preflight(trace_id: str) -> None:
+        model_name = str(getattr(agent, "model", "") or "")
+        try:
+            provider = resolve_model_provider(model_name)
+        except (LookupError, RuntimeError, ValueError):
+            logger.warning(
+                "Unable to resolve provider for provider-context preflight model=%s",
+                model_name,
+                exc_info=True,
+            )
+            provider = None
+        provider_context_preflight(
+            surface="flow" if provided_runtime_agent else "standard_chat",
+            operation="streamed_agent_context",
+            provider=provider,
+            model=model_name,
+            payload={
+                "input_items": input_items,
+                "document_id": document_id,
+                "document_name": document_name,
+                "active_groups": active_groups or [],
+                "agent_name": getattr(agent, "name", agent_name),
+            },
+            metadata={
+                "trace_id": trace_id,
+                "session_id": session_id,
+                "document_id": document_id,
+                "context_message_count": len(context_messages),
+            },
+            emit_trace_event=True,
+        )
 
     # Generate a fallback trace ID (used when Langfuse not configured)
     doc_prefix = document_id[:8] if document_id else "nodoc"
@@ -1815,6 +1947,7 @@ async def run_agent_streamed(
                     user_id=user_id,
                     observation_id=getattr(root_span, "id", None),
                 )
+                _emit_provider_context_preflight(trace_id)
 
                 logger.info(
                     "Trace created",
@@ -2088,6 +2221,7 @@ async def run_agent_streamed(
                 session_id=session_id,
                 user_id=user_id,
             )
+            _emit_provider_context_preflight(fallback_trace_id)
             run_started_event = {
                 "type": "RUN_STARTED",
                 "data": {
@@ -2134,6 +2268,7 @@ async def run_agent_streamed(
             session_id=session_id,
             user_id=user_id,
         )
+        _emit_provider_context_preflight(fallback_trace_id)
         run_started_event = {
             "type": "RUN_STARTED",
             "data": {

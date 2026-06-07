@@ -200,6 +200,8 @@ services:
       - ANONYMIZED_TELEMETRY=False  # Disable ChromaDB telemetry (capital F required)
       - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/ai_curation}
       - HEALTH_CHECK_STRICT_MODE=${HEALTH_CHECK_STRICT_MODE:-false}
+      - HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS=${HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS:-false}
+      - HEALTH_CHECK_REQUIRE_LITERATURE_DB=${HEALTH_CHECK_REQUIRE_LITERATURE_DB:-false}
       - POSTGRES_HOST=${POSTGRES_HOST:-postgres}
       - POSTGRES_PORT=${POSTGRES_PORT:-5432}
       - POSTGRES_DB=${POSTGRES_DB:-ai_curation}
@@ -225,6 +227,8 @@ services:
       - RERANK_AWS_CONFIG_FILE=${RERANK_AWS_CONFIG_FILE:-/runtime/secrets/aws-rerank/config}
       - RERANK_PROVIDER=${RERANK_PROVIDER:-none}
       - BEDROCK_RERANK_MODEL_ARN=${BEDROCK_RERANK_MODEL_ARN:-arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0}
+      - OPENAI_RESPONSES_WEBSOCKET_ENABLED=${OPENAI_RESPONSES_WEBSOCKET_ENABLED:-true}
+      - OPENAI_WEBSOCKET_BASE_URL=${OPENAI_WEBSOCKET_BASE_URL:-}
       - FEEDBACK_USE_SNS=${FEEDBACK_USE_SNS:-false}
       # Tool failure alerts (reuses PROMPT_SUGGESTIONS_SNS_TOPIC_ARN)
       - TOOL_FAILURE_ALERTS_ENABLED=${TOOL_FAILURE_ALERTS_ENABLED:-false}
@@ -286,7 +290,7 @@ services:
       - "169.254.169.254:127.0.0.1"  # Block EC2 IMDS metadata endpoint
       - "169.254.170.2:127.0.0.1"    # Block ECS credential endpoint
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; response = urllib.request.urlopen('http://localhost:8000/health/live', timeout=2); response.read(1)"]
+      test: ["CMD", "python", "-c", "import urllib.request; response = urllib.request.urlopen('http://localhost:8000/health/live', timeout=10); response.read(1)"]
       interval: 30s
       timeout: 10s
       retries: 3

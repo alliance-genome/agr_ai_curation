@@ -6,7 +6,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 BASE_URL="${1:-http://localhost:8000}"
 TIMESTAMP_UTC="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 STAMP_FILE="$(date -u +"%Y%m%dT%H%M%SZ")"
-OUT_DIR="file_outputs/temp"
+OUT_DIR="${RERANK_PROVIDER_SMOKE_OUT_DIR:-file_outputs/temp}"
 OUT_FILE="${OUT_DIR}/rerank_provider_smoke_local_${STAMP_FILE}.json"
 DEFAULT_LOCAL_RERANKER_URL="http://reranker-transformers:8080"
 REPO_ENV_FILE="${REPO_ROOT}/.env"
@@ -29,6 +29,17 @@ If RERANKER_URL is exported for the smoke run, the script passes that override
 through to the backend. Otherwise it validates any RERANKER_URL already
 present in the local backend .env file before falling back to the default
 local Compose hostname.
+
+Optional environment:
+  SMOKE_COMPOSE_ENV_FILE       Extra docker compose --env-file path.
+  SMOKE_COMPOSE_PROJECT_NAME   Explicit docker compose -p project name.
+  SMOKE_EXTRA_ENV_FILE         Extra shell env file sourced after home test env.
+  RERANK_PROVIDER_SMOKE_OUT_DIR Directory for the evidence JSON.
+  SMOKE_BACKEND_HOST_PORT, SMOKE_REDIS_HOST_PORT, SMOKE_POSTGRES_HOST_PORT,
+  SMOKE_WEAVIATE_HTTP_HOST_PORT, SMOKE_WEAVIATE_GRPC_HOST_PORT,
+  SMOKE_LANGFUSE_HOST_PORT, SMOKE_CLICKHOUSE_HTTP_HOST_PORT,
+  SMOKE_CLICKHOUSE_NATIVE_HOST_PORT, SMOKE_MINIO_API_HOST_PORT,
+  SMOKE_MINIO_CONSOLE_HOST_PORT
 EOF
   exit 0
 fi
@@ -43,6 +54,7 @@ declare -i FAIL_COUNT=0
 
 LAST_CHECK_JSON=""
 LAST_DERIVED_JSON=""
+LAST_HTTP_BODY=""
 
 ensure_python_bin() {
   if [[ -n "${PY_BIN}" ]]; then
@@ -90,6 +102,14 @@ append_smoke_compose_args() {
   # shellcheck disable=SC2178,SC2034
   local -n compose_args_ref="${args_array_name}"
 
+  if [[ -n "${SMOKE_COMPOSE_ENV_FILE:-}" ]]; then
+    compose_args_ref+=(--env-file "${SMOKE_COMPOSE_ENV_FILE}")
+  fi
+
+  if [[ -n "${SMOKE_COMPOSE_PROJECT_NAME:-}" ]]; then
+    compose_args_ref+=(-p "${SMOKE_COMPOSE_PROJECT_NAME}")
+  fi
+
   if [[ -n "${SMOKE_COMPOSE_OVERRIDE_FILE:-}" ]]; then
     compose_args_ref+=(-f docker-compose.yml -f "${SMOKE_COMPOSE_OVERRIDE_FILE}")
   fi
@@ -114,6 +134,31 @@ services:
     environment:
       RERANKER_URL: $(json_escape "${RERANKER_URL}")
 EOF
+}
+
+source_smoke_extra_env_file() {
+  if [[ -z "${SMOKE_EXTRA_ENV_FILE:-}" ]]; then
+    return 0
+  fi
+  if [[ ! -f "${SMOKE_EXTRA_ENV_FILE}" ]]; then
+    echo "Error: SMOKE_EXTRA_ENV_FILE does not exist: ${SMOKE_EXTRA_ENV_FILE}" >&2
+    exit 1
+  fi
+  # shellcheck disable=SC1090
+  source "${SMOKE_EXTRA_ENV_FILE}"
+}
+
+apply_smoke_port_overrides() {
+  [[ -z "${SMOKE_BACKEND_HOST_PORT:-}" ]] || export BACKEND_HOST_PORT="${SMOKE_BACKEND_HOST_PORT}"
+  [[ -z "${SMOKE_REDIS_HOST_PORT:-}" ]] || export REDIS_HOST_PORT="${SMOKE_REDIS_HOST_PORT}"
+  [[ -z "${SMOKE_POSTGRES_HOST_PORT:-}" ]] || export POSTGRES_HOST_PORT="${SMOKE_POSTGRES_HOST_PORT}"
+  [[ -z "${SMOKE_WEAVIATE_HTTP_HOST_PORT:-}" ]] || export WEAVIATE_HTTP_HOST_PORT="${SMOKE_WEAVIATE_HTTP_HOST_PORT}"
+  [[ -z "${SMOKE_WEAVIATE_GRPC_HOST_PORT:-}" ]] || export WEAVIATE_GRPC_HOST_PORT="${SMOKE_WEAVIATE_GRPC_HOST_PORT}"
+  [[ -z "${SMOKE_LANGFUSE_HOST_PORT:-}" ]] || export LANGFUSE_HOST_PORT="${SMOKE_LANGFUSE_HOST_PORT}"
+  [[ -z "${SMOKE_CLICKHOUSE_HTTP_HOST_PORT:-}" ]] || export CLICKHOUSE_HTTP_HOST_PORT="${SMOKE_CLICKHOUSE_HTTP_HOST_PORT}"
+  [[ -z "${SMOKE_CLICKHOUSE_NATIVE_HOST_PORT:-}" ]] || export CLICKHOUSE_NATIVE_HOST_PORT="${SMOKE_CLICKHOUSE_NATIVE_HOST_PORT}"
+  [[ -z "${SMOKE_MINIO_API_HOST_PORT:-}" ]] || export MINIO_API_HOST_PORT="${SMOKE_MINIO_API_HOST_PORT}"
+  [[ -z "${SMOKE_MINIO_CONSOLE_HOST_PORT:-}" ]] || export MINIO_CONSOLE_HOST_PORT="${SMOKE_MINIO_CONSOLE_HOST_PORT}"
 }
 
 read_repo_env_value() {
@@ -161,7 +206,7 @@ wait_for_backend() {
   local delay_sec="${2:-2}"
   local code
   for _ in $(seq 1 "${attempts}"); do
-    code="$(curl -sS --max-time 5 -o /dev/null -w "%{http_code}" "${BASE_URL}/health" || true)"
+    code="$(curl -s --max-time 5 -o /dev/null -w "%{http_code}" "${BASE_URL}/health" || true)"
     if [[ "${code}" == "200" ]]; then
       return 0
     fi
@@ -185,6 +230,7 @@ run_http_check() {
   local body
   body="$(cat "${tmp_body}" 2>/dev/null || true)"
   rm -f "${tmp_body}"
+  LAST_HTTP_BODY="${body}"
 
   local status="pass"
   if [[ "${http_code}" != "${expected}" ]]; then
@@ -509,12 +555,12 @@ configure_stack_for_provider() {
 
   if rerank_provider_requires_local_service "${provider}"; then
     RERANK_PROVIDER="${provider}" compose_with_local_reranker up -d --wait reranker-transformers
-    RERANK_PROVIDER="${provider}" compose_with_local_reranker up -d --wait backend
+    RERANK_PROVIDER="${provider}" compose_with_local_reranker up -d backend
     return 0
   fi
 
   compose_with_local_reranker rm -sf reranker-transformers >/dev/null 2>&1 || true
-  RERANK_PROVIDER="${provider}" compose up -d --wait backend
+  RERANK_PROVIDER="${provider}" compose up -d backend
 }
 
 main() {
@@ -526,6 +572,8 @@ main() {
 
   # shellcheck disable=SC1091
   . "${SCRIPT_DIR}/load-home-test-env.sh"
+  source_smoke_extra_env_file
+  apply_smoke_port_overrides
   ensure_python_bin
   ensure_smoke_compose_override_file
   trap cleanup_smoke_compose_override EXIT
@@ -556,7 +604,7 @@ PY
       continue
     fi
 
-    if ! wait_for_backend 30 2; then
+    if ! wait_for_backend 90 2; then
       append_derived_check "$("${PY_BIN}" - "${provider}" <<'PY'
 import json
 import sys
@@ -587,7 +635,8 @@ PY
       continue
     fi
 
-    connections_body="$(run_http_check "${provider}" "${provider^^}_CONNECTIONS" "/api/admin/health/connections" "200")"
+    run_http_check "${provider}" "${provider^^}_CONNECTIONS" "/api/admin/health/connections" "200" >/dev/null
+    connections_body="${LAST_HTTP_BODY}"
     CHECKS_ITEMS+=("${LAST_CHECK_JSON}")
     if [[ "$(last_check_result)" != "pass" ]]; then
       print_stack_diagnostics

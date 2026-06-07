@@ -19,6 +19,7 @@ from src.lib.agent_studio.tools import (
     get_trace_conversation,
     get_trace_costs,
     get_trace_duplicates,
+    get_trace_model_live_context,
     get_trace_payloads,
     get_trace_summary,
 )
@@ -437,6 +438,8 @@ async def inspect_chat_traces(
         result = await get_trace_costs(authorized_trace_id)
     elif normalized_detail == "duplicates":
         result = await get_trace_duplicates(authorized_trace_id)
+    elif normalized_detail == "model_live_context":
+        result = await get_trace_model_live_context(authorized_trace_id)
     elif normalized_detail == "payload_inventory":
         try:
             offset = max(0, int(cursor or 0))
@@ -451,7 +454,7 @@ async def inspect_chat_traces(
     else:
         return _tool_response(
             "invalid_detail",
-            "Unsupported trace detail. Use inventory, conversation, summary, diagnostic_report, tool_calls, costs, duplicates, or payload_inventory.",
+            "Unsupported trace detail. Use inventory, conversation, summary, diagnostic_report, tool_calls, costs, duplicates, model_live_context, or payload_inventory.",
             detail=normalized_detail,
         )
 

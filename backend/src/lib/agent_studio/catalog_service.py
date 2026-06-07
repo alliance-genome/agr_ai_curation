@@ -1514,26 +1514,39 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
         output_type=output_schema,
         output_guardrails=output_guardrails,
     )
+    runtime_agent.agent_key = str(db_agent.agent_key)
     try:
         from src.lib.config.agent_loader import get_agent_by_folder, get_agent_definition
 
         agent_definition = get_agent_definition(str(db_agent.agent_key))
         if agent_definition is None:
             agent_definition = get_agent_by_folder(str(db_agent.agent_key))
-        if agent_definition is None:
+
+        curation_definition = (
+            agent_definition
+            if _launchable_curation_metadata_from_definition(agent_definition) is not None
+            else _inherited_curation_definition_for_db_agent(db_agent)
+        )
+        curation_metadata = _curation_metadata_from_definition(curation_definition)
+        if curation_metadata is not None:
+            runtime_agent.curation_metadata = dict(curation_metadata)
+            runtime_agent.curation = dict(curation_metadata)
+
+        structured_definition = agent_definition
+        if structured_definition is None:
             for candidate_key in (
                 getattr(db_agent, "template_source", None),
                 getattr(db_agent, "group_rules_component", None),
             ):
                 candidate_text = str(candidate_key or "")
-                agent_definition = (
+                structured_definition = (
                     get_agent_definition(candidate_text)
                     or get_agent_by_folder(candidate_text)
                 )
-                if agent_definition is not None:
+                if structured_definition is not None:
                     break
         structured_finalization = getattr(
-            agent_definition,
+            structured_definition,
             "structured_finalization",
             None,
         )
@@ -1621,6 +1634,62 @@ def _merge_registry_required_params(
     return merged_required_params, merged_requires_document
 
 
+def _curation_metadata_from_definition(agent_definition: Any) -> Dict[str, Any] | None:
+    curation = getattr(agent_definition, "curation", None)
+    if curation is None:
+        return None
+    return {
+        "adapter_key": getattr(curation, "adapter_key", None),
+        "launchable": bool(getattr(curation, "launchable", False)),
+    }
+
+
+def _launchable_curation_metadata_from_definition(
+    agent_definition: Any,
+) -> Dict[str, Any] | None:
+    metadata = _curation_metadata_from_definition(agent_definition)
+    if metadata is None:
+        return None
+    adapter_key = str(metadata.get("adapter_key") or "").strip()
+    if not adapter_key or not bool(metadata.get("launchable", False)):
+        return None
+    return metadata
+
+
+def _tool_ids_include_builder_finalizer(tool_ids: List[str]) -> bool:
+    for tool_id in tool_ids:
+        tool_info = TOOL_REGISTRY.get(tool_id)
+        if isinstance(tool_info, dict) and bool(tool_info.get("builder_finalization")):
+            return True
+    return False
+
+
+def _inherited_curation_definition_for_db_agent(db_agent: Any) -> Any | None:
+    canonical_tool_ids = _canonical_tool_ids(list(getattr(db_agent, "tool_ids", []) or []))
+    operates_on_document = "document_id" in _required_context_for_tool_ids(canonical_tool_ids)
+    if not operates_on_document or not _tool_ids_include_builder_finalizer(canonical_tool_ids):
+        return None
+
+    for candidate_key in (
+        getattr(db_agent, "template_source", None),
+        getattr(db_agent, "group_rules_component", None),
+    ):
+        normalized_candidate = str(candidate_key or "").strip()
+        if not normalized_candidate:
+            continue
+        inherited_definition = get_agent_definition(normalized_candidate)
+        if inherited_definition is None:
+            inherited_definition = get_agent_by_folder(normalized_candidate)
+        inherited_curation = getattr(inherited_definition, "curation", None)
+        if (
+            inherited_curation is not None
+            and inherited_curation.launchable
+            and str(getattr(inherited_curation, "adapter_key", "") or "").strip()
+        ):
+            return inherited_definition
+    return None
+
+
 def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
     """Get metadata about a unified agent (display name, requirements, etc.).
 
@@ -1641,7 +1710,11 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
 
     agent_definition = get_agent_definition(agent_id)
     db_agent = _get_db_agent_row(agent_id, dict(kwargs))
-    curation_definition = agent_definition
+    curation_definition = (
+        agent_definition
+        if _launchable_curation_metadata_from_definition(agent_definition) is not None
+        else None
+    )
     if curation_definition is None and db_agent is not None:
         # The agent has no definition under its own (routing) key. This happens for
         # builder/materializer agents whose routing key differs from their definition
@@ -1653,28 +1726,9 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
         # parent definition explicitly declares itself launchable for curation. This is
         # data-driven (no hard-coded name table) and authoritative, and stays scoped to
         # document-context extraction agents.
-        tool_ids = list(getattr(db_agent, "tool_ids", []) or [])
-        operates_on_document = "document_id" in _required_context_for_tool_ids(tool_ids)
-        if operates_on_document:
-            for candidate_key in (
-                getattr(db_agent, "template_source", None),
-                getattr(db_agent, "group_rules_component", None),
-            ):
-                normalized_candidate = str(candidate_key or "").strip()
-                if not normalized_candidate:
-                    continue
-                inherited_definition = get_agent_definition(normalized_candidate)
-                if inherited_definition is None:
-                    continue
-                inherited_curation = inherited_definition.curation
-                if inherited_curation is not None and inherited_curation.launchable:
-                    curation_definition = inherited_definition
-                    break
+        curation_definition = _inherited_curation_definition_for_db_agent(db_agent)
 
-    curation_metadata = {
-        "adapter_key": curation_definition.curation.adapter_key,
-        "launchable": curation_definition.curation.launchable,
-    } if curation_definition is not None else None
+    curation_metadata = _curation_metadata_from_definition(curation_definition)
     if db_agent is not None:
         tool_ids = list(getattr(db_agent, "tool_ids", []) or [])
         required_params = _required_context_for_tool_ids(tool_ids)

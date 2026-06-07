@@ -2,8 +2,11 @@
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+import json
 import logging
 import os
+import urllib.error
+import urllib.request
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -533,6 +536,164 @@ async def health_check():
     return _build_liveness_health_status()
 
 
+def _env_flag_enabled(name: str, default: str = "false") -> bool:
+    """Return true when an environment flag is enabled."""
+    return os.getenv(name, default).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _check_database_url(label: str, env_name: str, *, required: bool) -> dict[str, object]:
+    """Check a configured SQLAlchemy database URL without exposing the URL."""
+    url = os.getenv(env_name)
+    if not url:
+        return {
+            "status": "missing" if required else "not_configured",
+            "required": required,
+        }
+
+    try:
+        from sqlalchemy import create_engine, text
+        from sqlalchemy.pool import NullPool
+
+        engine = create_engine(
+            url,
+            pool_pre_ping=True,
+            connect_args={"connect_timeout": 3},
+            poolclass=NullPool,
+        )
+        try:
+            with engine.connect() as connection:
+                connection.execute(text("select 1"))
+        finally:
+            engine.dispose()
+        return {
+            "status": "connected",
+            "required": required,
+        }
+    except Exception as e:
+        logger.warning("%s readiness check failed: %s", label, type(e).__name__)
+        return {
+            "status": "disconnected",
+            "required": required,
+            "error_type": type(e).__name__,
+        }
+
+
+def _check_elasticsearch(*, required: bool) -> dict[str, object]:
+    """Check that the configured literature search index accepts a real query."""
+    host = os.getenv("ELASTICSEARCH_HOST")
+    if not host:
+        return {
+            "status": "missing" if required else "not_configured",
+            "required": required,
+        }
+
+    scheme = os.getenv("ELASTICSEARCH_SCHEME")
+    index = os.getenv("ELASTICSEARCH_INDEX")
+    if scheme not in {"http", "https"}:
+        return {
+            "status": "invalid_config",
+            "required": required,
+            "error_type": "InvalidScheme",
+        }
+    if not index:
+        return {
+            "status": "invalid_config",
+            "required": required,
+            "error_type": "MissingIndex",
+        }
+
+    port_raw = os.getenv("ELASTICSEARCH_PORT", "443")
+    try:
+        port = int(port_raw)
+    except ValueError:
+        return {
+            "status": "invalid_config",
+            "required": required,
+            "error_type": "InvalidPort",
+        }
+
+    try:
+        query = json.dumps({"query": {"match_all": {}}, "size": 0}).encode("utf-8")
+        request = urllib.request.Request(
+            f"{scheme}://{host}:{port}/{index}/_search",
+            data=query,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=3) as response:
+            response.read(1)
+        return {
+            "status": "connected",
+            "required": required,
+        }
+    except (OSError, urllib.error.URLError, urllib.error.HTTPError) as e:
+        logger.warning("Literature search readiness check failed: %s", type(e).__name__)
+        return {
+            "status": "disconnected",
+            "required": required,
+            "error_type": type(e).__name__,
+        }
+
+
+def _service_ready(service_status: dict[str, object]) -> bool:
+    """Return whether an individual readiness service is acceptable."""
+    status = service_status.get("status")
+    if status == "connected":
+        return True
+    if status == "not_configured" and not service_status.get("required"):
+        return True
+    return False
+
+
+def readiness_check():
+    """Strict readiness endpoint for Docker validation stacks."""
+    require_external_validation_deps = _env_flag_enabled(
+        "HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS",
+    )
+    require_literature_db = _env_flag_enabled("HEALTH_CHECK_REQUIRE_LITERATURE_DB")
+    services = {
+        "app": {"status": "running", "required": True},
+        "curation_db": _check_database_url(
+            "Curation database",
+            "CURATION_DB_URL",
+            required=require_external_validation_deps,
+        ),
+        "literature_db": _check_database_url(
+            "Literature database",
+            "LITERATURE_DB_URL",
+            required=require_literature_db,
+        ),
+        "literature_search": _check_elasticsearch(
+            required=require_external_validation_deps,
+        ),
+    }
+    ready = all(
+        service == "app" or _service_ready(status)
+        for service, status in services.items()
+    )
+    return JSONResponse(
+        status_code=200 if ready else 503,
+        content={
+            "status": "healthy" if ready else "unhealthy",
+            "ready": ready,
+            "service": "AI Curation Platform API",
+            "version": get_app_version(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "checks": {
+                "app": "running",
+                "external_validation_dependencies_required": require_external_validation_deps,
+                "literature_db_required": require_literature_db,
+            },
+            "services": services,
+        },
+    )
+
+
 async def deep_health_check():
     """Comprehensive dependency health check endpoint."""
     health_status = {
@@ -640,6 +801,7 @@ def create_app() -> FastAPI:
     application.add_api_route("/", root, methods=["GET"])
     application.add_api_route("/health", health_check, methods=["GET"])
     application.add_api_route("/health/live", health_check, methods=["GET"])
+    application.add_api_route("/health/ready", readiness_check, methods=["GET"])
     application.add_api_route("/health/deep", deep_health_check, methods=["GET"])
     return application
 

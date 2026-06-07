@@ -2,6 +2,7 @@
 """Durable chat session and conversation endpoints."""
 
 from .chat_common import *
+from ..lib.chat_context_report import build_chat_context_report
 
 
 @router.post("/chat/session", response_model=SessionResponse)
@@ -202,6 +203,37 @@ async def get_session_history(
         message_limit=message_limit,
         next_message_cursor=_encode_message_cursor(detail.next_message_cursor),
     )
+
+
+@router.get("/chat/sessions/{session_id}/context-report", response_model=ChatContextReportResponse)
+async def get_session_context_report(
+    session_id: str,
+    chat_kind: Literal["assistant_chat", "agent_studio"] = Query("assistant_chat"),
+    db: Session = Depends(get_db),
+    user: Dict[str, Any] = get_auth_dependency(),
+) -> ChatContextReportResponse:
+    """Return a raw-payload-free size report for durable chat replay context."""
+
+    user_id = _require_user_sub(user)
+    if not session_id.strip():
+        raise HTTPException(status_code=400, detail="session_id is required")
+    repository = _get_chat_history_repository(db)
+
+    try:
+        report = build_chat_context_report(
+            repository=repository,
+            session_id=session_id,
+            user_auth_sub=user_id,
+            chat_kind=chat_kind,
+        )
+    except ChatHistorySessionNotFoundError:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if report is None:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    return ChatContextReportResponse(**report)
 
 
 @router.get("/chat/history", response_model=ChatSessionListResponse)

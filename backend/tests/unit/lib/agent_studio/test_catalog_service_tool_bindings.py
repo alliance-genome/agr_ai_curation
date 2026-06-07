@@ -254,7 +254,7 @@ def test_get_agent_metadata_db_lookup_prefers_db_user_id(monkeypatch):
         agent_key="pdf_extraction",
         name="PDF Specialist",
         description="Reads documents",
-        tool_ids=["search_document"],
+        tool_ids=["search_document", "finalize_gene_extraction"],
     )
     observed = {"user_id": None, "closed": False}
 
@@ -311,19 +311,24 @@ def test_get_agent_metadata_inherits_curation_from_custom_agent_template(monkeyp
         agent_key="ca_custom_gene_extractor",
         name="Custom Gene Extractor",
         description="Custom extraction agent",
-        tool_ids=["search_document"],
+        tool_ids=["search_document", "finalize_gene_extraction"],
         template_source="gene_extractor",
         group_rules_component="gene_extractor",
         output_schema_key="GeneExtractionResultEnvelope",
     )
     fake_curation = SimpleNamespace(adapter_key="gene", launchable=True)
-    fake_definition = SimpleNamespace(curation=fake_curation)
+    fake_definition = SimpleNamespace(
+        curation=fake_curation,
+        structured_finalization={"tool_name": "finalize_gene_extraction"},
+    )
 
     monkeypatch.setattr(catalog_service, "_get_db_agent_row", lambda _agent_id, _kwargs: fake_row)
     monkeypatch.setattr(
-        "src.lib.config.agent_loader.get_agent_definition",
+        catalog_service,
+        "get_agent_definition",
         lambda agent_id: fake_definition if agent_id == "gene_extractor" else None,
     )
+    monkeypatch.setattr(catalog_service, "get_agent_by_folder", lambda _agent_id: None)
 
     metadata = catalog_service.get_agent_metadata("ca_custom_gene_extractor")
 
@@ -342,7 +347,10 @@ def test_get_agent_metadata_does_not_inherit_curation_when_custom_agent_no_longe
         output_schema_key=None,
     )
     fake_curation = SimpleNamespace(adapter_key="gene", launchable=True)
-    fake_definition = SimpleNamespace(curation=fake_curation)
+    fake_definition = SimpleNamespace(
+        curation=fake_curation,
+        structured_finalization={"tool_name": "finalize_gene_extraction"},
+    )
 
     monkeypatch.setattr(catalog_service, "_get_db_agent_row", lambda _agent_id, _kwargs: fake_row)
     monkeypatch.setattr(

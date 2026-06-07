@@ -1,0 +1,10 @@
+# Local Incus smoke rerun artifacts. These can include bulky logs, trace ids,
+# and generated harness JSON that should be reviewed locally instead of
+# committed with the design note.
+validation-rerun-*/
+backend_logs/
+context_reports/
+dev_release_smoke_*.json
+extraction_trace_events/
+summaries/
+trace_review/

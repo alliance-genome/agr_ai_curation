@@ -17,6 +17,7 @@ from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validator_dispatch import (
     _validated_results_from_agent_batch_output,
+    _validator_batch_summary,
     _validator_finalization_tool_payload,
     _validator_result_finalization_feedback,
     dispatch_active_validator_bindings,
@@ -543,7 +544,54 @@ def test_validator_request_payload_for_agent_omits_semantic_duplicates():
         "target.input_values",
         "evidence",
     ]
-    assert payload["runtime_compaction"]["input_values_source"] == "selected_inputs"
+
+
+def test_validator_request_payload_preserves_long_selected_input_scalars():
+    request = _verbose_validation_request().model_copy(
+        update={
+            "selected_inputs": {
+                "identifier": "BAD:0001",
+                "evidence_quote": "paper-supported quote " * 200,
+            }
+        },
+        deep=True,
+    )
+
+    payload = validator_request_payload_for_agent(request)
+
+    assert payload["selected_inputs"] == request.selected_inputs
+    assert payload["selected_inputs"]["evidence_quote"].endswith(
+        "paper-supported quote "
+    )
+
+
+def test_validator_batch_summary_reports_payload_sizes_and_large_scalars():
+    request = _verbose_validation_request().model_copy(
+        update={
+            "selected_inputs": {
+                "identifier": "BAD:0001",
+                "evidence_quote": "long quote " * 200,
+            }
+        },
+        deep=True,
+    )
+    binding = SimpleNamespace(
+        binding_id="fixture.identifier_lookup",
+        batch_family="fixture.family",
+        validator_agent=None,
+    )
+    job = SimpleNamespace(
+        request=request,
+        match=SimpleNamespace(binding=binding),
+    )
+
+    summary = _validator_batch_summary(cast(Any, [job]))
+
+    assert summary["payload_summary"]["request_payload_json_chars"] > 0
+    assert summary["payload_summary"]["omitted_target_input_values_count"] == 1
+    large_paths = summary["payload_summary"]["large_selected_input_scalar_paths"]
+    assert large_paths[0]["request_id"] == request.request_id
+    assert large_paths[0]["paths"][0]["path"] == "selected_inputs.evidence_quote"
 
 
 def _parent_validator_findings(result):
@@ -1940,8 +1988,10 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
         output_type=GeneResultEnvelope,
         tools=[],
         instructions="Base validator instructions.",
+        model="validator-model",
     )
     captured = {}
+    captured_preflight = {}
 
     monkeypatch.setattr(
         "src.lib.config.agent_loader.get_agent_definition_for_package",
@@ -1955,6 +2005,14 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
     monkeypatch.setattr(
         "src.lib.agent_studio.catalog_service.get_agent_by_id",
         lambda agent_key: source_agent,
+    )
+    monkeypatch.setattr(
+        "src.lib.openai_agents.config.resolve_model_provider",
+        lambda model: "anthropic" if model == "validator-model" else "unknown",
+    )
+    monkeypatch.setattr(
+        "src.lib.domain_packs.validator_dispatch.provider_context_preflight",
+        lambda **kwargs: captured_preflight.update(kwargs) or {},
     )
 
     def _fake_run_sync(agent, **kwargs):
@@ -1989,6 +2047,8 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
     assert "evidence" not in runtime_payload
     assert runtime_payload["evidence_summary"]["evidence_record_ids"] == ["evidence-1"]
     assert captured["kwargs"]["max_turns"] == 6
+    assert captured_preflight["provider"] == "anthropic"
+    assert captured_preflight["model"] == "validator-model"
 
 
 def test_validator_finalization_feedback_accepts_valid_result():
@@ -2168,8 +2228,10 @@ def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
         output_type=GeneResultEnvelope,
         tools=[],
         instructions="Base validator instructions.",
+        model="validator-batch-model",
     )
     captured = {}
+    captured_preflight = {}
 
     monkeypatch.setattr(
         "src.lib.config.agent_loader.get_agent_definition_for_package",
@@ -2184,6 +2246,14 @@ def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
     monkeypatch.setattr(
         "src.lib.agent_studio.catalog_service.get_agent_by_id",
         lambda agent_key: source_agent,
+    )
+    monkeypatch.setattr(
+        "src.lib.openai_agents.config.resolve_model_provider",
+        lambda model: "gemini" if model == "validator-batch-model" else "unknown",
+    )
+    monkeypatch.setattr(
+        "src.lib.domain_packs.validator_dispatch.provider_context_preflight",
+        lambda **kwargs: captured_preflight.update(kwargs) or {},
     )
 
     def _fake_run_sync(agent, **kwargs):
@@ -2219,6 +2289,8 @@ def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
     assert "one bulk lookup tool call per compatible shared lookup group" in payload[
         "instructions"
     ]
+    assert captured_preflight["provider"] == "gemini"
+    assert captured_preflight["model"] == "validator-batch-model"
     assert "gene_symbols" in payload["instructions"]
     assert payload["requests"][0]["request_id"] == request.request_id
     assert payload["requests"][0]["selected_inputs"] == request.selected_inputs

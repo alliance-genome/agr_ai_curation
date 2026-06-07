@@ -511,6 +511,22 @@ GET_TRACE_PAYLOADS_TOOL = {
     },
 }
 
+GET_TRACE_MODEL_LIVE_CONTEXT_TOOL = {
+    "name": "get_trace_model_live_context",
+    "description": (
+        "Summarize model-live provider input sizes for a trace without raw "
+        "prompt values. Use this before get_trace_payloads/get_trace_payload "
+        "when investigating token budget, context replay, or prompt bloat."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "trace_id": {"type": "string", "description": "Langfuse trace ID."},
+        },
+        "required": ["trace_id"],
+    },
+}
+
 GET_TRACE_PAYLOAD_TOOL = {
     "name": "get_trace_payload",
     "description": "Retrieve one exact Langfuse payload by payload_id, or by scope/observation_id/field. Returns a chunk with start/end/next_start so large prompts/results can be inspected safely.",
@@ -802,6 +818,7 @@ TRACE_TOOLS = {
     "get_extraction_timeline",
     "get_trace_tree",
     "get_trace_reconstruction",
+    "get_trace_model_live_context",
     "get_trace_payloads",
     "get_trace_payload",
     "get_trace_costs",
@@ -937,6 +954,7 @@ def get_all_opus_tools(
         GET_EXTRACTION_TIMELINE_TOOL,
         GET_TRACE_TREE_TOOL,
         GET_TRACE_RECONSTRUCTION_TOOL,
+        GET_TRACE_MODEL_LIVE_CONTEXT_TOOL,
         GET_TRACE_PAYLOADS_TOOL,
         GET_TRACE_PAYLOAD_TOOL,
         GET_TRACE_COSTS_TOOL,

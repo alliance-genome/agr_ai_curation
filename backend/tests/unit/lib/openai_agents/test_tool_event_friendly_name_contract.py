@@ -1673,10 +1673,11 @@ async def test_specialist_accepts_schema_defined_retained_collection_without_ite
 
     assert not any(event.get("type") == "SPECIALIST_ERROR" for event in captured_events)
     assert any(event.get("type") == "evidence_summary" for event in captured_events)
-    result_payload = _structured_payload_from_result_or_internal_event(result, captured_events)
-
-    objects = result_payload.get("curatable_objects") or result_payload.get("objects")
-    assert objects[0]["evidence_record_ids"] == [expected_record["evidence_record_id"]]
+    assert streaming_tools.INTERNAL_EXTRACTION_RESULT_EVENT_TYPE not in {
+        event.get("type") for event in captured_events
+    }
+    assert "allele-act5c" in result
+    assert "Actin 5C" in result
 
 
 @pytest.mark.asyncio

@@ -44,6 +44,33 @@ def _trace_data():
                 "usage": {"input": 10, "output": 5, "total": 15},
                 "calculatedTotalCost": 0.03,
             },
+            {
+                "id": "event-1",
+                "type": "EVENT",
+                "name": "extraction_trace_event",
+                "startTime": "2026-06-06T03:00:03Z",
+                "metadata": {
+                    "event_payload": {
+                        "event_type": "runtime.provider_context_preflight",
+                        "input_summary": {
+                            "preview": {
+                                "surface": "validator",
+                                "operation": "domain_validator_batch",
+                                "provider": "openai",
+                                "model": "gpt-5.5",
+                                "payload_summary": {
+                                    "json_chars": 1200,
+                                    "estimated_tokens": "<redacted>",
+                                    "threshold": None,
+                                    "largest_paths": [
+                                        {"path": "requests", "json_chars": 900}
+                                    ],
+                                },
+                            }
+                        },
+                    }
+                },
+            },
         ],
         "scores": [],
         "metadata": {},
@@ -117,13 +144,13 @@ async def test_claude_langfuse_reconstruction_is_event_paginated(extractor_cls: 
     )
 
     assert response.status == "success"
-    assert response.data["event_count"] == 4
+    assert response.data["event_count"] == 5
     assert len(response.data["events"]) == 2
     assert response.data["events"][0]["event_id"] == "agent-1"
     assert response.data["pagination"] == {
         "limit": 2,
         "offset": 1,
-        "total_items": 4,
+        "total_items": 5,
         "has_next": True,
         "next_offset": 3,
     }
@@ -174,3 +201,40 @@ async def test_claude_langfuse_costs_and_duplicates(extractor_cls: Mock):
 
     assert costs.data["costs"]["totals"]["total_tokens"] == 15
     assert duplicates.data["duplicates"]["duplicate_group_count"] == 1
+
+
+@pytest.mark.asyncio
+@patch("src.api.claude.TraceExtractor")
+async def test_claude_model_live_context_uses_preflight_and_generation_inputs(extractor_cls: Mock):
+    extractor_cls.return_value.extract_complete_trace.return_value = _trace_data()
+
+    response = await claude.get_model_live_context(
+        "856df16f1752cb53ee43dcb2f5ecfd16",
+        source="local",
+    )
+
+    assert response.status == "success"
+    model_live = response.data["model_live_context"]
+    assert model_live["observed_call_record_count"] == 2
+    assert model_live["classification"]["preflight_event_count"] == 1
+    assert model_live["classification"]["inferred_generation_count"] == 1
+    assert model_live["classification"]["historical_precision"] == (
+        "mixed_explicit_and_inferred"
+    )
+    assert model_live["classification"]["possible_double_count"] is True
+    assert model_live["totals_by_classification"]["provider_context_preflight"] == {
+        "call_count": 1,
+        "total_input_json_chars": 1200,
+        "total_estimated_input_tokens": 300,
+    }
+    assert model_live["totals_by_classification"]["inferred_generation_input"] == {
+        "call_count": 1,
+        "total_input_json_chars": 11,
+        "total_estimated_input_tokens": 3,
+    }
+    assert model_live["calls"][0]["classification_source"] == "inferred_generation_input"
+    assert model_live["calls"][0]["input_json_chars"] == 11
+    assert model_live["calls"][0]["estimated_input_tokens"] == 3
+    assert model_live["calls"][1]["classification_source"] == "provider_context_preflight"
+    assert model_live["calls"][1]["largest_paths"][0]["path"] == "requests"
+    assert response.data["observability_payloads"]["exact_payload_requires_explicit_lookup"] is True

@@ -88,6 +88,7 @@ def test_finalize_rejects_late_mutation_and_duplicate_identical_finalize_is_idem
         "evidence_record_ids": ["evidence-1"],
         "resolver_selection_count": 2,
         "builder_run_id": "trace-1",
+        "builder_invocation_id": workspace.builder_invocation_id,
         "candidate_ids": ["candidate-1"],
         "source_candidate_ids": [],
     }
@@ -96,11 +97,13 @@ def test_finalize_rejects_late_mutation_and_duplicate_identical_finalize_is_idem
             candidate_id="candidate-2",
             staged_fields={"items": []},
         )
-    with pytest.raises(builder.ExtractionBuilderFinalizedError):
-        workspace.record_validation_failure(
-            errors=[{"message": "late failure", "reason": "late"}],
-            candidate_ids=["candidate-1"],
-        )
+    workspace.record_validation_failure(
+        errors=[{"message": "late failure", "reason": "late"}],
+        candidate_ids=["candidate-1"],
+    )
+    assert workspace.state == builder.BUILDER_STATE_VALIDATION_FAILED
+    assert workspace.get_candidate("candidate-1").status == builder.CANDIDATE_STATUS_FINALIZED
+    assert workspace.validation_errors == [{"message": "late failure", "reason": "late"}]
 
 
 def test_duplicate_finalize_with_same_membership_different_order_is_idempotent(

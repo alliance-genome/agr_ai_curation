@@ -209,6 +209,8 @@ services:
       ANONYMIZED_TELEMETRY: "False"
       DATABASE_URL: "${DATABASE_URL:?set in standalone env}"
       HEALTH_CHECK_STRICT_MODE: "${HEALTH_CHECK_STRICT_MODE:-true}"
+      HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS: "${HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS:-false}"
+      HEALTH_CHECK_REQUIRE_LITERATURE_DB: "${HEALTH_CHECK_REQUIRE_LITERATURE_DB:-false}"
       POSTGRES_HOST: "${POSTGRES_HOST:-postgres}"
       POSTGRES_PORT: "${POSTGRES_PORT:-5432}"
       POSTGRES_DB: "${POSTGRES_DB:-ai_curation}"
@@ -228,6 +230,8 @@ services:
       RERANK_PROVIDER: "${RERANK_PROVIDER:-none}"
       BEDROCK_RERANK_MODEL_ARN: "${BEDROCK_RERANK_MODEL_ARN:-arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0}"
       RERANKER_URL: "${RERANKER_URL:-http://reranker-transformers:8080}"
+      OPENAI_RESPONSES_WEBSOCKET_ENABLED: "${OPENAI_RESPONSES_WEBSOCKET_ENABLED:-true}"
+      OPENAI_WEBSOCKET_BASE_URL: "${OPENAI_WEBSOCKET_BASE_URL:-}"
       FEEDBACK_USE_SNS: "${FEEDBACK_USE_SNS:-false}"
       TOOL_FAILURE_ALERTS_ENABLED: "${TOOL_FAILURE_ALERTS_ENABLED:-false}"
       AUTH_PROVIDER: "${AUTH_PROVIDER:-oidc}"
@@ -281,7 +285,7 @@ services:
       - "169.254.169.254:127.0.0.1"  # Block EC2 IMDS metadata endpoint
       - "169.254.170.2:127.0.0.1"    # Block ECS credential endpoint
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; response = urllib.request.urlopen('http://localhost:8000/health/live', timeout=2); response.read(1)"]
+      test: ["CMD", "python", "-c", "import urllib.request; response = urllib.request.urlopen('http://localhost:8000/health/live', timeout=10); response.read(1)"]
       interval: 30s
       timeout: 10s
       retries: 3

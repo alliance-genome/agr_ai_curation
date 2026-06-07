@@ -31,11 +31,23 @@ def test_writer_persists_versioned_redacted_bounded_events(tmp_path, monkeypatch
             tool_call_id="call-resolve",
             input_summary={"token": "secret-token"},
         )
+        metrics = events.write_extraction_trace_event(
+            event_type="runtime.provider_context_preflight",
+            input_summary={
+                "payload_summary": {
+                    "estimated_tokens": 123,
+                    "input_tokens": 45,
+                    "total_token_count": 168,
+                    "access_token": "secret-access-token",
+                }
+            },
+        )
     finally:
         events.clear_extraction_trace_run()
 
     assert first is not None
     assert second is not None
+    assert metrics is not None
     assert first["schema_version"] == events.SCHEMA_VERSION
     assert second["sequence"] == first["sequence"] + 1
     assert first["trace_id"] == "trace-123"
@@ -52,10 +64,19 @@ def test_writer_persists_versioned_redacted_bounded_events(tmp_path, monkeypatch
     ]["json_chars"]
     assert first["event_size"]["json_chars"] > 0
     assert second["input_summary"]["preview"]["token"] == "<redacted>"
+    metric_summary = metrics["input_summary"]["preview"]["payload_summary"]
+    assert metric_summary["estimated_tokens"] == 123
+    assert metric_summary["input_tokens"] == 45
+    assert metric_summary["total_token_count"] == 168
+    assert metric_summary["access_token"] == "<redacted>"
 
     lines = events.trace_event_path("trace-123").read_text(encoding="utf-8").splitlines()
     persisted = [json.loads(line) for line in lines]
-    assert [event["event_id"] for event in persisted] == [first["event_id"], second["event_id"]]
+    assert [event["event_id"] for event in persisted] == [
+        first["event_id"],
+        second["event_id"],
+        metrics["event_id"],
+    ]
 
 
 def test_stream_event_maps_specialist_tool_and_validation_events(tmp_path, monkeypatch):

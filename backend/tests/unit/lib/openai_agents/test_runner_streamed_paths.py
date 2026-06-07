@@ -1,5 +1,6 @@
 """Branch tests for run_agent_streamed orchestration paths."""
 
+import logging
 import uuid
 from types import SimpleNamespace
 
@@ -23,13 +24,22 @@ async def _collect_events(async_gen):
 
 
 class _FakeRunResult:
-    def __init__(self, events, final_output="ok"):
+    def __init__(self, events, final_output: object = "ok"):
         self._events = events
         self.final_output = final_output
 
     async def stream_events(self):
         for event in self._events:
             yield event
+
+
+class _FakeFailingRunResult:
+    final_output = None
+
+    async def stream_events(self):
+        if False:
+            yield None
+        raise TimeoutError("Responses websocket connect timed out after 5.0 seconds.")
 
 
 class _FakeTextDelta:
@@ -94,6 +104,23 @@ def _patch_common_runtime(monkeypatch, captured):
         lambda trace_id, session_id=None, span=None: captured.setdefault("logged", []).append((trace_id, session_id, span)),
     )
     monkeypatch.setattr(runner, "create_supervisor_agent", lambda **_kwargs: SimpleNamespace(name="Supervisor", model="gpt-5"))
+
+
+def test_safe_reset_run_context_token_logs_context_mismatch(caplog):
+    def _raise_context_mismatch(_token):
+        raise ValueError("token was created in a different Context")
+
+    caplog.set_level(logging.WARNING, logger=runner.__name__)
+
+    runner._safe_reset_run_context_token(
+        label="evidence_workspace",
+        reset_fn=_raise_context_mismatch,
+        token=object(),
+        trace_id="trace-file-ready",
+        user_id="user-1",
+    )
+
+    assert "Skipped evidence_workspace context reset after async context switch" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -542,6 +569,114 @@ async def test_run_agent_streamed_core_only_round_trip_does_not_require_speciali
     assert event_types[-1] == "RUN_FINISHED"
     assert events[-1]["data"]["response"] == "Core-only hello"
     assert captured["committed"] == ["Query Supervisor"]
+
+
+@pytest.mark.asyncio
+async def test_runner_traces_impossible_top_level_curation_shaped_output(monkeypatch):
+    trace_events = []
+
+    monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "get_collected_events", lambda: [])
+    monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
+    monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
+    monkeypatch.setattr(
+        runner,
+        "structured_result_requires_evidence",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setattr(
+        runner,
+        "extract_evidence_records_from_structured_result",
+        lambda _structured_result: [],
+    )
+    monkeypatch.setattr(
+        runner,
+        "write_extraction_trace_event",
+        lambda **event: trace_events.append(event) or event,
+    )
+    monkeypatch.setattr(
+        runner.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult(
+            [],
+            final_output={
+                "domain_pack_id": "agr.alliance.gene_expression",
+                "curatable_objects": [
+                    {
+                        "object_type": "gene_expression_annotation",
+                        "pending_ref_id": "annotation-1",
+                    }
+                ],
+                "metadata": {},
+            },
+        ),
+    )
+
+    emitted_events = [
+        event
+        async for event in runner._run_agent_with_tracing(
+            agent=SimpleNamespace(
+                name="Query Supervisor",
+                tools=[],
+                model="gpt-4o",
+                output_type=None,
+            ),
+            input_items=[{"role": "user", "content": "extract expression"}],
+            user_id="user-1",
+            document_id=None,
+            document_name=None,
+            user_message="extract expression",
+            trace_id="trace-curation-shaped",
+        )
+    ]
+
+    assert not any(event.get("type") == "RUN_ERROR" for event in emitted_events)
+    diagnostic_event = next(
+        event
+        for event in trace_events
+        if event.get("event_type")
+        == "extraction_builder.top_level_curation_shaped_structured_output"
+    )
+    assert diagnostic_event["trace_id"] == "trace-curation-shaped"
+    assert diagnostic_event["output_summary"]["object_count"] == 1
+    assert diagnostic_event["metadata"]["agent"] == "Query Supervisor"
+
+
+@pytest.mark.asyncio
+async def test_runner_propagates_sdk_stream_errors(monkeypatch):
+    monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "get_collected_events", lambda: [])
+    monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
+    monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
+    monkeypatch.setattr(
+        runner.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeFailingRunResult(),
+    )
+
+    with pytest.raises(
+        TimeoutError,
+        match="Responses websocket connect timed out",
+    ):
+        async for _event in runner._run_agent_with_tracing(
+            agent=SimpleNamespace(
+                name="Flow Supervisor",
+                tools=[],
+                model="gpt-5.5",
+                output_type=None,
+            ),
+            input_items=[{"role": "user", "content": "run flow"}],
+            user_id="user-1",
+            document_id=None,
+            document_name=None,
+            user_message="run flow",
+            trace_id="trace-sdk-timeout",
+        ):
+            pass
 
 
 @pytest.mark.asyncio

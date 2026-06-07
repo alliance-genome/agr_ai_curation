@@ -219,6 +219,103 @@ class TestMainHealthEndpoint:
             assert response.status_code == 200
             assert response.json()["checks"] == {"app": "running"}
 
+    def test_readiness_allows_unconfigured_external_deps_when_not_required(self, client, monkeypatch):
+        monkeypatch.delenv("HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS", raising=False)
+        monkeypatch.delenv("CURATION_DB_URL", raising=False)
+        monkeypatch.delenv("LITERATURE_DB_URL", raising=False)
+        monkeypatch.delenv("ELASTICSEARCH_HOST", raising=False)
+
+        response = client.get("/health/ready")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["ready"] is True
+        assert data["checks"]["external_validation_dependencies_required"] is False
+        assert data["services"]["curation_db"]["status"] == "not_configured"
+        assert data["services"]["literature_db"]["status"] == "not_configured"
+        assert data["services"]["literature_search"]["status"] == "not_configured"
+
+    def test_readiness_fails_when_required_external_deps_missing(self, client, monkeypatch):
+        monkeypatch.setenv("HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS", "true")
+        monkeypatch.delenv("HEALTH_CHECK_REQUIRE_LITERATURE_DB", raising=False)
+        monkeypatch.delenv("CURATION_DB_URL", raising=False)
+        monkeypatch.delenv("LITERATURE_DB_URL", raising=False)
+        monkeypatch.delenv("ELASTICSEARCH_HOST", raising=False)
+
+        response = client.get("/health/ready")
+
+        assert response.status_code == 503
+        data = response.json()
+        assert data["ready"] is False
+        assert data["checks"]["external_validation_dependencies_required"] is True
+        assert data["checks"]["literature_db_required"] is False
+        assert data["services"]["curation_db"]["status"] == "missing"
+        assert data["services"]["literature_db"]["status"] == "not_configured"
+        assert data["services"]["literature_search"]["status"] == "missing"
+
+    def test_readiness_passes_when_required_external_deps_connected(self, client, monkeypatch):
+        monkeypatch.setenv("HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS", "true")
+        monkeypatch.delenv("HEALTH_CHECK_REQUIRE_LITERATURE_DB", raising=False)
+
+        def _connected_database(*args, **kwargs):
+            return {"status": "connected", "required": kwargs["required"]}
+
+        def _connected_elasticsearch(*args, **kwargs):
+            return {"status": "connected", "required": kwargs["required"]}
+
+        monkeypatch.setattr("main._check_database_url", _connected_database)
+        monkeypatch.setattr("main._check_elasticsearch", _connected_elasticsearch)
+
+        response = client.get("/health/ready")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["ready"] is True
+        assert data["services"]["curation_db"]["status"] == "connected"
+        assert data["services"]["literature_db"]["status"] == "connected"
+        assert data["services"]["literature_search"]["status"] == "connected"
+
+    def test_readiness_can_require_literature_db_when_explicitly_enabled(self, client, monkeypatch):
+        monkeypatch.setenv("HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS", "true")
+        monkeypatch.setenv("HEALTH_CHECK_REQUIRE_LITERATURE_DB", "true")
+        monkeypatch.delenv("CURATION_DB_URL", raising=False)
+        monkeypatch.delenv("LITERATURE_DB_URL", raising=False)
+        monkeypatch.delenv("ELASTICSEARCH_HOST", raising=False)
+
+        response = client.get("/health/ready")
+
+        assert response.status_code == 503
+        data = response.json()
+        assert data["checks"]["literature_db_required"] is True
+        assert data["services"]["literature_db"]["status"] == "missing"
+
+    def test_readiness_does_not_expose_database_urls(self, client, monkeypatch):
+        monkeypatch.setenv("HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS", "true")
+        monkeypatch.setenv("CURATION_DB_URL", "postgresql://user:secret@127.0.0.1:59999/missing")
+        monkeypatch.delenv("LITERATURE_DB_URL", raising=False)
+        monkeypatch.delenv("ELASTICSEARCH_HOST", raising=False)
+
+        response = client.get("/health/ready")
+
+        assert response.status_code == 503
+        assert "secret" not in response.text
+        assert "127.0.0.1" not in response.text
+        assert response.json()["services"]["curation_db"]["error_type"]
+
+    def test_literature_search_readiness_requires_valid_index_config(self, client, monkeypatch):
+        monkeypatch.setenv("HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS", "true")
+        monkeypatch.setenv("CURATION_DB_URL", "postgresql://user:secret@127.0.0.1:59999/missing")
+        monkeypatch.setenv("ELASTICSEARCH_HOST", "example.test")
+        monkeypatch.setenv("ELASTICSEARCH_SCHEME", "ftp")
+        monkeypatch.setenv("ELASTICSEARCH_INDEX", "references_index")
+
+        response = client.get("/health/ready")
+
+        assert response.status_code == 503
+        data = response.json()
+        assert data["services"]["literature_search"]["status"] == "invalid_config"
+        assert data["services"]["literature_search"]["error_type"] == "InvalidScheme"
+
     def test_deep_health_reports_curation_db_not_configured(self, client, monkeypatch):
         monkeypatch.setenv("CURATION_DB_CREDENTIALS_SOURCE", "env")
         monkeypatch.delenv("CURATION_DB_URL", raising=False)

@@ -260,6 +260,46 @@ def _make_completed_step(
     }
 
 
+def _make_extraction_handoff_audit(
+    *,
+    step: int,
+    tool_name: str,
+    agent_id: str,
+    agent_name: str,
+    adapter_key: str,
+    candidate_built: bool = True,
+    candidate_reject_reason: str | None = None,
+    adapter_key_resolved: bool = True,
+    evidence_count: int = 1,
+    internal_payload_found: bool = True,
+):
+    """Build a compact extraction handoff audit fixture."""
+
+    return {
+        "step": step,
+        "toolName": tool_name,
+        "agentId": agent_id,
+        "agentName": agent_name,
+        "candidateExpected": True,
+        "candidateExpectedFrom": ["catalog_curation_metadata"],
+        "curationAdapterKey": adapter_key,
+        "internalEventEmitted": internal_payload_found,
+        "internalEventMatchedTool": internal_payload_found,
+        "internalEventFoundByFlow": internal_payload_found,
+        "internalPayloadFound": internal_payload_found,
+        "internalPayloadSource": "live_events" if internal_payload_found else None,
+        "internalEventSources": ["live_events"] if internal_payload_found else [],
+        "internalEventToolNames": [tool_name] if internal_payload_found else [],
+        "builderFinalizationSeen": internal_payload_found,
+        "candidateBuilt": candidate_built,
+        "candidateRejectReason": candidate_reject_reason,
+        "adapterKeyResolved": adapter_key_resolved,
+        "evidenceCount": evidence_count,
+        "persistenceAttempted": False,
+        "persistedResultCount": None,
+    }
+
+
 def _recording_persist_extraction_results(persisted_requests=None):
     """Build a test double that records requests and returns persistence responses."""
 
@@ -311,6 +351,31 @@ def _make_flow_execution_state(*completed_steps, ordered_tool_names=None):
         "completed_steps": list(completed_steps),
         "evidence_registry": registry,
     }
+
+
+def test_internal_extraction_audit_treats_none_tool_output_as_missing_payload():
+    """Audit flags should match whether the flow can actually use the payload."""
+
+    executor = _executor_module()
+    payload, audit = executor._internal_extraction_tool_output_with_audit_since(
+        {
+            "collected_events": [
+                {
+                    "type": executor.INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
+                    "details": {"toolName": "ask_gene_specialist"},
+                    "internal": {"tool_output": None},
+                }
+            ],
+            "collected_index": 0,
+        },
+        tool_name="ask_gene_specialist",
+    )
+
+    assert payload is None
+    assert audit["internalEventEmitted"] is True
+    assert audit["internalEventMatchedTool"] is True
+    assert audit["internalEventFoundByFlow"] is True
+    assert audit["internalPayloadFound"] is False
 
 
 def test_flow_candidate_persistence_materializes_domain_envelope_records(monkeypatch):
@@ -404,6 +469,91 @@ def test_flow_candidate_persistence_skips_legacy_non_domain_payloads(monkeypatch
     )
 
     assert materialized == []
+
+
+def test_persistence_helper_allows_empty_candidates_when_not_required():
+    """Non-curation flows must still be allowed to finish without extraction output."""
+
+    executor = _executor_module()
+
+    persisted, failure_reason, flow_error_event, records = (
+        executor._persist_flow_extraction_candidates_or_build_error(
+            flow_name="Non-curation flow",
+            candidates=[],
+            document_id=None,
+            user_id="u1",
+            session_id="s1",
+            trace_id=None,
+            flow_run_id=None,
+            extraction_output_required=False,
+        )
+    )
+
+    assert persisted is True
+    assert failure_reason is None
+    assert flow_error_event is None
+    assert records == []
+
+
+def test_persistence_helper_rejects_empty_required_candidates():
+    """Expected curation extraction output should not persist as an empty success."""
+
+    executor = _executor_module()
+
+    persisted, failure_reason, flow_error_event, records = (
+        executor._persist_flow_extraction_candidates_or_build_error(
+            flow_name="Gene flow",
+            candidates=[],
+            document_id="doc-1",
+            user_id="u1",
+            session_id="s1",
+            trace_id=None,
+            flow_run_id=None,
+            extraction_output_required=True,
+        )
+    )
+
+    assert persisted is False
+    assert "no persistable extraction candidates" in (failure_reason or "")
+    assert flow_error_event["details"]["reason"] == "no_extraction_candidates"
+    assert records == []
+
+
+def test_persistence_helper_rejects_candidates_without_adapter_keys():
+    """Persistable flow candidates need explicit curation adapter metadata."""
+
+    executor = _executor_module()
+    candidate = executor.ExtractionEnvelopeCandidate(
+        agent_key="gene_extractor",
+        adapter_key=None,
+        candidate_count=1,
+        conversation_summary="Extract genes.",
+        payload_json=_structured_step_output("TP53"),
+        metadata={
+            "flow_id": "11111111-1111-1111-1111-111111111111",
+            "step": 1,
+            "tool_name": "ask_gene_extractor_specialist",
+        },
+    )
+
+    persisted, failure_reason, flow_error_event, records = (
+        executor._persist_flow_extraction_candidates_or_build_error(
+            flow_name="Gene flow",
+            candidates=[candidate],
+            document_id="doc-1",
+            user_id="u1",
+            session_id="s1",
+            trace_id=None,
+            flow_run_id=None,
+            extraction_output_required=True,
+        )
+    )
+
+    assert persisted is False
+    assert "without adapter keys" in (failure_reason or "")
+    assert flow_error_event["details"]["reason"] == "missing_adapter_key"
+    assert flow_error_event["details"]["agent_keys"] == ["gene_extractor"]
+    assert records == []
 
 
 # ===========================================================================
@@ -1231,13 +1381,236 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert completed_step["evidence_records"][0]["entity"] == "TP53"
         assert "template_variables" not in execution_state
         assert "TP53" in completed_step["output"]
+        handoff_audit = completed_step["extraction_handoff_audit"]
+        assert handoff_audit["candidateExpected"] is True
+        assert handoff_audit["candidateExpectedFrom"] == ["catalog_curation_metadata"]
+        assert handoff_audit["internalEventEmitted"] is True
+        assert handoff_audit["internalEventMatchedTool"] is True
+        assert handoff_audit["internalEventFoundByFlow"] is True
+        assert handoff_audit["internalPayloadFound"] is True
+        assert handoff_audit["internalPayloadSource"] == "collected_events"
+        assert handoff_audit["internalEventSources"] == ["collected_events"]
+        assert handoff_audit["internalEventToolNames"] == ["ask_gene_specialist"]
+        assert handoff_audit["candidateBuilt"] is True
+        assert handoff_audit["candidateRejectReason"] is None
+        assert handoff_audit["adapterKeyResolved"] is True
+        assert handoff_audit["evidenceCount"] == 1
+        assert handoff_audit["persistenceAttempted"] is False
+        assert handoff_audit["persistedResultCount"] is None
         timing_event = next(
             event for event in collected_events if event.get("type") == "FLOW_STEP_TIMING"
         )
         assert timing_event["details"]["toolName"] == "ask_gene_specialist"
         assert timing_event["details"]["usedInternalExtractionPayload"] is True
+        assert timing_event["details"]["candidateExpected"] is True
+        assert timing_event["details"]["candidateExpectedFrom"] == ["catalog_curation_metadata"]
+        assert timing_event["details"]["internalEventEmitted"] is True
+        assert timing_event["details"]["internalEventFoundByFlow"] is True
+        assert timing_event["details"]["internalPayloadFound"] is True
+        assert timing_event["details"]["internalPayloadSource"] == "collected_events"
         assert timing_event["details"]["candidateBuilt"] is True
+        assert timing_event["details"]["candidateRejectReason"] is None
+        assert timing_event["details"]["adapterKeyResolved"] is True
+        assert timing_event["details"]["evidenceCount"] == 1
         assert "specialist_tool_invoke_ms" in timing_event["details"]["phaseTimingsMs"]
+        audit_event = next(
+            event
+            for event in collected_events
+            if event.get("type") == executor.FLOW_EXTRACTION_HANDOFF_AUDIT_EVENT
+        )
+        assert audit_event["data"]["flow_id"] == str(flow.id)
+        assert audit_event["data"]["flow_name"] == flow.name
+        assert audit_event["data"]["toolName"] == "ask_gene_specialist"
+        assert audit_event["data"]["internalPayloadFound"] is True
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_expected_extraction_step_audits_missing_internal_payload(
+        self, mock_get_agent, mock_streaming, monkeypatch
+    ):
+        """Expected extraction steps should explain when no internal payload appears."""
+        executor = _executor_module()
+        from src.lib.openai_agents.streaming_tools import (
+            clear_collected_events,
+            get_collected_events,
+        )
+
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        validation_candidates = []
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                return "Finalized one extraction through builder tools."
+
+            return _tool
+
+        async def _fake_validation_groups(**kwargs):
+            validation_candidates.append(kwargs["candidate"])
+            return {"validation_group_results": {"groups": []}}
+
+        mock_streaming.side_effect = _make_streaming_tool
+        monkeypatch.setattr(
+            executor,
+            "_execute_validation_groups_for_step",
+            _fake_validation_groups,
+        )
+
+        flow = _make_flow([
+            _agent_node("n1", "gene", output_key="gene_output"),
+        ])
+
+        clear_collected_events()
+        try:
+            tools, _, _, execution_state = get_all_agent_tools(
+                flow,
+                include_unavailable=True,
+            )
+            tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+            result = asyncio.run(
+                tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"}))
+            )
+            collected_events = list(get_collected_events())
+        finally:
+            clear_collected_events()
+
+        assert result == "Finalized one extraction through builder tools."
+        assert validation_candidates == [None]
+        completed_step = execution_state["completed_steps"][0]
+        assert completed_step["candidate"] is None
+        assert completed_step["evidence_count"] == 0
+        handoff_audit = completed_step["extraction_handoff_audit"]
+        assert handoff_audit["candidateExpected"] is True
+        assert handoff_audit["candidateExpectedFrom"] == ["catalog_curation_metadata"]
+        assert handoff_audit["internalEventEmitted"] is False
+        assert handoff_audit["internalEventMatchedTool"] is False
+        assert handoff_audit["internalEventFoundByFlow"] is False
+        assert handoff_audit["internalPayloadFound"] is False
+        assert handoff_audit["internalPayloadSource"] is None
+        assert handoff_audit["internalEventSources"] == []
+        assert handoff_audit["internalEventToolNames"] == []
+        assert handoff_audit["candidateBuilt"] is False
+        assert handoff_audit["candidateRejectReason"] == "internal_payload_missing"
+        assert handoff_audit["adapterKeyResolved"] is True
+        assert handoff_audit["evidenceCount"] == 0
+        assert handoff_audit["persistenceAttempted"] is False
+        assert handoff_audit["persistedResultCount"] is None
+        timing_event = next(
+            event for event in collected_events if event.get("type") == "FLOW_STEP_TIMING"
+        )
+        assert timing_event["details"]["candidateExpected"] is True
+        assert timing_event["details"]["usedInternalExtractionPayload"] is False
+        assert timing_event["details"]["internalPayloadFound"] is False
+        assert timing_event["details"]["candidateBuilt"] is False
+        assert timing_event["details"]["candidateRejectReason"] == "internal_payload_missing"
+        audit_event = next(
+            event
+            for event in collected_events
+            if event.get("type") == executor.FLOW_EXTRACTION_HANDOFF_AUDIT_EVENT
+        )
+        assert audit_event["data"]["toolName"] == "ask_gene_specialist"
+        assert audit_event["data"]["internalPayloadFound"] is False
+        assert audit_event["data"]["candidateRejectReason"] == "internal_payload_missing"
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_candidate_without_adapter_key_audits_missing_adapter(
+        self, mock_get_agent, mock_streaming, monkeypatch
+    ):
+        """Candidate adapter diagnostics should match the persistence gate."""
+        executor = _executor_module()
+        from src.lib.openai_agents.streaming_tools import (
+            clear_collected_events,
+            get_collected_events,
+        )
+
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        evidence_record = _make_evidence_record(
+            "TP53",
+            verified_quote="TP53 expression increased.",
+            chunk_id="chunk-tp53",
+        )
+        payload = _structured_step_output(
+            "TP53",
+            evidence_records=[evidence_record],
+        )
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                return json.dumps(payload)
+
+            return _tool
+
+        def _fake_candidate_builder(step_result, **kwargs):
+            _ = step_result, kwargs
+            return (
+                executor.ExtractionEnvelopeCandidate(
+                    agent_key="gene",
+                    adapter_key=None,
+                    candidate_count=1,
+                    conversation_summary="Extract findings",
+                    payload_json=payload,
+                    metadata={
+                        "flow_id": "11111111-1111-1111-1111-111111111111",
+                        "step": 1,
+                        "tool_name": "ask_gene_specialist",
+                    },
+                ),
+                {"evidence_records": [evidence_record]},
+            )
+
+        async def _fake_validation_groups(**kwargs):
+            return {"validation_group_results": {"groups": []}}
+
+        mock_streaming.side_effect = _make_streaming_tool
+        monkeypatch.setattr(
+            executor,
+            "build_extraction_envelope_candidate_with_evidence",
+            _fake_candidate_builder,
+        )
+        monkeypatch.setattr(
+            executor,
+            "_execute_validation_groups_for_step",
+            _fake_validation_groups,
+        )
+
+        flow = _make_flow([
+            _agent_node("n1", "gene", output_key="gene_output"),
+        ])
+
+        clear_collected_events()
+        try:
+            tools, _, _, execution_state = get_all_agent_tools(
+                flow,
+                include_unavailable=True,
+            )
+            tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+            asyncio.run(
+                tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"}))
+            )
+            collected_events = list(get_collected_events())
+        finally:
+            clear_collected_events()
+
+        completed_step = execution_state["completed_steps"][0]
+        handoff_audit = completed_step["extraction_handoff_audit"]
+        assert completed_step["candidate"] is not None
+        assert handoff_audit["candidateBuilt"] is True
+        assert handoff_audit["adapterKeyResolved"] is False
+        assert handoff_audit["candidateRejectReason"] == "missing_adapter_key"
+        timing_event = next(
+            event for event in collected_events if event.get("type") == "FLOW_STEP_TIMING"
+        )
+        assert timing_event["details"]["adapterKeyResolved"] is False
+        assert timing_event["details"]["candidateRejectReason"] == "missing_adapter_key"
+        audit_event = next(
+            event
+            for event in collected_events
+            if event.get("type") == executor.FLOW_EXTRACTION_HANDOFF_AUDIT_EVENT
+        )
+        assert audit_event["data"]["adapterKeyResolved"] is False
+        assert audit_event["data"]["candidateRejectReason"] == "missing_adapter_key"
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -1246,6 +1619,11 @@ class TestGetAllAgentToolsStepOrderRuntime:
     ):
         """Custom terminal output should plan a projection, then save deterministically."""
         executor = _executor_module()
+        from src.lib.openai_agents.streaming_tools import (
+            clear_collected_events,
+            get_collected_events,
+        )
+
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         planner_calls = []
         formatter_invocations = []
@@ -1311,16 +1689,21 @@ class TestGetAllAgentToolsStepOrderRuntime:
             ),
         ])
 
-        tools, _, _, execution_state = get_all_agent_tools(
-            flow,
-            include_unavailable=True,
-            flow_run_id="flow-run-123",
-        )
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
-        asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
-        result_text = asyncio.run(
-            tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "format"}))
-        )
+        clear_collected_events()
+        try:
+            tools, _, _, execution_state = get_all_agent_tools(
+                flow,
+                include_unavailable=True,
+                flow_run_id="flow-run-123",
+            )
+            tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+            asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
+            result_text = asyncio.run(
+                tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "format"}))
+            )
+            collected_events = list(get_collected_events())
+        finally:
+            clear_collected_events()
 
         result = json.loads(result_text)
         assert result["file_id"] == "file-planned-flow-csv"
@@ -1331,6 +1714,140 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert save_calls[0]["filename"] == "Test_Flow_csv_export"
         assert save_calls[0]["data"][0]["object_payload_label"] == "TP53"
         assert execution_state["completed_steps"][-1]["agent_id"] == "csv_output_formatter"
+        assert execution_state["completed_steps"][-1]["output"] == result_text
+        assert "extraction_handoff_audit" not in execution_state["completed_steps"][-1]
+        formatter_audit_events = [
+            event
+            for event in collected_events
+            if event.get("type") == executor.FLOW_EXTRACTION_HANDOFF_AUDIT_EVENT
+            and event.get("data", {}).get("toolName")
+            == "ask_csv_output_formatter_specialist"
+        ]
+        assert formatter_audit_events == []
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_literal_only_terminal_output_can_run_without_structured_artifacts(
+        self, mock_get_agent, mock_streaming, monkeypatch
+    ):
+        """Literal-only formatter plans can create deterministic smoke artifacts."""
+        executor = _executor_module()
+
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        formatter_invocations = []
+        save_calls = []
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                formatter_invocations.append((tool_name, query))
+                return "PDF specialist completed document access for batch smoke."
+
+            return _tool
+
+        async def _fake_save_json_impl(
+            data_json: str,
+            filename: str,
+            pretty: bool = False,
+        ) -> dict:
+            save_calls.append(
+                {
+                    "data": json.loads(data_json),
+                    "filename": filename,
+                    "pretty": pretty,
+                }
+            )
+            return {
+                "file_id": "file-literal-json",
+                "filename": "literal.json",
+                "format": "json",
+                "size_bytes": 42,
+                "mime_type": "application/json",
+                "download_url": "/api/files/file-literal-json/download",
+                "created_at": "2026-06-07T00:00:00Z",
+            }
+
+        mock_streaming.side_effect = _make_streaming_tool
+        monkeypatch.setattr(
+            executor,
+            "get_agent_metadata",
+            lambda agent_id, **_kwargs: {
+                "display_name": {
+                    "pdf_extraction": "General PDF Extraction Agent",
+                    "json_formatter": "JSON File Formatter",
+                }.get(agent_id, agent_id),
+                "description": "",
+                "category": "",
+                "requires_document": agent_id == "pdf_extraction",
+                "tool_name": {
+                    "pdf_extraction": "ask_pdf_extraction_specialist",
+                    "json_formatter": "ask_json_formatter_specialist",
+                }.get(agent_id),
+                "curation": None,
+                "curation_metadata": None,
+            },
+        )
+        monkeypatch.setattr(
+            "src.lib.openai_agents.tools.file_output_tools._save_json_impl",
+            _fake_save_json_impl,
+        )
+
+        flow = _make_flow([
+            _agent_node("n1", "pdf_extraction", output_key="pdf_output"),
+            _agent_node(
+                "n2",
+                "json_formatter",
+                output_key="final_output",
+                custom_instructions="Save the literal smoke status JSON artifact.",
+            ),
+        ])
+        flow.flow_definition["nodes"][1]["data"]["projection_plan"] = {
+            "format": "json",
+            "row_source": "artifact",
+            "json_shape": "rows",
+            "columns": [
+                {
+                    "key": "check",
+                    "transform": {
+                        "type": "literal",
+                        "value": "batch_file_output",
+                    },
+                },
+                {
+                    "key": "status",
+                    "transform": {
+                        "type": "literal",
+                        "value": "completed",
+                    },
+                },
+            ],
+        }
+
+        tools, _, _, execution_state = get_all_agent_tools(
+            flow,
+            include_unavailable=True,
+            flow_run_id="flow-run-123",
+            document_id="document-1",
+        )
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+        asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "read"})))
+        result_text = asyncio.run(
+            tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "format"}))
+        )
+
+        result = json.loads(result_text)
+        assert result["file_id"] == "file-literal-json"
+        assert save_calls == [
+            {
+                "data": [{"check": "batch_file_output", "status": "completed"}],
+                "filename": "Test_Flow_json_export",
+                "pretty": True,
+            }
+        ]
+        assert len(formatter_invocations) == 1
+        assert formatter_invocations[0][0] == "ask_pdf_extraction_specialist"
+        assert "General PDF Extraction Agent" in formatter_invocations[0][1]
+        assert execution_state["completed_steps"][-1]["agent_id"] == "json_formatter"
         assert execution_state["completed_steps"][-1]["output"] == result_text
 
     @patch("src.lib.flows.executor._create_streaming_tool")
@@ -3673,6 +4190,252 @@ class TestExecuteFlowTermination:
         assert flow_finished["data"]["failure_reason"] is None
 
     @pytest.mark.asyncio
+    async def test_defers_file_ready_until_terminal_step_state_is_recorded(
+        self, monkeypatch
+    ):
+        """Direct formatter projection can emit FILE_READY before TOOL_COMPLETE."""
+
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "pdf_extraction", step_goal="Read document"),
+            _agent_node("n2", "json_formatter", step_goal="Save JSON"),
+        ])
+        pdf_step = {
+            "step": 1,
+            "agent_id": "pdf_extraction",
+            "agent_name": "PDF Extraction",
+            "tool_name": "ask_pdf_extraction_specialist",
+            "output": "PDF specialist completed document access for batch smoke.",
+            "candidate": None,
+            "evidence_records": [],
+            "evidence_count": 0,
+        }
+        formatter_step = {
+            "step": 2,
+            "agent_id": "json_formatter",
+            "agent_name": "JSON Formatter",
+            "tool_name": "ask_json_formatter_specialist",
+            "output": '{"file_path": "smoke.json"}',
+            "candidate": None,
+            "evidence_records": [],
+            "evidence_count": 0,
+        }
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(
+            pdf_step,
+            ordered_tool_names=[
+                "ask_pdf_extraction_specialist",
+                "ask_json_formatter_specialist",
+            ],
+        )
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            yield {
+                "type": "FILE_READY",
+                "details": {"file_path": "smoke.json", "filename": "smoke.json"},
+            }
+            supervisor._flow_execution_state["completed_steps"].append(formatter_step)
+            yield {
+                "type": "TOOL_COMPLETE",
+                "details": {"toolName": "ask_json_formatter_specialist"},
+            }
+            yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [event async for event in execute_flow(flow, user_id="u1", session_id="s1")]
+        event_types = [event.get("type") for event in events]
+
+        assert "FLOW_ERROR" not in event_types
+        assert "FILE_READY" in event_types
+        assert event_types.index("TOOL_COMPLETE") < event_types.index("FILE_READY")
+        flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
+        assert flow_finished["data"]["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_fails_when_expected_extraction_step_has_no_candidate(self, monkeypatch):
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene", step_goal="Extract genes"),
+        ])
+        completed_step = {
+            "step": 1,
+            "agent_id": "gene",
+            "agent_name": "Gene",
+            "tool_name": "ask_gene_specialist",
+            "output": "Finalized one extraction through builder tools.",
+            "output_preview": "Finalized one extraction through builder tools.",
+            "candidate": None,
+            "evidence_records": [],
+            "evidence_count": 0,
+            "extraction_handoff_audit": _make_extraction_handoff_audit(
+                step=1,
+                tool_name="ask_gene_specialist",
+                agent_id="gene",
+                agent_name="Gene",
+                adapter_key="gene",
+                candidate_built=False,
+                candidate_reject_reason="internal_payload_missing",
+                evidence_count=0,
+                internal_payload_found=False,
+            ),
+        }
+
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(completed_step)
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.persist_extraction_results",
+            lambda *_args, **_kwargs: pytest.fail(
+                "missing extraction handoff must fail before persistence"
+            ),
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            yield {
+                "type": "TOOL_COMPLETE",
+                "details": {"toolName": "ask_gene_specialist"},
+            }
+            yield {"type": "CHAT_OUTPUT_READY", "data": {}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [
+            event
+            async for event in execute_flow(
+                flow,
+                user_id="u1",
+                session_id="s1",
+                document_id="doc-1",
+            )
+        ]
+        event_types = [event.get("type") for event in events]
+
+        assert "FLOW_ERROR" in event_types
+        assert "CHAT_OUTPUT_READY" not in event_types
+        flow_error = next(event for event in events if event.get("type") == "FLOW_ERROR")
+        assert flow_error["details"]["reason"] == "missing_expected_extraction_output"
+        assert flow_error["details"]["extraction_handoff_failures"][0]["reason"] == (
+            "internal_payload_missing"
+        )
+        flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
+        assert flow_finished["data"]["status"] == "failed"
+        assert "internal_payload_missing" in (flow_finished["data"]["failure_reason"] or "")
+        assert flow_finished["data"]["extraction_handoff_audits"][0]["candidateBuilt"] is False
+
+    @pytest.mark.asyncio
+    async def test_fails_when_required_extraction_persistence_returns_no_records(
+        self, monkeypatch
+    ):
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene", step_goal="Extract genes"),
+        ])
+        evidence_record = _make_evidence_record(
+            "TP53",
+            verified_quote="TP53 expression increased.",
+            chunk_id="chunk-tp53",
+        )
+        completed_step = _make_completed_step(
+            agent_id="gene",
+            agent_name="Gene",
+            tool_name="ask_gene_specialist",
+            step=1,
+            adapter_key="gene",
+            payload=_structured_step_output(
+                "TP53",
+                actor="gene",
+                destination="gene",
+                evidence_records=[evidence_record],
+            ),
+            evidence_records=[evidence_record],
+        )
+        completed_step["extraction_handoff_audit"] = _make_extraction_handoff_audit(
+            step=1,
+            tool_name="ask_gene_specialist",
+            agent_id="gene",
+            agent_name="Gene",
+            adapter_key="gene",
+            evidence_count=1,
+        )
+
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(completed_step)
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.DocumentContext.fetch",
+            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.persist_extraction_results",
+            lambda _requests: [],
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            yield {"type": "CHAT_OUTPUT_READY", "data": {}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [
+            event
+            async for event in execute_flow(
+                flow,
+                user_id="u1",
+                session_id="s1",
+                document_id="doc-1",
+            )
+        ]
+
+        flow_error = next(event for event in events if event.get("type") == "FLOW_ERROR")
+        assert flow_error["details"]["reason"] == "extraction_persistence_empty_result"
+        flow_finished = next(event for event in events if event.get("type") == "FLOW_FINISHED")
+        assert flow_finished["data"]["status"] == "failed"
+        finished_audit = flow_finished["data"]["extraction_handoff_audits"][0]
+        assert finished_audit["persistenceAttempted"] is True
+        assert finished_audit["persistenceStatus"] == "failed"
+        assert finished_audit["persistedResultCount"] == 0
+
+    @pytest.mark.asyncio
     async def test_marks_completed_on_curation_handoff_ready_and_preserves_extraction_refs(
         self, monkeypatch
     ):
@@ -3909,6 +4672,29 @@ class TestExecuteFlowTermination:
             payload=payload,
             evidence_records=[evidence_record],
         )
+        completed_step["extraction_handoff_audit"] = {
+            "step": 1,
+            "toolName": "ask_gene_expression_specialist",
+            "agentId": "gene-expression",
+            "agentName": "Gene Expression",
+            "candidateExpected": True,
+            "candidateExpectedFrom": ["catalog_curation_metadata"],
+            "curationAdapterKey": "gene_expression",
+            "internalEventEmitted": True,
+            "internalEventMatchedTool": True,
+            "internalEventFoundByFlow": True,
+            "internalPayloadFound": True,
+            "internalPayloadSource": "live_events",
+            "internalEventSources": ["live_events"],
+            "internalEventToolNames": ["ask_gene_expression_specialist"],
+            "builderFinalizationSeen": True,
+            "candidateBuilt": True,
+            "candidateRejectReason": None,
+            "adapterKeyResolved": True,
+            "evidenceCount": 1,
+            "persistenceAttempted": False,
+            "persistedResultCount": None,
+        }
 
         supervisor = MagicMock(name="Flow Supervisor")
         supervisor._flow_unavailable_steps = []
@@ -3938,6 +4724,13 @@ class TestExecuteFlowTermination:
         async def _fake_run_agent_streamed(**_kwargs):
             yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
             yield {
+                "type": "FLOW_EXTRACTION_HANDOFF_AUDIT",
+                "data": {
+                    **completed_step["extraction_handoff_audit"],
+                    "flow_run_id": "00000000-0000-0000-0000-000000000123",
+                },
+            }
+            yield {
                 "type": "TOOL_COMPLETE",
                 "details": {"toolName": "ask_gene_expression_specialist"},
             }
@@ -3959,10 +4752,18 @@ class TestExecuteFlowTermination:
         ]
 
         flow_started = next(e for e in events if e.get("type") == "FLOW_STARTED")
+        live_handoff_audit = next(
+            e
+            for e in events
+            if e.get("type") == "FLOW_EXTRACTION_HANDOFF_AUDIT"
+        )
         flow_step_evidence = next(e for e in events if e.get("type") == "FLOW_STEP_EVIDENCE")
         flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
 
         assert flow_started["data"]["flow_run_id"] == "00000000-0000-0000-0000-000000000123"
+        assert live_handoff_audit["data"]["toolName"] == "ask_gene_expression_specialist"
+        assert live_handoff_audit["data"]["persistenceAttempted"] is False
+        assert live_handoff_audit["data"]["persistedResultCount"] is None
         assert flow_step_evidence["data"]["flow_run_id"] == "00000000-0000-0000-0000-000000000123"
         assert flow_step_evidence["data"]["step"] == 1
         assert flow_step_evidence["data"]["evidence_count"] == 1
@@ -3975,8 +4776,104 @@ class TestExecuteFlowTermination:
         assert flow_finished["data"]["total_evidence_records"] == 1
         assert flow_finished["data"]["step_evidence_counts"] == {"1": 1}
         assert flow_finished["data"]["adapter_keys"] == ["gene_expression"]
+        assert len(flow_finished["data"]["extraction_handoff_audits"]) == 1
+        finished_audit = flow_finished["data"]["extraction_handoff_audits"][0]
+        assert finished_audit["toolName"] == "ask_gene_expression_specialist"
+        assert finished_audit["internalPayloadFound"] is True
+        assert finished_audit["candidateBuilt"] is True
+        assert finished_audit["persistenceAttempted"] is True
+        assert finished_audit["persistenceStatus"] == "success"
+        assert finished_audit["persistedResultCount"] == 1
         assert len(persisted_requests) == 1
         assert persisted_requests[0].flow_run_id == "00000000-0000-0000-0000-000000000123"
+
+    @pytest.mark.asyncio
+    async def test_failed_extraction_persistence_updates_handoff_audit(self, monkeypatch):
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene-expression", step_goal="Extract genes"),
+        ])
+        evidence_record = _make_evidence_record(
+            "TP53",
+            verified_quote="TP53 expression increased.",
+            chunk_id="chunk-tp53",
+        )
+        payload = _structured_step_output(
+            "TP53",
+            evidence_records=[evidence_record],
+        )
+        completed_step = _make_completed_step(
+            agent_id="gene-expression",
+            agent_name="Gene Expression",
+            tool_name="ask_gene_expression_specialist",
+            step=1,
+            adapter_key="gene_expression",
+            payload=payload,
+            evidence_records=[evidence_record],
+        )
+        completed_step["extraction_handoff_audit"] = _make_extraction_handoff_audit(
+            step=1,
+            tool_name="ask_gene_expression_specialist",
+            agent_id="gene-expression",
+            agent_name="Gene Expression",
+            adapter_key="gene_expression",
+            evidence_count=1,
+        )
+
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(completed_step)
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.DocumentContext.fetch",
+            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+        )
+
+        def _raise_persistence_error(_requests):
+            raise RuntimeError("db unavailable")
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.persist_extraction_results",
+            _raise_persistence_error,
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            yield {"type": "CHAT_OUTPUT_READY", "data": {}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [
+            event
+            async for event in execute_flow(
+                flow,
+                user_id="u1",
+                session_id="flow-session-1",
+                document_id="doc-1",
+            )
+        ]
+
+        flow_error = next(e for e in events if e.get("type") == "FLOW_ERROR")
+        flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
+
+        assert flow_error["details"]["reason"] == "extraction_persistence_failed"
+        assert flow_finished["data"]["status"] == "failed"
+        finished_audit = flow_finished["data"]["extraction_handoff_audits"][0]
+        assert finished_audit["persistenceAttempted"] is True
+        assert finished_audit["persistenceStatus"] == "failed"
+        assert finished_audit["persistedResultCount"] == 0
+        assert "db unavailable" in finished_audit["persistenceErrorReason"]
 
     @pytest.mark.asyncio
     async def test_execute_flow_emits_validator_lookup_audit_events(self, monkeypatch):

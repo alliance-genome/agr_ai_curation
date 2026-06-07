@@ -52,11 +52,9 @@ from .tools.evidence_workspace import (
 from .extraction_builder_workspace import (
     ExtractionBuilderWorkspace,
     build_internal_extraction_result_event,
-    finalize_extraction_payload,
     get_active_extraction_builder_workspace,
     reset_active_extraction_builder_workspace,
     set_active_extraction_builder_workspace,
-    stage_extraction_payload,
 )
 from .curation_context_registry import register_internal_extraction_event
 from .extraction_trace_events import (
@@ -321,10 +319,13 @@ def _is_domain_envelope_extraction_output_type(output_type: Any) -> bool:
 def _looks_like_domain_envelope_payload(payload: Any) -> bool:
     """Return whether a parsed payload has the shared domain-envelope shape."""
 
-    return (
-        isinstance(payload, dict)
-        and isinstance(payload.get("domain_pack_id"), str)
-        and isinstance(payload.get("objects"), list)
+    if not isinstance(payload, dict):
+        return False
+    if isinstance(payload.get("curatable_objects"), list):
+        return True
+    return isinstance(payload.get("domain_pack_id"), str) and isinstance(
+        payload.get("objects"),
+        list,
     )
 
 
@@ -2523,7 +2524,7 @@ def _reduce_specialist_output_for_supervisor(
 def _domain_envelope_supervisor_summary(payload: Dict[str, Any]) -> str:
     """Build a compact supervisor-facing summary from a materialized envelope."""
 
-    objects = payload.get("objects")
+    objects = _domain_envelope_supervisor_objects(payload)
     if not isinstance(objects, list) or not objects:
         return ""
 
@@ -2597,7 +2598,7 @@ def _domain_envelope_supervisor_minimal_summary(payload: Dict[str, Any]) -> str:
     """Return a compact non-JSON summary for unusual domain-envelope payloads."""
 
     domain_pack_id = str(payload.get("domain_pack_id") or "domain envelope")
-    objects = payload.get("objects")
+    objects = _domain_envelope_supervisor_objects(payload)
     object_count = len(objects) if isinstance(objects, list) else 0
     lines = [
         (
@@ -2611,6 +2612,18 @@ def _domain_envelope_supervisor_minimal_summary(payload: Dict[str, Any]) -> str:
     if isinstance(findings, list):
         lines.append(f"Validation finding count: {len(findings)}.")
     return "\n".join(lines)
+
+
+def _domain_envelope_supervisor_objects(payload: Dict[str, Any]) -> list[Any]:
+    """Return objects from either domain-envelope or curation-prep payload shapes."""
+
+    curatable_objects = payload.get("curatable_objects")
+    if isinstance(curatable_objects, list):
+        return curatable_objects
+    objects = payload.get("objects")
+    if isinstance(objects, list):
+        return objects
+    return []
 
 
 def _domain_envelope_resolved_finding_summary(finding: Dict[str, Any]) -> str:
@@ -3419,12 +3432,38 @@ def _emit_validator_lookup_audit_events(
         })
 
 
+def _agent_runtime_curation_adapter_key(agent: Agent) -> Optional[str]:
+    """Return curation adapter metadata attached during runtime agent creation."""
+
+    raw_metadata = getattr(agent, "curation_metadata", None)
+    if not isinstance(raw_metadata, Mapping):
+        raw_metadata = getattr(agent, "curation", None)
+    if not isinstance(raw_metadata, Mapping):
+        return None
+    if not bool(raw_metadata.get("launchable", False)):
+        return None
+    adapter_key = str(raw_metadata.get("adapter_key") or "").strip()
+    return adapter_key or None
+
+
+def _agent_runtime_canonical_agent_key(agent: Agent) -> Optional[str]:
+    """Return the canonical DB/config agent key attached during runtime creation."""
+
+    for attr_name in ("agent_key", "canonical_agent_key"):
+        agent_key = str(getattr(agent, attr_name, "") or "").strip()
+        if agent_key:
+            return agent_key
+    return None
+
+
 async def _dispatch_domain_envelope_validators_for_chat(
     final_output: str,
     *,
     expected_output_type: Any,
     specialist_name: str,
     tool_name: Optional[str],
+    adapter_key: Optional[str] = None,
+    source_agent_key: Optional[str] = None,
     is_builder_envelope: bool = False,
 ) -> str:
     """Run active domain-pack validators before extractor output reaches supervisor.
@@ -3443,7 +3482,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
     ):
         return final_output
 
-    agent_key = _agent_key_from_specialist_tool_name(tool_name)
+    agent_key = str(source_agent_key or "").strip() or _agent_key_from_specialist_tool_name(tool_name)
     if agent_key is None:
         raise SpecialistOutputError(
             specialist_name=specialist_name,
@@ -3491,6 +3530,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
         final_output,
         agent_key=agent_key,
         conversation_summary=f"{specialist_name} chat extraction",
+        adapter_key=adapter_key,
     )
     dispatch_phase_timings_ms["candidate_build_ms"] = _elapsed_ms(
         candidate_started_at
@@ -3986,6 +4026,109 @@ def add_specialist_event(event: Dict[str, Any]):
         _specialist_events.set(events)
 
 
+def _builder_finalizer_tool_calls(
+    *,
+    tool_calls: List[SpecialistToolCall],
+) -> List[SpecialistToolCall]:
+    """Return builder finalizer tool calls observed in the specialist stream."""
+
+    finalizer_names = _builder_finalization_tool_names()
+    return [
+        call
+        for call in tool_calls
+        if str(call.tool_name or "").strip() in finalizer_names
+    ]
+
+
+def _builder_finalization_diagnostics(
+    *,
+    builder_workspace: ExtractionBuilderWorkspace,
+    specialist_name: str,
+    tool_name: Optional[str],
+    tool_calls: List[SpecialistToolCall],
+    final_output: str,
+) -> Dict[str, Any]:
+    """Build trace-visible diagnostics for the builder finalization handoff."""
+
+    finalization = builder_workspace.finalization
+    finalizer_calls = _builder_finalizer_tool_calls(tool_calls=tool_calls)
+    candidates = [
+        {
+            "candidateId": candidate_id,
+            "status": candidate.status,
+            "evidenceRecordCount": len(candidate.evidence_record_ids),
+            "pendingRefCount": len(candidate.pending_ref_ids),
+            "resolverSelectionCount": len(candidate.resolver_selection_refs),
+        }
+        for candidate_id, candidate in builder_workspace.candidates.items()
+    ]
+    return {
+        "specialist": specialist_name,
+        "toolName": tool_name,
+        "builderRunId": builder_workspace.run_id,
+        "builderInvocationId": builder_workspace.builder_invocation_id,
+        "workspaceState": builder_workspace.state,
+        "finalizationPresent": finalization is not None,
+        "finalizationCandidateIds": (
+            list(finalization.candidate_ids) if finalization is not None else []
+        ),
+        "finalizationSourceCandidateIds": (
+            list(finalization.source_candidate_ids) if finalization is not None else []
+        ),
+        "finalizationEvidenceRecordIds": (
+            list(finalization.evidence_record_ids) if finalization is not None else []
+        ),
+        "finalizerToolCalls": [call.tool_name for call in finalizer_calls],
+        "finalizerToolCallCount": len(finalizer_calls),
+        "allToolCalls": [call.tool_name for call in tool_calls],
+        "candidateCount": len(candidates),
+        "candidates": candidates,
+        "validationErrorCount": len(builder_workspace.validation_errors),
+        "finalOutputType": type(final_output).__name__,
+        "finalOutputLength": len(final_output or ""),
+    }
+
+
+def _emit_builder_finalization_state(
+    *,
+    builder_workspace: ExtractionBuilderWorkspace,
+    specialist_name: str,
+    tool_name: Optional[str],
+    tool_calls: List[SpecialistToolCall],
+    final_output: str,
+) -> Dict[str, Any]:
+    diagnostics = _builder_finalization_diagnostics(
+        builder_workspace=builder_workspace,
+        specialist_name=specialist_name,
+        tool_name=tool_name,
+        tool_calls=tool_calls,
+        final_output=final_output,
+    )
+    logger.info(
+        "%s builder finalization state: present=%s state=%s finalizer_calls=%s",
+        specialist_name,
+        diagnostics["finalizationPresent"],
+        diagnostics["workspaceState"],
+        diagnostics["finalizerToolCalls"],
+        extra={
+            "specialist_name": specialist_name,
+            "tool_name": tool_name,
+            "builder_run_id": builder_workspace.run_id,
+            "builder_invocation_id": builder_workspace.builder_invocation_id,
+            "builder_finalization_present": diagnostics["finalizationPresent"],
+            "builder_state": diagnostics["workspaceState"],
+            "builder_finalizer_tool_calls": diagnostics["finalizerToolCalls"],
+            "operation": "builder_finalization_state",
+        },
+    )
+    add_specialist_event({
+        "type": "SPECIALIST_BUILDER_FINALIZATION_STATE",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "details": diagnostics,
+    })
+    return diagnostics
+
+
 def _emit_chunk_provenance_from_output(tool_name: str, output: str):
     """
     Parse PDF tool output and emit CHUNK_PROVENANCE events for PDF highlighting.
@@ -4119,6 +4262,8 @@ async def run_specialist_with_events(
     )
 
     expected_output_type = getattr(agent, "output_type", None)
+    runtime_curation_adapter_key = _agent_runtime_curation_adapter_key(agent)
+    runtime_canonical_agent_key = _agent_runtime_canonical_agent_key(agent)
     builder_materializer_agent = _is_builder_materializer_agent(agent)
     if builder_materializer_agent and expected_output_type is not None:
         output_type_name = getattr(expected_output_type, "__name__", "response")
@@ -5267,19 +5412,94 @@ async def run_specialist_with_events(
         expected_output_type=expected_output_type,
     )
     builder_finalization = builder_workspace.finalization
-    if expected_output_type is not None and final_output and builder_finalization is None:
-        try:
-            payload = json.loads(final_output)
-        except Exception:
-            payload = None
-        if isinstance(payload, dict):
-            canonical_payload = stage_extraction_payload(
-                payload,
-                workspace=builder_workspace,
-                candidate_id=builder_candidate_id,
-                evidence_records=live_evidence_records,
+    if builder_materializer_agent:
+        finalization_diagnostics = _emit_builder_finalization_state(
+            builder_workspace=builder_workspace,
+            specialist_name=specialist_name,
+            tool_name=tool_name,
+            tool_calls=tool_calls,
+            final_output=final_output,
+        )
+        if builder_finalization is None:
+            error_message = (
+                f"{specialist_name} is a builder/materializer specialist but did "
+                "not leave a finalized backend builder payload after the run."
             )
-            final_output = json.dumps(canonical_payload)
+            logger.error(
+                "%s diagnostics=%s",
+                error_message,
+                finalization_diagnostics,
+                extra={
+                    "specialist_name": specialist_name,
+                    "tool_name": tool_name,
+                    "builder_run_id": builder_workspace.run_id,
+                    "builder_invocation_id": builder_workspace.builder_invocation_id,
+                    "builder_state": builder_workspace.state,
+                    "builder_finalizer_tool_calls": finalization_diagnostics[
+                        "finalizerToolCalls"
+                    ],
+                    "operation": "builder_finalization_missing",
+                },
+            )
+            add_specialist_event({
+                "type": "SPECIALIST_BUILDER_FINALIZATION_MISSING",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "details": {
+                    **finalization_diagnostics,
+                    "reason": "builder_finalization_missing",
+                    "message": error_message,
+                    "severity": "error",
+                },
+            })
+            raise SpecialistOutputError(
+                specialist_name=specialist_name,
+                output_type_name="builder_finalization",
+                message=error_message,
+                details=[
+                    {
+                        **finalization_diagnostics,
+                        "reason": "builder_finalization_missing",
+                    }
+                ],
+            )
+        if not tool_name:
+            error_message = (
+                f"{specialist_name} is a builder/materializer specialist but was "
+                "invoked without a supervisor tool name, so its finalized payload "
+                "cannot be emitted for persistence."
+            )
+            logger.error(
+                "%s diagnostics=%s",
+                error_message,
+                finalization_diagnostics,
+                extra={
+                    "specialist_name": specialist_name,
+                    "builder_run_id": builder_workspace.run_id,
+                    "builder_invocation_id": builder_workspace.builder_invocation_id,
+                    "operation": "builder_materializer_tool_name_missing",
+                },
+            )
+            add_specialist_event({
+                "type": "SPECIALIST_BUILDER_TOOL_NAME_MISSING",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "details": {
+                    **finalization_diagnostics,
+                    "reason": "builder_materializer_tool_name_missing",
+                    "message": error_message,
+                    "severity": "error",
+                },
+            })
+            raise SpecialistOutputError(
+                specialist_name=specialist_name,
+                output_type_name="builder_finalization",
+                message=error_message,
+                details=[
+                    {
+                        **finalization_diagnostics,
+                        "reason": "builder_materializer_tool_name_missing",
+                    }
+                ],
+            )
 
     phase_timings_ms["post_stream_output_ms"] = _elapsed_ms(post_stream_started_at)
 
@@ -5332,6 +5552,8 @@ async def run_specialist_with_events(
                 expected_output_type=expected_output_type,
                 specialist_name=specialist_name,
                 tool_name=tool_name,
+                adapter_key=runtime_curation_adapter_key,
+                source_agent_key=runtime_canonical_agent_key,
             )
         except SpecialistOutputError as exc:
             dispatch_errors = [
@@ -5352,6 +5574,18 @@ async def run_specialist_with_events(
                         "tool_name": tool_name,
                     }
                 ]
+            logger.warning(
+                "%s chat domain-envelope validation failed after plain output: %s",
+                specialist_name,
+                dispatch_errors,
+                extra={
+                    "specialist_name": specialist_name,
+                    "tool_name": tool_name,
+                    "adapter_key": runtime_curation_adapter_key,
+                    "source_agent_key": runtime_canonical_agent_key,
+                    "operation": "chat_domain_envelope_validation_failed",
+                },
+            )
             builder_workspace.record_validation_failure(
                 errors=dispatch_errors,
                 candidate_ids=[builder_candidate_id],
@@ -5371,6 +5605,8 @@ async def run_specialist_with_events(
                 expected_output_type=expected_output_type,
                 specialist_name=specialist_name,
                 tool_name=tool_name,
+                adapter_key=runtime_curation_adapter_key,
+                source_agent_key=runtime_canonical_agent_key,
                 is_builder_envelope=True,
             )
         except SpecialistOutputError as exc:
@@ -5392,9 +5628,24 @@ async def run_specialist_with_events(
                         "tool_name": tool_name,
                     }
                 ]
+            logger.warning(
+                "%s chat domain-envelope validation failed after builder finalization: %s",
+                specialist_name,
+                dispatch_errors,
+                extra={
+                    "specialist_name": specialist_name,
+                    "tool_name": tool_name,
+                    "adapter_key": runtime_curation_adapter_key,
+                    "source_agent_key": runtime_canonical_agent_key,
+                    "operation": "chat_domain_envelope_validation_failed",
+                },
+            )
+            finalized_candidate_ids = (
+                builder_finalization.candidate_ids or (builder_candidate_id,)
+            )
             builder_workspace.record_validation_failure(
                 errors=dispatch_errors,
-                candidate_ids=[builder_candidate_id],
+                candidate_ids=finalized_candidate_ids,
             )
             raise
         try:
@@ -5405,6 +5656,7 @@ async def run_specialist_with_events(
             builder_finalization = replace(
                 builder_finalization, payload=validated_builder_payload
             )
+            builder_workspace.finalization = builder_finalization
     phase_timings_ms["domain_validator_dispatch_ms"] = _elapsed_ms(
         validator_dispatch_started_at
     )
@@ -5419,26 +5671,6 @@ async def run_specialist_with_events(
 
     internal_event_started_at = time.monotonic()
     if tool_name and builder_finalization is not None:
-        final_output = json.dumps(builder_finalization.payload)
-        add_specialist_event(
-            build_internal_extraction_result_event(
-                tool_name=tool_name,
-                specialist_name=specialist_name,
-                finalization=builder_finalization,
-                timestamp=datetime.now(timezone.utc).isoformat(),
-            )
-        )
-    elif tool_name and _is_domain_envelope_output_json(
-        final_output,
-        expected_output_type=expected_output_type,
-    ):
-        payload = json.loads(final_output)
-        builder_finalization = finalize_extraction_payload(
-            payload,
-            workspace=builder_workspace,
-            candidate_id=builder_candidate_id,
-            evidence_records=live_evidence_records,
-        )
         final_output = json.dumps(builder_finalization.payload)
         add_specialist_event(
             build_internal_extraction_result_event(

@@ -380,7 +380,18 @@ def test_prompt_sensitive_agent_workshop_chat_forces_refresh_before_review(
         events = _consume_sse_events(response)
 
     assert response.status_code == 200, response.text
-    assert [event["type"] for event in events] == [
+    preflight_events = [
+        event for event in events if event["type"] == "PROVIDER_CONTEXT_PREFLIGHT"
+    ]
+    assert [event["operation"] for event in preflight_events] == [
+        "initial_anthropic_call",
+        "tool_loop_continuation",
+    ]
+    output_events = [
+        event for event in events if event["type"] != "PROVIDER_CONTEXT_PREFLIGHT"
+    ]
+
+    assert [event["type"] for event in output_events] == [
         "TOOL_USE",
         "TOOL_RESULT",
         "TEXT_DELTA",
@@ -394,7 +405,7 @@ def test_prompt_sensitive_agent_workshop_chat_forces_refresh_before_review(
     }
     assert "tool_choice" not in second_call
 
-    tool_result = events[1]["result"]
+    tool_result = output_events[1]["result"]
     assert tool_result["source"] == "saved_custom_agent"
     assert tool_result["current_prompt"] == "Current saved prompt with no typo."
     assert "minerite" not in tool_result["current_prompt"]

@@ -563,6 +563,246 @@ def test_create_db_agent_attaches_structured_finalization_metadata(monkeypatch):
     assert built.structured_finalization["tool_name"] == "finalize_gene_lookup"
 
 
+def test_create_db_agent_attaches_inherited_curation_metadata_for_custom_template(monkeypatch):
+    fake_row = SimpleNamespace(
+        id="agent-id",
+        agent_key="ca_custom_gene_extractor",
+        visibility="private",
+        instructions="CUSTOM",
+        mod_prompt_overrides={},
+        group_rules_enabled=False,
+        template_source="gene_extractor",
+        group_rules_component="gene_extractor",
+        model_id="gpt-4o",
+        model_temperature=0.1,
+        model_reasoning="low",
+        output_schema_key=None,
+        tool_ids=["search_document", "finalize_gene_extraction"],
+        name="Custom Gene Extractor",
+    )
+    fake_parent_definition = SimpleNamespace(
+        curation=SimpleNamespace(adapter_key="gene", launchable=True),
+        structured_finalization={"tool_name": "finalize_gene_extraction"},
+    )
+
+    from src.lib.openai_agents import config as agent_config
+
+    monkeypatch.setattr(catalog_service, "_resolve_output_schema", lambda _key: None)
+    monkeypatch.setattr(catalog_service, "resolve_tools", lambda _tool_ids, _ctx: [])
+    monkeypatch.setattr(agent_config, "resolve_model_provider", lambda _model_id: "openai")
+    monkeypatch.setattr(agent_config, "get_model_for_agent", lambda _model_id, **_kwargs: "model")
+    monkeypatch.setattr(agent_config, "build_model_settings", lambda **kwargs: kwargs)
+    monkeypatch.setattr(
+        catalog_service,
+        "_build_runtime_instructions",
+        lambda **_kwargs: SimpleNamespace(
+            render=lambda: "INSTR",
+            hash="hash-1",
+            to_manifest=lambda: {
+                "agent_id": "ca_custom_gene_extractor",
+                "layers": [],
+                "hash": "hash-1",
+            },
+        ),
+    )
+    monkeypatch.setattr(catalog_service, "prompt_templates_for_bundle", lambda _bundle: [])
+    monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(catalog_service, "resolve_tools", lambda _tool_ids, _ctx: [])
+    monkeypatch.setattr(
+        catalog_service,
+        "get_agent_definition",
+        lambda agent_id: fake_parent_definition if agent_id == "gene_extractor" else None,
+    )
+    monkeypatch.setattr(catalog_service, "get_agent_by_folder", lambda _agent_id: None)
+
+    built = catalog_service._create_db_agent(fake_row, db_user_id=17)
+
+    assert built is not None
+    assert built.agent_key == "ca_custom_gene_extractor"
+    assert built.curation_metadata == {"adapter_key": "gene", "launchable": True}
+    assert built.curation == {"adapter_key": "gene", "launchable": True}
+
+
+def test_create_db_agent_inherits_when_custom_definition_is_not_launchable(monkeypatch):
+    fake_row = SimpleNamespace(
+        id="agent-id",
+        agent_key="ca_custom_gene_extractor",
+        visibility="private",
+        instructions="CUSTOM",
+        mod_prompt_overrides={},
+        group_rules_enabled=False,
+        template_source="gene_extractor",
+        group_rules_component="gene_extractor",
+        model_id="gpt-4o",
+        model_temperature=0.1,
+        model_reasoning="low",
+        output_schema_key=None,
+        tool_ids=["search_document", "finalize_gene_extraction"],
+        name="Custom Gene Extractor",
+    )
+    fake_custom_definition = SimpleNamespace(
+        curation=SimpleNamespace(adapter_key=None, launchable=False),
+        structured_finalization=None,
+    )
+    fake_parent_definition = SimpleNamespace(
+        curation=SimpleNamespace(adapter_key="gene", launchable=True),
+        structured_finalization={"tool_name": "finalize_gene_extraction"},
+    )
+
+    from src.lib.openai_agents import config as agent_config
+
+    monkeypatch.setattr(catalog_service, "_resolve_output_schema", lambda _key: None)
+    monkeypatch.setattr(agent_config, "resolve_model_provider", lambda _model_id: "openai")
+    monkeypatch.setattr(agent_config, "get_model_for_agent", lambda _model_id, **_kwargs: "model")
+    monkeypatch.setattr(agent_config, "build_model_settings", lambda **kwargs: kwargs)
+    monkeypatch.setattr(
+        catalog_service,
+        "_build_runtime_instructions",
+        lambda **_kwargs: SimpleNamespace(
+            render=lambda: "INSTR",
+            hash="hash-1",
+            to_manifest=lambda: {
+                "agent_id": "ca_custom_gene_extractor",
+                "layers": [],
+                "hash": "hash-1",
+            },
+        ),
+    )
+    monkeypatch.setattr(catalog_service, "prompt_templates_for_bundle", lambda _bundle: [])
+    monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(catalog_service, "resolve_tools", lambda _tool_ids, _ctx: [])
+    monkeypatch.setattr(
+        catalog_service,
+        "get_agent_definition",
+        lambda agent_id: {
+            "ca_custom_gene_extractor": fake_custom_definition,
+            "gene_extractor": fake_parent_definition,
+        }.get(agent_id),
+    )
+    monkeypatch.setattr(catalog_service, "get_agent_by_folder", lambda _agent_id: None)
+
+    built = catalog_service._create_db_agent(fake_row, db_user_id=17)
+
+    assert built is not None
+    assert built.curation_metadata == {"adapter_key": "gene", "launchable": True}
+    assert built.curation == {"adapter_key": "gene", "launchable": True}
+
+
+def test_create_db_agent_does_not_attach_curation_metadata_without_finalizer_tool(monkeypatch):
+    fake_row = SimpleNamespace(
+        id="agent-id",
+        agent_key="ca_repurposed_gene_extractor",
+        visibility="private",
+        instructions="CUSTOM",
+        mod_prompt_overrides={},
+        group_rules_enabled=False,
+        template_source="gene_extractor",
+        group_rules_component="gene_extractor",
+        model_id="gpt-4o",
+        model_temperature=0.1,
+        model_reasoning="low",
+        output_schema_key=None,
+        tool_ids=["search_document"],
+        name="Repurposed Gene Extractor",
+    )
+    fake_parent_definition = SimpleNamespace(
+        curation=SimpleNamespace(adapter_key="gene", launchable=True),
+        structured_finalization={"tool_name": "finalize_gene_extraction"},
+    )
+
+    from src.lib.openai_agents import config as agent_config
+
+    monkeypatch.setattr(catalog_service, "_resolve_output_schema", lambda _key: None)
+    monkeypatch.setattr(agent_config, "resolve_model_provider", lambda _model_id: "openai")
+    monkeypatch.setattr(agent_config, "get_model_for_agent", lambda _model_id, **_kwargs: "model")
+    monkeypatch.setattr(agent_config, "build_model_settings", lambda **kwargs: kwargs)
+    monkeypatch.setattr(
+        catalog_service,
+        "_build_runtime_instructions",
+        lambda **_kwargs: SimpleNamespace(
+            render=lambda: "INSTR",
+            hash="hash-1",
+            to_manifest=lambda: {
+                "agent_id": "ca_repurposed_gene_extractor",
+                "layers": [],
+                "hash": "hash-1",
+            },
+        ),
+    )
+    monkeypatch.setattr(catalog_service, "prompt_templates_for_bundle", lambda _bundle: [])
+    monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(catalog_service, "resolve_tools", lambda _tool_ids, _ctx: [])
+    monkeypatch.setattr(
+        catalog_service,
+        "get_agent_definition",
+        lambda agent_id: fake_parent_definition if agent_id == "gene_extractor" else None,
+    )
+    monkeypatch.setattr(catalog_service, "get_agent_by_folder", lambda _agent_id: None)
+
+    built = catalog_service._create_db_agent(fake_row, db_user_id=17)
+
+    assert built is not None
+    assert not hasattr(built, "curation_metadata")
+    assert not hasattr(built, "curation")
+
+
+def test_create_db_agent_does_not_inherit_curation_without_parent_adapter_key(monkeypatch):
+    fake_row = SimpleNamespace(
+        id="agent-id",
+        agent_key="ca_gene_extractor_missing_adapter",
+        visibility="private",
+        instructions="CUSTOM",
+        mod_prompt_overrides={},
+        group_rules_enabled=False,
+        template_source="gene_extractor",
+        group_rules_component="gene_extractor",
+        model_id="gpt-4o",
+        model_temperature=0.1,
+        model_reasoning="low",
+        output_schema_key=None,
+        tool_ids=["search_document", "finalize_gene_extraction"],
+        name="Custom Gene Extractor",
+    )
+    fake_parent_definition = SimpleNamespace(
+        curation=SimpleNamespace(adapter_key="", launchable=True),
+    )
+
+    from src.lib.openai_agents import config as agent_config
+
+    monkeypatch.setattr(catalog_service, "_resolve_output_schema", lambda _key: None)
+    monkeypatch.setattr(agent_config, "resolve_model_provider", lambda _model_id: "openai")
+    monkeypatch.setattr(agent_config, "get_model_for_agent", lambda _model_id, **_kwargs: "model")
+    monkeypatch.setattr(agent_config, "build_model_settings", lambda **kwargs: kwargs)
+    monkeypatch.setattr(
+        catalog_service,
+        "_build_runtime_instructions",
+        lambda **_kwargs: SimpleNamespace(
+            render=lambda: "INSTR",
+            hash="hash-1",
+            to_manifest=lambda: {
+                "agent_id": "ca_gene_extractor_missing_adapter",
+                "layers": [],
+                "hash": "hash-1",
+            },
+        ),
+    )
+    monkeypatch.setattr(catalog_service, "prompt_templates_for_bundle", lambda _bundle: [])
+    monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(catalog_service, "resolve_tools", lambda _tool_ids, _ctx: [])
+    monkeypatch.setattr(
+        catalog_service,
+        "get_agent_definition",
+        lambda agent_id: fake_parent_definition if agent_id == "gene_extractor" else None,
+    )
+    monkeypatch.setattr(catalog_service, "get_agent_by_folder", lambda _agent_id: None)
+
+    built = catalog_service._create_db_agent(fake_row, db_user_id=17)
+
+    assert built is not None
+    assert not hasattr(built, "curation_metadata")
+    assert not hasattr(built, "curation")
+
+
 def test_create_db_agent_applies_model_overrides(monkeypatch):
     fake_row = SimpleNamespace(
         id="agent-id",
