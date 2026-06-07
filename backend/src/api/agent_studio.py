@@ -3093,6 +3093,8 @@ async def chat_with_opus(
                     event_type="PROVIDER_CONTEXT_PREFLIGHT",
                     trace_id=trace_id,
                     operation=preflight_event["operation"],
+                    provider=preflight_event["provider"],
+                    model=preflight_event["model"],
                     model_live=True,
                     payload_summary=preflight_event["payload_summary"],
                 )

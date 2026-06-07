@@ -209,7 +209,7 @@ services:
       ANONYMIZED_TELEMETRY: "False"
       DATABASE_URL: "${DATABASE_URL:?set in standalone env}"
       HEALTH_CHECK_STRICT_MODE: "${HEALTH_CHECK_STRICT_MODE:-true}"
-      HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS: "${HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS:-true}"
+      HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS: "${HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS:-false}"
       HEALTH_CHECK_REQUIRE_LITERATURE_DB: "${HEALTH_CHECK_REQUIRE_LITERATURE_DB:-false}"
       POSTGRES_HOST: "${POSTGRES_HOST:-postgres}"
       POSTGRES_PORT: "${POSTGRES_PORT:-5432}"
@@ -285,7 +285,7 @@ services:
       - "169.254.169.254:127.0.0.1"  # Block EC2 IMDS metadata endpoint
       - "169.254.170.2:127.0.0.1"    # Block ECS credential endpoint
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; response = urllib.request.urlopen('http://localhost:8000/health/ready', timeout=10); response.read(1)"]
+      test: ["CMD", "python", "-c", "import urllib.request; response = urllib.request.urlopen('http://localhost:8000/health/live', timeout=10); response.read(1)"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -1988,8 +1988,10 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
         output_type=GeneResultEnvelope,
         tools=[],
         instructions="Base validator instructions.",
+        model="validator-model",
     )
     captured = {}
+    captured_preflight = {}
 
     monkeypatch.setattr(
         "src.lib.config.agent_loader.get_agent_definition_for_package",
@@ -2003,6 +2005,14 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
     monkeypatch.setattr(
         "src.lib.agent_studio.catalog_service.get_agent_by_id",
         lambda agent_key: source_agent,
+    )
+    monkeypatch.setattr(
+        "src.lib.openai_agents.config.resolve_model_provider",
+        lambda model: "anthropic" if model == "validator-model" else "unknown",
+    )
+    monkeypatch.setattr(
+        "src.lib.domain_packs.validator_dispatch.provider_context_preflight",
+        lambda **kwargs: captured_preflight.update(kwargs) or {},
     )
 
     def _fake_run_sync(agent, **kwargs):
@@ -2037,6 +2047,8 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
     assert "evidence" not in runtime_payload
     assert runtime_payload["evidence_summary"]["evidence_record_ids"] == ["evidence-1"]
     assert captured["kwargs"]["max_turns"] == 6
+    assert captured_preflight["provider"] == "anthropic"
+    assert captured_preflight["model"] == "validator-model"
 
 
 def test_validator_finalization_feedback_accepts_valid_result():
@@ -2216,8 +2228,10 @@ def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
         output_type=GeneResultEnvelope,
         tools=[],
         instructions="Base validator instructions.",
+        model="validator-batch-model",
     )
     captured = {}
+    captured_preflight = {}
 
     monkeypatch.setattr(
         "src.lib.config.agent_loader.get_agent_definition_for_package",
@@ -2232,6 +2246,14 @@ def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
     monkeypatch.setattr(
         "src.lib.agent_studio.catalog_service.get_agent_by_id",
         lambda agent_key: source_agent,
+    )
+    monkeypatch.setattr(
+        "src.lib.openai_agents.config.resolve_model_provider",
+        lambda model: "gemini" if model == "validator-batch-model" else "unknown",
+    )
+    monkeypatch.setattr(
+        "src.lib.domain_packs.validator_dispatch.provider_context_preflight",
+        lambda **kwargs: captured_preflight.update(kwargs) or {},
     )
 
     def _fake_run_sync(agent, **kwargs):
@@ -2267,6 +2289,8 @@ def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
     assert "one bulk lookup tool call per compatible shared lookup group" in payload[
         "instructions"
     ]
+    assert captured_preflight["provider"] == "gemini"
+    assert captured_preflight["model"] == "validator-batch-model"
     assert "gene_symbols" in payload["instructions"]
     assert payload["requests"][0]["request_id"] == request.request_id
     assert payload["requests"][0]["selected_inputs"] == request.selected_inputs

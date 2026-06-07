@@ -131,6 +131,24 @@ def _chat_request():
     )
 
 
+def _assert_provider_context_preflight(event: dict) -> None:
+    assert event["type"] == "PROVIDER_CONTEXT_PREFLIGHT"
+    assert event["session_id"] == "agent-studio-session-1"
+    assert event["turn_id"] == "opus-turn-1"
+    assert event["trace_id"] == "trace-123"
+    assert event["operation"] == "initial_anthropic_call"
+    assert event["provider"] == "anthropic"
+    assert event["model"] == "claude-sonnet-test"
+    assert event["model_live"] is True
+    assert event["payload_summary"]["json_chars"] > 0
+
+
+def _events_after_preflight(events: list[dict]) -> list[dict]:
+    assert events
+    _assert_provider_context_preflight(events[0])
+    return events[1:]
+
+
 def test_chat_with_opus_sanitizes_invalid_request_errors(monkeypatch, caplog):
     caplog.set_level(logging.WARNING, logger=api_module.logger.name)
 
@@ -182,7 +200,9 @@ def test_chat_with_opus_sanitizes_bad_request_errors(monkeypatch):
 
     events = asyncio.run(_consume_stream(response))
 
-    assert events == [
+    output_events = _events_after_preflight(events)
+
+    assert output_events == [
         {
             "type": "ERROR",
             "session_id": "agent-studio-session-1",
@@ -196,7 +216,7 @@ def test_chat_with_opus_sanitizes_bad_request_errors(monkeypatch):
             "error_source": "anthropic",
         }
     ]
-    assert "req_test_123" not in events[0]["message"]
+    assert "req_test_123" not in output_events[0]["message"]
     assert alerts == [
         {
             "error_type": "BadRequestError",
@@ -231,7 +251,9 @@ def test_chat_with_opus_sanitizes_api_errors(monkeypatch):
 
     events = asyncio.run(_consume_stream(response))
 
-    assert events == [
+    output_events = _events_after_preflight(events)
+
+    assert output_events == [
         {
             "type": "ERROR",
             "session_id": "agent-studio-session-1",
@@ -245,7 +267,7 @@ def test_chat_with_opus_sanitizes_api_errors(monkeypatch):
             "error_source": "anthropic",
         }
     ]
-    assert "req_test_456" not in events[0]["message"]
+    assert "req_test_456" not in output_events[0]["message"]
     assert alerts == [
         {
             "error_type": "APIError",
@@ -276,7 +298,9 @@ def test_chat_with_opus_preserves_context_overflow_branch(monkeypatch):
 
     events = asyncio.run(_consume_stream(response))
 
-    assert events == [
+    output_events = _events_after_preflight(events)
+
+    assert output_events == [
         {
             "type": "CONTEXT_OVERFLOW",
             "session_id": "agent-studio-session-1",
@@ -299,7 +323,7 @@ def test_chat_with_opus_preserves_context_overflow_branch(monkeypatch):
     ]
     assert alerts == []
     assert logger_errors == []
-    assert "error_source" not in events[0]
+    assert "error_source" not in output_events[0]
 
 
 def test_chat_with_opus_sanitizes_unexpected_errors(monkeypatch):
@@ -318,7 +342,9 @@ def test_chat_with_opus_sanitizes_unexpected_errors(monkeypatch):
 
     events = asyncio.run(_consume_stream(response))
 
-    assert events == [
+    output_events = _events_after_preflight(events)
+
+    assert output_events == [
         {
             "type": "ERROR",
             "session_id": "agent-studio-session-1",
@@ -332,7 +358,7 @@ def test_chat_with_opus_sanitizes_unexpected_errors(monkeypatch):
             ),
         }
     ]
-    assert raw_message not in events[0]["message"]
+    assert raw_message not in output_events[0]["message"]
     assert alerts == [
         {
             "error_type": "RuntimeError",

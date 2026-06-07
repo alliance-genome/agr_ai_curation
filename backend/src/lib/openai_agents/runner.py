@@ -1815,7 +1815,12 @@ async def run_agent_streamed(
         model_name = str(getattr(agent, "model", "") or "")
         try:
             provider = resolve_model_provider(model_name)
-        except Exception:
+        except (LookupError, RuntimeError, ValueError):
+            logger.warning(
+                "Unable to resolve provider for provider-context preflight model=%s",
+                model_name,
+                exc_info=True,
+            )
             provider = None
         provider_context_preflight(
             surface="flow" if provided_runtime_agent else "standard_chat",

@@ -50,15 +50,6 @@ def json_size(value: Any) -> RuntimePayloadSize:
     )
 
 
-def summarize_text(value: str, *, max_chars: int) -> dict[str, Any]:
-    return {
-        "preview": value[:max_chars],
-        "original_chars": len(value),
-        "omitted_chars": max(0, len(value) - max_chars),
-        "truncated": len(value) > max_chars,
-    }
-
-
 def largest_json_paths(
     value: Any,
     *,
@@ -206,8 +197,11 @@ def _write_extraction_trace_preflight_event(summary: Mapping[str, Any]) -> None:
                 "model": summary.get("model"),
             },
         )
-    except Exception:
-        LOGGER.debug("Failed to write provider context preflight trace event", exc_info=True)
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        LOGGER.warning(
+            "Failed to write provider context preflight trace event",
+            exc_info=True,
+        )
 
 
 def _emit_specialist_runtime_event(summary: Mapping[str, Any]) -> None:
@@ -220,5 +214,5 @@ def _emit_specialist_runtime_event(summary: Mapping[str, Any]) -> None:
                 "details": _preflight_event_details(summary),
             }
         )
-    except Exception:
-        LOGGER.debug("Failed to emit provider context preflight event", exc_info=True)
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        LOGGER.warning("Failed to emit provider context preflight event", exc_info=True)

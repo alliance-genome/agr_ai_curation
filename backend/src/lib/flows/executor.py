@@ -1434,7 +1434,12 @@ async def _run_custom_flow_validator_agent(
     try:
         validator_model = get_model_for_agent(validator_agent_id)
         validator_provider = resolve_model_provider(validator_model)
-    except Exception:
+    except (LookupError, RuntimeError, ValueError):
+        logger.warning(
+            "Unable to resolve validator provider for flow validator agent=%s",
+            validator_agent_id,
+            exc_info=True,
+        )
         validator_model = None
         validator_provider = None
     provider_context_preflight(

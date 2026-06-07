@@ -78,7 +78,9 @@ def test_batch_plumbing_flow_uses_deterministic_file_output_payload():
 
     assert "prove document access" in pdf_goal
     assert "Do not include quotes" in pdf_goal
-    assert '[{"check":"batch_file_output","status":"completed"}]' in formatter_goal
+    assert "check=batch_file_output" in formatter_goal
+    assert "status=completed" in formatter_goal
+    assert "batch_release_smoke_result_json" in formatter_goal
     assert projection_plan["format"] == "json"
     assert projection_plan["row_source"] == "artifact"
     assert projection_plan["json_shape"] == "rows"
@@ -108,20 +110,27 @@ def test_require_batch_plumbing_payload_requires_exact_json_artifact():
 
     smoke.require_batch_plumbing_payload(
         {
-            "batch_release_smoke_result.json": [
+            "001_batch_release_smoke_result_json_export_20260607T123456Z.json": [
                 {"check": "batch_file_output", "status": "completed"}
             ]
-        }
+        },
+        output_format="json",
     )
 
     with pytest.raises(smoke.SmokeFailure, match="parsed JSON"):
         smoke.require_batch_plumbing_payload(
-            {"batch_release_smoke_result.txt": '[{"check":"batch_file_output","status":"completed"}]'}
+            {"batch_release_smoke_result.txt": '[{"check":"batch_file_output","status":"completed"}]'},
+            output_format="json",
         )
 
-    with pytest.raises(smoke.SmokeFailure, match="deterministic payload"):
+    with pytest.raises(smoke.SmokeFailure, match="deterministic JSON payload"):
         smoke.require_batch_plumbing_payload(
-            {"batch_release_smoke_result.json": [{"check": "batch_file_output", "status": "changed"}]}
+            {
+                "001_batch_release_smoke_result_json_export_20260607T123456Z.json": [
+                    {"check": "batch_file_output", "status": "changed"}
+                ]
+            },
+            output_format="json",
         )
 
 

@@ -22,7 +22,7 @@ def _workspace() -> builder.ExtractionBuilderWorkspace:
     )
 
 
-def test_finalize_extraction_payload_returns_canonical_payload_with_evidence(monkeypatch):
+def test_stage_and_finalize_extraction_payload_returns_canonical_payload_with_evidence(monkeypatch):
     captured_events = []
     monkeypatch.setattr(
         builder,
@@ -38,7 +38,8 @@ def test_finalize_extraction_payload_returns_canonical_payload_with_evidence(mon
         "section": "Results",
     }
 
-    finalization = builder.finalize_extraction_payload(
+    workspace = _workspace()
+    builder.stage_extraction_payload(
         {
             "items": [
                 {
@@ -51,11 +52,12 @@ def test_finalize_extraction_payload_returns_canonical_payload_with_evidence(mon
             "evidence_records": [],
             "run_summary": {"candidate_count": 1, "kept_count": 1},
         },
-        workspace=_workspace(),
+        workspace=workspace,
         candidate_id="candidate-1",
         evidence_records=[evidence_record],
         resolver_selection_refs=["resolver:gene:crumb"],
     )
+    finalization = workspace.finalize(candidate_ids=["candidate-1"])
 
     assert finalization.payload["evidence_records"] == [evidence_record]
     assert finalization.summary()["finalized_candidate_count"] == 1
@@ -64,7 +66,7 @@ def test_finalize_extraction_payload_returns_canonical_payload_with_evidence(mon
     assert captured_events[-1]["event_type"] == "extraction_builder.finalization_decision"
 
 
-def test_finalize_extraction_payload_backfills_scope_metadata_from_payload(monkeypatch):
+def test_stage_and_finalize_extraction_payload_backfills_scope_metadata_from_payload(monkeypatch):
     captured_events = []
     monkeypatch.setattr(
         builder,
@@ -76,7 +78,7 @@ def test_finalize_extraction_payload_backfills_scope_metadata_from_payload(monke
         agent_id="agent",
     )
 
-    finalization = builder.finalize_extraction_payload(
+    builder.stage_extraction_payload(
         {
             "domain_pack_id": "agr.test",
             "objects": [
@@ -100,6 +102,7 @@ def test_finalize_extraction_payload_backfills_scope_metadata_from_payload(monke
             }
         ],
     )
+    finalization = workspace.finalize(candidate_ids=["candidate-1"])
 
     assert finalization.status == "finalized"
     assert workspace.document_id == "doc-1"
@@ -110,7 +113,7 @@ def test_finalize_extraction_payload_backfills_scope_metadata_from_payload(monke
     assert finalization_event["metadata"]["document_id"] == "doc-1"
 
 
-def test_finalize_extraction_payload_duplicate_candidate_is_idempotent(monkeypatch):
+def test_workspace_finalize_duplicate_candidate_is_idempotent(monkeypatch):
     captured_events = []
     monkeypatch.setattr(
         builder,
@@ -119,16 +122,13 @@ def test_finalize_extraction_payload_duplicate_candidate_is_idempotent(monkeypat
     )
     workspace = _workspace()
 
-    first = builder.finalize_extraction_payload(
+    builder.stage_extraction_payload(
         {"items": [{"label": "crumb"}], "run_summary": {"candidate_count": 1}},
         workspace=workspace,
         candidate_id="candidate-1",
     )
-    duplicate = builder.finalize_extraction_payload(
-        {"items": [{"label": "crumb"}], "run_summary": {"candidate_count": 1}},
-        workspace=workspace,
-        candidate_id="candidate-1",
-    )
+    first = workspace.finalize(candidate_ids=["candidate-1"])
+    duplicate = workspace.finalize(candidate_ids=["candidate-1"])
 
     assert duplicate is first
     assert duplicate.payload == first.payload
@@ -143,16 +143,18 @@ def test_finalize_extraction_payload_duplicate_candidate_is_idempotent(monkeypat
 
 def test_internal_extraction_result_event_carries_canonical_builder_payload(monkeypatch):
     monkeypatch.setattr(builder, "write_extraction_trace_event", lambda **event: event)
-    finalization = builder.finalize_extraction_payload(
+    workspace = _workspace()
+    builder.stage_extraction_payload(
         {
             "actor": "gene_expression_specialist",
             "destination": "gene_expression",
             "items": [{"label": "notch"}],
             "run_summary": {"candidate_count": 1},
         },
-        workspace=_workspace(),
+        workspace=workspace,
         candidate_id="candidate-1",
     )
+    finalization = workspace.finalize(candidate_ids=["candidate-1"])
 
     event = builder.build_internal_extraction_result_event(
         tool_name="ask_gene_expression_specialist",

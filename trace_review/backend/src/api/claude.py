@@ -13,6 +13,7 @@ Endpoints:
 """
 
 import json
+import logging
 import math
 from datetime import datetime
 from typing import Annotated, Dict, Any, Optional, List, Mapping
@@ -62,6 +63,7 @@ from .domain_envelope_responses import domain_envelope_response_views
 
 
 router = APIRouter()
+LOGGER = logging.getLogger(__name__)
 TRANSIENT_CACHE_TTL_SECONDS = 15
 
 
@@ -95,7 +97,8 @@ def _payload_json_chars(value: Any) -> int:
         return len(value)
     try:
         return len(json.dumps(value, sort_keys=True, ensure_ascii=False, default=str))
-    except Exception:
+    except (TypeError, ValueError):
+        LOGGER.warning("Falling back to string length for payload JSON sizing", exc_info=True)
         return len(str(value))
 
 

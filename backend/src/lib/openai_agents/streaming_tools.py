@@ -2615,7 +2615,7 @@ def _domain_envelope_supervisor_minimal_summary(payload: Dict[str, Any]) -> str:
 
 
 def _domain_envelope_supervisor_objects(payload: Dict[str, Any]) -> list[Any]:
-    """Return the materialized object collection for old and current envelopes."""
+    """Return objects from either domain-envelope or curation-prep payload shapes."""
 
     curatable_objects = payload.get("curatable_objects")
     if isinstance(curatable_objects, list):

@@ -67,6 +67,23 @@ _VALIDATOR_DEDUPE_CONTEXT_INPUT_FIELDS = frozenset(
 )
 
 
+def _provider_id_for_model(model: Any) -> str | None:
+    model_name = str(model or "").strip()
+    if not model_name:
+        return None
+    try:
+        from src.lib.openai_agents.config import resolve_model_provider
+
+        return resolve_model_provider(model_name)
+    except (LookupError, RuntimeError, ValueError):
+        LOGGER.warning(
+            "Unable to resolve validator provider for model=%s",
+            model_name,
+            exc_info=True,
+        )
+        return None
+
+
 class DomainValidatorAgentRunner(Protocol):
     """Callable that executes one package-owned validator request."""
 
@@ -818,11 +835,12 @@ def run_package_scoped_validator_agent(
     _append_validator_finalization_instructions(agent, batch=False)
 
     provider_payload = validator_request_payload_for_agent(request)
+    validator_model = str(getattr(agent, "model", "") or "")
     provider_context_preflight(
         surface="validator",
         operation="domain_validator_single",
-        provider="openai",
-        model=str(getattr(agent, "model", "") or ""),
+        provider=_provider_id_for_model(validator_model),
+        model=validator_model,
         payload=provider_payload,
         metadata={
             "validator_binding_id": request.validator_binding_id,
@@ -951,11 +969,12 @@ def run_package_scoped_validator_agent_batch(
             for job in jobs
         ],
     }
+    validator_model = str(getattr(agent, "model", "") or "")
     provider_context_preflight(
         surface="validator",
         operation="domain_validator_batch",
-        provider="openai",
-        model=str(getattr(agent, "model", "") or ""),
+        provider=_provider_id_for_model(validator_model),
+        model=validator_model,
         payload=provider_payload,
         metadata={
             "validator_binding_id": representative_request.validator_binding_id,

@@ -509,33 +509,6 @@ def get_active_extraction_builder_workspace() -> ExtractionBuilderWorkspace:
     return workspace
 
 
-def finalize_extraction_payload(
-    payload: Mapping[str, Any],
-    *,
-    workspace: ExtractionBuilderWorkspace,
-    candidate_id: str,
-    source_candidate_ids: Iterable[str] | None = None,
-    evidence_records: Iterable[Mapping[str, Any]] | None = None,
-    resolver_selection_refs: Iterable[Any] | None = None,
-    validation_errors: Iterable[Mapping[str, Any]] | None = None,
-) -> ExtractionBuilderFinalization:
-    """Stage and finalize one payload through the builder handoff contract."""
-
-    if workspace.finalization is None:
-        stage_extraction_payload(
-            payload,
-            workspace=workspace,
-            candidate_id=candidate_id,
-            evidence_records=evidence_records,
-            resolver_selection_refs=resolver_selection_refs,
-        )
-    return workspace.finalize(
-        candidate_ids=[candidate_id],
-        source_candidate_ids=source_candidate_ids,
-        validation_errors=validation_errors,
-    )
-
-
 def stage_extraction_payload(
     payload: Mapping[str, Any],
     *,
@@ -712,7 +685,6 @@ __all__ = [
     "ExtractionBuilderValidationError",
     "ExtractionBuilderWorkspace",
     "build_internal_extraction_result_event",
-    "finalize_extraction_payload",
     "get_active_extraction_builder_workspace",
     "reset_active_extraction_builder_workspace",
     "set_active_extraction_builder_workspace",

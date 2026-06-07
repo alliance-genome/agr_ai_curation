@@ -109,6 +109,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/openai_agents/test_tool_call_policy.py"),
     Path("backend/tests/unit/lib/openai_agents/test_tool_event_friendly_name_contract.py"),
     Path("backend/tests/unit/lib/test_identifier_validation.py"),
+    Path("backend/tests/unit/lib/test_runtime_payload_budget.py"),
     Path("backend/tests/unit/lib/test_runtime_entrypoint.py"),
     Path("backend/tests/unit/lib/test_weaviate_documents_runtime.py"),
     Path("backend/tests/unit/lib/prompts/test_cache_core.py"),
