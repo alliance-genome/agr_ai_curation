@@ -8,7 +8,7 @@ The tunnel-backed smoke run gave us enough evidence to split the token-budget wo
 
 There are two separate empty-state problems to fix. First, the runtime evidence registry stayed empty, which means the internal builder payload, candidate construction, or evidence extraction failed before final persistence. Second, final flow persistence accepted an empty candidate/result set as success. `_persist_flow_extraction_candidates()` returns `[]` when there are no candidates, and `_persist_flow_extraction_candidates_or_build_error()` currently returns success for that empty result. Together, those let a flow end with `FLOW_FINISHED.status=completed`, `total_evidence_records=0`, and no extraction-result refs.
 
-The next implementation should make this self-diagnosing and fail closed for steps that are expected to produce curation extraction output: if such a step builds no candidate, extracts no evidence, or persists no extraction result, emit a specific `FLOW_ERROR` with the reason bucket instead of reporting completion. The expected-output signal must be explicit so ordinary non-curation flows do not fail just because they have no extraction candidates.
+The next implementation should be diagnostics-first and fail-closed for steps that are expected to produce curation extraction output. We do not yet know whether the break was internal event emission, event lookup, adapter resolution, candidate construction, evidence extraction, or persistence. The fix should record that handoff audit in the flow output, then emit a specific `FLOW_ERROR` instead of reporting completion when a required extraction candidate/evidence/result is missing. The expected-output signal must be explicit so ordinary non-curation flows do not fail just because they have no extraction candidates.
 
 ## Evidence Sources
 
@@ -63,6 +63,8 @@ The immediate issue is reliability and observability around handoff boundaries:
 - flow persistence expects a structured extraction envelope candidate;
 - the system can lose the structured payload or reject it without making the final flow status fail.
 
+This does not call for a blind LLM retry. In the failed run, the expensive extraction work already happened: `record_evidence`, `stage_gene_mention_evidence`, and `finalize_gene_extraction` all completed. Retrying the specialist could consume more tokens and duplicate evidence while still leaving the backend handoff gap unfixed. A bounded retry/recovery may be useful later, but first the runtime must identify the failed handoff point and stop reporting success.
+
 ## Flow Code Path
 
 The specialist wrapper in [backend/src/lib/flows/executor.py](/home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation/backend/src/lib/flows/executor.py:2384) captures an internal extraction-event cursor before invoking the specialist tool.
@@ -103,6 +105,45 @@ The implementation should diagnose both states separately:
 - candidate rejected because adapter metadata was missing;
 - candidate built but no evidence records extracted;
 - candidate/evidence existed but persistence returned no records.
+
+## Missing Diagnostics
+
+The saved artifacts show where the flow ended, but not the exact point where the handoff failed. Specifically, they do not answer:
+
+- did the builder workspace have `builder_finalization` after `finalize_gene_extraction`?
+- was `INTERNAL_EXTRACTION_RESULT` emitted?
+- did `add_specialist_event(...)` register it in the current-turn context or live/collected event list?
+- did `_internal_extraction_tool_output_since(...)` find it for the flow step's tool name?
+- if found, did `build_extraction_envelope_candidate_with_evidence(...)` reject it?
+- if a candidate was built, did evidence extraction return zero records?
+- if candidate/evidence existed, did persistence receive them and return zero records?
+
+The code already has coarse fields in `FLOW_STEP_TIMING`: `usedInternalExtractionPayload`, `candidateBuilt`, and `evidenceCount`. Those are useful but insufficient; they cannot distinguish "internal event never emitted" from "internal event emitted but missed" from "payload found but rejected."
+
+Add an explicit handoff audit event for extraction-capable flow steps:
+
+```json
+{
+  "type": "FLOW_EXTRACTION_HANDOFF_AUDIT",
+  "details": {
+    "step": 1,
+    "tool_name": "ask_dev_release_smoke_agent_specialist",
+    "candidate_expected": true,
+    "candidate_expected_from": ["catalog_curation_metadata", "builder_finalize_tool"],
+    "builder_finalization_seen": null,
+    "internal_event_emitted": null,
+    "internal_event_found_by_flow": false,
+    "internal_payload_source": null,
+    "candidate_built": false,
+    "candidate_reject_reason": "internal_payload_missing",
+    "adapter_key_resolved": false,
+    "evidence_count": 0,
+    "persisted_result_count": 0
+  }
+}
+```
+
+The first implementation can use `null` for fields that are not yet observable, but it should make the unknowns visible and preserve the event in smoke artifacts. The acceptance bar is not "guess the culprit"; it is "the next run tells us which actor did not hand off what."
 
 ## Persistence Hole
 
@@ -155,6 +196,7 @@ Fix:
 - Add a first-class result object from specialist invocation that separates `supervisor_text` from `internal_tool_output`, instead of relying only on a global event-list side channel.
 - Add targeted diagnostics to `FLOW_STEP_TIMING`: `internalPayloadFound`, `candidateRejectReason`, `adapterKeyResolved`, and `evidenceExtractedFrom`.
 - Add unit coverage around the flow wrapper consuming a builder-finalized payload from a custom curation agent.
+- Preserve enough audit state to say whether `builder_finalization` was missing, `INTERNAL_EXTRACTION_RESULT` was missing, the flow cursor missed it, or candidate construction rejected it.
 
 ### 3. Custom Agent Adapter Metadata May Not Be Present At The Flow Node
 
@@ -199,6 +241,18 @@ Fix:
 
 ## Proposed Implementation
 
+### P0: Add A Flow Extraction Handoff Audit
+
+Before adding retry behavior, add deterministic audit state around the existing handoff:
+
+- capture whether the specialist step is expected to produce curation extraction output;
+- capture whether the builder/finalizer path produced a finalized builder payload;
+- capture whether `INTERNAL_EXTRACTION_RESULT` was emitted and where it was registered;
+- capture whether the flow cursor found an internal payload after the specialist call;
+- capture candidate rejection reason, adapter key resolution, evidence count, and persisted result count.
+
+Emit this as `FLOW_EXTRACTION_HANDOFF_AUDIT` and include a compact copy of the final audit buckets in any `FLOW_ERROR` and `FLOW_FINISHED` event. The smoke script should preserve this event in its evidence artifact.
+
 ### P0: Fail Closed On Empty Flow Evidence
 
 Update `_persist_flow_extraction_candidates_or_build_error(...)` to know whether a curation extraction candidate was expected. `candidate_expected` should be derived from explicit extraction-step state, such as catalog curation metadata, flow node metadata, or extraction-builder tool usage. It should return failure when:
@@ -216,6 +270,8 @@ The final `FLOW_FINISHED` event should then contain:
 - `candidate_built_counts`
 - rejection reason buckets
 
+This should not trigger an automatic specialist retry. First fail closed with audit details. Add bounded recovery later only if the audit shows a deterministic recoverable state, such as "builder finalization exists but event lookup missed it."
+
 ### P0: Preserve The Internal Builder Payload Explicitly
 
 Add a typed handoff from specialist execution back to the flow executor:
@@ -231,6 +287,8 @@ SpecialistInvocationResult
 Keep the existing internal event for UI/trace compatibility, but do not make flow persistence depend solely on discovering it from collected events after the fact.
 
 Add one surgical test around this boundary: an `INTERNAL_EXTRACTION_RESULT` emitted from the specialist streaming path must be visible to `_internal_extraction_tool_output_since(...)` and must become the `step_result` used for candidate/evidence construction.
+
+If the audit shows the internal event path is the weak link, prefer direct handoff of the canonical payload over an LLM retry. The specialist already did the work; the backend should not ask it to do the same extraction again just to repair a missed internal event.
 
 ### P1: Explain Candidate Rejection
 
@@ -272,12 +330,15 @@ Add a `redis.ping()` readiness check for local/docker stacks where streaming use
 ## Tests To Add
 
 - `backend/tests/unit/lib/flows/test_executor.py`
+  - extraction handoff audit is emitted for curation-capable steps
+  - audit distinguishes internal payload missing, candidate rejected, evidence empty, and persistence empty
   - no candidate for curation extraction step -> `FLOW_ERROR`
   - candidate list empty -> persistence helper returns failure
   - candidates present but persisted records empty -> failure
   - builder internal payload -> candidate/evidence persisted
   - emitted `INTERNAL_EXTRACTION_RESULT` is visible to the flow cursor lookup
   - non-curation flow with no extraction candidates does not fail the extraction-specific gate
+  - no blind specialist retry is attempted for backend handoff failures
 
 - `backend/tests/unit/lib/curation_workspace/test_extraction_results.py`
   - domain-envelope builder payload extracts evidence
@@ -315,6 +376,7 @@ Acceptance criteria:
 - curation DB and literature dependencies are ready before the run starts;
 - Redis readiness is either green or explicitly skipped for non-streaming tests;
 - Langfuse/TraceReview preflight is green before flow execution;
+- each extraction-capable flow step emits `FLOW_EXTRACTION_HANDOFF_AUDIT`;
 - flow run persists at least one extraction result;
 - `FLOW_FINISHED.total_evidence_records > 0`;
 - `adapter_keys` includes the gene curation adapter;
@@ -323,7 +385,9 @@ Acceptance criteria:
 
 ## Open Questions
 
-- Was `INTERNAL_EXTRACTION_RESULT` absent, or present but invisible to the flow cursor lookup?
+- In the failed run, did the builder workspace actually have `builder_finalization`, or did the LLM-facing finalizer tool return success without setting backend finalization state?
+- Was `INTERNAL_EXTRACTION_RESULT` absent, or was it emitted but absent from the current flow cursor's live/collected lists?
+- Did `build_extraction_envelope_candidate_with_evidence(...)` reject a valid-looking payload because adapter metadata was missing or because the payload shape was not recognized as an extraction envelope?
 - Did the smoke custom agent catalog metadata include `curation.adapter_key` immediately before flow execution?
 - Do the local backend and TraceReview containers share the same Langfuse project credentials in the Incus stack?
 - Should flow output consider a builder tool sequence successful only after both extraction-result persistence and review-session materialization succeed?
