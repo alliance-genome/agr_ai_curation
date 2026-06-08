@@ -284,6 +284,18 @@ export function getEventSeverity(type: AuditEventType, details?: any): AuditSeve
     return 'success'
   }
 
+  // Active validator dispatch runs synchronously (Runner.run_sync) and emits no
+  // intermediate stream events, so its TOOL_START stays the latest event for the
+  // entire run. Treat it as 'processing' so it shows the same animated dots as
+  // agent reasoning instead of sitting silently for the full validator runtime.
+  if (
+    type === 'TOOL_START' &&
+    (details?.toolName === 'dispatch_active_validator_bindings' ||
+      details?.toolName === 'dispatch_active_validator_batch')
+  ) {
+    return 'processing'
+  }
+
   if (type.includes('START') || type === 'LLM_CALL') {
     return 'info'
   }

@@ -1030,6 +1030,25 @@ describe('getEventSeverity (T016)', () => {
     expect(getEventSeverity('TOOL_START')).toBe('info')
   })
 
+  it('returns "processing" for the active validator dispatch TOOL_START (animated dots)', () => {
+    expect(
+      getEventSeverity('TOOL_START', { toolName: 'dispatch_active_validator_bindings' })
+    ).toBe('processing')
+    expect(
+      getEventSeverity('TOOL_START', { toolName: 'dispatch_active_validator_batch' })
+    ).toBe('processing')
+  })
+
+  it('keeps non-dispatch TOOL_START events as "info"', () => {
+    expect(getEventSeverity('TOOL_START', { toolName: 'curation_db_sql' })).toBe('info')
+  })
+
+  it('returns "success" for the active validator dispatch TOOL_COMPLETE', () => {
+    expect(
+      getEventSeverity('TOOL_COMPLETE', { toolName: 'dispatch_active_validator_bindings', success: true })
+    ).toBe('success')
+  })
+
   it('returns "info" for LLM_CALL', () => {
     expect(getEventSeverity('LLM_CALL')).toBe('info')
   })
