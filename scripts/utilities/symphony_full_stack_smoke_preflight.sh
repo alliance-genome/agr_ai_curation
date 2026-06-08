@@ -318,6 +318,95 @@ PY
   rm -f /tmp/symphony_backend_ready.$$ /tmp/symphony_backend_ready_payload.$$
 }
 
+check_backend_admin_connections() {
+  local payload_file="/tmp/symphony_admin_connections_payload.$$"
+  local output_file="/tmp/symphony_admin_connections.$$"
+
+  if ! curl -fsS -m 30 "http://127.0.0.1:${backend_port}/api/admin/health/connections" >"${payload_file}" 2>/dev/null; then
+    blocker "backend admin connections health is not reachable"
+    echo "WHY: this is the frontend banner source for required service availability; evidence smokes should not run when required provider checks cannot be queried."
+    rm -f "${payload_file}"
+    return
+  fi
+
+  python - "${payload_file}" <<'PY' >"${output_file}" || true
+import json
+import re
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    raw = handle.read()
+
+try:
+    payload = json.loads(raw)
+except Exception:
+    print("BLOCKER: backend admin connections health returned non-JSON")
+    print("WHY: the preflight cannot verify required provider/service readiness from the same endpoint the UI uses.")
+    raise SystemExit(0)
+
+
+def sanitize(value):
+    text = str(value or "")
+    if not text:
+        return "none"
+    text = re.sub(r"[a-zA-Z][a-zA-Z0-9+.-]*://\S+", "[redacted-url]", text)
+    text = re.sub(r"(?i)(password|passwd|token|secret|api[_-]?key)=\S+", r"\1=[redacted]", text)
+    text = re.sub(r"\b(AKIA|ASIA)[A-Z0-9]{12,}\b", "[redacted-access-key]", text)
+    return text[:240]
+
+
+services = payload.get("services") or {}
+if not isinstance(services, dict):
+    print("BLOCKER: backend admin connections health has invalid services payload")
+    print("WHY: required service readiness cannot be trusted if the admin connections schema is malformed.")
+    raise SystemExit(0)
+
+bedrock = services.get("bedrock_reranker")
+if bedrock is None:
+    print("BLOCKER: backend admin connections health is missing bedrock_reranker")
+    print("WHY: Bedrock reranker access is required for document reranking evidence; the preflight must fail if the frontend banner source cannot report it.")
+elif not isinstance(bedrock, dict):
+    print("BLOCKER: backend admin connections bedrock_reranker payload is invalid")
+    print("WHY: Bedrock reranker readiness cannot be trusted if the admin connections schema is malformed.")
+elif bool(bedrock.get("required")):
+    if bedrock.get("is_healthy") is True:
+        print("PASS: required bedrock_reranker connection is healthy")
+        print("WHY: this verifies the configured Bedrock rerank profile/credentials are mounted and usable before evidence smokes spend tokens.")
+    else:
+        print(
+            "BLOCKER: required bedrock_reranker connection is unhealthy "
+            f"health={bedrock.get('is_healthy')} error={sanitize(bedrock.get('last_error') or bedrock.get('status'))}"
+        )
+        print("WHY: Bedrock reranking is required for the default smoke stack; a missing AWS rerank profile or unusable credentials makes document reranking unavailable.")
+else:
+    state = "healthy" if bedrock.get("is_healthy") is True else "not-required"
+    print(f"WARN: bedrock_reranker connection is {state}")
+    print("WHY: this stack does not mark Bedrock reranking as required; verify that is intentional before using rerank behavior as evidence.")
+
+required_failures = []
+for service_name, service in services.items():
+    if service_name == "bedrock_reranker" or not isinstance(service, dict):
+        continue
+    if bool(service.get("required")) and service.get("is_healthy") is not True:
+        required_failures.append((service_name, service))
+
+for service_name, service in sorted(required_failures):
+    print(
+        f"BLOCKER: required admin connection {service_name} is unhealthy "
+        f"health={service.get('is_healthy')} error={sanitize(service.get('last_error') or service.get('status'))}"
+    )
+    print("WHY: the backend marks this service required, and the frontend banner would report the stack as partially unavailable.")
+
+if payload.get("required_healthy") is True:
+    print("PASS: backend admin connections reports all required services healthy")
+elif not required_failures:
+    print("WARN: backend admin connections required_healthy is not true")
+    print("WHY: no required per-service failure was listed, but the aggregate health flag is not clean; inspect the admin connections payload before expensive evidence runs.")
+PY
+  emit_probe_output "${output_file}"
+  rm -f "${payload_file}" "${output_file}"
+}
+
 check_backend_env() {
   if ! container_running "${backend_container}"; then
     blocker "cannot inspect backend env because ${backend_container} is not running"
@@ -538,6 +627,7 @@ main() {
   check_stack_containers
   check_compose_network_dns
   check_backend_http
+  check_backend_admin_connections
   check_backend_env
   check_curation_tunnel
   check_backend_external_dependencies
