@@ -1032,7 +1032,7 @@
     "agent_methods": null,
     "binding_kind": "context_factory",
     "category": "PDF Extraction",
-    "description": "Link a saved piece of evidence to the finding it supports.",
+    "description": "Link a saved piece of evidence to the specific field it supports.",
     "documentation": {
       "parameters": [
         {
@@ -1054,13 +1054,13 @@
           "type": "string"
         },
         {
-          "description": "The specific field this evidence supports, if it applies to just one field.",
+          "description": "The concrete domain payload field this evidence supports.",
           "name": "field_path",
-          "required": false,
+          "required": true,
           "type": "string"
         }
       ],
-      "summary": "Connects a saved piece of evidence to a finding (or to a specific field of it), without changing the quote itself or where it came from."
+      "summary": "Connects a saved piece of evidence to a concrete field on a finding. To correct the quote or source provenance, call record_evidence again with the existing evidence_record_id and current span IDs."
     },
     "methods": null,
     "name": "Attach Evidence To Object",
@@ -2780,9 +2780,15 @@
           "name": "span_ids",
           "required": true,
           "type": "array[string]"
+        },
+        {
+          "description": "Existing active-run evidence record ID to update in place when correcting the source spans.",
+          "name": "evidence_record_id",
+          "required": false,
+          "type": "string"
         }
       ],
-      "summary": "Turns chosen snippets from a passage into a saved piece of evidence with the exact verified quote and where it came from in the paper. Each call saves one piece of evidence; if several snippets are chosen together, they are stored as one joined quote."
+      "summary": "Turns chosen snippets from a passage into a saved piece of evidence with the exact verified quote and where it came from in the paper. Each call saves one piece of evidence; if several snippets are chosen together, they are stored as one joined quote. Supplying an existing evidence_record_id updates that active-run record with newly validated source spans instead of creating a replacement ID."
     },
     "methods": null,
     "name": "Record Evidence",
@@ -4174,7 +4180,7 @@
           "type": "string"
         }
       ],
-      "summary": "Changes the editable details on a piece of evidence \u2014 what it is about, which field it supports, and the agent's note. The quote itself and where it came from cannot be changed."
+      "summary": "Changes the editable details on a piece of evidence -- what it is about, which field it supports, and the agent's note. To correct the quote or source provenance, call record_evidence again with the existing evidence_record_id and current span IDs."
     },
     "methods": null,
     "name": "Update Evidence Metadata",

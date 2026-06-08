@@ -157,12 +157,18 @@ Backend materialization stores source quotes, page numbers, figure references, `
 Multiple `span_ids` in one `record_evidence` call produce one evidence record; use separate `record_evidence` calls for truly disjoint evidence units.
 
 # GEX-48 source quote and provenance immutable
-source quote and provenance fields are immutable
+# Reworded by the field-level evidence-flow change (96844f70): "immutable" -> "backend-owned"; the
+# load-bearing rule that quote/provenance is backend-owned and never model-authored is unchanged
+# (it is replaced only by re-calling record_evidence with the existing evidence_record_id).
+Source quote and provenance fields are backend-owned
 
 # GEX-49 final evidence review + attachment workflow
-Choose the retained observation's `pending_ref_id` before attachment.
+# Reworded by the field-level evidence-flow change (96844f70): attachment now requires a concrete
+# field_path, so "choose pending_ref before attachment" -> "attach to the pending_ref_id and a field
+# path", and the invalid_request retry now names the missing pending_ref_id OR field_path.
+Attach every retained evidence record to the retained observation's `pending_ref_id`
 use a stable pending ref such as `gene-expression-annotation-pef-1`
-If `attach_evidence_to_object` returns `invalid_request`, retry once with the chosen `pending_ref_id`
+If `attach_evidence_to_object` returns `invalid_request`, retry with the missing `pending_ref_id` or `field_path`
 
 # GEX-50 experimental conditions explicit-only and sparse
 Extract ALL experimental conditions the paper explicitly states for a retained annotation, and ONLY those -- never infer, default, or invent a condition.

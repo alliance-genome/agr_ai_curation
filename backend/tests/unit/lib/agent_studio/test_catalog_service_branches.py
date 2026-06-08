@@ -354,7 +354,7 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
     ).render()
     assert "Use multiple evidence records when one evidence unit alone does not fully support" in runtime_text_with_evidence
     assert "Pass the entity label and `span_ids`; do not write source evidence text yourself." in runtime_text_with_evidence
-    assert "Source quote, source span IDs, source fragments, chunk IDs, page, and section provenance are immutable" in runtime_text_with_evidence
+    assert "Source quote, source span IDs, source fragments, chunk IDs, page, and section provenance are backend-owned" in runtime_text_with_evidence
 
     formatter_runtime_text = catalog_service._build_runtime_instructions(
         db_agent=db_agent,

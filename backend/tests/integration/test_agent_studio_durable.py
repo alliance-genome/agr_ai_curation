@@ -148,7 +148,11 @@ def test_agent_studio_chat_persists_durable_rows_and_replays_completed_turn(
         events = collect_sse_events(stream_response)
         assert stream_response.status_code == 200
 
-    assert [event["type"] for event in events] == [
+    # PROVIDER_CONTEXT_PREFLIGHT is emitted before each provider call (96ab9632);
+    # filter it to assert the meaningful stream (two provider calls -> two preflights).
+    assert [
+        event["type"] for event in events if event["type"] != "PROVIDER_CONTEXT_PREFLIGHT"
+    ] == [
         "TOOL_USE",
         "TOOL_RESULT",
         "TEXT_DELTA",
@@ -212,7 +216,11 @@ def test_agent_studio_chat_persists_durable_rows_and_replays_completed_turn(
         replay_events = collect_sse_events(replay_response)
         assert replay_response.status_code == 200
 
-    assert [event["type"] for event in replay_events] == [
+    # Durable replay does not call the provider, so no preflight event is emitted;
+    # filter defensively to keep the assertion robust to observability events.
+    assert [
+        event["type"] for event in replay_events if event["type"] != "PROVIDER_CONTEXT_PREFLIGHT"
+    ] == [
         "TOOL_USE",
         "TOOL_RESULT",
         "TEXT_DELTA",
@@ -295,7 +303,11 @@ def test_agent_studio_chat_derives_a_durable_session_from_assistant_seed_id(
         ("user", "Please continue from the seeded transcript"),
         ("assistant", "Seeded durable answer"),
     ]
-    assert stored_messages[1].payload_json == {
+    # provider_context_preflight_events is token-budget observability (96ab9632) with
+    # dynamic values; assert the stable payload contract and that observability is present.
+    seeded_payload = dict(stored_messages[1].payload_json)
+    preflight_events = seeded_payload.pop("provider_context_preflight_events", None)
+    assert seeded_payload == {
         "trace_capture": {
             "status": "provided_context_trace_id",
             "trace_id": "trace-seeded",
@@ -303,6 +315,7 @@ def test_agent_studio_chat_derives_a_durable_session_from_assistant_seed_id(
         },
         "seed_session_id": "assistant-seed-session",
     }
+    assert isinstance(preflight_events, list) and preflight_events
 
 
 def test_agent_studio_chat_returns_404_for_other_users_session(

@@ -141,7 +141,12 @@ def test_agent_studio_chat_endpoint_registers_chat_history_tools_on_the_wire(
         events = _consume_sse_events(response)
 
     assert response.status_code == 200, response.text
-    assert [event["type"] for event in events] == ["TEXT_DELTA", "DONE"]
+    # PROVIDER_CONTEXT_PREFLIGHT is token-budget observability emitted before the
+    # provider call (96ab9632); filter it to assert the meaningful stream.
+    assert any(event["type"] == "PROVIDER_CONTEXT_PREFLIGHT" for event in events)
+    assert [
+        event["type"] for event in events if event["type"] != "PROVIDER_CONTEXT_PREFLIGHT"
+    ] == ["TEXT_DELTA", "DONE"]
 
     tools_by_name = {tool["name"]: tool for tool in captured["tools"]}
     assert {"list_recent_chats", "search_chat_history", "get_chat_conversation"} <= set(

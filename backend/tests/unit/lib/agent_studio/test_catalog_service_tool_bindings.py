@@ -155,7 +155,7 @@ def test_pdf_evidence_tools_document_span_contract():
     assert "snippets" in read_chunk_summary
     assert "span_ids" in record_parameters
     assert "claimed_quote" not in record_parameters
-    assert "cannot be changed" in workspace_summary.lower()
+    assert "to correct the quote or source provenance" in workspace_summary.lower()
 
 
 def test_required_context_for_tool_ids_includes_document_requirements(monkeypatch):

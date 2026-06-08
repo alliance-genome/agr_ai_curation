@@ -159,11 +159,19 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
         events = _consume_sse_events(response)
 
     assert response.status_code == 200, response.text
-    assert [event["type"] for event in events] == ["TEXT_DELTA", "DONE"]
+    # PROVIDER_CONTEXT_PREFLIGHT is token-budget observability emitted before each
+    # provider call (96ab9632); filter it to assert the meaningful stream.
+    assert any(event["type"] == "PROVIDER_CONTEXT_PREFLIGHT" for event in events)
+    assert [
+        event["type"] for event in events if event["type"] != "PROVIDER_CONTEXT_PREFLIGHT"
+    ] == ["TEXT_DELTA", "DONE"]
     assert all(event["session_id"] == "agent-studio-session-1" for event in events)
     assert captured["request_context_session_id"] == "assistant-session-123"
     assert captured["assistant_trace_id"] == "trace-123"
-    assert captured["assistant_payload"] == {
+    assistant_payload = captured["assistant_payload"]
+    assert isinstance(assistant_payload, dict)
+    preflight_events = assistant_payload.pop("provider_context_preflight_events", None)
+    assert assistant_payload == {
         "trace_capture": {
             "status": "provided_context_trace_id",
             "trace_id": "trace-123",
@@ -171,3 +179,4 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
         },
         "seed_session_id": "assistant-session-123",
     }
+    assert isinstance(preflight_events, list) and preflight_events
