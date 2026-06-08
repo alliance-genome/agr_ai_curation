@@ -124,7 +124,7 @@ from src.lib.prompts.service import PromptService
 from src.models.sql.database import SessionLocal
 
 # Request-scoped context for tools (trace_id captured via closure)
-from src.lib.context import set_current_trace_id
+from src.lib.context import set_current_trace_id, set_current_run_config, reset_current_run_config
 from src.lib.alerts.tool_failure_notifier import notify_tool_failure
 
 if TYPE_CHECKING:
@@ -883,6 +883,10 @@ async def _run_agent_with_tracing(
         document_id=document_id,
         document_name=document_name,
     )
+    # Make the per-request RunConfig (and its warm websocket provider) available to
+    # deeply nested runs invoked outside the SDK tool-context path (e.g. custom flow
+    # validators) so they reuse the same connection instead of opening a new one.
+    run_config_token = set_current_run_config(run_config)
 
     # Create live event list for real-time specialist event streaming
     # Events appended to this list are yielded during stream processing
@@ -1483,6 +1487,13 @@ async def _run_agent_with_tracing(
             label="extraction_builder_workspace",
             reset_fn=reset_active_extraction_builder_workspace,
             token=builder_workspace_token,
+            trace_id=trace_id,
+            user_id=user_id,
+        )
+        _safe_reset_run_context_token(
+            label="run_config",
+            reset_fn=reset_current_run_config,
+            token=run_config_token,
             trace_id=trace_id,
             user_id=user_id,
         )

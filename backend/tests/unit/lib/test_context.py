@@ -11,6 +11,9 @@ from src.lib.context import (
     get_current_session_id,
     set_current_user_id,
     get_current_user_id,
+    set_current_run_config,
+    get_current_run_config,
+    reset_current_run_config,
     clear_context,
 )
 
@@ -80,3 +83,18 @@ class TestContextVariables:
 
         set_current_trace_id("second-trace")
         assert get_current_trace_id() == "second-trace"
+
+    def test_run_config_set_get_reset(self):
+        """run_config contextvar round-trips and resets via its token."""
+        sentinel = object()
+        assert get_current_run_config() is None
+        token = set_current_run_config(sentinel)
+        assert get_current_run_config() is sentinel
+        reset_current_run_config(token)
+        assert get_current_run_config() is None
+
+    def test_clear_context_resets_run_config(self):
+        """clear_context() nulls the run_config contextvar."""
+        set_current_run_config(object())
+        clear_context()
+        assert get_current_run_config() is None

@@ -34,6 +34,7 @@ from agents import Agent, Runner, RunContextWrapper, function_tool
 from pydantic import ValidationError
 
 from src.lib.context import (
+    get_current_run_config,
     get_current_trace_id,
     reset_current_output_filename_stem,
     set_current_output_filename_stem,
@@ -1460,7 +1461,10 @@ async def _run_custom_flow_validator_agent(
     )
     payload = json.dumps(provider_payload, sort_keys=True)
     if hasattr(streaming_tool, "on_invoke_tool"):
-        tool_ctx = SimpleNamespace(tool_name=tool_name, run_config=None)
+        # Reuse the current request's warm websocket provider for this nested
+        # validator run (it is invoked outside the SDK tool-context path, so there
+        # is no ctx to inherit from); falls back to None if no run is active.
+        tool_ctx = SimpleNamespace(tool_name=tool_name, run_config=get_current_run_config())
         return await streaming_tool.on_invoke_tool(
             tool_ctx,
             json.dumps({"query": payload}),
