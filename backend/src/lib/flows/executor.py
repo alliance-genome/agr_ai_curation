@@ -1460,7 +1460,7 @@ async def _run_custom_flow_validator_agent(
     )
     payload = json.dumps(provider_payload, sort_keys=True)
     if hasattr(streaming_tool, "on_invoke_tool"):
-        tool_ctx = SimpleNamespace(tool_name=tool_name)
+        tool_ctx = SimpleNamespace(tool_name=tool_name, run_config=None)
         return await streaming_tool.on_invoke_tool(
             tool_ctx,
             json.dumps({"query": payload}),
@@ -2724,8 +2724,10 @@ def get_all_agent_tools(
                     if agent_id in _FLOW_CHAT_FORMATTER_AGENT_IDS:
                         projected_chat_output = direct_formatter_result
                 elif hasattr(tool_callable, "on_invoke_tool"):
-                    # Newer openai-agents tool invokers may dereference ctx.tool_name.
-                    tool_ctx = SimpleNamespace(tool_name=tool_name)
+                    # Newer openai-agents tool invokers dereference ctx.tool_name and,
+                    # on handled tool errors, ctx.run_config (0.17+). Provide both on the
+                    # synthetic context so nested flow-tool errors surface correctly.
+                    tool_ctx = SimpleNamespace(tool_name=tool_name, run_config=None)
                     result = await tool_callable.on_invoke_tool(
                         tool_ctx,
                         json.dumps({"query": resolved_query}),

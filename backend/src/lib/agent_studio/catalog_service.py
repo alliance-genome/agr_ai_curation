@@ -444,7 +444,7 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
             tracker.record_call(tool_id)
 
         if _should_execute_package_tool_inline(binding):
-            inline_ctx = ctx or SimpleNamespace(tool_name=tool_id)
+            inline_ctx = ctx or SimpleNamespace(tool_name=tool_id, run_config=None)
             result = base_on_invoke_tool(inline_ctx, input_str)
             if inspect.isawaitable(result):
                 return await result

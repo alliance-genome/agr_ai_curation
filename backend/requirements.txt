@@ -17,7 +17,7 @@ pyjwt[crypto]>=2.8.0  # JWT token handling and JWKS validation
 # AI and Chat dependencies
 openai
 tiktoken  # Token preflight checks for embedding limits
-openai-agents[litellm]==0.12.5  # Preserve the current Agents SDK integration while refreshing LiteLLM separately.
+openai-agents[litellm]==0.17.4  # Upgraded for Responses WebSocket keepalive + warm-session reuse and improved WS handling. Requires openai>=2.36.
 litellm>=1.83.0  # Patched after the 1.82.8 supply-chain incident and current Dependabot CVEs.
 anthropic>=0.87.0  # Anthropic SDK for Opus chat in Prompt Explorer
 aiohttp>=3.13.4  # Async HTTP client for PDFX service

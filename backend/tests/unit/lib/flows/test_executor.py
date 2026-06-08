@@ -1214,7 +1214,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         ])
 
         tools, _ = get_all_agent_tools(flow)
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
 
         # Step 1 executes normally.
         out1 = asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "q1"})))
@@ -1279,7 +1279,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             flow_run_id="flow-run-123",
         )
 
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
         asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "ignored-q1"})))
         asyncio.run(
             tools[1].on_invoke_tool(
@@ -1363,7 +1363,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 flow,
                 include_unavailable=True,
             )
-            tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
             result = asyncio.run(
                 tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"}))
             )
@@ -1466,7 +1466,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 flow,
                 include_unavailable=True,
             )
-            tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
             result = asyncio.run(
                 tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"}))
             )
@@ -1585,7 +1585,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 flow,
                 include_unavailable=True,
             )
-            tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
             asyncio.run(
                 tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"}))
             )
@@ -1696,7 +1696,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 include_unavailable=True,
                 flow_run_id="flow-run-123",
             )
-            tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
             asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
             result_text = asyncio.run(
                 tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "format"}))
@@ -1829,7 +1829,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             flow_run_id="flow-run-123",
             document_id="document-1",
         )
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
         asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "read"})))
         result_text = asyncio.run(
             tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "format"}))
@@ -1879,7 +1879,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 flow,
                 include_unavailable=True,
             )
-            tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
 
             result = asyncio.run(
                 tools[0].on_invoke_tool(
@@ -1923,7 +1923,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         ])
 
         tools, _ = get_all_agent_tools(flow, user_query="Original flow input")
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
         asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "supervisor-query"})))
 
         assert len(invocations) == 1
@@ -1971,7 +1971,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         ])
 
         tools, _, _, execution_state = get_all_agent_tools(flow, include_unavailable=True)
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
         asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
 
         schedule = execution_state["completed_steps"][0]["validation_schedule"]
@@ -2929,7 +2929,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 flow,
                 include_unavailable=True,
             )
-            tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
             asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
             asyncio.run(tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "format"})))
 
@@ -3008,7 +3008,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         ])
 
         tools, _ = get_all_agent_tools(flow, document_name="Smith et al. (2024).pdf")
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
         asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
         asyncio.run(tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "format now"})))
 
@@ -3137,7 +3137,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
             assert created_names == {"ask_gene_specialist", "ask_curation_prep_specialist"}
 
-            tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
             asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract first"})))
             prep_output = asyncio.run(
                 tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "prepare for review"}))
@@ -3254,7 +3254,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
             assert created_names == {"ask_gene_specialist", "ask_curation_handoff_specialist"}
 
-            tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
             asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract first"})))
             handoff_output = asyncio.run(
                 tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "prepare review"}))
@@ -3306,7 +3306,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             session_id="session-123",
         )
 
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
         asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract first"})))
         prep_output = asyncio.run(
             tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "prepare for review"}))
@@ -3821,7 +3821,7 @@ class TestFlowEvidenceAccumulation:
             "ask_gene_step2_specialist",
         }
 
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
         asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "step one"})))
         asyncio.run(tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "step two"})))
 
