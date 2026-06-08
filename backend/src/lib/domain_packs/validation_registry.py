@@ -1479,6 +1479,21 @@ def _validate_active_selector_against_targets(
                 )
         return
 
+    if selector.source == "evidence_record":
+        if selector.field_path is None or not target_definitions:
+            return
+        resolved_path = selector.field_path
+        for object_definition in target_definitions:
+            if not _object_definition_declares_payload_path(
+                object_definition,
+                resolved_path,
+            ):
+                errors.append(
+                    f"{location} evidence_record field_path '{resolved_path}' "
+                    f"is not declared for object_type '{object_definition.object_type}'"
+                )
+        return
+
     if selector.source == "object_ref":
         referenced_object_types: set[str] = set()
         if selector.field_path is not None:

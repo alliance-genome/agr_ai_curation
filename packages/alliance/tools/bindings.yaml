@@ -1715,7 +1715,7 @@ tools:
       name: Record Evidence
       category: PDF Extraction
       documentation:
-        summary: Turns chosen snippets from a passage into a saved piece of evidence with the exact verified quote and where it came from in the paper. Each call saves one piece of evidence; if several snippets are chosen together, they are stored as one joined quote.
+        summary: Turns chosen snippets from a passage into a saved piece of evidence with the exact verified quote and where it came from in the paper. Each call saves one piece of evidence; if several snippets are chosen together, they are stored as one joined quote. Supplying an existing evidence_record_id updates that active-run record with newly validated source spans instead of creating a replacement ID.
         parameters:
         - name: entity
           type: string
@@ -1725,6 +1725,10 @@ tools:
           type: array[string]
           required: true
           description: The snippets to save, picked from a passage that was read.
+        - name: evidence_record_id
+          type: string
+          required: false
+          description: Existing active-run evidence record ID to update in place when correcting the source spans.
   - tool_id: list_recorded_evidence
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_list_recorded_evidence_tool
@@ -1775,13 +1779,13 @@ tools:
     required_context:
       - document_id
       - user_id
-    description: Link a saved piece of evidence to the finding it supports.
+    description: Link a saved piece of evidence to the specific field it supports.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
       name: Attach Evidence To Object
       category: PDF Extraction
       documentation:
-        summary: Connects a saved piece of evidence to a finding (or to a specific field of it), without changing the quote itself or where it came from.
+        summary: Connects a saved piece of evidence to a concrete field on a finding. To correct the quote or source provenance, call record_evidence again with the existing evidence_record_id and current span IDs.
         parameters:
         - name: evidence_record_id
           type: string
@@ -1797,8 +1801,8 @@ tools:
           description: The draft finding to link the evidence to.
         - name: field_path
           type: string
-          required: false
-          description: The specific field this evidence supports, if it applies to just one field.
+          required: true
+          description: The concrete domain payload field this evidence supports.
   - tool_id: detach_evidence_from_object
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_detach_evidence_from_object_tool
@@ -1863,7 +1867,7 @@ tools:
       name: Update Evidence Metadata
       category: PDF Extraction
       documentation:
-        summary: Changes the editable details on a piece of evidence — what it is about, which field it supports, and the agent's note. The quote itself and where it came from cannot be changed.
+        summary: Changes the editable details on a piece of evidence -- what it is about, which field it supports, and the agent's note. To correct the quote or source provenance, call record_evidence again with the existing evidence_record_id and current span IDs.
         parameters:
         - name: evidence_record_id
           type: string

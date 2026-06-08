@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import re
+from copy import deepcopy
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
 from agents import function_tool
@@ -15,7 +17,14 @@ from src.lib.openai_agents.evidence_spans import (
     parse_evidence_span_id,
     resolve_evidence_span_id,
 )
-from src.lib.openai_agents.evidence_summary import build_evidence_record_id
+from src.lib.openai_agents.evidence_summary import (
+    build_evidence_record_id,
+    evidence_record_status,
+)
+from src.lib.openai_agents.tools.evidence_workspace import (
+    find_active_evidence_record,
+    find_evidence_record_in_records,
+)
 from src.lib.weaviate_client.chunks import get_chunk_by_id
 
 if TYPE_CHECKING:
@@ -36,6 +45,32 @@ _PREVIEW_CHARS = 300
 _SPAN_RETRY_INSTRUCTIONS = (
     "Call read_chunk for the source chunk again and select current "
     "evidence_spans[].span_id values. Do not provide model-authored source text."
+)
+_SOURCE_REVISION_FIELDS = (
+    "verified_quote",
+    "span_ids",
+    "source_span_ids",
+    "source_fragments",
+    "document_id",
+    "chunk_id",
+    "chunk_ids",
+    "page",
+    "section",
+    "subsection",
+    "figure_reference",
+)
+_ATTACHMENT_METADATA_FIELDS = (
+    "object_id",
+    "pending_ref_id",
+    "object_ref",
+    "envelope_target",
+    "envelope_targets",
+    "field_path",
+    "field_paths",
+)
+_PRESERVED_METADATA_FIELDS = (
+    "agent_note",
+    "created_at",
 )
 
 
@@ -215,6 +250,10 @@ def _optional_output_string(value: Any) -> str | None:
     return normalized or None
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _build_envelope_target_fields(
     *,
     object_id: Any = None,
@@ -249,6 +288,93 @@ def _merge_extra_fields(*field_groups: dict[str, Any]) -> dict[str, Any] | None:
     for fields in field_groups:
         merged.update(fields)
     return merged or None
+
+
+def _copy_existing_record_fields(
+    payload: dict[str, Any],
+    existing_record: dict[str, Any],
+    fields: tuple[str, ...],
+) -> None:
+    for key in fields:
+        value = existing_record.get(key)
+        if value not in (None, "", []):
+            payload[key] = deepcopy(value)
+
+
+def _project_primary_target_fields(payload: dict[str, Any]) -> None:
+    raw_target = payload.get("envelope_target")
+    if not isinstance(raw_target, dict) or not raw_target:
+        return
+
+    target = {
+        key: normalized
+        for key in (
+            "object_id",
+            "pending_ref_id",
+            "object_type",
+            "field_path",
+            "validation_finding_id",
+        )
+        for normalized in [_optional_output_string(raw_target.get(key))]
+        if normalized
+    }
+    if not target:
+        return
+
+    payload["envelope_target"] = target
+    payload["envelope_targets"] = [dict(target)]
+    if target.get("object_id"):
+        payload["object_id"] = target["object_id"]
+    if target.get("pending_ref_id"):
+        payload["pending_ref_id"] = target["pending_ref_id"]
+    if target.get("object_id") or target.get("pending_ref_id"):
+        payload["object_ref"] = {
+            key: target[key]
+            for key in ("object_id", "pending_ref_id")
+            if target.get(key)
+        }
+    if target.get("field_path"):
+        payload["field_path"] = target["field_path"]
+        payload["field_paths"] = [target["field_path"]]
+
+
+def _previous_source_snapshot(record: dict[str, Any]) -> dict[str, Any]:
+    snapshot: dict[str, Any] = {}
+    for key in _SOURCE_REVISION_FIELDS:
+        value = record.get(key)
+        if value not in (None, "", []):
+            snapshot[key] = deepcopy(value)
+    return snapshot
+
+
+def _revision_history_with_previous_source(
+    existing_record: dict[str, Any],
+) -> list[dict[str, Any]] | None:
+    raw_history = existing_record.get("evidence_revision_history")
+    history = [
+        deepcopy(item)
+        for item in raw_history
+        if isinstance(item, dict)
+    ] if isinstance(raw_history, list) else []
+
+    previous_source = _previous_source_snapshot(existing_record)
+    if not previous_source:
+        return history or None
+
+    history.append(
+        {
+            "revision": len(history) + 1,
+            "replaced_at": _now_iso(),
+            "previous_source": previous_source,
+        }
+    )
+    return history
+
+
+def _strip_hidden_revision_history(payload: dict[str, Any]) -> dict[str, Any]:
+    visible_payload = dict(payload)
+    visible_payload.pop("evidence_revision_history", None)
+    return visible_payload
 
 
 def _normalize_span_ids(span_ids: Any) -> tuple[list[str], dict[str, Any] | None]:
@@ -376,32 +502,110 @@ def create_record_evidence_tool(
     document_id: str,
     user_id: str,
     tracker: Optional["ToolCallTracker"] = None,
+    *,
+    workspace_records: list[dict[str, Any]] | None = None,
+    allowed_evidence_record_ids: set[str] | frozenset[str] | None = None,
+    allow_create: bool = True,
+    required_object_id: str | None = None,
+    required_pending_ref_id: str | None = None,
+    required_field_path: str | None = None,
 ):
     """Create a record_evidence tool bound to one document and user."""
+
+    allowed_ids = {
+        normalized
+        for raw in (allowed_evidence_record_ids or set())
+        for normalized in [_optional_output_string(raw)]
+        if normalized
+    } if allowed_evidence_record_ids is not None else None
+
+    def _scope_error_for_record_id(
+        normalized_evidence_record_id: str | None,
+    ) -> dict[str, Any] | None:
+        if normalized_evidence_record_id is None:
+            if allow_create:
+                return None
+            return {
+                "status": "forbidden",
+                "message": "This validator evidence tool may only update supplied evidence records; provide evidence_record_id.",
+                "allowed_evidence_record_ids": sorted(allowed_ids or []),
+            }
+        if allowed_ids is None or normalized_evidence_record_id in allowed_ids:
+            return None
+        return {
+            "status": "forbidden",
+            "evidence_record_id": normalized_evidence_record_id,
+            "allowed_evidence_record_ids": sorted(allowed_ids),
+            "message": "Validators may only update evidence records supplied for this validation target.",
+        }
+
+    def _target_scope_error(
+        *,
+        object_id: Any = None,
+        pending_ref_id: Any = None,
+        field_path: Any = None,
+    ) -> dict[str, Any] | None:
+        normalized_object_id = _optional_output_string(object_id)
+        normalized_pending_ref_id = _optional_output_string(pending_ref_id)
+        normalized_field_path = _optional_output_string(field_path)
+        allowed_target_ids = {
+            target_id
+            for target_id in (required_object_id, required_pending_ref_id)
+            if target_id
+        }
+        supplied_target_ids = [
+            target_id
+            for target_id in (normalized_object_id, normalized_pending_ref_id)
+            if target_id
+        ]
+        if allowed_target_ids and supplied_target_ids and not all(
+            target_id in allowed_target_ids for target_id in supplied_target_ids
+        ):
+            return {
+                "status": "forbidden",
+                "message": "Validators may not retarget evidence to another object or pending ref.",
+                "allowed_object_id": required_object_id,
+                "allowed_pending_ref_id": required_pending_ref_id,
+            }
+        if (
+            required_field_path
+            and normalized_field_path
+            and normalized_field_path != required_field_path
+        ):
+            return {
+                "status": "forbidden",
+                "message": "Validators may not retarget evidence to another field path.",
+                "target_field_path": required_field_path,
+            }
+        return None
 
     @function_tool
     async def record_evidence(
         entity: str,
         span_ids: list[str],
+        evidence_record_id: str | None = None,
         object_id: str | None = None,
         pending_ref_id: str | None = None,
         field_path: str | None = None,
         object_type: str | None = None,
         validation_finding_id: str | None = None,
     ) -> dict[str, Any]:
-        """Create verified evidence from read_chunk evidence span IDs.
+        """Create or replace verified evidence from read_chunk evidence span IDs.
 
         The backend resolves span_ids, copies exact source text into
         verified_quote, and preserves span provenance. Multiple span_ids in one
         call form one evidence unit and one evidence record; use separate calls
-        for truly disjoint support.
+        for truly disjoint support. Supplying evidence_record_id replaces the
+        source quote/provenance on that active-run record while preserving its
+        object/field attachments unless new target args are supplied.
 
         Args:
             entity: Entity or object label this evidence supports.
             span_ids: Non-empty list copied from read_chunk(...).chunk.evidence_spans[].span_id.
+            evidence_record_id: Existing active-run evidence record ID to update in place.
             object_id: Optional stable curatable object ID to attach this evidence to.
             pending_ref_id: Optional pending object/reference ID to attach this evidence to.
-            field_path: Optional domain payload field path supported by this evidence.
+            field_path: Concrete domain payload field path supported by this evidence when attaching it at record time.
             object_type: Optional curatable object type.
             validation_finding_id: Optional validation finding this evidence addresses.
         """
@@ -409,6 +613,33 @@ def create_record_evidence_tool(
             tracker.record_call("record_evidence")
 
         normalized_entity = str(entity or "").strip()
+        normalized_evidence_record_id = _optional_output_string(evidence_record_id)
+        scope_error = _scope_error_for_record_id(normalized_evidence_record_id)
+        if scope_error is not None:
+            return _log_record_evidence_result(
+                {"entity": normalized_entity, **scope_error},
+                document_id=document_id,
+                verification_method="evidence_record_scope",
+            )
+        target_scope_error = _target_scope_error(
+            object_id=object_id,
+            pending_ref_id=pending_ref_id,
+            field_path=field_path,
+        )
+        if target_scope_error is not None:
+            return _log_record_evidence_result(
+                {
+                    "entity": normalized_entity,
+                    **(
+                        {"evidence_record_id": normalized_evidence_record_id}
+                        if normalized_evidence_record_id
+                        else {}
+                    ),
+                    **target_scope_error,
+                },
+                document_id=document_id,
+                verification_method="evidence_target_scope",
+            )
         normalized_span_ids, span_ids_error = _normalize_span_ids(span_ids)
         envelope_target_fields = _build_envelope_target_fields(
             object_id=object_id,
@@ -417,13 +648,77 @@ def create_record_evidence_tool(
             field_path=field_path,
             validation_finding_id=validation_finding_id,
         )
+        error_extra_fields = _merge_extra_fields(
+            envelope_target_fields,
+            (
+                {"evidence_record_id": normalized_evidence_record_id}
+                if normalized_evidence_record_id
+                else {}
+            ),
+        )
+        existing_record: dict[str, Any] | None = None
+
+        if normalized_evidence_record_id:
+            if workspace_records is not None:
+                existing_record = find_evidence_record_in_records(
+                    workspace_records,
+                    normalized_evidence_record_id,
+                    document_id=document_id,
+                )
+            else:
+                try:
+                    existing_record = find_active_evidence_record(
+                        normalized_evidence_record_id,
+                        document_id=document_id,
+                    )
+                except RuntimeError:
+                    return _log_record_evidence_result(
+                        {
+                            "status": "forbidden",
+                            "entity": normalized_entity,
+                            "evidence_record_id": normalized_evidence_record_id,
+                            "message": (
+                                "Existing evidence updates require an active evidence workspace. "
+                                "The evidence record was not updated."
+                            ),
+                        },
+                        document_id=document_id,
+                        verification_method="missing_active_workspace",
+                    )
+
+            if existing_record is None:
+                return _log_record_evidence_result(
+                    {
+                        "status": "not_found",
+                        "entity": normalized_entity,
+                        "evidence_record_id": normalized_evidence_record_id,
+                        "message": (
+                            "Evidence record was not found in the active run workspace. "
+                            "The evidence record was not updated."
+                        ),
+                    },
+                    document_id=document_id,
+                    verification_method="unknown_evidence_record_id",
+                )
+
+            if evidence_record_status(existing_record) == "discarded":
+                return _log_record_evidence_result(
+                    {
+                        "status": "discarded",
+                        "entity": normalized_entity,
+                        "evidence_record_id": normalized_evidence_record_id,
+                        "message": "Discarded evidence cannot be source-updated.",
+                    },
+                    document_id=document_id,
+                    verification_method="discarded_evidence_record_id",
+                )
 
         if span_ids_error is not None:
             return _log_record_evidence_result(
                 _build_span_resolution_error_result(
                     entity=normalized_entity,
                     span_ids=normalized_span_ids,
-                    extra_fields=envelope_target_fields,
+                    extra_fields=error_extra_fields,
                     **span_ids_error,
                 ),
                 document_id=document_id,
@@ -448,7 +743,7 @@ def create_record_evidence_tool(
                         failed_span_id=span_id,
                         failed_span_index=index,
                         failed_span_error=f"{exc}. Call read_chunk again for current span IDs.",
-                        extra_fields=envelope_target_fields,
+                        extra_fields=error_extra_fields,
                     ),
                     document_id=document_id,
                     verification_method="invalid_span_id",
@@ -476,7 +771,7 @@ def create_record_evidence_tool(
                         ),
                         failed_span_error="Chunk could not be loaded for this span ID",
                         chunk_id=chunk_id,
-                        extra_fields=envelope_target_fields,
+                        extra_fields=error_extra_fields,
                     ),
                     document_id=document_id,
                     verification_method="chunk_load_error",
@@ -496,7 +791,7 @@ def create_record_evidence_tool(
                             "Chunk referenced by this span ID was not found in the active document"
                         ),
                         chunk_id=chunk_id,
-                        extra_fields=envelope_target_fields,
+                        extra_fields=error_extra_fields,
                     ),
                     document_id=document_id,
                     verification_method="missing_chunk",
@@ -520,7 +815,7 @@ def create_record_evidence_tool(
                             "Chunk referenced by this span ID has no exact raw text content"
                         ),
                         chunk_id=chunk_id,
-                        extra_fields=envelope_target_fields,
+                        extra_fields=error_extra_fields,
                     ),
                     document_id=document_id,
                     verification_method="missing_chunk_text",
@@ -547,7 +842,7 @@ def create_record_evidence_tool(
                         failed_span_error=f"{exc}. Call read_chunk again for current span IDs.",
                         chunk_id=chunk_id,
                         chunk_text=chunk_text,
-                        extra_fields=envelope_target_fields,
+                        extra_fields=error_extra_fields,
                     ),
                     document_id=document_id,
                     verification_method="stale_span_id",
@@ -597,21 +892,45 @@ def create_record_evidence_tool(
         if len(figure_references) == 1:
             payload["figure_reference"] = figure_references[0]
 
-        payload["evidence_record_id"] = build_evidence_record_id(
-            evidence_record={
-                "entity": normalized_entity,
-                "verified_quote": verified_quote,
-                "page": first_fragment.page,
-                "section": first_fragment.section,
-                "chunk_id": first_fragment.chunk_id,
-                "subsection": first_fragment.subsection,
-                "figure_reference": payload.get("figure_reference"),
-                "source_span_ids": normalized_span_ids,
-            }
+        payload["evidence_record_id"] = (
+            normalized_evidence_record_id
+            or build_evidence_record_id(
+                evidence_record={
+                    "entity": normalized_entity,
+                    "verified_quote": verified_quote,
+                    "page": first_fragment.page,
+                    "section": first_fragment.section,
+                    "chunk_id": first_fragment.chunk_id,
+                    "subsection": first_fragment.subsection,
+                    "figure_reference": payload.get("figure_reference"),
+                    "source_span_ids": normalized_span_ids,
+                }
+            )
         )
 
+        if existing_record is not None:
+            revision_history = _revision_history_with_previous_source(existing_record)
+            if envelope_target_fields:
+                _project_primary_target_fields(payload)
+            else:
+                _copy_existing_record_fields(
+                    payload,
+                    existing_record,
+                    _ATTACHMENT_METADATA_FIELDS,
+                )
+            _copy_existing_record_fields(
+                payload,
+                existing_record,
+                _PRESERVED_METADATA_FIELDS,
+            )
+            if revision_history:
+                payload["evidence_revision_history"] = revision_history
+            payload["updated_at"] = _now_iso()
+            existing_record.clear()
+            existing_record.update(payload)
+
         return _log_record_evidence_result(
-            payload,
+            _strip_hidden_revision_history(payload),
             document_id=document_id,
             verification_method="span_ids",
         )

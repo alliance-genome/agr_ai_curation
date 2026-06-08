@@ -13,9 +13,13 @@ from .tool_calls import ToolCallAnalyzer
 
 ANALYZER_SCHEMA_VERSION = "extraction_timeline_analyzer.v1"
 EVENT_SCHEMA_VERSION = "extraction_trace_event.v1"
+EVIDENCE_REVISIONS_SCHEMA_VERSION = "evidence_revisions.v1"
 SUMMARY_TEXT_LIMIT = 500
 PAYLOAD_SIZE_TOP_EVENT_COUNT = 20
 PAYLOAD_SIZE_WARNING_THRESHOLDS = (100_000, 500_000, 1_000_000)
+DIAGNOSTIC_STRING_PARSE_CHARS = 1_000_000
+DIAGNOSTIC_MAX_DEPTH = 10
+DIAGNOSTIC_MAX_LIST_ITEMS = 200
 
 
 def _trace_event_dir() -> Path:
@@ -286,6 +290,377 @@ def _coerce_mapping(value: Any) -> Mapping[str, Any] | None:
             return None
         return parsed if isinstance(parsed, Mapping) else None
     return None
+
+
+def _coerce_jsonish(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+
+    text = value.strip()
+    if not text or text[0] not in "{[" or len(text) > DIAGNOSTIC_STRING_PARSE_CHARS:
+        return value
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return value
+
+
+def _text_value(value: Any) -> str | None:
+    value = _coerce_jsonish(value)
+    if isinstance(value, Mapping):
+        preview = value.get("preview")
+        if isinstance(preview, str):
+            text = " ".join(preview.split())
+            return text or None
+        return None
+    if isinstance(value, str):
+        text = " ".join(value.split())
+        return text or None
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    return None
+
+
+def _text_preview(value: Any, *, limit: int = 240) -> str | None:
+    text = _text_value(value)
+    if text is None:
+        return None
+    if len(text) <= limit:
+        return text
+    return f"{text[: limit - 3].rstrip()}..."
+
+
+def _string_list(value: Any) -> List[str]:
+    value = _coerce_jsonish(value)
+    if not isinstance(value, list):
+        return []
+    strings: List[str] = []
+    seen: set[str] = set()
+    for item in value:
+        text = _text_value(item)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        strings.append(text)
+    return strings
+
+
+def _iter_path_values(
+    value: Any,
+    path: str,
+    *,
+    depth: int = 0,
+) -> Iterable[tuple[str, Any]]:
+    if depth > DIAGNOSTIC_MAX_DEPTH:
+        return
+
+    coerced = _coerce_jsonish(value)
+    yield path, coerced
+
+    if isinstance(coerced, Mapping):
+        for key, nested in coerced.items():
+            yield from _iter_path_values(
+                nested,
+                f"{path}.{key}" if path else str(key),
+                depth=depth + 1,
+            )
+        return
+
+    if isinstance(coerced, list):
+        for index, nested in enumerate(coerced[:DIAGNOSTIC_MAX_LIST_ITEMS]):
+            yield from _iter_path_values(nested, f"{path}[{index}]", depth=depth + 1)
+
+
+def _normalized_evidence_targets(record: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    targets: List[Dict[str, Any]] = []
+
+    def append_target(raw_target: Any) -> None:
+        raw_target = _coerce_jsonish(raw_target)
+        if not isinstance(raw_target, Mapping):
+            return
+        target = {
+            key: text
+            for key in (
+                "object_id",
+                "pending_ref_id",
+                "object_type",
+                "field_path",
+                "validation_finding_id",
+            )
+            for text in [_text_value(raw_target.get(key))]
+            if text
+        }
+        if target and target not in targets:
+            targets.append(target)
+
+    append_target(record.get("envelope_target"))
+    raw_targets = _coerce_jsonish(record.get("envelope_targets"))
+    if isinstance(raw_targets, list):
+        for raw_target in raw_targets:
+            append_target(raw_target)
+
+    fallback_target = {
+        key: text
+        for key in ("object_id", "pending_ref_id", "field_path")
+        for text in [_text_value(record.get(key))]
+        if text
+    }
+    if fallback_target and fallback_target not in targets:
+        targets.append(fallback_target)
+    return targets
+
+
+def _record_field_paths(record: Mapping[str, Any]) -> List[str]:
+    paths = _string_list(record.get("field_paths"))
+    primary = _text_value(record.get("field_path"))
+    if primary and primary not in paths:
+        paths.insert(0, primary)
+    for target in _normalized_evidence_targets(record):
+        field_path = _text_value(target.get("field_path"))
+        if field_path and field_path not in paths:
+            paths.append(field_path)
+    return paths
+
+
+def _source_snapshot_summary(source: Mapping[str, Any]) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {}
+    quote_preview = _text_preview(source.get("verified_quote"))
+    if quote_preview:
+        summary["verified_quote_preview"] = quote_preview
+
+    span_ids = _string_list(source.get("source_span_ids")) or _string_list(source.get("span_ids"))
+    if span_ids:
+        summary["source_span_ids"] = span_ids
+
+    chunk_ids = _string_list(source.get("chunk_ids"))
+    chunk_id = _text_value(source.get("chunk_id"))
+    if chunk_id:
+        summary["chunk_id"] = chunk_id
+        if chunk_id not in chunk_ids:
+            chunk_ids.insert(0, chunk_id)
+    if chunk_ids:
+        summary["chunk_ids"] = chunk_ids
+
+    for key in ("document_id", "page", "section", "subsection", "figure_reference"):
+        text = _text_value(source.get(key))
+        if text:
+            summary[key] = text
+
+    return summary
+
+
+def _event_reference(item: Mapping[str, Any], source_path: str) -> Dict[str, Any]:
+    return {
+        "timeline_index": item.get("index"),
+        "timestamp": item.get("timestamp"),
+        "event_trace_id": item.get("event_trace_id"),
+        "event_type": item.get("event_type"),
+        "event_id": item.get("event_id"),
+        "tool_name": item.get("tool_name"),
+        "agent": item.get("agent"),
+        "source": item.get("source"),
+        "source_path": source_path,
+    }
+
+
+def _changed_by(item: Mapping[str, Any], revision: Mapping[str, Any]) -> Dict[str, Any]:
+    raw_changed_by = revision.get("changed_by") or revision.get("changed_by_context")
+    if isinstance(raw_changed_by, Mapping):
+        changed_by = {
+            key: value
+            for key, value in raw_changed_by.items()
+            if value not in (None, "", [])
+        }
+    else:
+        changed_by = {}
+        actor = _text_value(raw_changed_by)
+        if actor:
+            changed_by["actor"] = actor
+
+    for key in ("agent", "tool_name", "event_type", "event_trace_id"):
+        value = _text_value(item.get(key))
+        if value and key not in changed_by:
+            changed_by[key] = value
+    return changed_by
+
+
+def _revision_reason(item: Mapping[str, Any], revision: Mapping[str, Any]) -> str:
+    explicit_reason = _text_value(revision.get("reason") or revision.get("change_reason"))
+    if explicit_reason:
+        return explicit_reason
+    if item.get("tool_name") == "record_evidence":
+        return "same_id_record_evidence_source_update"
+    event_type = _text_value(item.get("event_type"))
+    return event_type or "evidence_revision_history"
+
+
+def _revision_summary(
+    revision: Mapping[str, Any],
+    *,
+    record: Mapping[str, Any],
+    item: Mapping[str, Any],
+) -> Dict[str, Any]:
+    previous_source = revision.get("previous_source")
+    if not isinstance(previous_source, Mapping):
+        previous_source = {}
+    replaced_at = _text_value(
+        revision.get("replaced_at")
+        or revision.get("changed_at")
+        or revision.get("updated_at")
+    )
+    summary: Dict[str, Any] = {
+        "revision": revision.get("revision"),
+        "replaced_at": replaced_at,
+        "reason": _revision_reason(item, revision),
+        "changed_by": _changed_by(item, revision),
+        "before_quote_preview": _text_preview(previous_source.get("verified_quote")),
+        "after_quote_preview": _text_preview(record.get("verified_quote")),
+        "previous_source": _source_snapshot_summary(previous_source),
+        "current_source": _source_snapshot_summary(record),
+    }
+    return {
+        key: value
+        for key, value in summary.items()
+        if value not in (None, "", [], {})
+    }
+
+
+def _looks_like_evidence_record(payload: Mapping[str, Any]) -> bool:
+    return bool(
+        _text_value(payload.get("evidence_record_id"))
+        and (
+            "evidence_revision_history" in payload
+            or "verified_quote" in payload
+            or "source_span_ids" in payload
+            or "span_ids" in payload
+        )
+    )
+
+
+def _evidence_record_revision_summary(
+    record: Mapping[str, Any],
+    *,
+    item: Mapping[str, Any],
+    source_path: str,
+) -> Dict[str, Any] | None:
+    evidence_record_id = _text_value(record.get("evidence_record_id"))
+    if not evidence_record_id:
+        return None
+
+    raw_history = _coerce_jsonish(record.get("evidence_revision_history"))
+    history = [entry for entry in raw_history if isinstance(entry, Mapping)] if isinstance(raw_history, list) else []
+    if not history:
+        return None
+
+    revision_summaries = [
+        _revision_summary(revision, record=record, item=item)
+        for revision in history
+    ]
+    replacement_times = [
+        text
+        for revision in revision_summaries
+        for text in [_text_value(revision.get("replaced_at"))]
+        if text
+    ]
+
+    target = {
+        key: value
+        for key, value in {
+            "field_paths": _record_field_paths(record),
+            "envelope_targets": _normalized_evidence_targets(record),
+        }.items()
+        if value
+    }
+
+    summary = {
+        "evidence_record_id": evidence_record_id,
+        "entity": _text_value(record.get("entity")),
+        "changed": True,
+        "revision_count": len(revision_summaries),
+        "first_replaced_at": replacement_times[0] if replacement_times else None,
+        "last_replaced_at": replacement_times[-1] if replacement_times else None,
+        "current_source": _source_snapshot_summary(record),
+        "target": target,
+        "revisions": revision_summaries,
+        "source_events": [_event_reference(item, source_path)],
+    }
+    return {
+        key: value
+        for key, value in summary.items()
+        if value not in (None, "", [], {})
+    }
+
+
+def _merge_event_references(
+    first: List[Dict[str, Any]],
+    second: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    merged: List[Dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for event in [*first, *second]:
+        key = (
+            event.get("timeline_index"),
+            event.get("event_id"),
+            event.get("source_path"),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(event)
+    return merged
+
+
+def _scope_refusal_diagnostic(message: str) -> str:
+    lowered = message.lower()
+    if "retarget" in lowered:
+        return "Validator attempted to retarget evidence outside its supplied object or field scope; backend refused the mutation."
+    if "only update" in lowered or "supplied" in lowered or "scope" in lowered:
+        return "Validator attempted to update evidence outside its supplied target scope; backend refused the mutation."
+    return "Backend refused an evidence mutation; inspect allowed evidence IDs and target fields before retrying."
+
+
+def _evidence_scope_refusal(
+    payload: Mapping[str, Any],
+    *,
+    item: Mapping[str, Any],
+    source_path: str,
+) -> Dict[str, Any] | None:
+    status = (_text_value(payload.get("status")) or "").lower()
+    if status != "forbidden":
+        return None
+
+    message = _text_value(payload.get("message") or payload.get("error")) or ""
+    evidence_keys = {
+        "evidence_record_id",
+        "allowed_evidence_record_ids",
+        "target_field_path",
+        "allowed_object_id",
+        "allowed_pending_ref_id",
+    }
+    if (
+        not any(key in payload for key in evidence_keys)
+        and "evidence" not in message.lower()
+        and "validator" not in message.lower()
+    ):
+        return None
+
+    refusal: Dict[str, Any] = {
+        **_event_reference(item, source_path),
+        "status": "forbidden",
+        "message": message,
+        "diagnostic": _scope_refusal_diagnostic(message),
+        "evidence_record_id": _text_value(payload.get("evidence_record_id")),
+        "allowed_evidence_record_ids": _string_list(payload.get("allowed_evidence_record_ids")),
+        "target_field_path": _text_value(payload.get("target_field_path")),
+        "allowed_object_id": _text_value(payload.get("allowed_object_id")),
+        "allowed_pending_ref_id": _text_value(payload.get("allowed_pending_ref_id")),
+    }
+    return {
+        key: value
+        for key, value in refusal.items()
+        if value not in (None, "", [], {})
+    }
 
 
 def _event_matches(
@@ -697,4 +1072,103 @@ class ExtractionTimelineAnalyzer:
             "reasoning_summary": timeline.get("reasoning_summary", {}),
             "validation_failures": validation_failures,
             "timeline": timeline.get("timeline", []),
+        }
+
+    @staticmethod
+    def evidence_revisions(timeline: Dict[str, Any]) -> Dict[str, Any]:
+        """Return an opt-in evidence revision diagnostic surface."""
+
+        records_by_id: Dict[str, Dict[str, Any]] = {}
+        scope_refusals: List[Dict[str, Any]] = []
+
+        for item in timeline.get("timeline", []):
+            if not isinstance(item, Mapping):
+                continue
+            searchable_payload = {
+                "input": item.get("input"),
+                "output": item.get("output"),
+                "validation": item.get("validation"),
+            }
+            for source_path, payload in _iter_path_values(searchable_payload, "timeline_item"):
+                if not isinstance(payload, Mapping):
+                    continue
+                if _looks_like_evidence_record(payload):
+                    summary = _evidence_record_revision_summary(
+                        payload,
+                        item=item,
+                        source_path=source_path,
+                    )
+                    if summary is not None:
+                        evidence_record_id = str(summary["evidence_record_id"])
+                        existing = records_by_id.get(evidence_record_id)
+                        if existing is None:
+                            records_by_id[evidence_record_id] = summary
+                        else:
+                            merged_events = _merge_event_references(
+                                existing.get("source_events", []),
+                                summary.get("source_events", []),
+                            )
+                            if int(summary.get("revision_count") or 0) >= int(
+                                existing.get("revision_count") or 0
+                            ):
+                                summary["source_events"] = merged_events
+                                records_by_id[evidence_record_id] = summary
+                            else:
+                                existing["source_events"] = merged_events
+
+                refusal = _evidence_scope_refusal(
+                    payload,
+                    item=item,
+                    source_path=source_path,
+                )
+                if refusal is not None:
+                    refusal_key = (
+                        refusal.get("timeline_index"),
+                        refusal.get("event_id"),
+                        refusal.get("source_path"),
+                        refusal.get("message"),
+                    )
+                    existing_keys = {
+                        (
+                            existing.get("timeline_index"),
+                            existing.get("event_id"),
+                            existing.get("source_path"),
+                            existing.get("message"),
+                        )
+                        for existing in scope_refusals
+                    }
+                    if refusal_key not in existing_keys:
+                        scope_refusals.append(refusal)
+
+        evidence_records = sorted(
+            records_by_id.values(),
+            key=lambda record: (
+                min(
+                    [
+                        int(event.get("timeline_index") or 0)
+                        for event in record.get("source_events", [])
+                        if isinstance(event, Mapping)
+                    ]
+                    or [0]
+                ),
+                str(record.get("evidence_record_id") or ""),
+            ),
+        )
+        revision_count = sum(int(record.get("revision_count") or 0) for record in evidence_records)
+        return {
+            "schema_version": EVIDENCE_REVISIONS_SCHEMA_VERSION,
+            "trace_id": timeline.get("trace_id"),
+            "summary": {
+                "evidence_record_count": len(evidence_records),
+                "updated_evidence_record_count": sum(1 for record in evidence_records if record.get("changed")),
+                "revision_count": revision_count,
+                "scope_refusal_count": len(scope_refusals),
+                "diagnostic_note": (
+                    "Live evidence fields are authoritative for product behavior; "
+                    "revision history is exposed only through this diagnostic surface."
+                ),
+            },
+            "evidence_records": evidence_records,
+            "scope_refusals": scope_refusals,
+            "query": timeline.get("query", {}),
         }

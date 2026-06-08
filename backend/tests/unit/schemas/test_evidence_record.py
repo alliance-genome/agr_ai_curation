@@ -165,6 +165,25 @@ def test_evidence_record_schema_preserves_span_provenance_fields():
     }
 
 
+def test_evidence_record_schema_preserves_revision_history():
+    evidence_payload = {
+        **_tool_evidence_payload(),
+        "evidence_revision_history": [
+            {
+                "revision": 1,
+                "previous_source": {
+                    "verified_quote": "Previous exact source sentence.",
+                    "source_span_ids": ["abc123:s0001:c0000-c0020:1234abcd"],
+                },
+            }
+        ],
+    }
+
+    decoded = EvidenceRecord(**evidence_payload).model_dump(mode="json", exclude_none=True)
+
+    assert decoded == evidence_payload
+
+
 def test_pdf_and_validated_source_fragment_fields_stay_in_sync():
     assert set(PdfEvidenceSourceFragment.model_fields) == set(
         EvidenceSourceFragment.model_fields

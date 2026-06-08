@@ -69,12 +69,14 @@ _RECORD_EVIDENCE_RUNTIME_NOTE = (
     "- Use multiple evidence records when one evidence unit alone does not fully support the retained item or claim.\n"
     "- Pass the entity label and `span_ids`; do not write source evidence text yourself.\n"
     "- `record_evidence` resolves span IDs against exact source text and copies the backend-owned slices into `verified_quote`.\n"
+    "- To correct the source quote/provenance for an existing active evidence record, call `record_evidence` again with that `evidence_record_id` and current `span_ids`; the backend updates the same record ID after span validation.\n"
     "- If the tool returns `not_found`, call `read_chunk` again for current span IDs or drop the evidence.\n"
     "- Only persist evidence records that came back `verified`.\n"
     "- Before final output, use `list_recorded_evidence` and `get_recorded_evidence` to review the active-run evidence workspace.\n"
-    "- Use `attach_evidence_to_object`, `detach_evidence_from_object`, and `update_recorded_evidence_metadata` to make evidence support the intended objects, pending refs, or field paths.\n"
+    "- Use `attach_evidence_to_object` with a concrete `field_path` plus object or pending-ref target; new attachments must not be object-level only.\n"
+    "- Use `detach_evidence_from_object` and `update_recorded_evidence_metadata` only to correct target or agent-owned metadata.\n"
     "- Use `discard_recorded_evidence` for wrong or weak evidence; discarded evidence is retained for audit but omitted from final output by default.\n"
-    "- Source quote, source span IDs, source fragments, chunk IDs, page, and section provenance are immutable after recording.\n"
+    "- Source quote, source span IDs, source fragments, chunk IDs, page, and section provenance are backend-owned; never type or edit quote text directly.\n"
 )
 _INLINE_PACKAGE_TOOL_IDS = frozenset({
     "attach_evidence_to_object",

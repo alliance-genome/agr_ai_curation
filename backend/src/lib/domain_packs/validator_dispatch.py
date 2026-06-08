@@ -14,11 +14,12 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Mapping, Protocol
+from typing import Any, Mapping, Protocol, cast
 
 from pydantic import BaseModel, Field, ValidationError, create_model
 
 from src.schemas.domain_envelope import (
+    CuratableObjectEnvelope,
     DomainEnvelope,
     ValidationFinding,
 )
@@ -130,9 +131,26 @@ class ActiveValidatorDispatchResult:
 
 
 @dataclass(frozen=True)
+class ValidatorRuntimeContext:
+    """Runtime document/user context available to validator agent tools."""
+
+    document_id: str | None = None
+    user_id: str | None = None
+
+
+@dataclass(frozen=True)
 class _DispatchJob:
     match: ValidatorBindingMatch
     request: DomainValidationRequest
+
+
+@dataclass(frozen=True)
+class _ValidatorEvidenceScope:
+    allowed_evidence_record_ids: frozenset[str]
+    object_id: str | None = None
+    pending_ref_id: str | None = None
+    field_path: str | None = None
+    allow_create: bool = False
 
 
 @dataclass(frozen=True)
@@ -187,6 +205,7 @@ def dispatch_active_validator_bindings(
     event_emitter: ValidatorDispatchEventEmitter | None = None,
     source_envelope_revision: int | None = None,
     max_parallel_validators: int = DEFAULT_MAX_PARALLEL_VALIDATORS,
+    runtime_context: ValidatorRuntimeContext | None = None,
 ) -> ActiveValidatorDispatchResult:
     """Dispatch active validator bindings and append result findings."""
 
@@ -197,8 +216,49 @@ def dispatch_active_validator_bindings(
         envelope,
         states=[ValidationBindingState.ACTIVE],
     )
-    agent_runner = runner or _default_package_scoped_validator_runner()
-    agent_batch_runner = batch_runner or _default_package_scoped_validator_batch_runner()
+    if runner is None:
+        default_runner = _default_package_scoped_validator_runner()
+
+        def agent_runner(
+            request: DomainValidationRequest,
+            *,
+            binding: ValidatorBinding,
+        ) -> Any:
+            if runtime_context is None:
+                return default_runner(
+                    request,
+                    binding=binding,
+                )
+            return cast(Any, default_runner)(
+                request,
+                binding=binding,
+                runtime_context=runtime_context,
+            )
+
+    else:
+        agent_runner = runner
+
+    if batch_runner is None:
+        default_batch_runner = _default_package_scoped_validator_batch_runner()
+
+        def agent_batch_runner(
+            jobs: list["_DispatchJob"],
+            *,
+            binding: ValidatorBinding,
+        ) -> Any:
+            if runtime_context is None:
+                return default_batch_runner(
+                    jobs,
+                    binding=binding,
+                )
+            return cast(Any, default_batch_runner)(
+                jobs,
+                binding=binding,
+                runtime_context=runtime_context,
+            )
+
+    else:
+        agent_batch_runner = batch_runner
 
     selector_findings: list[ValidationFinding] = []
     jobs: list[_DispatchJob] = []
@@ -279,6 +339,10 @@ def dispatch_active_validator_bindings(
         )
         appended_findings.extend(selector_appended_findings)
     if materialization_items:
+        updated_envelope = _apply_validator_evidence_updates_to_envelope(
+            updated_envelope,
+            materialization_items,
+        )
         materialization_started_at = time.monotonic()
         materialization_result = materialize_validator_results_into_envelope(
             updated_envelope,
@@ -305,6 +369,107 @@ def dispatch_active_validator_bindings(
         batch_validator_run_count=int(run_metadata["batch_validator_run_count"]),
         validator_batch_groups=tuple(run_metadata["validator_batch_groups"]),
     )
+
+
+def _apply_validator_evidence_updates_to_envelope(
+    envelope: DomainEnvelope,
+    items: list[ValidatorResultMaterializationInput],
+) -> DomainEnvelope:
+    updated_records = _validator_updated_evidence_records_by_id(items)
+    if not updated_records:
+        return envelope
+
+    metadata, metadata_changed = _replace_evidence_records_in_mapping(
+        envelope.metadata,
+        updated_records,
+    )
+    changed = metadata_changed
+    objects: list[CuratableObjectEnvelope] = []
+    for domain_object in envelope.objects:
+        payload, payload_changed = _replace_evidence_records_in_mapping(
+            domain_object.payload,
+            updated_records,
+        )
+        object_metadata, object_metadata_changed = _replace_evidence_records_in_mapping(
+            domain_object.metadata,
+            updated_records,
+        )
+        if payload_changed or object_metadata_changed:
+            domain_object = domain_object.model_copy(
+                update={
+                    "payload": payload,
+                    "metadata": object_metadata,
+                }
+            )
+            changed = True
+        objects.append(domain_object)
+
+    if not changed:
+        LOGGER.info(
+            "Validator evidence updates referenced %s record(s), but no matching envelope evidence_records list was found",
+            len(updated_records),
+        )
+        return envelope
+    return envelope.model_copy(update={"metadata": metadata, "objects": objects})
+
+
+def _validator_updated_evidence_records_by_id(
+    items: list[ValidatorResultMaterializationInput],
+) -> dict[str, dict[str, Any]]:
+    updated_records: dict[str, dict[str, Any]] = {}
+    for item in items:
+        for record in item.request.evidence:
+            evidence_record_id = _optional_string(record.get("evidence_record_id"))
+            if not evidence_record_id:
+                continue
+            if not (
+                record.get("evidence_revision_history")
+                or record.get("updated_at")
+            ):
+                continue
+            updated_records[evidence_record_id] = copy.deepcopy(record)
+    return updated_records
+
+
+def _replace_evidence_records_in_mapping(
+    value: Mapping[str, Any],
+    updated_records: Mapping[str, dict[str, Any]],
+) -> tuple[dict[str, Any], bool]:
+    payload = dict(value)
+    changed = False
+
+    raw_records = payload.get("evidence_records")
+    if isinstance(raw_records, list):
+        replaced_records: list[Any] = []
+        for record in raw_records:
+            if isinstance(record, Mapping):
+                evidence_record_id = _optional_string(record.get("evidence_record_id"))
+                replacement = (
+                    updated_records.get(evidence_record_id)
+                    if evidence_record_id
+                    else None
+                )
+                if replacement is not None:
+                    replaced_records.append(copy.deepcopy(replacement))
+                    changed = True
+                    continue
+            replaced_records.append(record)
+        if changed:
+            payload["evidence_records"] = replaced_records
+
+    extraction_metadata = payload.get("extraction_metadata")
+    if isinstance(extraction_metadata, Mapping):
+        replaced_extraction_metadata, extraction_changed = (
+            _replace_evidence_records_in_mapping(
+                extraction_metadata,
+                updated_records,
+            )
+        )
+        if extraction_changed:
+            payload["extraction_metadata"] = replaced_extraction_metadata
+            changed = True
+
+    return payload, changed
 
 
 def _run_validator_jobs(
@@ -468,6 +633,8 @@ def _batch_group_key_for_deduped_job_group(group: list[_DispatchJob]) -> str | N
     binding = representative.match.binding
     if not binding.batch_enabled or binding.validator_agent is None:
         return None
+    if any(_request_has_scoped_evidence_context(job.request) for job in group):
+        return None
     family = binding.batch_family or binding.binding_id
     return json.dumps(
         {
@@ -553,17 +720,24 @@ def _validator_request_dedupe_key(request: DomainValidationRequest) -> str:
     if not selected_identity_inputs:
         selected_identity_inputs = dict(request.selected_inputs)
 
+    target_identity: dict[str, Any] = {
+        "domain_pack_id": request.target.domain_pack_id,
+        "object_type": request.target.object_type,
+        "object_role": request.target.object_role,
+        "expected_fields": list(request.target.expected_fields),
+    }
+    evidence_context = _validator_evidence_context_identity(request)
+    if evidence_context is not None:
+        target_identity["object_id"] = request.target.object_id
+        target_identity["field_path"] = request.target.field_path
+
     return json.dumps(
         {
             "validator_binding_id": request.validator_binding_id,
             "validator_agent": request.validator_agent.model_dump(mode="json"),
-            "target": {
-                "domain_pack_id": request.target.domain_pack_id,
-                "object_type": request.target.object_type,
-                "object_role": request.target.object_role,
-                "expected_fields": list(request.target.expected_fields),
-            },
+            "target": target_identity,
             "selected_inputs": selected_identity_inputs,
+            "evidence_context": evidence_context,
             "expected_result_fields": request.expected_result_fields,
         },
         sort_keys=True,
@@ -794,6 +968,7 @@ def run_package_scoped_validator_agent(
     request: DomainValidationRequest,
     *,
     binding: ValidatorBinding,
+    runtime_context: ValidatorRuntimeContext | None = None,
 ) -> Any:
     """Execute the package-owned validator through the unified agent runtime."""
 
@@ -826,15 +1001,24 @@ def run_package_scoped_validator_agent(
         )
     agent.tools = [
         *list(getattr(agent, "tools", []) or []),
+        *_validator_runtime_tools(request, runtime_context),
         _build_finalize_validator_result_tool(
             request,
             finalization_state=finalization_state,
             function_tool_factory=function_tool,
         ),
     ]
+    _append_validator_source_context_instructions(
+        agent,
+        batch=False,
+        runtime_context=runtime_context,
+    )
     _append_validator_finalization_instructions(agent, batch=False)
 
-    provider_payload = validator_request_payload_for_agent(request)
+    provider_payload = validator_request_payload_for_agent(
+        request,
+        runtime_context=runtime_context,
+    )
     validator_model = str(getattr(agent, "model", "") or "")
     provider_context_preflight(
         surface="validator",
@@ -902,6 +1086,7 @@ def run_package_scoped_validator_agent_batch(
     jobs: list[_DispatchJob],
     *,
     binding: ValidatorBinding,
+    runtime_context: ValidatorRuntimeContext | None = None,
 ) -> Any:
     """Execute one package validator batch through the unified agent runtime."""
 
@@ -943,12 +1128,18 @@ def run_package_scoped_validator_agent_batch(
         )
     agent.tools = [
         *list(getattr(agent, "tools", []) or []),
+        *_validator_document_tools(runtime_context),
         _build_finalize_validator_batch_results_tool(
             jobs,
             finalization_state=finalization_state,
             function_tool_factory=function_tool,
         ),
     ]
+    _append_validator_source_context_instructions(
+        agent,
+        batch=True,
+        runtime_context=runtime_context,
+    )
     _append_validator_finalization_instructions(agent, batch=True)
 
     provider_payload = {
@@ -965,7 +1156,10 @@ def run_package_scoped_validator_agent_batch(
             "when one shared bulk call can answer the group."
         ),
         "requests": [
-            validator_request_payload_for_agent(job.request)
+            validator_request_payload_for_agent(
+                job.request,
+                runtime_context=runtime_context,
+            )
             for job in jobs
         ],
     }
@@ -1045,8 +1239,232 @@ def _copy_agent_for_validator_runtime(agent: Any) -> Any:
     return runtime_agent
 
 
+def _runtime_context_has_document_tools(
+    runtime_context: ValidatorRuntimeContext | None,
+) -> bool:
+    return bool(
+        runtime_context
+        and _optional_string(runtime_context.document_id)
+        and _optional_string(runtime_context.user_id)
+    )
+
+
+def _selected_evidence_quote_bundles(selected_inputs: Mapping[str, Any]) -> list[dict[str, Any]]:
+    bundles: list[dict[str, Any]] = []
+
+    def visit(value: Any) -> None:
+        if isinstance(value, Mapping):
+            evidence_record_id = _optional_string(value.get("evidence_record_id"))
+            verified_quote = _optional_string(value.get("verified_quote"))
+            if evidence_record_id and verified_quote:
+                bundles.append(dict(value))
+                return
+            for nested_value in value.values():
+                visit(nested_value)
+            return
+        if isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    for value in selected_inputs.values():
+        visit(value)
+    return bundles
+
+
+def _validator_evidence_scope_for_request(
+    request: DomainValidationRequest,
+) -> _ValidatorEvidenceScope:
+    target_field_path = _optional_string(request.target.field_path)
+    allowed_ids: list[str] = []
+    for bundle in _selected_evidence_quote_bundles(request.selected_inputs):
+        bundle_field_path = _optional_string(bundle.get("field_path"))
+        if target_field_path and bundle_field_path and bundle_field_path != target_field_path:
+            continue
+        evidence_record_id = _optional_string(bundle.get("evidence_record_id"))
+        if evidence_record_id and evidence_record_id not in allowed_ids:
+            allowed_ids.append(evidence_record_id)
+
+    target_object_id = _optional_string(request.target.object_id)
+    return _ValidatorEvidenceScope(
+        allowed_evidence_record_ids=frozenset(allowed_ids),
+        object_id=target_object_id,
+        pending_ref_id=target_object_id,
+        field_path=target_field_path,
+        allow_create=False,
+    )
+
+
+def _request_has_scoped_evidence_context(request: DomainValidationRequest) -> bool:
+    return bool(_validator_evidence_scope_for_request(request).allowed_evidence_record_ids)
+
+
+def _validator_evidence_context_identity(
+    request: DomainValidationRequest,
+) -> dict[str, Any] | None:
+    bundles = _selected_evidence_quote_bundles(request.selected_inputs)
+    if not bundles:
+        return None
+    return {
+        "target_object_id": request.target.object_id,
+        "target_field_path": request.target.field_path,
+        "evidence_quote_bundles": [
+            {
+                "evidence_record_id": _optional_string(bundle.get("evidence_record_id")),
+                "field_path": _optional_string(bundle.get("field_path")),
+                "verified_quote": _optional_string(bundle.get("verified_quote")),
+            }
+            for bundle in bundles
+        ],
+    }
+
+
+def _scoped_request_evidence_records(
+    request: DomainValidationRequest,
+    scope: _ValidatorEvidenceScope,
+) -> list[dict[str, Any]]:
+    allowed_ids = scope.allowed_evidence_record_ids
+    return [
+        record
+        for record in request.evidence
+        if _optional_string(record.get("evidence_record_id")) in allowed_ids
+    ]
+
+
+def _validator_runtime_capabilities_payload(
+    request: DomainValidationRequest,
+    runtime_context: ValidatorRuntimeContext | None,
+) -> dict[str, Any]:
+    scope = _validator_evidence_scope_for_request(request)
+    paper_tools_available = _runtime_context_has_document_tools(runtime_context)
+    scoped_evidence_available = paper_tools_available and bool(
+        scope.allowed_evidence_record_ids
+    )
+    unavailable_reasons: list[str] = []
+    if not paper_tools_available:
+        unavailable_reasons.append("document_id and user_id are required for paper search and evidence updates")
+    if not scope.allowed_evidence_record_ids:
+        unavailable_reasons.append("no field-scoped evidence quote bundle was supplied for this validation target")
+    return {
+        "paper_search_available": paper_tools_available,
+        "scoped_evidence_update_available": scoped_evidence_available,
+        "allowed_evidence_record_ids": sorted(scope.allowed_evidence_record_ids),
+        "target_object_id": scope.object_id,
+        "target_field_path": scope.field_path,
+        **({"unavailable_reasons": unavailable_reasons} if unavailable_reasons else {}),
+    }
+
+
+def _validator_document_tools(
+    runtime_context: ValidatorRuntimeContext | None,
+) -> list[Any]:
+    if not _runtime_context_has_document_tools(runtime_context):
+        LOGGER.info(
+            "Validator paper tools unavailable because document_id/user_id runtime context is missing"
+        )
+        return []
+
+    from src.lib.agent_studio.catalog_service import ToolExecutionContext, resolve_tools
+
+    assert runtime_context is not None
+    return resolve_tools(
+        ["search_document", "read_chunk", "read_section", "read_subsection"],
+        ToolExecutionContext(
+            document_id=str(runtime_context.document_id),
+            user_id=str(runtime_context.user_id),
+        ),
+    )
+
+
+def _validator_scoped_evidence_tools(
+    request: DomainValidationRequest,
+    runtime_context: ValidatorRuntimeContext | None,
+) -> list[Any]:
+    if not _runtime_context_has_document_tools(runtime_context):
+        return []
+
+    scope = _validator_evidence_scope_for_request(request)
+    if not scope.allowed_evidence_record_ids:
+        LOGGER.info(
+            "Validator evidence tools unavailable for request %s because no field-scoped evidence bundle was supplied",
+            request.request_id,
+        )
+        return []
+
+    workspace_records = _scoped_request_evidence_records(request, scope)
+    assert runtime_context is not None
+    document_id = str(runtime_context.document_id)
+    user_id = str(runtime_context.user_id)
+
+    from src.lib.openai_agents.tools.evidence_workspace import (
+        create_attach_evidence_to_object_tool,
+        create_detach_evidence_from_object_tool,
+        create_get_recorded_evidence_tool,
+        create_list_recorded_evidence_tool,
+        create_update_recorded_evidence_metadata_tool,
+    )
+    from src.lib.openai_agents.tools.record_evidence import create_record_evidence_tool
+
+    common_scope = {
+        "workspace_records": workspace_records,
+        "allowed_evidence_record_ids": scope.allowed_evidence_record_ids,
+    }
+    return [
+        create_record_evidence_tool(
+            document_id,
+            user_id,
+            **common_scope,
+            allow_create=scope.allow_create,
+            required_object_id=scope.object_id,
+            required_pending_ref_id=scope.pending_ref_id,
+            required_field_path=scope.field_path,
+        ),
+        create_list_recorded_evidence_tool(
+            document_id,
+            user_id,
+            **common_scope,
+        ),
+        create_get_recorded_evidence_tool(
+            document_id,
+            user_id,
+            **common_scope,
+        ),
+        create_attach_evidence_to_object_tool(
+            document_id,
+            user_id,
+            **common_scope,
+            required_object_id=scope.object_id,
+            required_pending_ref_id=scope.pending_ref_id,
+            required_field_path=scope.field_path,
+        ),
+        create_detach_evidence_from_object_tool(
+            document_id,
+            user_id,
+            **common_scope,
+            allow_detach=False,
+        ),
+        create_update_recorded_evidence_metadata_tool(
+            document_id,
+            user_id,
+            **common_scope,
+            required_field_path=scope.field_path,
+        ),
+    ]
+
+
+def _validator_runtime_tools(
+    request: DomainValidationRequest,
+    runtime_context: ValidatorRuntimeContext | None,
+) -> list[Any]:
+    return [
+        *_validator_document_tools(runtime_context),
+        *_validator_scoped_evidence_tools(request, runtime_context),
+    ]
+
+
 def validator_request_payload_for_agent(
     request: DomainValidationRequest,
+    *,
+    runtime_context: ValidatorRuntimeContext | None = None,
 ) -> dict[str, Any]:
     """Return the compact request shape sent to validator agents.
 
@@ -1090,6 +1508,10 @@ def validator_request_payload_for_agent(
         "input_values_source": "selected_inputs",
         "canonical_identity_restored_by": "finalize_validator_result",
     }
+    if runtime_context is not None:
+        payload["validator_runtime_capabilities"] = (
+            _validator_runtime_capabilities_payload(request, runtime_context)
+        )
     return payload
 
 
@@ -1118,6 +1540,62 @@ def _append_validator_finalization_instructions(agent: Any, *, batch: bool) -> N
     else:
         LOGGER.debug(
             "Skipping validator finalization instruction append for non-string "
+            "instructions on agent %r",
+            getattr(agent, "name", None),
+        )
+
+
+def _append_validator_source_context_instructions(
+    agent: Any,
+    *,
+    batch: bool,
+    runtime_context: ValidatorRuntimeContext | None,
+) -> None:
+    paper_tools_available = _runtime_context_has_document_tools(runtime_context)
+    evidence_tool_text = (
+        "For single-request validation runs with scoped evidence tools, if you "
+        "find a better supporting sentence, update the supplied evidence record "
+        "by calling `record_evidence` with the existing `evidence_record_id` "
+        "and improved `span_ids`."
+        if not batch
+        else (
+            "Batch validator runs do not receive scoped evidence mutation tools; "
+            "use supplied `selected_inputs.evidence_quotes` when present."
+        )
+    )
+    paper_tool_text = (
+        "If supplied quotes are missing, irrelevant, or incomplete, use "
+        "`search_document`, `read_chunk`, `read_section`, or `read_subsection` "
+        "to inspect the same paper. Search results are discovery only; exact "
+        "source support must come from `read_chunk` spans or supplied verified quotes."
+        if paper_tools_available
+        else (
+            "Paper search and evidence update tools are unavailable for this "
+            "runtime because document_id and user_id were not supplied; rely on "
+            "the structured inputs, database lookup tools, and any supplied "
+            "`selected_inputs.evidence_quotes`."
+        )
+    )
+    instruction_block = (
+        "Extractor-provided evidence: `selected_inputs.evidence_quotes`, when "
+        "present, contains verified PDF quote text selected by the extractor for "
+        "this field. Treat these quotes as source context, not as a validator "
+        "decision. If they are sufficient for the expected field(s), use them in "
+        "your validation result. "
+        f"{paper_tool_text} "
+        f"{evidence_tool_text} "
+        "Do not write, paraphrase, or directly edit source quote text. If no "
+        "source text supports the value, finalize an unresolved result with a "
+        "clear explanation."
+    )
+    instructions = getattr(agent, "instructions", None)
+    if instructions is None:
+        agent.instructions = instruction_block
+    elif isinstance(instructions, str):
+        agent.instructions = f"{instructions.rstrip()}\n\n{instruction_block}"
+    else:
+        LOGGER.debug(
+            "Skipping validator source-context instruction append for non-string "
             "instructions on agent %r",
             getattr(agent, "name", None),
         )
@@ -1441,6 +1919,7 @@ def run_package_scoped_validator_agent_in_worker_thread(
     request: DomainValidationRequest,
     *,
     binding: ValidatorBinding,
+    runtime_context: ValidatorRuntimeContext | None = None,
 ) -> Any:
     """Execute a package validator from sync code that is already in an event loop."""
 
@@ -1448,10 +1927,18 @@ def run_package_scoped_validator_agent_in_worker_thread(
         max_workers=1,
         thread_name_prefix="domain-validator-agent",
     ) as executor:
+        if runtime_context is None:
+            future = executor.submit(
+                run_package_scoped_validator_agent,
+                request,
+                binding=binding,
+            )
+            return future.result()
         future = executor.submit(
             run_package_scoped_validator_agent,
             request,
             binding=binding,
+            runtime_context=runtime_context,
         )
         return future.result()
 
@@ -1460,6 +1947,7 @@ def run_package_scoped_validator_agent_batch_in_worker_thread(
     jobs: list[_DispatchJob],
     *,
     binding: ValidatorBinding,
+    runtime_context: ValidatorRuntimeContext | None = None,
 ) -> Any:
     """Execute a package validator batch from sync code inside an event loop."""
 
@@ -1467,10 +1955,18 @@ def run_package_scoped_validator_agent_batch_in_worker_thread(
         max_workers=1,
         thread_name_prefix="domain-validator-agent-batch",
     ) as executor:
+        if runtime_context is None:
+            future = executor.submit(
+                run_package_scoped_validator_agent_batch,
+                jobs,
+                binding=binding,
+            )
+            return future.result()
         future = executor.submit(
             run_package_scoped_validator_agent_batch,
             jobs,
             binding=binding,
+            runtime_context=runtime_context,
         )
         return future.result()
 
@@ -2106,6 +2602,7 @@ __all__ = [
     "DomainValidatorAgentRunner",
     "DomainValidatorBatchAgentRunner",
     "ValidatorDispatchEventEmitter",
+    "ValidatorRuntimeContext",
     "dispatch_active_validator_bindings",
     "preflight_unresolved_validator_result",
     "run_package_scoped_validator_agent_batch",

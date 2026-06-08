@@ -303,7 +303,7 @@ def _stub_domain_envelope_review_row_materializer(monkeypatch):
     monkeypatch.setattr(
         module,
         "_refresh_domain_envelope_validation_for_ref",
-        lambda _db, envelope_ref: envelope_ref.envelope_revision,
+        lambda _db, envelope_ref, *, runtime_context=None: envelope_ref.envelope_revision,
     )
     monkeypatch.setattr(
         module,
@@ -670,6 +670,7 @@ metadata:
         *,
         registry=None,
         source_envelope_revision=None,
+        runtime_context=None,
     ):
         assert source_envelope_revision == 1
 
@@ -709,6 +710,7 @@ metadata:
             registry=registry,
             runner=_runner,
             source_envelope_revision=source_envelope_revision,
+            runtime_context=runtime_context,
         )
 
     monkeypatch.setattr(

@@ -285,11 +285,29 @@ def status(name):
     value = services.get(name) or {}
     return value.get("status"), value.get("required")
 
+def is_connected(service_status):
+    return service_status in {"connected", "ok", "ready", "healthy", "running"}
+
 if ready:
     print("PASS: backend /health/ready reports ready=true")
 else:
-    print("WARN: backend /health/ready reports ready=false")
-    print("WHY: readiness false is a warning only because older/current stacks may mark optional literature_db as disconnected; the dedicated curation DB and literature ES probes below decide whether evidence runs are blocked.")
+    disconnected = []
+    for service_name, value in services.items():
+        if not isinstance(value, dict):
+            continue
+        service_status = value.get("status")
+        required = bool(value.get("required"))
+        if service_status is not None and not is_connected(service_status):
+            disconnected.append((service_name, service_status, required))
+    if (
+        disconnected
+        and all(name == "literature_db" and not required for name, _status, required in disconnected)
+    ):
+        print("PASS: backend /health/ready reports ready=false only because optional literature_db is disconnected")
+        print("WHY: optional literature_db is not the evidence gate for real extraction smoke tests; the live literature ES/package smoke below validates the reference/literature lookup path.")
+    else:
+        print("WARN: backend /health/ready reports ready=false")
+        print("WHY: readiness false can indicate a dependency issue; the dedicated curation DB and literature ES probes below decide whether evidence runs are blocked.")
 
 for name in ("curation_db", "literature_search", "literature_db"):
     service_status, required = status(name)

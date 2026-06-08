@@ -1,6 +1,7 @@
 import hashlib
 import json
 import logging
+from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple, get_args, get_origin
 
 logger = logging.getLogger(__name__)
@@ -169,6 +170,14 @@ def _normalize_source_fragments(value: Any) -> Optional[List[Dict[str, Any]]]:
     return fragments or None
 
 
+def _normalize_evidence_revision_history(value: Any) -> Optional[List[Dict[str, Any]]]:
+    if not isinstance(value, list):
+        return None
+
+    history = [deepcopy(item) for item in value if isinstance(item, dict)]
+    return history or None
+
+
 def _copy_span_provenance_fields(
     evidence_record: Dict[str, Any],
     record_dict: Dict[str, Any],
@@ -293,11 +302,13 @@ def _copy_workspace_metadata_fields(
         if normalized_object_ref:
             evidence_record["object_ref"] = normalized_object_ref
 
-    envelope_target = record_dict.get("envelope_target")
-    if isinstance(envelope_target, dict):
+    envelope_targets = _normalize_evidence_targets(record_dict)
+    if envelope_targets:
+        evidence_record["envelope_target"] = envelope_targets[0]
+        evidence_record["envelope_targets"] = envelope_targets
         for key in ("object_id", "pending_ref_id", "field_path"):
             if key not in evidence_record:
-                normalized = _normalize_optional_text(envelope_target.get(key))
+                normalized = _normalize_optional_text(envelope_targets[0].get(key))
                 if normalized:
                     evidence_record[key] = normalized
 
@@ -306,6 +317,41 @@ def _copy_workspace_metadata_fields(
         evidence_record["field_paths"] = field_paths
     elif evidence_record.get("field_path"):
         evidence_record["field_paths"] = [evidence_record["field_path"]]
+
+    revision_history = _normalize_evidence_revision_history(
+        record_dict.get("evidence_revision_history")
+    )
+    if revision_history:
+        evidence_record["evidence_revision_history"] = revision_history
+
+
+def _normalize_evidence_targets(record_dict: Dict[str, Any]) -> list[dict[str, str]]:
+    targets: list[dict[str, str]] = []
+
+    def append_target(raw_target: Any) -> None:
+        if not isinstance(raw_target, dict):
+            return
+        target = {
+            key: normalized
+            for key in (
+                "object_id",
+                "pending_ref_id",
+                "object_type",
+                "field_path",
+                "validation_finding_id",
+            )
+            for normalized in [_normalize_optional_text(raw_target.get(key))]
+            if normalized
+        }
+        if target and target not in targets:
+            targets.append(target)
+
+    append_target(record_dict.get("envelope_target"))
+    raw_targets = record_dict.get("envelope_targets")
+    if isinstance(raw_targets, list):
+        for raw_target in raw_targets:
+            append_target(raw_target)
+    return targets
 
 
 def build_evidence_record_id(
@@ -505,6 +551,55 @@ class _EvidenceRegistry:
         self._ids_by_locator_key: Dict[tuple[Any, ...], List[str]] = {}
         self._canonical_id_by_input_id: Dict[str, str] = {}
 
+    def _forget_indexes_for_record(self, evidence_record_id: str, record: Dict[str, Any]) -> None:
+        exact_key = _evidence_record_key(record)
+        if self._id_by_exact_key.get(exact_key) == evidence_record_id:
+            self._id_by_exact_key.pop(exact_key, None)
+
+        locator_key = _evidence_locator_key(record)
+        locator_ids = self._ids_by_locator_key.get(locator_key)
+        if locator_ids:
+            self._ids_by_locator_key[locator_key] = [
+                locator_id for locator_id in locator_ids if locator_id != evidence_record_id
+            ]
+            if not self._ids_by_locator_key[locator_key]:
+                self._ids_by_locator_key.pop(locator_key, None)
+
+    def _index_record(self, evidence_record_id: str, record: Dict[str, Any]) -> None:
+        exact_key = _evidence_record_key(record)
+        locator_key = _evidence_locator_key(record)
+        self._records_by_id[evidence_record_id] = record
+        self._id_by_exact_key[exact_key] = evidence_record_id
+        locator_ids = self._ids_by_locator_key.setdefault(locator_key, [])
+        if evidence_record_id not in locator_ids:
+            locator_ids.append(evidence_record_id)
+        self._canonical_id_by_input_id[evidence_record_id] = evidence_record_id
+
+    def _replace_record_by_id(
+        self,
+        evidence_record_id: str,
+        normalized_record: Dict[str, Any],
+    ) -> str:
+        existing_record = self._records_by_id[evidence_record_id]
+        if (
+            "evidence_revision_history" not in normalized_record
+            and existing_record.get("evidence_revision_history")
+        ):
+            normalized_record = dict(normalized_record)
+            normalized_record["evidence_revision_history"] = deepcopy(
+                existing_record["evidence_revision_history"]
+            )
+
+        self._forget_indexes_for_record(evidence_record_id, existing_record)
+        for index, record in enumerate(self._records):
+            if str(record.get("evidence_record_id") or "") == evidence_record_id:
+                self._records[index] = normalized_record
+                break
+        else:
+            self._records.append(normalized_record)
+        self._index_record(evidence_record_id, normalized_record)
+        return evidence_record_id
+
     def add_many(
         self,
         values: Any,
@@ -540,6 +635,10 @@ class _EvidenceRegistry:
         if normalized_record is None:
             return None
 
+        evidence_record_id = str(normalized_record["evidence_record_id"])
+        if evidence_record_id in self._records_by_id:
+            return self._replace_record_by_id(evidence_record_id, normalized_record)
+
         exact_key = _evidence_record_key(normalized_record)
         existing_id = self._id_by_exact_key.get(exact_key)
         if existing_id:
@@ -552,12 +651,8 @@ class _EvidenceRegistry:
             self._canonical_id_by_input_id[str(normalized_record["evidence_record_id"])] = locator_ids[0]
             return locator_ids[0]
 
-        evidence_record_id = str(normalized_record["evidence_record_id"])
         self._records.append(normalized_record)
-        self._records_by_id[evidence_record_id] = normalized_record
-        self._id_by_exact_key[exact_key] = evidence_record_id
-        self._ids_by_locator_key.setdefault(locator_key, []).append(evidence_record_id)
-        self._canonical_id_by_input_id[evidence_record_id] = evidence_record_id
+        self._index_record(evidence_record_id, normalized_record)
         return evidence_record_id
 
     def records(self) -> List[Dict[str, Any]]:

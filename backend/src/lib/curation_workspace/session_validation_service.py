@@ -50,7 +50,10 @@ from src.lib.domain_packs.validation_findings import (
     remove_open_validation_findings_for_scope,
     resolve_stale_validation_findings_after_refresh,
 )
-from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
+from src.lib.domain_packs.validator_dispatch import (
+    ValidatorRuntimeContext,
+    dispatch_active_validator_bindings,
+)
 from src.schemas.curation_workspace import (
     CurationCandidateValidationRequest,
     CurationCandidateValidationResponse,
@@ -155,6 +158,7 @@ def _compute_candidate_validation(
     *,
     force: bool,
     validated_at: datetime,
+    runtime_context: ValidatorRuntimeContext | None = None,
     field_keys: Sequence[str] | None = None,
 ) -> CandidateValidationComputation:
     requested_field_keys = set(field_keys or [])
@@ -214,6 +218,7 @@ def _compute_candidate_validation(
         candidate,
         draft_fields=draft_fields,
         validated_at=validated_at,
+        runtime_context=runtime_context,
     )
     warnings.extend(envelope_warnings)
 
@@ -296,6 +301,7 @@ def _apply_candidate_validation(
     *,
     force: bool,
     validated_at: datetime,
+    runtime_context: ValidatorRuntimeContext | None = None,
     field_keys: Sequence[str] | None = None,
 ) -> tuple[CurationValidationSnapshotSchema, bool]:
     computation = _compute_candidate_validation(
@@ -303,6 +309,7 @@ def _apply_candidate_validation(
         candidate,
         force=force,
         validated_at=validated_at,
+        runtime_context=runtime_context,
         field_keys=field_keys,
     )
     if computation.existing_snapshot is not None:
@@ -336,6 +343,7 @@ def _envelope_validation_results_for_candidate(
     *,
     draft_fields: Sequence[CurationDraftFieldSchema],
     validated_at: datetime,
+    runtime_context: ValidatorRuntimeContext | None = None,
 ) -> tuple[dict[str, FieldValidationResult] | None, list[str], str | None, int | None]:
     if (
         candidate.envelope_id is None
@@ -374,6 +382,7 @@ def _envelope_validation_results_for_candidate(
         envelope=envelope,
         field_paths=_candidate_validation_field_paths(draft_fields),
         validated_at=validated_at,
+        runtime_context=runtime_context,
     )
     field_results, warnings = domain_envelope_field_validation_results(
         envelope,
@@ -417,6 +426,7 @@ def _dispatch_workspace_envelope_validation(
     envelope: DomainEnvelope,
     field_paths: Sequence[str],
     validated_at: datetime,
+    runtime_context: ValidatorRuntimeContext | None = None,
 ) -> tuple[DomainEnvelope, int, list[str]]:
     domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
     if domain_pack is None:
@@ -457,6 +467,7 @@ def _dispatch_workspace_envelope_validation(
         actor_id="workspace_candidate_validation",
         registry=structural_result.registry,
         source_envelope_revision=source_revision,
+        runtime_context=runtime_context,
     )
     stale_resolution = resolve_stale_validation_findings_after_refresh(
         original_envelope=envelope,
@@ -565,6 +576,8 @@ def validate_candidate(
     db: Session,
     candidate_id: str | UUID,
     request: CurationCandidateValidationRequest,
+    *,
+    user_id: str | None = None,
 ) -> CurationCandidateValidationResponse:
     normalized_candidate_id = _normalize_uuid(candidate_id, field_name="candidate_id")
     request_candidate_id = _normalize_uuid(request.candidate_id, field_name="candidate_id")
@@ -596,11 +609,16 @@ def validate_candidate(
         )
 
     validated_at = datetime.now(timezone.utc)
+    runtime_context = _validator_runtime_context_for_candidate(
+        candidate,
+        user_id=user_id,
+    )
     validation_snapshot, changed = _apply_candidate_validation(
         db,
         candidate,
         force=request.force,
         validated_at=validated_at,
+        runtime_context=runtime_context,
         field_keys=request.field_keys,
     )
     if changed:
@@ -625,6 +643,8 @@ def validate_session(
     db: Session,
     session_id: str | UUID,
     request: CurationSessionValidationRequest,
+    *,
+    user_id: str | None = None,
 ) -> CurationSessionValidationResponse:
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
     request_session_id = _normalize_uuid(request.session_id, field_name="session_id")
@@ -652,11 +672,16 @@ def validate_session(
     changed = False
 
     for target_candidate_id in target_candidate_ids:
+        runtime_context = _validator_runtime_context_for_candidate(
+            candidate_map[target_candidate_id],
+            user_id=user_id,
+        )
         validation_snapshot, candidate_changed = _apply_candidate_validation(
             db,
             candidate_map[target_candidate_id],
             force=request.force,
             validated_at=validated_at,
+            runtime_context=runtime_context,
         )
         candidate_validations.append(validation_snapshot)
         changed |= candidate_changed
@@ -694,6 +719,22 @@ def validate_session(
         session_validation=session_validation,
         candidate_validations=candidate_validations,
     )
+
+
+def _validator_runtime_context_for_candidate(
+    candidate: CurationCandidate,
+    *,
+    user_id: str | None,
+) -> ValidatorRuntimeContext | None:
+    document_id: str | None = None
+    if candidate.domain_envelope is not None and candidate.domain_envelope.document_id is not None:
+        document_id = str(candidate.domain_envelope.document_id)
+    elif candidate.session is not None and candidate.session.document_id is not None:
+        document_id = str(candidate.session.document_id)
+
+    if not document_id or not user_id:
+        return None
+    return ValidatorRuntimeContext(document_id=document_id, user_id=str(user_id))
 
 __all__ = [
     "validate_candidate",

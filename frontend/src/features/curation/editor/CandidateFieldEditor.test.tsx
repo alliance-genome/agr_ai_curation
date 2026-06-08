@@ -12,6 +12,11 @@ import {
 import theme from '@/theme'
 import CandidateFieldEditor from './CandidateFieldEditor'
 
+const FIELD_EVIDENCE_QUOTE =
+  'ABC appears in the result sentence with enough surrounding source context for curators to review why the selected field value is grounded in the paper and should open as a full quote.'
+const FIELD_EVIDENCE_PREVIEW =
+  'ABC appears in the result sentence with enough surrounding source context for curators to review why the selected field value is...'
+
 function buildWorkspace(): CurationWorkspace {
   return {
     session: {
@@ -179,7 +184,7 @@ function buildWorkspace(): CurationWorkspace {
             field_path: 'gene.symbol',
             envelope_revision: 4,
             document_id: 'document-1',
-            quote: 'ABC appears in the result sentence.',
+            quote: FIELD_EVIDENCE_QUOTE,
             page_number: 2,
             page_label: null,
             chunk_id: 'chunk-1',
@@ -195,9 +200,9 @@ function buildWorkspace(): CurationWorkspace {
               anchor_kind: 'snippet',
               locator_quality: 'exact_quote',
               supports_decision: 'supports',
-              snippet_text: 'ABC appears in the result sentence.',
-              sentence_text: 'ABC appears in the result sentence.',
-              viewer_search_text: 'ABC appears in the result sentence.',
+              snippet_text: FIELD_EVIDENCE_QUOTE,
+              sentence_text: FIELD_EVIDENCE_QUOTE,
+              viewer_search_text: FIELD_EVIDENCE_QUOTE,
               page_number: 2,
               section_title: 'Results',
               chunk_ids: ['chunk-1'],
@@ -444,6 +449,12 @@ describe('CandidateFieldEditor', () => {
     ).toBeInTheDocument()
     expect(screen.getByTestId('field-evidence-projection-evidence-1')).toHaveTextContent(
       'p. 2',
+    )
+    expect(screen.getByTestId('field-evidence-projection-evidence-1')).toHaveTextContent(
+      'Evidence quote',
+    )
+    expect(screen.getByTestId('field-evidence-projection-evidence-1')).toHaveTextContent(
+      FIELD_EVIDENCE_PREVIEW,
     )
     expect(screen.getByTestId('field-support-details-field_symbol')).toHaveTextContent(
       'Path: gene.symbol',
@@ -725,8 +736,35 @@ describe('CandidateFieldEditor', () => {
     expect(onNavigateEvidence).toHaveBeenCalledTimes(1)
     const command = onNavigateEvidence.mock.calls[0][0].detail.command
     expect(command.anchorId).toBe('evidence-1')
-    expect(command.searchText).toBe('ABC appears in the result sentence.')
+    expect(command.searchText).toBe(FIELD_EVIDENCE_QUOTE)
     expect(command.mode).toBe('select')
+
+    unsubscribe()
+  })
+
+  it('previews, expands, and dispatches pdf navigation from the field evidence quote details', async () => {
+    const user = userEvent.setup()
+    const onNavigateEvidence = vi.fn()
+    const unsubscribe = onPDFViewerNavigateEvidence(onNavigateEvidence)
+
+    renderEditor()
+
+    const summary = screen.getByTestId('field-evidence-projection-evidence-1')
+    const details = summary.closest('details')
+    expect(details).not.toBeNull()
+    expect(details).not.toHaveAttribute('open')
+    expect(summary).toHaveTextContent(FIELD_EVIDENCE_PREVIEW)
+    expect(summary).not.toHaveTextContent(FIELD_EVIDENCE_QUOTE)
+
+    await user.click(summary)
+
+    expect(onNavigateEvidence).toHaveBeenCalledTimes(1)
+    const command = onNavigateEvidence.mock.calls[0][0].detail.command
+    expect(command.anchorId).toBe('evidence-1')
+    expect(command.searchText).toBe(FIELD_EVIDENCE_QUOTE)
+    expect(command.mode).toBe('select')
+    expect(details).toHaveAttribute('open')
+    expect(details).toHaveTextContent(`“${FIELD_EVIDENCE_QUOTE}”`)
 
     unsubscribe()
   })

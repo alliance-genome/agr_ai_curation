@@ -43,11 +43,38 @@ def get_active_evidence_records_snapshot() -> list[dict[str, Any]]:
     return deepcopy(_workspace_records())
 
 
+def find_evidence_record_in_records(
+    records: list[dict[str, Any]],
+    evidence_record_id: str,
+    *,
+    document_id: str,
+) -> dict[str, Any] | None:
+    """Return the mutable record matching an ID and document from a supplied list."""
+
+    return _find_record(evidence_record_id, document_id=document_id, records=records)
+
+
+def find_active_evidence_record(
+    evidence_record_id: str,
+    *,
+    document_id: str,
+) -> dict[str, Any] | None:
+    """Return the mutable active-run record matching an ID and document."""
+
+    return _find_record(evidence_record_id, document_id=document_id)
+
+
 def _workspace_records() -> list[dict[str, Any]]:
     records = _ACTIVE_EVIDENCE_RECORDS.get()
     if records is None:
         raise RuntimeError("No active evidence workspace is bound to this run")
     return records
+
+
+def _tool_records(
+    workspace_records: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    return workspace_records if workspace_records is not None else _workspace_records()
 
 
 def _now_iso() -> str:
@@ -204,17 +231,86 @@ def _find_record(
     evidence_record_id: str,
     *,
     document_id: str,
+    records: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     normalized_id = _optional_string(evidence_record_id)
     if not normalized_id:
         return None
 
-    for record in _workspace_records():
+    for record in _tool_records(records):
         if (
             _optional_string(record.get("evidence_record_id")) == normalized_id
             and _matches_document(record, document_id)
         ):
             return record
+    return None
+
+
+def _allowed_ids_set(values: set[str] | frozenset[str] | None) -> set[str] | None:
+    if values is None:
+        return None
+    return {value for raw in values for value in [_optional_string(raw)] if value}
+
+
+def _allowed_id_error(
+    evidence_record_id: str,
+    allowed_evidence_record_ids: set[str] | None,
+) -> dict[str, Any] | None:
+    if allowed_evidence_record_ids is None:
+        return None
+    normalized_id = _optional_string(evidence_record_id)
+    if normalized_id in allowed_evidence_record_ids:
+        return None
+    return {
+        "status": "forbidden",
+        "evidence_record_id": normalized_id,
+        "allowed_evidence_record_ids": sorted(allowed_evidence_record_ids),
+        "message": "This evidence tool is scoped to the validation target's supplied evidence records.",
+    }
+
+
+def _target_scope_error(
+    *,
+    object_id: Any = None,
+    pending_ref_id: Any = None,
+    field_path: Any = None,
+    required_object_id: str | None = None,
+    required_pending_ref_id: str | None = None,
+    required_field_path: str | None = None,
+) -> dict[str, Any] | None:
+    normalized_object_id = _optional_string(object_id)
+    normalized_pending_ref_id = _optional_string(pending_ref_id)
+    normalized_field_path = _optional_string(field_path)
+
+    accepted_target_ids = {
+        target_id
+        for target_id in (required_object_id, required_pending_ref_id)
+        if target_id
+    }
+    supplied_target_ids = [
+        target_id
+        for target_id in (normalized_object_id, normalized_pending_ref_id)
+        if target_id
+    ]
+    if accepted_target_ids and supplied_target_ids and not all(
+        target_id in accepted_target_ids for target_id in supplied_target_ids
+    ):
+        return {
+            "status": "forbidden",
+            "message": "Validator evidence tools cannot retarget evidence to another object or pending ref.",
+            "allowed_object_id": required_object_id,
+            "allowed_pending_ref_id": required_pending_ref_id,
+        }
+    if (
+        required_field_path
+        and normalized_field_path
+        and normalized_field_path != required_field_path
+    ):
+        return {
+            "status": "forbidden",
+            "message": "Validator evidence tools cannot retarget evidence to another field path.",
+            "target_field_path": required_field_path,
+        }
     return None
 
 
@@ -280,8 +376,13 @@ def create_list_recorded_evidence_tool(
     document_id: str,
     user_id: str,
     tracker: Optional["ToolCallTracker"] = None,
+    *,
+    workspace_records: list[dict[str, Any]] | None = None,
+    allowed_evidence_record_ids: set[str] | frozenset[str] | None = None,
 ):
     """Create a tool for listing evidence recorded during the active run."""
+
+    allowed_ids = _allowed_ids_set(allowed_evidence_record_ids)
 
     @function_tool
     async def list_recorded_evidence(
@@ -303,8 +404,11 @@ def create_list_recorded_evidence_tool(
         _track(tracker, "list_recorded_evidence")
         requested = _normalize_target(object_id=object_id, pending_ref_id=pending_ref_id)
         records = []
-        for record in _workspace_records():
+        for record in _tool_records(workspace_records):
             if not _matches_document(record, document_id):
+                continue
+            record_id = _optional_string(record.get("evidence_record_id"))
+            if allowed_ids is not None and record_id not in allowed_ids:
                 continue
             if _is_discarded(record) and not include_discarded:
                 continue
@@ -329,11 +433,18 @@ def create_get_recorded_evidence_tool(
     document_id: str,
     user_id: str,
     tracker: Optional["ToolCallTracker"] = None,
+    *,
+    workspace_records: list[dict[str, Any]] | None = None,
+    allowed_evidence_record_ids: set[str] | frozenset[str] | None = None,
 ):
     """Create a tool for fetching one active-run evidence record."""
 
+    allowed_ids = _allowed_ids_set(allowed_evidence_record_ids)
+
     @function_tool
-    async def get_recorded_evidence(evidence_record_id: str) -> dict[str, Any]:
+    async def get_recorded_evidence(
+        evidence_record_id: str,
+    ) -> dict[str, Any]:
         """Fetch one active-run evidence record for detailed review.
 
         Args:
@@ -341,12 +452,21 @@ def create_get_recorded_evidence_tool(
         """
 
         _track(tracker, "get_recorded_evidence")
-        record = _find_record(evidence_record_id, document_id=document_id)
+        scope_error = _allowed_id_error(evidence_record_id, allowed_ids)
+        if scope_error is not None:
+            return scope_error
+        record = _find_record(
+            evidence_record_id,
+            document_id=document_id,
+            records=workspace_records,
+        )
         if record is None:
             return _not_found(evidence_record_id)
+        record_payload = deepcopy(record)
+        record_payload.pop("evidence_revision_history", None)
         return {
             "status": "ok",
-            "record": deepcopy(record),
+            "record": record_payload,
         }
 
     return get_recorded_evidence
@@ -356,30 +476,57 @@ def create_attach_evidence_to_object_tool(
     document_id: str,
     user_id: str,
     tracker: Optional["ToolCallTracker"] = None,
+    *,
+    workspace_records: list[dict[str, Any]] | None = None,
+    allowed_evidence_record_ids: set[str] | frozenset[str] | None = None,
+    required_object_id: str | None = None,
+    required_pending_ref_id: str | None = None,
+    required_field_path: str | None = None,
 ):
     """Create a tool for attaching evidence to an object or pending ref."""
+
+    allowed_ids = _allowed_ids_set(allowed_evidence_record_ids)
 
     @function_tool
     async def attach_evidence_to_object(
         evidence_record_id: str,
+        field_path: str,
         object_id: str | None = None,
         pending_ref_id: str | None = None,
-        field_path: str | None = None,
     ) -> dict[str, Any]:
-        """Attach active evidence to the intended object or pending ref.
+        """Attach active evidence to the intended object or pending ref field.
 
-        This changes only workspace attachment metadata; source quote text and
-        provenance remain immutable.
+        This changes only workspace attachment metadata; correct source quote
+        and provenance by calling record_evidence with the existing
+        evidence_record_id and current span IDs. New attachments require a
+        concrete field_path so finalized extractor output remains field-level.
 
         Args:
             evidence_record_id: Evidence record ID to attach.
+            field_path: Domain payload field path supported by this evidence.
             object_id: Stable curatable object ID to support.
             pending_ref_id: Pending object/reference ID to support.
-            field_path: Optional domain payload field path supported by this evidence.
         """
 
         _track(tracker, "attach_evidence_to_object")
-        record = _find_record(evidence_record_id, document_id=document_id)
+        scope_error = _allowed_id_error(evidence_record_id, allowed_ids)
+        if scope_error is not None:
+            return scope_error
+        target_error = _target_scope_error(
+            object_id=object_id,
+            pending_ref_id=pending_ref_id,
+            field_path=field_path,
+            required_object_id=required_object_id,
+            required_pending_ref_id=required_pending_ref_id,
+            required_field_path=required_field_path,
+        )
+        if target_error is not None:
+            return target_error
+        record = _find_record(
+            evidence_record_id,
+            document_id=document_id,
+            records=workspace_records,
+        )
         if record is None:
             return _not_found(evidence_record_id)
         if _is_discarded(record):
@@ -390,10 +537,15 @@ def create_attach_evidence_to_object_tool(
             pending_ref_id=pending_ref_id,
             field_path=field_path,
         )
-        if not target:
+        if not (target.get("object_id") or target.get("pending_ref_id")):
             return {
                 "status": "invalid_request",
-                "message": "Provide object_id or pending_ref_id, optionally with field_path.",
+                "message": "Provide object_id or pending_ref_id plus field_path.",
+            }
+        if not target.get("field_path"):
+            return {
+                "status": "invalid_request",
+                "message": "field_path is required when attaching evidence to a new extraction target.",
             }
 
         previous_targets = _record_targets(record)
@@ -416,8 +568,14 @@ def create_detach_evidence_from_object_tool(
     document_id: str,
     user_id: str,
     tracker: Optional["ToolCallTracker"] = None,
+    *,
+    workspace_records: list[dict[str, Any]] | None = None,
+    allowed_evidence_record_ids: set[str] | frozenset[str] | None = None,
+    allow_detach: bool = True,
 ):
     """Create a tool for detaching evidence from an object or pending ref."""
+
+    allowed_ids = _allowed_ids_set(allowed_evidence_record_ids)
 
     @function_tool
     async def detach_evidence_from_object(
@@ -428,8 +586,9 @@ def create_detach_evidence_from_object_tool(
     ) -> dict[str, Any]:
         """Detach evidence from a wrong object, pending ref, or field path.
 
-        This removes only workspace attachment metadata; source quote text and
-        provenance remain immutable.
+        This removes only workspace attachment metadata; correct source quote
+        and provenance by calling record_evidence with the existing
+        evidence_record_id and current span IDs.
 
         Args:
             evidence_record_id: Evidence record ID to detach.
@@ -439,7 +598,20 @@ def create_detach_evidence_from_object_tool(
         """
 
         _track(tracker, "detach_evidence_from_object")
-        record = _find_record(evidence_record_id, document_id=document_id)
+        scope_error = _allowed_id_error(evidence_record_id, allowed_ids)
+        if scope_error is not None:
+            return scope_error
+        if not allow_detach:
+            return {
+                "status": "forbidden",
+                "evidence_record_id": _optional_string(evidence_record_id),
+                "message": "Validator evidence tools cannot detach scoped evidence from the current validation target.",
+            }
+        record = _find_record(
+            evidence_record_id,
+            document_id=document_id,
+            records=workspace_records,
+        )
         if record is None:
             return _not_found(evidence_record_id)
         if _is_discarded(record):
@@ -515,8 +687,14 @@ def create_update_recorded_evidence_metadata_tool(
     document_id: str,
     user_id: str,
     tracker: Optional["ToolCallTracker"] = None,
+    *,
+    workspace_records: list[dict[str, Any]] | None = None,
+    allowed_evidence_record_ids: set[str] | frozenset[str] | None = None,
+    required_field_path: str | None = None,
 ):
     """Create a tool for editing agent-owned evidence metadata only."""
+
+    allowed_ids = _allowed_ids_set(allowed_evidence_record_ids)
 
     @function_tool
     async def update_recorded_evidence_metadata(
@@ -527,9 +705,10 @@ def create_update_recorded_evidence_metadata_tool(
     ) -> dict[str, Any]:
         """Update only editable agent-owned evidence metadata.
 
-        Editable fields are entity, field_path, and agent_note. Source quote,
-        source span IDs, source fragments, chunk IDs, page, and section provenance
-        remain immutable.
+        Editable fields are entity, field_path, and agent_note. Correct source
+        quote, source span IDs, source fragments, chunk IDs, page, and section
+        provenance by calling record_evidence with the existing evidence_record_id
+        and current span IDs.
 
         Args:
             evidence_record_id: Evidence record ID to update.
@@ -539,7 +718,20 @@ def create_update_recorded_evidence_metadata_tool(
         """
 
         _track(tracker, "update_recorded_evidence_metadata")
-        record = _find_record(evidence_record_id, document_id=document_id)
+        scope_error = _allowed_id_error(evidence_record_id, allowed_ids)
+        if scope_error is not None:
+            return scope_error
+        target_error = _target_scope_error(
+            field_path=field_path,
+            required_field_path=required_field_path,
+        )
+        if target_error is not None:
+            return target_error
+        record = _find_record(
+            evidence_record_id,
+            document_id=document_id,
+            records=workspace_records,
+        )
         if record is None:
             return _not_found(evidence_record_id)
         if _is_discarded(record):
@@ -579,6 +771,8 @@ __all__ = [
     "create_get_recorded_evidence_tool",
     "create_list_recorded_evidence_tool",
     "create_update_recorded_evidence_metadata_tool",
+    "find_active_evidence_record",
+    "find_evidence_record_in_records",
     "get_active_evidence_records_snapshot",
     "reset_active_evidence_records",
     "set_active_evidence_records",

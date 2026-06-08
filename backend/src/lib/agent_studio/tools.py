@@ -14,6 +14,7 @@ Token-Aware Tools (Claude-Specific Endpoints):
 - search_traces: Find traces by session/document/run/extraction metadata
 - get_extraction_diagnostic_report: Concise extraction/builder/validation report
 - get_extraction_timeline: Ordered extraction and tool timeline
+- get_evidence_revisions: Evidence source update and scope refusal diagnostics
 - get_trace_tree: Langfuse parent/child observation tree
 - get_trace_reconstruction: Ordered Langfuse reconstruction with payload refs
 - get_trace_model_live_context: Provider-call input size classification
@@ -104,7 +105,7 @@ def validate_view(view: str) -> None:
         "summary", "tool_calls", "conversation", "pdf_citations",
         "token_analysis", "agent_context", "trace_summary",
         "document_hierarchy", "agent_configs", "group_context", "mod_context",
-        "domain_envelope", "extraction_timeline"
+        "domain_envelope", "extraction_timeline", "evidence_revisions"
     ]
     if view not in valid_views:
         raise ValueError(f"Invalid view '{view}'. Must be one of: {', '.join(valid_views)}")
@@ -693,7 +694,7 @@ async def get_trace_view(trace_id: str, view_name: str) -> Dict[str, Any]:
         valid_views = [
             "token_analysis", "agent_context", "pdf_citations",
             "document_hierarchy", "agent_configs", "group_context", "mod_context",
-            "trace_summary", "domain_envelope", "extraction_timeline"
+            "trace_summary", "domain_envelope", "extraction_timeline", "evidence_revisions"
         ]
         if view_name not in valid_views:
             return {
@@ -880,6 +881,42 @@ async def get_extraction_timeline(
             "refresh": refresh,
             "include_raw_args": include_raw_args,
             "include_raw_outputs": include_raw_outputs,
+            "tool_name": tool_name,
+            "event_type": event_type,
+            "candidate_id": candidate_id,
+        },
+    )
+
+
+async def get_evidence_revisions(
+    trace_id: str,
+    session_id: Optional[str] = None,
+    feedback_id: Optional[str] = None,
+    include_sibling_traces: bool = False,
+    refresh: bool = False,
+    tool_name: Optional[str] = None,
+    event_type: Optional[str] = None,
+    candidate_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Get diagnostics-only evidence source updates and scope refusals."""
+    try:
+        validate_trace_id(trace_id)
+    except ValueError as e:
+        return {
+            "status": "error",
+            "data": None,
+            "token_info": None,
+            "error": str(e),
+            "help": "Check trace_id format",
+        }
+
+    return await _get_claude_endpoint(
+        f"/{trace_id}/evidence_revisions",
+        params={
+            "session_id": session_id,
+            "feedback_id": feedback_id,
+            "include_sibling_traces": include_sibling_traces,
+            "refresh": refresh,
             "tool_name": tool_name,
             "event_type": event_type,
             "candidate_id": candidate_id,

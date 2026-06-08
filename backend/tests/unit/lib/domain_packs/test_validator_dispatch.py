@@ -16,9 +16,12 @@ from src.lib.config.agent_loader import AgentDefinition
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validator_dispatch import (
+    ValidatorRuntimeContext,
+    _apply_validator_evidence_updates_to_envelope,
     _validated_results_from_agent_batch_output,
     _validator_batch_summary,
     _validator_finalization_tool_payload,
+    _validator_request_dedupe_key,
     _validator_result_finalization_feedback,
     dispatch_active_validator_bindings,
     run_package_scoped_validator_agent_batch,
@@ -563,6 +566,164 @@ def test_validator_request_payload_preserves_long_selected_input_scalars():
     assert payload["selected_inputs"]["evidence_quote"].endswith(
         "paper-supported quote "
     )
+
+
+def test_validator_request_payload_reports_runtime_capabilities_for_scoped_evidence():
+    request = _validation_request().model_copy(
+        update={
+            "target": ValidationTarget(
+                domain_pack_id="fixture.dispatch",
+                object_type="GeneAssertion",
+                object_id="object-1",
+                field_path="gene.identifier",
+            ),
+            "selected_inputs": {
+                "identifier": "BAD:0001",
+                "evidence_quotes": [
+                    {
+                        "evidence_record_id": "evidence-1",
+                        "field_path": "gene.identifier",
+                        "verified_quote": "BAD:0001 was reported in the paper.",
+                    }
+                ],
+            },
+            "evidence": [
+                {
+                    "evidence_record_id": "evidence-1",
+                    "verified_quote": "BAD:0001 was reported in the paper.",
+                    "chunk_id": "chunk-1",
+                    "document_id": "doc-123",
+                }
+            ],
+        },
+        deep=True,
+    )
+
+    payload = validator_request_payload_for_agent(
+        request,
+        runtime_context=ValidatorRuntimeContext(
+            document_id="doc-123",
+            user_id="user-1",
+        ),
+    )
+
+    assert payload["validator_runtime_capabilities"] == {
+        "paper_search_available": True,
+        "scoped_evidence_update_available": True,
+        "allowed_evidence_record_ids": ["evidence-1"],
+        "target_object_id": "object-1",
+        "target_field_path": "gene.identifier",
+    }
+
+
+def test_validator_request_dedupe_key_includes_field_and_evidence_context():
+    base_request = _validation_request().model_copy(
+        update={
+            "target": ValidationTarget(
+                domain_pack_id="fixture.dispatch",
+                object_type="GeneAssertion",
+                object_id="object-1",
+                field_path="gene.identifier",
+            ),
+            "selected_inputs": {
+                "identifier": "BAD:0001",
+                "evidence_quotes": [
+                    {
+                        "evidence_record_id": "evidence-1",
+                        "field_path": "gene.identifier",
+                        "verified_quote": "First quote.",
+                    }
+                ],
+            },
+        },
+        deep=True,
+    )
+    different_evidence = base_request.model_copy(
+        update={
+            "selected_inputs": {
+                "identifier": "BAD:0001",
+                "evidence_quotes": [
+                    {
+                        "evidence_record_id": "evidence-2",
+                        "field_path": "gene.identifier",
+                        "verified_quote": "Second quote.",
+                    }
+                ],
+            }
+        },
+        deep=True,
+    )
+    different_field = base_request.model_copy(
+        update={
+            "target": ValidationTarget(
+                domain_pack_id="fixture.dispatch",
+                object_type="GeneAssertion",
+                object_id="object-1",
+                field_path="gene.symbol",
+            ),
+        },
+        deep=True,
+    )
+
+    assert _validator_request_dedupe_key(base_request) != _validator_request_dedupe_key(
+        different_evidence
+    )
+    assert _validator_request_dedupe_key(base_request) != _validator_request_dedupe_key(
+        different_field
+    )
+
+
+def test_apply_validator_evidence_updates_replaces_matching_envelope_records():
+    envelope = _envelope(
+        evidence_records=[
+            {
+                "evidence_record_id": "evidence-1",
+                "entity": "BAD:0001",
+                "verified_quote": "Previous quote.",
+                "page": 3,
+                "section": "Results",
+                "chunk_id": "chunk-1",
+            }
+        ]
+    )
+    request = _validation_request().model_copy(
+        update={
+            "evidence": [
+                {
+                    "evidence_record_id": "evidence-1",
+                    "entity": "BAD:0001",
+                    "verified_quote": "Updated quote.",
+                    "page": 4,
+                    "section": "Results",
+                    "chunk_id": "chunk-2",
+                    "updated_at": "2026-06-08T00:00:00+00:00",
+                    "evidence_revision_history": [
+                        {
+                            "revision": 1,
+                            "previous_source": {
+                                "verified_quote": "Previous quote.",
+                                "chunk_id": "chunk-1",
+                            },
+                        }
+                    ],
+                }
+            ]
+        },
+        deep=True,
+    )
+
+    updated = _apply_validator_evidence_updates_to_envelope(
+        envelope,
+        cast(Any, [SimpleNamespace(request=request)]),
+    )
+
+    evidence_record = updated.objects[0].payload["evidence_records"][0]
+    assert evidence_record["verified_quote"] == "Updated quote."
+    assert evidence_record["chunk_id"] == "chunk-2"
+    assert evidence_record["evidence_revision_history"][0]["previous_source"] == {
+        "verified_quote": "Previous quote.",
+        "chunk_id": "chunk-1",
+    }
 
 
 def test_validator_batch_summary_reports_payload_sizes_and_large_scalars():
@@ -2129,6 +2290,111 @@ def test_package_scoped_validator_agent_prefers_accepted_finalization_tool_resul
 
     assert result.status == "resolved"
     assert result.resolved_values["identifier"] == "AGR:0001"
+
+
+def test_package_scoped_validator_agent_adds_scoped_runtime_tools(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from packages.alliance.agents.gene.schema import GeneResultEnvelope
+    from src.lib.agent_studio.diagnostic_tools.tool_definitions import (
+        _unwrap_function_tool,
+    )
+
+    request = _validation_request().model_copy(
+        update={
+            "target": ValidationTarget(
+                domain_pack_id="fixture.dispatch",
+                object_type="GeneAssertion",
+                object_id="object-1",
+                field_path="gene.identifier",
+            ),
+            "selected_inputs": {
+                "identifier": "BAD:0001",
+                "evidence_quotes": [
+                    {
+                        "evidence_record_id": "evidence-1",
+                        "field_path": "gene.identifier",
+                        "verified_quote": "BAD:0001 was reported in the paper.",
+                    }
+                ],
+            },
+            "evidence": [
+                {
+                    "evidence_record_id": "evidence-1",
+                    "entity": "BAD:0001",
+                    "verified_quote": "BAD:0001 was reported in the paper.",
+                    "page": 3,
+                    "section": "Results",
+                    "chunk_id": "chunk-1",
+                    "document_id": "doc-123",
+                }
+            ],
+        },
+        deep=True,
+    )
+    source_agent = SimpleNamespace(
+        output_type=GeneResultEnvelope,
+        tools=[],
+        instructions="Base validator instructions.",
+    )
+    captured = {}
+
+    monkeypatch.setattr(
+        "src.lib.config.agent_loader.get_agent_definition_for_package",
+        lambda package_id, agent_id: AgentDefinition(
+            folder_name="gene",
+            agent_id=agent_id,
+            name="Gene Validation",
+            package_id=package_id,
+        ),
+    )
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        lambda agent_key: source_agent,
+    )
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.resolve_tools",
+        lambda tool_ids, execution_context: [
+            SimpleNamespace(name=tool_id) for tool_id in tool_ids
+        ],
+    )
+
+    def _fake_run_sync(agent, **kwargs):
+        captured["agent"] = agent
+        captured["payload"] = json.loads(kwargs["input"])
+        tool = next(
+            tool for tool in agent.tools if tool.name == "finalize_validator_result"
+        )
+        _unwrap_function_tool(tool)(result=_result_payload(request))
+        return {"status": "resolved"}
+
+    monkeypatch.setattr("agents.Runner.run_sync", _fake_run_sync)
+
+    run_package_scoped_validator_agent(
+        request,
+        binding=cast(Any, SimpleNamespace(max_tool_calls=4)),
+        runtime_context=ValidatorRuntimeContext(document_id="doc-123", user_id="user-1"),
+    )
+
+    tool_names = [tool.name for tool in captured["agent"].tools]
+    assert tool_names == [
+        "search_document",
+        "read_chunk",
+        "read_section",
+        "read_subsection",
+        "record_evidence",
+        "list_recorded_evidence",
+        "get_recorded_evidence",
+        "attach_evidence_to_object",
+        "detach_evidence_from_object",
+        "update_recorded_evidence_metadata",
+        "finalize_validator_result",
+    ]
+    assert "Extractor-provided evidence" in captured["agent"].instructions
+    assert "document_id and user_id" not in captured["agent"].instructions
+    assert captured["payload"]["validator_runtime_capabilities"][
+        "scoped_evidence_update_available"
+    ] is True
 
 
 def test_package_scoped_validator_agent_clears_accepted_result_after_rejection(

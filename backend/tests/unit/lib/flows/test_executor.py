@@ -2043,10 +2043,14 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
         calls = []
 
-        def _fake_package_validator(request, *, binding):
+        def _fake_package_validator(request, *, binding, runtime_context=None):
             with pytest.raises(RuntimeError):
                 asyncio.get_running_loop()
-            calls.append({"request": request, "binding": binding})
+            calls.append({
+                "request": request,
+                "binding": binding,
+                "runtime_context": runtime_context,
+            })
             return {
                 "status": "resolved",
                 "request_id": request.request_id,
@@ -2090,6 +2094,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 ],
                 flow=_make_flow([]),
                 agent_context={"user_id": "curator-1"},
+                document_id="document-1",
+                user_id="curator-1",
             )
         )
 
@@ -2097,6 +2103,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert len(calls) == 1
         assert calls[0]["binding"] is binding
         assert calls[0]["request"].validator_binding_id == "fixture.identifier_lookup"
+        assert calls[0]["runtime_context"].document_id == "document-1"
+        assert calls[0]["runtime_context"].user_id == "curator-1"
         assert len(materialization_inputs) == 1
         assert materialization_inputs[0].match is match
         assert len(metadata) == 1

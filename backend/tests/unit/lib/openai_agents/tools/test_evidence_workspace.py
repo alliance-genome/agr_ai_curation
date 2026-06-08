@@ -61,6 +61,9 @@ def workspace_records():
 async def test_list_and_get_recorded_evidence_are_current_document_scoped(workspace_records):
     list_tool = evidence_workspace.create_list_recorded_evidence_tool("doc-1", "user-1")
     get_tool = evidence_workspace.create_get_recorded_evidence_tool("doc-1", "user-1")
+    workspace_records[0]["evidence_revision_history"] = [
+        {"revision": 1, "previous_source": {"verified_quote": "Previous quote."}}
+    ]
 
     listed = await list_tool()
     fetched = await get_tool("ev-active")
@@ -70,7 +73,12 @@ async def test_list_and_get_recorded_evidence_are_current_document_scoped(worksp
     assert listed["evidence_records"][0]["evidence_record_id"] == "ev-active"
     assert listed["evidence_records"][0]["source_span_count"] == 1
     assert "source_span_ids" not in listed["evidence_records"][0]
+    assert "evidence_revision_history" not in listed["evidence_records"][0]
     assert fetched["record"]["verified_quote"] == "flcn was detected in embryonic brain."
+    assert "evidence_revision_history" not in fetched["record"]
+    assert workspace_records[0]["evidence_revision_history"] == [
+        {"revision": 1, "previous_source": {"verified_quote": "Previous quote."}}
+    ]
     assert missing_other_doc["status"] == "not_found"
 
 
@@ -104,6 +112,117 @@ async def test_attach_and_detach_evidence_to_object_or_pending_ref(workspace_rec
     assert detached["record"]["envelope_targets"] == []
     assert "pending_ref_id" not in workspace_records[0]
     assert "object_id" not in workspace_records[0]
+
+
+@pytest.mark.asyncio
+async def test_attach_requires_field_path_for_new_extraction_targets(workspace_records):
+    attach_tool = evidence_workspace.create_attach_evidence_to_object_tool("doc-1", "user-1")
+
+    missing_field = await attach_tool(
+        "ev-active",
+        pending_ref_id="expression-flcn-brain",
+        field_path="",
+    )
+    missing_object = await attach_tool(
+        "ev-active",
+        field_path="expression_annotation_subject.gene_symbol",
+    )
+
+    assert missing_field == {
+        "status": "invalid_request",
+        "message": (
+            "field_path is required when attaching evidence to a new extraction target."
+        ),
+    }
+    assert missing_object == {
+        "status": "invalid_request",
+        "message": "Provide object_id or pending_ref_id plus field_path.",
+    }
+    assert "envelope_targets" not in workspace_records[0]
+
+
+@pytest.mark.asyncio
+async def test_scoped_workspace_tools_limit_ids_and_target_changes(workspace_records):
+    workspace_records.append(
+        {
+            "evidence_record_id": "ev-unscoped",
+            "entity": "other",
+            "verified_quote": "Other quote.",
+            "page": 3,
+            "section": "Results",
+            "chunk_id": "chunk-other",
+            "document_id": "doc-1",
+        }
+    )
+    list_tool = evidence_workspace.create_list_recorded_evidence_tool(
+        "doc-1",
+        "user-1",
+        workspace_records=workspace_records,
+        allowed_evidence_record_ids={"ev-active"},
+    )
+    get_tool = evidence_workspace.create_get_recorded_evidence_tool(
+        "doc-1",
+        "user-1",
+        workspace_records=workspace_records,
+        allowed_evidence_record_ids={"ev-active"},
+    )
+    attach_tool = evidence_workspace.create_attach_evidence_to_object_tool(
+        "doc-1",
+        "user-1",
+        workspace_records=workspace_records,
+        allowed_evidence_record_ids={"ev-active"},
+        required_pending_ref_id="expression-flcn-brain",
+        required_field_path="expression_annotation_subject.gene_symbol",
+    )
+    detach_tool = evidence_workspace.create_detach_evidence_from_object_tool(
+        "doc-1",
+        "user-1",
+        workspace_records=workspace_records,
+        allowed_evidence_record_ids={"ev-active"},
+        allow_detach=False,
+    )
+    update_tool = evidence_workspace.create_update_recorded_evidence_metadata_tool(
+        "doc-1",
+        "user-1",
+        workspace_records=workspace_records,
+        allowed_evidence_record_ids={"ev-active"},
+        required_field_path="expression_annotation_subject.gene_symbol",
+    )
+
+    listed = await list_tool(include_discarded=True)
+    forbidden_get = await get_tool("ev-unscoped")
+    forbidden_attach = await attach_tool(
+        "ev-active",
+        pending_ref_id="other-target",
+        field_path="expression_annotation_subject.gene_symbol",
+    )
+    attached = await attach_tool(
+        "ev-active",
+        pending_ref_id="expression-flcn-brain",
+        field_path="expression_annotation_subject.gene_symbol",
+    )
+    forbidden_detach = await detach_tool("ev-active", pending_ref_id="expression-flcn-brain")
+    forbidden_update = await update_tool("ev-active", field_path="other.field")
+
+    assert listed["count"] == 1
+    assert listed["evidence_records"][0]["evidence_record_id"] == "ev-active"
+    assert forbidden_get["status"] == "forbidden"
+    assert forbidden_get["allowed_evidence_record_ids"] == ["ev-active"]
+    assert forbidden_attach["status"] == "forbidden"
+    assert "retarget" in forbidden_attach["message"]
+    assert attached["status"] == "ok"
+    assert attached["record"]["envelope_targets"] == [
+        {
+            "pending_ref_id": "expression-flcn-brain",
+            "field_path": "expression_annotation_subject.gene_symbol",
+        }
+    ]
+    assert forbidden_detach["status"] == "forbidden"
+    assert "cannot detach" in forbidden_detach["message"]
+    assert forbidden_update["status"] == "forbidden"
+    assert forbidden_update["target_field_path"] == (
+        "expression_annotation_subject.gene_symbol"
+    )
 
 
 @pytest.mark.asyncio
@@ -202,7 +321,11 @@ async def test_record_list_attach_discard_finalize_flow_omits_discarded(workspac
         }
     )
 
-    await attach_tool("ev-active", pending_ref_id="expression-flcn-brain")
+    await attach_tool(
+        "ev-active",
+        pending_ref_id="expression-flcn-brain",
+        field_path="expression_annotation_subject.gene_symbol",
+    )
     await discard_tool("ev-weak", reason="Not specific enough")
     listed = await list_tool()
 
@@ -247,6 +370,18 @@ async def test_record_list_attach_discard_finalize_flow_omits_discarded(workspac
             ],
             "pending_ref_id": "expression-flcn-brain",
             "object_ref": {"pending_ref_id": "expression-flcn-brain"},
+            "envelope_target": {
+                "pending_ref_id": "expression-flcn-brain",
+                "field_path": "expression_annotation_subject.gene_symbol",
+            },
+            "envelope_targets": [
+                {
+                    "pending_ref_id": "expression-flcn-brain",
+                    "field_path": "expression_annotation_subject.gene_symbol",
+                }
+            ],
+            "field_path": "expression_annotation_subject.gene_symbol",
+            "field_paths": ["expression_annotation_subject.gene_symbol"],
             "evidence_record_id": "ev-active",
         }
     ]
@@ -255,3 +390,7 @@ async def test_record_list_attach_discard_finalize_flow_omits_discarded(workspac
     assert validated_record.pending_ref_id == "expression-flcn-brain"
     assert validated_record.object_ref is not None
     assert validated_record.object_ref.pending_ref_id == "expression-flcn-brain"
+    assert validated_record.envelope_targets is not None
+    assert validated_record.envelope_targets[0].field_path == (
+        "expression_annotation_subject.gene_symbol"
+    )

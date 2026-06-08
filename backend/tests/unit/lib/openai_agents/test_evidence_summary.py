@@ -133,6 +133,67 @@ def test_canonicalize_merges_live_and_payload_evidence_records():
     ]
 
 
+def test_canonicalize_replaces_same_id_record_and_preserves_revision_history():
+    payload = {
+        "items": [
+            {
+                "label": "Actin 5C",
+                "entity_type": "gene",
+                "source_mentions": ["Actin 5C"],
+                "evidence_record_ids": ["evidence-live-a"],
+            }
+        ],
+        "evidence_records": [
+            {
+                **_record(
+                    entity="Actin 5C",
+                    quote="Updated exact source sentence.",
+                    chunk_id="chunk-2",
+                    page=5,
+                ),
+                "evidence_record_id": "evidence-live-a",
+            }
+        ],
+        "run_summary": {"kept_count": 1},
+    }
+    previous_record = {
+        **_record(
+            entity="Actin 5C",
+            quote="Previous exact source sentence.",
+            chunk_id="chunk-1",
+            page=4,
+        ),
+        "evidence_record_id": "evidence-live-a",
+        "evidence_revision_history": [
+            {
+                "revision": 1,
+                "previous_source": {
+                    "verified_quote": "Earlier exact source sentence.",
+                    "chunk_id": "chunk-0",
+                },
+            }
+        ],
+    }
+
+    canonical = canonicalize_structured_result_payload(
+        payload,
+        preferred_evidence_records=[previous_record],
+    )
+
+    assert canonical["evidence_records"] == [
+        {
+            **_record(
+                entity="Actin 5C",
+                quote="Updated exact source sentence.",
+                chunk_id="chunk-2",
+                page=5,
+            ),
+            "evidence_record_id": "evidence-live-a",
+            "evidence_revision_history": previous_record["evidence_revision_history"],
+        }
+    ]
+
+
 def test_canonicalize_remaps_payload_refs_when_live_record_id_is_preferred():
     payload = {
         "items": [

@@ -587,6 +587,26 @@ object_definitions:
               range: string
               db_table: vocabularyterm
               db_column: name
+      - field_path: relation.vocabulary
+        field_type: string
+        display_name: Relation vocabulary
+        metadata:
+          validatable: true
+          validator_binding_id: relation_vocabulary_validation
+          validation_result_field: vocabulary
+          validator_state: active
+          definition_state_category: complete
+          source_of_truth: alliance_linkml
+      - field_path: relation.id
+        field_type: integer
+        display_name: Relation internal ID
+        metadata:
+          validatable: true
+          validator_binding_id: relation_vocabulary_validation
+          validation_result_field: internal_id
+          validator_state: active
+          definition_state_category: complete
+          source_of_truth: alliance_linkml
       - field_path: single_reference
         field_type: object
         display_name: Evidence reference
@@ -2101,6 +2121,13 @@ metadata:
           lookup_method:
             source: literal
             value: search_life_stage_terms
+          evidence_quotes:
+            source: evidence_record
+            output: quote_bundle
+            field_path: when_expressed_stage_name
+            allow_multiple: true
+            required: false
+            context_only: true
         expected_result_fields:
           label: when_expressed_stage_name
           curie: expression_pattern.when_expressed.developmental_stage_start.curie
@@ -2139,6 +2166,13 @@ metadata:
           lookup_method:
             source: literal
             value: search_ontology_terms
+          evidence_quotes:
+            source: evidence_record
+            output: quote_bundle
+            field_path: expression_experiment.expression_assay_used
+            allow_multiple: true
+            required: false
+            context_only: true
         expected_result_fields:
           curie: expression_experiment.expression_assay_used.curie
           name: expression_experiment.expression_assay_used.name
@@ -2182,6 +2216,13 @@ metadata:
             source: literal
             value:
               - post embryonic, pre-adult
+          evidence_quotes:
+            source: evidence_record
+            output: quote_bundle
+            field_path: expression_pattern.when_expressed.stage_uberon_slim_terms
+            allow_multiple: true
+            required: false
+            context_only: true
         expected_result_fields:
           terms: expression_pattern.when_expressed.stage_uberon_slim_terms
         required: true
@@ -2220,6 +2261,13 @@ metadata:
           lookup_method:
             source: literal
             value: search_anatomy_terms
+          evidence_quotes:
+            source: evidence_record
+            output: quote_bundle
+            field_path: expression_pattern.where_expressed.anatomical_structure
+            allow_multiple: true
+            required: false
+            context_only: true
         expected_result_fields:
           curie: expression_pattern.where_expressed.anatomical_structure.curie
           name: expression_pattern.where_expressed.anatomical_structure.name
@@ -2283,6 +2331,13 @@ metadata:
               - UBERON:0016887
               - UBERON:6005023
               - UBERON:0002539
+          evidence_quotes:
+            source: evidence_record
+            output: quote_bundle
+            field_path: expression_pattern.where_expressed.anatomical_structure_uberon_terms
+            allow_multiple: true
+            required: false
+            context_only: true
         expected_result_fields:
           terms: expression_pattern.where_expressed.anatomical_structure_uberon_terms
         required: true
@@ -2319,6 +2374,13 @@ metadata:
           lookup_method:
             source: literal
             value: search_go_terms
+          evidence_quotes:
+            source: evidence_record
+            output: quote_bundle
+            field_path: expression_pattern.where_expressed.cellular_component
+            allow_multiple: true
+            required: false
+            context_only: true
         expected_result_fields:
           curie: expression_pattern.where_expressed.cellular_component.curie
           name: expression_pattern.where_expressed.cellular_component.name
@@ -2353,6 +2415,13 @@ metadata:
           lookup_method:
             source: literal
             value: search_go_terms
+          evidence_quotes:
+            source: evidence_record
+            output: quote_bundle
+            field_path: expression_pattern.where_expressed.cellular_component_qualifiers
+            allow_multiple: true
+            required: false
+            context_only: true
         expected_result_fields:
           terms: expression_pattern.where_expressed.cellular_component_qualifiers
         required: true
@@ -2467,9 +2536,11 @@ metadata:
             context_only: true
           # EVIDENCE CONTRACT: the validator sees the backend-resolved exact source text for the
           # spans the condition was read from; the model never types the quote.
-          evidence_quote:
+          evidence_quotes:
             source: evidence_record
-            path: verified_quote
+            output: quote_bundle
+            field_path: condition_relations.conditions.condition_summary
+            allow_multiple: true
             required: false
             context_only: true
         # The composite resolves on the always-present condition_class (the experimental-variable

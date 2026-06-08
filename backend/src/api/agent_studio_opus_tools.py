@@ -362,7 +362,7 @@ GET_TRACE_CONVERSATION_TOOL = {
 
 GET_TRACE_VIEW_TOOL = {
     "name": "get_trace_view",
-    "description": "Get a specific analysis view with token metadata. Use for specialized views not covered by the primary tools. Available views: token_analysis, agent_context, pdf_citations, document_hierarchy, agent_configs, group_context, trace_summary, domain_envelope, extraction_timeline.",
+    "description": "Get a specific analysis view with token metadata. Use for specialized views not covered by the primary tools. Available views: token_analysis, agent_context, pdf_citations, document_hierarchy, agent_configs, group_context, trace_summary, domain_envelope, extraction_timeline, evidence_revisions.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -372,7 +372,7 @@ GET_TRACE_VIEW_TOOL = {
             },
             "view_name": {
                 "type": "string",
-                "enum": ["token_analysis", "agent_context", "pdf_citations", "document_hierarchy", "agent_configs", "group_context", "mod_context", "trace_summary", "domain_envelope", "extraction_timeline"],
+                "enum": ["token_analysis", "agent_context", "pdf_citations", "document_hierarchy", "agent_configs", "group_context", "mod_context", "trace_summary", "domain_envelope", "extraction_timeline", "evidence_revisions"],
                 "description": "Which view to fetch",
             },
         },
@@ -431,6 +431,25 @@ GET_EXTRACTION_TIMELINE_TOOL = {
     "name": "get_extraction_timeline",
     "description": "Get the ordered extraction timeline and OpenAI/Agents SDK tool-call observations. Use when the diagnostic report points to a candidate, event type, or tool and you need more event-level detail.",
     "input_schema": GET_EXTRACTION_DIAGNOSTIC_REPORT_TOOL["input_schema"],
+}
+
+GET_EVIDENCE_REVISIONS_TOOL = {
+    "name": "get_evidence_revisions",
+    "description": "Inspect diagnostics-only hidden evidence revision history for same-ID evidence updates and backend-refused scope mutations. Use when troubleshooting evidence quote/provenance changes, validator evidence updates, or validator attempts to modify evidence outside its supplied field/object scope. Extractors create field-level evidence; validators receive scoped quote bundles, may search/read paper, and may update the same evidence record through scoped record_evidence. Live evidence fields are authoritative.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "trace_id": {"type": "string", "description": "Langfuse trace ID."},
+            "session_id": {"type": "string", "description": "Optional Langfuse session ID for sibling trace expansion."},
+            "feedback_id": {"type": "string", "description": "Optional feedback ID linked to stored trace artifacts."},
+            "include_sibling_traces": {"type": "boolean", "description": "Include related traces from the same session when session_id is supplied.", "default": False},
+            "refresh": {"type": "boolean", "description": "Refresh cached TraceReview analysis before rendering.", "default": False},
+            "tool_name": {"type": "string", "description": "Optional tool-name filter."},
+            "event_type": {"type": "string", "description": "Optional extraction event type filter."},
+            "candidate_id": {"type": "string", "description": "Optional candidate/object ID filter."},
+        },
+        "required": ["trace_id"],
+    },
 }
 
 GET_TRACE_TREE_TOOL = {
@@ -816,6 +835,7 @@ TRACE_TOOLS = {
     "get_trace_conversation",
     "get_extraction_diagnostic_report",
     "get_extraction_timeline",
+    "get_evidence_revisions",
     "get_trace_tree",
     "get_trace_reconstruction",
     "get_trace_model_live_context",
@@ -952,6 +972,7 @@ def get_all_opus_tools(
         GET_TRACE_CONVERSATION_TOOL,
         GET_EXTRACTION_DIAGNOSTIC_REPORT_TOOL,
         GET_EXTRACTION_TIMELINE_TOOL,
+        GET_EVIDENCE_REVISIONS_TOOL,
         GET_TRACE_TREE_TOOL,
         GET_TRACE_RECONSTRUCTION_TOOL,
         GET_TRACE_MODEL_LIVE_CONTEXT_TOOL,

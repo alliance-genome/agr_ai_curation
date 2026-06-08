@@ -37,6 +37,7 @@ from ..analyzers.extraction_timeline import (
     ExtractionTimelineAnalyzer,
 )
 from .extraction_timeline_helpers import (
+    build_evidence_revisions,
     build_extraction_timeline,
     load_extraction_timeline_context,
 )
@@ -1283,6 +1284,65 @@ async def get_extraction_diagnostic_report(
     )
 
 
+@router.get(
+    "/{trace_id}/evidence_revisions",
+    response_model=ClaudeTraceResponse,
+    summary="Get evidence revision diagnostics",
+    description="""
+    Returns an opt-in diagnostics-only summary of hidden evidence revision
+    history and backend-refused evidence scope mutations. Live evidence fields
+    remain authoritative for product behavior.
+    """
+)
+async def get_evidence_revisions(
+    trace_id: Annotated[str, Path(description="Langfuse trace ID")],
+    request: Request,
+    source: str = Query(default=DEFAULT_SOURCE, description="Trace source: local, remote, or auto"),
+    session_id: Optional[str] = Query(default=None, description="Langfuse session ID for sibling-trace expansion"),
+    feedback_id: Optional[str] = Query(default=None, description="Feedback ID linked to stored trace artifacts"),
+    include_sibling_traces: bool = Query(default=False, description="Include durable events from traces in the same session"),
+    refresh: bool = Query(default=False, description="Refresh cached trace analysis before rendering"),
+    tool_name: Optional[str] = Query(default=None, description="Filter by tool name"),
+    event_type: Optional[str] = Query(default=None, description="Filter by event type"),
+    candidate_id: Optional[str] = Query(default=None, description="Filter by candidate ID"),
+    user: Dict[str, Any] = get_auth_dependency()
+) -> ClaudeTraceResponse:
+    context = await load_extraction_timeline_context(
+        trace_id=trace_id,
+        feedback_id=feedback_id,
+        include_sibling_traces=include_sibling_traces,
+        load_cached_data=lambda: _ensure_trace_analyzed(trace_id, request, source, refresh=refresh),
+        load_sibling_trace_ids=lambda: _sibling_trace_ids(
+            trace_id=trace_id,
+            source=source,
+            session_id=session_id,
+            include_sibling_traces=include_sibling_traces,
+        ),
+        load_sibling_cached_data=lambda sibling_trace_id: _ensure_trace_analyzed(
+            sibling_trace_id,
+            request,
+            source,
+            refresh=refresh,
+        ),
+        fallback_exceptions=(HTTPException,),
+    )
+    evidence_revisions = build_evidence_revisions(
+        trace_id=trace_id,
+        context=context,
+        tool_name=tool_name,
+        event_type=event_type,
+        candidate_id=candidate_id,
+        session_id=session_id,
+        feedback_id=feedback_id,
+    )
+    token_info = create_token_info_dict(evidence_revisions)
+    return ClaudeTraceResponse(
+        status="success",
+        data=evidence_revisions,
+        token_info=TokenInfo(**token_info),
+    )
+
+
 # =============================================================================
 # Generic View Endpoint (for other views)
 # =============================================================================
@@ -1295,7 +1355,8 @@ async def get_extraction_diagnostic_report(
     Get a specific analysis view with token metadata.
 
     Available views: token_analysis, agent_context, pdf_citations,
-    document_hierarchy, agent_configs, mod_context
+    document_hierarchy, agent_configs, mod_context, trace_summary,
+    domain_envelope, extraction_timeline, evidence_revisions
 
     Token cost: varies by view (check token_info in response).
     """
@@ -1311,13 +1372,41 @@ async def get_trace_view(
     valid_views = [
         "token_analysis", "agent_context", "pdf_citations",
         "document_hierarchy", "agent_configs", "mod_context", "trace_summary",
-        "domain_envelope", "extraction_timeline",
+        "domain_envelope", "extraction_timeline", "evidence_revisions",
     ]
 
     if view_name not in valid_views:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid view '{view_name}'. Valid views: {', '.join(valid_views)}"
+        )
+
+    if view_name == "evidence_revisions":
+        context = await load_extraction_timeline_context(
+            trace_id=trace_id,
+            feedback_id=None,
+            include_sibling_traces=False,
+            load_cached_data=lambda: _ensure_trace_analyzed(trace_id, request, source),
+            load_sibling_trace_ids=lambda: [],
+            load_sibling_cached_data=lambda sibling_trace_id: _ensure_trace_analyzed(
+                sibling_trace_id,
+                request,
+                source,
+            ),
+            fallback_exceptions=(HTTPException,),
+        )
+        view_data = build_evidence_revisions(
+            trace_id=trace_id,
+            context=context,
+            tool_name=None,
+            event_type=None,
+            candidate_id=None,
+        )
+        token_info = create_token_info_dict(view_data)
+        return ClaudeTraceResponse(
+            status="success",
+            data=view_data,
+            token_info=TokenInfo(**token_info),
         )
 
     cached_data = await _ensure_trace_analyzed(trace_id, request, source)

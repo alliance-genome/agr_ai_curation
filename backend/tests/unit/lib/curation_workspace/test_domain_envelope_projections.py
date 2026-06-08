@@ -282,6 +282,56 @@ def test_evidence_anchor_projection_reads_nested_extraction_metadata_records():
     assert projection.document_id == "document-from-envelope"
 
 
+def test_evidence_anchor_projection_uses_target_specific_field_paths():
+    envelope = DomainEnvelope(
+        envelope_id="env-targeted-evidence",
+        domain_pack_id="fixture-pack",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneAssertion",
+                object_id="gene-1",
+                payload={"gene": {"symbol": "abc-1", "curie": "TEST:Gene00000001"}},
+                evidence_record_ids=["evidence-shared"],
+            ),
+            CuratableObjectEnvelope(
+                object_type="GeneAssertion",
+                object_id="gene-2",
+                payload={"gene": {"symbol": "xyz-1", "curie": "TEST:Gene00000002"}},
+                evidence_record_ids=["evidence-shared"],
+            ),
+        ],
+        metadata={
+            "evidence_records": [
+                {
+                    "evidence_record_id": "evidence-shared",
+                    "verified_quote": "The source text mentioned both genes.",
+                    # Flattened paths include both targets; projection should use
+                    # envelope_targets for new target-specific evidence records.
+                    "field_paths": ["gene.symbol", "gene.curie"],
+                    "envelope_targets": [
+                        {"object_id": "gene-1", "field_path": "gene.symbol"},
+                        {"object_id": "gene-2", "field_path": "gene.curie"},
+                    ],
+                }
+            ]
+        },
+    )
+
+    projections = project_evidence_anchor_projections(
+        envelope,
+        envelope_revision=5,
+    )
+    projection_fields = {
+        (projection.object_id, projection.field_path)
+        for projection in projections
+    }
+
+    assert projection_fields == {
+        ("gene-1", "gene.symbol"),
+        ("gene-2", "gene.curie"),
+    }
+
+
 def test_evidence_anchor_projection_resolves_object_metadata_refs():
     envelope = DomainEnvelope(
         envelope_id="env-metadata-ref",

@@ -148,6 +148,7 @@ def test_langfuse_trace_tools_are_registered_and_trace_scoped():
         "search_traces",
         "get_extraction_diagnostic_report",
         "get_extraction_timeline",
+        "get_evidence_revisions",
         "get_trace_tree",
         "get_trace_reconstruction",
         "get_trace_payloads",
@@ -167,6 +168,7 @@ def test_langfuse_trace_tools_are_registered_and_trace_scoped():
         "metadata.event_payload",
     ]
     assert "extraction_timeline" in tools_by_name["get_trace_view"]["input_schema"]["properties"]["view_name"]["enum"]
+    assert "evidence_revisions" in tools_by_name["get_trace_view"]["input_schema"]["properties"]["view_name"]["enum"]
 
 
 def test_codebase_tools_are_agents_only():
@@ -220,11 +222,16 @@ async def test_handle_tool_call_new_trace_tools_forward_inputs(monkeypatch):
         captured["reconstruction"] = kwargs
         return {"status": "ok", "tool": "reconstruction"}
 
+    async def _fake_evidence_revisions(**kwargs):
+        captured["evidence_revisions"] = kwargs
+        return {"status": "ok", "tool": "evidence_revisions"}
+
     async def _fake_payload(**kwargs):
         captured["payload"] = kwargs
         return {"status": "ok", "tool": "payload"}
 
     monkeypatch.setattr(tools_module, "get_extraction_diagnostic_report", _fake_report)
+    monkeypatch.setattr(tools_module, "get_evidence_revisions", _fake_evidence_revisions)
     monkeypatch.setattr(tools_module, "get_trace_reconstruction", _fake_reconstruction)
     monkeypatch.setattr(tools_module, "get_trace_payload", _fake_payload)
 
@@ -248,6 +255,35 @@ async def test_handle_tool_call_new_trace_tools_forward_inputs(monkeypatch):
     assert captured["report"]["include_sibling_traces"] is True
     assert captured["report"]["include_raw_args"] is True
     assert captured["report"]["tool_name"] == "stage"
+
+    evidence_revisions = await api_module._handle_tool_call(
+        tool_name="get_evidence_revisions",
+        tool_input={
+            "trace_id": "trace-1",
+            "session_id": "session-1",
+            "feedback_id": "feedback-1",
+            "include_sibling_traces": True,
+            "refresh": True,
+            "tool_name": "record_evidence",
+            "event_type": "evidence.summary",
+            "candidate_id": "candidate-1",
+        },
+        context=None,
+        user_email="dev@example.org",
+        user_auth_sub="auth-sub-1",
+        messages=[],
+    )
+    assert evidence_revisions["tool"] == "evidence_revisions"
+    assert captured["evidence_revisions"] == {
+        "trace_id": "trace-1",
+        "session_id": "session-1",
+        "feedback_id": "feedback-1",
+        "include_sibling_traces": True,
+        "refresh": True,
+        "tool_name": "record_evidence",
+        "event_type": "evidence.summary",
+        "candidate_id": "candidate-1",
+    }
 
     reconstruction = await api_module._handle_tool_call(
         tool_name="get_trace_reconstruction",

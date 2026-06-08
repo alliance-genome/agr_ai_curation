@@ -106,6 +106,46 @@ def _patch_common_runtime(monkeypatch, captured):
     monkeypatch.setattr(runner, "create_supervisor_agent", lambda **_kwargs: SimpleNamespace(name="Supervisor", model="gpt-5"))
 
 
+def test_merge_evidence_records_replaces_same_id_and_preserves_revision_history():
+    existing = [
+        {
+            "evidence_record_id": "evidence-live-a",
+            "entity": "Actin 5C",
+            "verified_quote": "Previous exact source sentence.",
+            "page": 4,
+            "section": "Results",
+            "chunk_id": "chunk-1",
+            "evidence_revision_history": [
+                {
+                    "revision": 1,
+                    "previous_source": {
+                        "verified_quote": "Earlier exact source sentence.",
+                    },
+                }
+            ],
+        }
+    ]
+    incoming = [
+        {
+            "evidence_record_id": "evidence-live-a",
+            "entity": "Actin 5C",
+            "verified_quote": "Updated exact source sentence.",
+            "page": 5,
+            "section": "Results",
+            "chunk_id": "chunk-2",
+        }
+    ]
+
+    merged = runner._merge_evidence_records(existing, incoming)
+
+    assert merged == [
+        {
+            **incoming[0],
+            "evidence_revision_history": existing[0]["evidence_revision_history"],
+        }
+    ]
+
+
 def test_safe_reset_run_context_token_logs_context_mismatch(caplog):
     def _raise_context_mismatch(_token):
         raise ValueError("token was created in a different Context")

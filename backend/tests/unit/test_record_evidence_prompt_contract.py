@@ -20,6 +20,9 @@ EXTRACTOR_PROMPT_PATHS = [
     REPO_ROOT / "packages/alliance/agents/pdf/prompt.yaml",
     REPO_ROOT / "packages/alliance/agents/phenotype_extractor/prompt.yaml",
 ]
+BUILDER_EXTRACTOR_PROMPT_PATHS = [
+    path for path in EXTRACTOR_PROMPT_PATHS if path.name == "prompt.yaml" and path.parent.name != "pdf"
+]
 
 EVIDENCE_FIXTURE_DIR = REPO_ROOT / "backend/tests/fixtures/evidence"
 PDF_CORPUS_TRIAL_DIR = REPO_ROOT / "docs/design/pdf-corpus-trials"
@@ -121,6 +124,30 @@ def test_extractor_prompts_state_span_evidence_workflow():
     assert missing == []
 
 
+def test_builder_extractor_prompts_require_field_targets_and_same_id_source_updates():
+    missing: list[str] = []
+    for path in BUILDER_EXTRACTOR_PROMPT_PATHS:
+        content = " ".join(_effective_prompt_content(path).lower().split())
+        content = content.replace("object-level-only", "object-level only")
+        label = str(path.relative_to(REPO_ROOT))
+        for fragment in [
+            "attach every retained evidence record",
+            "`pending_ref_id`",
+            "at least one concrete",
+            "`field_path`",
+            "object-level only",
+            "evidence_record_id=existing_id",
+            "source quote",
+            "provenance",
+            "record_evidence",
+            "metadata",
+        ]:
+            if fragment.lower() not in content:
+                missing.append(f"{label}: {fragment}")
+
+    assert missing == []
+
+
 def test_gene_expression_prompt_contract_states_span_workspace_workflow():
     required_fragments = [
         "read_chunk.evidence_spans[].span_id",
@@ -131,7 +158,8 @@ def test_gene_expression_prompt_contract_states_span_workspace_workflow():
         "detach_evidence_from_object",
         "discard_recorded_evidence",
         "update_recorded_evidence_metadata",
-        "source quote and provenance fields are immutable",
+        "source quote and provenance fields are backend-owned",
+        "object-level-only evidence",
         "Multiple `span_ids` in one `record_evidence` call produce one evidence record",
     ]
 
@@ -194,10 +222,10 @@ def test_agent_studio_catalog_tool_inventory_exposes_span_workspace_contract():
         "record_evidence": ["snippets", "verified quote"],
         "list_recorded_evidence": ["review", "saved so far in this run"],
         "get_recorded_evidence": ["full detail"],
-        "attach_evidence_to_object": ["finding it supports"],
+        "attach_evidence_to_object": ["specific field", "supports"],
         "detach_evidence_from_object": ["wrongly tied"],
         "discard_recorded_evidence": ["wrong or too weak", "history"],
-        "update_recorded_evidence_metadata": ["editable", "cannot be changed"],
+        "update_recorded_evidence_metadata": ["editable", "record_evidence", "existing evidence_record_id"],
     }
 
     stale_hits: list[str] = []

@@ -79,6 +79,7 @@ from src.lib.prompts.context import (
     append_pending_prompt_runtime_context,
     commit_pending_prompts,
 )
+from src.lib.context import get_current_user_id
 from src.schemas.domain_validator import is_domain_validator_result_schema
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
@@ -3465,6 +3466,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
     adapter_key: Optional[str] = None,
     source_agent_key: Optional[str] = None,
     is_builder_envelope: bool = False,
+    runtime_context: Optional[Any] = None,
 ) -> str:
     """Run active domain-pack validators before extractor output reaches supervisor.
 
@@ -3638,12 +3640,16 @@ async def _dispatch_domain_envelope_validators_for_chat(
             })
 
         core_dispatch_started_at = time.monotonic()
+        dispatch_kwargs: Dict[str, Any] = {
+            "event_emitter": _emit_validator_dispatch_event,
+            "source_envelope_revision": 1,
+            "runtime_context": runtime_context,
+        }
         dispatch_result = await asyncio.to_thread(
             dispatch_active_validator_bindings,
             envelope,
             domain_pack,
-            event_emitter=_emit_validator_dispatch_event,
-            source_envelope_revision=1,
+            **dispatch_kwargs,
         )
         dispatch_phase_timings_ms["core_dispatch_ms"] = _elapsed_ms(
             core_dispatch_started_at
@@ -5554,6 +5560,10 @@ async def run_specialist_with_events(
                 tool_name=tool_name,
                 adapter_key=runtime_curation_adapter_key,
                 source_agent_key=runtime_canonical_agent_key,
+                runtime_context=_validator_runtime_context_for_chat(
+                    document_id=builder_workspace.document_id,
+                    user_id=get_current_user_id(),
+                ),
             )
         except SpecialistOutputError as exc:
             dispatch_errors = [
@@ -5608,6 +5618,10 @@ async def run_specialist_with_events(
                 adapter_key=runtime_curation_adapter_key,
                 source_agent_key=runtime_canonical_agent_key,
                 is_builder_envelope=True,
+                runtime_context=_validator_runtime_context_for_chat(
+                    document_id=builder_workspace.document_id,
+                    user_id=get_current_user_id(),
+                ),
             )
         except SpecialistOutputError as exc:
             dispatch_errors = [
@@ -5762,3 +5776,25 @@ async def run_specialist_with_events(
             final_output += nudge
 
     return final_output
+
+
+def _validator_runtime_context_for_chat(
+    *,
+    document_id: Optional[str],
+    user_id: Optional[str],
+) -> Optional[Any]:
+    normalized_document_id = str(document_id or "").strip()
+    normalized_user_id = str(user_id or "").strip()
+    if (
+        not normalized_document_id
+        or not normalized_user_id
+        or normalized_document_id == "chat-runtime"
+    ):
+        return None
+
+    from src.lib.domain_packs.validator_dispatch import ValidatorRuntimeContext
+
+    return ValidatorRuntimeContext(
+        document_id=normalized_document_id,
+        user_id=normalized_user_id,
+    )

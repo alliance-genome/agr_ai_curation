@@ -1142,6 +1142,7 @@ GET_TOOL_CALL_DETAIL_TOOL = opus_tools.GET_TOOL_CALL_DETAIL_TOOL
 GET_TRACE_CONVERSATION_TOOL = opus_tools.GET_TRACE_CONVERSATION_TOOL
 GET_EXTRACTION_DIAGNOSTIC_REPORT_TOOL = opus_tools.GET_EXTRACTION_DIAGNOSTIC_REPORT_TOOL
 GET_EXTRACTION_TIMELINE_TOOL = opus_tools.GET_EXTRACTION_TIMELINE_TOOL
+GET_EVIDENCE_REVISIONS_TOOL = opus_tools.GET_EVIDENCE_REVISIONS_TOOL
 GET_TRACE_TREE_TOOL = opus_tools.GET_TRACE_TREE_TOOL
 GET_TRACE_RECONSTRUCTION_TOOL = opus_tools.GET_TRACE_RECONSTRUCTION_TOOL
 GET_TRACE_PAYLOADS_TOOL = opus_tools.GET_TRACE_PAYLOADS_TOOL
@@ -1978,6 +1979,7 @@ async def _handle_tool_call(
         get_trace_conversation,
         get_extraction_diagnostic_report,
         get_extraction_timeline,
+        get_evidence_revisions,
         get_trace_tree,
         get_trace_reconstruction,
         get_trace_model_live_context,
@@ -2126,6 +2128,27 @@ async def _handle_tool_call(
             candidate_id=tool_input.get("candidate_id"),
         )
 
+    elif tool_name == "get_evidence_revisions":
+        trace_id = tool_input.get("trace_id")
+        if not trace_id:
+            return {
+                "status": "error",
+                "data": None,
+                "token_info": None,
+                "error": "Missing required parameter: trace_id",
+                "help": "Call search_traces if you have a session/document/run ID instead"
+            }
+        return await get_evidence_revisions(
+            trace_id=trace_id,
+            session_id=tool_input.get("session_id"),
+            feedback_id=tool_input.get("feedback_id"),
+            include_sibling_traces=tool_input.get("include_sibling_traces", False),
+            refresh=tool_input.get("refresh", False),
+            tool_name=tool_input.get("tool_name"),
+            event_type=tool_input.get("event_type"),
+            candidate_id=tool_input.get("candidate_id"),
+        )
+
     elif tool_name == "get_trace_tree":
         trace_id = tool_input.get("trace_id")
         if not trace_id:
@@ -2243,7 +2266,7 @@ async def _handle_tool_call(
                 "data": None,
                 "token_info": None,
                 "error": f"Missing required parameters: {', '.join(missing)}",
-                "help": "Valid view_name values: token_analysis, agent_context, pdf_citations, document_hierarchy, agent_configs, group_context, mod_context, trace_summary, domain_envelope, extraction_timeline"
+                "help": "Valid view_name values: token_analysis, agent_context, pdf_citations, document_hierarchy, agent_configs, group_context, mod_context, trace_summary, domain_envelope, extraction_timeline, evidence_revisions"
             }
         return await get_trace_view(trace_id=trace_id, view_name=view_name)
 

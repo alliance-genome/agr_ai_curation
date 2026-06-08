@@ -66,6 +66,7 @@ from src.schemas.curation_workspace import (
     CurationSessionListRequest,
     CurationSessionSortField,
     CurationSessionStatus,
+    CurationSessionValidationRequest,
     CurationSortDirection,
     CurationSubmissionExecuteRequest,
     CurationSubmissionPreviewRequest,
@@ -2110,6 +2111,73 @@ def test_workspace_validation_dispatches_domain_pack_and_records_envelope_revisi
     assert response.validation_snapshot.envelope_revision == 2
     assert response.candidate.projection_ref is not None
     assert response.candidate.projection_ref.envelope_revision == 2
+
+
+def test_workspace_validation_passes_document_user_runtime_context(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    loaded_pack = _loaded_museum_pack(tmp_path, title_binding_allows_opt_out=True)
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={"artifact": {"accession_id": "A-1", "title": "Bronze astrolabe"}},
+        title_binding_allows_opt_out=True,
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    assert session_row is not None
+    captured_contexts = []
+
+    monkeypatch.setattr(
+        validation_module,
+        "resolve_curation_domain_pack_by_id",
+        lambda pack_id: loaded_pack if pack_id == loaded_pack.pack_id else None,
+    )
+
+    def _dispatch(envelope, domain_pack, *, runtime_context=None, **kwargs):
+        assert domain_pack is loaded_pack
+        assert kwargs["source_envelope_revision"] == 1
+        captured_contexts.append(runtime_context)
+        return SimpleNamespace(envelope=envelope, appended_findings=())
+
+    monkeypatch.setattr(
+        validation_module,
+        "dispatch_active_validator_bindings",
+        _dispatch,
+    )
+
+    module.validate_candidate(
+        db_session,
+        seeded["candidate_id"],
+        CurationCandidateValidationRequest(
+            session_id=seeded["session_id"],
+            candidate_id=seeded["candidate_id"],
+            force=True,
+        ),
+        user_id="curator-42",
+    )
+
+    assert len(captured_contexts) == 1
+    assert captured_contexts[0].document_id == str(session_row.document_id)
+    assert captured_contexts[0].user_id == "curator-42"
+
+    captured_contexts.clear()
+    module.validate_session(
+        db_session,
+        seeded["session_id"],
+        CurationSessionValidationRequest(
+            session_id=seeded["session_id"],
+            candidate_ids=[seeded["candidate_id"]],
+            force=True,
+        ),
+        user_id="curator-43",
+    )
+
+    assert len(captured_contexts) == 1
+    assert captured_contexts[0].document_id == str(session_row.document_id)
+    assert captured_contexts[0].user_id == "curator-43"
 
 
 def test_workspace_validation_runs_package_domain_envelope_validator_before_bindings(

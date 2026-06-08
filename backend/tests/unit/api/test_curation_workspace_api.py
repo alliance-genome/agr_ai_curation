@@ -772,10 +772,11 @@ async def test_post_candidate_validation_delegates_to_service(monkeypatch):
     expected = object()
     captured: dict[str, object] = {}
 
-    def _validate_candidate(db, candidate_id, request):
+    def _validate_candidate(db, candidate_id, request, *, user_id=None):
         captured["db"] = db
         captured["candidate_id"] = candidate_id
         captured["request"] = request
+        captured["user_id"] = user_id
         return expected
 
     monkeypatch.setattr(module, "validate_candidate", _validate_candidate)
@@ -801,6 +802,7 @@ async def test_post_candidate_validation_delegates_to_service(monkeypatch):
         "db": db,
         "candidate_id": candidate_id,
         "request": request,
+        "user_id": "user-1",
     }
 
 
@@ -810,10 +812,11 @@ async def test_post_session_validation_delegates_to_service(monkeypatch):
     expected = object()
     captured: dict[str, object] = {}
 
-    def _validate_session(db, session_id, request):
+    def _validate_session(db, session_id, request, *, user_id=None):
         captured["db"] = db
         captured["session_id"] = session_id
         captured["request"] = request
+        captured["user_id"] = user_id
         return expected
 
     monkeypatch.setattr(module, "validate_session", _validate_session)
@@ -838,6 +841,7 @@ async def test_post_session_validation_delegates_to_service(monkeypatch):
         "db": db,
         "session_id": session_id,
         "request": request,
+        "user_id": "user-1",
     }
 
 

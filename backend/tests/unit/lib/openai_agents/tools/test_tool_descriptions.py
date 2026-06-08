@@ -110,6 +110,10 @@ def test_record_evidence_description_exposes_span_ids_not_quote_text(monkeypatch
 def test_evidence_workspace_descriptions_cover_review_attach_detach_discard_metadata(monkeypatch):
     monkeypatch.setattr(evidence_workspace, "function_tool", _identity_tool)
 
+    attach_tool = evidence_workspace.create_attach_evidence_to_object_tool("doc-1", "user-1")
+    attach_signature = inspect.signature(attach_tool)
+    assert attach_signature.parameters["field_path"].default is inspect.Parameter.empty
+
     docs = {
         "list_recorded_evidence": _tool_doc(
             evidence_workspace.create_list_recorded_evidence_tool("doc-1", "user-1")
@@ -117,9 +121,7 @@ def test_evidence_workspace_descriptions_cover_review_attach_detach_discard_meta
         "get_recorded_evidence": _tool_doc(
             evidence_workspace.create_get_recorded_evidence_tool("doc-1", "user-1")
         ),
-        "attach_evidence_to_object": _tool_doc(
-            evidence_workspace.create_attach_evidence_to_object_tool("doc-1", "user-1")
-        ),
+        "attach_evidence_to_object": _tool_doc(attach_tool),
         "detach_evidence_from_object": _tool_doc(
             evidence_workspace.create_detach_evidence_from_object_tool("doc-1", "user-1")
         ),
@@ -137,8 +139,8 @@ def test_evidence_workspace_descriptions_cover_review_attach_detach_discard_meta
     assert "Detach evidence from a wrong object" in docs["detach_evidence_from_object"]
     assert "Discard wrong or weak evidence" in docs["discard_recorded_evidence"]
     assert "Update only editable agent-owned evidence metadata" in docs["update_recorded_evidence_metadata"]
-    assert "Source quote" in docs["update_recorded_evidence_metadata"]
-    assert "immutable" in docs["update_recorded_evidence_metadata"]
+    assert "Correct source" in docs["update_recorded_evidence_metadata"]
+    assert "record_evidence with the existing evidence_record_id" in docs["update_recorded_evidence_metadata"]
 
     for tool_name, doc in docs.items():
         _assert_clean_doc(tool_name, doc)

@@ -68,6 +68,7 @@ def test_validate_helpers():
     tools.validate_view("summary")
     tools.validate_view("domain_envelope")
     tools.validate_view("extraction_timeline")
+    tools.validate_view("evidence_revisions")
     with pytest.raises(ValueError):
         tools.validate_view("not-a-view")
 
@@ -223,6 +224,31 @@ async def test_get_extraction_diagnostic_report_forwards_filters(monkeypatch):
     assert capture["params"]["include_sibling_traces"] is True
     assert capture["params"]["include_raw_outputs"] is True
     assert capture["params"]["tool_name"] == "resolve_domain_field_term"
+
+
+@pytest.mark.asyncio
+async def test_get_evidence_revisions_forwards_filters(monkeypatch):
+    capture = {}
+    _patch_async_client(
+        monkeypatch,
+        response=_FakeResponse(200, {"data": {"schema_version": "evidence_revisions.v1"}, "token_info": {"estimated_tokens": 80}}),
+        capture=capture,
+    )
+
+    result = await tools.get_evidence_revisions(
+        "856df16f1752cb53ee43dcb2f5ecfd16",
+        session_id="session-1",
+        include_sibling_traces=True,
+        tool_name="record_evidence",
+    )
+
+    assert result["status"] == "success"
+    assert capture["url"].endswith("/api/claude/traces/856df16f1752cb53ee43dcb2f5ecfd16/evidence_revisions")
+    assert capture["params"]["session_id"] == "session-1"
+    assert capture["params"]["include_sibling_traces"] is True
+    assert capture["params"]["tool_name"] == "record_evidence"
+    assert "include_raw_args" not in capture["params"]
+    assert "include_raw_outputs" not in capture["params"]
 
 
 @pytest.mark.asyncio

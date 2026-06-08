@@ -17,6 +17,7 @@ import os
 import time
 import uuid
 from collections import deque
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, AsyncGenerator, Dict, Any, Optional, List
 
@@ -383,7 +384,8 @@ def _merge_evidence_records(
 ) -> List[Dict[str, Any]]:
     """Merge normalized evidence records while preserving first-seen order."""
     merged: List[Dict[str, Any]] = []
-    seen: set[tuple[Any, ...]] = set()
+    indexes_by_id: Dict[str, int] = {}
+    indexes_by_key: Dict[tuple[Any, ...], int] = {}
 
     for record in [*existing, *normalize_evidence_records(incoming)]:
         key = (
@@ -395,9 +397,38 @@ def _merge_evidence_records(
             record.get("subsection"),
             record.get("figure_reference"),
         )
-        if key in seen:
+        evidence_record_id = str(record.get("evidence_record_id") or "").strip()
+        if evidence_record_id and evidence_record_id in indexes_by_id:
+            existing_index = indexes_by_id[evidence_record_id]
+            existing_record = merged[existing_index]
+            existing_key = (
+                existing_record.get("entity"),
+                existing_record.get("verified_quote"),
+                existing_record.get("page"),
+                existing_record.get("section"),
+                existing_record.get("chunk_id"),
+                existing_record.get("subsection"),
+                existing_record.get("figure_reference"),
+            )
+            if indexes_by_key.get(existing_key) == existing_index:
+                indexes_by_key.pop(existing_key, None)
+            if (
+                "evidence_revision_history" not in record
+                and existing_record.get("evidence_revision_history")
+            ):
+                record = dict(record)
+                record["evidence_revision_history"] = deepcopy(
+                    existing_record["evidence_revision_history"]
+                )
+            merged[existing_index] = record
+            indexes_by_key[key] = existing_index
             continue
-        seen.add(key)
+
+        if key in indexes_by_key:
+            continue
+        if evidence_record_id:
+            indexes_by_id[evidence_record_id] = len(merged)
+        indexes_by_key[key] = len(merged)
         merged.append(record)
 
     return merged

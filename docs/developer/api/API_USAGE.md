@@ -590,6 +590,7 @@ inspection API and are the preferred drill-down surface for Chat with Claude:
 | `GET /api/claude/traces/search` | Find traces by `session_id`, `user_id`, trace name, `document_id`, `run_id`, `extraction_id`, or bounded timestamp window. |
 | `GET /api/claude/traces/{trace_id}/diagnostic_report` | Concise extraction, builder, tool, validation, and domain-envelope diagnostics. |
 | `GET /api/claude/traces/{trace_id}/extraction_timeline` | Ordered extraction events and OpenAI/Agents SDK tool-call observations with filters. |
+| `GET /api/claude/traces/{trace_id}/evidence_revisions` | Diagnostics-only evidence quote/provenance revision history and validator scope refusals. |
 | `GET /api/claude/traces/{trace_id}/langfuse_tree` | Parent/child observation tree with payload references and usage/cost summaries. |
 | `GET /api/claude/traces/{trace_id}/langfuse_reconstruction` | Chronological model/tool/event reconstruction, paginated by `limit`/`offset`. |
 | `GET /api/claude/traces/{trace_id}/langfuse_payloads` | Payload inventory with IDs, sizes, hashes, and previews. |
@@ -755,7 +756,8 @@ Access other analysis views with token metadata.
 
 ```bash
 # Available views: token_analysis, agent_context, pdf_citations,
-#                  document_hierarchy, agent_configs, mod_context, trace_summary
+#                  document_hierarchy, agent_configs, mod_context, trace_summary,
+#                  domain_envelope, extraction_timeline, evidence_revisions
 curl -s http://localhost:8001/api/claude/traces/{trace_id}/views/pdf_citations | jq
 ```
 
@@ -829,6 +831,7 @@ Opus has access to these token-aware tools during analysis:
 | `get_trace_summary` | ~500 | Lightweight overview (ALWAYS called first) |
 | `get_extraction_diagnostic_report` | compact/varies | Extraction, builder, validator, domain-envelope diagnostics |
 | `get_extraction_timeline` | varies | Ordered extraction events and tool observations |
+| `get_evidence_revisions` | compact/varies | Evidence quote/provenance source updates and validator scope refusals |
 | `get_trace_reconstruction` | varies | Chronological Langfuse model/tool/event reconstruction |
 | `get_trace_payloads` | compact/varies | Payload inventory with IDs, sizes, hashes, previews |
 | `get_trace_payload` | chunked | Exact prompt/model/tool payload chunks |

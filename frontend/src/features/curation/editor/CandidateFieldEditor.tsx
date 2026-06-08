@@ -856,6 +856,15 @@ function evidenceQuote(projection: DomainEnvelopeEvidenceAnchorProjection): stri
     ?? '[missing evidence text]'
 }
 
+function quotePreview(quote: string): string {
+  const compactQuote = quote.replace(/\s+/g, ' ').trim()
+  if (compactQuote.length <= 132) {
+    return compactQuote
+  }
+
+  return `${compactQuote.slice(0, 129).trimEnd()}...`
+}
+
 function evidenceProjectionCommand(
   projection: DomainEnvelopeEvidenceAnchorProjection,
 ): EvidenceNavigationCommand {
@@ -911,16 +920,61 @@ function FieldEvidenceSlot({
           sectionTitle,
           subsectionTitle,
         })
+        const preview = quotePreview(quote)
 
         return (
-          <Tooltip
-            arrow
+          <Box
+            component="details"
             key={projection.anchor_id}
-            placement="top"
-            title={quote}
+            sx={{
+              color: 'text.secondary',
+              flex: '1 1 240px',
+              maxWidth: '100%',
+              minWidth: 0,
+              width: '100%',
+              '& summary': {
+                alignItems: 'center',
+                backgroundColor: theme.palette.background.paper,
+                border: `1px solid ${alpha(theme.palette.divider, 0.84)}`,
+                borderRadius: 1,
+                boxShadow: `0 1px 0 ${alpha(theme.palette.common.black, 0.04)}`,
+                color: 'text.secondary',
+                cursor: 'pointer',
+                display: 'grid',
+                gap: 0.55,
+                gridTemplateColumns: 'auto auto minmax(0, 1fr)',
+                lineHeight: 1.35,
+                listStyle: 'none',
+                minHeight: 32,
+                outline: 0,
+                px: 0.85,
+                py: 0.45,
+                transition: 'background-color 160ms cubic-bezier(0.2, 0, 0, 1), border-color 160ms cubic-bezier(0.2, 0, 0, 1), box-shadow 160ms cubic-bezier(0.2, 0, 0, 1)',
+                userSelect: 'none',
+                '&:hover': {
+                  backgroundColor: alpha(theme.palette.primary.main, 0.04),
+                  borderColor: alpha(theme.palette.primary.main, 0.42),
+                  boxShadow: `0 1px 0 ${alpha(theme.palette.primary.main, 0.12)}`,
+                },
+              },
+              '& summary::-webkit-details-marker': {
+                display: 'none',
+              },
+              '& summary .field-evidence-details-caret': {
+                color: alpha(theme.palette.text.secondary, 0.82),
+                transition: 'transform 160ms cubic-bezier(0.2, 0, 0, 1)',
+              },
+              '&[open] summary .field-evidence-details-caret': {
+                transform: 'rotate(180deg)',
+              },
+              '& summary:focus-visible': {
+                boxShadow: `0 0 0 2px ${alpha(theme.palette.primary.main, 0.38)}`,
+              },
+            }}
           >
-            <ButtonBase
+            <Box
               aria-label={`Highlight field evidence ${index + 1}: ${quote}`}
+              component="summary"
               data-testid={`field-evidence-projection-${projection.anchor_id}`}
               onClick={() =>
                 dispatchEvidenceProjection(projection, {
@@ -928,25 +982,61 @@ function FieldEvidenceSlot({
                   fieldPath: projection.field_path,
                   objectId: projection.object_id,
                 })}
+              role="button"
+            >
+              <ExpandMoreIcon className="field-evidence-details-caret" sx={{ fontSize: 16 }} />
+              <Typography
+                component="span"
+                sx={{
+                  color: 'text.primary',
+                  fontSize: '0.72rem',
+                  fontWeight: 800,
+                  letterSpacing: 0,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                Evidence quote
+              </Typography>
+              <Typography
+                component="span"
+                sx={{
+                  fontSize: theme.typography.caption.fontSize,
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {label} · {preview}
+              </Typography>
+            </Box>
+            <Stack
+              spacing={0.45}
               sx={{
-                px: 0.9,
-                py: 0.35,
-                borderRadius: 999,
-                border: `1px solid ${alpha(theme.palette.divider, 0.82)}`,
-                color: theme.palette.text.secondary,
-                fontSize: theme.typography.caption.fontSize,
-                fontWeight: 700,
-                minHeight: 24,
-                '&:hover': {
-                  borderColor: alpha(theme.palette.primary.main, 0.72),
-                  backgroundColor: alpha(theme.palette.primary.main, 0.1),
-                  color: theme.palette.primary.light,
-                },
+                backgroundColor: theme.palette.background.paper,
+                border: `1px solid ${alpha(theme.palette.divider, 0.72)}`,
+                borderRadius: 1,
+                borderTop: 0,
+                color: 'text.primary',
+                px: 1,
+                py: 0.75,
               }}
             >
-              {label}
-            </ButtonBase>
-          </Tooltip>
+              <Typography
+                sx={{
+                  fontSize: '0.78rem',
+                  fontStyle: 'italic',
+                  lineHeight: 1.5,
+                }}
+                variant="body2"
+              >
+                &ldquo;{quote}&rdquo;
+              </Typography>
+              <Typography color="text.secondary" sx={{ fontSize: '0.68rem' }} variant="caption">
+                {label}
+              </Typography>
+            </Stack>
+          </Box>
         )
       })}
     </>

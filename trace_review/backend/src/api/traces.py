@@ -33,6 +33,7 @@ from ..analyzers.extraction_timeline import (
     ExtractionTimelineAnalyzer,
 )
 from .extraction_timeline_helpers import (
+    build_evidence_revisions,
     build_extraction_timeline,
     load_extraction_timeline_context,
 )
@@ -49,7 +50,7 @@ ALL_VIEWS = [
     "summary", "conversation", "tool_calls",
     "pdf_citations", "token_analysis", "agent_context", "trace_summary",
     "document_hierarchy", "agent_configs", "group_context", "domain_envelope",
-    "extraction_timeline",
+    "extraction_timeline", "evidence_revisions",
 ]
 
 # Group descriptions for display (Alliance MODs as default groups)
@@ -798,7 +799,7 @@ async def get_trace_view(
     """
     cache_manager = request.app.state.cache_manager
 
-    if view_name == "extraction_timeline":
+    if view_name in {"extraction_timeline", "evidence_revisions"}:
         async def load_cached_data() -> Dict[str, Any]:
             cached_data, _cache_status, _from_cache = _get_or_analyze_trace_export(
                 trace_id,
@@ -836,17 +837,28 @@ async def get_trace_view(
                     detail=f"Trace {trace_id} not found in Langfuse ({source}): {str(exc)}",
                 ),
             )
-            timeline = build_extraction_timeline(
-                trace_id=trace_id,
-                context=context,
-                include_raw_args=include_raw_args,
-                include_raw_outputs=include_raw_outputs,
-                tool_name=tool_name,
-                event_type=event_type,
-                candidate_id=candidate_id,
-                session_id=session_id,
-                feedback_id=feedback_id,
-            )
+            if view_name == "evidence_revisions":
+                view_data = build_evidence_revisions(
+                    trace_id=trace_id,
+                    context=context,
+                    tool_name=tool_name,
+                    event_type=event_type,
+                    candidate_id=candidate_id,
+                    session_id=session_id,
+                    feedback_id=feedback_id,
+                )
+            else:
+                view_data = build_extraction_timeline(
+                    trace_id=trace_id,
+                    context=context,
+                    include_raw_args=include_raw_args,
+                    include_raw_outputs=include_raw_outputs,
+                    tool_name=tool_name,
+                    event_type=event_type,
+                    candidate_id=candidate_id,
+                    session_id=session_id,
+                    feedback_id=feedback_id,
+                )
         except TraceAnalysisError as e:
             logger.exception("Error analyzing trace: %s", e)
             raise HTTPException(
@@ -858,7 +870,7 @@ async def get_trace_view(
             "view": view_name,
             "trace_id": trace_id,
             "cached_at": context.cached_data.get("cached_at"),
-            "data": timeline,
+            "data": view_data,
         }
 
     cached_data = cache_manager.get(trace_id)

@@ -72,6 +72,7 @@ from src.lib.domain_packs.validation_registry import (
 )
 from src.lib.domain_packs.validation_findings import append_validation_findings_to_envelope
 from src.lib.domain_packs.validator_dispatch import (
+    ValidatorRuntimeContext,
     preflight_unresolved_validator_result,
     run_package_scoped_validator_agent,
     unresolved_validator_result_for_dispatch_problem,
@@ -1506,6 +1507,8 @@ async def _collect_flow_validator_materialization_inputs(
     groups: list[dict[str, Any]],
     flow: CurationFlow,
     agent_context: Mapping[str, Any],
+    document_id: str | None = None,
+    user_id: str | None = None,
 ) -> tuple[
     list[ValidatorResultMaterializationInput],
     list[ValidationFinding],
@@ -1521,6 +1524,10 @@ async def _collect_flow_validator_materialization_inputs(
     materialization_inputs: list[ValidatorResultMaterializationInput] = []
     selector_findings: list[ValidationFinding] = []
     result_metadata: list[dict[str, Any]] = []
+    runtime_context = _validator_runtime_context_for_flow(
+        document_id=document_id,
+        user_id=user_id,
+    )
 
     for group in groups:
         state = str(group.get("state") or "")
@@ -1633,10 +1640,14 @@ async def _collect_flow_validator_materialization_inputs(
                             source_envelope_revision=source_envelope_revision,
                         )
                     else:
+                        validator_kwargs: dict[str, Any] = {
+                            "binding": match.binding,
+                            "runtime_context": runtime_context,
+                        }
                         raw_output = await asyncio.to_thread(
                             run_package_scoped_validator_agent,
                             request,
-                            binding=match.binding,
+                            **validator_kwargs,
                         )
                     validator_result = validator_result_from_agent_output(
                         raw_output,
@@ -1710,6 +1721,21 @@ def _source_envelope_has_validator_finding(
         if _validator_finding_target_matches(target, match):
             return True
     return False
+
+
+def _validator_runtime_context_for_flow(
+    *,
+    document_id: str | None,
+    user_id: str | None,
+) -> ValidatorRuntimeContext | None:
+    normalized_document_id = str(document_id or "").strip()
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_document_id or not normalized_user_id:
+        return None
+    return ValidatorRuntimeContext(
+        document_id=normalized_document_id,
+        user_id=normalized_user_id,
+    )
 
 
 def _validator_finding_target_matches(
@@ -1876,6 +1902,8 @@ async def _execute_validation_groups_for_step(
                 groups=groups,
                 flow=flow,
                 agent_context=agent_context,
+                document_id=document_id,
+                user_id=user_id,
             )
         )
         phase_timings_ms["collect_materialization_inputs_ms"] = _elapsed_ms(

@@ -68,6 +68,7 @@ from src.lib.curation_workspace.session_types import (
 from src.lib.curation_workspace.session_validation_service import (
     _apply_candidate_validation,
     _load_candidate_for_write,
+    _validator_runtime_context_for_candidate,
 )
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.schemas.curation_workspace import (
@@ -598,6 +599,10 @@ def update_candidate_draft(
             candidate,
             force=True,
             validated_at=now,
+            runtime_context=_validator_runtime_context_for_candidate(
+                candidate,
+                user_id=_actor_user_id(actor_claims),
+            ),
             field_keys=changed_field_keys,
         )
 
@@ -633,6 +638,14 @@ def update_candidate_draft(
         validation_snapshot=validation_snapshot,
         action_log_entry=_action_log_entry(action_log_row),
     )
+
+
+def _actor_user_id(actor_claims: Mapping[str, Any]) -> str | None:
+    value = actor_claims.get("sub") or actor_claims.get("uid")
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _domain_envelope_candidate(candidate: CurationCandidate) -> bool:

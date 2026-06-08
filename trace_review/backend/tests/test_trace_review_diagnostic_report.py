@@ -170,6 +170,78 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(view_response["data"]["schema_version"], "extraction_timeline_analyzer.v1")
         self.assertEqual(view_response["data"]["reasoning_summary"]["status"], "unavailable")
 
+    @patch("src.analyzers.extraction_timeline.ExtractionTimelineAnalyzer.load_durable_events")
+    async def test_trace_review_endpoint_renders_evidence_revisions_view(
+        self,
+        load_durable_events: Mock,
+    ):
+        request = self._make_request()
+        request.app.state.cache_manager.set(
+            "trace-extraction-123",
+            {
+                "analyzer_schema_version": traces.EXTRACTION_TIMELINE_ANALYZER_SCHEMA_VERSION,
+                "raw_trace": {"id": "trace-extraction-123", "name": "gene expression extraction"},
+                "observations": [],
+                "cached_at": "2026-06-08T00:00:00Z",
+            },
+        )
+        load_durable_events.return_value = [
+            {
+                "schema_version": "extraction_trace_event.v1",
+                "event_type": "evidence.summary",
+                "event_id": "evt-evidence",
+                "sequence": 1,
+                "trace_id": "trace-extraction-123",
+                "observation_id": "obs-root",
+                "domain_pack_id": "agr.alliance.gene_expression",
+                "tool_call_id": "call-record-evidence",
+                "input_summary": {},
+                "output_summary": {
+                    "preview": {
+                        "evidence_records": [
+                            {
+                                "evidence_record_id": "ev-1",
+                                "verified_quote": "Updated exact quote.",
+                                "evidence_revision_history": [
+                                    {
+                                        "revision": 1,
+                                        "previous_source": {
+                                            "verified_quote": "Earlier broad quote."
+                                        },
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    "bounded": True,
+                },
+                "validation": {},
+                "metadata": {"tool_name": "record_evidence"},
+                "timestamp": "2026-06-08T00:00:01Z",
+            }
+        ]
+
+        response = await traces.get_trace_view(
+            "trace-extraction-123",
+            "evidence_revisions",
+            request,
+            source="auto",
+            session_id=None,
+            feedback_id=None,
+            include_sibling_traces=False,
+            refresh=False,
+            include_raw_args=False,
+            include_raw_outputs=False,
+            tool_name=None,
+            event_type=None,
+            candidate_id=None,
+        )
+
+        self.assertEqual(response["view"], "evidence_revisions")
+        self.assertIsNotNone(response["cached_at"])
+        self.assertEqual(response["data"]["schema_version"], "evidence_revisions.v1")
+        self.assertEqual(response["data"]["summary"]["revision_count"], 1)
+
     @patch(
         "src.api.extraction_timeline_helpers.fetch_feedback_trace_artifacts",
         return_value={
@@ -326,7 +398,12 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
             request,
             source="auto",
             session_id=None,
+            feedback_id=None,
             include_sibling_traces=False,
+            refresh=False,
+            tool_name=None,
+            event_type=None,
+            candidate_id=None,
         )
 
         extractor_cls.assert_called_once_with(source="local")
@@ -334,6 +411,176 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.data["trace_id"], "trace-extraction-123")
         self.assertEqual(response.data["summary"]["reasoning_summary_status"], "unavailable")
         self.assertGreaterEqual(response.token_info.estimated_tokens, 1)
+
+    @patch("src.analyzers.extraction_timeline.ExtractionTimelineAnalyzer.load_durable_events")
+    @patch("src.analyzers.agent_config.AgentConfigAnalyzer.extract_agent_configs", return_value={})
+    @patch("src.analyzers.document_hierarchy.DocumentHierarchyAnalyzer.analyze", return_value={})
+    @patch(
+        "src.api.claude.TraceSummaryAnalyzer.analyze",
+        return_value={"has_errors": False, "domain_envelope": {"found": False, "summary": {}}},
+    )
+    @patch("src.analyzers.agent_context.AgentContextAnalyzer.analyze", return_value={})
+    @patch("src.analyzers.token_analysis.TokenAnalysisAnalyzer.analyze", return_value={})
+    @patch("src.analyzers.pdf_citations.PDFCitationsAnalyzer.analyze", return_value={})
+    @patch("src.api.claude.ToolCallAnalyzer.extract_tool_calls", return_value={"total_count": 0, "unique_tools": [], "tool_calls": [], "duplicates": {}})
+    @patch("src.api.claude.ConversationAnalyzer.extract_conversation", return_value={"user_input": "Question", "assistant_response": "N/A"})
+    @patch("src.api.claude.TraceExtractor")
+    async def test_claude_evidence_revisions_endpoint_returns_token_metadata(
+        self,
+        extractor_cls: Mock,
+        _conversation: Mock,
+        _tool_calls: Mock,
+        _pdf_citations: Mock,
+        _token_analysis: Mock,
+        _agent_context: Mock,
+        _trace_summary: Mock,
+        _document_hierarchy: Mock,
+        _agent_configs: Mock,
+        load_durable_events: Mock,
+    ):
+        request = self._make_request()
+        extractor_cls.return_value.extract_complete_trace.return_value = self._make_trace_data()
+        load_durable_events.return_value = [
+            {
+                "schema_version": "extraction_trace_event.v1",
+                "event_type": "evidence.summary",
+                "event_id": "evt-evidence",
+                "sequence": 1,
+                "trace_id": "trace-extraction-123",
+                "observation_id": "obs-root",
+                "domain_pack_id": "agr.alliance.gene_expression",
+                "tool_call_id": "call-record-evidence",
+                "input_summary": {},
+                "output_summary": {
+                    "preview": {
+                        "evidence_records": [
+                            {
+                                "evidence_record_id": "ev-1",
+                                "verified_quote": "Updated exact quote.",
+                                "field_path": "expression_pattern.where_expressed.cellular_component",
+                                "evidence_revision_history": [
+                                    {
+                                        "revision": 1,
+                                        "replaced_at": "2026-06-08T00:00:00Z",
+                                        "previous_source": {
+                                            "verified_quote": "Earlier broad quote.",
+                                            "page": 3,
+                                        },
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    "bounded": True,
+                },
+                "validation": {},
+                "metadata": {
+                    "tool_name": "record_evidence",
+                    "agent": "validator:cellular_component",
+                },
+                "timestamp": "2026-06-08T00:00:01Z",
+            }
+        ]
+
+        response = await claude.get_evidence_revisions(
+            "trace-extraction-123",
+            request,
+            source="auto",
+            session_id=None,
+            feedback_id=None,
+            include_sibling_traces=False,
+            refresh=False,
+            tool_name=None,
+            event_type=None,
+            candidate_id=None,
+        )
+
+        extractor_cls.assert_called_with(source="local")
+        self.assertEqual(response.status, "success")
+        self.assertEqual(response.data["schema_version"], "evidence_revisions.v1")
+        self.assertEqual(response.data["summary"]["revision_count"], 1)
+        self.assertEqual(
+            response.data["evidence_records"][0]["revisions"][0]["before_quote_preview"],
+            "Earlier broad quote.",
+        )
+        self.assertNotIn("evidence_revision_history", json.dumps(response.data))
+        self.assertGreaterEqual(response.token_info.estimated_tokens, 1)
+
+    @patch("src.analyzers.extraction_timeline.ExtractionTimelineAnalyzer.load_durable_events")
+    @patch("src.analyzers.agent_config.AgentConfigAnalyzer.extract_agent_configs", return_value={})
+    @patch("src.analyzers.document_hierarchy.DocumentHierarchyAnalyzer.analyze", return_value={})
+    @patch(
+        "src.api.claude.TraceSummaryAnalyzer.analyze",
+        return_value={"has_errors": False, "domain_envelope": {"found": False, "summary": {}}},
+    )
+    @patch("src.analyzers.agent_context.AgentContextAnalyzer.analyze", return_value={})
+    @patch("src.analyzers.token_analysis.TokenAnalysisAnalyzer.analyze", return_value={})
+    @patch("src.analyzers.pdf_citations.PDFCitationsAnalyzer.analyze", return_value={})
+    @patch("src.api.claude.ToolCallAnalyzer.extract_tool_calls", return_value={"total_count": 0, "unique_tools": [], "tool_calls": [], "duplicates": {}})
+    @patch("src.api.claude.ConversationAnalyzer.extract_conversation", return_value={"user_input": "Question", "assistant_response": "N/A"})
+    @patch("src.api.claude.TraceExtractor")
+    async def test_claude_generic_view_renders_evidence_revisions(
+        self,
+        extractor_cls: Mock,
+        _conversation: Mock,
+        _tool_calls: Mock,
+        _pdf_citations: Mock,
+        _token_analysis: Mock,
+        _agent_context: Mock,
+        _trace_summary: Mock,
+        _document_hierarchy: Mock,
+        _agent_configs: Mock,
+        load_durable_events: Mock,
+    ):
+        request = self._make_request()
+        extractor_cls.return_value.extract_complete_trace.return_value = self._make_trace_data()
+        load_durable_events.return_value = [
+            {
+                "schema_version": "extraction_trace_event.v1",
+                "event_type": "evidence.summary",
+                "event_id": "evt-evidence",
+                "sequence": 1,
+                "trace_id": "trace-extraction-123",
+                "observation_id": "obs-root",
+                "domain_pack_id": "agr.alliance.gene_expression",
+                "tool_call_id": "call-record-evidence",
+                "input_summary": {},
+                "output_summary": {
+                    "preview": {
+                        "evidence_records": [
+                            {
+                                "evidence_record_id": "ev-1",
+                                "verified_quote": "Updated exact quote.",
+                                "evidence_revision_history": [
+                                    {
+                                        "revision": 1,
+                                        "previous_source": {
+                                            "verified_quote": "Earlier broad quote."
+                                        },
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    "bounded": True,
+                },
+                "validation": {},
+                "metadata": {"tool_name": "record_evidence"},
+                "timestamp": "2026-06-08T00:00:01Z",
+            }
+        ]
+
+        response = await claude.get_trace_view(
+            "trace-extraction-123",
+            "evidence_revisions",
+            request,
+            source="auto",
+        )
+
+        self.assertEqual(response.status, "success")
+        self.assertEqual(response.data["schema_version"], "evidence_revisions.v1")
+        self.assertEqual(response.data["summary"]["revision_count"], 1)
+        self.assertNotIn("evidence_revision_history", json.dumps(response.data))
 
     @patch("src.analyzers.agent_config.AgentConfigAnalyzer.extract_agent_configs", return_value={})
     @patch("src.analyzers.document_hierarchy.DocumentHierarchyAnalyzer.analyze", return_value={})

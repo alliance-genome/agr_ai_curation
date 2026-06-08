@@ -342,6 +342,25 @@ def test_gene_expression_domain_pack_is_bundled_with_concrete_metadata():
             },
         ],
     }
+    fields_by_path = {field.field_path: field for field in curatable_unit.fields}
+    assert fields_by_path["relation.vocabulary"].field_type is (
+        DomainPackFieldType.STRING
+    )
+    assert fields_by_path["relation.vocabulary"].metadata[
+        "validation_result_field"
+    ] == "vocabulary"
+    assert fields_by_path["relation.id"].field_type is DomainPackFieldType.INTEGER
+    assert fields_by_path["relation.id"].metadata[
+        "validation_result_field"
+    ] == "internal_id"
+
+    hidden_relation_fields = {"relation.vocabulary", "relation.id"}
+    workspace_display = curatable_unit.metadata["workspace_display"]
+    assert hidden_relation_fields.isdisjoint(workspace_display["summary_fields"])
+    assert all(
+        hidden_relation_fields.isdisjoint(group["fields"])
+        for group in workspace_display["groups"]
+    )
 
     validators = metadata.metadata["validators"]
     assert tuple(validators) == GENE_EXPRESSION_VALIDATOR_STATES
@@ -543,6 +562,11 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
     assert active_bindings["relation_vocabulary_validation"].field_paths == (
         "relation.name",
     )
+    assert active_bindings["relation_vocabulary_validation"].expected_result_fields == {
+        "term_name": "relation.name",
+        "vocabulary": "relation.vocabulary",
+        "internal_id": "relation.id",
+    }
     assert active_bindings["subject_gene_validation"].validator_agent is not None
     assert active_bindings["subject_gene_validation"].validator_agent.agent_id == (
         "gene_validation"
@@ -755,6 +779,14 @@ def test_gene_expression_context_ontology_requests_are_field_scoped():
         "lookup_method": "search_anatomy_terms",
     }
     assert anatomy_request.input_selectors["data_provider"]["context_only"] is True
+    assert anatomy_request.input_selectors["evidence_quotes"] == {
+        "source": "evidence_record",
+        "field_path": "expression_pattern.where_expressed.anatomical_structure",
+        "output": "quote_bundle",
+        "required": False,
+        "allow_multiple": True,
+        "context_only": True,
+    }
 
     stage_uberon_match = _active_binding_match(
         envelope,
@@ -812,6 +844,32 @@ def test_gene_expression_context_ontology_requests_are_field_scoped():
             "expression_pattern.where_expressed.cellular_component_qualifiers"
         )
     }
+
+
+def test_gene_expression_field_scoped_evidence_quote_bundle_selected_from_nested_metadata():
+    envelope = _converted_tmem67_envelope()
+    evidence_records = envelope.metadata["extraction_metadata"]["evidence_records"]
+    evidence_records[0]["field_paths"] = [
+        "expression_pattern.where_expressed.anatomical_structure"
+    ]
+
+    match = _active_binding_match(
+        envelope,
+        "expression_anatomical_structure_validation",
+    )
+    request = build_domain_validation_request(match).request
+
+    assert request is not None
+    assert request.selected_inputs["evidence_quotes"] == [
+        {
+            "evidence_record_id": "evidence-tmem67-metanephros-1",
+            "field_path": "expression_pattern.where_expressed.anatomical_structure",
+            "verified_quote": (
+                "Tmem67 expression was detected in the metanephros at TS26 "
+                "by reverse transcription polymerase chain reaction assay."
+            ),
+        }
+    ]
 
 
 def test_gene_expression_assay_materializes_from_validator_result():
@@ -886,6 +944,53 @@ def test_gene_expression_assay_materializes_from_validator_result():
         "expression_experiment.expression_assay_used.curie": "resolved",
         "expression_experiment.expression_assay_used.name": "resolved",
     }
+
+
+def test_gene_expression_relation_identity_materializes_from_validator_result():
+    envelope = _converted_tmem67_envelope()
+    match = _active_binding_match(envelope, "relation_vocabulary_validation")
+    request = build_domain_validation_request(match).request
+    assert request is not None
+    assert request.selected_inputs == {
+        "vocabulary": "Expression Relation",
+        "term_name": "is_expressed_in",
+    }
+    assert request.expected_result_fields == {
+        "term_name": "relation.name",
+        "vocabulary": "relation.vocabulary",
+        "internal_id": "relation.id",
+    }
+
+    result = materialize_validator_results_into_envelope(
+        envelope,
+        _gene_expression_pack().metadata,
+        [
+            ValidatorResultMaterializationInput(
+                match=match,
+                request=request,
+                result=_validator_result(
+                    request,
+                    status="resolved",
+                    resolved_values={
+                        "term_name": "is_expressed_in",
+                        "vocabulary": "Expression Relation",
+                        "internal_id": 12345,
+                    },
+                ),
+            )
+        ],
+    )
+
+    relation = result.envelope.objects[0].payload["relation"]
+    assert relation == {
+        "name": "is_expressed_in",
+        "vocabulary": "Expression Relation",
+        "id": 12345,
+    }
+    assert not any(
+        finding.code == "domain_pack.validator_expected_field_unmapped"
+        for finding in result.appended_findings
+    )
 
 
 def test_gene_expression_conversion_preserves_no_match_assay_label_for_validation():
@@ -1171,10 +1276,27 @@ def test_gene_expression_stage_and_site_terms_materialize_from_validator_results
     assert stage_patch["original_values"] == {
         "when_expressed_stage_name": "TS26"
     }
-    assert [finding.status.value for finding in result.appended_findings] == [
-        "resolved",
-        "resolved",
-    ]
+    resolved_status_by_path = {
+        finding.field_ref.field_path: finding.status.value
+        for finding in result.appended_findings
+        if finding.field_ref is not None
+    }
+    assert resolved_status_by_path == {
+        "when_expressed_stage_name": "resolved",
+        "expression_pattern.when_expressed.developmental_stage_start.curie": (
+            "resolved"
+        ),
+        "expression_pattern.when_expressed.developmental_stage_start.name": (
+            "resolved"
+        ),
+        "expression_pattern.where_expressed.anatomical_structure": "resolved",
+        "expression_pattern.where_expressed.anatomical_structure.curie": (
+            "resolved"
+        ),
+        "expression_pattern.where_expressed.anatomical_structure.name": (
+            "resolved"
+        ),
+    }
 
 
 def test_gene_expression_slim_and_qualifier_arrays_materialize_from_validator_results():
@@ -1488,9 +1610,8 @@ def test_gene_expression_context_ontology_unresolved_outcomes_stay_field_address
         "expression_pattern.where_expressed.anatomical_structure"
     )
     assert finding.details["validation_result"]["status"] == "unresolved"
-    assert finding.details["validation_result"]["lookup_attempts"][0]["outcome"] == (
-        lookup_outcome
-    )
+    assert finding.details["validation_result"]["lookup_attempt_count"] == 1
+    assert finding.details["validation_result"]["candidate_count"] == 1
     assert finding.details["lookup_attempts"][0]["lookup_status"] == expected_status
 
 
@@ -2325,6 +2446,14 @@ def test_gene_expression_condition_binding_scoped_and_shaped():
         "condition_relations.condition_relation_type.name"
     )
     assert composite["input_fields"]["condition_relation_type"]["context_only"] is True
+    assert composite["input_fields"]["evidence_quotes"] == {
+        "source": "evidence_record",
+        "output": "quote_bundle",
+        "field_path": "condition_relations.conditions.condition_summary",
+        "allow_multiple": True,
+        "required": False,
+        "context_only": True,
+    }
     assert composite["expected_result_fields"] == {
         "condition_class_curie": "condition_relations.conditions.condition_class.curie"
     }
@@ -2396,6 +2525,18 @@ def _gene_expression_builder_evidence_records() -> list[dict[str, Any]]:
             "page": 3,
             "section": "Results",
             "chunk_id": "chunk-1",
+            "envelope_target": {
+                "pending_ref_id": "gene-expression-annotation-pef-1",
+                "object_type": GENE_EXPRESSION_OBJECT_TYPE,
+                "field_path": "expression_pattern.where_expressed.anatomical_structure",
+            },
+            "envelope_targets": [
+                {
+                    "pending_ref_id": "gene-expression-annotation-pef-1",
+                    "object_type": GENE_EXPRESSION_OBJECT_TYPE,
+                    "field_path": "expression_pattern.where_expressed.anatomical_structure",
+                }
+            ],
         }
     ]
 
@@ -2547,6 +2688,45 @@ def _materialize_gene_expression_candidate(staged_fields: dict[str, Any]) -> Any
     )
 
 
+def test_gene_expression_builder_rejects_object_level_only_evidence():
+    staged_fields = _gene_expression_builder_staged_fields()
+    workspace = ExtractionBuilderWorkspace(
+        run_id="gene-expression-builder-missing-field-evidence-run",
+        domain_pack_id=GENE_EXPRESSION_DOMAIN_PACK_ID,
+        agent_id="gene_expression_extraction",
+    )
+    workspace.upsert_candidate(
+        candidate_id="gex-candidate-1",
+        staged_fields=staged_fields,
+        pending_ref_ids=["gene-expression-annotation-pef-1"],
+        evidence_record_ids=["evidence-67598e5688f123c8"],
+        resolver_selection_refs=[],
+        status=CANDIDATE_STATUS_VALID,
+    )
+    object_level_evidence = [
+        {
+            key: value
+            for key, value in _gene_expression_builder_evidence_records()[0].items()
+            if key not in {"envelope_target", "envelope_targets"}
+        }
+    ]
+
+    result = materialize_gene_expression_builder_state(
+        workspace=workspace,
+        candidate_ids=["gex-candidate-1"],
+        evidence_records=object_level_evidence,
+        resolver_entry_lookup=None,
+    )
+
+    assert not result.ok
+    assert any(
+        issue["reason"] == "missing_field_level_evidence_target"
+        and issue["evidence_record_id"] == "evidence-67598e5688f123c8"
+        and issue["pending_ref_id"] == "gene-expression-annotation-pef-1"
+        for issue in result.issues
+    )
+
+
 def test_gene_expression_builder_materializes_staged_condition_relations():
     """Staged condition_relations land on the GeneExpressionAnnotation in validator shape.
 
@@ -2580,6 +2760,15 @@ def test_gene_expression_builder_materializes_staged_condition_relations():
     assert conditions[1]["condition_free_text"] == "28 degrees C"
     # Empty leaves are dropped (condition 2 had no chemical).
     assert "condition_chemical" not in conditions[1]
+
+    evidence_record = result.payload["metadata"]["evidence_records"][0]
+    assert evidence_record["envelope_targets"] == [
+        {
+            "pending_ref_id": "gene-expression-annotation-pef-1",
+            "object_type": GENE_EXPRESSION_OBJECT_TYPE,
+            "field_path": "expression_pattern.where_expressed.anatomical_structure",
+        }
+    ]
 
 
 def test_gene_expression_builder_omits_condition_relations_when_unstaged():

@@ -140,7 +140,7 @@ trace_review/
 - `GET /api/traces/{trace_id}/duplicates` - Report repeated payload fingerprints across trace and observation IO
 - `GET /api/traces/{trace_id}/views/{view_name}` - Get specific view data
 
-**Available Views**: `summary`, `conversation`, `tool_calls`, `supervisor_routing`
+**Available Views**: `summary`, `conversation`, `tool_calls`, `pdf_citations`, `token_analysis`, `agent_context`, `trace_summary`, `document_hierarchy`, `agent_configs`, `group_context`, `domain_envelope`, `extraction_timeline`, `evidence_revisions`
 
 ## Development
 

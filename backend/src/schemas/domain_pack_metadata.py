@@ -186,7 +186,9 @@ class DomainPackInputSelector(DomainPackMetadataBaseModel):
         "evidence_record": {
             "source",
             "path",
+            "field_path",
             "record_id",
+            "output",
             "required",
             "allow_multiple",
             "context_only",
@@ -235,6 +237,10 @@ class DomainPackInputSelector(DomainPackMetadataBaseModel):
     field_path: Optional[str] = None
     object_type: Optional[str] = None
     record_id: Optional[str] = None
+    output: Literal["value", "quote_bundle"] = Field(
+        default="value",
+        exclude_if=lambda value: value == "value",
+    )
     value: Any = None
     key_map: Optional[Dict[str, Any]] = None
     required: bool = True
@@ -283,11 +289,16 @@ class DomainPackInputSelector(DomainPackMetadataBaseModel):
                 "payload",
                 "envelope_metadata",
                 "object_metadata",
-                "evidence_record",
             }
             and self.path is None
         ):
             raise ValueError(f"{self.source} selectors must provide path")
+        if (
+            self.source == "evidence_record"
+            and self.output == "value"
+            and self.path is None
+        ):
+            raise ValueError("evidence_record value selectors must provide path")
         if self.source == "literal" and "value" not in self.model_fields_set:
             raise ValueError("literal selectors must provide value")
         if self.source == "payload_keyed_literal":

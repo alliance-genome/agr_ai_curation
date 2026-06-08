@@ -428,3 +428,138 @@ def test_analyzer_expands_stored_feedback_sibling_trace_artifacts(monkeypatch, t
     assert timeline["feedback_artifact_event_count"] == 2
     assert timeline["sibling_trace_ids"] == ["trace-sibling"]
     assert [item["event_trace_id"] for item in timeline["timeline"]] == ["trace-main", "trace-sibling"]
+
+
+def test_evidence_revisions_summarizes_history_and_scope_refusals():
+    timeline = {
+        "schema_version": "extraction_timeline_analyzer.v1",
+        "trace_id": "trace-main",
+        "query": {"tool_name": "record_evidence"},
+        "timeline": [
+            {
+                "index": 1,
+                "timestamp": "2026-06-08T00:00:01Z",
+                "source": "durable_event",
+                "event_trace_id": "trace-main",
+                "event_type": "evidence.summary",
+                "event_id": "evt-evidence",
+                "tool_name": "record_evidence",
+                "agent": "validator:anatomy",
+                "output": {
+                    "preview": {
+                        "evidence_records": [
+                            {
+                                "evidence_record_id": "ev-1",
+                                "entity": "pat-3 neuron",
+                                "verified_quote": "Updated exact neuron expression quote.",
+                                "page": 5,
+                                "section": "Results",
+                                "chunk_id": "chunk-new",
+                                "source_span_ids": ["chunk-new:s0001:c0000-c0040:bbbbbbbb"],
+                                "pending_ref_id": "gene-expression-annotation-pat-3-neuron",
+                                "field_path": "expression_pattern.where_expressed.anatomical_structure",
+                                "field_paths": [
+                                    "expression_pattern.where_expressed.anatomical_structure"
+                                ],
+                                "envelope_targets": [
+                                    {
+                                        "pending_ref_id": "gene-expression-annotation-pat-3-neuron",
+                                        "field_path": (
+                                            "expression_pattern.where_expressed."
+                                            "anatomical_structure"
+                                        ),
+                                    }
+                                ],
+                                "evidence_revision_history": [
+                                    {
+                                        "revision": 1,
+                                        "replaced_at": "2026-06-08T00:00:00Z",
+                                        "previous_source": {
+                                            "verified_quote": "Old broad quote.",
+                                            "page": 4,
+                                            "section": "Results",
+                                            "chunk_id": "chunk-old",
+                                            "source_span_ids": [
+                                                "chunk-old:s0001:c0000-c0020:aaaaaaaa"
+                                            ],
+                                        },
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    "bounded": True,
+                },
+                "validation": {},
+            },
+            {
+                "index": 2,
+                "timestamp": "2026-06-08T00:00:02Z",
+                "event_trace_id": "trace-main",
+                "event_type": "tool_call.completed",
+                "event_id": "evt-forbidden",
+                "tool_name": "record_evidence",
+                "agent": "validator:anatomy",
+                "output": {
+                    "preview": {
+                        "status": "forbidden",
+                        "message": (
+                            "Validators may only update evidence records supplied "
+                            "for this validation target."
+                        ),
+                        "evidence_record_id": "ev-outside",
+                        "allowed_evidence_record_ids": ["ev-1"],
+                        "target_field_path": (
+                            "expression_pattern.where_expressed."
+                            "anatomical_structure"
+                        ),
+                    }
+                },
+                "validation": {},
+            },
+        ],
+    }
+
+    revisions = ExtractionTimelineAnalyzer.evidence_revisions(timeline)
+
+    assert revisions["schema_version"] == "evidence_revisions.v1"
+    assert revisions["summary"]["evidence_record_count"] == 1
+    assert revisions["summary"]["updated_evidence_record_count"] == 1
+    assert revisions["summary"]["revision_count"] == 1
+    assert revisions["summary"]["scope_refusal_count"] == 1
+    assert revisions["query"] == {"tool_name": "record_evidence"}
+
+    record = revisions["evidence_records"][0]
+    assert record["evidence_record_id"] == "ev-1"
+    assert record["current_source"]["verified_quote_preview"] == "Updated exact neuron expression quote."
+    assert record["current_source"]["page"] == "5"
+    assert record["target"]["field_paths"] == [
+        "expression_pattern.where_expressed.anatomical_structure"
+    ]
+    assert record["target"]["envelope_targets"] == [
+        {
+            "pending_ref_id": "gene-expression-annotation-pat-3-neuron",
+            "field_path": "expression_pattern.where_expressed.anatomical_structure",
+        }
+    ]
+
+    revision = record["revisions"][0]
+    assert revision["before_quote_preview"] == "Old broad quote."
+    assert revision["after_quote_preview"] == "Updated exact neuron expression quote."
+    assert revision["previous_source"]["chunk_id"] == "chunk-old"
+    assert revision["current_source"]["chunk_id"] == "chunk-new"
+    assert revision["changed_by"] == {
+        "agent": "validator:anatomy",
+        "tool_name": "record_evidence",
+        "event_type": "evidence.summary",
+        "event_trace_id": "trace-main",
+    }
+
+    refusal = revisions["scope_refusals"][0]
+    assert refusal["evidence_record_id"] == "ev-outside"
+    assert refusal["allowed_evidence_record_ids"] == ["ev-1"]
+    assert refusal["target_field_path"] == (
+        "expression_pattern.where_expressed.anatomical_structure"
+    )
+    assert "supplied target scope" in refusal["diagnostic"]
+    assert "evidence_revision_history" not in json.dumps(revisions)

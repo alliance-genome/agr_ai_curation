@@ -103,13 +103,14 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
     assert "list_recorded_evidence" in content
     assert "get_recorded_evidence" in content
     assert "attach_evidence_to_object" in content
-    assert "Choose the retained observation's `pending_ref_id` before attachment" in content
+    assert "Attach every retained evidence record" in content
+    assert "at least one concrete field path" in content
     assert "gene-expression-annotation-pef-1" in content
-    assert "retry once with the" in content
+    assert "finalization will reject object-level-only evidence" in content
     assert "detach_evidence_from_object" in content
     assert "discard_recorded_evidence" in content
     assert "update_recorded_evidence_metadata" in content
-    assert "source quote and provenance fields are immutable" in content
+    assert "Source quote and provenance fields are backend-owned" in content
     assert "Multiple `span_ids` in one `record_evidence` call produce one evidence record" in content
     assert "payload.evidence_text" not in content
     assert "claimed_quote" not in content

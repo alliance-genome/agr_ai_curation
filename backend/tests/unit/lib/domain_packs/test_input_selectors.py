@@ -164,6 +164,11 @@ def _assertion_envelope(
         },
         {"source": "literal", "value": "constant"},
         {
+            "source": "evidence_record",
+            "output": "quote_bundle",
+            "field_path": "value",
+        },
+        {
             "source": "payload_keyed_literal",
             "path": "value",
             "key_map": {"gene": "Gene Disease Relation"},
@@ -294,7 +299,6 @@ def test_input_selector_parser_rejects_malformed_selectors(selector: dict):
         {"source": "envelope_metadata", "path": "run_id", "record_id": "evidence-1"},
         {"source": "object_metadata", "path": "status", "object_type": "Gene"},
         {"source": "evidence_record", "path": "quote", "object_type": "Gene"},
-        {"source": "evidence_record", "path": "quote", "field_path": "ref"},
         {"source": "evidence_record", "path": "quote", "value": "constant"},
         {"source": "object_ref", "field_path": "ref", "value": "constant"},
         {"source": "object_ref", "object_type": "RefObject", "record_id": "evidence-1"},
@@ -615,6 +619,200 @@ def test_optional_missing_selector_is_omitted_without_suppressing_request(
     assert request["selected_inputs"] == {"selected": "AGR:1"}
     assert request["target"]["input_values"] == {"selected": "AGR:1"}
     assert "optional_quote" in request["input_selectors"]
+
+
+def test_evidence_selector_reads_nested_extraction_metadata_records(tmp_path: Path):
+    result = _run_selector(
+        tmp_path,
+        """
+          selected:
+            source: payload
+            path: value
+          evidence_quote:
+            source: evidence_record
+            path: verified_quote
+            record_id: evidence-nested
+            required: false
+            context_only: true
+""",
+        _assertion_envelope(
+            payload={"value": "AGR:1"},
+            envelope_metadata={
+                "extraction_metadata": {
+                    "evidence_records": [
+                        {
+                            "evidence_record_id": "evidence-nested",
+                            "verified_quote": "Nested extraction metadata quote.",
+                        }
+                    ]
+                }
+            },
+            evidence_record_ids=["evidence-nested"],
+        ),
+    )
+
+    assert result.findings == ()
+    assert result.request is not None
+    assert result.selected_inputs == {
+        "selected": "AGR:1",
+        "evidence_quote": "Nested extraction metadata quote.",
+    }
+    assert result.evidence == [
+        {
+            "evidence_record_id": "evidence-nested",
+            "verified_quote": "Nested extraction metadata quote.",
+        }
+    ]
+
+
+def test_evidence_selector_filters_by_field_path_without_unrelated_fallback(
+    tmp_path: Path,
+):
+    result = _run_selector(
+        tmp_path,
+        """
+          selected:
+            source: payload
+            path: value
+          evidence_quote:
+            source: evidence_record
+            path: verified_quote
+            field_path: value
+            required: false
+            context_only: true
+""",
+        _assertion_envelope(
+            payload={"value": "AGR:1"},
+            envelope_metadata={
+                "evidence_records": [
+                    {
+                        "evidence_record_id": "evidence-alias",
+                        "verified_quote": "Quote for a different field.",
+                        "field_path": "aliases",
+                    }
+                ]
+            },
+            evidence_record_ids=["evidence-alias"],
+        ),
+    )
+
+    assert result.findings == ()
+    assert result.request is not None
+    assert result.selected_inputs == {"selected": "AGR:1"}
+    assert "evidence_quote" not in result.selected_inputs
+
+
+def test_evidence_selector_allow_multiple_returns_all_field_matched_quotes(
+    tmp_path: Path,
+):
+    result = _run_selector(
+        tmp_path,
+        """
+          selected:
+            source: payload
+            path: value
+          evidence_quotes:
+            source: evidence_record
+            path: verified_quote
+            field_path: value
+            allow_multiple: true
+            required: false
+            context_only: true
+""",
+        _assertion_envelope(
+            payload={"value": "AGR:1"},
+            envelope_metadata={
+                "evidence_records": [
+                    {
+                        "evidence_record_id": "evidence-1",
+                        "verified_quote": "First value quote.",
+                        "field_paths": ["value"],
+                    },
+                    {
+                        "evidence_record_id": "evidence-2",
+                        "verified_quote": "Second value quote.",
+                        "envelope_targets": [
+                            {
+                                "pending_ref_id": "assertion-1",
+                                "field_path": "value",
+                            }
+                        ],
+                    },
+                ]
+            },
+            evidence_record_ids=["evidence-1", "evidence-2"],
+        ),
+    )
+
+    assert result.findings == ()
+    assert result.request is not None
+    assert result.selected_inputs["evidence_quotes"] == [
+        "First value quote.",
+        "Second value quote.",
+    ]
+
+
+def test_evidence_quote_bundle_selector_returns_record_id_field_and_quote(
+    tmp_path: Path,
+):
+    result = _run_selector(
+        tmp_path,
+        """
+          selected:
+            source: payload
+            path: value
+          evidence_quotes:
+            source: evidence_record
+            output: quote_bundle
+            field_path: value
+            allow_multiple: true
+            required: false
+            context_only: true
+""",
+        _assertion_envelope(
+            payload={"value": "AGR:1"},
+            envelope_metadata={
+                "extraction_metadata": {
+                    "evidence_records": [
+                        {
+                            "evidence_record_id": "evidence-1",
+                            "verified_quote": "Verified value quote.",
+                            "envelope_targets": [
+                                {
+                                    "pending_ref_id": "assertion-1",
+                                    "field_path": "value",
+                                }
+                            ],
+                        },
+                        {
+                            "evidence_record_id": "evidence-other",
+                            "verified_quote": "Verified alias quote.",
+                            "field_path": "aliases",
+                        },
+                    ]
+                }
+            },
+            evidence_record_ids=["evidence-1", "evidence-other"],
+        ),
+    )
+
+    assert result.findings == ()
+    assert result.request is not None
+    assert result.selected_inputs["evidence_quotes"] == [
+        {
+            "evidence_record_id": "evidence-1",
+            "field_path": "value",
+            "verified_quote": "Verified value quote.",
+        }
+    ]
+    assert result.input_selectors["evidence_quotes"] == {
+        "source": "evidence_record",
+        "field_path": "value",
+        "output": "quote_bundle",
+        "required": False,
+        "allow_multiple": True,
+        "context_only": True,
+    }
 
 
 def test_optional_ambiguous_selector_still_becomes_structured_finding(

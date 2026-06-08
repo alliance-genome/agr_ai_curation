@@ -6,6 +6,7 @@ from typing import Any, cast
 import pytest
 
 import src.lib.openai_agents.tools.record_evidence as record_evidence
+from src.lib.openai_agents.tools import evidence_workspace
 from src.lib.openai_agents.evidence_spans import build_evidence_spans
 from src.lib.openai_agents.evidence_summary import build_evidence_record_id
 
@@ -60,6 +61,7 @@ def test_record_evidence_schema_accepts_span_ids_not_claimed_quote():
     signature = inspect.signature(tool)
 
     assert "span_ids" in signature.parameters
+    assert "evidence_record_id" in signature.parameters
     assert "claimed_quote" not in signature.parameters
     assert "chunk_id" not in signature.parameters
 
@@ -237,6 +239,280 @@ async def test_record_evidence_rejects_unknown_span_chunk_without_record(monkeyp
     assert "read_chunk" in result["retry_instructions"]
     assert "evidence_record_id" not in result
     assert "verified_quote" not in result
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_updates_existing_id_and_preserves_attachments(monkeypatch):
+    chunk_id = "chunk-update"
+    chunk_text = "Old context sentence. New exact replacement sentence."
+    span_ids = _span_ids(chunk_id, chunk_text)
+    workspace_records = [
+        {
+            "evidence_record_id": "ev-active",
+            "entity": "wg",
+            "verified_quote": "Old exact source sentence.",
+            "page": 2,
+            "section": "Results",
+            "chunk_id": "chunk-old",
+            "document_id": "doc-123",
+            "source_span_ids": ["chunk-old:s0000:c0000-c0026:aaaabbbb"],
+            "source_fragments": [
+                {
+                    "span_id": "chunk-old:s0000:c0000-c0026:aaaabbbb",
+                    "chunk_id": "chunk-old",
+                    "document_id": "doc-123",
+                    "text": "Old exact source sentence.",
+                    "char_start": 0,
+                    "char_end": 26,
+                    "text_hash": "aaaabbbb",
+                }
+            ],
+            "envelope_targets": [
+                {
+                    "pending_ref_id": "expression-wg",
+                    "field_path": "expression_assay.used_in",
+                }
+            ],
+            "pending_ref_id": "expression-wg",
+            "field_path": "expression_assay.used_in",
+            "field_paths": ["expression_assay.used_in"],
+            "agent_note": "Use for assay support.",
+        }
+    ]
+
+    async def _fake_get_chunk_by_id(**kwargs):
+        assert kwargs["chunk_id"] == chunk_id
+        return _chunk(chunk_id=chunk_id, text=chunk_text, page_number=5)
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    token = evidence_workspace.set_active_evidence_records(workspace_records)
+    try:
+        tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+        result = await tool(
+            entity="wg",
+            span_ids=[span_ids[1]],
+            evidence_record_id=" ev-active ",
+        )
+    finally:
+        evidence_workspace.reset_active_evidence_records(token)
+
+    assert result["status"] == "verified"
+    assert result["evidence_record_id"] == "ev-active"
+    assert result["verified_quote"] == "New exact replacement sentence."
+    assert result["source_span_ids"] == [span_ids[1]]
+    assert result["pending_ref_id"] == "expression-wg"
+    assert result["field_paths"] == ["expression_assay.used_in"]
+    assert "evidence_revision_history" not in result
+    assert len(workspace_records) == 1
+
+    updated_record = workspace_records[0]
+    assert updated_record["evidence_record_id"] == "ev-active"
+    assert updated_record["verified_quote"] == "New exact replacement sentence."
+    assert updated_record["agent_note"] == "Use for assay support."
+    assert updated_record["envelope_targets"] == [
+        {
+            "pending_ref_id": "expression-wg",
+            "field_path": "expression_assay.used_in",
+        }
+    ]
+    assert updated_record["updated_at"]
+    assert updated_record["evidence_revision_history"] == [
+        {
+            "revision": 1,
+            "replaced_at": updated_record["evidence_revision_history"][0]["replaced_at"],
+            "previous_source": {
+                "verified_quote": "Old exact source sentence.",
+                "source_span_ids": ["chunk-old:s0000:c0000-c0026:aaaabbbb"],
+                "source_fragments": [
+                    {
+                        "span_id": "chunk-old:s0000:c0000-c0026:aaaabbbb",
+                        "chunk_id": "chunk-old",
+                        "document_id": "doc-123",
+                        "text": "Old exact source sentence.",
+                        "char_start": 0,
+                        "char_end": 26,
+                        "text_hash": "aaaabbbb",
+                    }
+                ],
+                "document_id": "doc-123",
+                "chunk_id": "chunk-old",
+                "page": 2,
+                "section": "Results",
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_update_failure_does_not_mutate_existing_record(monkeypatch):
+    chunk_id = "chunk-update-stale"
+    original_text = "The selected source sentence exists."
+    stale_span_id = _span_ids(chunk_id, original_text)[0]
+    existing_record = {
+        "evidence_record_id": "ev-active",
+        "entity": "wg",
+        "verified_quote": "Existing quote remains live.",
+        "page": 2,
+        "section": "Results",
+        "chunk_id": "chunk-old",
+        "document_id": "doc-123",
+        "source_span_ids": ["chunk-old:s0000:c0000-c0027:aaaabbbb"],
+    }
+    workspace_records = [dict(existing_record)]
+
+    async def _fake_get_chunk_by_id(**kwargs):
+        assert kwargs["chunk_id"] == chunk_id
+        return _chunk(
+            chunk_id=chunk_id,
+            text="The selected source sentence changed.",
+        )
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    token = evidence_workspace.set_active_evidence_records(workspace_records)
+    try:
+        tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+        result = await tool(
+            entity="wg",
+            span_ids=[stale_span_id],
+            evidence_record_id="ev-active",
+        )
+    finally:
+        evidence_workspace.reset_active_evidence_records(token)
+
+    assert result["status"] == "not_found"
+    assert result["evidence_record_id"] == "ev-active"
+    assert result["failed_span_id"] == stale_span_id
+    assert workspace_records == [existing_record]
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_update_requires_active_workspace():
+    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+
+    result = await tool(
+        entity="wg",
+        span_ids=["chunk:s0000:c0000-c0001:aaaabbbb"],
+        evidence_record_id="ev-missing-workspace",
+    )
+
+    assert result == {
+        "status": "forbidden",
+        "entity": "wg",
+        "evidence_record_id": "ev-missing-workspace",
+        "message": (
+            "Existing evidence updates require an active evidence workspace. "
+            "The evidence record was not updated."
+        ),
+    }
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_scoped_validator_tool_refuses_create_and_wrong_ids():
+    workspace_records = [
+        {
+            "evidence_record_id": "ev-allowed",
+            "entity": "wg",
+            "verified_quote": "Existing quote.",
+            "page": 2,
+            "section": "Results",
+            "chunk_id": "chunk-old",
+            "document_id": "doc-123",
+        }
+    ]
+    tool = record_evidence.create_record_evidence_tool(
+        "doc-123",
+        "user-1",
+        workspace_records=workspace_records,
+        allowed_evidence_record_ids={"ev-allowed"},
+        allow_create=False,
+        required_pending_ref_id="expression-wg",
+        required_field_path="expression_assay.used_in",
+    )
+
+    create_attempt = await tool(entity="wg", span_ids=["chunk:s0000:c0000-c0001:aaaabbbb"])
+    wrong_id = await tool(
+        entity="wg",
+        span_ids=["chunk:s0000:c0000-c0001:aaaabbbb"],
+        evidence_record_id="ev-other",
+    )
+    wrong_target = await tool(
+        entity="wg",
+        span_ids=["chunk:s0000:c0000-c0001:aaaabbbb"],
+        evidence_record_id="ev-allowed",
+        pending_ref_id="other-expression",
+        field_path="expression_assay.used_in",
+    )
+    wrong_field = await tool(
+        entity="wg",
+        span_ids=["chunk:s0000:c0000-c0001:aaaabbbb"],
+        evidence_record_id="ev-allowed",
+        pending_ref_id="expression-wg",
+        field_path="other.field",
+    )
+
+    assert create_attempt["status"] == "forbidden"
+    assert "provide evidence_record_id" in create_attempt["message"]
+    assert wrong_id["status"] == "forbidden"
+    assert wrong_id["allowed_evidence_record_ids"] == ["ev-allowed"]
+    assert wrong_target["status"] == "forbidden"
+    assert "another object or pending ref" in wrong_target["message"]
+    assert wrong_field["status"] == "forbidden"
+    assert wrong_field["target_field_path"] == "expression_assay.used_in"
+    assert workspace_records[0]["verified_quote"] == "Existing quote."
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_scoped_validator_tool_updates_allowed_record(monkeypatch):
+    chunk_id = "chunk-scoped-update"
+    chunk_text = "Old context sentence. Better scoped support sentence."
+    span_ids = _span_ids(chunk_id, chunk_text)
+    workspace_records = [
+        {
+            "evidence_record_id": "ev-allowed",
+            "entity": "wg",
+            "verified_quote": "Previous scoped quote.",
+            "page": 2,
+            "section": "Results",
+            "chunk_id": "chunk-old",
+            "document_id": "doc-123",
+            "envelope_targets": [
+                {
+                    "pending_ref_id": "expression-wg",
+                    "field_path": "expression_assay.used_in",
+                }
+            ],
+        }
+    ]
+
+    async def _fake_get_chunk_by_id(**kwargs):
+        assert kwargs["chunk_id"] == chunk_id
+        return _chunk(chunk_id=chunk_id, text=chunk_text, page_number=6)
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    tool = record_evidence.create_record_evidence_tool(
+        "doc-123",
+        "user-1",
+        workspace_records=workspace_records,
+        allowed_evidence_record_ids={"ev-allowed"},
+        allow_create=False,
+        required_pending_ref_id="expression-wg",
+        required_field_path="expression_assay.used_in",
+    )
+
+    result = await tool(
+        entity="wg",
+        span_ids=[span_ids[1]],
+        evidence_record_id="ev-allowed",
+    )
+
+    assert result["status"] == "verified"
+    assert result["evidence_record_id"] == "ev-allowed"
+    assert result["verified_quote"] == "Better scoped support sentence."
+    assert "evidence_revision_history" not in result
+    assert workspace_records[0]["verified_quote"] == "Better scoped support sentence."
+    assert workspace_records[0]["evidence_revision_history"][0]["previous_source"][
+        "verified_quote"
+    ] == "Previous scoped quote."
 
 
 @pytest.mark.asyncio

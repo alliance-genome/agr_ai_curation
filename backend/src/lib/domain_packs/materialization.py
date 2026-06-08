@@ -1652,7 +1652,7 @@ def project_evidence_anchor_projections(
             evidence_record = records_by_id.get(evidence_record_id)
             if evidence_record is None:
                 continue
-            for field_path in _projection_field_paths(evidence_record):
+            for field_path in _projection_field_paths(evidence_record, domain_object):
                 projection_key = (evidence_record_id, field_path)
                 if projection_key in seen_projection_keys:
                     continue
@@ -2569,7 +2569,53 @@ def _finding_target(
     return None, None
 
 
-def _projection_field_paths(evidence_record: Mapping[str, Any]) -> list[str | None]:
+def _evidence_target_maps(evidence_record: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    targets: list[Mapping[str, Any]] = []
+    for raw_target in [evidence_record.get("envelope_target")]:
+        if isinstance(raw_target, Mapping):
+            targets.append(raw_target)
+    raw_targets = evidence_record.get("envelope_targets")
+    if isinstance(raw_targets, Sequence) and not isinstance(raw_targets, (str, bytes, bytearray)):
+        for raw_target in raw_targets:
+            if isinstance(raw_target, Mapping):
+                targets.append(raw_target)
+    return targets
+
+
+def _evidence_target_matches_object(
+    target: Mapping[str, Any],
+    domain_object: CuratableObjectEnvelope,
+) -> bool:
+    target_object_id = _optional_string(target.get("object_id"))
+    target_pending_ref_id = _optional_string(target.get("pending_ref_id"))
+    stable_id = stable_object_id(domain_object)
+    return (
+        target_object_id is not None
+        and target_object_id in {domain_object.object_id, stable_id}
+    ) or (
+        target_pending_ref_id is not None
+        and target_pending_ref_id in {domain_object.pending_ref_id, stable_id}
+    )
+
+
+def _projection_field_paths(
+    evidence_record: Mapping[str, Any],
+    domain_object: CuratableObjectEnvelope,
+) -> list[str | None]:
+    targets = _evidence_target_maps(evidence_record)
+    if targets:
+        matching_targets = [
+            target
+            for target in targets
+            if _evidence_target_matches_object(target, domain_object)
+        ]
+        if not matching_targets:
+            return []
+        target_field_paths = _unique_strings(
+            target.get("field_path") for target in matching_targets
+        )
+        return list(target_field_paths) if target_field_paths else [None]
+
     field_paths = _unique_strings(evidence_record.get("field_paths"))
     if not field_paths:
         field_path = _optional_string(evidence_record.get("field_path"))

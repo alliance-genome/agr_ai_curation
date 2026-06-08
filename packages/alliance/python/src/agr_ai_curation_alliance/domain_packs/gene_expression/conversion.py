@@ -720,6 +720,24 @@ def materialize_gene_expression_builder_state(
                         evidence_record_id=evidence_id,
                     )
                 )
+            elif not _evidence_record_field_paths_for_target(
+                evidence_record,
+                pending_ref_id=pending_ref_id,
+            ):
+                issues.append(
+                    _materialization_issue(
+                        field_path="evidence_record_ids",
+                        reason="missing_field_level_evidence_target",
+                        message=(
+                            "Finalized gene-expression candidates require each "
+                            "evidence record to attach to the candidate pending_ref_id "
+                            "with at least one concrete field_path."
+                        ),
+                        candidate_id=candidate.candidate_id,
+                        evidence_record_id=evidence_id,
+                        pending_ref_id=pending_ref_id,
+                    )
+                )
 
         payload = _materialized_gene_expression_payload(
             staged_fields,
@@ -890,6 +908,37 @@ def _normalized_evidence_records(
         seen.add(evidence_id)
         normalized.append(normalized_record.model_dump(mode="json", exclude_none=True))
     return normalized
+
+
+def _evidence_record_targets(record: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    targets: list[Mapping[str, Any]] = []
+    raw_targets = record.get("envelope_targets")
+    if isinstance(raw_targets, Sequence) and not isinstance(
+        raw_targets,
+        (str, bytes, bytearray),
+    ):
+        targets.extend(target for target in raw_targets if isinstance(target, Mapping))
+    raw_target = record.get("envelope_target")
+    if isinstance(raw_target, Mapping):
+        targets.append(raw_target)
+    return tuple(targets)
+
+
+def _evidence_record_field_paths_for_target(
+    record: Mapping[str, Any],
+    *,
+    pending_ref_id: str,
+) -> tuple[str, ...]:
+    field_paths: list[str] = []
+    seen: set[str] = set()
+    for target in _evidence_record_targets(record):
+        if _clean_text(target.get("pending_ref_id")) != pending_ref_id:
+            continue
+        field_path = _clean_text(target.get("field_path"))
+        if field_path and field_path not in seen:
+            seen.add(field_path)
+            field_paths.append(field_path)
+    return tuple(field_paths)
 
 
 def _candidate_pending_ref_id(candidate: Any, payload: Mapping[str, Any], index: int) -> str:

@@ -9,7 +9,14 @@ This module contains foundational types used across all schema models:
 
 from typing import Any, List, Literal, Optional
 from enum import Enum
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictStr,
+    field_validator,
+    model_validator,
+)
 from pydantic.json_schema import DEFAULT_REF_TEMPLATE, GenerateJsonSchema, JsonSchemaMode
 
 from src.schemas.domain_envelope import ObjectRef, validate_field_path_syntax
@@ -141,6 +148,69 @@ class EvidenceSourceFragment(BaseModel):
         return normalized or None
 
 
+class EvidenceEnvelopeTarget(BaseModel):
+    """Target object/field attachment for one evidence record."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    object_id: Optional[str] = Field(
+        default=None,
+        description="Durable curatable object ID this evidence supports",
+    )
+    pending_ref_id: Optional[str] = Field(
+        default=None,
+        description="Extraction-time curatable object ref this evidence supports",
+    )
+    object_type: Optional[str] = Field(
+        default=None,
+        description="Curatable object type this evidence supports, if available",
+    )
+    field_path: Optional[str] = Field(
+        default=None,
+        description="Domain payload field path this evidence supports, if available",
+    )
+    validation_finding_id: Optional[str] = Field(
+        default=None,
+        description="Validation finding target this evidence supports, if available",
+    )
+
+    @field_validator(
+        "object_id",
+        "pending_ref_id",
+        "object_type",
+        "field_path",
+        "validation_finding_id",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_optional_strings(cls, value: object) -> object:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("must be a string")
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("field_path")
+    @classmethod
+    def _validate_optional_field_path(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return validate_field_path_syntax(value)
+
+    @model_validator(mode="after")
+    def _validate_target_has_scope(self) -> "EvidenceEnvelopeTarget":
+        if not (
+            self.object_id
+            or self.pending_ref_id
+            or self.object_type
+            or self.field_path
+            or self.validation_finding_id
+        ):
+            raise ValueError("evidence envelope targets must not be empty")
+        return self
+
+
 class EvidenceRecord(BaseModel):
     """Verified evidence record used to support keep/exclude decisions."""
 
@@ -173,6 +243,14 @@ class EvidenceRecord(BaseModel):
         default=None,
         description="Canonical object reference this evidence supports, if available",
     )
+    envelope_target: Optional[EvidenceEnvelopeTarget] = Field(
+        default=None,
+        description="Primary target attachment this evidence supports, if available",
+    )
+    envelope_targets: Optional[List[EvidenceEnvelopeTarget]] = Field(
+        default=None,
+        description="Target-specific attachments this evidence supports, if available",
+    )
     field_path: Optional[str] = Field(
         default=None,
         description="Primary domain payload field path supported by this evidence, if available",
@@ -184,6 +262,10 @@ class EvidenceRecord(BaseModel):
     agent_note: Optional[str] = Field(
         default=None,
         description="Agent-owned note about how this evidence should be used",
+    )
+    evidence_revision_history: Optional[List[dict[str, Any]]] = Field(
+        default=None,
+        description="Backend-owned previous source/provenance snapshots for same-ID evidence updates",
     )
 
     @field_validator("page", mode="before")

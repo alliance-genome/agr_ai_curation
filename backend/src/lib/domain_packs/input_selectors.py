@@ -327,30 +327,174 @@ def _resolve_evidence_record_selector(
         records = tuple(
             record for record in records if _record_id(record) == selector.record_id
         )
+    resolved_field_path = None
+    if selector.field_path is not None:
+        resolved_field_path = _element_indexed_path(match, selector.field_path)
+        records = tuple(
+            record
+            for record in records
+            if _evidence_record_matches_field_path(record, resolved_field_path)
+        )
 
     if not records:
         return _missing(
             input_name,
             selector,
             "No evidence record resolved for selector.",
-            details={"record_id": selector.record_id},
+            details={
+                "record_id": selector.record_id,
+                "field_path": resolved_field_path,
+            },
+            field_path=resolved_field_path,
         )
-    if len(records) > 1:
+    if len(records) > 1 and selector.allow_multiple is not True:
         return _ambiguous(
             input_name,
             selector,
             "Evidence selector matched multiple records.",
-            details={"record_ids": [_record_id(record) for record in records]},
+            details={
+                "record_ids": [_record_id(record) for record in records],
+                "field_path": resolved_field_path,
+            },
+            field_path=resolved_field_path,
         )
 
-    value, exists = _value_at_path(records[0], selector.path or "")
-    if not exists:
-        return _missing_field(
+    if selector.output == "quote_bundle":
+        bundles = [
+            bundle
+            for record in records
+            if (
+                bundle := _quote_bundle_for_evidence_record(
+                    record,
+                    selected_field_path=resolved_field_path,
+                )
+            )
+            is not None
+        ]
+        if not bundles:
+            return _missing_field(
+                input_name,
+                selector,
+                "Evidence record quote bundle requires evidence_record_id and verified_quote.",
+                field_path=resolved_field_path,
+            )
+        value = bundles if selector.allow_multiple is True else bundles[0]
+        return _single_value(
             input_name,
             selector,
-            f"Evidence record path '{selector.path}' is missing.",
+            value,
+            field_path=resolved_field_path,
         )
-    return _single_value(input_name, selector, value)
+
+    values: list[Any] = []
+    for record in records:
+        value, exists = _value_at_path(record, selector.path or "")
+        if not exists:
+            return _missing_field(
+                input_name,
+                selector,
+                f"Evidence record path '{selector.path}' is missing.",
+                field_path=resolved_field_path,
+            )
+        values.append(value)
+    value = values if selector.allow_multiple is True else values[0]
+    return _single_value(
+        input_name,
+        selector,
+        value,
+        field_path=resolved_field_path,
+    )
+
+
+def _quote_bundle_for_evidence_record(
+    record: Mapping[str, Any],
+    *,
+    selected_field_path: str | None,
+) -> dict[str, Any] | None:
+    record_id = _record_id(record)
+    verified_quote = record.get("verified_quote")
+    if record_id is None or not isinstance(verified_quote, str) or not verified_quote:
+        return None
+
+    bundle: dict[str, Any] = {
+        "evidence_record_id": record_id,
+        "verified_quote": verified_quote,
+    }
+    field_path = selected_field_path or _first_evidence_record_field_path(record)
+    if field_path:
+        bundle["field_path"] = field_path
+    return bundle
+
+
+def _first_evidence_record_field_path(record: Mapping[str, Any]) -> str | None:
+    for field_path in _evidence_record_field_paths(record):
+        return field_path
+    return None
+
+
+def _evidence_record_matches_field_path(
+    record: Mapping[str, Any],
+    field_path: str,
+) -> bool:
+    return field_path in _evidence_record_field_paths(record)
+
+
+def _evidence_record_field_paths(record: Mapping[str, Any]) -> tuple[str, ...]:
+    paths: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: Any) -> None:
+        if isinstance(value, str) and value and value not in seen:
+            seen.add(value)
+            paths.append(value)
+
+    add(record.get("field_path"))
+    raw_field_paths = record.get("field_paths")
+    if isinstance(raw_field_paths, Sequence) and not isinstance(
+        raw_field_paths, (str, bytes, bytearray)
+    ):
+        for field_path in raw_field_paths:
+            add(field_path)
+    for target in _evidence_record_targets(record):
+        add(target.get("field_path"))
+    return tuple(paths)
+
+
+def _evidence_record_targets(record: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    targets: list[Mapping[str, Any]] = []
+    raw_targets = record.get("envelope_targets")
+    if isinstance(raw_targets, Sequence) and not isinstance(
+        raw_targets, (str, bytes, bytearray)
+    ):
+        targets.extend(target for target in raw_targets if isinstance(target, Mapping))
+    raw_target = record.get("envelope_target")
+    if isinstance(raw_target, Mapping):
+        targets.append(raw_target)
+    return tuple(targets)
+
+
+def _records_from_extraction_metadata(
+    container: Mapping[str, Any],
+) -> list[Mapping[str, Any]]:
+    raw_metadata = container.get("extraction_metadata")
+    if not isinstance(raw_metadata, Mapping):
+        return []
+    return _records_from_mapping(raw_metadata)
+
+
+def _dedupe_records_by_id(
+    records: Sequence[Mapping[str, Any]],
+) -> tuple[Mapping[str, Any], ...]:
+    deduped: list[Mapping[str, Any]] = []
+    seen: set[str] = set()
+    for record in records:
+        record_id = _record_id(record)
+        if record_id is not None:
+            if record_id in seen:
+                continue
+            seen.add(record_id)
+        deduped.append(record)
+    return tuple(deduped)
 
 
 def _resolve_object_ref_selector(
@@ -389,7 +533,7 @@ def _resolve_object_ref_selector(
             field_path=selector.field_path,
         )
 
-    ref = ref_candidates[0]
+    ref = next(iter(ref_candidates))
     referenced_object = _object_for_ref(match.envelope, ref)
     if referenced_object is None:
         return _unresolved_ref(
@@ -661,13 +805,16 @@ def _candidate_evidence_records(
         *_records_from_mapping(domain_object.payload),
         *_records_from_mapping(domain_object.metadata),
         *_records_from_mapping(envelope.metadata),
+        *_records_from_extraction_metadata(domain_object.metadata),
+        *_records_from_extraction_metadata(envelope.metadata),
     ]
+    deduped_records = _dedupe_records_by_id(raw_records)
     if not domain_object.evidence_record_ids:
-        return tuple(raw_records)
+        return deduped_records
 
     by_id = {
         record_id: record
-        for record in raw_records
+        for record in deduped_records
         if (record_id := _record_id(record)) is not None
     }
     return tuple(

@@ -2908,6 +2908,30 @@ async def test_chat_domain_envelope_dispatch_fails_closed_without_tool_agent_key
         )
 
 
+def test_chat_validator_runtime_context_requires_real_document_and_user():
+    context = streaming_tools._validator_runtime_context_for_chat(
+        document_id="document-1",
+        user_id="curator-1",
+    )
+
+    assert context.document_id == "document-1"
+    assert context.user_id == "curator-1"
+    assert (
+        streaming_tools._validator_runtime_context_for_chat(
+            document_id="chat-runtime",
+            user_id="curator-1",
+        )
+        is None
+    )
+    assert (
+        streaming_tools._validator_runtime_context_for_chat(
+            document_id="document-1",
+            user_id=None,
+        )
+        is None
+    )
+
+
 @pytest.mark.asyncio
 async def test_chat_domain_envelope_dispatch_fails_closed_without_curation_adapter(
     monkeypatch,

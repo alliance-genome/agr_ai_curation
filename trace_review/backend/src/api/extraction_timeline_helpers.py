@@ -169,3 +169,27 @@ def build_extraction_timeline(
         "candidate_id": candidate_id,
     }
     return timeline
+
+
+def build_evidence_revisions(
+    *,
+    trace_id: str,
+    context: ExtractionTimelineContext,
+    tool_name: Optional[str],
+    event_type: Optional[str],
+    candidate_id: Optional[str],
+    session_id: Optional[str] = None,
+    feedback_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    timeline = build_extraction_timeline(
+        trace_id=trace_id,
+        context=context,
+        include_raw_args=True,
+        include_raw_outputs=True,
+        tool_name=tool_name,
+        event_type=event_type,
+        candidate_id=candidate_id,
+        session_id=session_id,
+        feedback_id=feedback_id,
+    )
+    return ExtractionTimelineAnalyzer.evidence_revisions(timeline)

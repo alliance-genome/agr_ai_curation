@@ -709,7 +709,12 @@ async def post_candidate_validation(
     db: Session = Depends(get_db),
 ) -> CurationCandidateValidationResponse:
     set_global_user_from_cognito(db, user)
-    return validate_candidate(db, candidate_id, request)
+    return validate_candidate(
+        db,
+        candidate_id,
+        request,
+        user_id=_current_user_id(user),
+    )
 
 
 @router.post(
@@ -723,7 +728,12 @@ async def post_session_validation(
     db: Session = Depends(get_db),
 ) -> CurationSessionValidationResponse:
     set_global_user_from_cognito(db, user)
-    return validate_session(db, session_id, request)
+    return validate_session(
+        db,
+        session_id,
+        request,
+        user_id=_current_user_id(user),
+    )
 
 
 @router.post(

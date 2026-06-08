@@ -61,7 +61,10 @@ from src.schemas.curation_workspace import (
 from src.lib.domain_packs.materialization import materialize_persisted_envelope_review_rows
 from src.lib.domain_packs.structural_checks import run_domain_envelope_structural_checks
 from src.lib.domain_packs.validation_findings import append_validation_findings_to_envelope
-from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
+from src.lib.domain_packs.validator_dispatch import (
+    ValidatorRuntimeContext,
+    dispatch_active_validator_bindings,
+)
 from src.lib.domain_envelopes.persistence import (
     DomainEnvelopeCheckpointRequest,
     write_domain_envelope_checkpoint,
@@ -415,9 +418,18 @@ def _materialized_review_rows(
 
     rows: list[DomainEnvelopeReviewRow] = []
     for envelope_ref in request.prep_output.envelope_refs:
+        runtime_context = (
+            ValidatorRuntimeContext(
+                document_id=request.document_id,
+                user_id=request.user_id,
+            )
+            if request.user_id
+            else None
+        )
         envelope_revision = _refresh_domain_envelope_validation_for_ref(
             db,
             envelope_ref,
+            runtime_context=runtime_context,
         )
         response = materialize_persisted_envelope_review_rows(
             db,
@@ -434,6 +446,8 @@ def _materialized_review_rows(
 def _refresh_domain_envelope_validation_for_ref(
     db: Session,
     envelope_ref: CurationPrepEnvelopeRef,
+    *,
+    runtime_context: ValidatorRuntimeContext | None = None,
 ) -> int:
     envelope_row = db.get(DomainEnvelopeModel, envelope_ref.envelope_id)
     if envelope_row is None:
@@ -475,6 +489,7 @@ def _refresh_domain_envelope_validation_for_ref(
             domain_pack,
             registry=structural_result.registry,
             source_envelope_revision=envelope_row.revision,
+            runtime_context=runtime_context,
         )
         dispatch_appended_findings = dispatch_result.appended_findings
         result_envelope = dispatch_result.envelope
