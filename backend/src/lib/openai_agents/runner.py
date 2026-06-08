@@ -155,6 +155,29 @@ def _openai_responses_websocket_enabled(provider: Any) -> bool:
     return True
 
 
+_REQUEST_WS_KEEPALIVE = {"ping_interval": 20.0, "ping_timeout": 60.0}
+
+
+def _build_request_openai_provider(openai_client: AsyncOpenAI) -> OpenAIProvider:
+    """Build the per-request OpenAIProvider, enabling the Responses WebSocket transport.
+
+    A single ``OpenAIProvider`` caches one warm WebSocket connection on its resolved
+    model, so reusing this provider's ``RunConfig`` across the supervisor run and its
+    nested specialist runs keeps the entire request on one authenticated WebSocket
+    connection instead of reconnecting per call. Keepalive (``ping_timeout``) is raised
+    so long reasoning turns are not dropped. When the websocket transport is disabled
+    (``OPENAI_RESPONSES_WEBSOCKET_ENABLED=false`` or a non-OpenAI/non-Responses provider),
+    this falls back to the plain HTTP-transport provider.
+    """
+    if _openai_responses_websocket_enabled(get_default_runner_provider()):
+        return OpenAIProvider(
+            openai_client=openai_client,
+            use_responses_websocket=True,
+            responses_websocket_options=dict(_REQUEST_WS_KEEPALIVE),
+        )
+    return OpenAIProvider(openai_client=openai_client)
+
+
 def _configure_api_mode():
     """Configure OpenAI SDK API mode based on default runner provider."""
     provider = get_default_runner_provider()
@@ -850,7 +873,7 @@ async def _run_agent_with_tracing(
     reasoning_summary_chunks: List[str] = []
 
     openai_client = SafeLangfuseAsyncOpenAI()
-    openai_provider = OpenAIProvider(openai_client=openai_client)
+    openai_provider = _build_request_openai_provider(openai_client)
     run_config = _build_agents_run_config(
         model_provider=openai_provider,
         agent=agent,
@@ -1463,6 +1486,16 @@ async def _run_agent_with_tracing(
             trace_id=trace_id,
             user_id=user_id,
         )
+        # Close the per-request provider's warm websocket connection once the stream
+        # is fully drained. Guarded so a close failure cannot mask the real outcome.
+        try:
+            await openai_provider.aclose()
+        except Exception:
+            logger.warning(
+                "Failed to close per-request OpenAI provider websocket",
+                extra={"trace_id": trace_id, "user_id": user_id},
+                exc_info=True,
+            )
 
     # Get final output if not captured from streaming
     if hasattr(result, "final_output"):

@@ -30,7 +30,7 @@ import re
 import time
 from typing import Optional, List, Literal, Dict, Any, Callable, Sequence
 
-from agents import Agent, ModelSettings, RunConfig, function_tool
+from agents import Agent, ModelSettings, RunConfig, RunContextWrapper, function_tool
 
 from ..streaming_tools import run_specialist_with_events
 
@@ -461,13 +461,18 @@ def _create_streaming_tool(
         A function_tool decorated async function
     """
     @function_tool(name_override=tool_name, description_override=tool_description)
-    async def streaming_tool_wrapper(query: str) -> str:
+    async def streaming_tool_wrapper(ctx: RunContextWrapper[Any], query: str) -> str:
         """Ask the specialist a question and get a response."""
+        # Reuse the supervisor run's RunConfig (which carries the per-request warm
+        # websocket provider) so the nested specialist run shares the same authenticated
+        # WebSocket connection instead of opening a new one. The SDK threads the parent
+        # run's RunConfig via the tool context in openai-agents 0.17+.
+        effective_run_config = getattr(ctx, "run_config", None) or run_config
         return await run_specialist_with_events(
             agent=agent,
             input_text=query,
             specialist_name=specialist_name,
-            run_config=run_config,
+            run_config=effective_run_config,
             tool_name=tool_name,  # Pass tool_name for batching nudge tracking
         )
 
