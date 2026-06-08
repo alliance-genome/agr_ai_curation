@@ -114,6 +114,23 @@ def test_create_openai_client_kwargs_includes_websocket_base_url(monkeypatch):
     assert kwargs["websocket_base_url"] == "wss://api.example.test/v1"
 
 
+def test_safe_async_openai_default_headers_include_authorization_for_websocket(monkeypatch):
+    """default_headers must carry Authorization so the Responses WebSocket handshake
+    authenticates (workaround for openai/openai-agents-python#3133: agents builds the
+    handshake from default_headers, but openai>=2.36 keeps auth in auth_headers)."""
+    monkeypatch.setattr(
+        runner,
+        "get_default_runner_provider",
+        lambda: SimpleNamespace(provider_id="openai"),
+    )
+    monkeypatch.setattr(runner, "get_api_key", lambda _provider: "test-key")
+    monkeypatch.setattr(runner, "get_base_url", lambda _provider: "https://api.example.test/v1")
+
+    client = runner.SafeAsyncOpenAI()
+    header_keys = {key.lower() for key in dict(client.default_headers)}
+    assert "authorization" in header_keys
+
+
 def test_create_openai_client_kwargs_omits_empty_values(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(

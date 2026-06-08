@@ -308,6 +308,21 @@ class SafeAsyncOpenAI(AsyncOpenAI):
 
             self.chat.completions.create = safe_create
 
+    @property
+    def default_headers(self) -> dict:
+        """Include ``Authorization`` in ``default_headers`` for the WebSocket handshake.
+
+        Workaround for openai/openai-agents-python#3133: the Responses WebSocket
+        transport builds its handshake headers from ``client.default_headers`` only
+        (agents 0.17.x ``_merge_websocket_headers``), but ``openai>=2.36`` keeps the
+        ``Authorization`` header in ``client.auth_headers`` — so the WS handshake
+        would be sent unauthenticated and rejected with HTTP 401. Merging
+        ``auth_headers`` here lets WebSocket connections authenticate. The HTTP/SSE
+        path is unaffected (it already applies ``auth_headers``). Remove once the SDK
+        reads ``auth_headers`` for the handshake.
+        """
+        return {**super().default_headers, **self.auth_headers}
+
 
 # Backward-compatible alias for tests and local helpers. Despite the historic
 # name, this now uses the plain OpenAI client; Langfuse capture comes from the
