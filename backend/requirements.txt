@@ -29,7 +29,7 @@ sqlalchemy>=2.0
 psycopg2-binary
 alembic
 agr-abc-document-parsers>=1.5.0
-agr-curation-api-client>=0.11.0,<0.12.0  # <0.12 pin: 0.12 get_data_providers() needs species.assembly_curie, absent in live curation DB (see deployments/2026-06-08 note). Literature ES helpers + pg_trgm trigram ontology fuzzy search (Tier 4).
+agr-curation-api-client>=0.12.1  # 0.12.1 fixes get_data_providers() to filter on species.genomeassembly_id (live curation DB schema); 0.12.0 queried the dropped assembly_curie column. Literature ES helpers + pg_trgm trigram ontology fuzzy search (Tier 4).
 
 # Ontology processing
 pronto  # OBO file parsing for biological ontologies

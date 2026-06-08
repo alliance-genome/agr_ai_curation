@@ -1,9 +1,10 @@
 # Auto-generated lockfile — DO NOT EDIT MANUALLY
 # Generated: 2026-06-08 from backend/requirements.txt in a clean python:3.11-slim container
 # Full re-resolve to latest; SDK upgrade openai-agents 0.17.4 / openai 2.41.0.
-# agr-curation-api-client held at 0.11.0 (<0.12): 0.12 get_data_providers() needs
-# species.assembly_curie, absent in the live curation DB. .pth scan clean; 0.11/0.12
-# share an identical dependency graph (this is the only line changed vs the re-resolve).
+# agr-curation-api-client pinned 0.12.1: 0.12.1 fixes get_data_providers() to use
+# species.genomeassembly_id (live curation DB schema); 0.12.0 queried the dropped
+# assembly_curie column. 0.12.0/0.12.1 have identical requires_dist, and 0.11/0.12
+# share an identical dependency graph, so this is the only line changed vs the re-resolve.
 #
 # To update: rebuild from requirements.txt in a clean environment, verify no
 # malicious .pth files, then re-freeze.
@@ -12,7 +13,7 @@
 #
 agr-abc-document-parsers==1.5.1
 agr-cognito-py==0.1.0
-agr-curation-api-client==0.11.0
+agr-curation-api-client==0.12.1
 aiohappyeyeballs==2.6.2
 aiohttp==3.14.1
 aiosignal==1.4.0
