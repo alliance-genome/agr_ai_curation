@@ -79,7 +79,7 @@ content: |
   </result_contract>
 
   <stop_rules>
-  - Stop after the required evidence is collected; do not continue searching to improve phrasing. Keep retrieval bounded: 1-2 searches at most.
+  - Stop after the required evidence is collected; do not continue searching to improve phrasing.
   - If a term is not found, record it in `not_found` and complete the response.
   - If QuickGO is unavailable or repeats failures, report that in `query_summary` and do not fabricate data.
   </stop_rules>

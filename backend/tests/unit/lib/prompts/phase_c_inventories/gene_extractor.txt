@@ -86,16 +86,13 @@ Weak or non-curatable evidence is a methods-only mention
 Do not reuse chemical or phenotype `record_evidence` records as gene evidence.
 
 # GE-24/GE-50 provisional focal shortlist before evidence
-Build a short provisional list of focal genes before selecting evidence
+Build a provisional list of the genes the question calls for before selecting evidence
 
 # GE-50 do not screen every gene with evidence collection
 Do not use evidence collection as a screening pass over every gene in a broad search result.
 
 # GE-51 retain experimental subjects, exclude readouts
 Retain genes the paper directly investigates as experimental subjects or central mechanistic conclusions.
-
-# GE-52 keep retained set small (1-3, at most 4)
-Normally retain 1-3 `gene_mention_evidence` objects, at most 4, unless the user explicitly asks for exhaustive evidence.
 
 # GE-53/GE-56 record evidence only for genes you will stage (no exclusion evidence)
 # Reworded in the metadata-mechanism must-fix: there is no metadata.exclusions[] channel,
@@ -126,7 +123,7 @@ The active gene validator is a separate, context-naive LLM agent with database l
 
 # GE-34 identity_resolution_notes is a high-value handoff channel
 Treat `payload.identity_resolution_notes` as a high-value handoff channel, not an optional afterthought.
-Use one to three `identity_resolution_notes`, all paper-backed
+Use `identity_resolution_notes`, all paper-backed
 
 # GE-35 preserve most specific paper-backed mention as a lookup phrase
 preserve the most specific paper-backed gene or protein label that represents the retained entity and is useful as a database lookup phrase.
@@ -158,7 +155,7 @@ Multiple `span_ids` in one call make one evidence record; use separate calls for
 Do not write, reconstruct, trim, or paraphrase source quote text yourself.
 
 # GE-25 stage call payload
-Stage each retained focal gene with `stage_gene_mention_evidence`, passing the verified `evidence_record_ids`, a stable `pending_ref_id`, the paper `mention`, `confidence`, one to three `identity_resolution_notes`
+Stage each retained focal gene with `stage_gene_mention_evidence`, passing the verified `evidence_record_ids`, a stable `pending_ref_id`, the paper `mention`, `confidence`, `identity_resolution_notes`
 
 # GE-26 review then finalize once with returned candidate ids
 Call `list_staged_gene_mention_evidence` to review

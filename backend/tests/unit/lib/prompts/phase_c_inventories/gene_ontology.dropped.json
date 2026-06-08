@@ -20,5 +20,13 @@
     "reason": "GOT-15 relationship-gloss deletion. The pre-rewrite '<go_reference>' glossed three GO relationship-type labels -- is_a (specialization), part_of (location/inclusion), regulates (control). This is a narrative gloss with NO decision rule: the model reports whatever `relationship_type` QuickGO returns on `children` / `ancestors` entries (kept verbatim in <result_contract>: 'direct child entries with `go_id`, `name`, `relationship_type`'), so glossing the meaning of is_a / part_of / regulates changes no behavior and is not a load-bearing rule. The aspect labels from the same <go_reference> block (molecular_function / biological_process / cellular_component) are NOT deleted -- they survive as the load-bearing `aspect` enum in <result_contract> (GOT-14/GOT-25). Deleted with no home; printed for review by the Phase C deleted-rules dump.",
     "old_source": "packages/alliance/agents/gene_ontology/prompt.yaml:<go_reference>",
     "new_home": ""
+  },
+  {
+    "phrase": "Keep retrieval bounded: 1-2 searches at most.",
+    "synonyms": [],
+    "category": "deleted",
+    "reason": "GOT-28 cap removed (2026-06-08 release decision): artificial numeric cap on search count. The retained 'Stop after the required evidence is collected; do not continue searching to improve phrasing' keeps the efficiency intent without a hard 1-2 cap.",
+    "old_source": "packages/alliance/agents/gene_ontology/prompt.yaml:<stop_rules>",
+    "new_home": ""
   }
 ]

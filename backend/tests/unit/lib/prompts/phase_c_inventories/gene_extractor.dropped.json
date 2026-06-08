@@ -82,5 +82,13 @@
     "reason": "GE-21. Internal search-ranking mechanics (cross-encoder rerank + MMR diversification, short-query lexical boost) are implementation details that do not change the curator-facing extraction behavior. The one curator-relevant consequence (very short queries lean on exact-word matching) already lives in the search_document tool description, so this sentence is deleted with no relocation rather than duplicated.",
     "old_source": "packages/alliance/agents/gene_extractor/prompt.yaml:<search_context>",
     "new_home": ""
+  },
+  {
+    "phrase": "Normally retain 1-3 `gene_mention_evidence` objects, at most 4, unless the user explicitly asks for exhaustive evidence.",
+    "synonyms": [],
+    "category": "deleted",
+    "reason": "GE-52 removed (2026-06-08 release decision): artificial numeric cap on how many genes to extract. Curators want every relevant gene; the count must follow the curator's question, not a fixed 1-4 default. The relevance filter (focal/experimentally-supported vs background; exclude readouts/reagents/controls) is retained; only the count cap is removed. The provisional-list guidance is retained but reworded to drop the 'short/shortlist' size framing.",
+    "old_source": "packages/alliance/agents/gene_extractor/prompt.yaml:<evidence_and_curation_rules>",
+    "new_home": ""
   }
 ]

@@ -18,5 +18,13 @@
     "reason": "DISV-OUT / DISV-02 output-mandate de-dup. The pre-rewrite <role> and <output_contract> carried the 'return one root JSON object matching DiseaseValidationResult' / 'Return only a DiseaseValidationResult JSON object' mandate that the locked core already injects ('Output contract from agent.yaml: produce JSON matching DiseaseValidationResult; the structured-output layer below is authoritative for final response shape' plus the CRITICAL structured-output block 'Your final response MUST be valid JSON matching the DiseaseValidationResult schema EXACTLY'). The lean rewrite no longer restates the JSON-only output mandate; the core half of the render owns it. The home check is satisfied by the synonym (the core's injected output-contract line); the disease root-field detail is KEPT in <result_contract> because the core does not enumerate it. The `DiseaseValidationResult` token and the curator-facing 'Do not wrap the object under `validation_result`, `result`, or any other property' rule are both still present in the base prompt.",
     "old_source": "packages/alliance/agents/disease/prompt.yaml:<output_contract>",
     "new_home": "render"
+  },
+  {
+    "phrase": "If many matches remain, return the top 10 alphabetically by name and preserve them as candidates.",
+    "synonyms": [],
+    "category": "deleted",
+    "reason": "DISV-17 cap removed (2026-06-08 release decision): arbitrary 'top 10 alphabetically' cap on candidate disease terms. Reworded to 'preserve them as candidates and return the target unresolved' so ambiguous matches are not silently truncated (the search step already applies a small limit).",
+    "old_source": "packages/alliance/agents/disease/prompt.yaml:<lookup_workflow>",
+    "new_home": ""
   }
 ]

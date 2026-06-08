@@ -88,7 +88,7 @@ For a true missing GO term match, include the exact searched term or ID in `not_
 If QuickGO fails transiently after the bounded retry path, return `status: "unresolved"` and explain the service issue in `explanation`.
 
 # GOT-28 stop: bounded retrieval, 1-2 searches
-Stop after the required evidence is collected; do not continue searching to improve phrasing. Keep retrieval bounded: 1-2 searches at most.
+Stop after the required evidence is collected; do not continue searching to improve phrasing.
 
 # GOT-29 stop: not found -> record in not_found
 If a term is not found, record it in `not_found` and complete the response.

@@ -18,7 +18,7 @@
 Search/read the document for candidate mentions and context.
 
 # Step 2 -- shortlist focal genes before spending evidence calls.
-build a short provisional list of focal genes before selecting evidence
+build a provisional list of the focal genes the question calls for before selecting evidence
 
 # Step 3 -- read the chunk, pick backend span ids, record one evidence unit.
 select the `evidence_spans[].span_id` values that directly support one evidence unit

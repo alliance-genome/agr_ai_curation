@@ -19,8 +19,8 @@ For a DOID input, call `get_ontology_term` with `term: <DOID>` and `ontology_ter
 # Step 2 -- disease name input: typed label/synonym search.
 For a disease name input, call `search_ontology_terms` with `term: <label>`, `ontology_term_type: "DOTerm"`, `include_synonyms: true`, and a small `limit`.
 
-# Step 3 -- too many matches: trim to top 10 alphabetically, preserve as candidates.
-If many matches remain, return the top 10 alphabetically by name and preserve them as candidates.
+# Step 3 -- many matches: preserve all as candidates and return unresolved (no arbitrary cap).
+If many matches remain, preserve them as candidates and return the target unresolved.
 
 # Step 4 -- no tool-backed match for an expected field: unresolved, list it as missing.
 If no tool-backed match is found for a requested expected field, return `status: "unresolved"` and list that field in `missing_expected_fields`.
