@@ -84,6 +84,34 @@ def active_builder_context(monkeypatch):
             "document_id": "doc-1",
             "page": 3,
             "section": "Results",
+            "pending_ref_id": "gene-expression-annotation-pef-1",
+            "field_path": "where_expressed_statement",
+            "field_paths": [
+                "where_expressed_statement",
+                "expression_pattern.where_expressed.anatomical_structure",
+            ],
+            "envelope_target": {
+                "pending_ref_id": "gene-expression-annotation-pef-1",
+                "field_path": "where_expressed_statement",
+            },
+            "envelope_targets": [
+                {
+                    "pending_ref_id": "gene-expression-annotation-pef-1",
+                    "field_path": "where_expressed_statement",
+                },
+                {
+                    "pending_ref_id": "gene-expression-annotation-pef-1",
+                    "field_path": "expression_pattern.where_expressed.anatomical_structure",
+                },
+                {
+                    "pending_ref_id": "gene-expression-annotation-pef-2",
+                    "field_path": "where_expressed_statement",
+                },
+                {
+                    "pending_ref_id": "gene-expression-annotation-pef-2",
+                    "field_path": "expression_pattern.where_expressed.anatomical_structure",
+                },
+            ],
         }
     ]
     builder_token = builder.set_active_extraction_builder_workspace(workspace)

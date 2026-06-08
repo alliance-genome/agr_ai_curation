@@ -1,6 +1,7 @@
 """Unit tests for the record_evidence document tool."""
 
 import inspect
+from copy import deepcopy
 from typing import Any, cast
 
 import pytest
@@ -100,12 +101,22 @@ def test_build_envelope_target_fields_uses_pending_ref_when_object_id_missing():
         object_id=" ",
         pending_ref_id=" pending:gene:1 ",
         object_type="gene",
+        field_path=" expression.field ",
     ) == {
         "envelope_target": {
             "pending_ref_id": "pending:gene:1",
             "object_type": "gene",
+            "field_path": "expression.field",
         }
     }
+
+
+def test_build_envelope_target_fields_rejects_target_without_field_path():
+    with pytest.raises(ValueError, match="field_path is required"):
+        record_evidence._build_envelope_target_fields(
+            pending_ref_id="pending:gene:1",
+            object_type="gene",
+        )
 
 
 def test_build_envelope_target_fields_omits_empty_targets():
@@ -216,6 +227,34 @@ async def test_record_evidence_copies_exact_span_text_and_tracks_call(monkeypatc
         "document_id": "doc-12345678",
     }
     assert tracker.calls == ["record_evidence"]
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_rejects_target_identity_without_field_path(monkeypatch):
+    async def _unexpected_get_chunk_by_id(**_kwargs):
+        raise AssertionError("target validation should run before span resolution")
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _unexpected_get_chunk_by_id)
+    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+
+    result = await tool(
+        entity="wg",
+        span_ids=["chunk:s0000:c0000-c0001:aaaabbbb"],
+        pending_ref_id="expression-wg",
+    )
+
+    assert result == {
+        "status": "forbidden",
+        "entity": "wg",
+        "message": (
+            "record_evidence target arguments require field_path. "
+            "Omit object/pending target arguments to create unattached source "
+            "evidence, or provide field_path to attach the evidence to a "
+            "concrete curatable field."
+        ),
+        "target_requires_field_path": True,
+        "supplied_target": {"pending_ref_id": "expression-wg"},
+    }
 
 
 @pytest.mark.asyncio
@@ -341,6 +380,54 @@ async def test_record_evidence_updates_existing_id_and_preserves_attachments(mon
             },
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_update_rejects_object_only_retarget_without_mutation(monkeypatch):
+    async def _unexpected_get_chunk_by_id(**_kwargs):
+        raise AssertionError("target validation should run before span resolution")
+
+    workspace_records = [
+        {
+            "evidence_record_id": "ev-active",
+            "entity": "wg",
+            "verified_quote": "Existing quote remains live.",
+            "page": 2,
+            "section": "Results",
+            "chunk_id": "chunk-old",
+            "document_id": "doc-123",
+            "source_span_ids": ["chunk-old:s0000:c0000-c0027:aaaabbbb"],
+            "envelope_targets": [
+                {
+                    "pending_ref_id": "expression-wg",
+                    "field_path": "expression_assay.used_in",
+                }
+            ],
+            "pending_ref_id": "expression-wg",
+            "field_path": "expression_assay.used_in",
+            "field_paths": ["expression_assay.used_in"],
+        }
+    ]
+    original_records = deepcopy(workspace_records)
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _unexpected_get_chunk_by_id)
+    token = evidence_workspace.set_active_evidence_records(workspace_records)
+    try:
+        tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+        result = await tool(
+            entity="wg",
+            span_ids=["chunk-new:s0000:c0000-c0001:bbbbcccc"],
+            evidence_record_id="ev-active",
+            pending_ref_id="expression-wg",
+        )
+    finally:
+        evidence_workspace.reset_active_evidence_records(token)
+
+    assert result["status"] == "forbidden"
+    assert result["evidence_record_id"] == "ev-active"
+    assert result["target_requires_field_path"] is True
+    assert result["supplied_target"] == {"pending_ref_id": "expression-wg"}
+    assert workspace_records == original_records
 
 
 @pytest.mark.asyncio

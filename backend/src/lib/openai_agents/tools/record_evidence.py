@@ -269,6 +269,16 @@ def _build_envelope_target_fields(
     normalized_field_path = _optional_output_string(field_path)
     normalized_validation_finding_id = _optional_output_string(validation_finding_id)
 
+    if (
+        normalized_object_id
+        or normalized_pending_ref_id
+        or normalized_object_type
+        or normalized_validation_finding_id
+    ) and not normalized_field_path:
+        raise ValueError(
+            "field_path is required when evidence target identity is supplied"
+        )
+
     if normalized_object_id:
         target["object_id"] = normalized_object_id
     elif normalized_pending_ref_id:
@@ -579,6 +589,42 @@ def create_record_evidence_tool(
             }
         return None
 
+    def _target_argument_error(
+        *,
+        object_id: Any = None,
+        pending_ref_id: Any = None,
+        object_type: Any = None,
+        field_path: Any = None,
+        validation_finding_id: Any = None,
+    ) -> dict[str, Any] | None:
+        normalized_field_path = _optional_output_string(field_path)
+        supplied_target = {
+            key: value
+            for key, value in (
+                ("object_id", _optional_output_string(object_id)),
+                ("pending_ref_id", _optional_output_string(pending_ref_id)),
+                ("object_type", _optional_output_string(object_type)),
+                (
+                    "validation_finding_id",
+                    _optional_output_string(validation_finding_id),
+                ),
+            )
+            if value
+        }
+        if supplied_target and not normalized_field_path:
+            return {
+                "status": "forbidden",
+                "message": (
+                    "record_evidence target arguments require field_path. "
+                    "Omit object/pending target arguments to create unattached "
+                    "source evidence, or provide field_path to attach the "
+                    "evidence to a concrete curatable field."
+                ),
+                "target_requires_field_path": True,
+                "supplied_target": supplied_target,
+            }
+        return None
+
     @function_tool
     async def record_evidence(
         entity: str,
@@ -639,6 +685,27 @@ def create_record_evidence_tool(
                 },
                 document_id=document_id,
                 verification_method="evidence_target_scope",
+            )
+        target_argument_error = _target_argument_error(
+            object_id=object_id,
+            pending_ref_id=pending_ref_id,
+            object_type=object_type,
+            field_path=field_path,
+            validation_finding_id=validation_finding_id,
+        )
+        if target_argument_error is not None:
+            return _log_record_evidence_result(
+                {
+                    "entity": normalized_entity,
+                    **(
+                        {"evidence_record_id": normalized_evidence_record_id}
+                        if normalized_evidence_record_id
+                        else {}
+                    ),
+                    **target_argument_error,
+                },
+                document_id=document_id,
+                verification_method="evidence_target_arguments",
             )
         normalized_span_ids, span_ids_error = _normalize_span_ids(span_ids)
         envelope_target_fields = _build_envelope_target_fields(
