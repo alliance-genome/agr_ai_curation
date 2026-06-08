@@ -30,7 +30,7 @@ from types import SimpleNamespace
 from typing import Any, AsyncGenerator, Dict, List, Mapping, Optional, Set
 from uuid import uuid4
 
-from agents import Agent, Runner, function_tool
+from agents import Agent, Runner, RunContextWrapper, function_tool
 from pydantic import ValidationError
 
 from src.lib.context import (
@@ -2655,7 +2655,7 @@ def get_all_agent_tools(
         description_override = f"Ask the {specialist_label}"
 
         @function_tool(name_override=tool_name, description_override=description_override)
-        async def _ordered_tool(query: str) -> str:
+        async def _ordered_tool(ctx: RunContextWrapper[Any], query: str) -> str:
             step_started_at = time.monotonic()
             phase_timings_ms: dict[str, int] = {}
             next_idx = execution_state["next_tool_index"]
@@ -2725,9 +2725,14 @@ def get_all_agent_tools(
                         projected_chat_output = direct_formatter_result
                 elif hasattr(tool_callable, "on_invoke_tool"):
                     # Newer openai-agents tool invokers dereference ctx.tool_name and,
-                    # on handled tool errors, ctx.run_config (0.17+). Provide both on the
-                    # synthetic context so nested flow-tool errors surface correctly.
-                    tool_ctx = SimpleNamespace(tool_name=tool_name, run_config=None)
+                    # on handled tool errors, ctx.run_config (0.17+). Reuse the flow
+                    # supervisor run's RunConfig (its warm websocket provider) so the
+                    # nested specialist run shares the same connection instead of opening
+                    # a new one; fall back to None when the SDK did not supply one.
+                    tool_ctx = SimpleNamespace(
+                        tool_name=tool_name,
+                        run_config=getattr(ctx, "run_config", None),
+                    )
                     result = await tool_callable.on_invoke_tool(
                         tool_ctx,
                         json.dumps({"query": resolved_query}),
