@@ -316,6 +316,46 @@ def test_build_model_settings_keeps_openai_behavior_unchanged(monkeypatch):
     assert settings.temperature == pytest.approx(0.8)
 
 
+def _patch_openai_model(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.config.models_loader.get_model",
+        lambda _model_id: SimpleNamespace(
+            provider="openai",
+            supports_reasoning=False,
+            supports_temperature=True,
+        ),
+    )
+    monkeypatch.setattr(
+        "src.lib.config.providers_loader.get_provider",
+        lambda provider_id: (
+            SimpleNamespace(provider_id="openai", supports_parallel_tool_calls=True)
+            if provider_id == "openai"
+            else None
+        ),
+    )
+
+
+def test_build_model_settings_enables_model_retry_by_default(monkeypatch):
+    monkeypatch.delenv("OPENAI_MODEL_MAX_RETRIES", raising=False)
+    _patch_openai_model(monkeypatch)
+
+    settings = build_model_settings(model="gpt-5.5")
+
+    assert settings.retry is not None
+    assert settings.retry.max_retries == 3
+    assert settings.retry.backoff is not None
+    assert settings.retry.backoff.jitter is True
+
+
+def test_build_model_settings_retry_disabled_when_max_retries_zero(monkeypatch):
+    monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", "0")
+    _patch_openai_model(monkeypatch)
+
+    settings = build_model_settings(model="gpt-5.5")
+
+    assert settings.retry is None
+
+
 def test_get_api_key_uses_provider_env_mapping(monkeypatch):
     monkeypatch.setattr(
         "src.lib.config.providers_loader.get_default_runner_provider",

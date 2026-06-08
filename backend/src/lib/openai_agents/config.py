@@ -357,6 +357,35 @@ def reasoning_summary_request_settings(
     }
 
 
+def build_default_model_retry():
+    """Opt-in runner-managed retry for transient model-call failures.
+
+    The Agents SDK retries model calls when ``ModelSettings.retry`` is set,
+    classifying HTTP 5xx (e.g. a Responses WebSocket handshake ``503``) and
+    never-sent WebSocket errors as safe to retry, with exponential backoff and
+    ``Retry-After`` support. Without this, a transient WebSocket ``503`` hard-fails
+    the turn. Disable by setting ``OPENAI_MODEL_MAX_RETRIES=0``.
+    """
+    # Import here to avoid circular dependency at module load.
+    from agents.retry import ModelRetrySettings, ModelRetryBackoffSettings
+
+    try:
+        max_retries = int(os.getenv("OPENAI_MODEL_MAX_RETRIES", "3"))
+    except ValueError:
+        max_retries = 3
+    if max_retries <= 0:
+        return None
+    return ModelRetrySettings(
+        max_retries=max_retries,
+        backoff=ModelRetryBackoffSettings(
+            initial_delay=_get_env_float("OPENAI_MODEL_RETRY_INITIAL_DELAY", 0.5),
+            max_delay=_get_env_float("OPENAI_MODEL_RETRY_MAX_DELAY", 8.0),
+            multiplier=_get_env_float("OPENAI_MODEL_RETRY_MULTIPLIER", 2.0),
+            jitter=True,
+        ),
+    )
+
+
 def build_model_settings(
     model: str,
     temperature: Optional[float] = None,
@@ -438,6 +467,7 @@ def build_model_settings(
         parallel_tool_calls=effective_parallel_tool_calls,
         verbosity=effective_verbosity,
         include_usage=include_usage,
+        retry=build_default_model_retry(),
     )
 
 
