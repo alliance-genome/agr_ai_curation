@@ -135,6 +135,31 @@ class SimpleFormatter(logging.Formatter):
         return base
 
 
+class WebsocketTeardownNoiseFilter(logging.Filter):
+    """Suppress benign OpenAI Responses WebSocket teardown noise on multi-step flows.
+
+    The warm WebSocket connection (use_responses_websocket) is reused across a
+    flow's sequential agent steps; at teardown the SDK's per-turn streaming task
+    sees the connection close and logs a ConnectionClosedError ("no close frame
+    received or sent") at ERROR, plus an orphaned asyncio "Task exception was never
+    retrieved". The agents complete normally -- this is log noise only (verified:
+    work completes with WS on and off), so we drop these two specific records.
+    A proper flow-WebSocket lifecycle rework is tracked for 0.8.0 (KANBAN-1345).
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        if record.name == "openai.agents" and "no close frame received or sent" in message:
+            return False
+        if (
+            record.name == "asyncio"
+            and "Task exception was never retrieved" in message
+            and "ConnectionClosedError" in message
+        ):
+            return False
+        return True
+
+
 def configure_logging() -> None:
     """Configure root logging for the application."""
     level_name = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -150,6 +175,7 @@ def configure_logging() -> None:
     else:
         handler.setFormatter(JsonFormatter())
     handler.addFilter(ContextFilter())
+    handler.addFilter(WebsocketTeardownNoiseFilter())
 
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
