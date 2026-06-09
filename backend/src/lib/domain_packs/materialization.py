@@ -260,7 +260,32 @@ class DomainPackMetadataReviewRowMaterializer:
                 )
             )
 
-        return rows
+        return _ordered_review_rows(rows)
+
+
+# Review-row ordering by object role: lead with the units a curator acts on, keep
+# supporting reference context after them, and place any remaining roles last. This is
+# generic (driven by ``object_role``), so a Title-only validated_reference (e.g. the
+# allele paper reference) never dominates the first impression of a review session.
+_REVIEW_ROW_ROLE_ORDER: dict[str | None, int] = {
+    "curatable_unit": 0,
+    "validated_reference": 1,
+}
+_REVIEW_ROW_ROLE_DEFAULT_ORDER = 2
+
+
+def _ordered_review_rows(
+    rows: Sequence[DomainEnvelopeReviewRow],
+) -> list[DomainEnvelopeReviewRow]:
+    """Stable-sort review rows by object-role priority, preserving envelope order."""
+
+    return sorted(
+        rows,
+        key=lambda row: _REVIEW_ROW_ROLE_ORDER.get(
+            row.object_role,
+            _REVIEW_ROW_ROLE_DEFAULT_ORDER,
+        ),
+    )
 
 
 def materialize_persisted_envelope_review_rows(
@@ -2081,8 +2106,7 @@ def _display_label(
     summary_fields: Sequence[DomainEnvelopeReviewRowSummaryField],
     display_config: Mapping[str, Any],
 ) -> str:
-    configured_field = display_config.get("primary_label_field")
-    if isinstance(configured_field, str):
+    for configured_field in _primary_label_field_candidates(display_config):
         configured_value = _payload_value(domain_object.payload, configured_field)
         if configured_value is not _MISSING:
             normalized = _display_value(configured_value)
@@ -2094,6 +2118,41 @@ def _display_label(
         if normalized is not None:
             return normalized
     return stable_object_id(domain_object)
+
+
+def _primary_label_field_candidates(
+    display_config: Mapping[str, Any],
+) -> list[str]:
+    """Return ordered primary-label payload paths declared by a pack's workspace_display.
+
+    Packs may declare a single ``primary_label_field`` or an ordered
+    ``primary_label_fields`` fallback chain. The chain lets a pack name the best
+    label field plus deterministic fallbacks (e.g. an allele label, then the
+    associated gene symbol) so a curatable unit never falls back to its opaque
+    pending id when a real label is present on the payload. Both keys are generic
+    workspace_display metadata, so this stays domain-agnostic.
+    """
+
+    candidates: list[str] = []
+    configured_fields = display_config.get("primary_label_fields")
+    if isinstance(configured_fields, Sequence) and not isinstance(
+        configured_fields, (str, bytes, bytearray)
+    ):
+        for raw_field in configured_fields:
+            if isinstance(raw_field, str) and raw_field.strip():
+                candidates.append(raw_field.strip())
+    configured_field = display_config.get("primary_label_field")
+    if isinstance(configured_field, str) and configured_field.strip():
+        candidates.append(configured_field.strip())
+
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        ordered.append(candidate)
+    return ordered
 
 
 def _secondary_label(

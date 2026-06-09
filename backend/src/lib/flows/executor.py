@@ -1158,7 +1158,22 @@ async def _try_project_terminal_flow_output(
             )
         else:
             projection = finalize_output_projection(bundle, default_plan)
+    except FlowTerminalOutputProjectionError as exc:
+        # Already a specific projection error -- log the reason in plain logs
+        # (backend logs otherwise only record the tool-result length) and re-raise
+        # as-is rather than re-wrapping (which doubled the message).
+        logger.warning(
+            "[Flow Executor] Terminal formatter '%s' could not project output: %s",
+            agent_id,
+            exc,
+        )
+        raise
     except Exception as exc:
+        logger.warning(
+            "[Flow Executor] Terminal formatter '%s' could not project output: %s",
+            agent_id,
+            exc,
+        )
         raise _flow_terminal_projection_error(agent_id, str(exc)) from exc
 
     if output_format == "chat":

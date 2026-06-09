@@ -307,6 +307,44 @@ function isProjectionForCandidate(
   return !objectId || objectId === candidate.projection_ref?.object_id
 }
 
+function objectTypeForCandidate(candidate: CurationCandidate | null): string | null {
+  if (!candidate) {
+    return null
+  }
+
+  for (const summary of candidate.validation_summary_projections ?? []) {
+    const objectType = stringValue(summary.object_type)
+    if (objectType) {
+      return objectType
+    }
+  }
+
+  for (const projection of candidate.evidence_anchor_projections ?? []) {
+    const objectType = stringValue(projection.object_type)
+    if (objectType) {
+      return objectType
+    }
+  }
+
+  return null
+}
+
+function curationDomainName(candidate: CurationCandidate | null): string {
+  const objectType = objectTypeForCandidate(candidate)
+  if (objectType) {
+    const humanized = humanizeKey(objectType)
+    if (humanized) {
+      return humanized
+    }
+  }
+
+  return 'This'
+}
+
+function underDevelopmentBannerMessage(domainName: string): string {
+  return `${domainName} curation isn't ready on this screen yet — validation and submission are still being built.`
+}
+
 function validationSummariesForField(
   candidate: CurationCandidate,
   field: CurationDraftField,
@@ -1343,9 +1381,11 @@ function FieldSupportDetails({
 }
 
 function ObjectValidationAlerts({
+  domainName,
   summaries,
   unavailableCapabilities,
 }: {
+  domainName: string
   summaries: DomainEnvelopeValidationSummaryProjection[]
   unavailableCapabilities: UnavailableValidatorCapability[]
 }) {
@@ -1353,24 +1393,26 @@ function ObjectValidationAlerts({
     return null
   }
 
+  const readySummaries = summaries.filter(
+    (summary) => summary.status !== 'under_development',
+  )
+  const showUnderDevelopmentBanner =
+    unavailableCapabilities.length > 0 || readySummaries.length !== summaries.length
+
   return (
     <Stack spacing={1}>
-      {unavailableCapabilityMessages(unavailableCapabilities).map((message) => (
+      {showUnderDevelopmentBanner ? (
         <Alert
           data-testid="object-validation-state-under_development"
-          key={message}
           severity="info"
           variant="outlined"
         >
-          <Typography component="span" sx={{ fontWeight: 700 }} variant="body2">
-            Under development
-          </Typography>
           <Typography component="span" variant="body2">
-            {`: ${message}`}
+            {underDevelopmentBannerMessage(domainName)}
           </Typography>
         </Alert>
-      ))}
-      {summaries.map((summary) => {
+      ) : null}
+      {readySummaries.map((summary) => {
         const presentation = STATUS_PRESENTATION[summary.status]
         const message = uniqueMessages([summary])[0] ?? presentation.label
 
@@ -1426,6 +1468,10 @@ export default function CandidateFieldEditor({
   )
   const objectUnavailableCapabilities = useMemo(
     () => unavailableCapabilitiesForCandidate(activeCandidate),
+    [activeCandidate],
+  )
+  const curationDomain = useMemo(
+    () => curationDomainName(activeCandidate),
     [activeCandidate],
   )
   const objectEvidence = useMemo(
@@ -1603,6 +1649,7 @@ export default function CandidateFieldEditor({
       ) : null}
 
       <ObjectValidationAlerts
+        domainName={curationDomain}
         summaries={objectSummaries}
         unavailableCapabilities={objectUnavailableCapabilities}
       />

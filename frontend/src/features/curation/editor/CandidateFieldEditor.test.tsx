@@ -438,8 +438,11 @@ describe('CandidateFieldEditor', () => {
       'Resolved',
     )
     expect(screen.getByTestId('object-validation-state-under_development')).toHaveTextContent(
-      'The object-level validator is under development.',
+      "Gene curation isn't ready on this screen yet — validation and submission are still being built.",
     )
+    expect(
+      screen.queryByText('The object-level validator is under development.'),
+    ).not.toBeInTheDocument()
     expect(screen.queryByText('Editable fields')).not.toBeInTheDocument()
     expect(screen.getByTestId('object-evidence-panel')).toHaveTextContent('Evidence')
     expect(
@@ -685,10 +688,38 @@ describe('CandidateFieldEditor', () => {
     renderEditor(workspace)
 
     expect(screen.getByTestId('object-validation-state-under_development')).toHaveTextContent(
-      'Object lookup is being wired.',
+      "Gene curation isn't ready on this screen yet — validation and submission are still being built.",
     )
+    expect(
+      screen.getByTestId('object-validation-state-under_development'),
+    ).not.toHaveTextContent('Object lookup is being wired.')
+    expect(screen.queryByText('Object lookup is being wired.')).not.toBeInTheDocument()
     expect(screen.getByTestId('field-validation-state-field_curie')).toHaveTextContent(
       'CURIE lookup is being wired.',
+    )
+  })
+
+  it('falls back to a generic under-development banner when no clean domain name is available', () => {
+    const workspace = buildWorkspace()
+    const candidate = workspace.candidates[0]!
+    candidate.validation_summary_projections = []
+    candidate.evidence_anchor_projections = []
+    candidate.display_label = 'allele-paper-evidence-association-1'
+    candidate.metadata = {
+      unavailable_validator_capabilities: [
+        {
+          validator_binding_id: 'fixture.object_lookup',
+          label: 'Object lookup',
+          state: 'under_development',
+          state_explanation: 'Object lookup is being wired.',
+        },
+      ],
+    }
+
+    renderEditor(workspace)
+
+    expect(screen.getByTestId('object-validation-state-under_development')).toHaveTextContent(
+      "This curation isn't ready on this screen yet — validation and submission are still being built.",
     )
   })
 

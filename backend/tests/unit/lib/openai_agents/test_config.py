@@ -227,6 +227,45 @@ def test_build_model_settings_uses_provider_parallel_tool_policy(monkeypatch):
     assert settings.parallel_tool_calls is False
 
 
+def test_normalize_reasoning_effort_drops_invalid_values():
+    from src.lib.openai_agents.config import normalize_reasoning_effort
+
+    for valid in ("minimal", "low", "medium", "high", "xhigh"):
+        assert normalize_reasoning_effort(valid) == valid
+    assert normalize_reasoning_effort("HIGH") == "high"
+    assert normalize_reasoning_effort("  low  ") == "low"
+    for invalid in ("disabled", "none", "off", "", "bogus", None):
+        assert normalize_reasoning_effort(invalid) is None
+
+
+def test_build_model_settings_drops_invalid_reasoning_without_crashing(monkeypatch):
+    # Regression (0.7.2): a flow/agent carrying reasoning='disabled' must NOT crash
+    # Reasoning(effort=...) construction (the flow terminal-formatter projection path).
+    monkeypatch.setattr(
+        "src.lib.config.models_loader.get_model",
+        lambda _model_id: SimpleNamespace(
+            provider="openai",
+            supports_reasoning=True,
+            supports_temperature=False,
+        ),
+    )
+    monkeypatch.setattr(
+        "src.lib.config.providers_loader.get_provider",
+        lambda provider_id: (
+            SimpleNamespace(provider_id="openai", supports_parallel_tool_calls=True)
+            if provider_id == "openai"
+            else None
+        ),
+    )
+
+    settings = build_model_settings(
+        model="gpt-5.4-mini",
+        reasoning_effort="disabled",  # type: ignore[arg-type]  # deliberately invalid
+    )
+    assert settings is not None
+    assert settings.reasoning is None
+
+
 def test_build_model_settings_applies_groq_safety_defaults(monkeypatch):
     monkeypatch.setattr(
         "src.lib.config.models_loader.get_model",

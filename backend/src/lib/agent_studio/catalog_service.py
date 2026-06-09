@@ -27,7 +27,6 @@ from functools import lru_cache
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, Iterator, List, Optional
 from datetime import datetime
-import re
 from dataclasses import dataclass, replace
 
 from agents import Agent
@@ -1177,7 +1176,6 @@ def get_prompt_catalog() -> PromptCatalogService:
 # Agent Factory Functions (for Flow Execution)
 # =============================================================================
 
-_REASONING_LEVEL_PATTERN = re.compile(r"^(minimal|low|medium|high)$")
 
 
 def _coerce_db_user_id(raw_user_id: Any) -> Optional[int]:
@@ -1408,6 +1406,7 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
     from src.lib.openai_agents.config import (
         get_model_for_agent,
         build_model_settings,
+        normalize_reasoning_effort,
         resolve_model_provider,
     )
 
@@ -1481,14 +1480,14 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
         effective_temperature = kwargs.get("model_temperature_override")
     else:
         effective_temperature = db_agent.model_temperature
-    reasoning_effort = kwargs.get("model_reasoning_override", db_agent.model_reasoning)
-    if isinstance(reasoning_effort, str) and not _REASONING_LEVEL_PATTERN.match(reasoning_effort):
+    raw_reasoning = kwargs.get("model_reasoning_override", db_agent.model_reasoning)
+    reasoning_effort = normalize_reasoning_effort(raw_reasoning)
+    if raw_reasoning and reasoning_effort is None:
         logger.warning(
             "[CatalogService] Ignoring invalid reasoning level '%s' for agent '%s'",
-            reasoning_effort,
+            raw_reasoning,
             db_agent.agent_key,
         )
-        reasoning_effort = None
 
     if bool(set(canonical_tool_ids) & _FORMATTER_TOOL_IDS):
         reasoning_effort = None

@@ -110,12 +110,16 @@ object_definitions:
       object_role: curatable_unit
       association_kind: allele_paper_evidence
       workspace_display:
+        primary_label_fields:
+          - allele_label
         summary_fields:
+          - allele_label
           - allele_identifier
         groups:
           - id: allele
             label: Allele
             fields:
+              - allele_label
               - allele_identifier
       export_behavior:
         status: blocked
@@ -193,6 +197,12 @@ object_definitions:
         display_name: Source allele mention
         required: true
         object_type_ref: AlleleMention
+      - field_path: allele_label
+        field_type: string
+        display_name: Allele label
+        required: false
+        metadata:
+          curator_action_note: Extracted allele label preserved from the source mention; the primary review-row label for this association.
       - field_path: allele_identifier
         field_type: string
         display_name: Allele identifier

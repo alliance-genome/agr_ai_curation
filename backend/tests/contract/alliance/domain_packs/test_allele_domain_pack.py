@@ -14,6 +14,7 @@ import yaml
 from src.schemas.curation_workspace import SubmissionMode
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
 from src.lib.domain_packs.materialization import (
+    DomainPackMetadataReviewRowMaterializer,
     ValidatorResultMaterializationInput,
     materialize_validator_results_into_envelope,
     project_validation_summary_projections,
@@ -673,6 +674,57 @@ def test_tool_verified_allele_fixture_converts_to_pending_envelope():
         )
         == expected["envelope"]
     )
+
+
+def test_allele_association_review_row_surfaces_allele_label_not_pending_ref_id():
+    """0.7.2 Fix B: a pending allele association review row leads with its allele label.
+
+    Before the fix the curatable association row fell back to its opaque
+    ``allele-paper-evidence-association-N`` pending id (the curator saw "nothing but a
+    title"). The label must instead come from the payload ``allele_label`` (with the
+    associated gene as the fallback), and the Title-only Reference row must not lead.
+    """
+
+    fixture = load_evidence_fixture("tool_verified_allele_paper")
+    envelope = build_pending_allele_envelope_from_tool_verified_fixture(
+        fixture,
+        envelope_id="allele-tool-verified-envelope",
+        created_at=datetime(2026, 5, 9, tzinfo=timezone.utc),
+    )
+
+    rows = DomainPackMetadataReviewRowMaterializer(_allele_pack().metadata).materialize(
+        envelope,
+        envelope_revision=1,
+    )
+
+    # Metadata-only objects (AlleleMention / EvidenceQuote) do not produce review rows;
+    # the curatable association and the validated Reference do.
+    rows_by_type = {row.object_type: row for row in rows}
+    assert set(rows_by_type) == {"AllelePaperEvidenceAssociation", "Reference"}
+
+    association_row = rows_by_type["AllelePaperEvidenceAssociation"]
+    assert association_row.display_label == "daf-2(m41)"
+    assert not association_row.display_label.startswith(
+        "allele-paper-evidence-association"
+    )
+    # The allele label surfaces as a row field so the curator sees it inline.
+    summary_field_values = {
+        field.field_path: field.value for field in association_row.summary_fields
+    }
+    assert summary_field_values.get("allele_label") == "daf-2(m41)"
+
+    # The curatable unit leads; the Title-only Reference does not dominate first.
+    assert rows[0].object_type == "AllelePaperEvidenceAssociation"
+    assert rows[0].object_role == "curatable_unit"
+    reference_index = next(
+        index for index, row in enumerate(rows) if row.object_type == "Reference"
+    )
+    association_index = next(
+        index
+        for index, row in enumerate(rows)
+        if row.object_type == "AllelePaperEvidenceAssociation"
+    )
+    assert association_index < reference_index
 
 
 def test_tool_verified_allele_fixture_rejects_malformed_required_data():

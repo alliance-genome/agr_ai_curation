@@ -315,6 +315,31 @@ def supports_temperature(model: str) -> bool:
 
 # Type alias for reasoning effort levels
 ReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh"]
+
+# Reasoning-effort values the model layer accepts. Agent and flow-builder configs
+# can carry values the model's Reasoning schema rejects (notably "disabled"/"none"
+# emitted by the AI flow builder). Treat anything else as "no reasoning" and
+# normalize to None rather than letting it crash Reasoning(effort=...) downstream
+# (e.g. in the flow terminal-formatter projection planner). KANBAN-1346 / 0.7.2.
+_VALID_REASONING_EFFORTS: frozenset = frozenset(
+    {"minimal", "low", "medium", "high", "xhigh"}
+)
+
+
+def normalize_reasoning_effort(value: object) -> Optional[ReasoningEffort]:
+    """Return a valid ReasoningEffort, or None when unset/invalid.
+
+    Any value not in the accepted set (including "disabled", "none", "off", or an
+    unknown string) means "no reasoning" and yields None, so a misconfigured
+    agent/flow can never crash model-settings construction.
+    """
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if normalized in _VALID_REASONING_EFFORTS:
+        return normalized  # type: ignore[return-value]
+    logger.debug("Dropping invalid reasoning effort %r (treated as no reasoning)", value)
+    return None
 ReasoningSummaryStatus = Literal["present", "not_requested", "not_supported", "unavailable"]
 
 
@@ -426,8 +451,11 @@ def build_model_settings(
     from agents import ModelSettings
     from openai.types.shared import Reasoning
 
-    # Build reasoning config for models that support it.
+    # Build reasoning config for models that support it. Normalize first so an
+    # invalid value (e.g. "disabled" from the flow builder) becomes "no reasoning"
+    # instead of crashing Reasoning(effort=...) construction.
     reasoning = None
+    reasoning_effort = normalize_reasoning_effort(reasoning_effort)
     if reasoning_effort and supports_reasoning(model):
         summary_settings = reasoning_summary_request_settings(
             model=model,

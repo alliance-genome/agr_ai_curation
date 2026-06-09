@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -15,7 +14,6 @@ from src.models.sql.database import SessionLocal
 
 
 _startup_report: Optional[Dict[str, Any]] = None
-_REASONING_LEVEL_PATTERN = re.compile(r"^(minimal|low|medium|high)$")
 logger = logging.getLogger(__name__)
 
 
@@ -310,7 +308,9 @@ def build_agent_runtime_report(
 
         reasoning = getattr(row, "model_reasoning", None)
         if isinstance(reasoning, str) and reasoning.strip():
-            if not _REASONING_LEVEL_PATTERN.match(reasoning.strip()):
+            from src.lib.openai_agents.config import normalize_reasoning_effort
+
+            if normalize_reasoning_effort(reasoning) is None:
                 row_warnings.append(f"Invalid model_reasoning '{reasoning}'")
 
         output_schema_key = str(getattr(row, "output_schema_key", "") or "").strip()
