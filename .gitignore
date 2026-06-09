@@ -240,3 +240,6 @@ skills-lock.json
 # Local design notes not intended for the repo
 /docs/design/2026-05-07-domain-pack-curatable-unit-notes.md
 /docs/design/domain-pack-migration/
+
+# Prompt-customization migration working set (local only, do not commit)
+docs/design/2026-06-08-prompt-customization-migration/
