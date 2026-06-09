@@ -155,7 +155,7 @@ describe('AppContent global notifications', () => {
   });
 
   it('uses the substantive v0.7.0 release notes for the changelog popup', () => {
-    expect(POPUP_CHANGELOG_ENTRY?.id).toBe('2026-05-11-v0.7.0');
+    expect(POPUP_CHANGELOG_ENTRY?.id).toBe('2026-06-09-v0.7.0');
     expect(POPUP_CHANGELOG_ENTRY?.version).toBe('0.7.0');
   });
 

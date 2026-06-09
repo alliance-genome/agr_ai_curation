@@ -1,9 +1,9 @@
 import type { ChangelogEntry } from '../types';
 
 const entry: ChangelogEntry = {
-  id: '2026-05-11-v0.7.0',
+  id: '2026-06-09-v0.7.0',
   version: '0.7.0',
-  date: 'May 11, 2026',
+  date: 'June 9, 2026',
   title: 'Domain Envelopes and Automatic Validation',
   sections: [
     {

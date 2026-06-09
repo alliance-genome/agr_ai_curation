@@ -40,7 +40,7 @@ batch_capabilities:
   - curation_handoff
 
 frontend:
-  icon: "CH"
+  icon: "📤"
   show_in_palette: true
 
 group_rules_enabled: false
