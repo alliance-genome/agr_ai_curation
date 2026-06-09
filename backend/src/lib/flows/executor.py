@@ -793,7 +793,11 @@ async def _run_output_projection_planner(
         node_data=node_data,
         resolved_query=resolved_query,
     )
-    max_turns = max(4, min(get_max_turns(), 8))
+    # Use the standard agent turn budget (default 60), not a tight clamp. The
+    # planner inspects row sources/fields, previews, corrects, and finalizes a
+    # multi-column plan; an 8-turn clamp exhausted before finalizing on richer
+    # bundles (e.g. multi-column allele TSV worklists), failing the whole flow.
+    max_turns = get_max_turns()
 
     for attempt in range(2):
         run_input = (
