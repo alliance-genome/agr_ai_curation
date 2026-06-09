@@ -553,7 +553,10 @@ async def test_projection_planner_retries_after_invalid_finalization(monkeypatch
     )
 
     assert len(run_calls) == 2
-    assert run_calls[0]["max_turns"] == 8
+    # Planner uses the standard agent turn budget (get_max_turns(), patched to 60
+    # in this fixture), not a tight clamp — an 8-turn cap exhausted before
+    # finalizing richer multi-column bundles. See hotfix 0.7.3.
+    assert run_calls[0]["max_turns"] == 60
     assert run_calls[0]["model"] == "resolved:configured-test-model:test-provider"
     assert run_calls[0]["tool_names"] == [
         "inspect_output_artifacts",
