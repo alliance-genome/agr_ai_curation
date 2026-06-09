@@ -44,7 +44,7 @@ VALIDATOR_DISPATCH_CLEANUP_SURFACE_PATHS = (
     "docs/developer/TEST_STRATEGY.md",
     "docs/developer/guides/DOMAIN_ENVELOPES.md",
     "docs/design/domain-pack-migration/18-validator-dispatch-contract.md",
-    "frontend/src/content/changelog/entries/2026-05-11-v0.7.0.ts",
+    "frontend/src/content/changelog/entries/2026-06-09-v0.7.0.ts",
 )
 
 VALIDATOR_DISPATCH_CLEANUP_SURFACE_GLOBS = (

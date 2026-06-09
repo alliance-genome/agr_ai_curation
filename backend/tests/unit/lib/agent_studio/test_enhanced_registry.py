@@ -81,14 +81,19 @@ class TestEnhancedRegistry:
                 assert frontend.get("show_in_palette") is True, \
                     f"{agent_id} should be visible in palette"
 
-    def test_curation_prep_visible_in_palette(self):
-        """Curation prep should be placeable as an explicit flow step."""
+    def test_curation_prep_hidden_from_palette(self):
+        """Curation prep is the internal handoff engine, not a palette choice.
+
+        As of 0.7.1, curation_handoff is the single curator-facing terminal for
+        getting data to the curation system; it runs curation_prep internally,
+        so curation_prep is hidden from the Flow Builder palette.
+        """
         from src.lib.agent_studio.catalog_service import AGENT_REGISTRY
 
         curation_prep = AGENT_REGISTRY.get("curation_prep")
         assert curation_prep is not None
         frontend = curation_prep.get("frontend", {})
-        assert frontend.get("show_in_palette") is True
+        assert frontend.get("show_in_palette") is False
 
     def test_newer_validation_agents_have_browser_metadata(self):
         """Newer validation agents should render useful Agent Browser tabs."""
