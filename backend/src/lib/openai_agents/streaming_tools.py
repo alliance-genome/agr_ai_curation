@@ -4166,6 +4166,44 @@ def add_specialist_event(event: Dict[str, Any]):
         _specialist_events.set(events)
 
 
+def _build_structured_finalization_internal_result_event(
+    *,
+    tool_name: str,
+    specialist_name: str,
+    payload: Mapping[str, Any],
+    output_type_name: str,
+    finalization_tool_name: str,
+    timestamp: str | None = None,
+) -> Dict[str, Any]:
+    """Build the backend-only handoff event for generic structured finalization."""
+
+    canonical_payload = copy.deepcopy(dict(payload))
+    canonical_output = json.dumps(canonical_payload)
+    return {
+        "type": INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
+        "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
+        "details": {
+            "toolName": tool_name,
+            "friendlyName": f"{specialist_name}: Internal Extraction Result",
+            "success": True,
+            "isSpecialistInternal": True,
+            "structuredFinalization": {
+                "output_type": output_type_name,
+                "tool_name": finalization_tool_name,
+            },
+        },
+        "internal": {
+            "tool_output": canonical_output,
+            "canonical_payload": canonical_payload,
+            "structured_finalization": {
+                "output_type": output_type_name,
+                "tool_name": finalization_tool_name,
+            },
+            "output_length": len(canonical_output),
+        },
+    }
+
+
 def _builder_finalizer_tool_calls(
     *,
     tool_calls: List[SpecialistToolCall],
@@ -5844,6 +5882,21 @@ async def run_specialist_with_events(
                 tool_name=tool_name,
                 specialist_name=specialist_name,
                 finalization=builder_finalization,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+        )
+    elif (
+        tool_name
+        and structured_finalization_state.required
+        and structured_finalization_state.accepted_payload is not None
+    ):
+        add_specialist_event(
+            _build_structured_finalization_internal_result_event(
+                tool_name=tool_name,
+                specialist_name=specialist_name,
+                payload=structured_finalization_state.accepted_payload,
+                output_type_name=structured_finalization_state.output_type_name,
+                finalization_tool_name=structured_finalization_state.tool_name,
                 timestamp=datetime.now(timezone.utc).isoformat(),
             )
         )

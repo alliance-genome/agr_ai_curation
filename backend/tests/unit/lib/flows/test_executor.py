@@ -378,6 +378,56 @@ def test_internal_extraction_audit_treats_none_tool_output_as_missing_payload():
     assert audit["internalPayloadFound"] is False
 
 
+def test_generic_structured_finalization_internal_event_feeds_flow_handoff():
+    """Generic structured finalization must expose a full artifact to flow steps."""
+
+    executor = _executor_module()
+    from src.lib.openai_agents.streaming_tools import (
+        _build_structured_finalization_internal_result_event,
+    )
+
+    payload = {
+        "collections": [
+            {
+                "collection_id": "reagents",
+                "items": [{"label": "UAS-GFP", "evidence_record_ids": ["ev-1"]}],
+            }
+        ],
+        "evidence_records": [{"id": "ev-1", "quote": "verified server quote"}],
+    }
+    event = _build_structured_finalization_internal_result_event(
+        tool_name="ask_pdf_extraction_specialist",
+        specialist_name="PDF Extraction Specialist",
+        payload=payload,
+        output_type_name="PdfExtractionFinalizationEnvelope",
+        finalization_tool_name="finalize_pdf_extraction",
+        timestamp="2026-06-11T12:00:00+00:00",
+    )
+
+    tool_output, audit = executor._internal_extraction_tool_output_with_audit_since(
+        {
+            "collected_events": [event],
+            "collected_index": 0,
+        },
+        tool_name="ask_pdf_extraction_specialist",
+    )
+
+    assert event["type"] == executor.INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
+    assert event["details"]["structuredFinalization"] == {
+        "output_type": "PdfExtractionFinalizationEnvelope",
+        "tool_name": "finalize_pdf_extraction",
+    }
+    assert event["internal"]["canonical_payload"] == payload
+    assert json.loads(tool_output) == payload
+    assert audit["internalEventEmitted"] is True
+    assert audit["internalEventMatchedTool"] is True
+    assert audit["internalEventFoundByFlow"] is True
+    assert audit["internalPayloadFound"] is True
+    assert audit["internalPayloadSource"] == "collected_events"
+    assert audit["internalEventToolNames"] == ["ask_pdf_extraction_specialist"]
+    assert audit["builderFinalizationSeen"] is False
+
+
 def test_flow_candidate_persistence_materializes_domain_envelope_records(monkeypatch):
     """Flow-persisted domain envelopes should become reviewable without prep sidecars."""
 
