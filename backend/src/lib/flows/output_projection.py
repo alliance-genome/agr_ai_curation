@@ -972,9 +972,10 @@ def _normal_answer_header_cell(value: str) -> str:
 
 def _header_from_answer_text_line(line: str) -> list[str] | None:
     lowered = line.lower()
-    if "columns:" not in lowered:
+    marker_index = lowered.find("columns:")
+    if marker_index < 0:
         return None
-    _, raw_columns = line.split(":", 1)
+    raw_columns = line[marker_index + len("columns:") :]
     raw_columns = raw_columns.strip().strip(":).")
     split = _split_answer_table_line(raw_columns)
     if split is None and "," in raw_columns:
@@ -994,14 +995,15 @@ def _rows_from_answer_segment(
     delimiter: str,
 ) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
+    parsed_line_delimiters = {delimiter}
+    if delimiter == ",":
+        parsed_line_delimiters = {"\t", " | "}
     for line in lines:
         split = _split_answer_table_line(line)
         if split is None:
             continue
         cells, line_delimiter = split
-        if delimiter == "\t" and line_delimiter != "\t":
-            continue
-        if delimiter != "\t" and line_delimiter == "\t":
+        if line_delimiter not in parsed_line_delimiters:
             continue
         if len(cells) < len(header):
             continue
@@ -1047,7 +1049,7 @@ def _parse_tabular_answer_rows(text: str) -> list[dict[str, str]]:
         if declared_header:
             flush_current()
             current_header = declared_header
-            current_delimiter = " | "
+            current_delimiter = ","
             continue
 
         split = _split_answer_table_line(line)
@@ -1453,18 +1455,21 @@ def default_columns_for_row_source(
             artifact.artifact_shape == "generic_pdf_answer_table"
             for artifact in bundle.artifacts
         ):
-            selected = [
+            priority_selected = [
                 field_ref
                 for field_ref in GENERIC_PDF_ANSWER_TABLE_FIELD_PRIORITY
                 if field_ref in available
             ]
-            if not selected:
-                selected = [
+            selected = [
+                *priority_selected,
+                *[
                     field.ref
                     for field in bundle.field_catalog
                     if field.row_source == row_source
                     and field.ref.startswith("object.payload.")
-                ][:12]
+                    and field.ref not in priority_selected
+                ],
+            ]
             return [
                 FlowOutputColumnSpec(
                     key=field_ref.removeprefix("object.payload."),

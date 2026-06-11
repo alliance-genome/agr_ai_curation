@@ -243,6 +243,69 @@ def test_generic_pdf_step_output_projects_pipe_answer_table_rows():
     ]
 
 
+def test_generic_pdf_step_output_projects_prefixed_comma_header_with_tab_rows_and_extra_columns():
+    payload = {
+        "answer": (
+            "Answer table: columns: synonym, source, source_identifier, count, note\n"
+            "w1118\tBloomington Drosophila Stock Center\tRRID: BDSC_3605\t1\tcontrol stock\n"
+            "Sas-4s2214|Sas-4\tBloomington Drosophila Stock Center\t"
+            "RRID: BDSC_12119\t11\tmutant allele\n"
+        ),
+        "evidence_records": [
+            {
+                "evidence_record_id": "ev-1",
+                "verified_quote": "Server verified quote.",
+            }
+        ],
+    }
+
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[
+            {
+                "step": 1,
+                "agent_id": "pdf_extraction",
+                "agent_name": "General PDF Extraction Agent",
+                "output": json.dumps(payload),
+                "output_preview": "Extracted rows.",
+                "candidate": None,
+            }
+        ],
+        flow_name="PDF Projection Flow",
+        output_format="tsv",
+    )
+
+    result = apply_projection_plan(
+        bundle,
+        default_projection_plan(bundle, output_format="tsv"),
+    )
+
+    assert bundle.artifacts[0].artifact_shape == "generic_pdf_answer_table"
+    assert result.row_source == "object"
+    assert [column.key for column in result.columns] == [
+        "synonym",
+        "source",
+        "source_identifier",
+        "count",
+        "note",
+    ]
+    assert result.rows == [
+        {
+            "synonym": "w1118",
+            "source": "Bloomington Drosophila Stock Center",
+            "source_identifier": "RRID: BDSC_3605",
+            "count": "1",
+            "note": "control stock",
+        },
+        {
+            "synonym": "Sas-4s2214|Sas-4",
+            "source": "Bloomington Drosophila Stock Center",
+            "source_identifier": "RRID: BDSC_12119",
+            "count": "11",
+            "note": "mutant allele",
+        },
+    ]
+
+
 def test_plain_text_step_output_without_candidate_is_not_an_artifact():
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[
