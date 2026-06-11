@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from types import SimpleNamespace
 
@@ -95,6 +97,70 @@ def test_default_tsv_artifact_projection_matches_compatibility_columns():
             "artifact_preview": "Extracted gene rows.",
         }
     ]
+
+
+def test_generic_pdf_step_output_projects_answer_table_rows_without_candidate():
+    payload = {
+        "answer": (
+            "Extracted rows:\n\n"
+            "synonym\tsource\tsource_identifier\tcount\n"
+            "Ck:GFP\tThis study\tNew in paper\t4\n"
+            "Actn RNAi\tSource not found\tNot found\t2\n"
+        ),
+        "items": [
+            {
+                "label": "group-level audit item",
+                "entity_type": "genetic reagent group",
+                "evidence_record_ids": ["ev-1"],
+            }
+        ],
+        "evidence_records": [
+            {
+                "evidence_record_id": "ev-1",
+                "verified_quote": "Server verified quote.",
+            }
+        ],
+    }
+
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[
+            {
+                "step": 1,
+                "agent_id": "pdf_extraction",
+                "agent_name": "General PDF Extraction Agent",
+                "output": json.dumps(payload),
+                "output_preview": "Extracted rows.",
+                "candidate": None,
+            }
+        ],
+        flow_name="PDF Projection Flow",
+        output_format="tsv",
+    )
+
+    object_rows = bundle.rows_for_source("object")
+    assert len(bundle.artifacts) == 1
+    assert len(object_rows) == 2
+    assert object_rows[0]["object.payload.synonym"] == "Ck:GFP"
+    assert object_rows[0]["object.payload.source_identifier"] == "New in paper"
+    assert object_rows[1]["object.payload.count"] == "2"
+    assert bundle.rows_for_source("evidence")[0]["evidence.evidence_record_id"] == "ev-1"
+
+
+def test_plain_text_step_output_without_candidate_is_not_an_artifact():
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[
+            {
+                "step": 1,
+                "agent_id": "pdf_extraction",
+                "output": "plain text only",
+                "candidate": None,
+            }
+        ],
+        flow_name="No Artifact Flow",
+        output_format="tsv",
+    )
+
+    assert bundle.artifacts == []
 
 
 def test_object_projection_supports_rename_omit_reorder_filter_sort_and_concat():

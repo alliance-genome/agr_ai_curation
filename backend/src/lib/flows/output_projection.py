@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import csv
 from datetime import datetime
+import io
 import json
 import math
 from typing import Any, Literal, Mapping, Sequence
@@ -934,6 +936,102 @@ def _payload_object_items(payload: Mapping[str, Any]) -> tuple[list[Mapping[str,
     return [], warnings
 
 
+def _parse_tabular_answer_rows(text: str) -> list[dict[str, str]]:
+    """Extract simple TSV rows embedded in a generic PDF answer."""
+
+    segments: list[list[str]] = []
+    current: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("```"):
+            if current:
+                segments.append(current)
+                current = []
+            continue
+        if "\t" not in line:
+            if current:
+                segments.append(current)
+                current = []
+            continue
+        current.append(line)
+    if current:
+        segments.append(current)
+
+    best_rows: list[dict[str, str]] = []
+    for segment in segments:
+        if len(segment) < 2:
+            continue
+        header = [cell.strip().lower() for cell in segment[0].split("\t")]
+        if not any(
+            cell in {"synonym", "source", "source_identifier", "count", "label", "name"}
+            for cell in header
+        ):
+            continue
+        reader = csv.DictReader(io.StringIO("\n".join(segment)), delimiter="\t")
+        rows: list[dict[str, str]] = []
+        for row in reader:
+            clean_row = {
+                str(key or "").strip(): str(value or "").strip()
+                for key, value in row.items()
+                if str(key or "").strip()
+            }
+            if any(clean_row.values()):
+                rows.append(clean_row)
+            if len(rows) >= MAX_PROJECTION_ROWS:
+                break
+        if len(rows) > len(best_rows):
+            best_rows = rows
+    return best_rows
+
+
+def _payload_answer_table_items(payload: Mapping[str, Any]) -> tuple[list[Mapping[str, Any]], list[str]]:
+    answer = payload.get("answer")
+    if not isinstance(answer, str) or "\t" not in answer:
+        return [], []
+    rows = _parse_tabular_answer_rows(answer)
+    if not rows:
+        return [], []
+    items: list[Mapping[str, Any]] = []
+    for index, row in enumerate(rows, start=1):
+        label = (
+            row.get("synonym")
+            or row.get("label")
+            or row.get("name")
+            or next((value for value in row.values() if value), f"row {index}")
+        )
+        items.append(
+            {
+                "object_type": "extracted_answer_row",
+                "object_id": f"answer-row-{index}",
+                "label": label,
+                "payload": row,
+            }
+        )
+    return items, ["Projected object rows from a TSV-like table in the PDF extraction answer."]
+
+
+def _payload_from_step_output(step: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    output = _step_attr(step, "output")
+    if isinstance(output, Mapping):
+        payload: Any = output
+    elif isinstance(output, str):
+        try:
+            payload = json.loads(output)
+        except (TypeError, ValueError):
+            return None
+    else:
+        return None
+
+    if isinstance(payload, Mapping) and _payload_shape(payload) == "non_structured":
+        nested_result = payload.get("result")
+        if isinstance(nested_result, Mapping):
+            payload = nested_result
+
+    if isinstance(payload, Mapping) and _payload_shape(payload) != "non_structured":
+        return payload
+    return None
+
+
 def _step_attr(step: Mapping[str, Any], key: str, default: Any = None) -> Any:
     return step.get(key, default)
 
@@ -947,6 +1045,8 @@ def _candidate_attr(candidate: Any, key: str, default: Any = None) -> Any:
 def _build_artifact_from_step(step: Mapping[str, Any]) -> FlowOutputArtifact | None:
     candidate = _step_attr(step, "candidate")
     payload = _candidate_attr(candidate, "payload_json")
+    if payload is None:
+        payload = _payload_from_step_output(step)
     if payload is None:
         return None
 
@@ -972,7 +1072,9 @@ def _build_artifact_from_step(step: Mapping[str, Any]) -> FlowOutputArtifact | N
     if isinstance(payload, Mapping):
         domain_pack_id = _string_value(payload.get("domain_pack_id") or payload.get("adapter_key"))
         envelope_id = _string_value(payload.get("envelope_id"))
-        object_items, object_warnings = _payload_object_items(payload)
+        object_items, object_warnings = _payload_answer_table_items(payload)
+        if not object_items:
+            object_items, object_warnings = _payload_object_items(payload)
         if shape == "non_structured":
             object_items = []
         warnings.extend(object_warnings)

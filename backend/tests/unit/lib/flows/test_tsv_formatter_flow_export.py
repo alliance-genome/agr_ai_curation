@@ -54,6 +54,120 @@ async def test_terminal_formatter_flow_output_fails_without_model_fallback(agent
 
 
 @pytest.mark.asyncio
+async def test_tsv_formatter_projects_generic_pdf_answer_table_without_model_fallback(
+    monkeypatch,
+):
+    executor = _executor_module()
+    save_calls = []
+    payload = {
+        "answer": (
+            "Extracted genetic reagents:\n\n"
+            "synonym\tsource\tsource_identifier\tcount\n"
+            "Ck:GFP\tThis study\tNew in paper\t4\n"
+            "Actn RNAi\tSource not found\tNot found\t2\n"
+        ),
+        "items": [
+            {
+                "label": "group-level audit item",
+                "entity_type": "genetic reagent group",
+                "evidence_record_ids": ["ev-1"],
+            }
+        ],
+        "evidence_records": [
+            {
+                "evidence_record_id": "ev-1",
+                "verified_quote": "Server verified quote.",
+            }
+        ],
+    }
+
+    async def _fake_save_tsv_impl(
+        data_json: str,
+        filename: str,
+        columns: str | None = None,
+    ) -> dict:
+        save_calls.append(
+            {
+                "data": json.loads(data_json),
+                "filename": filename,
+                "columns": json.loads(columns or "[]"),
+            }
+        )
+        return {
+            "file_id": "file-pdf-tsv",
+            "filename": "pdf.tsv",
+            "format": "tsv",
+            "size_bytes": 1234,
+            "mime_type": "text/tab-separated-values",
+            "download_url": "/api/files/file-pdf-tsv/download",
+            "created_at": "2026-06-11T00:00:00Z",
+        }
+
+    monkeypatch.setattr(
+        "src.lib.openai_agents.tools.file_output_tools._save_tsv_impl",
+        _fake_save_tsv_impl,
+    )
+
+    await executor._try_project_terminal_flow_output(
+        agent_id="tsv_formatter",
+        completed_steps=[
+            {
+                "step": 1,
+                "agent_id": "pdf_extraction",
+                "agent_name": "General PDF Extraction Agent",
+                "output": json.dumps(payload),
+                "output_preview": "Extracted genetic reagents.",
+                "candidate": None,
+            }
+        ],
+        flow_name="PDF TSV Flow",
+        projection_plan={
+            "format": "tsv",
+            "row_source": "object",
+            "columns": [
+                {
+                    "key": "synonym",
+                    "field_ref": "object.payload.synonym",
+                },
+                {
+                    "key": "source",
+                    "field_ref": "object.payload.source",
+                },
+                {
+                    "key": "source_identifier",
+                    "field_ref": "object.payload.source_identifier",
+                },
+                {
+                    "key": "count",
+                    "field_ref": "object.payload.count",
+                },
+            ],
+        },
+    )
+
+    assert save_calls[0]["columns"] == [
+        "synonym",
+        "source",
+        "source_identifier",
+        "count",
+    ]
+    assert save_calls[0]["data"] == [
+        {
+            "synonym": "Ck:GFP",
+            "source": "This study",
+            "source_identifier": "New in paper",
+            "count": "4",
+        },
+        {
+            "synonym": "Actn RNAi",
+            "source": "Source not found",
+            "source_identifier": "Not found",
+            "count": "2",
+        },
+    ]
+
+
+@pytest.mark.asyncio
 async def test_csv_formatter_flow_output_saves_object_projection_without_model_round_trip(
     monkeypatch,
 ):
