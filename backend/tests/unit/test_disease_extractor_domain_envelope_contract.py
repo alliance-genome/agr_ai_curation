@@ -315,6 +315,7 @@ def test_disease_extractor_prompt_agent_and_group_rules_name_domain_contract():
         "patch_disease_observation",
         "discard_disease_observation",
         "list_staged_disease_observations",
+        "find_staged_disease_observations",
         "finalize_disease_extraction",
     ]
     assert "DiseaseAnnotation curatable_objects[]" in agent_data["supervisor_routing"][

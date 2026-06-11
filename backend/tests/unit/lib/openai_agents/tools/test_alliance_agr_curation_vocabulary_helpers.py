@@ -201,7 +201,11 @@ def test_get_vocabulary_term_preserves_obsolete_candidate(monkeypatch):
     assert result.lookup_status == "success"
     assert result.data[0]["obsolete"] is True
     assert "obsolete_vocabulary_terms:1" in result.warnings
-    assert result.candidate_matches[0]["projection"]["object_type"] == "VocabularyTerm"
+    # The candidate is a lightweight pointer now; it keeps a scalar object_type
+    # but no longer re-embeds the full projection (that lives once under
+    # result_projections).
+    assert "projection" not in result.candidate_matches[0]
+    assert result.candidate_matches[0]["object_type"] == "VocabularyTerm"
 
 
 def test_get_vocabulary_term_reports_ambiguous_exact_matches(monkeypatch):

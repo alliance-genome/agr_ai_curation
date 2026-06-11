@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Callable, Dict, List, Optional
 
 from agents import function_tool
@@ -12,8 +13,12 @@ logger = logging.getLogger(__name__)
 
 SOURCE = "literature_es"
 TOOL_PROVIDER = "agr_literature_reference_lookup"
-DEFAULT_LIMIT = 20
-HARD_MAX = 100
+# Default and hard-cap page sizes for literature reference lookups.
+# Env-configurable via LITERATURE_REFERENCE_DEFAULT_LIMIT (default 20) and
+# LITERATURE_REFERENCE_HARD_MAX (default 100). This module runs in the isolated
+# package subprocess (inherits the backend env), so it reads os.getenv directly.
+DEFAULT_LIMIT = int(os.getenv("LITERATURE_REFERENCE_DEFAULT_LIMIT", "20"))
+HARD_MAX = int(os.getenv("LITERATURE_REFERENCE_HARD_MAX", "100"))
 
 _EXPECTED_UPSTREAM_ERROR_TYPES: tuple[type[BaseException], ...] = (
     ConnectionError,

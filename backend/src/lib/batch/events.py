@@ -24,10 +24,13 @@ from collections import defaultdict
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
+from src.lib.openai_agents.config import get_batch_event_queue_maxsize
+
 logger = logging.getLogger(__name__)
 
-# Maximum events to queue per subscriber to prevent memory issues
-DEFAULT_QUEUE_MAXSIZE = 1000
+# Maximum events to queue per subscriber to prevent memory issues.
+# Env-configurable via BATCH_EVENT_QUEUE_MAXSIZE (default 1000); see config.py.
+DEFAULT_QUEUE_MAXSIZE = get_batch_event_queue_maxsize()
 
 
 class BatchEventBroadcaster:

@@ -43,9 +43,16 @@ DEFAULT_RERANK_PROVIDER = "bedrock_cohere"
 DEFAULT_BEDROCK_RERANK_MODEL_ARN = (
     "arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0"
 )
-MAX_BEDROCK_RERANK_SOURCES = 100
+# Env-configurable (defaults unchanged). This module can load inside the isolated
+# package subprocess (which inherits the backend env), so it reads os.getenv
+# directly using the same env var names documented in .env.example:
+#   BEDROCK_RERANK_MAX_SOURCES (default 100),
+#   LOCAL_TRANSFORMERS_RERANK_TIMEOUT_SECONDS (default 5).
+MAX_BEDROCK_RERANK_SOURCES = int(os.getenv("BEDROCK_RERANK_MAX_SOURCES", "100"))
 _DEFAULT_LOCAL_TRANSFORMERS_URL = "http://reranker-transformers:8080"
-LOCAL_TRANSFORMERS_TIMEOUT_SECONDS = 5
+LOCAL_TRANSFORMERS_TIMEOUT_SECONDS = int(
+    os.getenv("LOCAL_TRANSFORMERS_RERANK_TIMEOUT_SECONDS", "5")
+)
 RERANK_AWS_ENV_OVERRIDES = {
     "RERANK_AWS_PROFILE": "AWS_PROFILE",
     "RERANK_AWS_SHARED_CREDENTIALS_FILE": "AWS_SHARED_CREDENTIALS_FILE",

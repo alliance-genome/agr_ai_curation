@@ -51,7 +51,7 @@ class PackageToolRunner:
         tool_registry: ToolRegistry | None = None,
         env_manager: PackageEnvironmentManager | None = None,
         entrypoint_path: Path | None = None,
-        timeout_seconds: float = 60.0,
+        timeout_seconds: float | None = None,
     ) -> None:
         self._tool_registry = tool_registry or load_tool_registry()
         self._env_manager = env_manager or PackageEnvironmentManager()
@@ -61,6 +61,14 @@ class PackageToolRunner:
                 "package_runner_entrypoint.py"
             )
         )
+        # Wall-clock budget for one package tool subprocess. Env-configurable via
+        # PACKAGE_RUNNER_TIMEOUT_SECONDS (default 60); see config.py / .env.example.
+        if timeout_seconds is None:
+            from src.lib.openai_agents.config import (
+                get_package_runner_timeout_seconds,
+            )
+
+            timeout_seconds = get_package_runner_timeout_seconds()
         self._timeout_seconds = timeout_seconds
 
     def execute_tool(

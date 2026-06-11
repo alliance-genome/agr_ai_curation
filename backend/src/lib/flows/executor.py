@@ -103,6 +103,9 @@ from src.lib.openai_agents.config import (
     get_agent_config,
     get_model_for_agent,
     build_model_settings,
+    get_flow_output_projection_planner_preview_limit,
+    get_flow_step_evidence_preview_limit,
+    get_flow_step_output_preview_chars,
     get_max_turns,
     resolve_model_provider,
 )
@@ -122,8 +125,10 @@ from src.schemas.flows import DEFAULT_FLOW_EDGE_ROLE, VALIDATION_ATTACHMENT_EDGE
 
 logger = logging.getLogger(__name__)
 
-_FLOW_STEP_OUTPUT_PREVIEW_CHARS = 800
-_FLOW_STEP_EVIDENCE_PREVIEW_LIMIT = 10
+# Env-configurable (defaults unchanged); see config.py getters and .env.example:
+#   FLOW_STEP_OUTPUT_PREVIEW_CHARS, FLOW_STEP_EVIDENCE_PREVIEW_LIMIT.
+_FLOW_STEP_OUTPUT_PREVIEW_CHARS = get_flow_step_output_preview_chars()
+_FLOW_STEP_EVIDENCE_PREVIEW_LIMIT = get_flow_step_evidence_preview_limit()
 _FLOW_TEMPLATE_VARIABLE_PATTERN = re.compile(r"{{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*}}")
 _FLOW_TEMPLATE_DEFAULT_INPUT_FILENAME = "input"
 _FLOW_TEMPLATE_DEFAULT_TRACE_ID = "trace"
@@ -163,7 +168,9 @@ _FLOW_OUTPUT_PROJECTION_CURATOR_REQUEST_HINT_PATTERN = re.compile(
     r")\b",
     re.IGNORECASE,
 )
-_FLOW_OUTPUT_PROJECTION_PLANNER_PREVIEW_LIMIT = 5
+# Env-configurable via FLOW_OUTPUT_PROJECTION_PLANNER_PREVIEW_LIMIT (default 5);
+# see config.py.
+_FLOW_OUTPUT_PROJECTION_PLANNER_PREVIEW_LIMIT = get_flow_output_projection_planner_preview_limit()
 CURATION_HANDOFF_AGENT_ID = "curation_handoff"
 CURATION_HANDOFF_READY_EVENT = "CURATION_HANDOFF_READY"
 FLOW_EXTRACTION_HANDOFF_AUDIT_EVENT = "FLOW_EXTRACTION_HANDOFF_AUDIT"
@@ -4093,6 +4100,16 @@ async def execute_flow(
         if event_type == "SPECIALIST_ERROR":
             yield event
             details = event.get("details", {}) or {}
+            # Non-fatal specialist errors must NOT fail the whole flow. The
+            # domain-envelope validator dispatch marks recoverable errors as
+            # ``fatal: False`` / ``severity: "warning"`` (streaming_tools): the
+            # extraction already persisted and the validator error was recorded as
+            # an OPEN ``validator_error`` finding for the curator to review. Surface
+            # the event (already yielded above) and keep going so the flow still
+            # produces its output instead of discarding a good extraction because a
+            # lookup-heavy validator could not finish.
+            if details.get("fatal") is False or details.get("severity") == "warning":
+                continue
             failure_reason = (
                 details.get("error")
                 or details.get("message")

@@ -26,14 +26,23 @@ from src.lib.feedback.models import FeedbackReport, ProcessingStatus
 from src.lib.feedback.sns_notifier import SNSNotifier
 from src.lib.feedback.transcript import capture_feedback_conversation_transcript
 from src.lib.agent_studio.models import TraceContext
+from src.lib.openai_agents.config import (
+    get_feedback_trace_error_chars,
+    get_feedback_trace_preview_chars,
+    get_feedback_trace_snapshot_items,
+    get_feedback_trace_snapshot_traces,
+)
 from src.lib.upstream_error_diagnostics import looks_like_header_or_html_response
 
 logger = logging.getLogger(__name__)
 
-MAX_TRACE_SNAPSHOT_TRACES = 5
-MAX_TRACE_SNAPSHOT_ITEMS = 20
-MAX_TRACE_PREVIEW_CHARS = 500
-MAX_TRACE_ERROR_CHARS = 300
+# Env-configurable (defaults unchanged); see config.py getters and .env.example:
+#   FEEDBACK_TRACE_SNAPSHOT_TRACES, FEEDBACK_TRACE_SNAPSHOT_ITEMS,
+#   FEEDBACK_TRACE_PREVIEW_CHARS, FEEDBACK_TRACE_ERROR_CHARS.
+MAX_TRACE_SNAPSHOT_TRACES = get_feedback_trace_snapshot_traces()
+MAX_TRACE_SNAPSHOT_ITEMS = get_feedback_trace_snapshot_items()
+MAX_TRACE_PREVIEW_CHARS = get_feedback_trace_preview_chars()
+MAX_TRACE_ERROR_CHARS = get_feedback_trace_error_chars()
 
 _EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 _URL_RE = re.compile(r"https?://[^\s\"'<>]+")

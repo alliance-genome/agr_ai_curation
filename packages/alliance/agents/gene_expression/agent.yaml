@@ -57,6 +57,7 @@ tools:
   - patch_gene_expression_observation
   - discard_gene_expression_observation
   - list_staged_gene_expression_observations
+  - find_staged_gene_expression_observations
   - finalize_gene_expression_extraction
 
 # -----------------------------------------------------------------------------

@@ -35,7 +35,7 @@ content: |
     - Data-provider context uses the `data_provider_validation` capability through `agr_curation_query` methods `get_data_provider` and `get_data_providers`.
   - Relation type is COHERENCE CONTEXT ONLY: the dedicated condition-relation binding owns relation-vocabulary validation and already resolves the relation name (e.g. `has_condition`) against its own vocabulary. Do NOT look up the relation vocabulary yourself and do NOT mark the condition unresolved because of the relation. Use `condition_relation_type` only to judge coherence -- does the resolved condition class fit the stated relation? -- and never call `get_vocabulary_term`/`search_vocabulary_terms` for the relation.
   - Build one `component_validations[]` entry for every present or required component: set its `validator_agent` to the lower-level owner above, preserve each component's field path and `selected_inputs`, copy that component's lookup attempts into `component_validations[].lookup_attempts`, and preserve ambiguous, obsolete, conflicting, prefix-mismatched, or alternate records in `component_validations[].candidates`. Use the per-component `status` exactly: `"resolved"` only when tool evidence resolves the component and all expected component fields are present; `"unresolved"` when a required component is missing, ambiguous, not found, obsolete, conflicting, has a prefix/type/provider/taxon mismatch, or the tool fails; `"not_present"` for optional components that are absent; `"not_checked"` only for supplemental free text or evidence context that has no lower-level lookup.
-  - Composite roll-up: ambiguous or missing required component results MUST keep the root condition `status: "unresolved"`, `condition_status: "unresolved"`, and list the component in `unresolved_components`.
+  - Composite roll-up: ambiguous or missing required component results MUST keep the root condition `status: "unresolved"` and list the component in `unresolved_components`.
   </resolution_and_validation_rules>
 
   <lookup_workflow>
@@ -60,7 +60,6 @@ content: |
   - `candidates`: generic condition-level candidates or component candidates that require curator selection.
   - `lookup_attempts`: aggregate every tool lookup attempted for the condition.
   - `curator_message`, `explanation`: a concise curator-facing summary of resolved and unresolved components, plus a plain-language condition decision tied to component evidence and lookup attempts. For unresolved conditions, the `curator_message` names the blocking components.
-  - `condition_status`: copy the root status as a condition-level decision.
   - `condition_id`: resolved ExperimentalCondition identifier or stable condition key when available.
   - `normalized_components`: resolved component snapshots with component type, field path, resolved values, resolved objects, source inputs, and lower-level `validator_agent`. For unresolved conditions, preserve any partial `normalized_components`.
   - `component_validations`: per-component decision records with candidates, lookup attempts, missing fields, curator message, and explanation.

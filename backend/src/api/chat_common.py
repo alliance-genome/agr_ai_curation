@@ -59,6 +59,10 @@ from ..lib.curation_workspace import (
 )
 from ..lib.curation_workspace.extraction_results import get_agent_curation_metadata
 from ..lib.openai_agents import run_agent_streamed
+from ..lib.openai_agents.config import (
+    get_flow_memory_max_visible_output_chars,
+    get_title_backfill_message_limit,
+)
 from ..lib.openai_agents.runner import normalize_context_message_role
 from ..lib.openai_agents.agents.supervisor_agent import get_supervisor_tool_agent_map
 from ..lib.openai_agents.evidence_summary import (
@@ -367,7 +371,8 @@ def _persist_extraction_candidates(
     )
 
 
-_FLOW_MEMORY_MAX_VISIBLE_OUTPUT_CHARS = 2500
+# Env-configurable via FLOW_MEMORY_MAX_VISIBLE_OUTPUT_CHARS (default 2500); see config.py.
+_FLOW_MEMORY_MAX_VISIBLE_OUTPUT_CHARS = get_flow_memory_max_visible_output_chars()
 _FLOW_TRANSCRIPT_REPLAY_RUN_STARTED_KEY = "_replay_run_started_event"
 _FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY = "_replay_terminal_events"
 _FLOW_TRANSCRIPT_INTERNAL_PAYLOAD_KEYS = frozenset(
@@ -405,7 +410,8 @@ def _assistant_rescue_conflicting_fields(
 # Redis handles cross-worker cancellation coordination.
 _LOCAL_CANCEL_EVENTS: Dict[str, asyncio.Event] = {}
 _LOCAL_SESSION_OWNERS: Dict[str, str] = {}
-_TITLE_BACKFILL_MESSAGE_LIMIT = 20
+# Env-configurable via TITLE_BACKFILL_MESSAGE_LIMIT (default 20); see config.py.
+_TITLE_BACKFILL_MESSAGE_LIMIT = get_title_backfill_message_limit()
 
 
 @dataclass

@@ -59,6 +59,7 @@ tools:
   - patch_gene_mention_evidence
   - discard_gene_mention_evidence
   - list_staged_gene_mention_evidence
+  - find_staged_gene_mention_evidence
   - finalize_gene_extraction
 
 # -----------------------------------------------------------------------------

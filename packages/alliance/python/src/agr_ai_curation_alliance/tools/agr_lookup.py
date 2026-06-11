@@ -6,12 +6,14 @@ import logging
 from typing import Any, Iterable, Mapping
 
 from agr_ai_curation_runtime.agr_lookup import (
+    DEFAULT_BULK_TOTAL_MATCH_CAP,
     DETAIL_RETRY_STRATEGY_PER_CURIE,
     LOOKUP_STATUS_NOT_FOUND,
     LOOKUP_STATUS_TRANSIENT,
     LookupProjectionMetadata,
     bulk_item_status_from_lookup_status as _runtime_bulk_item_status_from_lookup_status,
     candidate_from_result as _runtime_candidate_from_result,
+    cap_bulk_total_matches,
     chunk_values,
     create_db_session,
     detail_fetch_failure,
@@ -551,11 +553,13 @@ __all__ = [
     "ALLIANCE_CURATION_DB_PROVIDER",
     "ALLIANCE_CURATION_TOOL_NAME",
     "ALLIANCE_DETAIL_LOOKUP_STAGES",
+    "DEFAULT_BULK_TOTAL_MATCH_CAP",
     "alliance_object_type",
     "alliance_projection_metadata",
     "alliance_projection_type",
     "bulk_item_status_from_lookup_status",
     "candidate_from_result",
+    "cap_bulk_total_matches",
     "entity_detail_lookup_attempts",
     "fetch_allele_details_bulk",
     "fetch_gene_details_bulk",

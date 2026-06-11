@@ -16,8 +16,10 @@ from src.lib.config.agent_loader import AgentDefinition
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validator_dispatch import (
+    _DEFAULT_VALIDATOR_BATCH_MAX_SIZE,
     ValidatorRuntimeContext,
     _apply_validator_evidence_updates_to_envelope,
+    _plan_validator_run_groups,
     _validated_results_from_agent_batch_output,
     _validator_batch_summary,
     _validator_finalization_tool_payload,
@@ -2568,6 +2570,283 @@ def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
         "evidence_record_ids": ["evidence-1"],
     }
     assert captured["kwargs"]["max_turns"] == 6
+
+
+def _batchable_dispatch_job(batch_max_size: int | None) -> Any:
+    return SimpleNamespace(
+        match=SimpleNamespace(
+            binding=SimpleNamespace(batch_max_size=batch_max_size)
+        )
+    )
+
+
+def test_plan_validator_run_groups_chunks_batch_by_configured_max_size(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        "src.lib.domain_packs.validator_dispatch."
+        "_batch_group_key_for_deduped_job_group",
+        lambda group: "shared-key",
+    )
+    grouped_jobs = [[_batchable_dispatch_job(3)] for _ in range(7)]
+
+    run_groups = _plan_validator_run_groups(grouped_jobs)
+
+    # 7 deduped groups, configured cap 3 -> [0,1,2], [3,4,5], [6].
+    # The trailing single-index chunk degrades to a standalone (non-batch) run.
+    assert [
+        (group.dedupe_group_indexes, group.batch_key) for group in run_groups
+    ] == [
+        ((0, 1, 2), "shared-key"),
+        ((3, 4, 5), "shared-key"),
+        ((6,), None),
+    ]
+
+
+def test_plan_validator_run_groups_chunks_batch_by_default_cap(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        "src.lib.domain_packs.validator_dispatch."
+        "_batch_group_key_for_deduped_job_group",
+        lambda group: "shared-key",
+    )
+    total = _DEFAULT_VALIDATOR_BATCH_MAX_SIZE + 5
+    grouped_jobs = [[_batchable_dispatch_job(None)] for _ in range(total)]
+
+    run_groups = _plan_validator_run_groups(grouped_jobs)
+
+    assert len(run_groups) == 2
+    assert run_groups[0].batch_key == "shared-key"
+    assert run_groups[0].dedupe_group_indexes == tuple(
+        range(_DEFAULT_VALIDATOR_BATCH_MAX_SIZE)
+    )
+    assert run_groups[1].batch_key == "shared-key"
+    assert run_groups[1].dedupe_group_indexes == tuple(
+        range(_DEFAULT_VALIDATOR_BATCH_MAX_SIZE, total)
+    )
+
+
+def test_plan_validator_run_groups_preserves_order_with_mixed_groups(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Group keys by first job's marker: None -> standalone, str -> batch member.
+    monkeypatch.setattr(
+        "src.lib.domain_packs.validator_dispatch."
+        "_batch_group_key_for_deduped_job_group",
+        lambda group: group[0].marker,
+    )
+
+    def job(marker: str | None) -> Any:
+        return SimpleNamespace(
+            marker=marker,
+            match=SimpleNamespace(binding=SimpleNamespace(batch_max_size=None)),
+        )
+
+    grouped_jobs = [
+        [job(None)],  # 0 standalone
+        [job("k")],  # 1 batch k
+        [job("k")],  # 2 batch k
+        [job(None)],  # 3 standalone
+    ]
+
+    run_groups = _plan_validator_run_groups(grouped_jobs)
+
+    assert [
+        (group.dedupe_group_indexes, group.batch_key) for group in run_groups
+    ] == [
+        ((0,), None),
+        ((1, 2), "k"),
+        ((3,), None),
+    ]
+
+
+def test_package_scoped_validator_agent_sets_max_turns_when_max_tool_calls_unset(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from packages.alliance.agents.gene.schema import GeneResultEnvelope
+    from src.lib.agent_studio.diagnostic_tools.tool_definitions import (
+        _unwrap_function_tool,
+    )
+
+    request = _validation_request()
+    source_agent = SimpleNamespace(
+        output_type=GeneResultEnvelope,
+        tools=[],
+        instructions="Base validator instructions.",
+    )
+    monkeypatch.setattr(
+        "src.lib.config.agent_loader.get_agent_definition_for_package",
+        lambda package_id, agent_id: AgentDefinition(
+            folder_name="gene",
+            agent_id=agent_id,
+            name="Gene Validation",
+            package_id=package_id,
+        ),
+    )
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        lambda agent_key: source_agent,
+    )
+    captured: dict[str, Any] = {}
+
+    def _fake_run_sync(agent, **kwargs):
+        captured["kwargs"] = kwargs
+        tool = next(
+            tool for tool in agent.tools if tool.name == "finalize_validator_result"
+        )
+        _unwrap_function_tool(tool)(result=_result_payload(request))
+        return {"status": "resolved"}
+
+    monkeypatch.setattr("agents.Runner.run_sync", _fake_run_sync)
+
+    run_package_scoped_validator_agent(
+        request,
+        binding=cast(Any, SimpleNamespace(max_tool_calls=None)),
+    )
+
+    # max_tool_calls unset must still pin max_turns rather than fall to the
+    # Agents SDK default of 10: default tool-call budget (8) + finalization (2).
+    assert captured["kwargs"]["max_turns"] == 10
+
+
+def test_package_scoped_validator_batch_agent_sets_max_turns_when_max_tool_calls_unset(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from packages.alliance.agents.gene.schema import GeneResultEnvelope
+    from src.lib.agent_studio.diagnostic_tools.tool_definitions import (
+        _unwrap_function_tool,
+    )
+
+    request = _verbose_validation_request()
+    source_agent = SimpleNamespace(
+        output_type=GeneResultEnvelope,
+        tools=[],
+        instructions="Base validator instructions.",
+        model="validator-batch-model",
+    )
+    monkeypatch.setattr(
+        "src.lib.config.agent_loader.get_agent_definition_for_package",
+        lambda package_id, agent_id: AgentDefinition(
+            folder_name="gene",
+            agent_id=agent_id,
+            name="Gene Validation",
+            package_id=package_id,
+            batch_capabilities=["domain_validator_batch"],
+        ),
+    )
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        lambda agent_key: source_agent,
+    )
+    monkeypatch.setattr(
+        "src.lib.openai_agents.config.resolve_model_provider",
+        lambda model: "gemini",
+    )
+    monkeypatch.setattr(
+        "src.lib.domain_packs.validator_dispatch.provider_context_preflight",
+        lambda **kwargs: {},
+    )
+    captured: dict[str, Any] = {}
+
+    def _fake_run_sync(agent, **kwargs):
+        captured["kwargs"] = kwargs
+        tool = next(
+            tool
+            for tool in agent.tools
+            if tool.name == "finalize_validator_batch_results"
+        )
+        _unwrap_function_tool(tool)(results=[_result_payload(request)])
+        return {"results": [_result_payload(request)]}
+
+    monkeypatch.setattr("agents.Runner.run_sync", _fake_run_sync)
+
+    run_package_scoped_validator_agent_batch(
+        cast(Any, [SimpleNamespace(request=request)]),
+        binding=cast(Any, SimpleNamespace(max_tool_calls=None)),
+    )
+
+    # Single-job batch with max_tool_calls unset: default budget (8) + 2 still
+    # wins over the len(jobs)-derived floor, so max_turns is pinned at 10 rather
+    # than silently inheriting the SDK default.
+    assert captured["kwargs"]["max_turns"] == 10
+
+
+@pytest.mark.parametrize(
+    "max_tool_calls, expected_max_turns",
+    [
+        # Per-JOB-aware budget: 3 jobs * default per-job budget (8) + finalization
+        # (2) == 26. A composite validator (experimental_condition) makes several
+        # per-component lookups per job, so the budget must scale with the number
+        # of jobs in the batch rather than a flat per-run cap.
+        (None, 3 * 8 + 2),
+        # 3 jobs * configured per-job budget (4) + finalization (2) == 14.
+        (4, 3 * 4 + 2),
+    ],
+)
+def test_package_scoped_validator_batch_agent_max_turns_scales_with_job_count(
+    monkeypatch: pytest.MonkeyPatch,
+    max_tool_calls: int | None,
+    expected_max_turns: int,
+):
+    from packages.alliance.agents.gene.schema import GeneResultEnvelope
+
+    base_request = _verbose_validation_request()
+
+    def _job(index: int) -> Any:
+        request = base_request.model_copy(
+            update={"request_id": f"domain-validation:verbose-{index}"}
+        )
+        return SimpleNamespace(request=request)
+
+    jobs = [_job(index) for index in range(3)]
+
+    source_agent = SimpleNamespace(
+        output_type=GeneResultEnvelope,
+        tools=[],
+        instructions="Base validator instructions.",
+        model="validator-batch-model",
+    )
+    monkeypatch.setattr(
+        "src.lib.config.agent_loader.get_agent_definition_for_package",
+        lambda package_id, agent_id: AgentDefinition(
+            folder_name="gene",
+            agent_id=agent_id,
+            name="Gene Validation",
+            package_id=package_id,
+            batch_capabilities=["domain_validator_batch"],
+        ),
+    )
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        lambda agent_key: source_agent,
+    )
+    monkeypatch.setattr(
+        "src.lib.openai_agents.config.resolve_model_provider",
+        lambda model: "gemini",
+    )
+    monkeypatch.setattr(
+        "src.lib.domain_packs.validator_dispatch.provider_context_preflight",
+        lambda **kwargs: {},
+    )
+    captured: dict[str, Any] = {}
+
+    # Capture the run kwargs without driving the batch finalize tool: record the
+    # max_turns the dispatcher pinned, then raise. The batch runner re-raises, so
+    # we only need the captured kwargs to assert the per-job-aware budget.
+    def _fake_run_sync(agent, **kwargs):
+        captured["kwargs"] = kwargs
+        raise RuntimeError("captured max_turns")
+
+    monkeypatch.setattr("agents.Runner.run_sync", _fake_run_sync)
+
+    with pytest.raises(RuntimeError, match="captured max_turns"):
+        run_package_scoped_validator_agent_batch(
+            cast(Any, jobs),
+            binding=cast(Any, SimpleNamespace(max_tool_calls=max_tool_calls)),
+        )
+
+    assert captured["kwargs"]["max_turns"] == expected_max_turns
 
 
 def test_package_scoped_validator_batch_agent_prefers_accepted_finalization_results(

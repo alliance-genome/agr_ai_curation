@@ -727,3 +727,167 @@ def test_finalize_rejects_placeholder_pmid(active_builder_context):
         event["event_type"] == "gene_expression_materializer.placeholder_reference_rejected"
         for event in events
     )
+
+
+# ---------------------------------------------------------------------------------------
+# Shared builder list/search helpers (_builder_candidate_list / _search_builder_candidates).
+# These back every domain's list_staged_*/find_staged_* tools, so they are exercised once here
+# against a plain workspace built directly through upsert_candidate.
+# ---------------------------------------------------------------------------------------
+
+
+def _seed_search_workspace() -> builder.ExtractionBuilderWorkspace:
+    workspace = _workspace()
+    workspace.upsert_candidate(
+        candidate_id="cand-alpha",
+        staged_fields={"where_expressed_statement": "GFP detected in the cilium"},
+        pending_ref_ids=["pending-alpha"],
+        evidence_record_ids=["evidence-alpha"],
+    )
+    workspace.upsert_candidate(
+        candidate_id="cand-beta",
+        staged_fields={"where_expressed_statement": "mCherry in the gut"},
+        pending_ref_ids=["pending-beta"],
+        evidence_record_ids=["evidence-beta", "evidence-shared"],
+    )
+    third = workspace.upsert_candidate(
+        candidate_id="cand-gamma",
+        staged_fields={"where_expressed_statement": "GFP in the pharynx"},
+        pending_ref_ids=["pending-gamma"],
+        evidence_record_ids=["evidence-shared"],
+    )
+    third.validation_errors = [{"field_path": "relation.name", "reason": "unresolved"}]
+    return workspace
+
+
+def test_builder_candidate_list_pages_with_offset_and_next_offset():
+    workspace = _seed_search_workspace()
+
+    first = agr_curation._builder_candidate_list(workspace, limit=2, offset=0)
+    assert first["returned_candidate_count"] == 2
+    assert first["total_listed_candidate_count"] == 3
+    assert first["offset"] == 0
+    assert first["next_offset"] == 2
+    assert first["truncated"] is True
+    assert [c["candidate_id"] for c in first["candidates"]] == ["cand-alpha", "cand-beta"]
+
+    second = agr_curation._builder_candidate_list(workspace, limit=2, offset=2)
+    assert second["returned_candidate_count"] == 1
+    assert second["offset"] == 2
+    assert second["next_offset"] is None
+    assert second["truncated"] is False
+    assert [c["candidate_id"] for c in second["candidates"]] == ["cand-gamma"]
+
+
+def test_builder_candidate_list_redacts_staged_field_values():
+    workspace = _seed_search_workspace()
+
+    result = agr_curation._builder_candidate_list(workspace, limit=10, offset=0)
+
+    first_candidate = result["candidates"][0]
+    assert first_candidate["staged_fields"] == {
+        "keys": ["where_expressed_statement"],
+        "field_count": 1,
+    }
+
+
+def test_search_builder_candidates_filters_by_field_value_contains():
+    workspace = _seed_search_workspace()
+
+    result = agr_curation._search_builder_candidates(
+        workspace, field_value_contains="gfp"
+    )
+
+    assert result["matched_candidate_count"] == 2
+    assert {c["candidate_id"] for c in result["candidates"]} == {"cand-alpha", "cand-gamma"}
+    # RETURN must be redacted: raw staged-field text is never echoed back.
+    assert result["candidates"][0]["staged_fields"] == {
+        "keys": ["where_expressed_statement"],
+        "field_count": 1,
+    }
+
+
+def test_search_builder_candidates_filters_by_pending_ref_and_evidence_and_candidate_id():
+    workspace = _seed_search_workspace()
+
+    by_pending = agr_curation._search_builder_candidates(
+        workspace, pending_ref_id="pending-beta"
+    )
+    assert [c["candidate_id"] for c in by_pending["candidates"]] == ["cand-beta"]
+
+    by_evidence = agr_curation._search_builder_candidates(
+        workspace, evidence_record_id="evidence-shared"
+    )
+    assert {c["candidate_id"] for c in by_evidence["candidates"]} == {
+        "cand-beta",
+        "cand-gamma",
+    }
+
+    by_candidate_id = agr_curation._search_builder_candidates(
+        workspace, candidate_id="cand-alpha"
+    )
+    assert [c["candidate_id"] for c in by_candidate_id["candidates"]] == ["cand-alpha"]
+
+
+def test_search_builder_candidates_filters_by_has_validation_errors():
+    workspace = _seed_search_workspace()
+
+    with_errors = agr_curation._search_builder_candidates(
+        workspace, has_validation_errors=True
+    )
+    assert [c["candidate_id"] for c in with_errors["candidates"]] == ["cand-gamma"]
+
+    without_errors = agr_curation._search_builder_candidates(
+        workspace, has_validation_errors=False
+    )
+    assert {c["candidate_id"] for c in without_errors["candidates"]} == {
+        "cand-alpha",
+        "cand-beta",
+    }
+
+
+def test_search_builder_candidates_combines_filters_with_and_semantics():
+    workspace = _seed_search_workspace()
+
+    result = agr_curation._search_builder_candidates(
+        workspace,
+        field_value_contains="gfp",
+        has_validation_errors=True,
+    )
+
+    assert [c["candidate_id"] for c in result["candidates"]] == ["cand-gamma"]
+
+
+def test_search_builder_candidates_respects_include_discarded():
+    workspace = _seed_search_workspace()
+    workspace.discard_candidate("cand-alpha", reason="duplicate")
+
+    default_search = agr_curation._search_builder_candidates(
+        workspace, field_value_contains="gfp"
+    )
+    assert [c["candidate_id"] for c in default_search["candidates"]] == ["cand-gamma"]
+
+    with_discarded = agr_curation._search_builder_candidates(
+        workspace, field_value_contains="gfp", include_discarded=True
+    )
+    assert {c["candidate_id"] for c in with_discarded["candidates"]} == {
+        "cand-alpha",
+        "cand-gamma",
+    }
+
+
+def test_search_builder_candidates_pages_matches():
+    workspace = _seed_search_workspace()
+
+    first = agr_curation._search_builder_candidates(workspace, limit=2, offset=0)
+    assert first["matched_candidate_count"] == 3
+    assert first["returned_candidate_count"] == 2
+    assert first["offset"] == 0
+    assert first["next_offset"] == 2
+    assert first["truncated"] is True
+
+    second = agr_curation._search_builder_candidates(workspace, limit=2, offset=2)
+    assert second["matched_candidate_count"] == 3
+    assert second["returned_candidate_count"] == 1
+    assert second["next_offset"] is None
+    assert second["truncated"] is False

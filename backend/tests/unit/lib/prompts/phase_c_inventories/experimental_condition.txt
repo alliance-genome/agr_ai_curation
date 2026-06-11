@@ -68,7 +68,7 @@ preserve each component's field path and `selected_inputs`, copy that component'
 `"not_checked"` only for supplemental free text or evidence context that has no lower-level lookup.
 
 # ECV-10 composite roll-up: ambiguous/missing required component keeps condition unresolved
-ambiguous or missing required component results MUST keep the root condition `status: "unresolved"`, `condition_status: "unresolved"`, and list the component in `unresolved_components`.
+ambiguous or missing required component results MUST keep the root condition `status: "unresolved"` and list the component in `unresolved_components`.
 
 # ECV-16 shared result contract statuses + root fields (request-copy collapsed to one line)
 Return only the shared validator statuses:
@@ -88,8 +88,7 @@ include `condition_id` only when derived from provider evidence or a stable cond
 # ECV-18 curator_message/explanation: name blocking components when unresolved
 `curator_message`, `explanation`: a concise curator-facing summary of resolved and unresolved components, plus a plain-language condition decision tied to component evidence and lookup attempts. For unresolved conditions, the `curator_message` names the blocking components.
 
-# ECV-19 composite-specific roots (condition_status / condition_id / normalized_components / component_validations / unresolved_components)
-`condition_status`: copy the root status as a condition-level decision.
+# ECV-19 composite-specific roots (condition_id / normalized_components / component_validations / unresolved_components)
 `condition_id`: resolved ExperimentalCondition identifier or stable condition key when available.
 `normalized_components`: resolved component snapshots with component type, field path, resolved values, resolved objects, source inputs, and lower-level `validator_agent`. For unresolved conditions, preserve any partial `normalized_components`.
 `component_validations`: per-component decision records with candidates, lookup attempts, missing fields, curator message, and explanation.

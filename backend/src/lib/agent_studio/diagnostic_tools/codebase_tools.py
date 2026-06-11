@@ -9,12 +9,22 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+from src.lib.openai_agents.config import (
+    get_codebase_file_list_max_results,
+    get_codebase_read_max_lines,
+    get_codebase_search_max_results,
+    get_codebase_search_timeout_seconds,
+)
+
 
 _DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[5]
-_MAX_READ_LINES = 400
-_MAX_SEARCH_RESULTS = 100
-_MAX_FILE_LIST_RESULTS = 200
-_RG_SUBPROCESS_TIMEOUT_SECONDS = 30
+# Env-configurable (defaults unchanged); see config.py getters and .env.example:
+#   CODEBASE_READ_MAX_LINES, CODEBASE_SEARCH_MAX_RESULTS,
+#   CODEBASE_FILE_LIST_MAX_RESULTS, CODEBASE_SEARCH_TIMEOUT_SECONDS.
+_MAX_READ_LINES = get_codebase_read_max_lines()
+_MAX_SEARCH_RESULTS = get_codebase_search_max_results()
+_MAX_FILE_LIST_RESULTS = get_codebase_file_list_max_results()
+_RG_SUBPROCESS_TIMEOUT_SECONDS = get_codebase_search_timeout_seconds()
 
 
 def get_codebase_root() -> Path:

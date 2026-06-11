@@ -19,11 +19,11 @@ Decide whether the input is a CURIE/ID or a compact symbol/notation.
 # Step 2 -- a CURIE/ID is resolved by id.
 For CURIE/ID input, call `get_allele_by_id`.
 
-# Step 3 -- a symbol/notation goes through search_alleles.
-For symbol/notation input, call `search_alleles`.
+# Step 3 -- a symbol/notation goes through search_alleles, scoped by species when known.
+For symbol/notation input, call `search_alleles`, and pass the species `data_provider` whenever the species is known (see Species filtering).
 
 # Step 4 -- too many results: narrow.
-If too many results come back, narrow by adding more characters or by applying the known species `data_provider`.
+If too many results come back, narrow by adding more characters; if you have not already scoped by the known species, add the `data_provider` now.
 
 # Step 5 -- nothing back: report not-found with the exact search attempted.
 report "Allele not found in database" with the exact search you attempted.

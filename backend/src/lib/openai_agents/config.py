@@ -677,6 +677,679 @@ def get_max_turns() -> int:
         return 60
 
 
+def get_supervisor_max_specialist_calls_per_turn() -> int:
+    """Total distinct specialist invocations the chat supervisor may run per turn.
+
+    Backstop for runaway/no-progress loops in standard chat (the per-call dedup
+    is the primary brake). Set high so legitimate multi-lookup chats are never
+    truncated. Tunable via SUPERVISOR_MAX_SPECIALIST_CALLS_PER_TURN.
+    """
+    limit = _get_env_int_with_fallback("SUPERVISOR_MAX_SPECIALIST_CALLS_PER_TURN", 25)
+    return max(1, limit)
+
+
+def get_supervisor_max_calls_per_specialist() -> int:
+    """Distinct invocations of any single specialist the chat supervisor may run per turn.
+
+    Backstop that catches a storm against one specialist (e.g. repeated allele
+    lookups) without serializing legitimate different-query work. Tunable via
+    SUPERVISOR_MAX_CALLS_PER_SPECIALIST.
+    """
+    limit = _get_env_int_with_fallback("SUPERVISOR_MAX_CALLS_PER_SPECIALIST", 8)
+    return max(1, limit)
+
+
+# =============================================================================
+# Operational limits (turns, batches, caps, timeouts)
+#
+# These getters surface previously-hardcoded operational constants so they are
+# discoverable and tunable from .env. Each keeps the historical default as its
+# fallback, so behavior is unchanged unless the env var is set. See .env.example
+# for the documented rationale and consequences of each.
+# =============================================================================
+
+# --- Validator dispatch ---
+
+def get_max_parallel_validators() -> int:
+    """Max validator jobs the dispatcher runs concurrently (MAX_PARALLEL_VALIDATORS).
+
+    Caps the thread/async fan-out for parallel validator binding execution.
+    Higher = more concurrent LLM/DB load; lower = slower but gentler on the
+    provider and database. Default 8 (raised from 4 to speed up condition-heavy
+    validation by running more batch chunks at once).
+    """
+    return max(1, _get_env_int_with_fallback("MAX_PARALLEL_VALIDATORS", 8))
+
+
+def get_validator_batch_max_size() -> int:
+    """Default cap on deduped validator jobs carried in one batch run (VALIDATOR_BATCH_MAX_SIZE).
+
+    Applies when a binding does not configure ``batch_max_size``. Kept small
+    because the per-run ``max_turns`` budget scales with the number of jobs in
+    the batch; a large cap risks "Max turns exceeded" and unbounded cost.
+    Default 8.
+    """
+    return max(1, _get_env_int_with_fallback("VALIDATOR_BATCH_MAX_SIZE", 8))
+
+
+def get_validator_max_tool_calls() -> int:
+    """Per-job tool-call budget for a binding without ``max_tool_calls`` (VALIDATOR_MAX_TOOL_CALLS).
+
+    The batch ``max_turns`` is derived as ``len(jobs) * this`` so a multi-lookup
+    composite validator is never starved mid-batch. Default 8.
+    """
+    return max(1, _get_env_int_with_fallback("VALIDATOR_MAX_TOOL_CALLS", 8))
+
+
+# --- Structured finalization ---
+
+def get_structured_finalization_max_attempts() -> int:
+    """Default attempts for the structured-finalization loop (STRUCTURED_FINALIZATION_MAX_ATTEMPTS).
+
+    Applies when a finalization config does not set ``max_attempts``. More
+    attempts = more chances for a specialist to emit valid structured output at
+    the cost of extra model calls. Default 6.
+    """
+    return max(1, _get_env_int_with_fallback("STRUCTURED_FINALIZATION_MAX_ATTEMPTS", 6))
+
+
+def get_structured_finalization_hard_max_attempts() -> int:
+    """Absolute ceiling on structured-finalization attempts (STRUCTURED_FINALIZATION_HARD_MAX_ATTEMPTS).
+
+    Configured ``max_attempts`` values are clamped to this hard cap so a
+    misconfiguration cannot drive unbounded retries. Default 20.
+    """
+    return max(1, _get_env_int_with_fallback("STRUCTURED_FINALIZATION_HARD_MAX_ATTEMPTS", 20))
+
+
+def get_structured_finalization_retry_max_turns() -> int:
+    """Turn budget for the simplified output-synthesis retry agent (STRUCTURED_FINALIZATION_RETRY_MAX_TURNS).
+
+    The retry agent runs without tools/guardrails and just needs to synthesize
+    output, so its turn budget is deliberately tight. Default 5.
+    """
+    return max(1, _get_env_int_with_fallback("STRUCTURED_FINALIZATION_RETRY_MAX_TURNS", 5))
+
+
+def get_batching_nudge_threshold() -> int:
+    """Consecutive same-specialist calls before the batching nudge fires (BATCHING_NUDGE_THRESHOLD).
+
+    Lower = nudge the supervisor toward batching sooner; higher = tolerate more
+    repeated single calls before reminding it. Default 3.
+    """
+    return max(1, _get_env_int_with_fallback("BATCHING_NUDGE_THRESHOLD", 3))
+
+
+def get_layer2_force_tool_finalization_enabled() -> bool:
+    """Kill-switch for Layer-2 tool-forced structured finalization (LAYER2_FORCE_TOOL_FINALIZATION_ENABLED).
+
+    When True (default), structured finalization uses tool_choice=required +
+    ToolsToFinalOutputFunction. Set to false to fall back to the prior Layer-1
+    structured-finalization loop instantly without a redeploy. Default True.
+    """
+    return _get_env_bool("LAYER2_FORCE_TOOL_FINALIZATION_ENABLED", True)
+
+
+# --- Tool list / page / section limits ---
+
+def get_section_read_max_chunks() -> int:
+    """Default max chunks a section-read tool returns (SECTION_READ_MAX_CHUNKS).
+
+    Shared by the backend and the isolated alliance package weaviate_search
+    tools (same env var honors both). Higher = more section content per read at
+    the cost of larger payloads/context. Default 30.
+    """
+    return max(1, _get_env_int_with_fallback("SECTION_READ_MAX_CHUNKS", 30))
+
+
+def get_section_snippet_radius_chars() -> int:
+    """Characters of context shown either side of a section snippet match (SECTION_SNIPPET_RADIUS_CHARS).
+
+    Shared by the backend and the isolated alliance package weaviate_search
+    tools (same env var honors both). Larger = more surrounding context per
+    snippet. Default 200.
+    """
+    return max(0, _get_env_int_with_fallback("SECTION_SNIPPET_RADIUS_CHARS", 200))
+
+
+def get_tool_page_default_limit() -> int:
+    """Default page size for bounded-list tool pagination (TOOL_PAGE_DEFAULT_LIMIT).
+
+    The page size used when a tool call omits an explicit limit. Default 20.
+    """
+    return max(1, _get_env_int_with_fallback("TOOL_PAGE_DEFAULT_LIMIT", 20))
+
+
+def get_tool_page_max_limit() -> int:
+    """Hard ceiling on bounded-list tool page size (TOOL_PAGE_MAX_LIMIT).
+
+    Caps how large a single page a tool may return regardless of the requested
+    limit, bounding payload size. Default 50.
+    """
+    return max(1, _get_env_int_with_fallback("TOOL_PAGE_MAX_LIMIT", 50))
+
+
+def get_list_recorded_evidence_limit() -> int:
+    """Default cap on records returned by list_recorded_evidence (LIST_RECORDED_EVIDENCE_LIMIT).
+
+    Bounds how many evidence records the workspace listing tool returns when no
+    explicit limit is given. Default 100.
+    """
+    return max(1, _get_env_int_with_fallback("LIST_RECORDED_EVIDENCE_LIMIT", 100))
+
+
+# --- Display / truncation ---
+
+def get_supervisor_text_preview_limit() -> int:
+    """Char limit for short text previews in supervisor context tools (SUPERVISOR_TEXT_PREVIEW_LIMIT).
+
+    Truncation budget for inline text previews surfaced to the supervisor.
+    Default 220.
+    """
+    return max(1, _get_env_int_with_fallback("SUPERVISOR_TEXT_PREVIEW_LIMIT", 220))
+
+
+def get_supervisor_field_text_limit() -> int:
+    """Char limit for bounded field text in supervisor context tools (SUPERVISOR_FIELD_TEXT_LIMIT).
+
+    Per-field truncation budget when compacting JSON for the supervisor.
+    Default 500.
+    """
+    return max(1, _get_env_int_with_fallback("SUPERVISOR_FIELD_TEXT_LIMIT", 500))
+
+
+def get_supervisor_max_list_limit() -> int:
+    """Max list page size for supervisor context list tools (SUPERVISOR_MAX_LIST_LIMIT).
+
+    Upper bound applied to list-style supervisor context tools. Default 20.
+    """
+    return max(1, _get_env_int_with_fallback("SUPERVISOR_MAX_LIST_LIMIT", 20))
+
+
+def get_validation_detail_string_limit() -> int:
+    """Char limit per string when materializing validation detail (VALIDATION_DETAIL_STRING_LIMIT).
+
+    Truncates long strings stored in materialized validation findings. Default
+    8000.
+    """
+    return max(1, _get_env_int_with_fallback("VALIDATION_DETAIL_STRING_LIMIT", 8000))
+
+
+def get_validation_detail_list_limit() -> int:
+    """Max list items kept when materializing validation detail (VALIDATION_DETAIL_LIST_LIMIT).
+
+    Caps list length stored in materialized validation findings. Default 25.
+    """
+    return max(1, _get_env_int_with_fallback("VALIDATION_DETAIL_LIST_LIMIT", 25))
+
+
+def get_validation_detail_mapping_limit() -> int:
+    """Max mapping keys kept when materializing validation detail (VALIDATION_DETAIL_MAPPING_LIMIT).
+
+    Caps dict size stored in materialized validation findings. Default 50.
+    """
+    return max(1, _get_env_int_with_fallback("VALIDATION_DETAIL_MAPPING_LIMIT", 50))
+
+
+def get_flow_step_output_preview_chars() -> int:
+    """Char limit for tool-output previews in flow steps (FLOW_STEP_OUTPUT_PREVIEW_CHARS).
+
+    Truncation budget for flow-step tool-output previews. Default 800.
+    """
+    return max(1, _get_env_int_with_fallback("FLOW_STEP_OUTPUT_PREVIEW_CHARS", 800))
+
+
+def get_flow_step_evidence_preview_limit() -> int:
+    """Max evidence records previewed per flow step (FLOW_STEP_EVIDENCE_PREVIEW_LIMIT).
+
+    Bounds how many evidence records a flow step preview includes. Default 10.
+    """
+    return max(1, _get_env_int_with_fallback("FLOW_STEP_EVIDENCE_PREVIEW_LIMIT", 10))
+
+
+def get_flow_output_projection_planner_preview_limit() -> int:
+    """Rows previewed for the flow output projection planner (FLOW_OUTPUT_PROJECTION_PLANNER_PREVIEW_LIMIT).
+
+    Bounds the preview row count the projection planner inspects. Default 5.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback("FLOW_OUTPUT_PROJECTION_PLANNER_PREVIEW_LIMIT", 5),
+    )
+
+
+# --- Timeouts ---
+
+def get_package_runner_timeout_seconds() -> float:
+    """Subprocess timeout for an isolated package tool call (PACKAGE_RUNNER_TIMEOUT_SECONDS).
+
+    Wall-clock budget for one package tool subprocess; on expiry the call fails
+    with a timeout error. Higher = tolerate slower tools; lower = fail faster.
+    Default 60.
+    """
+    return max(1.0, _get_env_float_with_fallback("PACKAGE_RUNNER_TIMEOUT_SECONDS", 60.0))
+
+
+def get_agent_studio_trace_tool_timeout_seconds() -> float:
+    """HTTP timeout for heavy Agent Studio trace tool calls (AGENT_STUDIO_TRACE_TOOL_TIMEOUT_SECONDS).
+
+    Wall-clock budget for the langfuse reconstruction/payloads trace tools, which
+    fetch large payloads and need longer than the default endpoint timeout.
+    Default 45.
+    """
+    return max(1.0, _get_env_float_with_fallback("AGENT_STUDIO_TRACE_TOOL_TIMEOUT_SECONDS", 45.0))
+
+
+def get_agent_studio_endpoint_timeout_seconds() -> float:
+    """Default HTTP timeout for Agent Studio Claude-endpoint calls (AGENT_STUDIO_ENDPOINT_TIMEOUT_SECONDS).
+
+    Applies to trace tools that do not override it. Default 30.
+    """
+    return max(1.0, _get_env_float_with_fallback("AGENT_STUDIO_ENDPOINT_TIMEOUT_SECONDS", 30.0))
+
+
+def get_trace_review_export_timeout_seconds() -> float:
+    """HTTP timeout for the TraceReview export call (TRACE_REVIEW_EXPORT_TIMEOUT_SECONDS).
+
+    Wall-clock budget for fetching trace context from the TraceReview service.
+    Default 30.
+    """
+    return max(1.0, _get_env_float_with_fallback("TRACE_REVIEW_EXPORT_TIMEOUT_SECONDS", 30.0))
+
+
+def get_codebase_search_timeout_seconds() -> int:
+    """Timeout for the ripgrep subprocess in Agent Studio code search (CODEBASE_SEARCH_TIMEOUT_SECONDS).
+
+    Wall-clock budget for one read-only codebase search; on expiry the search is
+    aborted. Default 30.
+    """
+    return max(1, _get_env_int_with_fallback("CODEBASE_SEARCH_TIMEOUT_SECONDS", 30))
+
+
+def get_codebase_read_max_lines() -> int:
+    """Max lines one Agent Studio code-read returns (CODEBASE_READ_MAX_LINES).
+
+    Bounds a single read-only file read. Default 400.
+    """
+    return max(1, _get_env_int_with_fallback("CODEBASE_READ_MAX_LINES", 400))
+
+
+def get_codebase_search_max_results() -> int:
+    """Max content-search hits returned by Agent Studio code search (CODEBASE_SEARCH_MAX_RESULTS).
+
+    Bounds content-match results. Default 100.
+    """
+    return max(1, _get_env_int_with_fallback("CODEBASE_SEARCH_MAX_RESULTS", 100))
+
+
+def get_codebase_file_list_max_results() -> int:
+    """Max file-list entries returned by Agent Studio code search (CODEBASE_FILE_LIST_MAX_RESULTS).
+
+    Bounds file-name listing results. Default 200.
+    """
+    return max(1, _get_env_int_with_fallback("CODEBASE_FILE_LIST_MAX_RESULTS", 200))
+
+
+# --- Feedback / transcript ---
+
+def get_transcript_page_size() -> int:
+    """Page size for paginating a captured feedback transcript (TRANSCRIPT_PAGE_SIZE).
+
+    How many chat messages are pulled per page when snapshotting a feedback
+    transcript. Default 200.
+    """
+    return max(1, _get_env_int_with_fallback("TRANSCRIPT_PAGE_SIZE", 200))
+
+
+def get_transcript_excerpt_edge_turns() -> int:
+    """Turns kept at each edge of an inline transcript excerpt (TRANSCRIPT_EXCERPT_EDGE_TURNS).
+
+    The inline excerpt keeps this many turns from the start and end (so the inline
+    cap is 2x this). Default 3.
+    """
+    return max(1, _get_env_int_with_fallback("TRANSCRIPT_EXCERPT_EDGE_TURNS", 3))
+
+
+def get_max_transcript_turn_chars() -> int:
+    """Char truncation budget per transcript turn (MAX_TRANSCRIPT_TURN_CHARS).
+
+    Caps the stored length of any single turn in a feedback transcript snapshot.
+    Default 500.
+    """
+    return max(1, _get_env_int_with_fallback("MAX_TRANSCRIPT_TURN_CHARS", 500))
+
+
+def get_feedback_trace_snapshot_traces() -> int:
+    """Max traces captured in a feedback trace snapshot (FEEDBACK_TRACE_SNAPSHOT_TRACES).
+
+    Bounds how many distinct traces a feedback report snapshots. Default 5.
+    """
+    return max(1, _get_env_int_with_fallback("FEEDBACK_TRACE_SNAPSHOT_TRACES", 5))
+
+
+def get_feedback_trace_snapshot_items() -> int:
+    """Max items per trace in a feedback trace snapshot (FEEDBACK_TRACE_SNAPSHOT_ITEMS).
+
+    Bounds how many items per trace a feedback report snapshots. Default 20.
+    """
+    return max(1, _get_env_int_with_fallback("FEEDBACK_TRACE_SNAPSHOT_ITEMS", 20))
+
+
+def get_feedback_trace_preview_chars() -> int:
+    """Char truncation budget for a feedback trace preview (FEEDBACK_TRACE_PREVIEW_CHARS).
+
+    Caps preview text length in feedback trace snapshots. Default 500.
+    """
+    return max(1, _get_env_int_with_fallback("FEEDBACK_TRACE_PREVIEW_CHARS", 500))
+
+
+def get_feedback_trace_error_chars() -> int:
+    """Char truncation budget for a feedback trace error string (FEEDBACK_TRACE_ERROR_CHARS).
+
+    Caps error text length in feedback trace snapshots. Default 300.
+    """
+    return max(1, _get_env_int_with_fallback("FEEDBACK_TRACE_ERROR_CHARS", 300))
+
+
+# --- Agent Studio domain-envelope diagnostic tools ---
+
+def get_domain_envelope_default_limit() -> int:
+    """Default page size for domain-envelope diagnostic tool listings (DOMAIN_ENVELOPE_DEFAULT_LIMIT).
+
+    Default 10.
+    """
+    return max(1, _get_env_int_with_fallback("DOMAIN_ENVELOPE_DEFAULT_LIMIT", 10))
+
+
+def get_domain_envelope_max_limit() -> int:
+    """Max page size for domain-envelope diagnostic tool listings (DOMAIN_ENVELOPE_MAX_LIMIT).
+
+    Caps the requested page size. Default 50.
+    """
+    return max(1, _get_env_int_with_fallback("DOMAIN_ENVELOPE_MAX_LIMIT", 50))
+
+
+def get_domain_envelope_max_json_chars() -> int:
+    """Char cap on bounded JSON returned by domain-envelope tools (DOMAIN_ENVELOPE_MAX_JSON_CHARS).
+
+    Truncates large JSON payloads surfaced to the model. Default 20000.
+    """
+    return max(1, _get_env_int_with_fallback("DOMAIN_ENVELOPE_MAX_JSON_CHARS", 20_000))
+
+
+def get_domain_envelope_max_summary_json_chars() -> int:
+    """Char cap on bounded summary JSON in domain-envelope tools (DOMAIN_ENVELOPE_MAX_SUMMARY_JSON_CHARS).
+
+    Truncates the compact summary JSON. Default 4000.
+    """
+    return max(1, _get_env_int_with_fallback("DOMAIN_ENVELOPE_MAX_SUMMARY_JSON_CHARS", 4_000))
+
+
+def get_domain_envelope_max_lookup_attempts() -> int:
+    """Max lookup attempts retained per object in domain-envelope tools (DOMAIN_ENVELOPE_MAX_LOOKUP_ATTEMPTS).
+
+    Bounds how many resolver lookup attempts are surfaced before truncation.
+    Default 25.
+    """
+    return max(1, _get_env_int_with_fallback("DOMAIN_ENVELOPE_MAX_LOOKUP_ATTEMPTS", 25))
+
+
+def get_domain_envelope_max_validator_lookup_attempts() -> int:
+    """Max validator lookup attempts retained in domain-envelope tools (DOMAIN_ENVELOPE_MAX_VALIDATOR_LOOKUP_ATTEMPTS).
+
+    Bounds validator lookup attempts surfaced before truncation. Default 10.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback("DOMAIN_ENVELOPE_MAX_VALIDATOR_LOOKUP_ATTEMPTS", 10),
+    )
+
+
+def get_domain_envelope_max_validator_summaries() -> int:
+    """Max validator summaries retained in domain-envelope tools (DOMAIN_ENVELOPE_MAX_VALIDATOR_SUMMARIES).
+
+    Bounds validator summaries surfaced before truncation. Default 25.
+    """
+    return max(1, _get_env_int_with_fallback("DOMAIN_ENVELOPE_MAX_VALIDATOR_SUMMARIES", 25))
+
+
+def get_domain_envelope_max_field_paths() -> int:
+    """Max field paths retained in domain-envelope tools (DOMAIN_ENVELOPE_MAX_FIELD_PATHS).
+
+    Bounds field-path enumeration surfaced to the model. Default 150.
+    """
+    return max(1, _get_env_int_with_fallback("DOMAIN_ENVELOPE_MAX_FIELD_PATHS", 150))
+
+
+def get_domain_reference_max_values() -> int:
+    """Max distinct values per domain reference key in Agent Studio (DOMAIN_REFERENCE_MAX_VALUES).
+
+    Caps how many values are surfaced for each domain reference key. Default 50.
+    """
+    return max(1, _get_env_int_with_fallback("DOMAIN_REFERENCE_MAX_VALUES", 50))
+
+
+# --- Chat / session ---
+
+def get_flow_memory_max_visible_output_chars() -> int:
+    """Char cap on flow-memory visible output replayed into chat (FLOW_MEMORY_MAX_VISIBLE_OUTPUT_CHARS).
+
+    Truncates the visible flow output kept in conversational memory. Default 2500.
+    """
+    return max(1, _get_env_int_with_fallback("FLOW_MEMORY_MAX_VISIBLE_OUTPUT_CHARS", 2500))
+
+
+def get_title_backfill_message_limit() -> int:
+    """Messages scanned when backfilling a chat title (TITLE_BACKFILL_MESSAGE_LIMIT).
+
+    Bounds how many recent messages are read to synthesize a session title.
+    Default 20.
+    """
+    return max(1, _get_env_int_with_fallback("TITLE_BACKFILL_MESSAGE_LIMIT", 20))
+
+
+def get_chat_title_max_length() -> int:
+    """Max character length of a generated chat title (CHAT_TITLE_MAX_LENGTH).
+
+    Default 80.
+    """
+    return max(1, _get_env_int_with_fallback("CHAT_TITLE_MAX_LENGTH", 80))
+
+
+def get_chat_session_page_size_max() -> int:
+    """Max page size for chat session listings (CHAT_SESSION_PAGE_SIZE_MAX).
+
+    Caps the requested session-list page size. Default 100.
+    """
+    return max(1, _get_env_int_with_fallback("CHAT_SESSION_PAGE_SIZE_MAX", 100))
+
+
+def get_chat_message_page_size_max() -> int:
+    """Max page size for chat message listings (CHAT_MESSAGE_PAGE_SIZE_MAX).
+
+    Caps the requested message-list page size. Default 200.
+    """
+    return max(1, _get_env_int_with_fallback("CHAT_MESSAGE_PAGE_SIZE_MAX", 200))
+
+
+def get_chat_recent_message_scan_size_max() -> int:
+    """Max messages scanned for a recent-window query (CHAT_RECENT_MESSAGE_SCAN_SIZE_MAX).
+
+    Bounds the recent-message scan window for chat history queries. Default 5000.
+    """
+    return max(1, _get_env_int_with_fallback("CHAT_RECENT_MESSAGE_SCAN_SIZE_MAX", 5000))
+
+
+def get_flow_list_page_size_default() -> int:
+    """Default page size for flow listings (FLOW_LIST_PAGE_SIZE_DEFAULT).
+
+    Default 50.
+    """
+    return max(1, _get_env_int_with_fallback("FLOW_LIST_PAGE_SIZE_DEFAULT", 50))
+
+
+# --- Flow output projection planner ---
+
+def get_flow_planner_max_text_chars() -> int:
+    """Char cap on planner text fields in flow output projection (FLOW_PLANNER_MAX_TEXT_CHARS).
+
+    Truncates per-field text the projection planner inspects. Default 180.
+    """
+    return max(1, _get_env_int_with_fallback("FLOW_PLANNER_MAX_TEXT_CHARS", 180))
+
+
+def get_flow_planner_max_row_chars() -> int:
+    """Char cap on planner row previews in flow output projection (FLOW_PLANNER_MAX_ROW_CHARS).
+
+    Truncates per-row preview text the projection planner inspects. Default 2000.
+    """
+    return max(1, _get_env_int_with_fallback("FLOW_PLANNER_MAX_ROW_CHARS", 2_000))
+
+
+def get_flow_projection_max_rows() -> int:
+    """Hard cap on rows a deterministic flow output projection emits (FLOW_PROJECTION_MAX_ROWS).
+
+    Safety ceiling so a runaway projection cannot build an unbounded table.
+    Default 10000.
+    """
+    return max(1, _get_env_int_with_fallback("FLOW_PROJECTION_MAX_ROWS", 10_000))
+
+
+def get_flow_chat_max_rows() -> int:
+    """Max rows rendered in a chat-format flow output (FLOW_CHAT_MAX_ROWS).
+
+    Bounds chat table/section length. Default 50.
+    """
+    return max(1, _get_env_int_with_fallback("FLOW_CHAT_MAX_ROWS", 50))
+
+
+def get_flow_planner_max_field_examples() -> int:
+    """Example values shown per field to the projection planner (FLOW_PLANNER_MAX_FIELD_EXAMPLES).
+
+    Default 3.
+    """
+    return max(1, _get_env_int_with_fallback("FLOW_PLANNER_MAX_FIELD_EXAMPLES", 3))
+
+
+def get_flow_planner_max_list_items() -> int:
+    """List items previewed per field to the projection planner (FLOW_PLANNER_MAX_LIST_ITEMS).
+
+    Default 5.
+    """
+    return max(1, _get_env_int_with_fallback("FLOW_PLANNER_MAX_LIST_ITEMS", 5))
+
+
+def get_flow_planner_max_object_items() -> int:
+    """Object keys previewed per field to the projection planner (FLOW_PLANNER_MAX_OBJECT_ITEMS).
+
+    Default 12.
+    """
+    return max(1, _get_env_int_with_fallback("FLOW_PLANNER_MAX_OBJECT_ITEMS", 12))
+
+
+# --- Curation / pipeline ---
+
+def get_async_candidate_threshold() -> int:
+    """Candidate count above which curation persistence runs async (ASYNC_CANDIDATE_THRESHOLD).
+
+    Below this, candidates are persisted synchronously; at or above, the pipeline
+    switches to async processing. Default 25.
+    """
+    return max(1, _get_env_int_with_fallback("ASYNC_CANDIDATE_THRESHOLD", 25))
+
+
+def get_record_evidence_preview_chars() -> int:
+    """Char truncation budget for record_evidence text previews (RECORD_EVIDENCE_PREVIEW_CHARS).
+
+    Caps preview length in the record_evidence tool. Default 300.
+    """
+    return max(1, _get_env_int_with_fallback("RECORD_EVIDENCE_PREVIEW_CHARS", 300))
+
+
+# --- Infrastructure clients (logs, rerank) ---
+
+def get_loki_query_timeout_seconds() -> float:
+    """HTTP timeout for Loki log queries (LOKI_QUERY_TIMEOUT_SECONDS).
+
+    Wall-clock budget for one Loki query request. Default 10.
+    """
+    return max(1.0, _get_env_float_with_fallback("LOKI_QUERY_TIMEOUT_SECONDS", 10.0))
+
+
+def get_loki_query_limit() -> int:
+    """Default max log lines returned per Loki query (LOKI_QUERY_LIMIT).
+
+    Default 2000.
+    """
+    return max(1, _get_env_int_with_fallback("LOKI_QUERY_LIMIT", 2000))
+
+
+# NOTE: bedrock_reranker reads BEDROCK_RERANK_MAX_SOURCES and
+# LOCAL_TRANSFORMERS_RERANK_TIMEOUT_SECONDS directly via os.getenv because that
+# module can load inside the isolated package subprocess. The vars are still
+# documented in .env.example.
+
+
+# --- Batch / queues / file sizes ---
+
+def get_batch_event_queue_maxsize() -> int:
+    """Bounded size of a per-batch event queue (BATCH_EVENT_QUEUE_MAXSIZE).
+
+    Caps in-memory event buffering to prevent unbounded memory growth when a
+    consumer is slow. Default 1000.
+    """
+    return max(1, _get_env_int_with_fallback("BATCH_EVENT_QUEUE_MAXSIZE", 1000))
+
+
+def get_file_output_max_size_bytes() -> int:
+    """Max byte size of a generated file output (FILE_OUTPUT_MAX_SIZE_BYTES).
+
+    Rejects oversized generated content before storage. Default 104857600 (100 MB).
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback("FILE_OUTPUT_MAX_SIZE_BYTES", 100 * 1024 * 1024),
+    )
+
+
+def get_pdf_max_file_size_bytes() -> int:
+    """Max byte size of an uploaded/processed PDF (PDF_MAX_FILE_SIZE_BYTES).
+
+    Rejects oversized PDF uploads. Default 104857600 (100 MB).
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback("PDF_MAX_FILE_SIZE_BYTES", 100 * 1024 * 1024),
+    )
+
+
+def get_evidence_page_only_degraded_ratio_threshold() -> float:
+    """Ratio at/above which page-only evidence is flagged degraded (EVIDENCE_PAGE_ONLY_DEGRADED_RATIO_THRESHOLD).
+
+    Fraction of page-only (low-precision) anchors that marks an extraction's
+    evidence quality as degraded. Default 0.5.
+    """
+    return _get_env_float_with_fallback(
+        "EVIDENCE_PAGE_ONLY_DEGRADED_RATIO_THRESHOLD", 0.5
+    )
+
+
+def get_pdf_stitched_context_min_chars() -> int:
+    """Min chars of stitched context kept by the PDF fuzzy matcher (PDF_STITCHED_CONTEXT_MIN_CHARS).
+
+    Lower bound on the context window the PDF viewer matcher stitches. Default 240.
+    """
+    return max(1, _get_env_int_with_fallback("PDF_STITCHED_CONTEXT_MIN_CHARS", 240))
+
+
+def get_pdf_stitched_context_max_chars() -> int:
+    """Max chars of stitched context kept by the PDF fuzzy matcher (PDF_STITCHED_CONTEXT_MAX_CHARS).
+
+    Upper bound on the context window the PDF viewer matcher stitches. Default 1600.
+    """
+    return max(1, _get_env_int_with_fallback("PDF_STITCHED_CONTEXT_MAX_CHARS", 1600))
+
+
 # =============================================================================
 # Logging helper
 # =============================================================================

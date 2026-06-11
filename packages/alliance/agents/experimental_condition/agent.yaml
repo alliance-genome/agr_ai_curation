@@ -18,7 +18,8 @@ category: "Validation"
 subcategory: "Data Validation"
 
 supervisor_routing:
-  enabled: true
+  enabled: false
+
   description: >
     Use for validating ExperimentalCondition payloads that combine condition
     class/id ontology terms, condition chemicals, condition taxa, relation

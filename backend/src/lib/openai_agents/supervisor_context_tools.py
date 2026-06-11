@@ -49,14 +49,27 @@ from src.lib.file_outputs.storage import FileOutputStorageService, PathSecurityE
 from src.lib.openai_agents.curation_context_registry import (
     list_current_turn_curation_context,
 )
+from src.lib.openai_agents.bounded_list import (
+    normalize_page_limit,
+    offset_page,
+    parse_offset_cursor,
+    recent_page,
+)
+from src.lib.openai_agents.config import (
+    get_supervisor_field_text_limit,
+    get_supervisor_max_list_limit,
+    get_supervisor_text_preview_limit,
+)
 from src.models.sql.database import SessionLocal
 from src.models.sql.file_output import FileOutput
 from src.schemas.curation_workspace import CurationExtractionSourceKind
 
 
-_TEXT_PREVIEW_LIMIT = 220
-_FIELD_TEXT_LIMIT = 500
-_MAX_LIST_LIMIT = 20
+# Env-configurable (defaults unchanged); see config.py getters and .env.example:
+#   SUPERVISOR_TEXT_PREVIEW_LIMIT, SUPERVISOR_FIELD_TEXT_LIMIT, SUPERVISOR_MAX_LIST_LIMIT.
+_TEXT_PREVIEW_LIMIT = get_supervisor_text_preview_limit()
+_FIELD_TEXT_LIMIT = get_supervisor_field_text_limit()
+_MAX_LIST_LIMIT = get_supervisor_max_list_limit()
 _MAX_TRACE_ARRAY_ITEMS = 20
 _MAX_TRACE_TEXT = 1200
 _MAX_TRACE_INVENTORY_MESSAGES = 5000
@@ -69,48 +82,6 @@ def _tool_response(status: str, message: str, **extra: Any) -> str:
     payload = {"status": status, "message": message}
     payload.update(extra)
     return json.dumps(_bounded_json(payload), ensure_ascii=True, default=str)
-
-
-def _normalize_limit(limit: int | None, *, default: int = 5, maximum: int = _MAX_LIST_LIMIT) -> int:
-    try:
-        value = int(limit if limit is not None else default)
-    except (TypeError, ValueError):
-        value = default
-    return max(1, min(value, maximum))
-
-
-def _parse_offset_cursor(cursor: str | None) -> int:
-    try:
-        return max(0, int(cursor or 0))
-    except (TypeError, ValueError):
-        return 0
-
-
-def _offset_page(
-    items: Sequence[Any],
-    *,
-    limit: int,
-    cursor: str | None,
-) -> tuple[list[Any], bool, str | None]:
-    offset = _parse_offset_cursor(cursor)
-    page = list(items[offset : offset + limit])
-    next_offset = offset + len(page)
-    has_more = next_offset < len(items)
-    return page, has_more, str(next_offset) if has_more else None
-
-
-def _recent_page(
-    items: Sequence[Any],
-    *,
-    limit: int,
-    cursor: str | None,
-) -> tuple[list[Any], bool, str | None]:
-    offset = _parse_offset_cursor(cursor)
-    end = max(0, len(items) - offset)
-    start = max(0, end - limit)
-    page = list(items[start:end])
-    has_more = start > 0
-    return page, has_more, str(offset + len(page)) if has_more else None
 
 
 def _optional_text(value: Any) -> str | None:
@@ -280,7 +251,7 @@ def _trace_inventory(
         user_id=user_id,
         query=query,
     )
-    page, truncated, next_cursor = _recent_page(traces, limit=limit, cursor=cursor)
+    page, truncated, next_cursor = recent_page(traces, limit=limit, cursor=cursor)
     return page, truncated, next_cursor, len(traces)
 
 
@@ -371,7 +342,7 @@ async def inspect_chat_traces(
         )
 
     normalized_detail = str(detail or "inventory").strip() or "inventory"
-    bounded_limit = _normalize_limit(limit, default=5)
+    bounded_limit = normalize_page_limit(limit, default=5, maximum=_MAX_LIST_LIMIT)
     if normalized_detail == "inventory":
         if turn_ref and not query:
             inventory = _trace_inventory_records(
@@ -441,13 +412,10 @@ async def inspect_chat_traces(
     elif normalized_detail == "model_live_context":
         result = await get_trace_model_live_context(authorized_trace_id)
     elif normalized_detail == "payload_inventory":
-        try:
-            offset = max(0, int(cursor or 0))
-        except (TypeError, ValueError):
-            offset = 0
+        offset = parse_offset_cursor(cursor)
         result = await get_trace_payloads(
             authorized_trace_id,
-            limit=_normalize_limit(limit, default=10, maximum=20),
+            limit=normalize_page_limit(limit, default=10, maximum=20),
             offset=offset,
             include_values=False,
         )
@@ -849,7 +817,7 @@ def _review_candidates_detail(
         for candidate in workspace_payload.get("candidates", [])
         if isinstance(candidate, Mapping) and _candidate_matches_ref(candidate, object_ref)
     ]
-    page, truncated, next_cursor = _offset_page(candidates, limit=limit, cursor=cursor)
+    page, truncated, next_cursor = offset_page(candidates, limit=limit, cursor=cursor)
     return [_compact_review_candidate(candidate) for candidate in page], len(candidates), truncated, next_cursor
 
 
@@ -873,7 +841,7 @@ def _review_evidence_detail(
             compact = _compact_evidence_record(item)
             compact.setdefault("candidate_id", candidate.get("candidate_id"))
             records.append(compact)
-    page, truncated, next_cursor = _offset_page(records, limit=limit, cursor=cursor)
+    page, truncated, next_cursor = offset_page(records, limit=limit, cursor=cursor)
     return page, len(records), truncated, next_cursor
 
 
@@ -899,7 +867,7 @@ def _review_validation_detail(
                 record = dict(compact)
                 record.setdefault("candidate_id", candidate.get("candidate_id"))
                 records.append(record)
-    page, truncated, next_cursor = _offset_page(records, limit=limit, cursor=cursor)
+    page, truncated, next_cursor = offset_page(records, limit=limit, cursor=cursor)
     return page, len(records), truncated, next_cursor
 
 
@@ -1325,7 +1293,7 @@ def _session_file_refs(
         .order_by(FileOutput.created_at.desc())
     )
     files = query.all()
-    page, truncated, next_cursor = _offset_page(files, limit=limit, cursor=cursor)
+    page, truncated, next_cursor = offset_page(files, limit=limit, cursor=cursor)
     refs = [_file_output_response(file) for file in page]
     return refs, len(files), truncated, next_cursor
 
@@ -1412,7 +1380,7 @@ async def inspect_curation_context(
 
     normalized_scope = str(scope or "current_chat").strip() or "current_chat"
     normalized_detail = str(detail or "inventory").strip() or "inventory"
-    bounded_limit = _normalize_limit(limit, default=5)
+    bounded_limit = normalize_page_limit(limit, default=5, maximum=_MAX_LIST_LIMIT)
     if normalized_scope == "review_session":
         db = SessionLocal()
         try:
@@ -1490,7 +1458,7 @@ async def inspect_curation_context(
         truncated = False
         next_cursor = None
     else:
-        records, truncated, next_cursor = _offset_page(
+        records, truncated, next_cursor = offset_page(
             records,
             limit=bounded_limit,
             cursor=cursor,
@@ -1644,7 +1612,7 @@ def _objects_detail(
                 str(item.get("id") or ""),
             }
         ]
-    visible, truncated, next_cursor = _offset_page(objects, limit=limit, cursor=cursor)
+    visible, truncated, next_cursor = offset_page(objects, limit=limit, cursor=cursor)
     return {
         **_extraction_record_ref(record),
         "objects": [_compact_object(item) for item in visible],
@@ -1685,7 +1653,7 @@ def _evidence_detail(record: Any, *, limit: int, cursor: str | None) -> dict[str
     )
     scan_truncated = len(evidence) > _MAX_EVIDENCE_SCAN_RECORDS
     evidence = evidence[:_MAX_EVIDENCE_SCAN_RECORDS]
-    visible, truncated, next_cursor = _offset_page(
+    visible, truncated, next_cursor = offset_page(
         evidence,
         limit=limit,
         cursor=cursor,
@@ -1710,7 +1678,7 @@ def _validation_findings_detail(
     findings = []
     if isinstance(payload, Mapping) and isinstance(payload.get("validation_findings"), list):
         findings = [item for item in payload["validation_findings"] if isinstance(item, Mapping)]
-    visible, truncated, next_cursor = _offset_page(
+    visible, truncated, next_cursor = offset_page(
         findings,
         limit=limit,
         cursor=cursor,

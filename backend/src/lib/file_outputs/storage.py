@@ -28,11 +28,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 from src.config import get_file_output_storage_path
+from src.lib.openai_agents.config import get_file_output_max_size_bytes
 
 logger = logging.getLogger(__name__)
 
 # Constants
-MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB
+# Env-configurable via FILE_OUTPUT_MAX_SIZE_BYTES (default 100 MB); see config.py.
+MAX_FILE_SIZE_BYTES = get_file_output_max_size_bytes()  # 100 MB
 VALID_FILE_TYPES = frozenset({"csv", "tsv", "json"})
 TRACE_ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
 DESCRIPTOR_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,100}$")

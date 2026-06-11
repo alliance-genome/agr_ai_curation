@@ -24,7 +24,8 @@ subcategory: "Data Validation"
 # -----------------------------------------------------------------------------
 # Tool name is generated at runtime as: ask_{folder}_specialist
 supervisor_routing:
-  enabled: true
+  enabled: false
+
   description: >
     Use for mapping disease terms to DOID identifiers, looking up disease names,
     finding disease synonyms, or disease ontology queries.

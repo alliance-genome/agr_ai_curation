@@ -168,7 +168,11 @@ def test_get_data_provider_reports_provider_taxon_mismatch(monkeypatch):
     assert "Taxon 'NCBITaxon:7227' does not match provider 'WB'" in candidate[
         "mismatch_explanation"
     ]
-    assert result.candidate_matches[0]["projection"]["object_type"] == "DataProvider"
+    # The candidate is a lightweight pointer now; it keeps a scalar object_type
+    # but no longer re-embeds the full projection (that lives once under
+    # result_projections).
+    assert "projection" not in result.candidate_matches[0]
+    assert result.candidate_matches[0]["object_type"] == "DataProvider"
 
 
 def test_data_provider_tuple_requires_abbreviation_and_taxon():

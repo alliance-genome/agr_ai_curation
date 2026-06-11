@@ -146,7 +146,14 @@ def test_alliance_entity_projection_and_candidate_metadata():
     assert projection["object_type"] == "Entity"
     assert projection["provider_data"]["taxon"] == "NCBITaxon:6239"
     assert candidate["provider"] == ALLIANCE_CURATION_DB_PROVIDER
-    assert candidate["projection"]["projection_type"] == "entity_reference"
+    # The candidate is a lightweight pointer; the full projection is carried
+    # once under result_projections and is not re-embedded in the candidate.
+    # It keeps a scalar object_type so it stays self-describing on its own.
+    assert "projection" not in candidate
+    assert candidate["object_type"] == "Entity"
+    assert candidate["candidate_id"] == "WB:WBGene00000298"
+    assert candidate["candidate_label"] == "cat-4"
+    assert candidate["match_type"] == "exact"
 
 
 def test_alliance_bulk_status_owns_detail_lookup_stages():

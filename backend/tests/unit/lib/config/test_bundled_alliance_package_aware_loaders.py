@@ -63,14 +63,15 @@ RESOLVER_LOOKUP_TOOLS = [
 
 def _assert_builder_extractor_tools(tools, *, domain: str):
     """Assert a migrated extractor carries the shared span-evidence workspace
-    tools, optionally the resolver/lookup tools, then exactly its five domain
+    tools, optionally the resolver/lookup tools, then exactly its six domain
     builder verbs.
 
     Builder-generic on purpose: only the ``stage_/patch_/discard_/list_staged_/
-    finalize_*`` *shape* is enforced, not a hardcoded verb list, so a newly
-    migrated domain (e.g. disease) is covered without editing this test again.
-    Domains with grounded controlled-vocabulary/ontology fields additionally
-    declare the resolver/lookup tools between the evidence prefix and the verbs.
+    find_staged_/finalize_*`` *shape* is enforced, not a hardcoded verb list, so a
+    newly migrated domain (e.g. disease) is covered without editing this test
+    again. Domains with grounded controlled-vocabulary/ontology fields
+    additionally declare the resolver/lookup tools between the evidence prefix
+    and the verbs.
     """
 
     prefix = tools[: len(BUILDER_EVIDENCE_TOOL_PREFIX)]
@@ -84,16 +85,17 @@ def _assert_builder_extractor_tools(tools, *, domain: str):
     if suffix[: len(RESOLVER_LOOKUP_TOOLS)] == RESOLVER_LOOKUP_TOOLS:
         suffix = suffix[len(RESOLVER_LOOKUP_TOOLS) :]
 
-    # Exactly the five builder verbs, in canonical stage -> finalize order. The
+    # Exactly the six builder verbs, in canonical stage -> finalize order. The
     # concrete object noun differs per domain (e.g. gene uses
     # ``gene_mention_evidence`` while allele/phenotype use ``*_observation``), so
     # match on the verb prefixes rather than spelling the noun out.
-    assert len(suffix) == 5, f"{domain} extractor builder verbs: {suffix}"
-    stage, patch, discard, list_staged, finalize = suffix
+    assert len(suffix) == 6, f"{domain} extractor builder verbs: {suffix}"
+    stage, patch, discard, list_staged, find_staged, finalize = suffix
     assert stage.startswith("stage_"), suffix
     assert patch.startswith("patch_"), suffix
     assert discard.startswith("discard_"), suffix
     assert list_staged.startswith("list_staged_"), suffix
+    assert find_staged.startswith("find_staged_"), suffix
     assert finalize.startswith("finalize_") and finalize.endswith("_extraction"), suffix
 
 
@@ -169,6 +171,7 @@ def test_bundled_alliance_gene_expression_declares_record_evidence(monkeypatch):
         "patch_gene_expression_observation",
         "discard_gene_expression_observation",
         "list_staged_gene_expression_observations",
+        "find_staged_gene_expression_observations",
         "finalize_gene_expression_extraction",
     ]
 

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from agents import function_tool
 
+from src.lib.openai_agents.config import get_record_evidence_preview_chars
 from src.lib.openai_agents.evidence_spans import (
     EvidenceSpan,
     EvidenceSpanResolutionError,
@@ -41,7 +42,8 @@ _TABLE_REFERENCE_PATTERN = re.compile(
     r"\b(?:Table\.?\s*\d+[A-Za-z0-9-]*)\b",
     re.IGNORECASE,
 )
-_PREVIEW_CHARS = 300
+# Env-configurable via RECORD_EVIDENCE_PREVIEW_CHARS (default 300); see config.py.
+_PREVIEW_CHARS = get_record_evidence_preview_chars()
 _SPAN_RETRY_INSTRUCTIONS = (
     "Call read_chunk for the source chunk again and select current "
     "evidence_spans[].span_id values. Do not provide model-authored source text."

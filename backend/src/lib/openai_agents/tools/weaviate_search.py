@@ -15,6 +15,10 @@ from pydantic import BaseModel
 from agents import function_tool
 
 from agr_ai_curation_runtime.chunk_identity import resolve_chunk_identifier
+from src.lib.openai_agents.config import (
+    get_section_read_max_chunks,
+    get_section_snippet_radius_chars,
+)
 from src.lib.openai_agents.evidence_spans import (
     EVIDENCE_SPANIZER_VERSION,
     build_evidence_spans,
@@ -33,6 +37,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 SearchMode = Literal["auto", "hybrid", "lexical", "hybrid_lexical_first"]
+
+# Default cap on how many section/subsection chunks one read returns. Section reads
+# previously returned every chunk unbounded (~50 chunks, the full section text twice),
+# which could reach hundreds of thousands of characters in a single tool result. The
+# default is surpassable via max_chunks, and the result reports total_chunk_count plus
+# next_offset so the model can page through the rest.
+# Env-configurable via SECTION_READ_MAX_CHUNKS (default 30); see config.py. The
+# isolated alliance package weaviate_search tool honors the SAME env var.
+_DEFAULT_SECTION_MAX_CHUNKS = get_section_read_max_chunks()
+
+# How much surrounding text to return around a text_contains match. Bounded so a
+# matched passage gives the model enough context to decide whether to read the full
+# chunk without pulling the entire section back.
+# Env-configurable via SECTION_SNIPPET_RADIUS_CHARS (default 200); see config.py.
+_SECTION_SNIPPET_RADIUS = get_section_snippet_radius_chars()
 
 _SEARCH_MODE_TO_STRATEGY: dict[str, str] = {
     "auto": "hybrid",
@@ -333,13 +352,18 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
 
 
 class SectionChunkSource(BaseModel):
+    # Lightweight per-chunk locator only. The full chunk text already lives in the
+    # assembled section ``content`` (or ``snippet`` when text_contains is set), so it
+    # must NOT be repeated here; duplicating it doubled the payload of every section
+    # read. To read a single passage's raw text and its selectable evidence spans,
+    # call read_chunk with this chunk_id.
     chunk_id: str
+    chunk_index: Optional[int] = None
     page_number: Optional[int] = None
     section_title: Optional[str] = None
     subsection: Optional[str] = None
-    # Keep full source text here. Preview-only chunk text invites agents to copy
-    # incomplete evidence instead of calling read_chunk for span IDs.
-    content: str
+    char_count: int
+    snippet: Optional[str] = None  # Only populated when text_contains matched this chunk
 
 
 class SectionContent(BaseModel):
@@ -347,6 +371,11 @@ class SectionContent(BaseModel):
     page_numbers: List[int]
     content: str
     chunk_count: int
+    returned_chunk_count: int
+    total_chunk_count: int
+    offset: int
+    next_offset: Optional[int] = None
+    truncated: bool
     source_chunks: Optional[List[SectionChunkSource]] = None
     doc_items: Optional[List[dict]] = None  # Combined bounding boxes from all chunks
 
@@ -368,6 +397,53 @@ def _best_effort_metadata(chunk: dict) -> dict:
     return metadata
 
 
+def _chunk_text(chunk: dict) -> str:
+    return chunk.get("text") or chunk.get("content") or ""
+
+
+def _chunk_page(chunk: dict, metadata: dict) -> Optional[int]:
+    return (
+        chunk.get("page_number")
+        or chunk.get("pageNumber")
+        or metadata.get("page_number")
+        or metadata.get("pageNumber")
+    )
+
+
+def _chunk_section_title(chunk: dict, metadata: dict, fallback: Optional[str]) -> Optional[str]:
+    return (
+        chunk.get("section_title")
+        or chunk.get("sectionTitle")
+        or metadata.get("section_title")
+        or metadata.get("sectionTitle")
+        or fallback
+    )
+
+
+def _chunk_subsection(chunk: dict, metadata: dict, fallback: Optional[str]) -> Optional[str]:
+    return (
+        chunk.get("subsection")
+        or metadata.get("subsection")
+        or metadata.get("subSection")
+        or fallback
+    )
+
+
+def _build_snippet(text: str, needle_lower: str) -> str:
+    """Return a bounded excerpt of ``text`` around the first match of ``needle_lower``."""
+    position = text.lower().find(needle_lower)
+    if position < 0:
+        return ""
+    start = max(0, position - _SECTION_SNIPPET_RADIUS)
+    end = min(len(text), position + len(needle_lower) + _SECTION_SNIPPET_RADIUS)
+    excerpt = text[start:end]
+    if start > 0:
+        excerpt = "..." + excerpt
+    if end < len(text):
+        excerpt = excerpt + "..."
+    return excerpt
+
+
 def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["ToolCallTracker"] = None):
     """
     Create a read_section tool bound to a specific document and user.
@@ -381,31 +457,55 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
     """
 
     @function_tool
-    async def read_section(section_name: str) -> SectionReadResult:
-        """Survey the full text of ALL chunks in a named section of the document.
+    async def read_section(
+        section_name: str,
+        max_chunks: int = _DEFAULT_SECTION_MAX_CHUNKS,
+        offset: int = 0,
+        text_contains: Optional[str] = None,
+    ) -> SectionReadResult:
+        """Survey the text of the chunks in a named section of the document.
 
-        Returns every chunk classified under the section via the LLM-resolved semantic
+        Returns the chunks classified under the section via the LLM-resolved semantic
         hierarchy, not linear page order, so it gives complete coverage even when search
         would miss low-scoring passages. Reach for it for comprehensive reads, especially:
         - Extracting complete lists (e.g., all named entities in Methods)
         - Getting full tables or figure legends (a rich source of expression evidence)
         - Reading complete methodology details
         - Any case where you need comprehensive section content
-        Use section.source_chunks[].chunk_id with read_chunk for final evidence
-        selection; read_section content is survey context, not retained evidence.
+
+        A long section is returned one page of chunks at a time. The result reports
+        total_chunk_count and, when more remain, next_offset; pass that next_offset back
+        in to continue. If you only need the part of a long section that mentions a
+        specific term, set text_contains to return just the matching passages and a short
+        excerpt around each match instead of the whole section.
+
+        section.source_chunks lists the passages on this page as lightweight pointers
+        (chunk_id, location, size) without repeating their text. Read one passage in full
+        with read_chunk using its chunk_id for final evidence selection; read_section
+        content is survey context, not retained evidence.
 
         Args:
             section_name: The section title to read (e.g., "Materials and Methods", "Results")
                           Partial matching is supported - "Methods" will match "Materials and Methods"
+            max_chunks: Most passages to return on this page. Defaults to a sensible cap;
+                        raise it to pull more of a very long section at once.
+            offset: How many passages to skip before this page, for stepping through a
+                    long section. Use the next_offset from the previous page to continue.
+            text_contains: Return only passages that contain this text (case-insensitive),
+                           each with a short excerpt around the match, instead of the whole
+                           section.
         """
         # Record tool call if tracker is provided
         if tracker:
             tracker.record_call("read_section")
 
         logger.info(
-            "Reading section '%s' from document %s...",
+            "Reading section '%s' from document %s... (offset=%s, max_chunks=%s, filtered=%s)",
             section_name,
             document_id[:8],
+            offset,
+            max_chunks,
+            bool(text_contains),
         )
 
         try:
@@ -424,56 +524,57 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
                     section=None
                 )
 
-            # Combine all chunk content and collect doc_items for highlighting
-            content_parts = []
+            resolved_section_title = _chunk_section_title(
+                chunks[0], _best_effort_metadata(chunks[0]), section_name
+            )
+
+            needle = text_contains.lower() if text_contains else None
+            if needle:
+                selected = [
+                    chunk for chunk in chunks if needle in _chunk_text(chunk).lower()
+                ]
+            else:
+                selected = chunks
+
+            total_chunk_count = len(selected)
+            cap = max(1, int(max_chunks))
+            start = max(0, int(offset))
+            page = selected[start : start + cap]
+            has_more = total_chunk_count > start + len(page)
+
+            content_parts: List[str] = []
             page_numbers = set()
-            actual_section_title = None
-            all_doc_items = []
+            all_doc_items: List[dict] = []
             source_chunks: List[SectionChunkSource] = []
 
-            for chunk in chunks:
-                # get_chunks_by_parent_section returns text, locator fields,
-                # hierarchy fields, metadata, and optional doc_items.
-                text = chunk.get("text") or chunk.get("content") or ""
-                if text:
-                    content_parts.append(text)
-
+            for index, chunk in enumerate(page, start=start):
+                text = _chunk_text(chunk)
                 metadata = _best_effort_metadata(chunk)
-                page = (
-                    chunk.get("page_number")
-                    or chunk.get("pageNumber")
-                    or metadata.get("page_number")
-                    or metadata.get("pageNumber")
-                )
-                if page:
-                    page_numbers.add(page)
-
-                if not actual_section_title:
-                    actual_section_title = (
-                        chunk.get("section_title")
-                        or chunk.get("sectionTitle")
-                        or metadata.get("section_title")
-                        or metadata.get("sectionTitle")
-                        or section_name
-                    )
+                page_number = _chunk_page(chunk, metadata)
+                if page_number:
+                    page_numbers.add(page_number)
 
                 chunk_id = resolve_chunk_identifier(chunk, metadata)
-                if chunk_id and text:
-                    source_chunks.append(
-                        SectionChunkSource(
-                            chunk_id=chunk_id,
-                            page_number=page,
-                            section_title=chunk.get("section_title")
-                            or chunk.get("sectionTitle")
-                            or metadata.get("section_title")
-                            or metadata.get("sectionTitle")
-                            or actual_section_title,
-                            subsection=chunk.get("subsection")
-                            or metadata.get("subsection")
-                            or metadata.get("subSection"),
-                            content=text,
-                        )
+                if not (chunk_id and text):
+                    continue
+
+                snippet = _build_snippet(text, needle) if needle else None
+                # Assembled section text is the full chunk text when surveying, or the
+                # bounded excerpt when filtering, never both the joined text and a
+                # per-chunk copy of it.
+                content_parts.append(snippet if snippet is not None else text)
+
+                source_chunks.append(
+                    SectionChunkSource(
+                        chunk_id=chunk_id,
+                        chunk_index=index,
+                        page_number=page_number,
+                        section_title=_chunk_section_title(chunk, metadata, resolved_section_title),
+                        subsection=_chunk_subsection(chunk, metadata, None),
+                        char_count=len(text),
+                        snippet=snippet,
                     )
+                )
 
                 chunk_doc_items = metadata.get("doc_items") or chunk.get("doc_items") or []
                 if chunk_doc_items:
@@ -481,19 +582,27 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
 
             full_content = "\n\n".join(content_parts)
             sorted_pages = sorted(page_numbers) if page_numbers else []
-            resolved_section_title = actual_section_title or section_name
+            resolved_section_title = resolved_section_title or section_name
 
             logger.info(
-                "Read %s chunks from section '%s', pages %s, %s doc_items",
-                len(chunks),
+                "Read %s/%s chunks from section '%s', pages %s, %s doc_items",
+                len(page),
+                total_chunk_count,
                 resolved_section_title,
                 sorted_pages,
                 len(all_doc_items),
             )
 
+            filter_note = f" matching '{text_contains}'" if text_contains else ""
+            more_note = (
+                f" More remain; call again with offset={start + len(page)}."
+                if has_more
+                else ""
+            )
             return SectionReadResult(
                 summary=(
-                    f"Read {len(chunks)} chunks from '{resolved_section_title}'. "
+                    f"Read {len(page)} of {total_chunk_count} chunks{filter_note} from "
+                    f"'{resolved_section_title}'.{more_note} "
                     "Use section.source_chunks[].chunk_id with read_chunk, then pass selected "
                     "evidence_spans[].span_id values to record_evidence."
                 ),
@@ -501,7 +610,12 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
                     section_title=resolved_section_title,
                     page_numbers=sorted_pages,
                     content=full_content,
-                    chunk_count=len(chunks),
+                    chunk_count=len(page),
+                    returned_chunk_count=len(page),
+                    total_chunk_count=total_chunk_count,
+                    offset=start,
+                    next_offset=start + len(page) if has_more else None,
+                    truncated=has_more,
                     source_chunks=source_chunks if source_chunks else None,
                     doc_items=all_doc_items if all_doc_items else None,
                 )
@@ -527,6 +641,11 @@ class SubsectionContent(BaseModel):
     page_numbers: List[int]
     content: str
     chunk_count: int
+    returned_chunk_count: int
+    total_chunk_count: int
+    offset: int
+    next_offset: Optional[int] = None
+    truncated: bool
     source_chunks: Optional[List[SectionChunkSource]] = None
     doc_items: Optional[List[dict]] = None
 
@@ -544,14 +663,29 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
     """
 
     @function_tool
-    async def read_subsection(parent_section: str, subsection: str) -> SubsectionReadResult:
-        """Survey the full text of ALL chunks in a SPECIFIC SUBSECTION of a parent section.
+    async def read_subsection(
+        parent_section: str,
+        subsection: str,
+        max_chunks: int = _DEFAULT_SECTION_MAX_CHUNKS,
+        offset: int = 0,
+        text_contains: Optional[str] = None,
+    ) -> SubsectionReadResult:
+        """Survey the text of the chunks in a SPECIFIC SUBSECTION of a parent section.
 
-        Returns every chunk under the subsection via the LLM-resolved semantic hierarchy,
+        Returns the chunks under the subsection via the LLM-resolved semantic hierarchy,
         not linear page order, for complete coverage when search may miss low-scoring
-        passages. Use it for precise, full reads of a named subsection (figure legends are
-        a rich source of expression evidence). For retained evidence, call read_chunk on
-        relevant chunks and select evidence_spans[].span_id values before record_evidence.
+        passages. Use it for precise reads of a named subsection (figure legends are a
+        rich source of expression evidence).
+
+        A long subsection is returned one page of chunks at a time. The result reports
+        total_chunk_count and, when more remain, next_offset; pass that next_offset back
+        in to continue. Set text_contains to return only passages that mention a specific
+        term, each with a short excerpt around the match, instead of the whole subsection.
+
+        subsection.source_chunks lists the passages on this page as lightweight pointers
+        (chunk_id, location, size) without repeating their text. For retained evidence,
+        call read_chunk on a relevant chunk_id and select evidence_spans[].span_id values
+        before record_evidence.
 
         Examples:
             - read_subsection("Methods", "Fly Strains")
@@ -561,15 +695,24 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
         Args:
             parent_section: The top-level section (e.g., "Methods", "Results")
             subsection: The specific subsection name (e.g., "Fly Strains", "Cell Culture")
+            max_chunks: Most passages to return on this page. Defaults to a sensible cap;
+                        raise it to pull more of a very long subsection at once.
+            offset: How many passages to skip before this page. Use the next_offset from
+                    the previous page to continue.
+            text_contains: Return only passages that contain this text (case-insensitive),
+                           each with a short excerpt around the match.
         """
         if tracker:
             tracker.record_call("read_subsection")
 
         logger.info(
-            "Reading subsection '%s' in '%s' from document %s...",
+            "Reading subsection '%s' in '%s' from document %s... (offset=%s, max_chunks=%s, filtered=%s)",
             subsection,
             parent_section,
             document_id[:8],
+            offset,
+            max_chunks,
+            bool(text_contains),
         )
 
         try:
@@ -586,45 +729,50 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
                     subsection=None
                 )
 
-            # Combine content and collect metadata
-            content_parts = []
+            needle = text_contains.lower() if text_contains else None
+            if needle:
+                selected = [
+                    chunk for chunk in chunks if needle in _chunk_text(chunk).lower()
+                ]
+            else:
+                selected = chunks
+
+            total_chunk_count = len(selected)
+            cap = max(1, int(max_chunks))
+            start = max(0, int(offset))
+            page = selected[start : start + cap]
+            has_more = total_chunk_count > start + len(page)
+
+            content_parts: List[str] = []
             page_numbers = set()
-            all_doc_items = []
+            all_doc_items: List[dict] = []
             source_chunks: List[SectionChunkSource] = []
 
-            for chunk in chunks:
-                text = chunk.get("text") or chunk.get("content") or ""
-                if text:
-                    content_parts.append(text)
-
+            for index, chunk in enumerate(page, start=start):
+                text = _chunk_text(chunk)
                 metadata = _best_effort_metadata(chunk)
-                page = (
-                    chunk.get("page_number")
-                    or chunk.get("pageNumber")
-                    or metadata.get("page_number")
-                    or metadata.get("pageNumber")
-                )
-                if page:
-                    page_numbers.add(page)
+                page_number = _chunk_page(chunk, metadata)
+                if page_number:
+                    page_numbers.add(page_number)
 
                 chunk_id = resolve_chunk_identifier(chunk, metadata)
-                if chunk_id and text:
-                    source_chunks.append(
-                        SectionChunkSource(
-                            chunk_id=chunk_id,
-                            page_number=page,
-                            section_title=chunk.get("section_title")
-                            or chunk.get("sectionTitle")
-                            or metadata.get("section_title")
-                            or metadata.get("sectionTitle")
-                            or parent_section,
-                            subsection=chunk.get("subsection")
-                            or metadata.get("subsection")
-                            or metadata.get("subSection")
-                            or subsection,
-                            content=text,
-                        )
+                if not (chunk_id and text):
+                    continue
+
+                snippet = _build_snippet(text, needle) if needle else None
+                content_parts.append(snippet if snippet is not None else text)
+
+                source_chunks.append(
+                    SectionChunkSource(
+                        chunk_id=chunk_id,
+                        chunk_index=index,
+                        page_number=page_number,
+                        section_title=_chunk_section_title(chunk, metadata, parent_section),
+                        subsection=_chunk_subsection(chunk, metadata, subsection),
+                        char_count=len(text),
+                        snippet=snippet,
                     )
+                )
 
                 doc_items = metadata.get("doc_items") or chunk.get("doc_items") or []
                 if doc_items:
@@ -634,15 +782,23 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
             sorted_pages = sorted(page_numbers) if page_numbers else []
 
             logger.info(
-                "Read %s chunks from subsection '%s', pages %s",
-                len(chunks),
+                "Read %s/%s chunks from subsection '%s', pages %s",
+                len(page),
+                total_chunk_count,
                 subsection,
                 sorted_pages,
             )
 
+            filter_note = f" matching '{text_contains}'" if text_contains else ""
+            more_note = (
+                f" More remain; call again with offset={start + len(page)}."
+                if has_more
+                else ""
+            )
             return SubsectionReadResult(
                 summary=(
-                    f"Read {len(chunks)} chunks from '{parent_section} > {subsection}'. "
+                    f"Read {len(page)} of {total_chunk_count} chunks{filter_note} from "
+                    f"'{parent_section} > {subsection}'.{more_note} "
                     "Use subsection.source_chunks[].chunk_id with read_chunk for final evidence span selection."
                 ),
                 subsection=SubsectionContent(
@@ -650,7 +806,12 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
                     subsection=subsection,
                     page_numbers=sorted_pages,
                     content=full_content,
-                    chunk_count=len(chunks),
+                    chunk_count=len(page),
+                    returned_chunk_count=len(page),
+                    total_chunk_count=total_chunk_count,
+                    offset=start,
+                    next_offset=start + len(page) if has_more else None,
+                    truncated=has_more,
                     source_chunks=source_chunks if source_chunks else None,
                     doc_items=all_doc_items if all_doc_items else None,
                 )

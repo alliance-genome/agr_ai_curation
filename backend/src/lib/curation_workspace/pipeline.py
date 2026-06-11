@@ -70,11 +70,13 @@ from src.lib.domain_envelopes.persistence import (
     write_domain_envelope_checkpoint,
 )
 from src.schemas.domain_envelope import DomainEnvelope
+from src.lib.openai_agents.config import get_async_candidate_threshold
 
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_ASYNC_CANDIDATE_THRESHOLD = 25
+# Env-configurable via ASYNC_CANDIDATE_THRESHOLD (default 25); see config.py.
+DEFAULT_ASYNC_CANDIDATE_THRESHOLD = get_async_candidate_threshold()
 
 
 class PipelineExecutionMode(str, Enum):

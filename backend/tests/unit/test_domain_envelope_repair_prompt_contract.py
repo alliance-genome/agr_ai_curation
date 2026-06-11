@@ -34,8 +34,8 @@ EXTRACTOR_OUTPUT_SCHEMAS = {
 }
 
 # Non-builder, extraction-only tools every extractor may declare regardless of
-# pattern. Builder verbs (stage_/patch_/discard_/list_staged_/finalize_*) are
-# validated separately by shape so a newly migrated domain stays in scope
+# pattern. Builder verbs (stage_/patch_/discard_/list_staged_/find_staged_/finalize_*)
+# are validated separately by shape so a newly migrated domain stays in scope
 # without editing this set.
 EXTRACTION_SAFE_TOOLS = {
     "search_document",
@@ -64,6 +64,7 @@ BUILDER_TOOL_VERB_PREFIXES = (
     "patch_",
     "discard_",
     "list_staged_",
+    "find_staged_",
     "finalize_",
 )
 
@@ -251,7 +252,7 @@ def test_extractor_agent_metadata_and_tools_stay_extraction_scoped():
         agent_payload = _yaml(relative_path)
         tools = set(agent_payload.get("tools") or [])
         # Every declared tool is either an extraction-only tool or a builder
-        # tool-loop verb (stage_/patch_/discard_/list_staged_/finalize_*). This
+        # tool-loop verb (stage_/patch_/discard_/list_staged_/find_staged_/finalize_*). This
         # stays builder-generic: a newly migrated domain's verbs are accepted by
         # shape rather than needing to be enumerated here.
         out_of_scope = {tool for tool in tools if not _is_extraction_scoped_tool(tool)}

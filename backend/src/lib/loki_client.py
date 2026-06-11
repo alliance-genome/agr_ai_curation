@@ -9,9 +9,16 @@ from typing import Any, Callable, Literal, TypeAlias, TypedDict
 
 import httpx
 
+from src.lib.openai_agents.config import (
+    get_loki_query_limit,
+    get_loki_query_timeout_seconds,
+)
+
 DEFAULT_LOKI_URL = "http://loki:3100"
-DEFAULT_TIMEOUT_SECONDS = 10.0
-DEFAULT_LIMIT = 2000
+# Env-configurable (defaults unchanged); see config.py getters and .env.example:
+#   LOKI_QUERY_TIMEOUT_SECONDS (default 10), LOKI_QUERY_LIMIT (default 2000).
+DEFAULT_TIMEOUT_SECONDS = get_loki_query_timeout_seconds()
+DEFAULT_LIMIT = get_loki_query_limit()
 LOKI_QUERY_RANGE_PATH = "/loki/api/v1/query_range"
 LOG_LEVEL_LABEL_PATTERNS = {
     "DEBUG": "(?i)^debug$",

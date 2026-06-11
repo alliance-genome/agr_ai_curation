@@ -9,6 +9,11 @@ from pydantic import BaseModel
 
 from src.lib.flows.validation_attachments import domain_pack_validation_registries
 from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
+from src.lib.openai_agents.bounded_list import (
+    normalize_page_limit,
+    offset_page,
+    parse_offset_cursor,
+)
 
 
 AGENT_CONTRACT_TOPICS = frozenset(
@@ -29,13 +34,20 @@ def get_agent_contract(
     topic: str,
     field_path: str | None = None,
     detail_level: str = "summary",
+    field_limit: int | None = None,
+    field_cursor: str | None = None,
     *,
     agent_registry: Mapping[str, Mapping[str, Any]] | None = None,
     registries: Mapping[str, DomainPackValidationRegistry] | None = None,
     tool_details_resolver: Callable[[str, str], Mapping[str, Any] | None] | None = None,
     output_schema_resolver: Callable[[str], type[BaseModel] | None] | None = None,
 ) -> dict[str, Any]:
-    """Return deterministic read-only contract metadata for one runtime agent."""
+    """Return deterministic read-only contract metadata for one runtime agent.
+
+    When an output schema exposes many fields, pass field_limit (and the
+    field_cursor returned by a previous call) to page through the schema field
+    list instead of receiving every field at once.
+    """
 
     try:
         normalized_agent_id = _required_text(agent_id, "agent_id")
@@ -112,6 +124,8 @@ def get_agent_contract(
                 field_path=normalized_field_path,
                 detail_level=normalized_detail_level,
                 output_schema_resolver=output_schema_resolver,
+                field_limit=field_limit,
+                field_cursor=field_cursor,
             ),
         }
 
@@ -313,6 +327,8 @@ def _output_schema_contract(
     field_path: str | None,
     detail_level: str,
     output_schema_resolver: Callable[[str], type[BaseModel] | None] | None,
+    field_limit: int | None = None,
+    field_cursor: str | None = None,
 ) -> dict[str, Any]:
     schema_name = _output_schema_name(agent_id, entry)
     if schema_name is None:
@@ -343,8 +359,28 @@ def _output_schema_contract(
     payload: dict[str, Any] = {
         "output_schema": schema_name,
         "schema_resolved": True,
-        "fields": fields,
+        "field_total_count": len(fields),
     }
+    # Field-list paging is opt-in: only page when a caller asks for a limit, so
+    # callers that want the whole schema keep receiving every field.
+    if field_limit is not None:
+        bounded_limit = normalize_page_limit(field_limit)
+        offset = parse_offset_cursor(field_cursor)
+        page, truncated, next_cursor = offset_page(
+            fields,
+            limit=bounded_limit,
+            cursor=offset,
+        )
+        payload["fields"] = page
+        payload["returned_field_count"] = len(page)
+        payload["fields_truncated"] = truncated
+        payload["next_field_cursor"] = next_cursor
+        payload["field_limit"] = bounded_limit
+    else:
+        payload["fields"] = fields
+        payload["returned_field_count"] = len(fields)
+        payload["fields_truncated"] = False
+        payload["next_field_cursor"] = None
     if detail_level == "detail":
         payload["schema_title"] = schema.get("title")
         payload["schema_description"] = schema.get("description")

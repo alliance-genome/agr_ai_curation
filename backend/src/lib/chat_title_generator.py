@@ -7,8 +7,11 @@ import re
 from dataclasses import dataclass
 from typing import Iterable
 
+from src.lib.openai_agents.config import get_chat_title_max_length
 
-TITLE_MAX_LENGTH = 80
+
+# Env-configurable via CHAT_TITLE_MAX_LENGTH (default 80); see config.py.
+TITLE_MAX_LENGTH = get_chat_title_max_length()
 
 _WHITESPACE_RE = re.compile(r"\s+")
 _FIRST_CLAUSE_SPLIT_RE = re.compile(r"(?:\r?\n)+|(?<=[.!?])\s+")

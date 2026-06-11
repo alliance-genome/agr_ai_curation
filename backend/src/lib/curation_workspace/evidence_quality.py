@@ -11,6 +11,9 @@ from src.schemas.curation_workspace import (
     EvidenceAnchor,
     EvidenceLocatorQuality,
 )
+from src.lib.openai_agents.config import (
+    get_evidence_page_only_degraded_ratio_threshold,
+)
 
 
 QUOTE_QUALITIES = {
@@ -18,7 +21,9 @@ QUOTE_QUALITIES = {
     EvidenceLocatorQuality.NORMALIZED_QUOTE,
 }
 
-PAGE_ONLY_DEGRADED_RATIO_THRESHOLD = 0.5
+# Env-configurable via EVIDENCE_PAGE_ONLY_DEGRADED_RATIO_THRESHOLD (default 0.5);
+# see config.py.
+PAGE_ONLY_DEGRADED_RATIO_THRESHOLD = get_evidence_page_only_degraded_ratio_threshold()
 
 
 class EvidenceRecordLike(Protocol):

@@ -68,9 +68,6 @@ ask_pdf_extraction_specialist
 ask_gene_extractor_specialist
 ask_gene_expression_specialist
 format_data
-ask_gene_specialist
-ask_allele_specialist
-ask_disease_specialist
 ask_chemical_specialist
 ask_gene_ontology_specialist
 ask_go_annotations_specialist
@@ -214,8 +211,6 @@ sweeping everything into curation.
 # SUP-52 curator-grade handoff example (canonical reformulation demo)
 What genes are the focus of this publication?
 identify the genes that are a central experimental focus of the study
-# SUP-53 chained extraction example (batched allele lookup)
-ONE call with ALL alleles batched
 # SUP-54 enrichment chain example
 ask_go_annotations_specialist("What GO annotations does WBGene00000912 have?")
 # SUP-55 gene expression three-step example
@@ -228,8 +223,7 @@ The supervisor output contract is prompt-only plain text, not JSON.
 Keep the answer concise and curator-facing.
 # SUP-65 exclude internal identifiers
 Exclude internal chunk_ids, trace IDs, raw tool names, and other system identifiers.
-# SUP-66 user-friendly source labels (Alliance Gene Database contract-test pinned)
-| ask_gene_specialist | "Alliance Gene Database" |
+# SUP-66 user-friendly source labels (Uploaded Document contract-test pinned)
 | ask_pdf_extraction_specialist | "Uploaded Document" |
 | ask_ontology_term_validation_specialist | "Ontology Term Resolver" |
 

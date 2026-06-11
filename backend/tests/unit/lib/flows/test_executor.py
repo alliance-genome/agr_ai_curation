@@ -4198,6 +4198,109 @@ class TestExecuteFlowTermination:
         assert flow_finished["data"]["failure_reason"] is None
 
     @pytest.mark.asyncio
+    async def test_non_fatal_specialist_error_does_not_fail_flow(self, monkeypatch):
+        """Warning-level / non-fatal specialist errors must not abort the flow.
+
+        The domain-envelope validator dispatch marks recoverable, lookup-heavy
+        validator failures (e.g. experimental_condition hitting MaxTurnsExceeded)
+        as ``fatal: False`` / ``severity: "warning"`` and records them as an OPEN
+        ``validator_error`` finding for curator review. The flow must surface the
+        event but keep going so the already-persisted extraction still produces a
+        terminal output instead of being discarded.
+        """
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene", step_goal="Extract genes"),
+        ])
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: MagicMock(name="Flow Supervisor"),
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            yield {
+                "type": "SPECIALIST_ERROR",
+                "details": {
+                    "error": "experimental_condition validator exceeded turn budget",
+                    "fatal": False,
+                    "severity": "warning",
+                },
+            }
+            # Flow must continue past the non-fatal error and reach a terminal.
+            yield {"type": "CHAT_OUTPUT_READY", "data": {}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [event async for event in execute_flow(flow, user_id="u1", session_id="s1")]
+        event_types = [event.get("type") for event in events]
+
+        # The SPECIALIST_ERROR is still surfaced for visibility ...
+        assert "SPECIALIST_ERROR" in event_types
+        # ... but it must NOT be converted into a flow failure.
+        assert "FLOW_ERROR" not in event_types
+        assert "CHAT_OUTPUT_READY" in event_types
+
+        flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
+        assert flow_finished["data"]["status"] == "completed"
+        assert flow_finished["data"]["failure_reason"] is None
+
+    @pytest.mark.asyncio
+    async def test_fatal_specialist_error_still_fails_flow(self, monkeypatch):
+        """A genuinely-fatal specialist error (no fatal:False / warning) must fail."""
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene", step_goal="Extract genes"),
+        ])
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: MagicMock(name="Flow Supervisor"),
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            yield {
+                "type": "SPECIALIST_ERROR",
+                "details": {
+                    "error": "Gene Validation did not call required AGR DB tools",
+                    "severity": "error",
+                },
+            }
+            # Must NOT leak through: a fatal error aborts the flow before this.
+            yield {"type": "CHAT_OUTPUT_READY", "data": {}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [event async for event in execute_flow(flow, user_id="u1", session_id="s1")]
+        event_types = [event.get("type") for event in events]
+
+        assert "SPECIALIST_ERROR" in event_types
+        assert "FLOW_ERROR" in event_types
+        assert "CHAT_OUTPUT_READY" not in event_types
+        flow_error = next(e for e in events if e.get("type") == "FLOW_ERROR")
+        assert flow_error["details"]["reason"] == "specialist_step_failed"
+
+        flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
+        assert flow_finished["data"]["status"] == "failed"
+        assert flow_finished["data"]["failure_reason"] is not None
+
+    @pytest.mark.asyncio
     async def test_defers_file_ready_until_terminal_step_state_is_recorded(
         self, monkeypatch
     ):

@@ -56,7 +56,6 @@ def _base_payload(**overrides):
         "lookup_attempts": [],
         "curator_message": "Experimental condition has unresolved components.",
         "explanation": "One or more component lookups did not resolve.",
-        "condition_status": "unresolved",
         "condition_id": None,
         "normalized_components": [],
         "component_validations": [],
@@ -86,7 +85,6 @@ def test_experimental_condition_agent_bundle_loads_with_component_tool_grants(
     schema = schemas["ExperimentalConditionValidationResult"]
     assert any(_b.__qualname__ == DomainValidatorResultBase.__qualname__ for _b in type.mro(schema))
     assert {
-        "condition_status",
         "condition_id",
         "normalized_components",
         "component_validations",
@@ -165,7 +163,6 @@ def test_experimental_condition_schema_accepts_resolved_chemical_condition(
         ],
         curator_message="Experimental condition components resolved.",
         explanation="The condition class and chemical components resolved unambiguously.",
-        condition_status="resolved",
         condition_id="ZECO:0000111|CHEBI:9168|3 pM|chemical:sirolimus",
         normalized_components=[
             {
@@ -215,7 +212,6 @@ def test_experimental_condition_schema_accepts_resolved_chemical_condition(
     result = schema.model_validate(payload)
 
     assert result.status == "resolved"
-    assert result.condition_status == "resolved"
     assert result.normalized_components[0].validator_agent.agent_id == "chemical_validation"
 
 
@@ -295,5 +291,4 @@ def test_experimental_condition_schema_preserves_ambiguous_disease_condition(
     result = schema.model_validate(payload)
 
     assert result.status == "unresolved"
-    assert result.condition_status == "unresolved"
     assert result.component_validations[0].candidates[0].value == "NCBITaxon:10090"

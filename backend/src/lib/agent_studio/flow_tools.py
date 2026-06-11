@@ -23,6 +23,12 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from src.schemas.flows import DEFAULT_FLOW_EDGE_ROLE, VALIDATION_ATTACHMENT_EDGE_ROLE
+from src.lib.openai_agents.bounded_list import (
+    normalize_page_limit,
+    offset_page,
+    parse_offset_cursor,
+    substring_match,
+)
 
 from .catalog_service import AGENT_REGISTRY
 from .diagnostic_tools import get_diagnostic_tools_registry
@@ -721,41 +727,91 @@ def _get_flow_templates_handler():
 
     Returns common flow patterns and available agents.
     """
-    def handler() -> Dict[str, Any]:
+    def handler(
+        query: Optional[str] = None,
+        category: Optional[str] = None,
+        limit: Optional[int] = None,
+        cursor: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Get flow templates and available agents.
 
+        Args:
+            query: Optional words to match against an agent's id, display name,
+                or description (case-insensitive). Blank returns every agent.
+            category: Optional exact category to keep, such as Extraction,
+                Validation, or Output.
+            limit: How many agents to return in this page.
+            cursor: Page marker returned as next_cursor by a previous call.
+
         Returns:
-            Dict with templates list, available_agents, and help message
+            Dict with templates list, a bounded available_agents page, and the
+            standard total_count/returned_count/truncated/next_cursor keys.
         """
-        available_agent_ids = set(FLOW_AGENT_IDS)
+        normalized_category = str(category).strip() if category else None
+
+        all_agents = [
+            {
+                "agent_id": agent_id,
+                "display_name": AGENT_REGISTRY.get(agent_id, {}).get("name", agent_id),
+                "description": AGENT_REGISTRY.get(agent_id, {}).get("description", ""),
+                "category": AGENT_REGISTRY.get(agent_id, {}).get("category", "Unknown"),
+                "requires_document": AGENT_REGISTRY.get(agent_id, {}).get("requires_document", False),
+            }
+            for agent_id in FLOW_AGENT_IDS
+        ]
+
+        matched_agents = [
+            agent
+            for agent in all_agents
+            if (not normalized_category or agent["category"] == normalized_category)
+            and substring_match(
+                query,
+                agent["agent_id"],
+                agent["display_name"],
+                agent["description"],
+            )
+        ]
+
+        available_agent_ids = {agent["agent_id"] for agent in matched_agents}
         templates = _filter_flow_templates(available_agent_ids)
 
-        # Get available agents with descriptions
-        available_agents = []
-        for agent_id in FLOW_AGENT_IDS:
-            agent_info = AGENT_REGISTRY.get(agent_id, {})
-            available_agents.append({
-                "agent_id": agent_id,
-                "display_name": agent_info.get("name", agent_id),
-                "description": agent_info.get("description", ""),
-                "category": agent_info.get("category", "Unknown"),
-                "requires_document": agent_info.get("requires_document", False)
-            })
+        total_count = len(matched_agents)
+        bounded_limit = normalize_page_limit(limit)
+        offset = parse_offset_cursor(cursor)
+        page, truncated, next_cursor = offset_page(
+            matched_agents,
+            limit=bounded_limit,
+            cursor=offset,
+        )
 
-        if not available_agents:
+        searched = bool(str(query or "").strip() or normalized_category)
+        if total_count == 0 and not searched:
             message = (
                 "No flow-capable agents are currently installed. "
                 "Add specialist packages to unlock flow templates."
             )
+        elif total_count == 0:
+            message = (
+                "No flow-capable agents matched. "
+                "Broaden the search or add specialist packages to unlock flow templates."
+            )
         else:
             message = (
-                f"Found {len(templates)} compatible templates and {len(available_agents)} available agents. "
+                f"Found {len(templates)} compatible templates and {total_count} matching agents "
+                f"(showing {len(page)}). "
                 "Use validate_flow to check a custom workflow, or create_flow to save one."
             )
 
         return {
             "templates": templates,
-            "available_agents": available_agents,
+            "available_agents": page,
+            "total_count": total_count,
+            "returned_count": len(page),
+            "truncated": truncated,
+            "next_cursor": next_cursor,
+            "limit": bounded_limit,
+            "query": str(query or "").strip() or None,
+            "category": normalized_category,
             "message": message,
         }
 
@@ -768,60 +824,105 @@ def _get_available_agents_handler():
     Returns all available agents organized by category with metadata.
     This helps Claude understand agent types and purposes for flow verification.
     """
-    def handler() -> Dict[str, Any]:
-        """Get all available agents organized by category.
+    def handler(
+        query: Optional[str] = None,
+        category: Optional[str] = None,
+        limit: Optional[int] = None,
+        cursor: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Get available agents, searchable and grouped by category.
+
+        Args:
+            query: Optional words to match against an agent's id, name, or
+                description (case-insensitive). Blank returns every agent.
+            category: Optional exact category to keep, such as Extraction,
+                Validation, or Output.
+            limit: How many agents to return in this page.
+            cursor: Page marker returned as next_cursor by a previous call.
 
         Returns:
-            Dict with categories, output_agents, extraction_agents, validation_agents
+            Dict with the matching agents grouped into categories plus the
+            standard total_count/returned_count/truncated/next_cursor keys.
         """
-        # Build categories dict from AGENT_REGISTRY
-        categories: Dict[str, List[Dict[str, str]]] = {}
-        output_agents: List[str] = []
-        extraction_agents: List[str] = []
-        validation_agents: List[str] = []
+        normalized_category = str(category).strip() if category else None
 
+        matched: List[Dict[str, Any]] = []
         for agent_id, config in AGENT_REGISTRY.items():
             # Skip supervisor (internal routing) and task_input (flow input node)
             if agent_id in ("supervisor", "task_input"):
                 continue
 
-            category = config.get("category", "Unknown")
-            agent_info = {
-                "agent_id": agent_id,
-                "name": config.get("name", agent_id),
-                "description": config.get("description", ""),
-                "requires_document": config.get("requires_document", False),
-            }
+            agent_category = config.get("category", "Unknown")
+            if normalized_category and agent_category != normalized_category:
+                continue
 
-            # Add to category list
-            if category not in categories:
-                categories[category] = []
-            categories[category].append(agent_info)
+            name = config.get("name", agent_id)
+            description = config.get("description", "")
+            if not substring_match(query, agent_id, name, description):
+                continue
 
-            # Categorize by purpose for verification
-            if category == "Output":
-                output_agents.append(agent_id)
-            elif category == "Extraction":
-                extraction_agents.append(agent_id)
-            elif category == "Validation":
-                validation_agents.append(agent_id)
+            matched.append(
+                {
+                    "agent_id": agent_id,
+                    "name": name,
+                    "description": description,
+                    "category": agent_category,
+                    "requires_document": config.get("requires_document", False),
+                }
+            )
 
-        total_agents = sum(len(agents) for agents in categories.values())
-        if total_agents == 0:
+        total_agents = len(matched)
+        bounded_limit = normalize_page_limit(limit)
+        offset = parse_offset_cursor(cursor)
+        page, truncated, next_cursor = offset_page(
+            matched,
+            limit=bounded_limit,
+            cursor=offset,
+        )
+
+        # Group only the returned page so callers see exactly what this page holds.
+        categories: Dict[str, List[Dict[str, Any]]] = {}
+        output_agents: List[str] = []
+        extraction_agents: List[str] = []
+        validation_agents: List[str] = []
+        for agent_info in page:
+            agent_category = agent_info["category"]
+            categories.setdefault(agent_category, []).append(
+                {
+                    "agent_id": agent_info["agent_id"],
+                    "name": agent_info["name"],
+                    "description": agent_info["description"],
+                    "requires_document": agent_info["requires_document"],
+                }
+            )
+            if agent_category == "Output":
+                output_agents.append(agent_info["agent_id"])
+            elif agent_category == "Extraction":
+                extraction_agents.append(agent_info["agent_id"])
+            elif agent_category == "Validation":
+                validation_agents.append(agent_info["agent_id"])
+
+        searched = bool(str(query or "").strip() or normalized_category)
+        if total_agents == 0 and not searched:
             message = (
                 "No flow-capable agents are currently installed. "
                 "Install additional agent packages to unlock flow verification helpers."
             )
+        elif total_agents == 0:
+            message = (
+                "No flow-capable agents matched. "
+                "Broaden the search or install additional agent packages."
+            )
         elif output_agents:
             message = (
-                f"Found {total_agents} agents across {len(categories)} categories. "
-                f"Output agents ({len(output_agents)}): {', '.join(output_agents)}. "
+                f"Found {total_agents} matching agents (showing {len(page)}). "
+                f"Output agents on this page ({len(output_agents)}): {', '.join(output_agents)}. "
                 "These are designed to be final steps in a flow."
             )
         else:
             message = (
-                f"Found {total_agents} agents across {len(categories)} categories. "
-                "No output agents are currently installed."
+                f"Found {total_agents} matching agents (showing {len(page)}). "
+                "No output agents are on this page."
             )
 
         return {
@@ -830,6 +931,13 @@ def _get_available_agents_handler():
             "extraction_agents": extraction_agents,
             "validation_agents": validation_agents,
             "total_agents": total_agents,
+            "returned_count": len(page),
+            "total_count": total_agents,
+            "truncated": truncated,
+            "next_cursor": next_cursor,
+            "limit": bounded_limit,
+            "query": str(query or "").strip() or None,
+            "category": normalized_category,
             "message": message,
         }
 
@@ -1287,13 +1395,35 @@ ALWAYS use this before create_flow to catch issues early.""",
 
 Use this tool to show the user example workflows they can use as
 starting points. Returns template flows for common curation tasks
-and a list of all available agents with their descriptions.
+and a searchable, paged list of available agents with their descriptions.
+
+Pass query to search agents by id, name, or description, category to keep
+one kind (Extraction, Validation, Output), and limit/cursor to page through
+large agent catalogs.
 
 Use this as a starting point when helping users design flows.""",
         input_schema={
             "type": "object",
-            "properties": {},
-            "description": "No parameters required"
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Optional words to match against an agent's id, name, or description (case-insensitive). Leave blank to list every agent.",
+                },
+                "category": {
+                    "type": "string",
+                    "description": "Optional exact category to keep, such as Extraction, Validation, or Output.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "How many agents to return in this page (default: 20, max: 50).",
+                    "minimum": 1,
+                    "maximum": 50,
+                },
+                "cursor": {
+                    "type": "string",
+                    "description": "Page marker returned as next_cursor by a previous call. Omit to start from the first page.",
+                },
+            },
         },
         handler=_get_flow_templates_handler(),
         category="flows",
@@ -1338,7 +1468,7 @@ The tool ensures you see the flow exactly as it will execute.""",
     # -------------------------------------------------------------------------
     registry.register(
         name="get_available_agents",
-        description="""Get all available agents organized by category with descriptions.
+        description="""Get available agents organized by category with descriptions.
 
 Use this tool to understand agent types and purposes when verifying or analyzing flows.
 Returns agents grouped by category (Extraction, Validation, Output) and identifies
@@ -1348,12 +1478,34 @@ which agents are designed for specific purposes:
 - extraction_agents: Agents that extract structured data from documents
 - validation_agents: Agents that validate or look up structured entities
 
+Pass query to search agents by id, name, or description, category to keep one
+kind, and limit/cursor to page through large agent catalogs. Results report
+total_count and next_cursor so you can fetch the rest.
+
 ALWAYS call this tool along with get_current_flow() when verifying a flow,
 so you can check if the flow ends with an appropriate output agent.""",
         input_schema={
             "type": "object",
-            "properties": {},
-            "description": "No parameters required"
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Optional words to match against an agent's id, name, or description (case-insensitive). Leave blank to list every agent.",
+                },
+                "category": {
+                    "type": "string",
+                    "description": "Optional exact category to keep, such as Extraction, Validation, or Output.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "How many agents to return in this page (default: 20, max: 50).",
+                    "minimum": 1,
+                    "maximum": 50,
+                },
+                "cursor": {
+                    "type": "string",
+                    "description": "Page marker returned as next_cursor by a previous call. Omit to start from the first page.",
+                },
+            },
         },
         handler=_get_available_agents_handler(),
         category="flows",

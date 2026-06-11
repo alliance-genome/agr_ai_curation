@@ -106,9 +106,6 @@ class ExperimentalConditionValidationResult(DomainValidatorResultBase):
 
     __envelope_class__ = True
 
-    condition_status: Literal["resolved", "unresolved"] = Field(
-        description="Condition-level decision after composing component validations"
-    )
     condition_id: Optional[StrictStr] = Field(
         default=None,
         description="Resolved ExperimentalCondition identifier or stable condition key when available",

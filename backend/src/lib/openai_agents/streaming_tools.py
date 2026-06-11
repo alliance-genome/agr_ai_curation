@@ -28,11 +28,28 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from typing import List, Dict, Any, Mapping, Optional
 
-from agents import Agent, AgentOutputSchema, Runner, RunConfig
+from agents import (
+    Agent,
+    AgentOutputSchema,
+    ModelSettings,
+    Runner,
+    RunConfig,
+    ToolsToFinalOutputFunction,
+    ToolsToFinalOutputResult,
+)
 from pydantic import ValidationError
 
 from .audit_labels import build_specialist_internal_friendly_name
-from .config import get_max_turns, reasoning_summary_request_settings, resolve_model_provider
+from .config import (
+    get_batching_nudge_threshold,
+    get_layer2_force_tool_finalization_enabled,
+    get_max_turns,
+    get_structured_finalization_hard_max_attempts,
+    get_structured_finalization_max_attempts,
+    get_structured_finalization_retry_max_turns,
+    reasoning_summary_request_settings,
+    resolve_model_provider,
+)
 from .evidence_summary import (
     build_record_evidence_summary_record,
     canonicalize_structured_result_payload,
@@ -89,8 +106,17 @@ INTERNAL_EXTRACTION_RESULT_EVENT_TYPE = _INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 _DOCUMENT_REQUIRED_TOOL_NAMES = set(DOCUMENT_REQUIRED_TOOL_NAMES)
 _STRUCTURED_FINALIZATION_CHECK_PDF_EVIDENCE = "pdf_evidence"
 _STRUCTURED_FINALIZATION_CHECK_LOOKUP_PROVENANCE = "lookup_provenance"
-_STRUCTURED_FINALIZATION_DEFAULT_MAX_ATTEMPTS = 6
-_STRUCTURED_FINALIZATION_HARD_MAX_ATTEMPTS = 20
+# Env-configurable (defaults unchanged); see config.py getters and .env.example:
+#   STRUCTURED_FINALIZATION_MAX_ATTEMPTS, STRUCTURED_FINALIZATION_HARD_MAX_ATTEMPTS.
+_STRUCTURED_FINALIZATION_DEFAULT_MAX_ATTEMPTS = get_structured_finalization_max_attempts()
+_STRUCTURED_FINALIZATION_HARD_MAX_ATTEMPTS = get_structured_finalization_hard_max_attempts()
+# Layer 2 (tool_choice=required + ToolsToFinalOutputFunction). Run-loop change;
+# gated so it can be disabled instantly during the live 11-agent regression.
+# This constant is a temporary validation gate, not a permanent fallback.
+# When False, behavior is exactly Layer 1 (the prior structured-finalization loop).
+# Remove the gate once regression-validated.
+# Env-configurable via LAYER2_FORCE_TOOL_FINALIZATION_ENABLED (default True).
+LAYER2_FORCE_TOOL_FINALIZATION_ENABLED = get_layer2_force_tool_finalization_enabled()
 _GROQ_SCHEMA_CONSTRAINTS_ADAPTER_KEY = "groq_schema_constraints"
 _DOMAIN_ENVELOPE_SUPERVISOR_FIELD_PRIORITY = (
     "mention",
@@ -2414,6 +2440,72 @@ def _configure_structured_specialist_finalization(
     )
 
 
+def _build_structured_finalization_tool_use_behavior(
+    finalization_state: _StructuredSpecialistFinalizationState,
+) -> ToolsToFinalOutputFunction:
+    """Build the SDK tool_use_behavior callback for Layer 2 forced finalization.
+
+    The callback closes over the finalization state and ends the run the instant
+    the mandatory finalize tool is accepted (its wrapper sets accepted_payload).
+    A rejected finalize does NOT set accepted_payload, so the run continues and
+    the model is allowed to repair and retry; reject/repair is therefore
+    preserved. This is why a plain StopAtTools is wrong: it would stop on a
+    rejected finalize too.
+    """
+
+    def _structured_finalization_tool_use_behavior(
+        run_context: Any,
+        tool_results: List[Any],
+    ) -> ToolsToFinalOutputResult:
+        if finalization_state.accepted:
+            return ToolsToFinalOutputResult(
+                is_final_output=True,
+                final_output=json.dumps(finalization_state.accepted_payload),
+            )
+        return ToolsToFinalOutputResult(is_final_output=False, final_output=None)
+
+    return _structured_finalization_tool_use_behavior
+
+
+def _apply_layer2_forced_tool_finalization(
+    runtime_agent: Agent,
+    finalization_state: _StructuredSpecialistFinalizationState,
+) -> Agent:
+    """Apply Layer 2 forced-tool finalization to an already Layer-1 runtime agent.
+
+    Layer 2 makes the model physically unable to deliver output as a bare final
+    message and ends the run the instant finalize is accepted:
+      - tool_use_behavior = a conditional ToolsToFinalOutputFunction that ends the
+        run on accepted finalize (and continues otherwise, preserving repair).
+      - model_settings.tool_choice = "required" so the model must call a tool every
+        turn (no bare-text answers). The source model_settings is cloned, never
+        mutated, and all other fields (reasoning, temperature, etc.) are preserved.
+      - reset_tool_choice = False so tool_choice stays "required" across turns; the
+        SDK otherwise resets it to auto after the first tool call.
+
+    When the kill-switch LAYER2_FORCE_TOOL_FINALIZATION_ENABLED is False, the agent
+    is returned unchanged (Layer 1 behavior).
+    """
+
+    if not LAYER2_FORCE_TOOL_FINALIZATION_ENABLED:
+        return runtime_agent
+
+    source_model_settings = getattr(runtime_agent, "model_settings", None)
+    if source_model_settings is None:
+        layer2_model_settings = ModelSettings(tool_choice="required")
+    else:
+        layer2_model_settings = replace(
+            source_model_settings,
+            tool_choice="required",
+        )
+    runtime_agent.model_settings = layer2_model_settings
+    runtime_agent.tool_use_behavior = (
+        _build_structured_finalization_tool_use_behavior(finalization_state)
+    )
+    runtime_agent.reset_tool_choice = False
+    return runtime_agent
+
+
 def _raise_missing_structured_specialist_finalization(
     *,
     state: _StructuredSpecialistFinalizationState,
@@ -3808,7 +3900,8 @@ async def _dispatch_domain_envelope_validators_for_chat(
 # batched call would work.
 
 # Threshold for triggering the nudge (3 consecutive calls to same specialist)
-BATCHING_NUDGE_THRESHOLD = 3
+# Env-configurable via BATCHING_NUDGE_THRESHOLD (default 3); see config.py.
+BATCHING_NUDGE_THRESHOLD = get_batching_nudge_threshold()
 
 
 def get_batching_config() -> Dict[str, Any]:
@@ -4390,6 +4483,20 @@ async def run_specialist_with_events(
             structured_finalization_state.tool_name,
             extra={"specialist_name": specialist_name, "tool_name": tool_name},
         )
+        # Layer 2: force a tool call every turn (no bare-text final answers) and
+        # end the run the instant finalize is accepted. Skip the Groq tool/JSON
+        # compatibility path, which has its own provider constraints. Gated by the
+        # removable kill-switch so it can be disabled instantly during regression.
+        if not groq_tool_json_compat_mode and LAYER2_FORCE_TOOL_FINALIZATION_ENABLED:
+            runtime_agent = _apply_layer2_forced_tool_finalization(
+                runtime_agent,
+                structured_finalization_state,
+            )
+            logger.info(
+                "%s applying Layer 2 forced-tool finalization (tool_choice=required)",
+                specialist_name,
+                extra={"specialist_name": specialist_name, "tool_name": tool_name},
+            )
 
     # Commit pending prompts for this specialist - moves from pending to used
     # This is where the agent ACTUALLY executes, so we log the prompts now
@@ -5288,7 +5395,9 @@ async def run_specialist_with_events(
                     retry_result = Runner.run_streamed(
                         retry_agent,  # Use simplified retry agent, NOT original agent
                         input=retry_input,  # Include full conversation history
-                        max_turns=5,  # Reduced turns - just need output synthesis
+                        # Reduced turns - just need output synthesis.
+                        # Env-configurable via STRUCTURED_FINALIZATION_RETRY_MAX_TURNS.
+                        max_turns=get_structured_finalization_retry_max_turns(),
                         run_config=effective_config
                     )
 

@@ -18,6 +18,13 @@ from typing import Any, Callable, Dict, List, Optional
 
 from agents import FunctionTool
 
+from src.lib.openai_agents.bounded_list import (
+    normalize_page_limit,
+    offset_page,
+    parse_offset_cursor,
+    substring_match,
+)
+
 from .registry import DiagnosticToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -351,12 +358,24 @@ def _create_read_source_file_handler():
     return handler
 
 
-def _bounded_inventory_limit(value: Any, *, default: int = 100, maximum: int = 250) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return default
-    return max(1, min(parsed, maximum))
+def _filter_tool_items_by_query(
+    tool_items: List[Dict[str, Any]],
+    query: Optional[str],
+) -> List[Dict[str, Any]]:
+    """Keep only the tools whose id, name, or description match the search words."""
+
+    if not query:
+        return tool_items
+    return [
+        item
+        for item in tool_items
+        if substring_match(
+            query,
+            item.get("tool_id"),
+            item.get("name"),
+            item.get("description"),
+        )
+    ]
 
 
 def _tool_inventory_item(tool_id: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
@@ -392,11 +411,15 @@ def _create_get_tool_inventory_handler():
         agent_id: Optional[str] = None,
         category: Optional[str] = None,
         include_method_tools: bool = False,
+        query: Optional[str] = None,
         limit: int = 100,
+        cursor: Optional[str] = None,
     ) -> Dict[str, Any]:
         normalized_agent_id = str(agent_id).strip() if agent_id else None
         normalized_category = str(category).strip() if category else None
-        bounded_limit = _bounded_inventory_limit(limit)
+        normalized_query = str(query).strip() if query else None
+        bounded_limit = normalize_page_limit(limit, default=100, maximum=250)
+        offset = parse_offset_cursor(cursor)
 
         if normalized_agent_id:
             agent_entry = catalog_service.AGENT_REGISTRY.get(normalized_agent_id)
@@ -439,6 +462,13 @@ def _create_get_tool_inventory_handler():
                     continue
                 tool_items.append(_tool_inventory_item(tool_id, metadata))
 
+            tool_items = _filter_tool_items_by_query(tool_items, normalized_query)
+            page, truncated, next_cursor = offset_page(
+                tool_items,
+                limit=bounded_limit,
+                cursor=offset,
+            )
+
             return {
                 "success": True,
                 "agent_id": normalized_agent_id,
@@ -446,11 +476,15 @@ def _create_get_tool_inventory_handler():
                 "raw_tool_ids": raw_tool_ids,
                 "expanded_tool_ids": expanded_tool_ids,
                 "total_tools": len(tool_items),
-                "tools": tool_items[:bounded_limit],
-                "truncated": len(tool_items) > bounded_limit,
+                "total_count": len(tool_items),
+                "returned_count": len(page),
+                "tools": page,
+                "truncated": truncated,
+                "next_cursor": next_cursor,
                 "filters": {
                     "category": normalized_category,
                     "include_method_tools": include_method_tools,
+                    "query": normalized_query,
                     "limit": bounded_limit,
                 },
                 "instruction": (
@@ -475,16 +509,26 @@ def _create_get_tool_inventory_handler():
             _tool_inventory_item(tool_id, metadata)
             for tool_id, metadata in filtered_tools.items()
         ]
+        tool_items = _filter_tool_items_by_query(tool_items, normalized_query)
+        page, truncated, next_cursor = offset_page(
+            tool_items,
+            limit=bounded_limit,
+            cursor=offset,
+        )
         return {
             "success": True,
             "agent_id": None,
             "total_tools": len(tool_items),
+            "total_count": len(tool_items),
+            "returned_count": len(page),
             "categories": _category_counts(filtered_tools),
-            "tools": tool_items[:bounded_limit],
-            "truncated": len(tool_items) > bounded_limit,
+            "tools": page,
+            "truncated": truncated,
+            "next_cursor": next_cursor,
             "filters": {
                 "category": normalized_category,
                 "include_method_tools": include_method_tools,
+                "query": normalized_query,
                 "limit": bounded_limit,
             },
             "instruction": (
@@ -826,7 +870,9 @@ Some agents have organism-specific rules. Use these group aliases:
 Use this when a curator asks what an agent can do, what tools are attached to a
 specialist or validator, or which package tools/method-level helpers exist.
 Pass agent_id to see one agent's raw and expanded tool IDs; omit it to list the
-global catalog. Use get_tool_details for full schemas and method metadata.""",
+global catalog. Pass query to search tools by id, name, or description, and use
+limit/cursor to page through large catalogs. Use get_tool_details for full
+schemas and method metadata.""",
         input_schema={
             "type": "object",
             "properties": {
@@ -843,12 +889,20 @@ global catalog. Use get_tool_details for full schemas and method metadata.""",
                     "description": "Include method-level tool entries such as search_genes in addition to concrete runtime tool IDs.",
                     "default": False,
                 },
+                "query": {
+                    "type": "string",
+                    "description": "Optional words to match against a tool's id, name, or description (case-insensitive). Leave blank to list every tool.",
+                },
                 "limit": {
                     "type": "integer",
-                    "description": "Maximum tools to return (default: 100, max: 250).",
+                    "description": "Maximum tools to return in this page (default: 100, max: 250).",
                     "default": 100,
                     "minimum": 1,
                     "maximum": 250,
+                },
+                "cursor": {
+                    "type": "string",
+                    "description": "Page marker returned as next_cursor by a previous call. Omit to start from the first page.",
                 },
             },
             "required": [],

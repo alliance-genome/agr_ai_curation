@@ -8,10 +8,18 @@ from typing import Sequence
 
 from rapidfuzz import fuzz
 
+from src.lib.openai_agents.config import (
+    get_pdf_stitched_context_max_chars,
+    get_pdf_stitched_context_min_chars,
+)
+
 
 MIN_FUZZY_MATCH_SCORE = 70.0
-STITCHED_CONTEXT_MIN_CHARS = 240
-STITCHED_CONTEXT_MAX_CHARS = 1600
+# Env-configurable (defaults unchanged); see config.py getters and .env.example:
+#   PDF_STITCHED_CONTEXT_MIN_CHARS (default 240),
+#   PDF_STITCHED_CONTEXT_MAX_CHARS (default 1600).
+STITCHED_CONTEXT_MIN_CHARS = get_pdf_stitched_context_min_chars()
+STITCHED_CONTEXT_MAX_CHARS = get_pdf_stitched_context_max_chars()
 STITCHED_ADJACENT_WORD_MIN = 4
 WORD_PATTERN = re.compile(r"\S+")
 

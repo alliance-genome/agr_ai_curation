@@ -205,3 +205,19 @@ curl -i -sS -m 5 http://127.0.0.1:4000/ | head -n 5
 4. Run targeted validation + tests.
 5. Update docs if behavior or process changed.
 6. For Symphony/Linear execution, keep a single workpad-style progress trail and clear acceptance criteria.
+7. **Any operational limit you add or touch must be surfaced to `.env` — see section 7. A bare hardcoded limit is a review-blocking defect.**
+
+## 7) Operational Limits MUST Be Surfaced To `.env` (standing convention)
+
+Every operational limit MUST be env-configurable with its current value as the default, and MUST be documented in `.env.example`. This keeps every knob discoverable, tunable in prod without a code change, and self-documenting (what it does + why). NEVER introduce a bare hardcoded limit.
+
+**What counts as an "operational limit":** agent/validator `max_turns`, tool-call budgets, batch sizes, parallelism caps, list/page/section caps, bulk/result caps, retry/attempt counts, timeouts, size/char/preview thresholds, and feature kill-switches (e.g. `LAYER2_FORCE_TOOL_FINALIZATION_ENABLED`). Pure internal plumbing waits (a 50 ms queue poll, a thread-future join) are exempt.
+
+**How to surface one:**
+- `backend/src/...` code: add a getter in `backend/src/lib/openai_agents/config.py` using the existing `_get_env_int_with_fallback(key, default)` (or the bool helper), and call it from the module. Do NOT keep a bare module constant.
+- Isolated package code (`packages/alliance/python/src/agr_ai_curation_alliance/...`) cannot import backend `config.py` (it runs in the `package_runner` subprocess, which inherits the parent env). Read `os.getenv("SAME_VAR_NAME", str(default))` directly, using the SAME env var name as any backend twin so one setting tunes both.
+- Keep the existing default exactly — surfacing a limit is never a behavior change on its own.
+
+**Document it:** add an entry under the `# Operational limits` section of `.env.example` with a comment line stating what it controls, the consequence/reasoning of changing it, and the default, then `VAR=<default>`. Group by category (Agent/turn; Validator dispatch; Structured finalization; Tool list/page/section; Display/truncation; Timeouts/retries; Feature flags).
+
+**Review rule:** reject any PR/commit that adds a new numeric/bool limit constant without an env getter + a documented `.env.example` entry. When in doubt, surface it. (Reference implementation: the 0.7.4 limits pass — `config.py` getters + the `.env.example` `# Operational limits` section.)

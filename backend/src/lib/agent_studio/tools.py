@@ -33,6 +33,10 @@ import re
 from typing import Dict, Any, Optional
 
 from src.lib.loki_client import LOG_LEVEL_LABEL_PATTERNS
+from src.lib.openai_agents.config import (
+    get_agent_studio_endpoint_timeout_seconds,
+    get_agent_studio_trace_tool_timeout_seconds,
+)
 
 
 VALID_SERVICE_LOG_LEVELS = frozenset(LOG_LEVEL_LABEL_PATTERNS)
@@ -136,7 +140,8 @@ async def _get_claude_endpoint(
     path: str,
     *,
     params: Optional[Dict[str, Any]] = None,
-    timeout_seconds: float = 30.0,
+    # Env-configurable via AGENT_STUDIO_ENDPOINT_TIMEOUT_SECONDS (default 30).
+    timeout_seconds: float = get_agent_studio_endpoint_timeout_seconds(),
 ) -> Dict[str, Any]:
     request_params: Dict[str, Any] = {"source": get_trace_source()}
     if params:
@@ -963,7 +968,8 @@ async def get_trace_reconstruction(
             "limit": max(1, min(limit, 500)),
             "offset": max(0, offset),
         },
-        timeout_seconds=45.0,
+        # Env-configurable via AGENT_STUDIO_TRACE_TOOL_TIMEOUT_SECONDS (default 45).
+        timeout_seconds=get_agent_studio_trace_tool_timeout_seconds(),
     )
 
 
@@ -1001,7 +1007,8 @@ async def get_trace_payloads(
             "offset": max(0, offset),
             "include_values": include_values,
         },
-        timeout_seconds=45.0,
+        # Env-configurable via AGENT_STUDIO_TRACE_TOOL_TIMEOUT_SECONDS (default 45).
+        timeout_seconds=get_agent_studio_trace_tool_timeout_seconds(),
     )
 
 
@@ -1058,7 +1065,8 @@ async def get_trace_payload(
             "start": max(0, start),
             "max_chars": max(0, min(max_chars, 50000)),
         },
-        timeout_seconds=45.0,
+        # Env-configurable via AGENT_STUDIO_TRACE_TOOL_TIMEOUT_SECONDS (default 45).
+        timeout_seconds=get_agent_studio_trace_tool_timeout_seconds(),
     )
 
 

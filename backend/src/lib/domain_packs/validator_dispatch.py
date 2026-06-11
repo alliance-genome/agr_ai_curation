@@ -34,6 +34,11 @@ from src.lib.runtime_payload_budget import (
     large_scalar_paths,
     provider_context_preflight,
 )
+from src.lib.openai_agents.config import (
+    get_max_parallel_validators,
+    get_validator_batch_max_size,
+    get_validator_max_tool_calls,
+)
 
 from .input_selectors import build_domain_validation_request
 from .materialization import (
@@ -58,7 +63,29 @@ from .validation_findings import append_validation_findings_to_envelope
 
 LOGGER = logging.getLogger(__name__)
 
-DEFAULT_MAX_PARALLEL_VALIDATORS = 4
+# These operational caps are env-configurable (defaults unchanged). See
+# src/lib/openai_agents/config.py getters and .env.example for documentation:
+#   MAX_PARALLEL_VALIDATORS, VALIDATOR_BATCH_MAX_SIZE, VALIDATOR_MAX_TOOL_CALLS.
+DEFAULT_MAX_PARALLEL_VALIDATORS = get_max_parallel_validators()
+# Cap on how many deduped validator jobs a single batch run may carry when a
+# binding does not configure ``batch_max_size``. Large extractions (hundreds of
+# annotations) collapse into one batch_key; without a cap the batch agent would
+# receive every job in one payload and need hundreds of turns to finish, which
+# is both the "Max turns exceeded" failure mode and an unbounded-cost risk.
+# Kept small because the per-run ``max_turns`` budget scales with the number of
+# jobs in the batch (see the batch runner): a COMPOSITE validator like
+# experimental_condition does several per-component lookups PER job, so a run of
+# N jobs costs roughly ``N * _DEFAULT_VALIDATOR_MAX_TOOL_CALLS`` turns. A small
+# cap keeps each run's turn count (and wall-clock) bounded and lets the chunks
+# run in parallel up to ``DEFAULT_MAX_PARALLEL_VALIDATORS`` instead of one long
+# serial run.
+_DEFAULT_VALIDATOR_BATCH_MAX_SIZE = get_validator_batch_max_size()
+# Per-job tool-call budget assumed for a validator binding that does not
+# configure ``max_tool_calls``. The batch ``max_turns`` is derived as
+# ``len(jobs) * this`` (each job may make this many tool calls before the single
+# batch finalize), so the runtime never relies on the Agents SDK default of 10
+# turns and never starves a multi-lookup composite validator mid-batch.
+_DEFAULT_VALIDATOR_MAX_TOOL_CALLS = get_validator_max_tool_calls()
 _VALIDATOR_DEDUPE_CONTEXT_INPUT_FIELDS = frozenset(
     {
         "evidence_quote",
@@ -592,40 +619,61 @@ def _run_validator_jobs(
 def _plan_validator_run_groups(
     grouped_jobs: list[list[_DispatchJob]],
 ) -> list[_ValidatorRunGroup]:
-    batch_groups_by_key: dict[str, list[int]] = {}
-    ordered_run_groups: list[_ValidatorRunGroup] = []
-    batch_group_positions: dict[str, int] = {}
+    batch_indexes_by_key: dict[str, list[int]] = {}
+    # ``slots`` preserves first-appearance order. Each slot is either a ready
+    # standalone run group or a ``batch_key`` placeholder string to expand once
+    # every member of that batch has been collected.
+    slots: list[_ValidatorRunGroup | str] = []
 
     for group_index, group in enumerate(grouped_jobs):
         key = _batch_group_key_for_deduped_job_group(group)
         if key is None:
-            ordered_run_groups.append(
-                _ValidatorRunGroup(dedupe_group_indexes=(group_index,))
-            )
+            slots.append(_ValidatorRunGroup(dedupe_group_indexes=(group_index,)))
             continue
 
-        indexes = batch_groups_by_key.get(key)
+        indexes = batch_indexes_by_key.get(key)
         if indexes is None:
             indexes = []
-            batch_groups_by_key[key] = indexes
-            batch_group_positions[key] = len(ordered_run_groups)
-            ordered_run_groups.append(
-                _ValidatorRunGroup(dedupe_group_indexes=(), batch_key=key)
-            )
+            batch_indexes_by_key[key] = indexes
+            slots.append(key)
         indexes.append(group_index)
 
-    for key, indexes in batch_groups_by_key.items():
-        position = batch_group_positions[key]
-        if len(indexes) == 1:
-            ordered_run_groups[position] = _ValidatorRunGroup(
-                dedupe_group_indexes=(indexes[0],)
-            )
-        else:
-            ordered_run_groups[position] = _ValidatorRunGroup(
-                dedupe_group_indexes=tuple(indexes),
-                batch_key=key,
-            )
+    ordered_run_groups: list[_ValidatorRunGroup] = []
+    for slot in slots:
+        if isinstance(slot, _ValidatorRunGroup):
+            ordered_run_groups.append(slot)
+            continue
+
+        indexes = batch_indexes_by_key[slot]
+        max_size = _effective_validator_batch_max_size(grouped_jobs, indexes)
+        for chunk in _chunk_indexes(indexes, max_size):
+            if len(chunk) == 1:
+                ordered_run_groups.append(
+                    _ValidatorRunGroup(dedupe_group_indexes=(chunk[0],))
+                )
+            else:
+                ordered_run_groups.append(
+                    _ValidatorRunGroup(
+                        dedupe_group_indexes=tuple(chunk),
+                        batch_key=slot,
+                    )
+                )
     return ordered_run_groups
+
+
+def _effective_validator_batch_max_size(
+    grouped_jobs: list[list[_DispatchJob]],
+    indexes: list[int],
+) -> int:
+    binding = grouped_jobs[indexes[0]][0].match.binding
+    configured = binding.batch_max_size
+    if configured is not None and configured > 0:
+        return configured
+    return _DEFAULT_VALIDATOR_BATCH_MAX_SIZE
+
+
+def _chunk_indexes(indexes: list[int], size: int) -> list[list[int]]:
+    return [indexes[start : start + size] for start in range(0, len(indexes), size)]
 
 
 def _batch_group_key_for_deduped_job_group(group: list[_DispatchJob]) -> str | None:
@@ -1040,11 +1088,15 @@ def run_package_scoped_validator_agent(
     payload = json.dumps(provider_payload, sort_keys=True)
     if hasattr(Runner, "run_sync"):
         run_kwargs: dict[str, Any] = {"input": payload}
-        if binding.max_tool_calls is not None:
-            run_kwargs["max_turns"] = _max_turns_with_validator_finalization(
-                binding.max_tool_calls,
-                minimum=4,
-            )
+        effective_max_tool_calls = (
+            binding.max_tool_calls
+            if binding.max_tool_calls is not None
+            else _DEFAULT_VALIDATOR_MAX_TOOL_CALLS
+        )
+        run_kwargs["max_turns"] = _max_turns_with_validator_finalization(
+            effective_max_tool_calls,
+            minimum=4,
+        )
         run_started_at = time.monotonic()
         try:
             result = Runner.run_sync(agent, **run_kwargs)
@@ -1191,11 +1243,21 @@ def run_package_scoped_validator_agent_batch(
     payload = json.dumps(provider_payload, sort_keys=True)
     if hasattr(Runner, "run_sync"):
         run_kwargs: dict[str, Any] = {"input": payload}
-        if binding.max_tool_calls is not None:
-            run_kwargs["max_turns"] = _max_turns_with_validator_finalization(
-                max(binding.max_tool_calls, len(jobs) + 1),
-                minimum=len(jobs) + 3,
-            )
+        effective_max_tool_calls = (
+            binding.max_tool_calls
+            if binding.max_tool_calls is not None
+            else _DEFAULT_VALIDATOR_MAX_TOOL_CALLS
+        )
+        # Per-JOB-aware budget: the batch agent validates every job in one run and
+        # a composite validator (e.g. experimental_condition) makes several
+        # per-component lookups per job, so the turn budget must scale with
+        # len(jobs) * per-job tool calls, not just max(per-job, job-count). The
+        # batch size is capped (``_DEFAULT_VALIDATOR_BATCH_MAX_SIZE`` /
+        # binding.batch_max_size) so this product stays bounded per run.
+        run_kwargs["max_turns"] = _max_turns_with_validator_finalization(
+            len(jobs) * effective_max_tool_calls,
+            minimum=len(jobs) + 3,
+        )
         run_started_at = time.monotonic()
         try:
             result = Runner.run_sync(agent, **run_kwargs)

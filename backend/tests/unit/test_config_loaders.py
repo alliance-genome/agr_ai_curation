@@ -64,7 +64,10 @@ class TestAgentLoader:
         assert gene.tool_name == "ask_gene_specialist"
 
         # Check supervisor routing
-        assert gene.supervisor_routing.enabled is True
+        # The gene validation agent is intentionally NOT supervisor-callable:
+        # validators run via the extractor's binding dispatch, not as standalone
+        # supervisor chat tools.
+        assert gene.supervisor_routing.enabled is False
         assert gene.supervisor_routing.batchable is True
         assert "genes" in gene.supervisor_routing.batching_instructions.lower()
 
@@ -184,15 +187,19 @@ class TestAgentLoader:
 
         # Check tool structure
         tool_names = [t["tool_name"] for t in tools]
-        assert "ask_gene_specialist" in tool_names
+        # The gene validation agent is intentionally NOT supervisor-callable now;
+        # validators run via the extractor's binding dispatch, not as standalone
+        # supervisor chat tools.
+        assert "ask_gene_specialist" not in tool_names
+        assert "ask_gene_extractor_specialist" in tool_names
         assert "ask_pdf_extraction_specialist" in tool_names
         assert "ask_ontology_term_validation_specialist" in tool_names
         assert "ask_ontology_term_specialist" not in tool_names
 
         # Check batchable flags
-        gene_tool = next(t for t in tools if t["tool_name"] == "ask_gene_specialist")
-        assert gene_tool["batchable"] is True
-        assert gene_tool["agent_id"] == "gene_validation"
+        chemical_tool = next(t for t in tools if t["tool_name"] == "ask_chemical_specialist")
+        assert chemical_tool["batchable"] is True
+        assert chemical_tool["agent_id"] == "chemical_validation"
 
     def test_formatters_not_enabled(self):
         """Test that formatter agents are not supervisor-enabled."""

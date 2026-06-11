@@ -336,3 +336,56 @@ def test_validator_agent_contract_is_project_agnostic_and_uses_same_service(tmp_
     assert "agr" + ".alliance" not in json.dumps(result)
     assert alias_result["success"] is True
     assert extraction_alias["success"] is True
+
+
+def test_output_schema_returns_all_fields_by_default(tmp_path):
+    registry = _fixture_registry(tmp_path)
+
+    result = get_agent_contract(
+        "fixture_extractor",
+        "output_schema",
+        agent_registry=_agent_registry(),
+        registries={"fixture.contract": registry},
+        output_schema_resolver=_schema_resolver,
+    )
+
+    field_paths = [field["field_path"] for field in result["fields"]]
+    assert field_paths == ["assertion_id", "assertion_label"]
+    assert result["field_total_count"] == 2
+    assert result["returned_field_count"] == 2
+    assert result["fields_truncated"] is False
+    assert result["next_field_cursor"] is None
+
+
+def test_output_schema_field_list_is_pageable(tmp_path):
+    registry = _fixture_registry(tmp_path)
+
+    first = get_agent_contract(
+        "fixture_extractor",
+        "output_schema",
+        field_limit=1,
+        agent_registry=_agent_registry(),
+        registries={"fixture.contract": registry},
+        output_schema_resolver=_schema_resolver,
+    )
+
+    assert [field["field_path"] for field in first["fields"]] == ["assertion_id"]
+    assert first["field_total_count"] == 2
+    assert first["returned_field_count"] == 1
+    assert first["fields_truncated"] is True
+    assert first["next_field_cursor"] == "1"
+    assert first["field_limit"] == 1
+
+    second = get_agent_contract(
+        "fixture_extractor",
+        "output_schema",
+        field_limit=1,
+        field_cursor=first["next_field_cursor"],
+        agent_registry=_agent_registry(),
+        registries={"fixture.contract": registry},
+        output_schema_resolver=_schema_resolver,
+    )
+
+    assert [field["field_path"] for field in second["fields"]] == ["assertion_label"]
+    assert second["fields_truncated"] is False
+    assert second["next_field_cursor"] is None

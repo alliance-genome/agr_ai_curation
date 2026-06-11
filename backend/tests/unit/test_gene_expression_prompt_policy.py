@@ -76,6 +76,7 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
         "patch_gene_expression_observation",
         "discard_gene_expression_observation",
         "list_staged_gene_expression_observations",
+        "find_staged_gene_expression_observations",
         "finalize_gene_expression_extraction",
     ]
 

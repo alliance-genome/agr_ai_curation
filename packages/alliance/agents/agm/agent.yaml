@@ -16,7 +16,8 @@ category: "Validation"
 subcategory: "Data Validation"
 
 supervisor_routing:
-  enabled: true
+  enabled: false
+
   description: >
     Use for validating affected genomic model subjects, AGM identifiers, and
     AGM labels in phenotype or disease annotation subject context.

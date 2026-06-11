@@ -637,9 +637,14 @@ def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(
     )
 
     assert section_result.ok is True
+    # E2a: source_chunks entries no longer echo the full chunk `content`; they
+    # carry lightweight metadata (chunk_id/chunk_index/page_number/section_title/
+    # subsection/char_count plus an optional snippet), and the result gained the
+    # paging fields (returned/total_chunk_count, offset, next_offset, truncated).
+    # The assembled section `content` is unchanged.
     assert section_result.result == {
         "summary": (
-            "Read 2 chunks from 'Materials and Methods'. "
+            "Read 2 of 2 chunks from 'Materials and Methods'. "
             "Use section.source_chunks[].chunk_id with read_chunk, then pass selected "
             "evidence_spans[].span_id values to record_evidence."
         ),
@@ -648,26 +653,38 @@ def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(
             "page_numbers": [3, 4],
             "content": "Paragraph one\n\nParagraph two",
             "chunk_count": 2,
+            "returned_chunk_count": 2,
+            "total_chunk_count": 2,
+            "offset": 0,
+            "next_offset": None,
+            "truncated": False,
             "source_chunks": [
                 {
                     "chunk_id": "chunk-methods-1",
+                    "chunk_index": 0,
                     "page_number": 3,
                     "section_title": "Materials and Methods",
                     "subsection": "Animals",
-                    "content": "Paragraph one",
+                    "char_count": 13,
+                    "snippet": None,
                 },
                 {
                     "chunk_id": "chunk-methods-2",
+                    "chunk_index": 1,
                     "page_number": 4,
                     "section_title": "Materials and Methods",
                     "subsection": None,
-                    "content": "Paragraph two",
+                    "char_count": 13,
+                    "snippet": None,
                 },
             ],
             "doc_items": [{"id": "bbox-1"}, {"id": "bbox-2"}],
         },
     }
     assert "evidence_spans" not in section_result.result["section"]["source_chunks"][0]
+    # E2a guard: no full chunk text is echoed back in source_chunks entries.
+    assert "content" not in section_result.result["section"]["source_chunks"][0]
+    assert "content" not in section_result.result["section"]["source_chunks"][1]
 
 
 def test_package_runner_executes_alliance_file_output_binding_in_isolation(

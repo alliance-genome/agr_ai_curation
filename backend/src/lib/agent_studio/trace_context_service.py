@@ -21,6 +21,7 @@ from src.lib.agent_studio.trace_agent_metadata import (
     normalize_trace_agent_id,
     trace_agent_display_name,
 )
+from src.lib.openai_agents.config import get_trace_review_export_timeout_seconds
 from src.lib.upstream_error_diagnostics import looks_like_header_or_html_response
 
 from .models import (
@@ -59,7 +60,8 @@ TRACE_CONTEXT_SOURCE_LANGFUSE_SDK = "langfuse_sdk"
 TRACE_CONTEXT_SOURCE_TRACE_REVIEW_EXPORT = "trace_review_export"
 _TRACE_REVIEW_SOURCE_ENV = "TRACE_REVIEW_SOURCE"
 _TRACE_REVIEW_INTERNAL_API_TOKEN_ENV = "TRACE_REVIEW_INTERNAL_API_TOKEN"
-_TRACE_REVIEW_TIMEOUT_SECONDS = 30.0
+# Env-configurable via TRACE_REVIEW_EXPORT_TIMEOUT_SECONDS (default 30); see config.py.
+_TRACE_REVIEW_TIMEOUT_SECONDS = get_trace_review_export_timeout_seconds()
 
 
 async def get_trace_context_for_explorer(trace_id: str) -> TraceContext:

@@ -18,7 +18,8 @@ category: "Validation"
 subcategory: "Data Validation"
 
 supervisor_routing:
-  enabled: true
+  enabled: false
+
   description: >
     Use for validating controlled vocabulary backed fields such as disease
     relations, condition relation types, expression relations, quantity units,

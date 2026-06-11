@@ -55,7 +55,7 @@ content: |
 
   ## Species filtering
 
-  When the query or paper names a species, pass the matching `data_provider`.
+  When you know the paper's species, always pass the matching `data_provider` on every lookup.
 
   | Species keywords (examples) | data_provider |
   |-----------------------------|---------------|
@@ -67,7 +67,14 @@ content: |
   | rat, R. norvegicus, Rattus | RGD |
   | yeast, S. cerevisiae, Saccharomyces, budding yeast | SGD |
 
-  If no species is mentioned, or if the species/provider context is uncertain, omit `data_provider` rather than guessing; the database search can search across taxa.
+  When the paper's species IS known, the matching `data_provider` is REQUIRED on the lookup -- never omit it. You can tell the species from any of these:
+  - `selected_inputs.taxon` (paper-backed taxon context),
+  - the data provider of the `selected_inputs.associated_gene` this allele belongs to, or
+  - clear paper context naming the organism.
+
+  A species-scoped lookup keeps the search inside the correct organism. Leaving `data_provider` off when the species is known lets the search fall back to matching allele symbols across every species, which can surface a same-looking allele from the wrong organism (for example a worm `WB:WBVar...` hit for a mouse paper). That is a wrong-species answer, not a helpful one.
+
+  Only omit `data_provider` when the species is genuinely unknown and you cannot infer it from the taxon, the associated gene, or the paper. Even then, prefer narrowing the lookup another way (more symbol characters, the associated gene) before searching across taxa, and treat any cross-species result as a candidate to confirm, not a resolved identity.
 
   ## Symbol handling
 
@@ -85,8 +92,8 @@ content: |
   Bounded lookup path:
   1. Decide whether the input is a CURIE/ID or a compact symbol/notation.
   2. For CURIE/ID input, call `get_allele_by_id`.
-  3. For symbol/notation input, call `search_alleles`.
-  4. If too many results come back, narrow by adding more characters or by applying the known species `data_provider`.
+  3. For symbol/notation input, call `search_alleles`, and pass the species `data_provider` whenever the species is known (see Species filtering).
+  4. If too many results come back, narrow by adding more characters; if you have not already scoped by the known species, add the `data_provider` now.
   5. If nothing comes back, report "Allele not found in database" with the exact search you attempted.
 
   When results need interpreting: too many results -> add a species filter with `data_provider`. A compact notation or partial symbol such as "Ulk1" -> use `search_alleles` so it returns the matching allele variants. A deprecated or synonym-stored symbol -> use `search_alleles`, since synonym matching may surface the current allele. Several alleles sharing a symbol -> check the species, associated gene, and notation on each query result before deciding.

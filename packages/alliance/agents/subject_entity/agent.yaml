@@ -16,7 +16,8 @@ category: "Validation"
 subcategory: "Data Validation"
 
 supervisor_routing:
-  enabled: true
+  enabled: false
+
   description: >
     Use for validating annotation subject payloads that include subject_type,
     subject_identifier, optional subject_label, and optional taxon context.

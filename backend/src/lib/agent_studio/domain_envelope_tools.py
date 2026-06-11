@@ -35,6 +35,16 @@ from src.lib.flows.validation_attachments import (
     domain_pack_validation_registries,
     validation_schedule_from_node_data,
 )
+from src.lib.openai_agents.config import (
+    get_domain_envelope_default_limit,
+    get_domain_envelope_max_field_paths,
+    get_domain_envelope_max_json_chars,
+    get_domain_envelope_max_limit,
+    get_domain_envelope_max_lookup_attempts,
+    get_domain_envelope_max_summary_json_chars,
+    get_domain_envelope_max_validator_lookup_attempts,
+    get_domain_envelope_max_validator_summaries,
+)
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     DomainEnvelope,
@@ -46,14 +56,16 @@ from src.schemas.domain_envelope import (
 
 SessionFactory = Callable[[], Session]
 
-_MAX_LIMIT = 50
-_DEFAULT_LIMIT = 10
-_MAX_JSON_CHARS = 20_000
-_MAX_LOOKUP_ATTEMPTS = 25
-_MAX_VALIDATOR_SUMMARIES = 25
-_MAX_VALIDATOR_LOOKUP_ATTEMPTS = 10
-_MAX_SUMMARY_JSON_CHARS = 4_000
-_MAX_FIELD_PATHS = 150
+# Env-configurable (defaults unchanged); see config.py getters and .env.example
+# (DOMAIN_ENVELOPE_* group).
+_MAX_LIMIT = get_domain_envelope_max_limit()
+_DEFAULT_LIMIT = get_domain_envelope_default_limit()
+_MAX_JSON_CHARS = get_domain_envelope_max_json_chars()
+_MAX_LOOKUP_ATTEMPTS = get_domain_envelope_max_lookup_attempts()
+_MAX_VALIDATOR_SUMMARIES = get_domain_envelope_max_validator_summaries()
+_MAX_VALIDATOR_LOOKUP_ATTEMPTS = get_domain_envelope_max_validator_lookup_attempts()
+_MAX_SUMMARY_JSON_CHARS = get_domain_envelope_max_summary_json_chars()
+_MAX_FIELD_PATHS = get_domain_envelope_max_field_paths()
 
 
 def list_domain_envelopes(

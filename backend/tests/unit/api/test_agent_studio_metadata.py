@@ -145,9 +145,20 @@ class TestGetRegistryMetadata:
         from src.api.agent_studio import get_registry_metadata
 
         result = asyncio.run(get_registry_metadata())
+
+        # The gene validator is intentionally no longer a standalone
+        # supervisor-callable chat tool (supervisor_routing.enabled = false); it
+        # runs via the extractor's binding-driven validation, so it exposes no
+        # supervisor_tool.
         gene = result.agents.get("gene")
         assert gene is not None
-        assert gene.supervisor_tool == "ask_gene_specialist"
+        assert gene.supervisor_tool is None
+
+        # Agents that ARE supervisor-enabled (e.g. the gene extractor) still
+        # surface their generated supervisor_tool, so the wiring stays verified.
+        gene_extractor = result.agents.get("gene_extractor")
+        assert gene_extractor is not None
+        assert gene_extractor.supervisor_tool == "ask_gene_extractor_specialist"
 
     def test_get_registry_metadata_includes_extraction_validation_attachments(self):
         """Extraction agents should include domain-pack validation attachment options."""

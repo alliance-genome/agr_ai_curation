@@ -63,6 +63,7 @@ tools:
   - patch_phenotype_observation
   - discard_phenotype_observation
   - list_staged_phenotype_observations
+  - find_staged_phenotype_observations
   - finalize_phenotype_extraction
 
 # -----------------------------------------------------------------------------

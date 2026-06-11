@@ -104,6 +104,7 @@ from src.lib.agent_studio.tool_idea_service import (
     tool_idea_request_to_dict,
 )
 from src.lib.agent_studio.streaming import flatten_runner_event as _flatten_runner_event
+from src.lib.openai_agents.config import get_domain_reference_max_values
 from src.lib.alerts.tool_failure_notifier import notify_tool_failure
 from src.lib.chat_history_repository import (
     ChatHistoryRepository,
@@ -1341,7 +1342,8 @@ _DOMAIN_REFERENCE_TOOL_NAMES = {
     "get_export_submission_readiness",
     "list_domain_envelopes",
 }
-_DOMAIN_REFERENCE_MAX_VALUES = 50
+# Env-configurable via DOMAIN_REFERENCE_MAX_VALUES (default 50); see config.py.
+_DOMAIN_REFERENCE_MAX_VALUES = get_domain_reference_max_values()
 
 
 def _audit_text_summary(value: str) -> Dict[str, Any]:

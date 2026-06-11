@@ -39,7 +39,15 @@ def test_config_supervisor_prompt_keeps_alliance_specific_handoffs():
     assert "ask_pdf_extraction_specialist" in content
     assert "ask_gene_extractor_specialist" in content
     assert "Ready to prepare these for curation?" in content
-    assert "Alliance Gene Database" in content
+    # The gene/allele/disease validators are no longer standalone supervisor
+    # handoffs, so the "Alliance Gene Database" display-name row was removed.
+    # The supervisor prompt still names alliance-specific handoffs for the kept
+    # extractors and lookups.
+    assert "Alliance Gene Database" not in content
+    assert "Uploaded Document" in content
+    assert "Ontology Term Resolver" in content
+    assert "Gene Extraction Analysis" in content
+    assert "Alliance Chemical Database" in content
     assert "primary_external_id" in content
     assert "validator-materialized scalar fields" in content
     assert "normalized IDs" not in content

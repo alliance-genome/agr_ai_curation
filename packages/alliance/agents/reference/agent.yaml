@@ -17,7 +17,8 @@ category: "Validation"
 subcategory: "Data Validation"
 
 supervisor_routing:
-  enabled: true
+  enabled: false
+
   description: >
     Use for validating and materializing source references, including exact
     PMID/DOI/AGRKB/MOD reference lookup and fuzzy title or citation search.

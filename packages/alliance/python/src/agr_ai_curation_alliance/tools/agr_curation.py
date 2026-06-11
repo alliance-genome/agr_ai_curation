@@ -35,6 +35,7 @@ from agr_ai_curation_runtime.agr_lookup import (
 from .agr_lookup import (
     bulk_item_status_from_lookup_status as _bulk_item_status_from_lookup_status,
     candidate_from_result as _candidate_from_result,
+    cap_bulk_total_matches as _cap_bulk_total_matches,
     create_db_session,
     entity_detail_lookup_attempts as _entity_detail_lookup_attempts,
     fetch_allele_details_bulk as _fetch_allele_details_bulk,
@@ -264,6 +265,19 @@ class GeneExpressionDiscardInput(_StrictToolModel):
 
 class GeneExpressionListInput(_StrictToolModel):
     include_discarded: bool
+    limit: int = Field(default=50, ge=0)
+    offset: int = Field(default=0, ge=0)
+
+
+class GeneExpressionFindInput(_StrictToolModel):
+    field_value_contains: Optional[StrictStr] = None
+    pending_ref_id: Optional[StrictStr] = None
+    evidence_record_id: Optional[StrictStr] = None
+    candidate_id: Optional[StrictStr] = None
+    has_validation_errors: Optional[bool] = None
+    include_discarded: bool = False
+    limit: int = Field(default=50, ge=0)
+    offset: int = Field(default=0, ge=0)
 
 
 class GeneExpressionFinalizeInput(_StrictToolModel):
@@ -978,6 +992,14 @@ def _search_alleles_fuzzy_via_db(
                     AND symbol.obsolete = false
                 WHERE (:taxon_curie IS NULL OR taxon.curie = :taxon_curie)
                   AND symbol.displaytext IS NOT NULL
+                  -- Index-usable candidate pre-filter. The `%` operator is the ONLY
+                  -- trigram form the planner can serve from the
+                  -- gin(upper(displaytext) gin_trgm_ops) index; `similarity(...) >= x`
+                  -- alone forces a full seq scan over millions of allele rows. Pairing
+                  -- this `%` pre-filter (candidate set) with the precise
+                  -- `score >= :threshold` filter below keeps the same results while
+                  -- turning ~16s/symbol into ~0.3s/symbol.
+                  AND upper(symbol.displaytext) % upper(:search_pattern)
 
                 UNION ALL
 
@@ -996,6 +1018,10 @@ def _search_alleles_fuzzy_via_db(
                 WHERE :include_synonyms = true
                   AND (:taxon_curie IS NULL OR taxon.curie = :taxon_curie)
                   AND synonym.displaytext IS NOT NULL
+                  -- Same index-usable `%` candidate pre-filter as the symbol branch
+                  -- (uses gin(upper(displaytext) gin_trgm_ops)); precise scoring is
+                  -- still done by `score >= :threshold` below.
+                  AND upper(synonym.displaytext) % upper(:search_pattern)
             ),
             ranked AS (
                 SELECT
@@ -1017,6 +1043,17 @@ def _search_alleles_fuzzy_via_db(
             ORDER BY score DESC, length(matched_text) ASC
             LIMIT :limit
             """
+        )
+        # Pin the trigram threshold so the `%` candidate pre-filter (above) uses the
+        # SAME cutoff as the `score >= :threshold` scoring filter, independent of any
+        # server/DBA default. Transaction-local (is_local=true): with the normal
+        # autobegin session this spans the query below; in an autocommit session it is a
+        # no-op and `%` falls back to the server default (0.3 <= 0.35), which is still a
+        # correct superset of `score >= 0.35`. Never set this session-wide — a pooled
+        # connection would leak the changed threshold to unrelated later queries.
+        session.execute(
+            text("SELECT set_config('pg_trgm.similarity_threshold', :threshold_text, true)"),
+            {"threshold_text": str(float(_ALLELE_FUZZY_SIMILARITY_THRESHOLD))},
         )
         rows = session.execute(
             sql_query,
@@ -1937,12 +1974,14 @@ def agr_curation_query(
                     item_payload["warnings"] = item_warnings
                 bulk_items.append(item_payload)
 
+            bulk_match_totals = _cap_bulk_total_matches(bulk_items)
             summary = _bulk_resolution_summary(bulk_items)
             return _lookup_response(
                 method=method,
                 data={
                     "items": bulk_items,
                     **summary,
+                    "bulk_match_totals": bulk_match_totals,
                     "method": "search_genes_bulk",
                 },
                 count=summary["resolved_count"],
@@ -2749,12 +2788,14 @@ def agr_curation_query(
                     item_payload["warnings"] = item_warnings
                 bulk_items.append(item_payload)
 
+            bulk_match_totals = _cap_bulk_total_matches(bulk_items)
             summary = _bulk_resolution_summary(bulk_items)
             return _lookup_response(
                 method=method,
                 data={
                     "items": bulk_items,
                     **summary,
+                    "bulk_match_totals": bulk_match_totals,
                     "method": "search_alleles_bulk",
                 },
                 count=summary["resolved_count"],
@@ -5881,26 +5922,176 @@ def _stage_payload_from_gene_expression_input(
     return payload
 
 
+# Default page size for builder list tools when no explicit limit is given.
+# Env-configurable via BUILDER_LIST_DEFAULT_LIMIT (default 50). This module runs
+# in the isolated package subprocess (inherits the backend env), so it reads
+# os.getenv directly using the same env var name the backend would honor.
+_BUILDER_LIST_DEFAULT_LIMIT = int(os.getenv("BUILDER_LIST_DEFAULT_LIMIT", "50"))
+
+
 def _builder_summary(workspace: Any, *, include_discarded: bool = False) -> Dict[str, Any]:
+    """Compact, model-facing builder acknowledgment.
+
+    Deliberately does NOT embed the full per-candidate list. That list scales
+    O(staged candidates) and, for data-rich papers (hundreds of staged
+    observations), blew past the model context window — a single
+    ``patch_*_observation`` return reached ~240K chars / ~600K tokens because it
+    echoed every staged candidate back to the model. The authoritative staged
+    state stays in the backend workspace and in trace events; the model only
+    needs counts + id-lists here. Use ``list_staged_*`` (bounded) to inspect
+    individual candidates.
+    """
     snapshot = workspace.snapshot(redact_payload=True)
-    candidates = snapshot["candidates"]
-    if not include_discarded:
-        candidates = [
-            candidate
-            for candidate in candidates
-            if candidate.get("status") != "discarded"
-        ]
+    all_candidates = snapshot["candidates"]
+    active = [c for c in all_candidates if c.get("status") != "discarded"]
+    discarded = [c for c in all_candidates if c.get("status") == "discarded"]
+    counted = all_candidates if include_discarded else active
     return {
         "builder_run_id": snapshot.get("run_id"),
         "state": snapshot.get("state"),
-        "candidate_count": len(candidates),
-        "candidate_ids": [candidate.get("candidate_id") for candidate in candidates],
+        "candidate_count": len(counted),
+        "discarded_candidate_count": len(discarded),
+        "candidate_ids": [candidate.get("candidate_id") for candidate in counted],
         "pending_ref_ids": snapshot["pending_ref_ids"],
         "evidence_record_ids": snapshot["evidence_record_ids"],
         "resolver_selection_refs": snapshot["resolver_selection_refs"],
-        "candidates": candidates,
         "finalization": snapshot.get("finalization"),
     }
+
+
+def _normalize_builder_page_limit(limit: int) -> int:
+    """Clamp a caller-supplied page size to a positive integer (default cap)."""
+    return max(1, int(limit)) if limit else _BUILDER_LIST_DEFAULT_LIMIT
+
+
+def _normalize_builder_page_offset(offset: int) -> int:
+    """Clamp a caller-supplied page offset to a non-negative integer."""
+    return max(0, int(offset)) if offset else 0
+
+
+def _builder_candidate_list(
+    workspace: Any,
+    *,
+    include_discarded: bool = False,
+    limit: int = _BUILDER_LIST_DEFAULT_LIMIT,
+    offset: int = 0,
+) -> Dict[str, Any]:
+    """Bounded, pageable per-candidate listing for the ``list_staged_*`` tools.
+
+    Returns the compact builder ack plus a CAPPED page of redacted candidate
+    snapshots (never the unbounded full set), with ``truncated`` /
+    ``total_listed_candidate_count`` so the model knows more exist. The cap is
+    surpassable by paging: pass ``offset`` to step past earlier candidates and
+    read ``next_offset`` to continue. This keeps each page within the model
+    context even for hundreds of staged observations.
+    """
+    snapshot = workspace.snapshot(redact_payload=True)
+    candidates = snapshot["candidates"]
+    if not include_discarded:
+        candidates = [c for c in candidates if c.get("status") != "discarded"]
+    total = len(candidates)
+    cap = _normalize_builder_page_limit(limit)
+    start = _normalize_builder_page_offset(offset)
+    returned = candidates[start : start + cap]
+    result = _builder_summary(workspace, include_discarded=include_discarded)
+    result["candidates"] = returned
+    result["returned_candidate_count"] = len(returned)
+    result["total_listed_candidate_count"] = total
+    result["offset"] = start
+    has_more = total > start + len(returned)
+    result["next_offset"] = start + len(returned) if has_more else None
+    result["truncated"] = has_more
+    return result
+
+
+def _search_builder_candidates(
+    workspace: Any,
+    *,
+    field_value_contains: Optional[str] = None,
+    pending_ref_id: Optional[str] = None,
+    evidence_record_id: Optional[str] = None,
+    candidate_id: Optional[str] = None,
+    has_validation_errors: Optional[bool] = None,
+    include_discarded: bool = False,
+    limit: int = _BUILDER_LIST_DEFAULT_LIMIT,
+    offset: int = 0,
+) -> Dict[str, Any]:
+    """Pageable search over staged candidates for the ``find_staged_*`` tools.
+
+    Searches the UN-redacted staged-field values internally so the model can
+    find a specific draft by what it contains, but RETURNS only redacted,
+    compact candidate summaries (``staged_fields`` collapsed to
+    ``{keys, field_count}``) so raw field values are never echoed back into the
+    model context. All supplied filters must match (AND semantics):
+
+      * ``candidate_id`` — exact candidate id match.
+      * ``pending_ref_id`` — the id appears in the candidate's pending refs.
+      * ``evidence_record_id`` — the id appears in the candidate's evidence refs.
+      * ``has_validation_errors`` — keep drafts that do (True) or do not (False)
+        carry validation errors.
+      * ``field_value_contains`` — case-insensitive substring match anywhere in
+        the JSON-serialized staged-field values.
+
+    Discarded drafts are skipped unless ``include_discarded`` is set. Matches are
+    paged with ``offset`` / ``limit`` and the result carries ``matched_candidate_count``
+    (total before paging), ``offset``, ``next_offset`` and ``truncated``.
+    """
+    needle = field_value_contains.lower() if field_value_contains else None
+    unredacted = workspace.snapshot(redact_payload=False)["candidates"]
+    matched: List[Dict[str, Any]] = []
+    for candidate in unredacted:
+        if not include_discarded and candidate.get("status") == "discarded":
+            continue
+        if candidate_id is not None and candidate.get("candidate_id") != candidate_id:
+            continue
+        if pending_ref_id is not None and pending_ref_id not in (
+            candidate.get("pending_ref_ids") or []
+        ):
+            continue
+        if evidence_record_id is not None and evidence_record_id not in (
+            candidate.get("evidence_record_ids") or []
+        ):
+            continue
+        if has_validation_errors is not None:
+            errors = candidate.get("validation_errors") or []
+            if bool(errors) != has_validation_errors:
+                continue
+        if needle is not None:
+            # Search the staged-field VALUES only (not the field names), so a
+            # search term that happens to appear in a field name does not produce
+            # a spurious match.
+            serialized = json.dumps(
+                list((candidate.get("staged_fields") or {}).values()), default=str
+            )
+            if needle not in serialized.lower():
+                continue
+        matched.append(candidate)
+
+    matched_total = len(matched)
+    cap = _normalize_builder_page_limit(limit)
+    start = _normalize_builder_page_offset(offset)
+    page = matched[start : start + cap]
+    # RETURN redacted summaries only: collapse staged-field values to keys/count
+    # so the searched field text is never echoed back to the model.
+    redacted_page = [
+        {
+            **candidate,
+            "staged_fields": {
+                "keys": sorted((candidate.get("staged_fields") or {}).keys()),
+                "field_count": len(candidate.get("staged_fields") or {}),
+            },
+        }
+        for candidate in page
+    ]
+    result = _builder_summary(workspace, include_discarded=include_discarded)
+    result["candidates"] = redacted_page
+    result["matched_candidate_count"] = matched_total
+    result["returned_candidate_count"] = len(redacted_page)
+    result["offset"] = start
+    has_more = matched_total > start + len(redacted_page)
+    result["next_offset"] = start + len(redacted_page) if has_more else None
+    result["truncated"] = has_more
+    return result
 
 
 def _stage_gene_expression_observation_impl(
@@ -6210,12 +6401,16 @@ def _discard_gene_expression_observation_impl(
 
 def _list_staged_gene_expression_observations_impl(
     include_discarded: bool,
+    limit: int = 50,
+    offset: int = 0,
 ) -> AgrQueryResult:
-    """List compact summaries for staged gene-expression observations."""
+    """List compact summaries for staged gene-expression observations, one page at a time."""
 
     attempted_query = _attempt_query(
         "list_staged_gene_expression_observations",
         include_discarded=include_discarded,
+        limit=limit,
+        offset=offset,
     )
     _emit_gene_expression_builder_event(
         "gene_expression_builder.list_requested",
@@ -6223,7 +6418,11 @@ def _list_staged_gene_expression_observations_impl(
         input_summary=attempted_query,
     )
     try:
-        list_input = GeneExpressionListInput(include_discarded=include_discarded)
+        list_input = GeneExpressionListInput(
+            include_discarded=include_discarded,
+            limit=limit,
+            offset=offset,
+        )
     except ValidationError as exc:
         return _gene_expression_validation_result(
             message="list_staged_gene_expression_observations failed input validation.",
@@ -6232,7 +6431,12 @@ def _list_staged_gene_expression_observations_impl(
             attempted_query=attempted_query,
         )
     workspace = get_active_extraction_builder_workspace()
-    summary = _builder_summary(workspace, include_discarded=list_input.include_discarded)
+    summary = _builder_candidate_list(
+        workspace,
+        include_discarded=list_input.include_discarded,
+        limit=list_input.limit,
+        offset=list_input.offset,
+    )
     _emit_gene_expression_builder_event(
         "gene_expression_builder.list_completed",
         action="list",
@@ -6240,6 +6444,77 @@ def _list_staged_gene_expression_observations_impl(
         output_summary=summary,
     )
     return _ok(data=summary, count=summary["candidate_count"], lookup_status=LOOKUP_STATUS_SUCCESS)
+
+
+def _find_staged_gene_expression_observations_impl(
+    field_value_contains: Optional[str] = None,
+    pending_ref_id: Optional[str] = None,
+    evidence_record_id: Optional[str] = None,
+    candidate_id: Optional[str] = None,
+    has_validation_errors: Optional[bool] = None,
+    include_discarded: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+) -> AgrQueryResult:
+    """Find specific staged gene-expression observation drafts by content or id, one page at a time."""
+
+    attempted_query = _attempt_query(
+        "find_staged_gene_expression_observations",
+        field_value_contains=field_value_contains,
+        pending_ref_id=pending_ref_id,
+        evidence_record_id=evidence_record_id,
+        candidate_id=candidate_id,
+        has_validation_errors=has_validation_errors,
+        include_discarded=include_discarded,
+        limit=limit,
+        offset=offset,
+    )
+    _emit_gene_expression_builder_event(
+        "gene_expression_builder.find_requested",
+        action="find",
+        input_summary=attempted_query,
+    )
+    try:
+        find_input = GeneExpressionFindInput(
+            field_value_contains=field_value_contains,
+            pending_ref_id=pending_ref_id,
+            evidence_record_id=evidence_record_id,
+            candidate_id=candidate_id,
+            has_validation_errors=has_validation_errors,
+            include_discarded=include_discarded,
+            limit=limit,
+            offset=offset,
+        )
+    except ValidationError as exc:
+        return _gene_expression_validation_result(
+            message="find_staged_gene_expression_observations failed input validation.",
+            issues=_model_validation_issues(exc),
+            method="find_staged_gene_expression_observations",
+            attempted_query=attempted_query,
+        )
+    workspace = get_active_extraction_builder_workspace()
+    summary = _search_builder_candidates(
+        workspace,
+        field_value_contains=find_input.field_value_contains,
+        pending_ref_id=find_input.pending_ref_id,
+        evidence_record_id=find_input.evidence_record_id,
+        candidate_id=find_input.candidate_id,
+        has_validation_errors=find_input.has_validation_errors,
+        include_discarded=find_input.include_discarded,
+        limit=find_input.limit,
+        offset=find_input.offset,
+    )
+    _emit_gene_expression_builder_event(
+        "gene_expression_builder.find_completed",
+        action="find",
+        input_summary=attempted_query,
+        output_summary=summary,
+    )
+    return _ok(
+        data=summary,
+        count=summary["matched_candidate_count"],
+        lookup_status=LOOKUP_STATUS_SUCCESS,
+    )
 
 
 def _materialize_gene_expression_with_events(
@@ -6489,6 +6764,9 @@ discard_gene_expression_observation = function_tool(
 list_staged_gene_expression_observations = function_tool(
     strict_mode=True, name_override="list_staged_gene_expression_observations"
 )(_list_staged_gene_expression_observations_impl)
+find_staged_gene_expression_observations = function_tool(
+    strict_mode=True, name_override="find_staged_gene_expression_observations"
+)(_find_staged_gene_expression_observations_impl)
 finalize_gene_expression_extraction = function_tool(
     strict_mode=True, name_override="finalize_gene_expression_extraction"
 )(_finalize_gene_expression_extraction_impl)

@@ -104,6 +104,34 @@ Choose the path that matches your goal:
 See [ADDING_NEW_TOOL.md](guides/ADDING_NEW_TOOL.md) and
 [backend/tools/README.md](../../backend/tools/README.md) for details.
 
+### Add or Change an Operational Limit
+
+Every operational limit MUST be env-configurable (with its current value as the
+default) and documented in `.env.example`. This keeps every knob discoverable,
+tunable in production without a code change, and self-documenting. **Never ship a
+bare hardcoded limit** — it is a review-blocking defect.
+
+"Operational limit" covers agent/validator `max_turns`, tool-call budgets, batch
+sizes, parallelism caps, list/page/section caps, bulk/result caps, retry/attempt
+counts, timeouts, size/char/preview thresholds, and feature kill-switches. Pure
+internal plumbing waits (e.g. a 50 ms queue poll) are exempt.
+
+- `backend/src/...`: add a getter in
+  `backend/src/lib/openai_agents/config.py` (use `_get_env_int_with_fallback` or
+  the bool helper) and call it; do not keep a bare module constant.
+- Isolated package code (`packages/alliance/python/src/...`) runs in the
+  `package_runner` subprocess (which inherits the parent env) and cannot import
+  backend `config.py` — read `os.getenv("SAME_VAR_NAME", str(default))` directly,
+  reusing the same env var name as any backend twin so one setting tunes both.
+- Keep the current value as the default (surfacing a limit is not a behavior
+  change), and add an entry under the `# Operational limits` section of
+  `.env.example` describing what it controls, the consequence of changing it, and
+  the default.
+
+Canonical rule: [AGENTS.md](../../AGENTS.md) section 7. Reference implementation:
+the 0.7.4 limits pass (`config.py` getters + the `.env.example` `# Operational
+limits` section).
+
 ### Keep Project-Agnostic Tests Neutral
 
 This repository ships both a project-agnostic runtime core and bundled Alliance

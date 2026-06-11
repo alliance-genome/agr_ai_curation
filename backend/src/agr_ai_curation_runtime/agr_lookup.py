@@ -7,6 +7,7 @@ lookup semantics must be supplied by the caller.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
@@ -30,6 +31,14 @@ _BULK_ITEM_STATUS_BY_LOOKUP_STATUS = {
 }
 DEFAULT_PROJECTION_TYPE = "lookup_result"
 DEFAULT_PROVIDER_DATA_KEYS: tuple[str, ...] = ()
+# Largest number of matched rows a single bulk lookup will hand back across all
+# of its inputs combined. A bulk call can ask about many symbols at once, and
+# each symbol's own per-symbol limit still applies; this is the safety ceiling
+# on the grand total so a long symbol list cannot return an unbounded payload.
+# Env-configurable via BULK_TOTAL_MATCH_CAP (default 500). This module is shared
+# by the backend and the isolated package subprocess (which inherits the backend
+# env), so it reads os.getenv directly using one env var name honored everywhere.
+DEFAULT_BULK_TOTAL_MATCH_CAP = int(os.getenv("BULK_TOTAL_MATCH_CAP", "500"))
 
 
 @dataclass(frozen=True)
@@ -143,6 +152,10 @@ def candidate_from_result(
     *,
     projection_metadata: LookupProjectionMetadata | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    # A candidate is a lightweight pointer to a match: just enough for the
+    # reader to recognize it and look up the full details elsewhere. The full
+    # projection lives once under result_projections, so it is intentionally
+    # not re-embedded here (that previously duplicated every match's data).
     metadata = _projection_metadata(projection_metadata)
     projection = projection_from_result(
         method,
@@ -152,10 +165,10 @@ def candidate_from_result(
     return clean_mapping(
         {
             "provider": metadata.provider,
+            "object_type": projection.get("object_type"),
             "candidate_id": projection.get("resolved_id"),
             "candidate_label": projection.get("resolved_label"),
             "match_type": result.get("match_type") or result.get("matched_variant"),
-            "projection": projection,
         }
     )
 
@@ -489,6 +502,57 @@ def bulk_resolution_summary(items: list[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+_BULK_ITEM_MATCH_LIST_KEYS = (
+    "results",
+    "candidate_matches",
+    "result_projections",
+)
+
+
+def cap_bulk_total_matches(
+    items: list[dict[str, Any]],
+    *,
+    total_match_cap: int = DEFAULT_BULK_TOTAL_MATCH_CAP,
+) -> dict[str, Any]:
+    """Bound the grand total of matched rows a bulk lookup hands back.
+
+    Each input already respects its own per-input limit, but a long input list
+    could still add up to an unbounded total. This trims item match lists in
+    input order until the running total reaches ``total_match_cap``, edits each
+    affected item in place (its match lists and ``count`` shrink to what was
+    kept), and reports how much was returned versus found.
+
+    Returns a small summary with ``total_count`` (matches found before the cap),
+    ``returned_count`` (matches kept after the cap), and ``truncated`` (whether
+    the cap removed anything).
+    """
+    total_count = sum(int(item.get("count", 0)) for item in items)
+    if total_match_cap < 0:
+        raise ValueError(f"total_match_cap must be non-negative: {total_match_cap!r}")
+
+    remaining = total_match_cap
+    returned_count = 0
+    for item in items:
+        item_count = int(item.get("count", 0))
+        keep = item_count if item_count <= remaining else remaining
+        if keep < item_count:
+            for key in _BULK_ITEM_MATCH_LIST_KEYS:
+                value = item.get(key)
+                if isinstance(value, list):
+                    item[key] = value[:keep]
+            item["count"] = keep
+            item["match_total_before_cap"] = item_count
+        returned_count += keep
+        remaining -= keep
+
+    return {
+        "total_count": total_count,
+        "returned_count": returned_count,
+        "truncated": returned_count < total_count,
+        "total_match_cap": total_match_cap,
+    }
+
+
 def lookup_explanation(
     *,
     method: str,
@@ -607,6 +671,7 @@ __all__ = [
     "DETAIL_RETRY_STRATEGY_PER_CURIE",
     "DEFAULT_PROJECTION_TYPE",
     "DEFAULT_PROVIDER_DATA_KEYS",
+    "DEFAULT_BULK_TOTAL_MATCH_CAP",
     "LookupProjectionMetadata",
     "LOOKUP_STATUS_SUCCESS",
     "LOOKUP_STATUS_NOT_FOUND",
@@ -627,6 +692,7 @@ __all__ = [
     "lookup_status_from_count",
     "bulk_item_status_from_lookup_status",
     "bulk_resolution_summary",
+    "cap_bulk_total_matches",
     "lookup_explanation",
     "lookup_response_payload",
     "chunk_values",

@@ -65,6 +65,7 @@ tools:
   - patch_disease_observation
   - discard_disease_observation
   - list_staged_disease_observations
+  - find_staged_disease_observations
   - finalize_disease_extraction
 
 # -----------------------------------------------------------------------------

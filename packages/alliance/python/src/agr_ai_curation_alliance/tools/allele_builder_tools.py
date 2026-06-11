@@ -57,6 +57,8 @@ from agr_ai_curation_alliance.domain_packs.allele import (
 from .agr_curation import (
     AgrQueryResult,
     _builder_summary,
+    _builder_candidate_list,
+    _search_builder_candidates,
     _ok,
 )
 from .builder_finalization import finalize_builder_extraction
@@ -136,6 +138,19 @@ class AlleleDiscardInput(_StrictToolModel):
 
 class AlleleListInput(_StrictToolModel):
     include_discarded: bool
+    limit: int = Field(default=50, ge=0)
+    offset: int = Field(default=0, ge=0)
+
+
+class AlleleFindInput(_StrictToolModel):
+    field_value_contains: Optional[StrictStr] = None
+    pending_ref_id: Optional[StrictStr] = None
+    evidence_record_id: Optional[StrictStr] = None
+    candidate_id: Optional[StrictStr] = None
+    has_validation_errors: Optional[bool] = None
+    include_discarded: bool = False
+    limit: int = Field(default=50, ge=0)
+    offset: int = Field(default=0, ge=0)
 
 
 class AlleleFinalizeInput(_StrictToolModel):
@@ -452,17 +467,26 @@ def _discard_allele_observation_impl(
     return _ok(data=summary, count=summary["candidate_count"], lookup_status=LOOKUP_STATUS_SUCCESS)
 
 
-def _list_staged_allele_observations_impl(include_discarded: bool) -> AgrQueryResult:
-    """List compact summaries for staged allele mention candidates."""
+def _list_staged_allele_observations_impl(
+    include_discarded: bool,
+    limit: int = 50,
+    offset: int = 0,
+) -> AgrQueryResult:
+    """List compact summaries for staged allele mention candidates, one page at a time."""
 
     attempted_query = _attempt_query(
-        "list_staged_allele_observations", include_discarded=include_discarded
+        "list_staged_allele_observations",
+        include_discarded=include_discarded,
+        limit=limit,
+        offset=offset,
     )
     _emit_allele_builder_event(
         "allele_builder.list_requested", action="list", input_summary=attempted_query
     )
     try:
-        list_input = AlleleListInput(include_discarded=include_discarded)
+        list_input = AlleleListInput(
+            include_discarded=include_discarded, limit=limit, offset=offset
+        )
     except ValidationError as exc:
         return _allele_validation_result(
             message="list_staged_allele_observations failed input validation.",
@@ -471,7 +495,12 @@ def _list_staged_allele_observations_impl(include_discarded: bool) -> AgrQueryRe
             attempted_query=attempted_query,
         )
     workspace = get_active_extraction_builder_workspace()
-    summary = _builder_summary(workspace, include_discarded=list_input.include_discarded)
+    summary = _builder_candidate_list(
+        workspace,
+        include_discarded=list_input.include_discarded,
+        limit=list_input.limit,
+        offset=list_input.offset,
+    )
     _emit_allele_builder_event(
         "allele_builder.list_completed",
         action="list",
@@ -479,6 +508,75 @@ def _list_staged_allele_observations_impl(include_discarded: bool) -> AgrQueryRe
         output_summary=summary,
     )
     return _ok(data=summary, count=summary["candidate_count"], lookup_status=LOOKUP_STATUS_SUCCESS)
+
+
+def _find_staged_allele_observations_impl(
+    field_value_contains: Optional[str] = None,
+    pending_ref_id: Optional[str] = None,
+    evidence_record_id: Optional[str] = None,
+    candidate_id: Optional[str] = None,
+    has_validation_errors: Optional[bool] = None,
+    include_discarded: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+) -> AgrQueryResult:
+    """Find specific staged allele drafts by content or id, one page at a time."""
+
+    attempted_query = _attempt_query(
+        "find_staged_allele_observations",
+        field_value_contains=field_value_contains,
+        pending_ref_id=pending_ref_id,
+        evidence_record_id=evidence_record_id,
+        candidate_id=candidate_id,
+        has_validation_errors=has_validation_errors,
+        include_discarded=include_discarded,
+        limit=limit,
+        offset=offset,
+    )
+    _emit_allele_builder_event(
+        "allele_builder.find_requested", action="find", input_summary=attempted_query
+    )
+    try:
+        find_input = AlleleFindInput(
+            field_value_contains=field_value_contains,
+            pending_ref_id=pending_ref_id,
+            evidence_record_id=evidence_record_id,
+            candidate_id=candidate_id,
+            has_validation_errors=has_validation_errors,
+            include_discarded=include_discarded,
+            limit=limit,
+            offset=offset,
+        )
+    except ValidationError as exc:
+        return _allele_validation_result(
+            message="find_staged_allele_observations failed input validation.",
+            issues=_model_validation_issues(exc),
+            method="find_staged_allele_observations",
+            attempted_query=attempted_query,
+        )
+    workspace = get_active_extraction_builder_workspace()
+    summary = _search_builder_candidates(
+        workspace,
+        field_value_contains=find_input.field_value_contains,
+        pending_ref_id=find_input.pending_ref_id,
+        evidence_record_id=find_input.evidence_record_id,
+        candidate_id=find_input.candidate_id,
+        has_validation_errors=find_input.has_validation_errors,
+        include_discarded=find_input.include_discarded,
+        limit=find_input.limit,
+        offset=find_input.offset,
+    )
+    _emit_allele_builder_event(
+        "allele_builder.find_completed",
+        action="find",
+        input_summary=attempted_query,
+        output_summary=summary,
+    )
+    return _ok(
+        data=summary,
+        count=summary["matched_candidate_count"],
+        lookup_status=LOOKUP_STATUS_SUCCESS,
+    )
 
 
 def _materialize_allele_with_events(
@@ -607,6 +705,9 @@ discard_allele_observation = function_tool(
 list_staged_allele_observations = function_tool(
     strict_mode=False, name_override="list_staged_allele_observations"
 )(_list_staged_allele_observations_impl)
+find_staged_allele_observations = function_tool(
+    strict_mode=False, name_override="find_staged_allele_observations"
+)(_find_staged_allele_observations_impl)
 finalize_allele_extraction = function_tool(
     strict_mode=False, name_override="finalize_allele_extraction"
 )(_finalize_allele_extraction_impl)
@@ -615,6 +716,7 @@ finalize_allele_extraction = function_tool(
 __all__ = [
     "discard_allele_observation",
     "finalize_allele_extraction",
+    "find_staged_allele_observations",
     "list_staged_allele_observations",
     "materialize_allele_builder_state",
     "patch_allele_observation",

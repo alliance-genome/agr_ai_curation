@@ -16,14 +16,22 @@ from src.models.sql.chat_message import ChatMessage as ChatMessageModel
 from src.models.sql.pdf_document import PDFDocument as PDFDocumentModel
 from src.models.sql.chat_session import ChatSession as ChatSessionModel
 from src.models.sql.user import User as UserModel
+from src.lib.openai_agents.config import (
+    get_chat_message_page_size_max,
+    get_chat_recent_message_scan_size_max,
+    get_chat_session_page_size_max,
+)
 
 
 ASSISTANT_CHAT_KIND = "assistant_chat"
 AGENT_STUDIO_CHAT_KIND = "agent_studio"
 ALL_CHAT_KINDS_SENTINEL = "all"
-MAX_SESSION_PAGE_SIZE = 100
-MAX_MESSAGE_PAGE_SIZE = 200
-MAX_RECENT_MESSAGE_SCAN_SIZE = 5000
+# Env-configurable (defaults unchanged); see config.py getters and .env.example:
+#   CHAT_SESSION_PAGE_SIZE_MAX, CHAT_MESSAGE_PAGE_SIZE_MAX,
+#   CHAT_RECENT_MESSAGE_SCAN_SIZE_MAX.
+MAX_SESSION_PAGE_SIZE = get_chat_session_page_size_max()
+MAX_MESSAGE_PAGE_SIZE = get_chat_message_page_size_max()
+MAX_RECENT_MESSAGE_SCAN_SIZE = get_chat_recent_message_scan_size_max()
 TURN_ID_UNIQUE_CONSTRAINTS = (
     "uq_chat_messages_user_turn",
     "uq_chat_messages_assistant_turn",

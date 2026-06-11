@@ -689,6 +689,132 @@ def test_create_flow_handler_success_and_db_errors(monkeypatch):
     assert "database error" in generic["error"]
 
 
+def _multi_agent_registry():
+    return {
+        "supervisor": {"category": "Routing"},
+        "task_input": {"category": "Input"},
+        "gene_extractor": {
+            "name": "Gene Specialist",
+            "description": "Extract gene mentions",
+            "category": "Extraction",
+            "requires_document": True,
+        },
+        "gene_validation": {
+            "name": "Gene Validator",
+            "description": "Validate gene identifiers",
+            "category": "Validation",
+            "requires_document": False,
+        },
+        "disease_extractor": {
+            "name": "Disease Specialist",
+            "description": "Extract disease mentions",
+            "category": "Extraction",
+            "requires_document": True,
+        },
+        "chat_output": {
+            "name": "Chat Output",
+            "description": "Render results",
+            "category": "Output",
+            "requires_document": False,
+        },
+    }
+
+
+def test_get_available_agents_handler_filters_by_query(monkeypatch):
+    monkeypatch.setattr(flow_tools, "AGENT_REGISTRY", _multi_agent_registry())
+    handler = flow_tools._get_available_agents_handler()
+
+    result = handler(query="gene")
+
+    returned_ids = {
+        agent["agent_id"]
+        for agents in result["categories"].values()
+        for agent in agents
+    }
+    assert returned_ids == {"gene_extractor", "gene_validation"}
+    assert result["total_count"] == 2
+    assert result["returned_count"] == 2
+    assert result["query"] == "gene"
+    assert result["truncated"] is False
+
+
+def test_get_available_agents_handler_filters_by_category(monkeypatch):
+    monkeypatch.setattr(flow_tools, "AGENT_REGISTRY", _multi_agent_registry())
+    handler = flow_tools._get_available_agents_handler()
+
+    result = handler(category="Extraction")
+
+    assert set(result["categories"].keys()) == {"Extraction"}
+    assert set(result["extraction_agents"]) == {"gene_extractor", "disease_extractor"}
+    assert result["total_count"] == 2
+
+
+def test_get_available_agents_handler_pages_with_cursor(monkeypatch):
+    monkeypatch.setattr(flow_tools, "AGENT_REGISTRY", _multi_agent_registry())
+    handler = flow_tools._get_available_agents_handler()
+
+    first = handler(limit=2)
+    assert first["returned_count"] == 2
+    assert first["total_count"] == 4
+    assert first["truncated"] is True
+    assert first["next_cursor"] == "2"
+
+    second = handler(limit=2, cursor=first["next_cursor"])
+    assert second["returned_count"] == 2
+    assert second["truncated"] is False
+    assert second["next_cursor"] is None
+
+    first_ids = {a["agent_id"] for ag in first["categories"].values() for a in ag}
+    second_ids = {a["agent_id"] for ag in second["categories"].values() for a in ag}
+    assert first_ids.isdisjoint(second_ids)
+    assert first_ids | second_ids == {
+        "gene_extractor",
+        "gene_validation",
+        "disease_extractor",
+        "chat_output",
+    }
+
+
+def test_get_flow_templates_handler_filters_by_query(monkeypatch):
+    monkeypatch.setattr(
+        flow_tools,
+        "FLOW_AGENT_IDS",
+        ["gene_extractor", "gene_validation", "disease_extractor"],
+    )
+    monkeypatch.setattr(flow_tools, "AGENT_REGISTRY", _multi_agent_registry())
+    handler = flow_tools._get_flow_templates_handler()
+
+    result = handler(query="disease")
+
+    assert {agent["agent_id"] for agent in result["available_agents"]} == {
+        "disease_extractor"
+    }
+    assert result["total_count"] == 1
+    assert result["query"] == "disease"
+    assert result["truncated"] is False
+
+
+def test_get_flow_templates_handler_pages_available_agents(monkeypatch):
+    monkeypatch.setattr(
+        flow_tools,
+        "FLOW_AGENT_IDS",
+        ["gene_extractor", "gene_validation", "disease_extractor"],
+    )
+    monkeypatch.setattr(flow_tools, "AGENT_REGISTRY", _multi_agent_registry())
+    handler = flow_tools._get_flow_templates_handler()
+
+    first = handler(limit=2)
+    assert first["returned_count"] == 2
+    assert first["total_count"] == 3
+    assert first["truncated"] is True
+    assert first["next_cursor"] == "2"
+
+    second = handler(limit=2, cursor=first["next_cursor"])
+    assert second["returned_count"] == 1
+    assert second["truncated"] is False
+    assert second["next_cursor"] is None
+
+
 def test_register_flow_tools_registers_five_tools(monkeypatch):
     registrations = []
 

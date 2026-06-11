@@ -21,6 +21,7 @@ SHIPPED_TOOLS_PACKAGE_EXPORTS = (
     "create_update_recorded_evidence_metadata_tool",
     "discard_gene_expression_observation",
     "finalize_gene_expression_extraction",
+    "find_staged_gene_expression_observations",
     "inspect_ontology_term",
     "list_staged_gene_expression_observations",
     "patch_gene_expression_observation",

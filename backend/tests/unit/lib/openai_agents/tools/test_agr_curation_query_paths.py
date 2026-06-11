@@ -1046,3 +1046,117 @@ def test_search_alleles_bulk_detail_fetch_failure_is_transient(monkeypatch):
     assert detail_attempt["attempted_query"]["lookup_stage"] == "fetch_allele_details"
     assert detail_attempt["attempted_query"]["allele_id"] == "WB:WBVar00000001"
     assert detail_attempt["error"]["type"] == "TimeoutError"
+
+
+def test_search_genes_bulk_caps_total_matches_and_reports_truncation(monkeypatch):
+    query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
+
+    per_symbol = 250
+
+    class FakeDb:
+        @staticmethod
+        def search_entities(entity_type, search_pattern, taxon_curie, include_synonyms, limit):
+            _ = include_synonyms, limit
+            if entity_type == "gene" and taxon_curie == "NCBITaxon:6239":
+                return [
+                    {
+                        "entity_curie": f"WB:WBGene{search_pattern}{index:05d}",
+                        "entity": search_pattern,
+                        "match_type": "contains",
+                    }
+                    for index in range(per_symbol)
+                ]
+            return []
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    def fake_fetch_gene_details_bulk(_db, curies):
+        details = {
+            curie: {"curie": curie, "symbol": curie, "name": curie}
+            for curie in curies
+        }
+        return details, {}
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"WB": "NCBITaxon:6239"})
+    monkeypatch.setattr(agr_curation, "TAXON_TO_PROVIDER", {"NCBITaxon:6239": "WB"})
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+    monkeypatch.setattr(agr_curation, "_fetch_gene_details_bulk", fake_fetch_gene_details_bulk)
+
+    result = query_fn(
+        method="search_genes_bulk",
+        gene_symbols=["aaa", "bbb", "ccc"],
+        data_provider="WB",
+        limit=per_symbol,
+    )
+
+    totals = result.data["bulk_match_totals"]
+    assert totals["total_count"] == 3 * per_symbol
+    assert totals["returned_count"] == 500
+    assert totals["total_match_cap"] == 500
+    assert totals["truncated"] is True
+
+    returned_rows = sum(len(item["results"]) for item in result.data["items"])
+    assert returned_rows == 500
+    assert sum(item["count"] for item in result.data["items"]) == 500
+    assert result.data["total_matches"] == 500
+
+
+def test_search_alleles_bulk_caps_total_matches_and_reports_truncation(monkeypatch):
+    query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
+
+    per_symbol = 250
+
+    class FakeDb:
+        @staticmethod
+        def search_entities(entity_type, search_pattern, taxon_curie, include_synonyms, limit):
+            _ = include_synonyms, limit
+            if entity_type == "allele" and taxon_curie == "NCBITaxon:6239":
+                return [
+                    {
+                        "entity_curie": f"WB:WBVar{search_pattern}{index:05d}",
+                        "entity": search_pattern,
+                        "match_type": "contains",
+                    }
+                    for index in range(per_symbol)
+                ]
+            return []
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    def fake_fetch_allele_details_bulk(_db, curies):
+        details = {
+            curie: {"curie": curie, "symbol": curie, "name": curie}
+            for curie in curies
+        }
+        return details, {}
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"WB": "NCBITaxon:6239"})
+    monkeypatch.setattr(agr_curation, "TAXON_TO_PROVIDER", {"NCBITaxon:6239": "WB"})
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+    monkeypatch.setattr(agr_curation, "_fetch_allele_details_bulk", fake_fetch_allele_details_bulk)
+
+    result = query_fn(
+        method="search_alleles_bulk",
+        allele_symbols=["aaa", "bbb", "ccc"],
+        data_provider="WB",
+        limit=per_symbol,
+    )
+
+    totals = result.data["bulk_match_totals"]
+    assert totals["total_count"] == 3 * per_symbol
+    assert totals["returned_count"] == 500
+    assert totals["total_match_cap"] == 500
+    assert totals["truncated"] is True
+
+    returned_rows = sum(len(item["results"]) for item in result.data["items"])
+    assert returned_rows == 500
+    assert sum(item["count"] for item in result.data["items"]) == 500
+    assert result.data["total_matches"] == 500

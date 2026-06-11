@@ -59,13 +59,21 @@ from src.lib.domain_packs.validator_result_policies import (
     allowed_term_policy_violations,
 )
 from src.lib.domain_packs.value_presence import missing_resolved_value
+from src.lib.openai_agents.config import (
+    get_validation_detail_list_limit,
+    get_validation_detail_mapping_limit,
+    get_validation_detail_string_limit,
+)
 
 
 REVIEW_ROW_PROJECTION_TYPE = "workspace_review_row"
 _MISSING = object()
-_VALIDATION_DETAIL_STRING_LIMIT = 8000
-_VALIDATION_DETAIL_LIST_LIMIT = 25
-_VALIDATION_DETAIL_MAPPING_LIMIT = 50
+# Env-configurable (defaults unchanged); see config.py getters and .env.example:
+#   VALIDATION_DETAIL_STRING_LIMIT, VALIDATION_DETAIL_LIST_LIMIT,
+#   VALIDATION_DETAIL_MAPPING_LIMIT.
+_VALIDATION_DETAIL_STRING_LIMIT = get_validation_detail_string_limit()
+_VALIDATION_DETAIL_LIST_LIMIT = get_validation_detail_list_limit()
+_VALIDATION_DETAIL_MAPPING_LIMIT = get_validation_detail_mapping_limit()
 
 VALIDATION_STATUS_RANK: dict[DomainEnvelopeValidationStatus, int] = {
     DomainEnvelopeValidationStatus.RESOLVED: 0,

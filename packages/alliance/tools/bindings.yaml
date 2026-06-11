@@ -31,6 +31,14 @@ tools:
             type: string
             required: false
             description: Choose a short overview or the full details.
+          - name: field_limit
+            type: integer
+            required: false
+            description: When an output schema has many fields, how many to show at once.
+          - name: field_cursor
+            type: string
+            required: false
+            description: Page marker from a previous call to fetch the next batch of fields.
   - tool_id: agr_curation_query
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:agr_curation_query
@@ -153,7 +161,7 @@ tools:
             limit: 10
         search_genes_bulk:
           name: Search Genes (Bulk)
-          description: Search for many gene symbols at once in a single call.
+          description: Search for many gene symbols at once in a single call. One call returns at most 500 matched rows in total across all symbols; when that limit trims the results, the response says so.
           required_params: [gene_symbols]
           optional_params: [data_provider, limit, include_synonyms]
           example:
@@ -190,7 +198,7 @@ tools:
             limit: 10
         search_alleles_bulk:
           name: Search Alleles (Bulk)
-          description: Search for many allele symbols at once in a single call.
+          description: Search for many allele symbols at once in a single call. One call returns at most 500 matched rows in total across all symbols; when that limit trims the results, the response says so.
           required_params: [allele_symbols]
           optional_params: [data_provider, limit, include_synonyms]
           example:
@@ -641,7 +649,7 @@ tools:
           - name: branch_root_curie
             type: string
             required: false
-            description: An optional starting point in the ontology to limit the search to one branch.
+            description: Reserved for a future option to limit matches to one branch of an ontology. It is accepted but does not yet narrow results.
           - name: limit
             type: integer
             required: false
@@ -858,7 +866,7 @@ tools:
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:list_staged_gene_expression_observations
     required_context: []
-    description: Show a short summary of every draft gene-expression observation currently on the run's working list.
+    description: Show a short summary of the draft gene-expression observations currently on the run's working list, one page at a time.
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     metadata:
       name: List Staged Gene Expression Observations
@@ -867,12 +875,67 @@ tools:
       audit:
         display_name: List Staged Gene Expression Observations
       documentation:
-        summary: Returns a compact overview of the gene-expression observation drafts staged so far in this run, so the agent can review the working set before finishing. Withdrawn drafts are left out unless they are explicitly included.
+        summary: Returns a compact overview of the gene-expression observation drafts staged so far in this run, so the agent can review the working set before finishing. Results come back one page at a time; step through the pages to see them all. Withdrawn drafts are left out unless they are explicitly included.
         parameters:
           - name: include_discarded
             type: boolean
             required: true
             description: Whether to also show drafts that were previously withdrawn.
+          - name: limit
+            type: integer
+            required: false
+            description: How many drafts to show on this page.
+          - name: offset
+            type: integer
+            required: false
+            description: How many drafts to skip before this page, so you can move past ones you have already seen.
+  - tool_id: find_staged_gene_expression_observations
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.agr_curation:find_staged_gene_expression_observations
+    required_context: []
+    description: Find specific draft gene-expression observations by what they contain or by their id, without listing the whole working set.
+    source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
+    metadata:
+      name: Find Staged Gene Expression Observations
+      category: Database
+      builder_run_state: true
+      audit:
+        display_name: Find Staged Gene Expression Observations
+      documentation:
+        summary: Looks through the gene-expression observation drafts staged so far in this run and returns compact summaries of just the ones that match what you are searching for, so you can pinpoint a specific draft without paging through the entire working set. Results come back one page at a time.
+        parameters:
+          - name: field_value_contains
+            type: string
+            required: false
+            description: Show only drafts whose saved details contain this text (case-insensitive).
+          - name: pending_ref_id
+            type: string
+            required: false
+            description: Show only the draft linked to this draft-finding id.
+          - name: evidence_record_id
+            type: string
+            required: false
+            description: Show only drafts that use this saved piece of evidence.
+          - name: candidate_id
+            type: string
+            required: false
+            description: Show only the draft with this exact id.
+          - name: has_validation_errors
+            type: boolean
+            required: false
+            description: Show only drafts that have problems flagged (true) or only those that are clean (false).
+          - name: include_discarded
+            type: boolean
+            required: false
+            description: Whether to also search drafts that were previously withdrawn.
+          - name: limit
+            type: integer
+            required: false
+            description: How many matching drafts to show on this page.
+          - name: offset
+            type: integer
+            required: false
+            description: How many matching drafts to skip before this page, so you can move past ones you have already seen.
   - tool_id: finalize_gene_expression_extraction
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:finalize_gene_expression_extraction
@@ -1024,7 +1087,7 @@ tools:
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.gene_builder_tools:list_staged_gene_mention_evidence
     required_context: []
-    description: Show a short summary of every draft gene currently on the run's working list.
+    description: Show a short summary of the draft genes currently on the run's working list, one page at a time.
     source_file: python/src/agr_ai_curation_alliance/tools/gene_builder_tools.py
     metadata:
       name: List Staged Gene Mention Evidence
@@ -1033,12 +1096,67 @@ tools:
       audit:
         display_name: List Staged Gene Mention Evidence
       documentation:
-        summary: Returns a compact overview of the gene drafts staged so far in this run, so the agent can review the working set before finishing. Withdrawn drafts are left out unless they are explicitly included.
+        summary: Returns a compact overview of the gene drafts staged so far in this run, so the agent can review the working set before finishing. Results come back one page at a time; step through the pages to see them all. Withdrawn drafts are left out unless they are explicitly included.
         parameters:
           - name: include_discarded
             type: boolean
             required: true
             description: Whether to also show drafts that were previously withdrawn.
+          - name: limit
+            type: integer
+            required: false
+            description: How many drafts to show on this page.
+          - name: offset
+            type: integer
+            required: false
+            description: How many drafts to skip before this page, so you can move past ones you have already seen.
+  - tool_id: find_staged_gene_mention_evidence
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.gene_builder_tools:find_staged_gene_mention_evidence
+    required_context: []
+    description: Find specific draft genes by what they contain or by their id, without listing the whole working set.
+    source_file: python/src/agr_ai_curation_alliance/tools/gene_builder_tools.py
+    metadata:
+      name: Find Staged Gene Mention Evidence
+      category: Database
+      builder_run_state: true
+      audit:
+        display_name: Find Staged Gene Mention Evidence
+      documentation:
+        summary: Looks through the gene drafts staged so far in this run and returns compact summaries of just the ones that match what you are searching for, so you can pinpoint a specific draft without paging through the entire working set. Results come back one page at a time.
+        parameters:
+          - name: field_value_contains
+            type: string
+            required: false
+            description: Show only drafts whose saved details contain this text (case-insensitive).
+          - name: pending_ref_id
+            type: string
+            required: false
+            description: Show only the draft linked to this draft-finding id.
+          - name: evidence_record_id
+            type: string
+            required: false
+            description: Show only drafts that use this saved piece of evidence.
+          - name: candidate_id
+            type: string
+            required: false
+            description: Show only the draft with this exact id.
+          - name: has_validation_errors
+            type: boolean
+            required: false
+            description: Show only drafts that have problems flagged (true) or only those that are clean (false).
+          - name: include_discarded
+            type: boolean
+            required: false
+            description: Whether to also search drafts that were previously withdrawn.
+          - name: limit
+            type: integer
+            required: false
+            description: How many matching drafts to show on this page.
+          - name: offset
+            type: integer
+            required: false
+            description: How many matching drafts to skip before this page, so you can move past ones you have already seen.
   - tool_id: finalize_gene_extraction
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.gene_builder_tools:finalize_gene_extraction
@@ -1183,7 +1301,7 @@ tools:
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.allele_builder_tools:list_staged_allele_observations
     required_context: []
-    description: Show a short summary of every draft allele currently on the run's working list.
+    description: Show a short summary of the draft alleles currently on the run's working list, one page at a time.
     source_file: python/src/agr_ai_curation_alliance/tools/allele_builder_tools.py
     metadata:
       name: List Staged Allele Observations
@@ -1192,12 +1310,67 @@ tools:
       audit:
         display_name: List Staged Allele Observations
       documentation:
-        summary: Returns a compact overview of the allele drafts staged so far in this run, so the agent can review the working set before finishing. Withdrawn drafts are left out unless they are explicitly included.
+        summary: Returns a compact overview of the allele drafts staged so far in this run, so the agent can review the working set before finishing. Results come back one page at a time; step through the pages to see them all. Withdrawn drafts are left out unless they are explicitly included.
         parameters:
           - name: include_discarded
             type: boolean
             required: true
             description: Whether to also show drafts that were previously withdrawn.
+          - name: limit
+            type: integer
+            required: false
+            description: How many drafts to show on this page.
+          - name: offset
+            type: integer
+            required: false
+            description: How many drafts to skip before this page, so you can move past ones you have already seen.
+  - tool_id: find_staged_allele_observations
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.allele_builder_tools:find_staged_allele_observations
+    required_context: []
+    description: Find specific draft alleles by what they contain or by their id, without listing the whole working set.
+    source_file: python/src/agr_ai_curation_alliance/tools/allele_builder_tools.py
+    metadata:
+      name: Find Staged Allele Observations
+      category: Database
+      builder_run_state: true
+      audit:
+        display_name: Find Staged Allele Observations
+      documentation:
+        summary: Looks through the allele drafts staged so far in this run and returns compact summaries of just the ones that match what you are searching for, so you can pinpoint a specific draft without paging through the entire working set. Results come back one page at a time.
+        parameters:
+          - name: field_value_contains
+            type: string
+            required: false
+            description: Show only drafts whose saved details contain this text (case-insensitive).
+          - name: pending_ref_id
+            type: string
+            required: false
+            description: Show only the draft linked to this draft-finding id.
+          - name: evidence_record_id
+            type: string
+            required: false
+            description: Show only drafts that use this saved piece of evidence.
+          - name: candidate_id
+            type: string
+            required: false
+            description: Show only the draft with this exact id.
+          - name: has_validation_errors
+            type: boolean
+            required: false
+            description: Show only drafts that have problems flagged (true) or only those that are clean (false).
+          - name: include_discarded
+            type: boolean
+            required: false
+            description: Whether to also search drafts that were previously withdrawn.
+          - name: limit
+            type: integer
+            required: false
+            description: How many matching drafts to show on this page.
+          - name: offset
+            type: integer
+            required: false
+            description: How many matching drafts to skip before this page, so you can move past ones you have already seen.
   - tool_id: finalize_allele_extraction
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.allele_builder_tools:finalize_allele_extraction
@@ -1366,7 +1539,7 @@ tools:
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.phenotype_builder_tools:list_staged_phenotype_observations
     required_context: []
-    description: Show a short summary of every draft phenotype annotation currently on the run's working list.
+    description: Show a short summary of the draft phenotype annotations currently on the run's working list, one page at a time.
     source_file: python/src/agr_ai_curation_alliance/tools/phenotype_builder_tools.py
     metadata:
       name: List Staged Phenotype Observations
@@ -1375,12 +1548,67 @@ tools:
       audit:
         display_name: List Staged Phenotype Observations
       documentation:
-        summary: Returns a compact overview of the phenotype annotation drafts staged so far in this run, so the agent can review the working set before finishing. Withdrawn drafts are left out unless they are explicitly included.
+        summary: Returns a compact overview of the phenotype annotation drafts staged so far in this run, so the agent can review the working set before finishing. Results come back one page at a time; step through the pages to see them all. Withdrawn drafts are left out unless they are explicitly included.
         parameters:
           - name: include_discarded
             type: boolean
             required: true
             description: Whether to also show drafts that were previously withdrawn.
+          - name: limit
+            type: integer
+            required: false
+            description: How many drafts to show on this page.
+          - name: offset
+            type: integer
+            required: false
+            description: How many drafts to skip before this page, so you can move past ones you have already seen.
+  - tool_id: find_staged_phenotype_observations
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.phenotype_builder_tools:find_staged_phenotype_observations
+    required_context: []
+    description: Find specific draft phenotype annotations by what they contain or by their id, without listing the whole working set.
+    source_file: python/src/agr_ai_curation_alliance/tools/phenotype_builder_tools.py
+    metadata:
+      name: Find Staged Phenotype Observations
+      category: Database
+      builder_run_state: true
+      audit:
+        display_name: Find Staged Phenotype Observations
+      documentation:
+        summary: Looks through the phenotype annotation drafts staged so far in this run and returns compact summaries of just the ones that match what you are searching for, so you can pinpoint a specific draft without paging through the entire working set. Results come back one page at a time.
+        parameters:
+          - name: field_value_contains
+            type: string
+            required: false
+            description: Show only drafts whose saved details contain this text (case-insensitive).
+          - name: pending_ref_id
+            type: string
+            required: false
+            description: Show only the draft linked to this draft-finding id.
+          - name: evidence_record_id
+            type: string
+            required: false
+            description: Show only drafts that use this saved piece of evidence.
+          - name: candidate_id
+            type: string
+            required: false
+            description: Show only the draft with this exact id.
+          - name: has_validation_errors
+            type: boolean
+            required: false
+            description: Show only drafts that have problems flagged (true) or only those that are clean (false).
+          - name: include_discarded
+            type: boolean
+            required: false
+            description: Whether to also search drafts that were previously withdrawn.
+          - name: limit
+            type: integer
+            required: false
+            description: How many matching drafts to show on this page.
+          - name: offset
+            type: integer
+            required: false
+            description: How many matching drafts to skip before this page, so you can move past ones you have already seen.
   - tool_id: finalize_phenotype_extraction
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.phenotype_builder_tools:finalize_phenotype_extraction
@@ -1571,7 +1799,7 @@ tools:
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.disease_builder_tools:list_staged_disease_observations
     required_context: []
-    description: Show a short summary of every draft disease annotation currently on the run's working list.
+    description: Show a short summary of the draft disease annotations currently on the run's working list, one page at a time.
     source_file: python/src/agr_ai_curation_alliance/tools/disease_builder_tools.py
     metadata:
       name: List Staged Disease Observations
@@ -1580,12 +1808,67 @@ tools:
       audit:
         display_name: List Staged Disease Observations
       documentation:
-        summary: Returns a compact overview of the disease annotation drafts staged so far in this run, so the agent can review the working set before finishing. Withdrawn drafts are left out unless they are explicitly included.
+        summary: Returns a compact overview of the disease annotation drafts staged so far in this run, so the agent can review the working set before finishing. Results come back one page at a time; step through the pages to see them all. Withdrawn drafts are left out unless they are explicitly included.
         parameters:
           - name: include_discarded
             type: boolean
             required: true
             description: Whether to also show drafts that were previously withdrawn.
+          - name: limit
+            type: integer
+            required: false
+            description: How many drafts to show on this page.
+          - name: offset
+            type: integer
+            required: false
+            description: How many drafts to skip before this page, so you can move past ones you have already seen.
+  - tool_id: find_staged_disease_observations
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.disease_builder_tools:find_staged_disease_observations
+    required_context: []
+    description: Find specific draft disease annotations by what they contain or by their id, without listing the whole working set.
+    source_file: python/src/agr_ai_curation_alliance/tools/disease_builder_tools.py
+    metadata:
+      name: Find Staged Disease Observations
+      category: Database
+      builder_run_state: true
+      audit:
+        display_name: Find Staged Disease Observations
+      documentation:
+        summary: Looks through the disease annotation drafts staged so far in this run and returns compact summaries of just the ones that match what you are searching for, so you can pinpoint a specific draft without paging through the entire working set. Results come back one page at a time.
+        parameters:
+          - name: field_value_contains
+            type: string
+            required: false
+            description: Show only drafts whose saved details contain this text (case-insensitive).
+          - name: pending_ref_id
+            type: string
+            required: false
+            description: Show only the draft linked to this draft-finding id.
+          - name: evidence_record_id
+            type: string
+            required: false
+            description: Show only drafts that use this saved piece of evidence.
+          - name: candidate_id
+            type: string
+            required: false
+            description: Show only the draft with this exact id.
+          - name: has_validation_errors
+            type: boolean
+            required: false
+            description: Show only drafts that have problems flagged (true) or only those that are clean (false).
+          - name: include_discarded
+            type: boolean
+            required: false
+            description: Whether to also search drafts that were previously withdrawn.
+          - name: limit
+            type: integer
+            required: false
+            description: How many matching drafts to show on this page.
+          - name: offset
+            type: integer
+            required: false
+            description: How many matching drafts to skip before this page, so you can move past ones you have already seen.
   - tool_id: finalize_disease_extraction
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.disease_builder_tools:finalize_disease_extraction
@@ -1681,6 +1964,18 @@ tools:
           type: string
           required: true
           description: The section to read, such as Methods or Introduction.
+        - name: max_chunks
+          type: integer
+          required: false
+          description: Most passages to return on this page (raise it to pull more of a long section at once).
+        - name: offset
+          type: integer
+          required: false
+          description: How many passages to skip; use the next_offset from the previous result to continue.
+        - name: text_contains
+          type: string
+          required: false
+          description: Return only passages containing this text (case-insensitive), each with a short excerpt, instead of the whole section.
   - tool_id: read_subsection
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_read_subsection_tool
@@ -1703,6 +1998,18 @@ tools:
           type: string
           required: true
           description: The subsection to read.
+        - name: max_chunks
+          type: integer
+          required: false
+          description: Most passages to return on this page (raise it to pull more of a long subsection at once).
+        - name: offset
+          type: integer
+          required: false
+          description: How many passages to skip; use the next_offset from the previous result to continue.
+        - name: text_contains
+          type: string
+          required: false
+          description: Return only passages containing this text (case-insensitive), each with a short excerpt, instead of the whole subsection.
   - tool_id: record_evidence
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_record_evidence_tool
@@ -1735,13 +2042,13 @@ tools:
     required_context:
       - document_id
       - user_id
-    description: Review the evidence saved so far in this run before finishing.
+    description: Review the evidence saved so far in this run before finishing, one page at a time.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
       name: List Recorded Evidence
       category: PDF Extraction
       documentation:
-        summary: Shows the pieces of evidence saved so far in this run, so the agent can confirm the full set of support before finishing. Withdrawn evidence is left out unless it is explicitly included.
+        summary: Shows the pieces of evidence saved so far in this run, so the agent can confirm the full set of support before finishing. Results come back one page at a time; step through the pages to see them all, or search by quote text to find a specific piece. Withdrawn evidence is left out unless it is explicitly included.
         parameters:
         - name: include_discarded
           type: boolean
@@ -1755,6 +2062,18 @@ tools:
           type: string
           required: false
           description: Show only evidence attached to this particular draft finding.
+        - name: text_contains
+          type: string
+          required: false
+          description: Show only evidence whose saved quote contains this text (case-insensitive), so you can find a specific quote without listing everything.
+        - name: limit
+          type: integer
+          required: false
+          description: How many pieces of evidence to show on this page.
+        - name: offset
+          type: integer
+          required: false
+          description: How many pieces of evidence to skip before this page, so you can move past ones you have already seen.
   - tool_id: get_recorded_evidence
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_get_recorded_evidence_tool

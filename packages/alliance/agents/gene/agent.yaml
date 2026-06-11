@@ -24,7 +24,8 @@ subcategory: "Data Validation"
 # -----------------------------------------------------------------------------
 # Tool name is generated at runtime as: ask_{folder}_specialist
 supervisor_routing:
-  enabled: true
+  enabled: false
+
   description: >
     Use for validating genes against the database, looking up gene symbols,
     finding gene IDs, or any gene-related queries.

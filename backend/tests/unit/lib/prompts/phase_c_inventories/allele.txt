@@ -35,7 +35,7 @@ Never pass a whole evidence sentence
 Evidence text is context for judging candidates
 
 # AV-07 species context -> data_provider, else all species (success_criteria removed; rule in <resolution_and_validation_rules>)
-When the query or paper names a species, pass the matching `data_provider`.
+When you know the paper's species, always pass the matching `data_provider` on every lookup.
 
 # AV-08 resolved_objects / resolved_values scalar / candidates+allele_candidates (success_criteria removed; rule in <result_contract>)
 `resolved_objects`: database-returned allele facts for resolved matches.
@@ -77,10 +77,11 @@ the request's `selected_inputs` are an extractor's proposals and context, not al
 The extractor that built this request had access to the paper; you do not.
 do not treat the extractor's lookup hints as the final identity
 
-# AV-17 species filtering table rows + omit-rather-than-guess (contract tokens)
+# AV-17 species filtering table rows + species-known-requires-data_provider (contract tokens)
 mouse, M. musculus, Mus, murine | MGI
 worm, C. elegans, nematode | WB
-omit `data_provider` rather than guessing
+When the paper's species IS known, the matching `data_provider` is REQUIRED on the lookup -- never omit it.
+Only omit `data_provider` when the species is genuinely unknown
 across taxa
 
 # AV-18 symbol handling: keep evidence out of the query (contract token)
@@ -97,8 +98,8 @@ An exact full database symbol you are already confident in (such as `Ulk1<sup>tm
 
 # AV-21 bounded ordered lookup path
 Decide whether the input is a CURIE/ID or a compact symbol/notation.
-For symbol/notation input, call `search_alleles`.
-If too many results come back, narrow by adding more characters or by applying the known species `data_provider`.
+For symbol/notation input, call `search_alleles`, and pass the species `data_provider` whenever the species is known (see Species filtering).
+If too many results come back, narrow by adding more characters; if you have not already scoped by the known species, add the `data_provider` now.
 report "Allele not found in database" with the exact search you attempted.
 
 # AV-22 troubleshooting judgment

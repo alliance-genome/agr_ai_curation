@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from agents import function_tool
 
+from ..config import get_list_recorded_evidence_limit
 from ..evidence_summary import evidence_record_status
 
 if TYPE_CHECKING:
@@ -342,6 +343,24 @@ def _record_summary(record: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
+# Env-configurable via LIST_RECORDED_EVIDENCE_LIMIT (default 100); see config.py.
+_LIST_RECORDED_EVIDENCE_LIMIT = get_list_recorded_evidence_limit()
+
+
+def _record_list_summary(record: dict[str, Any]) -> dict[str, Any]:
+    """Compact projection for ``list_recorded_evidence``.
+
+    Omits the full ``verified_quote`` text (which can be long and, across many
+    records, blow the model context) — the model can fetch it via
+    ``get_recorded_evidence``. Keeps the identifying fields so the model can
+    still review what evidence exists.
+    """
+    summary = _record_summary(record)
+    quote = summary.pop("verified_quote", None)
+    summary["verified_quote_chars"] = len(quote) if isinstance(quote, str) else 0
+    return summary
+
+
 def _success(record: dict[str, Any], *, action: str) -> dict[str, Any]:
     return {
         "status": "ok",
@@ -389,20 +408,31 @@ def create_list_recorded_evidence_tool(
         include_discarded: bool = False,
         object_id: str | None = None,
         pending_ref_id: str | None = None,
+        text_contains: str | None = None,
+        limit: int = _LIST_RECORDED_EVIDENCE_LIMIT,
+        offset: int = 0,
     ) -> dict[str, Any]:
-        """Review queued active-run evidence before final output.
+        """Review queued active-run evidence before final output, one page at a time.
 
         Discarded records are excluded by default. Use this to confirm the active
         evidence set matches final curatable objects before returning structured output.
+        Results come back one page at a time: pass ``offset`` to step past evidence
+        you have already seen and read ``next_offset`` to continue.
 
         Args:
             include_discarded: Include evidence previously marked discarded.
             object_id: Filter to evidence attached to this stable curatable object ID.
             pending_ref_id: Filter to evidence attached to this pending reference ID.
+            text_contains: Show only evidence whose saved quote contains this text
+                (case-insensitive), so you can find a specific quote without listing
+                everything.
+            limit: How many pieces of evidence to return on this page.
+            offset: How many matching pieces of evidence to skip before this page.
         """
 
         _track(tracker, "list_recorded_evidence")
         requested = _normalize_target(object_id=object_id, pending_ref_id=pending_ref_id)
+        needle = text_contains.lower() if text_contains else None
         records = []
         for record in _tool_records(workspace_records):
             if not _matches_document(record, document_id):
@@ -416,14 +446,27 @@ def create_list_recorded_evidence_tool(
                 _target_matches(target, requested) for target in _record_targets(record)
             ):
                 continue
-            records.append(_record_summary(record))
+            if needle is not None:
+                quote = record.get("verified_quote")
+                if not isinstance(quote, str) or needle not in quote.lower():
+                    continue
+            records.append(_record_list_summary(record))
 
+        total = len(records)
+        cap = max(1, int(limit)) if limit else _LIST_RECORDED_EVIDENCE_LIMIT
+        start = max(0, int(offset)) if offset else 0
+        returned = records[start : start + cap]
+        has_more = total > start + len(returned)
         return {
             "status": "ok",
             "document_id": document_id,
             "include_discarded": include_discarded,
-            "count": len(records),
-            "evidence_records": records,
+            "count": total,
+            "returned_count": len(returned),
+            "offset": start,
+            "next_offset": start + len(returned) if has_more else None,
+            "truncated": has_more,
+            "evidence_records": returned,
         }
 
     return list_recorded_evidence

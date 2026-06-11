@@ -394,3 +394,72 @@ async def test_record_list_attach_discard_finalize_flow_omits_discarded(workspac
     assert validated_record.envelope_targets[0].field_path == (
         "expression_annotation_subject.gene_symbol"
     )
+
+
+@pytest.fixture
+def many_workspace_records():
+    records = [
+        {
+            "evidence_record_id": f"ev-{index}",
+            "entity": f"gene-{index}",
+            "verified_quote": (
+                "GFP signal" if index % 2 == 0 else "mCherry signal"
+            )
+            + f" in sample {index}.",
+            "page": index,
+            "section": "Results",
+            "chunk_id": f"chunk-{index}",
+            "document_id": "doc-1",
+        }
+        for index in range(5)
+    ]
+    token = evidence_workspace.set_active_evidence_records(records)
+    try:
+        yield records
+    finally:
+        evidence_workspace.reset_active_evidence_records(token)
+
+
+@pytest.mark.asyncio
+async def test_list_recorded_evidence_pages_with_offset_and_next_offset(many_workspace_records):
+    list_tool = evidence_workspace.create_list_recorded_evidence_tool("doc-1", "user-1")
+
+    first = await list_tool(limit=2, offset=0)
+    assert first["count"] == 5
+    assert first["returned_count"] == 2
+    assert first["offset"] == 0
+    assert first["next_offset"] == 2
+    assert first["truncated"] is True
+    assert [r["evidence_record_id"] for r in first["evidence_records"]] == ["ev-0", "ev-1"]
+
+    last = await list_tool(limit=2, offset=4)
+    assert last["returned_count"] == 1
+    assert last["offset"] == 4
+    assert last["next_offset"] is None
+    assert last["truncated"] is False
+    assert [r["evidence_record_id"] for r in last["evidence_records"]] == ["ev-4"]
+
+
+@pytest.mark.asyncio
+async def test_list_recorded_evidence_filters_by_text_contains(many_workspace_records):
+    list_tool = evidence_workspace.create_list_recorded_evidence_tool("doc-1", "user-1")
+
+    matched = await list_tool(text_contains="mcherry")
+
+    assert matched["count"] == 2
+    assert {r["evidence_record_id"] for r in matched["evidence_records"]} == {"ev-1", "ev-3"}
+    # The compact list summary never echoes the full quote text back.
+    assert "verified_quote" not in matched["evidence_records"][0]
+
+
+@pytest.mark.asyncio
+async def test_list_recorded_evidence_text_contains_pages(many_workspace_records):
+    list_tool = evidence_workspace.create_list_recorded_evidence_tool("doc-1", "user-1")
+
+    page = await list_tool(text_contains="gfp", limit=2, offset=0)
+
+    assert page["count"] == 3
+    assert page["returned_count"] == 2
+    assert page["next_offset"] == 2
+    assert page["truncated"] is True
+    assert {r["evidence_record_id"] for r in page["evidence_records"]} == {"ev-0", "ev-2"}

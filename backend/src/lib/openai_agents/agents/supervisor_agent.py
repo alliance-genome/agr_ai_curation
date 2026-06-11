@@ -28,7 +28,7 @@ import json
 import logging
 import re
 import time
-from typing import Optional, List, Literal, Dict, Any, Callable, Sequence
+from typing import Awaitable, Optional, List, Literal, Dict, Any, Callable, Sequence
 
 from agents import Agent, ModelSettings, RunConfig, RunContextWrapper, function_tool
 
@@ -437,12 +437,153 @@ except ImportError:
     biology_topic_guardrail = None
 
 
+# Plain-language terminal instructions returned to the supervisor model when the
+# no-progress brake fires. These mirror the strict step-order guard that flows
+# enforce via flows/, applied to standard chat (which has no such guard).
+_LEDGER_REPLAY_INSTRUCTION = (
+    "You already asked this and received the result below. Report it to the user; "
+    "do not call this specialist with the same request again."
+)
+_LEDGER_BUDGET_EXCEEDED_MESSAGE = (
+    "You have made enough specialist lookups for this turn. Stop and summarize what "
+    "you have for the user, including anything that could not be resolved."
+)
+
+
+def _normalize_ledger_query(query: str) -> str:
+    """Collapse whitespace and lowercase a query for stable dedup keying."""
+
+    return " ".join(str(query or "").split()).strip().lower()
+
+
+class SupervisorCallLedger:
+    """Per-chat-turn no-progress brake for supervisor specialist tool calls.
+
+    One ledger is created per ``create_supervisor_agent`` call and shared (via
+    closure) across that turn's specialist tools. It provides three protections,
+    keyed on ``(tool_name, normalized_query)``:
+
+    1. Concurrent collapse: identical concurrent calls share a single underlying
+       run via a per-key ``asyncio.Future``; different queries still run in
+       parallel and are never serialized.
+    2. Sequential short-circuit: once a key has a cached result, later identical
+       calls return the cached text plus a terminal instruction instead of
+       re-running.
+    3. Invocation budget: a generous per-turn total cap and per-specialist cap
+       backstop true runaways without truncating legitimate multi-lookup chats.
+
+    Flow supervisors bypass ``create_supervisor_agent`` entirely, so they never
+    receive a ledger and are completely unaffected.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_total_calls: int,
+        max_calls_per_tool: int,
+    ) -> None:
+        self._lock = asyncio.Lock()
+        self._futures: Dict[tuple[str, str], "asyncio.Future[str]"] = {}
+        self._max_total_calls = max_total_calls
+        self._max_calls_per_tool = max_calls_per_tool
+        # Distinct underlying invocations actually started this turn (cache hits
+        # and concurrent-collapse awaiters do not count toward the budget).
+        self._total_invocations = 0
+        self._per_tool_invocations: Dict[str, int] = {}
+
+    async def run_or_replay(
+        self,
+        tool_name: str,
+        query: str,
+        runner_coro_factory: Callable[[], Awaitable[str]],
+    ) -> str:
+        """Run the specialist once per key, replaying cached/concurrent results.
+
+        ``runner_coro_factory`` is a zero-arg callable returning the awaitable
+        that performs the real specialist run. It is invoked at most once per
+        distinct key, and only when budget allows.
+        """
+
+        key = (tool_name, _normalize_ledger_query(query))
+
+        async with self._lock:
+            existing = self._futures.get(key)
+            if existing is not None:
+                # Either an in-flight identical concurrent call, or a completed
+                # cached result. Await it outside the lock below.
+                future = existing
+                is_owner = False
+            else:
+                budget_message = self._budget_block_message_locked(tool_name)
+                if budget_message is not None:
+                    return budget_message
+                future = asyncio.get_running_loop().create_future()
+                self._futures[key] = future
+                self._total_invocations += 1
+                self._per_tool_invocations[tool_name] = (
+                    self._per_tool_invocations.get(tool_name, 0) + 1
+                )
+                is_owner = True
+
+        if not is_owner:
+            # Concurrent identical caller or sequential repeat: replay the same
+            # result. Done futures resolve immediately; in-flight ones await the
+            # owner's run. Either way the underlying specialist runs only once.
+            was_done = future.done()
+            result = await future
+            return self._with_replay_instruction(result) if was_done else result
+
+        try:
+            result = await runner_coro_factory()
+        except Exception as exc:
+            # Propagate to any concurrent awaiters, then clear the key so a later
+            # legitimate retry can proceed. This is correct future bookkeeping,
+            # not a fallback.
+            async with self._lock:
+                self._futures.pop(key, None)
+                self._total_invocations = max(0, self._total_invocations - 1)
+                self._per_tool_invocations[tool_name] = max(
+                    0, self._per_tool_invocations.get(tool_name, 0) - 1
+                )
+            if not future.done():
+                future.set_exception(exc)
+            # Mark the exception retrieved so a lone owner (no concurrent awaiter
+            # grabbed this future before it was popped) does not trip asyncio's
+            # "Future exception was never retrieved" log noise. Concurrent awaiters
+            # still receive the exception when they await the future.
+            future.exception()
+            raise
+
+        if not future.done():
+            future.set_result(result)
+        return result
+
+    def _budget_block_message_locked(self, tool_name: str) -> Optional[str]:
+        """Return the budget message when a new invocation would exceed a cap.
+
+        Must be called while holding ``self._lock``.
+        """
+
+        if self._total_invocations >= self._max_total_calls:
+            return _LEDGER_BUDGET_EXCEEDED_MESSAGE
+        if self._per_tool_invocations.get(tool_name, 0) >= self._max_calls_per_tool:
+            return _LEDGER_BUDGET_EXCEEDED_MESSAGE
+        return None
+
+    @staticmethod
+    def _with_replay_instruction(result: str) -> str:
+        """Wrap a cached result with the plain-language terminal instruction."""
+
+        return f"{_LEDGER_REPLAY_INSTRUCTION}\n\n{result}"
+
+
 def _create_streaming_tool(
     agent: Agent,
     tool_name: str,
     tool_description: str,
     specialist_name: str,
     run_config: Optional[RunConfig] = None,
+    ledger: Optional[SupervisorCallLedger] = None,
 ) -> Callable:
     """
     Create a streaming tool wrapper for a specialist agent.
@@ -468,13 +609,26 @@ def _create_streaming_tool(
         # WebSocket connection instead of opening a new one. The SDK threads the parent
         # run's RunConfig via the tool context in openai-agents 0.17+.
         effective_run_config = getattr(ctx, "run_config", None) or run_config
-        return await run_specialist_with_events(
-            agent=agent,
-            input_text=query,
-            specialist_name=specialist_name,
-            run_config=effective_run_config,
-            tool_name=tool_name,  # Pass tool_name for batching nudge tracking
-        )
+
+        def _runner_coro_factory() -> Awaitable[str]:
+            return run_specialist_with_events(
+                agent=agent,
+                input_text=query,
+                specialist_name=specialist_name,
+                run_config=effective_run_config,
+                tool_name=tool_name,  # Pass tool_name for batching nudge tracking
+            )
+
+        # In standard chat the supervisor is built fresh per turn with a ledger
+        # closed over here (NOT a tool argument, so the model-visible schema stays
+        # (query)). It collapses identical concurrent calls, short-circuits
+        # sequential repeats, and enforces a per-turn invocation budget -- the
+        # no-progress brake that flows get from strict step order. Flow supervisors
+        # bypass create_supervisor_agent and so have no ledger here.
+        if ledger is not None:
+            return await ledger.run_or_replay(tool_name, query, _runner_coro_factory)
+
+        return await _runner_coro_factory()
 
     return streaming_tool_wrapper
 
@@ -698,6 +852,7 @@ def _create_dynamic_specialist_tools(
     specialist_model_override: Optional[str] = None,
     specialist_temperature_override: Optional[float] = None,
     specialist_reasoning_override: Optional[str] = None,
+    ledger: Optional[SupervisorCallLedger] = None,
 ) -> List[Callable]:
     """
     Dynamically create specialist tools based on unified agent records.
@@ -768,6 +923,7 @@ def _create_dynamic_specialist_tools(
                 tool_name=tool_name,
                 tool_description=description,
                 specialist_name=specialist_name,
+                ledger=ledger,
             )
             specialist_tools.append(streaming_tool)
 
@@ -894,6 +1050,22 @@ def create_supervisor_agent(
     # Document-dependent agents are automatically filtered if no document is loaded.
     # Group-specific rules are injected for agents with group_rules_enabled=True.
     # =========================================================================
+    # One ledger per chat turn (create_supervisor_agent is called fresh per
+    # STANDARD CHAT turn; flow supervisors pass their own prebuilt agent and
+    # never reach this function, so they get no ledger and are unaffected). The
+    # ledger + budget are the runaway/no-progress brake for chat; we intentionally
+    # do NOT lower the shared AGENT_MAX_TURNS here -- this budget supersedes
+    # relying on max_turns for runaway protection.
+    from ..config import (
+        get_supervisor_max_calls_per_specialist,
+        get_supervisor_max_specialist_calls_per_turn,
+    )
+
+    call_ledger = SupervisorCallLedger(
+        max_total_calls=get_supervisor_max_specialist_calls_per_turn(),
+        max_calls_per_tool=get_supervisor_max_calls_per_specialist(),
+    )
+
     tool_specs = _get_supervisor_specialist_specs()
     specialist_tools = _create_dynamic_specialist_tools(
         document_id=document_id,
@@ -907,6 +1079,7 @@ def create_supervisor_agent(
         specialist_model_override=specialist_model_override,
         specialist_temperature_override=specialist_temperature_override,
         specialist_reasoning_override=specialist_reasoning_override,
+        ledger=call_ledger,
     )
 
     routing_duration_ms = (time.monotonic() - route_start) * 1000

@@ -72,9 +72,6 @@ content: |
   | ask_gene_extractor_specialist | Gene-focused document extraction with evidence and validator-ready identity context | genes in paper, genes studied, focus genes, experimentally supported genes | Document -> Gene assertions plus validator findings when active |
   | ask_gene_expression_specialist | Gene expression data extraction | "expression pattern", "create annotation" | Document -> Plain Text |
   | format_data | Convert extracted text to JSON | After extraction specialists | Text + format_type -> Structured JSON |
-  | ask_gene_specialist | Gene symbols/IDs (WB, FB, MGI, HGNC, ZFIN, RGD, SGD, etc.) | gene names, "WBGene", "FBgn", etc. | Symbol -> ValidID |
-  | ask_allele_specialist | Allele symbols/IDs | allele names, "WBVar", "MGI:####", "mutation", etc. | Symbol -> ValidID |
-  | ask_disease_specialist | Disease names, DOID | "disease", "DOID", "disorder", "syndrome", etc. | Name -> DOID |
   | ask_chemical_specialist | Chemicals, ChEBI | "chemical", "ChEBI", "compound", "drug", "molecule", etc. | Name -> ChEBI |
   | ask_gene_ontology_specialist | GO terms, hierarchy | "GO term", "molecular function", "biological process", "cellular component", etc. | Query -> GO Info |
   | ask_go_annotations_specialist | Gene GO annotations | "GO annotations for" | GeneID -> GO Annotations |
@@ -207,9 +204,9 @@ content: |
 
   <examples>
   <example name="simple_lookup">
-  Query: "What is daf-16?"
+  Query: "What is the ChEBI ID for caffeine?"
   Routing: Single specialist call
-  Execution: ask_gene_specialist("What is daf-16?")
+  Execution: ask_chemical_specialist("What is the ChEBI ID for caffeine?")
   </example>
 
   <example name="curator_grade_handoff">
@@ -228,28 +225,11 @@ content: |
   )
   </example>
 
-  <example name="chained_extraction">
-  Query: "What are the MGI IDs for alleles in this paper?"
-  Routing: Document -> Mentions (PDF extraction) -> ValidID (Allele Specialist)
-
-  Execution:
-  1. ask_pdf_extraction_specialist(
-       "Review the loaded paper and extract all mouse allele symbols reported in the study,
-        prioritizing experimentally relevant alleles over incidental mentions."
-     )
-     -> Returns: "Tg(Mx1-cre)1Cgn, tm1234, tm5678, ..."
-  2. ask_allele_specialist("Look up MGI IDs for these mouse alleles: Tg(Mx1-cre)1Cgn, tm1234, tm5678, ...")
-     ONE call with ALL alleles batched
-  3. Synthesize results with source attribution
-  </example>
-
   <example name="enrichment_chain">
-  Query: "What GO annotations does daf-16 have?"
-  Routing: Resolver -> Enricher chain
+  Query: "What GO annotations does WBGene00000912 have?"
+  Routing: Enricher only
   Execution:
-  1. ask_gene_specialist("What is the gene ID for daf-16?")
-     -> Returns: WBGene00000912
-  2. ask_go_annotations_specialist("What GO annotations does WBGene00000912 have?")
+  1. ask_go_annotations_specialist("What GO annotations does WBGene00000912 have?")
   </example>
 
   <example name="gene_expression_workflow">
@@ -287,9 +267,6 @@ content: |
   | ask_gene_extractor_specialist | "Gene Extraction Analysis" |
   | ask_gene_expression_specialist | "Gene Expression Analysis" |
   | format_data | "Data Formatter" |
-  | ask_gene_specialist | "Alliance Gene Database" |
-  | ask_allele_specialist | "Alliance Allele Database" |
-  | ask_disease_specialist | "Alliance Disease Database" |
   | ask_chemical_specialist | "Alliance Chemical Database" |
   | ask_gene_ontology_specialist | "Gene Ontology" |
   | ask_go_annotations_specialist | "GO Annotations Database" |
@@ -299,6 +276,11 @@ content: |
 
   <stop_rules>
   - If a specialist returns empty or "not found", say so honestly.
+  - "Unresolved", "not found", and empty results are valid final answers. When a specialist
+    has already looked and could not resolve the target, report that plainly to the curator
+    (for example, "I couldn't resolve X in the database") and stop. Do not re-run the same
+    lookup with the same input hoping for a different result; only route again if you have
+    genuinely new input (a corrected symbol, an added species, or a different specialist).
   - Never guess JAX#, MMRRC#, CGC#, or other stock numbers; these are not in our database.
   - Never invent IDs, claims, annotations, citations, or data.
   - Never imply a value is normalized if the specialist only returned a mention.

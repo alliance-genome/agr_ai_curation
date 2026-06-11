@@ -10,6 +10,16 @@ from typing import Any, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, Field
 
+from src.lib.openai_agents.config import (
+    get_flow_chat_max_rows,
+    get_flow_planner_max_field_examples,
+    get_flow_planner_max_list_items,
+    get_flow_planner_max_object_items,
+    get_flow_planner_max_row_chars,
+    get_flow_planner_max_text_chars,
+    get_flow_projection_max_rows,
+)
+
 
 FlowOutputFormat = Literal["csv", "tsv", "json", "chat"]
 FlowOutputRowSource = Literal["artifact", "object", "evidence", "validation_finding"]
@@ -38,13 +48,15 @@ FlowOutputFilterOperator = Literal[
 ]
 FlowOutputSortDirection = Literal["asc", "desc"]
 
-MAX_PROJECTION_ROWS = 10_000
-MAX_CHAT_ROWS = 50
-MAX_FIELD_EXAMPLES = 3
-MAX_PLANNER_TEXT_CHARS = 180
-MAX_PLANNER_LIST_ITEMS = 5
-MAX_PLANNER_OBJECT_ITEMS = 12
-MAX_PLANNER_ROW_CHARS = 2_000
+# Env-configurable (defaults unchanged); see config.py getters and .env.example
+# (flow projection planner group).
+MAX_PROJECTION_ROWS = get_flow_projection_max_rows()
+MAX_CHAT_ROWS = get_flow_chat_max_rows()
+MAX_FIELD_EXAMPLES = get_flow_planner_max_field_examples()
+MAX_PLANNER_TEXT_CHARS = get_flow_planner_max_text_chars()
+MAX_PLANNER_LIST_ITEMS = get_flow_planner_max_list_items()
+MAX_PLANNER_OBJECT_ITEMS = get_flow_planner_max_object_items()
+MAX_PLANNER_ROW_CHARS = get_flow_planner_max_row_chars()
 
 ARTIFACT_DEFAULT_FIELD_REFS = [
     "artifact.step",

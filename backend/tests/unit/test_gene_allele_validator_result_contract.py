@@ -337,7 +337,12 @@ def test_allele_prompt_keeps_evidence_quotes_out_of_symbol_queries():
         "Evidence text is context for judging candidates",
         "Keep supporting evidence quotes out of the `allele_symbol` argument",
         "Do not use a full sentence or surrounding prose as the search string",
-        "omit `data_provider` rather than guessing",
+        # Species discipline: when the paper's species is known, the matching
+        # data_provider is mandatory on the lookup -- only omit it when the
+        # species is genuinely unknown. This keeps the search inside the correct
+        # organism and prevents cross-species fuzzy hits.
+        "When the paper's species IS known, the matching `data_provider` is REQUIRED on the lookup -- never omit it.",
+        "Only omit `data_provider` when the species is genuinely unknown",
         "across taxa",
     ]
     for fragment in required_fragments:

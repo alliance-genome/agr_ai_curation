@@ -32,6 +32,7 @@ from ..lib.flows.validation_attachments import (
     FlowValidationAttachmentError,
     apply_flow_validation_attachment_defaults,
 )
+from ..lib.openai_agents.config import get_flow_list_page_size_default
 from ..models.api_schemas import OperationResult
 from ..models.sql import get_db, CurationFlow
 from ..schemas.flows import (
@@ -48,7 +49,8 @@ from ..services.user_service import set_global_user_from_cognito
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/flows")
-DEFAULT_FLOW_LIST_PAGE_SIZE = 50
+# Env-configurable via FLOW_LIST_PAGE_SIZE_DEFAULT (default 50); see config.py.
+DEFAULT_FLOW_LIST_PAGE_SIZE = get_flow_list_page_size_default()
 
 
 def _validated_flow_definition_payload(flow_definition) -> dict[str, Any]:

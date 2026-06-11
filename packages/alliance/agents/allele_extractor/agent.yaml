@@ -54,6 +54,7 @@ tools:
   - patch_allele_observation
   - discard_allele_observation
   - list_staged_allele_observations
+  - find_staged_allele_observations
   - finalize_allele_extraction
 
 # -----------------------------------------------------------------------------

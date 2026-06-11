@@ -8,14 +8,22 @@ from typing import Any
 
 from src.lib.chat_history_repository import ChatHistoryRepository, ChatMessageCursor, ChatMessageRecord
 from src.lib.chat_transcript import FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
+from src.lib.openai_agents.config import (
+    get_max_transcript_turn_chars,
+    get_transcript_excerpt_edge_turns,
+    get_transcript_page_size,
+)
 
 logger = logging.getLogger(__name__)
 
 
-TRANSCRIPT_PAGE_SIZE = 200
-TRANSCRIPT_EXCERPT_EDGE_TURNS = 3
+# Env-configurable (defaults unchanged); see config.py getters and .env.example:
+#   TRANSCRIPT_PAGE_SIZE, TRANSCRIPT_EXCERPT_EDGE_TURNS, MAX_TRANSCRIPT_TURN_CHARS.
+TRANSCRIPT_PAGE_SIZE = get_transcript_page_size()
+TRANSCRIPT_EXCERPT_EDGE_TURNS = get_transcript_excerpt_edge_turns()
+# Derived from the edge turns (keep this relationship; not separately configurable).
 MAX_INLINE_TRANSCRIPT_TURNS = TRANSCRIPT_EXCERPT_EDGE_TURNS * 2
-MAX_TRANSCRIPT_TURN_CHARS = 500
+MAX_TRANSCRIPT_TURN_CHARS = get_max_transcript_turn_chars()
 
 
 def capture_feedback_conversation_transcript(
