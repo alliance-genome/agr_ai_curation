@@ -20,11 +20,16 @@ class DemoStructuredOutput(BaseModel):
     value: str
 
 
+class DemoFinalizationInput(BaseModel):
+    answer: str
+
+
 def _agent(
     *,
     folder_name: str = "demo_agent",
     agent_id: str = "demo_agent_validation",
     output_schema: str | None = "DemoStructuredOutput",
+    structured_finalization: dict | None = None,
     category: str = "",
     tools: list[str] | None = None,
     domain_pack_id: str | None = None,
@@ -38,6 +43,7 @@ def _agent(
         category=category,
         tools=tools or [],
         output_schema=output_schema,
+        structured_finalization=structured_finalization,
         curation=CurationConfig(domain_pack_id=domain_pack_id),
     )
 
@@ -95,7 +101,11 @@ def agent_registry(monkeypatch):
     monkeypatch.setattr(
         assembly,
         "resolve_output_schema",
-        lambda _schema_key: DemoStructuredOutput,
+        lambda schema_key: {
+            "DemoFinalizationInput": DemoFinalizationInput,
+            "DemoStructuredOutput": DemoStructuredOutput,
+            "PhenotypeResultEnvelope": DemoStructuredOutput,
+        }.get(schema_key),
     )
 
 
@@ -110,6 +120,31 @@ def test_core_prompt_layers_are_locked_and_do_not_use_prompt_templates(prompt_ca
     assert "DemoStructuredOutput structured output" in bundle.layers[1].content
     assert "Base prompt" not in bundle.render()
     assert "Group alpha rules" not in bundle.render()
+
+
+def test_core_prompt_uses_structured_finalization_input_schema(monkeypatch, prompt_cache):
+    monkeypatch.setattr(
+        assembly,
+        "load_agent_definitions",
+        lambda: {
+            "demo_agent_validation": _agent(
+                output_schema="DemoStructuredOutput",
+                structured_finalization={
+                    "enabled": True,
+                    "tool_name": "finalize_demo",
+                    "input_schema": "DemoFinalizationInput",
+                },
+            )
+        },
+    )
+
+    bundle = assembly.build_agent_core_prompt("demo_agent")
+    generated_content = bundle.layers[1].content
+
+    assert "DemoFinalizationInput structured output" in generated_content
+    assert "produce JSON matching DemoFinalizationInput" in generated_content
+    assert "DemoStructuredOutput structured output" not in generated_content
+    assert "structured_finalization_input_schema:DemoFinalizationInput" in bundle.layers[1].source_ref
 
 
 def test_core_generated_contract_summarizes_tool_and_domain_metadata(monkeypatch):

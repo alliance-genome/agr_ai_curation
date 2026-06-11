@@ -93,9 +93,7 @@ content: |
   <output_and_handoff_contract>
   Backend builder finalization creates the GeneExtractionResultEnvelope. Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, `phenotypes[]`, `normalized_payload`, `annotation_drafts`, `curatable_objects[]`, `metadata.*`, or `run_summary`.
 
-  Every evidence record carries this shared field shape, copied from the `record_evidence` response, never typed by you:
-  - `entity` - the specific gene label you were evaluating, not a generic "gene" and not a chemical, phenotype, or treatment term
-  - `verified_quote`, `page`, `section`, optional `subsection`, `chunk_id`, optional `figure_reference`
+  Every evidence record carries an `evidence_record_id` plus backend-owned source quote/provenance fields from `record_evidence`; never type or copy those source fields yourself. Use the specific gene label as `entity`, not a generic "gene" and not a chemical, phenotype, or treatment term.
 
   For each retained gene/evidence pairing (the `<workflow>` tool sequence produces these), the staged payload is: a stable `pending_ref_id`, the returned `evidence_record_ids`, `mention`, `confidence`, and paper-backed identity/context hints (`species`, `taxon_hint`, `data_provider_hint`, `proposed_gene_symbol`, `proposed_taxon`, `identity_resolution_notes`).
   - Include `proposed_primary_external_id` only when the paper itself supplies a specific identifier. Do not guess or look up IDs in the extractor.
@@ -153,11 +151,8 @@ content: |
   record_evidence(entity="crumb", span_ids=["abc123:s0001:c0000-c0073:11111111"])
   -> {
        "status": "verified",
-       "verified_quote": "Crumb is essential for maintaining epithelial polarity in the embryo.",
-       "page": 4,
-       "section": "Results",
-       "subsection": "Gene Expression Analysis",
-       "figure_reference": "Figure 2A"
+       "evidence_record_id": "evidence-crumb-1",
+       "...": "backend-owned source quote/provenance omitted"
      }
 
   read_chunk("def456")
@@ -175,10 +170,8 @@ content: |
   record_evidence(entity="crumb", span_ids=["def456:s0001:c0000-c0068:22222222"])
   -> {
        "status": "verified",
-       "verified_quote": "Loss of crumb disrupted apical membrane organization in 83% of embryos.",
-       "page": 5,
-       "section": "Results",
-       "subsection": "Embryonic phenotypes"
+       "evidence_record_id": "evidence-crumb-2",
+       "...": "backend-owned source quote/provenance omitted"
      }
 
   Builder calls (each stage call returns a candidate_id; pass those IDs to finalize):
@@ -242,10 +235,8 @@ content: |
   record_evidence(entity="yurt", span_ids=["ghi789:s0001:c0087-c0152:33333333"])
   -> {
        "status": "verified",
-       "verified_quote": "we found yurt mutants failed to maintain apical junction continuity.",
-       "page": 9,
-       "section": "Discussion",
-       "subsection": "Comparison with prior studies"
+       "evidence_record_id": "evidence-yurt-1",
+       "...": "backend-owned source quote/provenance omitted"
      }
 
   Builder calls:

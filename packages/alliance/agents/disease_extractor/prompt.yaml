@@ -118,9 +118,7 @@ content: |
   <output_and_handoff_contract>
   Backend builder finalization creates the DiseaseExtractionResultEnvelope and materializes the concrete subtype objects and `metadata.*` from your staged builder state and recorded evidence; you never type that graph. Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, `phenotypes[]`, or full-envelope JSON.
 
-  Every evidence record carries this shared field shape, copied from the `record_evidence` response, never typed by you:
-  - `entity` -- the specific disease label you were evaluating
-  - `verified_quote`, `page`, `section`, optional `subsection`, `chunk_id`, optional `figure_reference`
+  Every evidence record carries an `evidence_record_id` plus backend-owned source quote/provenance fields from `record_evidence`; never type or copy those source fields yourself.
   Cite verified evidence with `evidence_record_ids` only; the source quote and provenance come from a verified `record_evidence` result, not a paraphrase. Before finalization, review the active-run evidence workspace and keep only the evidence records the staged diseases rely on.
 
   For each retained disease, call `stage_disease_observation` exactly once with:

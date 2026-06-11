@@ -225,10 +225,10 @@ async def _get_user_from_cookie_impl(
                     claim_groups.append(f"{group_id.lower()}-curators")
 
         payload = {
-            "sub": "dev-user-123",
-            "uid": "dev-user-123",
-            "email": "dev@localhost",
-            "name": "Dev User",
+            "sub": os.getenv("DEV_USER_SUB", "dev-user-123"),
+            "uid": os.getenv("DEV_USER_SUB", "dev-user-123"),
+            "email": os.getenv("DEV_USER_EMAIL", "dev@localhost"),
+            "name": os.getenv("DEV_USER_NAME", "Dev User"),
         }
         return _build_mock_user(_with_group_claim_aliases(payload, claim_groups))
 

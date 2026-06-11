@@ -2,18 +2,18 @@
   {
     "phrase": "Returns JSON only, matching `PdfExtractionResultEnvelope`.",
     "category": "relocated",
-    "reason": "PDF-08 (de-dup). The pre-rewrite <success_criteria> restated the JSON-only output mandate the locked core already injects. assembly.py::_build_core_generated_content emits both the 'Output contract from agent.yaml: produce JSON matching PdfExtractionResultEnvelope' line and the 'CRITICAL: ALWAYS PRODUCE STRUCTURED OUTPUT AS VALID JSON ... valid JSON matching the PdfExtractionResultEnvelope schema EXACTLY' block. The base prompt no longer restates 'Returns JSON only'; the fact survives in the core half of the assembled render. Verified the curation-specific output guidance (field roster, no Evidence/Citations/Sources headers, kept_count rules) is preserved in <output_contract>.",
+    "reason": "PDF-08 (de-dup). The pre-rewrite <success_criteria> restated the JSON-only output mandate the locked core already injects. The runtime prompt now uses the structured_finalization.input_schema contract for model-facing PDF finalization, so assembly.py::_build_core_generated_content emits PdfExtractionFinalizationEnvelope in the critical structured-output block while the backend still canonicalizes to PdfExtractionResultEnvelope after live evidence hydration. The base prompt no longer restates 'Returns JSON only'; the fact survives in the core half of the assembled render. Verified the curation-specific output guidance (field roster, no Evidence/Citations/Sources headers, kept_count rules) is preserved in <output_contract>.",
     "old_source": "packages/alliance/agents/pdf/prompt.yaml:<success_criteria>",
     "new_home": "render",
-    "synonyms": ["produce JSON matching PdfExtractionResultEnvelope", "valid JSON matching the PdfExtractionResultEnvelope schema EXACTLY"]
+    "synonyms": ["produce JSON matching PdfExtractionFinalizationEnvelope", "valid JSON matching the PdfExtractionFinalizationEnvelope schema EXACTLY"]
   },
   {
     "phrase": "Return JSON only, matching `PdfExtractionResultEnvelope`. Use the schema fields rather than adding extra prose-only sections.",
     "category": "relocated",
-    "reason": "PDF-26 (de-dup). The pre-rewrite <output_contract> opener again restated the JSON-only mandate the locked core owns (the structured-output layer is authoritative for final response shape). The base prompt keeps the load-bearing half -- 'Populate the PdfExtractionResultEnvelope fields rather than adding extra prose-only sections' -- but drops the 'Return JSON only' restatement, which survives in the core half of the render.",
+    "reason": "PDF-26 (de-dup). The pre-rewrite <output_contract> opener again restated the JSON-only mandate the locked core owns (the structured-output layer is authoritative for final response shape). The base prompt keeps the load-bearing half updated to the model-facing finalization schema -- 'Populate the PdfExtractionFinalizationEnvelope fields rather than adding extra prose-only sections' -- but drops the 'Return JSON only' restatement, which survives in the core half of the render.",
     "old_source": "packages/alliance/agents/pdf/prompt.yaml:<output_contract>",
     "new_home": "render",
-    "synonyms": ["produce JSON matching PdfExtractionResultEnvelope", "Populate the `PdfExtractionResultEnvelope` fields rather than adding extra prose-only sections"]
+    "synonyms": ["produce JSON matching PdfExtractionFinalizationEnvelope", "Populate the `PdfExtractionFinalizationEnvelope` fields rather than adding extra prose-only sections"]
   },
   {
     "phrase": "Use document retrieval tools before answering.",

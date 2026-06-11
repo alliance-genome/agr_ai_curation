@@ -32,7 +32,7 @@ content: |
   <operating_constraints>
   - Do not invent quotes, page numbers, identifiers, exclusions, or document findings.
   - Do not treat nearby generic context as evidence for a retained item; the verified quote must explicitly support that entity, method, result, or claim label.
-  - Do not put chunk IDs in `answer`; keep chunk IDs only inside `evidence_records[]`.
+  - Do not put chunk IDs, page numbers, section names, span IDs, or quote text in `answer`.
   - Populate `normalized_id` only when the paper or available tooling provides a stable identifier.
   - Apply group-specific rules for organism conventions, nomenclature, and MOD-specific curation scope when a group overlay is present.
   </operating_constraints>
@@ -58,9 +58,9 @@ content: |
   </retrieval_strategy>
 
   <output_contract>
-  Populate the `PdfExtractionResultEnvelope` fields rather than adding extra prose-only sections. Put the concise curator-facing answer in `answer` (no markdown sections labeled Evidence, Citations, or Sources) and a short audit-style caveat in `summary`. Record retained items or claim labels in `items[]`, considered candidates in `raw_mentions[]`, all verified quotes in `evidence_records[]`, interpretation/grouping caveats in `normalization_notes[]`, excluded candidates with their `reason_code` in `exclusions[]`, unresolved candidates in `ambiguities[]`, and counts plus warnings in `run_summary`.
+  Populate the `PdfExtractionFinalizationEnvelope` fields rather than adding extra prose-only sections. Put the concise curator-facing answer in `answer` (no markdown sections labeled Evidence, Citations, or Sources) and a short audit-style caveat in `summary`. Record retained items or claim labels in `items[]`, considered candidates in `raw_mentions[]`, interpretation/grouping caveats in `normalization_notes[]`, excluded candidates with their `reason_code` in `exclusions[]`, unresolved candidates in `ambiguities[]`, and counts plus warnings in `run_summary`.
 
-  If `kept_count` > 0, `evidence_records[]` must not be empty. Reference retained evidence from `items`, `raw_mentions`, `exclusions`, or `ambiguities` with `evidence_record_ids` when the schema provides that field. For broad summary-style questions, use short claim labels such as "main question", "core method", or "principal finding" so the evidence registry is easier to audit. If nothing relevant is found, answer honestly and set `kept_count` to 0.
+  If `kept_count` > 0, every retained item must reference at least one `evidence_record_id` returned by `record_evidence`. Reference retained evidence from `items`, `raw_mentions`, `exclusions`, or `ambiguities` with `evidence_record_ids` when the schema provides that field. Do not include `evidence_records`, `verified_quote`, `source_fragments`, `source_span_ids`, chunk IDs, page numbers, section names, or any copied quote/provenance fields in the finalization payload; the backend will populate the canonical evidence registry from live `record_evidence` output after the ID-only payload is accepted. For broad summary-style questions, use short claim labels such as "main question", "core method", or "principal finding" so the evidence registry is easier to audit. If nothing relevant is found, answer honestly and set `kept_count` to 0.
 
-  Before your final answer, call `finalize_pdf_extraction` with the complete `PdfExtractionResultEnvelope` payload you intend to return. If finalization is rejected, repair only the reported issue and call `finalize_pdf_extraction` again. Do not finish until finalization returns `status: accepted`.
+  Before your final answer, call `finalize_pdf_extraction` with the complete `PdfExtractionFinalizationEnvelope` payload you intend to return. If finalization is rejected, repair only the reported issue and call `finalize_pdf_extraction` again. Do not finish until finalization returns `status: accepted`.
   </output_contract>

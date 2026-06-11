@@ -82,6 +82,7 @@ from src.lib.agent_studio.custom_agent_service import (
     CustomAgentAccessError,
     CustomAgentNotFoundError,
     clone_visible_agent_for_user,
+    custom_main_prompt_for_parent,
     custom_agent_to_dict,
     get_custom_agent_group_prompt,
     get_custom_agent_for_user,
@@ -268,6 +269,18 @@ def _merge_custom_agents_into_catalog(
             template_source,
             getattr(custom, "custom_prompt", ""),
         )
+        main_prompt = ""
+        main_prompt_error: Optional[str] = None
+        if overlay_normalization.status != "needs_review":
+            try:
+                main_prompt = custom_main_prompt_for_parent(
+                    template_source,
+                    getattr(custom, "custom_prompt", ""),
+                )
+            except ValueError as exc:
+                main_prompt_error = str(exc)
+        else:
+            main_prompt_error = overlay_normalization.warning
 
         for group_id, parent_group_rule in template_group_rules.items():
             override_content = normalized_overrides.get(group_id.upper())
@@ -284,16 +297,11 @@ def _merge_custom_agents_into_catalog(
 
         prompt_bundle = None
         prompt_layer_error = None
-        if template_source:
-            overlay_for_layer_projection = (
-                ""
-                if overlay_normalization.status == "needs_review"
-                else overlay_normalization.content
-            )
+        if template_source and not main_prompt_error:
             try:
                 prompt_bundle = build_agent_prompt_layers(
                     template_source,
-                    overlay=overlay_for_layer_projection,
+                    base_prompt_override=main_prompt,
                 )
             except Exception as exc:
                 logger.warning(
@@ -302,6 +310,8 @@ def _merge_custom_agents_into_catalog(
                     exc_info=(type(exc), exc, exc.__traceback__),
                 )
                 prompt_layer_error = "Prompt layer metadata could not be built."
+        elif main_prompt_error:
+            prompt_layer_error = "Custom agent prompt needs coordinator review."
         prompt_layers, effective_prompt_hash, layer_manifest = catalog_service.layer_projection(prompt_bundle)
 
         prompt_info = PromptInfo(
@@ -310,7 +320,7 @@ def _merge_custom_agents_into_catalog(
             description=custom.description or (
                 f"Custom agent from {template_name}" if template_name else "Custom scratch agent"
             ),
-            base_prompt=overlay_normalization.content,
+            base_prompt=main_prompt,
             source_file=f"custom_agent:{custom.id}",
             has_group_rules=bool(effective_group_rules),
             group_rules=effective_group_rules,
@@ -758,34 +768,24 @@ def _build_custom_agent_effective_prompt_bundle(
         )
 
     active_group_id = group_id if custom_group_rules_enabled else None
-    overlay_normalization = normalize_custom_overlay_for_parent(
-        parent_agent_key,
-        str(custom_agent.custom_prompt or ""),
-        group_id=active_group_id,
-    )
-    if overlay_normalization.status == "needs_review":
+    try:
+        main_prompt = custom_main_prompt_for_parent(
+            parent_agent_key,
+            getattr(custom_agent, "custom_prompt", ""),
+        )
+    except ValueError as exc:
         raise HTTPException(
             status_code=409,
             detail=(
-                "Custom agent overlay contains copied locked/core prompt text "
+                "Custom agent prompt contains copied locked/core prompt text "
                 "that needs coordinator review before preview."
             ),
-        )
-
-    overlay_parts = [overlay_normalization.content]
-    if active_group_id:
-        override_prompt = str(
-            custom_group_overrides.get(active_group_id.upper()) or ""
-        ).strip()
-        if override_prompt:
-            overlay_parts.append(
-                f"## Curator group overlay: {active_group_id.upper()}\n{override_prompt}"
-            )
-
+        ) from exc
     bundle = build_agent_prompt_layers(
         parent_agent_key,
         group_id=active_group_id,
-        overlay="\n\n".join(part for part in overlay_parts if part),
+        base_prompt_override=main_prompt,
+        group_prompt_overrides=custom_group_overrides,
     )
     return bundle, parent_agent_key, custom_group_rules_enabled
 
@@ -1863,13 +1863,34 @@ def _build_refresh_workshop_prompt_result(
                         "success": False,
                         "error": "No Agent Workshop group is selected for a group prompt refresh.",
                     }
+                saved_parent_agent_key = str(
+                    getattr(saved_custom_agent, "parent_agent_key", None)
+                    or getattr(saved_custom_agent, "template_source", None)
+                    or getattr(saved_custom_agent, "group_rules_component", None)
+                    or ""
+                ).strip()
                 saved_prompt = get_custom_agent_group_prompt(
-                    parent_agent_key=saved_custom_agent.parent_agent_key,
+                    parent_agent_key=saved_parent_agent_key,
                     group_id=target_group_id,
                     group_prompt_overrides=saved_custom_agent.group_prompt_overrides,
                 )
             else:
-                saved_prompt = str(saved_custom_agent.custom_prompt or "")
+                saved_parent_agent_key = str(
+                    getattr(saved_custom_agent, "parent_agent_key", None)
+                    or getattr(saved_custom_agent, "template_source", None)
+                    or getattr(saved_custom_agent, "group_rules_component", None)
+                    or ""
+                ).strip()
+                try:
+                    saved_prompt = custom_main_prompt_for_parent(
+                        saved_parent_agent_key,
+                        saved_custom_agent.custom_prompt,
+                    )
+                except ValueError as exc:
+                    return {
+                        "success": False,
+                        "error": str(exc),
+                    }
             saved_updated_at = saved_custom_agent.updated_at
         except (CustomAgentAccessError, CustomAgentNotFoundError):
             logger.warning(
@@ -2598,8 +2619,8 @@ async def _handle_tool_call(
             return {
                 "success": False,
                 "error": (
-                    "Prompt update targets the editable curator overlay only. "
-                    "Locked core/generated prompt contracts cannot be edited or copied into the overlay."
+                    "Prompt update targets editable main/base or group-specific instructions only. "
+                    "Locked core/generated prompt contracts cannot be edited or copied."
                 ),
             }
 

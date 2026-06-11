@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from .auth import get_auth_dependency
+from src.lib.group_rules import get_groups_from_cognito
 from src.models.sql.database import get_db
 from src.services.user_service import set_global_user_from_cognito
 
@@ -62,8 +63,15 @@ async def get_current_user_info(
     # This implements FR-005 (automatic user creation) and FR-006 (empty collections)
     db_user = set_global_user_from_cognito(db, user)
 
-    # Return user information
-    return db_user.to_dict()
+    response = db_user.to_dict()
+    provider_groups = user.get("groups")
+    if provider_groups is None:
+        provider_groups = user.get("cognito:groups", [])
+    if not isinstance(provider_groups, list):
+        provider_groups = [str(provider_groups)] if provider_groups else []
+    response["provider_groups"] = provider_groups
+    response["active_groups"] = get_groups_from_cognito(provider_groups)
+    return response
 
 
 # Export router

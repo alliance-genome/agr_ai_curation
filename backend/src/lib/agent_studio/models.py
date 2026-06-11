@@ -135,15 +135,15 @@ class PromptInfo(BaseModel):
     )
     custom_prompt_overlay_status: Optional[Literal["clean", "deduplicated", "needs_review"]] = Field(
         None,
-        description="Normalization status for custom-agent curator overlay text",
+        description="Legacy copied-layer normalization status for custom-agent main prompt text",
     )
     custom_prompt_removed_layer_kinds: List[str] = Field(
         default_factory=list,
-        description="Locked/generated parent layer kinds removed from a legacy custom overlay",
+        description="Locked/generated parent layer kinds removed from legacy custom-agent prompt text",
     )
     custom_prompt_warning: Optional[str] = Field(
         None,
-        description="Coordinator-review warning for ambiguous legacy custom overlay text",
+        description="Coordinator-review warning for ambiguous legacy custom-agent prompt text",
     )
     tools: List[str] = Field(
         default_factory=list,

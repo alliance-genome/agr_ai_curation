@@ -1256,6 +1256,32 @@ def _structured_finalization_has_check(
     return False
 
 
+def _structured_finalization_input_schema_name(
+    config: Mapping[str, Any],
+) -> Optional[str]:
+    schema_name = str(config.get("input_schema") or "").strip()
+    return schema_name or None
+
+
+def _structured_finalization_input_type(
+    config: Mapping[str, Any],
+) -> Optional[Any]:
+    schema_name = _structured_finalization_input_schema_name(config)
+    if not schema_name:
+        return None
+    try:
+        from src.lib.config import schema_discovery
+
+        return schema_discovery.resolve_output_schema(schema_name)
+    except Exception:
+        logger.warning(
+            "Unable to resolve structured finalization input schema %s",
+            schema_name,
+            exc_info=True,
+        )
+        return None
+
+
 def _structured_specialist_finalization_tool_name(
     config: Mapping[str, Any],
 ) -> Optional[str]:
@@ -2059,6 +2085,21 @@ def _structured_specialist_finalization_feedback(
 ) -> _StructuredSpecialistFinalizationFeedback:
     output_type_name = _output_type_name(expected_output_type)
     finalization_config = finalization_config or {}
+    input_schema_name = _structured_finalization_input_schema_name(finalization_config)
+    input_output_type = _structured_finalization_input_type(finalization_config)
+    if input_schema_name and input_output_type is None:
+        return _StructuredSpecialistFinalizationFeedback(
+            accepted_payload=None,
+            message=(
+                f"{output_type_name} rejected: structured finalization input "
+                f"schema {input_schema_name!r} could not be resolved."
+            ),
+            repair_instructions=[
+                "Report this agent configuration error; the configured finalization input schema is unavailable."
+            ],
+        )
+    input_output_type = input_output_type or expected_output_type
+    input_type_name = _output_type_name(input_output_type)
     try:
         payload = raw_result
         if hasattr(raw_result, "model_dump"):
@@ -2067,10 +2108,10 @@ def _structured_specialist_finalization_feedback(
             payload = json.loads(payload)
         if not isinstance(payload, dict):
             raise TypeError("finalization payload must be a JSON object")
-        validated = expected_output_type.model_validate(payload)
+        validated = input_output_type.model_validate(payload)
     except ValidationError as exc:
         message = (
-            f"{output_type_name} rejected: incompatible schema "
+            f"{input_type_name} rejected: incompatible schema "
             f"({_validation_error_summary(exc)})."
         )
         return _StructuredSpecialistFinalizationFeedback(
@@ -2081,7 +2122,7 @@ def _structured_specialist_finalization_feedback(
             ],
         )
     except Exception as exc:
-        message = f"{output_type_name} rejected: {exc}."
+        message = f"{input_type_name} rejected: {exc}."
         return _StructuredSpecialistFinalizationFeedback(
             accepted_payload=None,
             message=message,
@@ -4397,7 +4438,10 @@ async def run_specialist_with_events(
         ),
         tool_name=finalization_tool_name or "finalize_structured_result",
         agent_name=specialist_name,
-        output_type_name=_output_type_name(expected_output_type),
+        output_type_name=(
+            _structured_finalization_input_schema_name(finalization_config)
+            or _output_type_name(expected_output_type)
+        ),
         config=finalization_config,
         max_attempts=_structured_specialist_finalization_max_attempts(
             finalization_config

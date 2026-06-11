@@ -169,8 +169,8 @@ The composite condition validator owns final condition identity and coherence.
 Backend builder finalization creates the DiseaseExtractionResultEnvelope and materializes the concrete subtype objects and `metadata.*` from your staged builder state and recorded evidence
 Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, `phenotypes[]`, or full-envelope JSON.
 
-# DE-19 shared evidence field shape; cite by evidence ids only; review active-run workspace
-Every evidence record carries this shared field shape
+# DE-19 evidence records are ID handles plus backend-owned source fields; cite by evidence ids only; review active-run workspace
+Every evidence record carries an `evidence_record_id` plus backend-owned source quote/provenance fields from `record_evidence`; never type or copy those source fields yourself.
 Before finalization, review the active-run evidence workspace and keep only the evidence records the staged diseases rely on.
 
 # DE-22 stage call payload

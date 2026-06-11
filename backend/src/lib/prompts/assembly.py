@@ -142,6 +142,8 @@ def build_agent_core_prompt(agent_id: str) -> PromptLayerBundle:
 def build_agent_prompt_layers(
     agent_id: str,
     group_id: str | Sequence[str] | None = None,
+    base_prompt_override: str | None = None,
+    group_prompt_overrides: Mapping[str, str] | None = None,
     overlay: str | None = None,
     runtime_context: str | Mapping[str, Any] | Sequence[Any] | None = None,
 ) -> PromptLayerBundle:
@@ -151,27 +153,44 @@ def build_agent_prompt_layers(
     cache = get_all_active_prompts()
 
     layers = list(build_agent_core_prompt(canonical_agent_id).layers)
-    layers.append(
-        _prompt_template_layer(
-            _required_prompt_template(
-                cache,
-                agent_name=canonical_agent_id,
-                prompt_type="system",
-                group_id=None,
-            ),
-            layer_id=f"{canonical_agent_id}:base_prompt",
-            kind="base_prompt",
-            title="Editable base prompt",
-            provenance="prompt_template:system",
-            editable=True,
-            locked=False,
-        )
+    base_prompt = _required_prompt_template(
+        cache,
+        agent_name=canonical_agent_id,
+        prompt_type="system",
+        group_id=None,
     )
+    base_override = _normalize_optional_text(base_prompt_override)
+    if base_override:
+        layers.append(
+            _make_layer(
+                layer_id=f"{canonical_agent_id}:base_prompt:custom_override",
+                kind="base_prompt",
+                title="Custom agent main prompt",
+                content=base_override,
+                provenance="custom_agent:base_prompt_override",
+                editable=True,
+                locked=False,
+                source_ref="request:base_prompt_override",
+            )
+        )
+    else:
+        layers.append(
+            _prompt_template_layer(
+                base_prompt,
+                layer_id=f"{canonical_agent_id}:base_prompt",
+                kind="base_prompt",
+                title="Editable base prompt",
+                provenance="prompt_template:system",
+                editable=True,
+                locked=False,
+            )
+        )
 
     group_layer = _build_group_rules_layer(
         cache,
         canonical_agent_id=canonical_agent_id,
         group_ids=_normalize_group_ids(group_id),
+        overrides=group_prompt_overrides,
     )
     if group_layer is not None:
         layers.append(group_layer)
@@ -288,7 +307,7 @@ def _build_core_generated_content(agent: AgentDefinition) -> str:
     if runtime_contract:
         fragments.append(runtime_contract)
 
-    schema_key = str(agent.output_schema or "").strip()
+    schema_key = _model_facing_output_schema_key(agent)
     if schema_key:
         output_type = resolve_output_schema(schema_key)
         if output_type is None:
@@ -312,12 +331,30 @@ def _core_generated_source_ref(agent: AgentDefinition) -> str:
     schema_key = str(agent.output_schema or "").strip()
     if schema_key:
         refs.append(f"output_schema:{schema_key}")
+    input_schema_key = _structured_finalization_input_schema_key(agent)
+    if input_schema_key:
+        refs.append(f"structured_finalization_input_schema:{input_schema_key}")
     if agent.tools:
         refs.append("tools:agent_yaml+package_tool_registry")
     domain_pack_id = _agent_domain_pack_id(agent)
     if domain_pack_id:
         refs.append(f"domain_pack:{domain_pack_id}")
     return "|".join(refs)
+
+
+def _structured_finalization_input_schema_key(agent: AgentDefinition) -> str:
+    config = agent.structured_finalization
+    if not isinstance(config, Mapping):
+        return ""
+    if config.get("enabled") is False:
+        return ""
+    return str(config.get("input_schema") or "").strip()
+
+
+def _model_facing_output_schema_key(agent: AgentDefinition) -> str:
+    return _structured_finalization_input_schema_key(agent) or str(
+        agent.output_schema or ""
+    ).strip()
 
 
 def _build_compact_runtime_contract(agent: AgentDefinition) -> str:
@@ -344,9 +381,14 @@ def _build_compact_runtime_contract(agent: AgentDefinition) -> str:
             if tool_name in agent.tools
         )
 
-    if agent.output_schema:
+    schema_key = _model_facing_output_schema_key(agent)
+    if schema_key:
+        if schema_key == str(agent.output_schema or "").strip():
+            schema_context = "Output contract from agent.yaml"
+        else:
+            schema_context = "Structured finalization input contract from agent.yaml"
         lines.append(
-            f"- Output contract from agent.yaml: produce JSON matching {agent.output_schema}; "
+            f"- {schema_context}: produce JSON matching {schema_key}; "
             "the structured-output layer below is authoritative for final response shape."
         )
 
@@ -510,31 +552,48 @@ def _build_group_rules_layer(
     *,
     canonical_agent_id: str,
     group_ids: tuple[str, ...],
+    overrides: Mapping[str, str] | None = None,
 ) -> PromptLayer | None:
     if not group_ids:
         return None
 
-    prompts: list[PromptTemplate] = []
+    normalized_overrides = {
+        str(group_id or "").strip().upper(): str(content or "").strip()
+        for group_id, content in (overrides or {}).items()
+        if str(group_id or "").strip() and str(content or "").strip()
+    }
+    layer_parts: list[tuple[str, str, str]] = []
     for group in group_ids:
+        override = normalized_overrides.get(group)
+        if override:
+            layer_parts.append((group, override, f"request:group_prompt_override:{group}"))
+            continue
         prompt = cache.get(_prompt_cache_key(canonical_agent_id, "group_rules", group))
         if prompt is not None:
-            prompts.append(prompt)
+            layer_parts.append(
+                (group, _prompt_template_content(prompt), _prompt_template_source_ref(prompt))
+            )
 
-    if not prompts:
+    if not layer_parts:
         return None
 
     content = "\n\n".join(
-        f"## {prompt.group_id}\n{_prompt_template_content(prompt)}"
-        for prompt in prompts
+        f"## {group}\n{part_content}"
+        for group, part_content, _source_ref in layer_parts
     )
-    source_ref = ",".join(_prompt_template_source_ref(prompt) for prompt in prompts)
-    group_ref = "+".join(str(prompt.group_id) for prompt in prompts)
+    source_ref = ",".join(source_ref for _group, _content, source_ref in layer_parts)
+    group_ref = "+".join(group for group, _content, _source_ref in layer_parts)
+    provenance = (
+        "custom_agent:group_prompt_override"
+        if all(source_ref.startswith("request:group_prompt_override:") for _group, _content, source_ref in layer_parts)
+        else "prompt_template:group_rules"
+    )
     return _make_layer(
         layer_id=f"{canonical_agent_id}:group_rules:{group_ref}",
         kind="group_rules",
         title="Package/admin group rules",
         content=content,
-        provenance="prompt_template:group_rules",
+        provenance=provenance,
         editable=True,
         locked=False,
         source_ref=source_ref,

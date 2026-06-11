@@ -28,7 +28,7 @@ UPDATE_WORKSHOP_PROMPT_TOOL = {
     "description": """Propose a prompt update for the current Agent Workshop draft.
 
 Use this when the curator asks you to rewrite, replace, or significantly refactor
-their editable workshop layers: the curator overlay ("main") or selected group
+their editable workshop layers: the main/base prompt ("main") or selected group
 override ("group"). Backend-owned core/generated layers and inherited base prompts
 are read-only context and must not be copied into updated_prompt.
 This tool does NOT auto-apply or auto-save changes.
@@ -43,7 +43,7 @@ legacy quote-generation guidance.
             "target_prompt": {
                 "type": "string",
                 "enum": ["main", "group", "mod"],
-                "description": "Which editable workshop layer to update. Use 'main' for the curator overlay and 'group' for the selected group prompt override. Legacy 'mod' is accepted during migration.",
+                "description": "Which editable workshop layer to update. Use 'main' for the main/base prompt and 'group' for the selected group prompt override. Legacy 'mod' is accepted during migration.",
                 "default": "main",
             },
             "target_group_id": {

@@ -294,6 +294,7 @@ def test_core_plus_org_custom_runtime_loads_without_alliance_package(monkeypatch
     assert set(schemas) == {
         "CurationPrepAgentOutput",
         "DemoValidationEnvelope",
+        "PdfExtractionFinalizationEnvelope",
         "PdfExtractionResultEnvelope",
     }
     demo_schema = schema_discovery.get_schema_for_agent("demo_agent")

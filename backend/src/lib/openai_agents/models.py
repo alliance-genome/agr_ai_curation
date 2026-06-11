@@ -4,7 +4,7 @@ Shared Pydantic models for OpenAI Agents structured outputs.
 
 from datetime import datetime
 from typing import Any, List, Literal, Optional
-from pydantic import BaseModel, Field, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from src.schemas.curation_prep import CurationPrepAgentOutput  # noqa: F401 - re-exported here for runtime schema discovery.
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
@@ -141,6 +141,8 @@ class PdfEvidenceRecord(BaseModel):
 class PdfMentionCandidate(BaseModel):
     """Raw mention harvested from the document before retention/exclusion."""
 
+    model_config = ConfigDict(extra="forbid")
+
     mention: str = Field(
         ...,
         description="Mention text exactly as written in the paper"
@@ -157,6 +159,8 @@ class PdfMentionCandidate(BaseModel):
 
 class PdfExtractionItem(BaseModel):
     """Retained generic extraction item for document-grounded answers."""
+
+    model_config = ConfigDict(extra="forbid")
 
     label: str = Field(
         ...,
@@ -183,6 +187,8 @@ class PdfExtractionItem(BaseModel):
 class PdfExclusionRecord(BaseModel):
     """Candidate rejected during generic PDF extraction."""
 
+    model_config = ConfigDict(extra="forbid")
+
     mention: str = Field(
         ...,
         description="Mention or candidate label that was excluded"
@@ -208,6 +214,8 @@ class PdfExclusionRecord(BaseModel):
 class PdfAmbiguityRecord(BaseModel):
     """Ambiguous candidate requiring curator follow-up."""
 
+    model_config = ConfigDict(extra="forbid")
+
     mention: str = Field(
         ...,
         description="Ambiguous mention or candidate label"
@@ -232,6 +240,8 @@ class PdfAmbiguityRecord(BaseModel):
 
 class PdfExtractionRunSummary(BaseModel):
     """Run-level counts and warnings for generic PDF extraction."""
+
+    model_config = ConfigDict(extra="forbid")
 
     candidate_count: int = Field(
         0,
@@ -260,7 +270,7 @@ class PdfExtractionRunSummary(BaseModel):
 
 
 class PdfExtractionResultEnvelope(BaseModel):
-    """Structured output for evidence-backed generic PDF extraction."""
+    """Canonical backend output for evidence-backed generic PDF extraction."""
 
     answer: str = Field(
         ...,
@@ -280,7 +290,10 @@ class PdfExtractionResultEnvelope(BaseModel):
     )
     evidence_records: List[PdfEvidenceRecord] = Field(
         default_factory=list,
-        description="Canonical verified evidence registry populated from record_evidence tool calls"
+        description=(
+            "Canonical verified evidence registry populated by the backend from "
+            "record_evidence tool calls; this is not model-authored quote text"
+        )
     )
     normalization_notes: List[str] = Field(
         default_factory=list,
@@ -293,6 +306,57 @@ class PdfExtractionResultEnvelope(BaseModel):
     ambiguities: List[PdfAmbiguityRecord] = Field(
         default_factory=list,
         description="Ambiguous candidates requiring curator follow-up"
+    )
+    run_summary: PdfExtractionRunSummary = Field(
+        default_factory=PdfExtractionRunSummary,
+        description="Run-level extraction counts and warnings"
+    )
+
+
+class PdfExtractionFinalizationEnvelope(BaseModel):
+    """Model-facing ID-only finalization payload for generic PDF extraction."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    answer: str = Field(
+        ...,
+        description="Concise plain-language answer for the supervisor to present to the user"
+    )
+    summary: Optional[str] = Field(
+        None,
+        description="Brief run summary or caveat summary for audit views"
+    )
+    items: List[PdfExtractionItem] = Field(
+        default_factory=list,
+        description=(
+            "Retained items or claim labels. Cite evidence only with "
+            "evidence_record_ids returned by record_evidence."
+        )
+    )
+    raw_mentions: List[PdfMentionCandidate] = Field(
+        default_factory=list,
+        description=(
+            "Raw candidates considered during extraction. Cite evidence only "
+            "with evidence_record_ids returned by record_evidence."
+        )
+    )
+    normalization_notes: List[str] = Field(
+        default_factory=list,
+        description="Normalization or interpretation notes for curator review"
+    )
+    exclusions: List[PdfExclusionRecord] = Field(
+        default_factory=list,
+        description=(
+            "Candidates excluded from the final answer. Cite evidence only with "
+            "evidence_record_ids returned by record_evidence."
+        )
+    )
+    ambiguities: List[PdfAmbiguityRecord] = Field(
+        default_factory=list,
+        description=(
+            "Ambiguous candidates requiring curator follow-up. Cite evidence "
+            "only with evidence_record_ids returned by record_evidence."
+        )
     )
     run_summary: PdfExtractionRunSummary = Field(
         default_factory=PdfExtractionRunSummary,

@@ -123,14 +123,7 @@ content: |
   </workflow>
 
   <evidence_record_contract>
-  Every verified evidence record you keep uses this shared field shape, copied from the `record_evidence` response, never typed by you:
-  - `entity`
-  - `verified_quote`
-  - `page`
-  - `section`
-  - optional `subsection`
-  - `chunk_id`
-  - optional `figure_reference`
+  Every verified evidence record you keep has an `evidence_record_id` plus backend-owned source quote/provenance fields created by `record_evidence`; never type or copy those source fields yourself.
 
   Apply that shape consistently:
   - `stage_gene_expression_observation.evidence_record_ids`: verified evidence supporting the retained extraction item.
@@ -176,7 +169,7 @@ content: |
   - Put spatial context under `expression_pattern.where_expressed`, using only resolver-backed `anatomical_structure` / `cellular_component` selector values. At least one of `anatomical_structure` or `cellular_component` must be present; cellular-component-only sites such as nucleus or cytoplasm are valid when helper routing points to the GO cellular-component slot.
   - Put temporal context under `when_expressed_stage_name` and, when available, `expression_pattern.when_expressed.developmental_stage_start.name`, only when supported by resolver output or explicit paper-provided identifiers. Otherwise preserve the literal stage phrase in metadata/provenance as unresolved context.
   - Put assay context under `expression_experiment.expression_assay_used` only from resolver-backed MMO/assay options or explicit paper-provided identifiers. If no resolver result is available, preserve the explicit assay label from the paper as unresolved metadata rather than inventing a CURIE.
-  - For Gene Expression 0.7.0, set `expression_experiment.single_reference` to the same resolved reference selector as annotation-level `single_reference`, and `expression_experiment.entity_assayed` to the same gene selector as `expression_annotation_subject`. Validators/materializers own final IDs.
+  - Set `expression_experiment.single_reference` to the same resolved reference selector as annotation-level `single_reference`, and `expression_experiment.entity_assayed` to the same gene selector as `expression_annotation_subject`. Validators/materializers own final IDs.
   - Preserve reagent, genotype, reporter, construct, strain, specimen, and allele context under the explicit LinkML-backed paths when a resolver-backed selector or placeholder is available: `expression_experiment.detection_reagents`, `expression_experiment.specimen_genomic_model`, and `expression_experiment.specimen_alleles`. When no resolver-backed identifier or safe placeholder exists, keep the exact paper text in metadata with the relevant field_path and unresolved reason.
   - Stage experimental conditions via the `condition_relations` parameter of `stage_gene_expression_observation` as described in `<experimental_condition_rules>`, NOT as field-addressed metadata.
   - Do not stage `evidence_text`, `evidence_page_numbers`, `evidence_figure_references`, or `evidence_internal_citations` inside payload.

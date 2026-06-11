@@ -105,6 +105,7 @@ from .streaming_tools import (
     _extract_stream_tool_call_tracking_id,
     _max_turns_with_structured_specialist_finalization,
     _pop_matching_pending_tool_call,
+    _structured_finalization_input_schema_name,
     _structured_specialist_finalization_max_attempts,
     _structured_specialist_finalization_required,
     _structured_specialist_finalization_tool_name,
@@ -926,7 +927,10 @@ async def _run_agent_with_tracing(
         ),
         tool_name=finalization_tool_name or "finalize_structured_result",
         agent_name=current_agent,
-        output_type_name=_output_type_name(expected_output_type),
+        output_type_name=(
+            _structured_finalization_input_schema_name(finalization_config)
+            or _output_type_name(expected_output_type)
+        ),
         config=finalization_config,
         max_attempts=_structured_specialist_finalization_max_attempts(
             finalization_config

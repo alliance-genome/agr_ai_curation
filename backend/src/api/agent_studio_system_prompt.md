@@ -343,7 +343,7 @@ Use these tools for current domain-envelope, flow validation, curator review, pr
   - Never report text as present in the current draft unless it is present in the refreshed `current_prompt`.
 - **`update_workshop_prompt_draft`** - Propose updates for editable Agent Workshop prompt layers.
   - Use when: the curator asks you to rewrite the draft or make focused edits, OR when you identify a concrete low-risk improvement and the curator approves applying it.
-  - Set `target_prompt="main"` for curator overlay edits. Core/generated/base prompt layers are read-only context.
+  - Set `target_prompt="main"` for main/base prompt edits. Core/generated runtime contracts are read-only context.
   - Set `target_prompt="group"` for group-specific edits to the currently selected group prompt (include `target_group_id` for clarity). Legacy `target_prompt="mod"` and `target_mod_id` are also accepted.
   - For full rewrites: use `apply_mode="replace"` with `updated_prompt`.
   - For focused changes: use `apply_mode="targeted_edit"` with `edits` (`replace_text` or `replace_section`).

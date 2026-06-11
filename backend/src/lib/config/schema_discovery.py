@@ -46,11 +46,15 @@ _initialized: bool = False
 def _builtin_output_schemas() -> Dict[str, Type[BaseModel]]:
     """Return backend-owned schemas referenced by first-party agent definitions."""
 
-    from src.lib.openai_agents.models import PdfExtractionResultEnvelope
+    from src.lib.openai_agents.models import (
+        PdfExtractionFinalizationEnvelope,
+        PdfExtractionResultEnvelope,
+    )
     from src.schemas.curation_prep import CurationPrepAgentOutput
 
     return {
         "CurationPrepAgentOutput": CurationPrepAgentOutput,
+        "PdfExtractionFinalizationEnvelope": PdfExtractionFinalizationEnvelope,
         "PdfExtractionResultEnvelope": PdfExtractionResultEnvelope,
     }
 

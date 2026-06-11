@@ -8,6 +8,7 @@ import pytest
 from src.lib.agent_studio.custom_agent_service import (
     CUSTOM_AGENT_PREFIX,
     create_custom_agent,
+    custom_main_prompt_for_parent,
     get_custom_agent_group_prompt,
     make_custom_agent_id,
     normalize_custom_overlay_for_parent,
@@ -120,7 +121,87 @@ def test_normalize_custom_overlay_flags_mixed_exact_and_ambiguous_locked_copy(mo
         "Keep curator guidance."
     )
     assert result.removed_layer_kinds == ["core_static"]
-    assert result.warning
+    assert "Custom-agent prompt" in (result.warning or "")
+
+
+def test_custom_main_prompt_expands_legacy_curator_overlay_with_parent_base(monkeypatch):
+    import src.lib.agent_studio.custom_agent_service as service
+
+    layers = (
+        SimpleNamespace(kind="core_static", content="LOCKED CORE"),
+        SimpleNamespace(kind="base_prompt", content="PARENT BASE"),
+    )
+    monkeypatch.setattr(
+        service,
+        "build_agent_prompt_layers",
+        lambda *_args, **_kwargs: SimpleNamespace(layers=layers),
+    )
+
+    result = custom_main_prompt_for_parent(
+        "gene_expression",
+        "<curator_overlay>\nKeep this ZFIN-specific behavior.\n</curator_overlay>",
+    )
+
+    assert result == (
+        "PARENT BASE\n\n"
+        "## Custom instructions\n"
+        "Keep this ZFIN-specific behavior."
+    )
+
+
+def test_custom_main_prompt_leaves_full_main_prompt_unchanged(monkeypatch):
+    import src.lib.agent_studio.custom_agent_service as service
+
+    def fail_build(*_args, **_kwargs):
+        raise AssertionError("parent prompt should not be loaded")
+
+    monkeypatch.setattr(service, "build_agent_prompt_layers", fail_build)
+
+    assert custom_main_prompt_for_parent(
+        "gene_expression",
+        "Full editable base prompt.\n\n## Custom instructions\nKeep this.",
+    ) == "Full editable base prompt.\n\n## Custom instructions\nKeep this."
+
+
+def test_custom_main_prompt_deduplicates_legacy_copied_locked_layers(monkeypatch):
+    import src.lib.agent_studio.custom_agent_service as service
+
+    layers = (
+        SimpleNamespace(kind="core_static", content="Platform Runtime Contract\nDo not edit."),
+        SimpleNamespace(kind="base_prompt", content="PARENT BASE"),
+    )
+    monkeypatch.setattr(
+        service,
+        "build_agent_prompt_layers",
+        lambda *_args, **_kwargs: SimpleNamespace(layers=layers),
+    )
+
+    result = custom_main_prompt_for_parent(
+        "gene_expression",
+        "Platform Runtime Contract\nDo not edit.\n\nPARENT BASE\n\nKeep curator guidance.",
+    )
+
+    assert result == (
+        "PARENT BASE\n\n"
+        "## Custom instructions\n"
+        "Keep curator guidance."
+    )
+
+
+def test_custom_main_prompt_rejects_ambiguous_locked_prompt_copy(monkeypatch):
+    import src.lib.agent_studio.custom_agent_service as service
+
+    monkeypatch.setattr(
+        service,
+        "build_agent_prompt_layers",
+        lambda *_args, **_kwargs: SimpleNamespace(layers=()),
+    )
+
+    with pytest.raises(ValueError, match="Custom-agent prompt"):
+        custom_main_prompt_for_parent(
+            "gene_expression",
+            "Partial Platform Runtime Contract prose with curator edits.",
+        )
 
 
 def test_get_custom_agent_group_prompt_prefers_override():
@@ -263,6 +344,21 @@ def test_create_custom_agent_rejects_locked_group_prompt_override():
                 "WB": "Generated runtime contract\nCurator tried to copy this.",
             },
         )
+
+
+def test_plain_structured_output_language_is_allowed_in_editable_prompts():
+    import src.lib.agent_studio.custom_agent_service as service
+
+    prompt = (
+        "Use structured output when it helps the curator compare candidate "
+        "rows, but keep the explanation concise."
+    )
+
+    service.reject_locked_prompt_markers(prompt, target="Custom agent main prompt")
+    normalization = service.normalize_custom_overlay_for_parent(None, prompt)
+
+    assert normalization.status == "clean"
+    assert normalization.content == prompt
 
 
 def test_create_custom_agent_rejects_non_attachable_tool_ids(monkeypatch):

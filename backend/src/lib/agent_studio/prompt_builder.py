@@ -568,7 +568,7 @@ Configured model options:
 {model_catalog_text}
 
 Use this workshop context to give concrete prompt-engineering feedback, especially:
-1. how to improve the editable curator overlay structure and specificity,
+1. how to improve the editable main/base prompt structure and specificity,
 2. what to test next in flow execution (and when to compare with the template-source prompt),
 3. how group rules may interact with the current draft.
 4. proactively identify concrete prompt improvements during normal conversation and suggest them.
@@ -579,7 +579,7 @@ Use this workshop context to give concrete prompt-engineering feedback, especial
 6. for PDF evidence extraction prompts, preserve the span workflow: `search_document` finds candidate chunks, `read_chunk` exposes deterministic `evidence_spans[].span_id`, and `record_evidence(span_ids=[...])` creates backend-copied evidence. Do not propose instructions that ask agents to generate quote strings, fuzzy-repair quotes, or confirm claims with a separate LLM.
 7. before making any draft update call, ask for permission in plain language (e.g., "Want me to apply this as a targeted edit?").
 8. after clear approval, call `update_workshop_prompt_draft`:
-   - set `target_prompt="main"` for editable curator-overlay behavior changes,
+   - set `target_prompt="main"` for editable main/base prompt behavior changes,
    - set `target_prompt="group"` for editable group-specific override wording/rules and include `target_group_id`,
    - full rewrite: `apply_mode="replace"` and provide `updated_prompt`,
    - small scoped tweaks: `apply_mode="targeted_edit"` and provide `edits`.

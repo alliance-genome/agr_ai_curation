@@ -6,9 +6,10 @@
 # (locked core + rewritten base prompt). Relocations/deletions are tracked in
 # pdf.dropped.json. This is an ENVELOPE QA agent (output_schema:
 # PdfExtractionResultEnvelope), NOT a builder extractor: it hand-authors the
-# envelope (answer/items/raw_mentions/evidence_records/normalization_notes/
-# exclusions/ambiguities/run_summary are model-authored TOP-LEVEL fields; the
-# envelope has NO metadata.*). So there is no stage/finalize workflow, no
+# PdfExtractionFinalizationEnvelope ID-only payload
+# (answer/items/raw_mentions/normalization_notes/exclusions/ambiguities/run_summary);
+# backend finalization hydrates canonical evidence_records[] from record_evidence.
+# The envelope has NO metadata.*. So there is no stage/finalize workflow, no
 # validator_handoff, and no .invariants.txt ordered builder workflow. The
 # metadata exclude=don't-stage template rule is N/A (exclusions[] is a real
 # model-authored channel). PdfExclusionRecord.reason_code is a free str with no
@@ -49,8 +50,8 @@ Do not invent quotes, page numbers, identifiers, exclusions, or document finding
 # PDF-14 nearby generic context is not evidence; quote must explicitly support
 Do not treat nearby generic context as evidence for a retained item; the verified quote must explicitly support that entity, method, result, or claim label.
 
-# PDF-15 no chunk IDs in answer; chunk IDs only inside evidence_records[]
-Do not put chunk IDs in `answer`; keep chunk IDs only inside `evidence_records[]`.
+# PDF-15 no provenance fields in answer
+Do not put chunk IDs, page numbers, section names, span IDs, or quote text in `answer`.
 
 # PDF-16 normalized_id only when a stable identifier is available
 Populate `normalized_id` only when the paper or available tooling provides a stable identifier.
@@ -98,16 +99,19 @@ For comprehensive requests ("all genes", "every strain", "everything about X"), 
 # PDF-30c parallel batches; exact terms + variations before a negative result
 Prefer parallel search batches for multiple terms, aliases, or variants, and try exact terms and common variations in one batch before reporting a negative result.
 
-# PDF-31 populate the envelope fields, not extra prose sections; answer has no Evidence/Citations/Sources headers
-Populate the `PdfExtractionResultEnvelope` fields rather than adding extra prose-only sections.
+# PDF-31 populate the ID-only finalization envelope fields, not extra prose sections; answer has no Evidence/Citations/Sources headers
+Populate the `PdfExtractionFinalizationEnvelope` fields rather than adding extra prose-only sections.
 Put the concise curator-facing answer in `answer` (no markdown sections labeled Evidence, Citations, or Sources) and a short audit-style caveat in `summary`.
-Record retained items or claim labels in `items[]`, considered candidates in `raw_mentions[]`, all verified quotes in `evidence_records[]`, interpretation/grouping caveats in `normalization_notes[]`, excluded candidates with their `reason_code` in `exclusions[]`, unresolved candidates in `ambiguities[]`, and counts plus warnings in `run_summary`.
+Record retained items or claim labels in `items[]`, considered candidates in `raw_mentions[]`, interpretation/grouping caveats in `normalization_notes[]`, excluded candidates with their `reason_code` in `exclusions[]`, unresolved candidates in `ambiguities[]`, and counts plus warnings in `run_summary`.
 
-# PDF-32 kept_count > 0 implies evidence_records[] non-empty
-If `kept_count` > 0, `evidence_records[]` must not be empty.
+# PDF-32 kept_count > 0 implies retained items cite record_evidence IDs
+If `kept_count` > 0, every retained item must reference at least one `evidence_record_id` returned by `record_evidence`.
 
 # PDF-33 reference retained evidence with evidence_record_ids
 Reference retained evidence from `items`, `raw_mentions`, `exclusions`, or `ambiguities` with `evidence_record_ids` when the schema provides that field.
+
+# PDF-33b model must not include quote/provenance fields in finalization payload
+Do not include `evidence_records`, `verified_quote`, `source_fragments`, `source_span_ids`, chunk IDs, page numbers, section names, or any copied quote/provenance fields in the finalization payload
 
 # PDF-34 short claim labels for broad summary questions
 For broad summary-style questions, use short claim labels such as "main question", "core method", or "principal finding" so the evidence registry is easier to audit.

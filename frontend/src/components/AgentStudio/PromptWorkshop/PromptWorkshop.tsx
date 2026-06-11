@@ -73,6 +73,7 @@ import {
   updateCustomAgent,
 } from '@/services/agentStudioService'
 import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
+import { useAuth } from '@/contexts/AuthContext'
 import DomainEnvelopeMetadataPanel from '../DomainEnvelopeMetadataPanel'
 
 const FALLBACK_ICON_OPTIONS = ['🔧', '🧬', '📄', '🔍', '🧪', '📊', '🧠', '⚙️', '✨', '📝', '📚', '🧩']
@@ -299,12 +300,23 @@ const REASONING_HELP_TEXT = [
   '• high: slowest, use only for hard ambiguity',
 ].join('\n')
 
-function formatLayerKind(kind: string): string {
-  return kind
-    .split('_')
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ')
+function resolveUserGroupIds(userGroups: string[] | undefined, availableGroupIds: string[]): string[] {
+  if (!userGroups || userGroups.length === 0 || availableGroupIds.length === 0) return []
+  const available = new Set(availableGroupIds.map((group) => group.toUpperCase()))
+  const resolved: string[] = []
+  for (const rawGroup of userGroups) {
+    const normalized = rawGroup.trim().toUpperCase()
+    if (!normalized) continue
+    const direct = available.has(normalized) ? normalized : ''
+    const inferred = direct || availableGroupIds.find((groupId) => {
+      const loweredGroup = rawGroup.trim().toLowerCase()
+      return loweredGroup === groupId.toLowerCase() || loweredGroup.includes(groupId.toLowerCase())
+    })?.toUpperCase() || ''
+    if (inferred && !resolved.includes(inferred)) {
+      resolved.push(inferred)
+    }
+  }
+  return resolved
 }
 
 interface PromptWorkshopProps {
@@ -329,6 +341,7 @@ function PromptWorkshop({
   incomingPromptUpdate = null,
 }: PromptWorkshopProps) {
   const { agents: agentMetadata, refresh: refreshAgentMetadata } = useAgentMetadata()
+  const { user: authUser } = useAuth()
 
   const [parentAgentId, setParentAgentId] = useState('')
   const [workshopSection, setWorkshopSection] = useState<'setup' | 'prompt' | 'tools' | 'reference'>('setup')
@@ -449,6 +462,13 @@ function PromptWorkshop({
     () => Object.keys(groupRuleSourceAgent?.group_rules || {}).sort(),
     [groupRuleSourceAgent]
   )
+  const loggedInGroupIds = useMemo(
+    () => resolveUserGroupIds(
+      authUser?.groups?.length ? authUser.groups : authUser?.providerGroups,
+      availableGroupIds
+    ),
+    [authUser?.groups, authUser?.providerGroups, availableGroupIds]
+  )
 
   const selectedGroupId = useMemo(() => groupId.trim().toUpperCase(), [groupId])
 
@@ -488,32 +508,8 @@ function PromptWorkshop({
     .join('\n\n') || parentAgent?.base_prompt || ''
   const overlayStatus = selectedCustomAgent?.custom_prompt_overlay_status
   const overlayWarning = selectedCustomAgent?.custom_prompt_warning || ''
-  const removedLayerKinds = selectedCustomAgent?.custom_prompt_removed_layer_kinds || []
-  const markedCustomPrompt = useMemo(() => {
-    if (!customPrompt.trim()) return ''
-    if (overlayStatus === 'needs_review') {
-      return [
-        '[Custom overlay needs coordinator review before runtime use]',
-        overlayWarning || 'This overlay contains locked/core prompt markers that could not be safely separated from curator-authored guidance.',
-        customPrompt,
-      ].join('\n\n')
-    }
-    if (overlayStatus === 'deduplicated') {
-      const removedLayers = removedLayerKinds.map(formatLayerKind).join(', ') || 'locked parent layers'
-      return [
-        `[Custom overlay deduplicated: removed copied ${removedLayers}]`,
-        customPrompt,
-      ].join('\n\n')
-    }
-    return customPrompt
-  }, [customPrompt, overlayStatus, overlayWarning, removedLayerKinds])
-  const effectivePromptPreview = [
-    parentCorePrompt,
-    parentGeneratedContract,
-    parentBasePrompt,
-    includeGroupRules ? selectedGroupPromptForContext : '',
-    markedCustomPrompt,
-  ].filter((part) => part && part.trim()).join('\n\n')
+  const loggedInAsLabel = authUser?.name || authUser?.email || authUser?.uid || 'the current user'
+  const loggedInGroupsLabel = loggedInGroupIds.length > 0 ? loggedInGroupIds.join(', ') : 'No matching group detected'
 
   const hasSelectedGroupOverride = useMemo(
     () => Boolean(selectedGroupId && Object.prototype.hasOwnProperty.call(groupPromptOverrides, selectedGroupId)),
@@ -806,8 +802,8 @@ function PromptWorkshop({
 
       setName(parentAgent ? `${parentAgent.agent_name} (Custom)` : '')
       setDescription('')
-      setCustomPrompt('')
-      setDebouncedPromptDraft('')
+      setCustomPrompt(parentBasePrompt)
+      setDebouncedPromptDraft(parentBasePrompt)
       setGroupPromptOverrides({})
       setDebouncedGroupPromptOverrides({})
       setIncludeGroupRules(true)
@@ -824,8 +820,9 @@ function PromptWorkshop({
 
     setName(selectedCustomAgent.name)
     setDescription(selectedCustomAgent.description || '')
-    setCustomPrompt(selectedCustomAgent.custom_prompt)
-    setDebouncedPromptDraft(selectedCustomAgent.custom_prompt)
+    const savedMainPrompt = selectedCustomAgent.custom_prompt || parentBasePrompt
+    setCustomPrompt(savedMainPrompt)
+    setDebouncedPromptDraft(savedMainPrompt)
     setGroupPromptOverrides(selectedCustomAgent.group_prompt_overrides || {})
     setDebouncedGroupPromptOverrides(selectedCustomAgent.group_prompt_overrides || {})
     setIncludeGroupRules(selectedCustomAgent.include_group_rules)
@@ -847,6 +844,7 @@ function PromptWorkshop({
     defaultModelId,
     gettingStartedMode,
     parentAgent,
+    parentBasePrompt,
     selectedCloneSource,
     selectedCustomAgent,
     selectedTemplate,
@@ -857,10 +855,28 @@ function PromptWorkshop({
       if (groupId) setGroupId('')
       return
     }
-    if (!groupId || !availableGroupIds.includes(groupId)) {
-      setGroupId(availableGroupIds[0])
+    if (groupId && availableGroupIds.includes(groupId)) {
+      return
     }
-  }, [availableGroupIds, groupId])
+
+    const overrideGroup = Object.keys(groupPromptOverrides)
+      .map((group) => group.trim().toUpperCase())
+      .find((group) => availableGroupIds.includes(group))
+    if (overrideGroup) {
+      setGroupId(overrideGroup)
+      return
+    }
+
+    const loggedInGroup = loggedInGroupIds.find((group) => availableGroupIds.includes(group))
+    if (loggedInGroup) {
+      setGroupId(loggedInGroup)
+      return
+    }
+
+    if (groupId) {
+      setGroupId('')
+    }
+  }, [availableGroupIds, groupId, groupPromptOverrides, loggedInGroupIds])
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -1834,26 +1850,21 @@ function PromptWorkshop({
             <Stack spacing={1}>
               <StyledAccordion defaultExpanded={true}>
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Your custom instructions</Typography>
+                  <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Main / base prompt</Typography>
                 </AccordionSummary>
                 <AccordionDetails>
                   {overlayStatus === 'needs_review' && (
                     <Alert severity="warning" sx={{ mb: 1.5 }}>
-                      {overlayWarning || 'This saved overlay contains locked/core prompt markers that need coordinator review before the final prompt is trusted.'}
-                    </Alert>
-                  )}
-                  {overlayStatus === 'deduplicated' && (
-                    <Alert severity="info" sx={{ mb: 1.5 }}>
-                      Removed copied locked/template layers from this overlay: {removedLayerKinds.map(formatLayerKind).join(', ') || 'parent prompt layers'}.
+                      {overlayWarning || 'This saved main prompt contains locked/core prompt markers that need coordinator review before the final prompt is trusted.'}
                     </Alert>
                   )}
                   <TextField
                     fullWidth
                     multiline
-                    minRows={12}
+                    minRows={14}
                     value={customPrompt}
                     onChange={(event) => setCustomPrompt(event.target.value)}
-                    placeholder="Write any extra instructions you want this agent to follow. They're added on top of the agent's built-in instructions, so you don't need to repeat anything that's already there."
+                    placeholder="Edit the main prompt for this custom agent."
                     variant="outlined"
                     sx={{
                       '& .MuiInputBase-root': {
@@ -1870,14 +1881,110 @@ function PromptWorkshop({
                 </AccordionDetails>
               </StyledAccordion>
 
-              <StyledAccordion defaultExpanded={false}>
+              <StyledAccordion defaultExpanded={true}>
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Final instructions (preview)</Typography>
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Group-specific instructions</Typography>
+                    {hasAnyGroupOverrides && (
+                      <Chip size="small" label={`${Object.keys(groupPromptOverrides).length} override${Object.keys(groupPromptOverrides).length !== 1 ? 's' : ''}`} color="warning" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
+                    )}
+                  </Stack>
                 </AccordionSummary>
                 <AccordionDetails>
-                  <PromptLayerPreview>
-                    {effectivePromptPreview || 'No effective prompt preview is available yet.'}
-                  </PromptLayerPreview>
+                  <Stack spacing={1.5}>
+                    <Alert severity="info" sx={{ borderRadius: 1.5 }}>
+                      Logged in as {loggedInAsLabel}. Group membership: {loggedInGroupsLabel}.
+                      {selectedGroupId ? ` Editing ${selectedGroupId} instructions.` : ' Select a group to edit its instructions.'}
+                    </Alert>
+                    <Stack direction="row" spacing={0.5} alignItems="center">
+                      <FormControlLabel
+                        sx={{ ml: 0, mr: 0 }}
+                        control={
+                          <Switch
+                            size="small"
+                            checked={includeGroupRules}
+                            onChange={(event) => setIncludeGroupRules(event.target.checked)}
+                          />
+                        }
+                        label={
+                          <Typography variant="body2" color="text.secondary">
+                            Add group prompts at runtime
+                          </Typography>
+                        }
+                      />
+                      <Tooltip
+                        title="When enabled, group-specific instructions are included at runtime for this agent."
+                        placement="top"
+                      >
+                        <IconButton size="small" sx={{ p: 0.25 }} aria-label="group prompt runtime help">
+                          <HelpOutlineIcon sx={{ fontSize: 14 }} />
+                        </IconButton>
+                      </Tooltip>
+                    </Stack>
+
+                    {availableGroupIds.length === 0 ? (
+                      <Typography variant="body2" color="text.secondary">
+                        This template has no group-specific prompts to override.
+                      </Typography>
+                    ) : (
+                      <Stack spacing={1.5}>
+                        <Stack direction="row" spacing={1} alignItems="center">
+                          <Select
+                            size="small"
+                            value={groupId}
+                            displayEmpty
+                            onChange={(event) => setGroupId(event.target.value)}
+                            sx={{ minWidth: 180 }}
+                          >
+                            <MenuItem value="">
+                              Select group
+                            </MenuItem>
+                            {availableGroupIds.map((availableGroupId) => (
+                              <MenuItem key={availableGroupId} value={availableGroupId}>
+                                {availableGroupId}
+                              </MenuItem>
+                            ))}
+                          </Select>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            onClick={handleResetSelectedGroupPrompt}
+                            disabled={!hasSelectedGroupOverride}
+                          >
+                            Reset to Template
+                          </Button>
+                        </Stack>
+                        <TextField
+                          fullWidth
+                          multiline
+                          minRows={10}
+                          label={selectedGroupId ? `${selectedGroupId} instructions` : 'Group-specific instructions'}
+                          value={selectedGroupPrompt}
+                          onChange={(event) => handleSelectedGroupPromptChange(event.target.value)}
+                          disabled={!selectedGroupId}
+                          sx={{
+                            '& .MuiInputBase-root': {
+                              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                              fontSize: '0.8rem',
+                              backgroundColor: (theme) => alpha(theme.palette.common.black, 0.15),
+                              borderRadius: 1.5,
+                            },
+                            '& .MuiOutlinedInput-notchedOutline': {
+                              borderColor: (theme) => alpha(theme.palette.divider, 0.3),
+                            },
+                          }}
+                        />
+                        <Typography variant="caption" color="text.secondary">
+                          {selectedGroupId
+                            ? hasSelectedGroupOverride
+                              ? `Custom override active for ${selectedGroupId}.`
+                              : `Using template ${selectedGroupId} prompt content.`
+                            : 'No group selected.'}
+                          {hasAnyGroupOverrides ? ` Total overrides: ${Object.keys(groupPromptOverrides).length}.` : ''}
+                        </Typography>
+                      </Stack>
+                    )}
+                  </Stack>
                 </AccordionDetails>
               </StyledAccordion>
             </Stack>
@@ -1943,101 +2050,6 @@ function PromptWorkshop({
                 </AccordionDetails>
               </StyledAccordion>
 
-              <StyledAccordion defaultExpanded={false}>
-                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Stack direction="row" spacing={1} alignItems="center">
-                    <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Species & group rules</Typography>
-                    {hasAnyGroupOverrides && (
-                      <Chip size="small" label={`${Object.keys(groupPromptOverrides).length} override${Object.keys(groupPromptOverrides).length !== 1 ? 's' : ''}`} color="warning" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
-                    )}
-                  </Stack>
-                </AccordionSummary>
-                <AccordionDetails>
-                  <Stack spacing={1.5}>
-                    <Stack direction="row" spacing={0.5} alignItems="center">
-                      <FormControlLabel
-                        sx={{ ml: 0, mr: 0 }}
-                        control={
-                          <Switch
-                            size="small"
-                            checked={includeGroupRules}
-                            onChange={(event) => setIncludeGroupRules(event.target.checked)}
-                          />
-                        }
-                        label={
-                          <Typography variant="body2" color="text.secondary">
-                            Add group prompts at runtime
-                          </Typography>
-                        }
-                      />
-                      <Tooltip
-                        title="When enabled, group-specific prompts and rules are included at runtime for this agent."
-                        placement="top"
-                      >
-                        <IconButton size="small" sx={{ p: 0.25 }} aria-label="group prompt runtime help">
-                          <HelpOutlineIcon sx={{ fontSize: 14 }} />
-                        </IconButton>
-                      </Tooltip>
-                    </Stack>
-
-                    {availableGroupIds.length === 0 ? (
-                      <Typography variant="body2" color="text.secondary">
-                        This template has no group-specific prompts to override.
-                      </Typography>
-                    ) : (
-                      <Stack spacing={1.5}>
-                        <Stack direction="row" spacing={1} alignItems="center">
-                          <Select
-                            size="small"
-                            value={groupId}
-                            onChange={(event) => setGroupId(event.target.value)}
-                            sx={{ minWidth: 160 }}
-                          >
-                            {availableGroupIds.map((availableGroupId) => (
-                              <MenuItem key={availableGroupId} value={availableGroupId}>
-                                {availableGroupId}
-                              </MenuItem>
-                            ))}
-                          </Select>
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            onClick={handleResetSelectedGroupPrompt}
-                            disabled={!hasSelectedGroupOverride}
-                          >
-                            Reset to Template
-                          </Button>
-                        </Stack>
-                        <TextField
-                          fullWidth
-                          multiline
-                          minRows={8}
-                          label={selectedGroupId ? `${selectedGroupId} Prompt` : 'Group Prompt'}
-                          value={selectedGroupPrompt}
-                          onChange={(event) => handleSelectedGroupPromptChange(event.target.value)}
-                          sx={{
-                            '& .MuiInputBase-root': {
-                              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                              fontSize: '0.8rem',
-                              backgroundColor: (theme) => alpha(theme.palette.common.black, 0.15),
-                              borderRadius: 1.5,
-                            },
-                            '& .MuiOutlinedInput-notchedOutline': {
-                              borderColor: (theme) => alpha(theme.palette.divider, 0.3),
-                            },
-                          }}
-                        />
-                        <Typography variant="caption" color="text.secondary">
-                          {hasSelectedGroupOverride
-                            ? `Custom override active for ${selectedGroupId}.`
-                            : `Using template ${selectedGroupId} prompt content.`}
-                          {hasAnyGroupOverrides ? ` Total overrides: ${Object.keys(groupPromptOverrides).length}.` : ''}
-                        </Typography>
-                      </Stack>
-                    )}
-                  </Stack>
-                </AccordionDetails>
-              </StyledAccordion>
             </Stack>
           </SectionCard>
           )}

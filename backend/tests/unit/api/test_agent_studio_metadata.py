@@ -516,10 +516,10 @@ class TestGetRegistryMetadata:
             group_prompt_overrides={},
             created_at=None,
         )
-        captured_overlays = []
+        captured_base_overrides = []
 
         def _fake_build_agent_prompt_layers(_agent_id, **kwargs):
-            captured_overlays.append(kwargs.get("overlay"))
+            captured_base_overrides.append(kwargs.get("base_prompt_override"))
             return SimpleNamespace(
                 hash="hash-without-flagged-overlay",
                 to_manifest=lambda: {
@@ -569,7 +569,7 @@ class TestGetRegistryMetadata:
                 content=flagged_overlay,
                 status="needs_review",
                 removed_layer_kinds=["core_static"],
-                warning="Custom overlay still contains locked/core prompt markers after safe cleanup.",
+                warning="Custom-agent prompt still contains locked/core prompt markers after safe cleanup.",
             ),
         )
         monkeypatch.setattr(api_module, "build_agent_prompt_layers", _fake_build_agent_prompt_layers)
@@ -586,11 +586,12 @@ class TestGetRegistryMetadata:
             for a in c.agents
             if a.agent_name == "Flagged Gene Agent"
         )
-        assert captured_overlays == [""]
+        assert captured_base_overrides == []
         assert custom.custom_prompt_overlay_status == "needs_review"
         assert custom.custom_prompt_removed_layer_kinds == ["core_static"]
         assert "locked/core prompt markers" in custom.custom_prompt_warning
-        assert custom.base_prompt == flagged_overlay
+        assert custom.base_prompt == ""
+        assert custom.prompt_layer_error == "Custom agent prompt needs coordinator review."
         assert flagged_overlay not in "\n\n".join(layer.content for layer in custom.prompt_layers)
         assert not any(layer.kind == "curator_overlay" for layer in custom.prompt_layers)
 

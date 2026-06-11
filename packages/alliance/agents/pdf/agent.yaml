@@ -48,6 +48,7 @@ output_schema: PdfExtractionResultEnvelope
 structured_finalization:
   enabled: true
   tool_name: finalize_pdf_extraction
+  input_schema: PdfExtractionFinalizationEnvelope
   checks:
     - pdf_evidence
 

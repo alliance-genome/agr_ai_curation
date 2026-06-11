@@ -25,6 +25,16 @@ const metadataMocks = vi.hoisted(() => ({
   refresh: vi.fn(),
 }))
 
+const authMocks = vi.hoisted(() => ({
+  user: {
+    uid: 'doug-test-user',
+    email: 'doughowe@uoregon.edu',
+    name: 'Doug Howe',
+    groups: ['ZFIN'],
+    providerGroups: ['zfin-curators'],
+  },
+}))
+
 vi.mock('@/services/agentStudioService', () => serviceMocks)
 vi.mock('@/contexts/AgentMetadataContext', () => ({
   useAgentMetadata: () => ({
@@ -32,6 +42,11 @@ vi.mock('@/contexts/AgentMetadataContext', () => ({
     refresh: metadataMocks.refresh,
     isLoading: false,
     error: null,
+  }),
+}))
+vi.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({
+    user: authMocks.user,
   }),
 }))
 
@@ -261,10 +276,10 @@ async function openToolsAccordion(): Promise<void> {
 }
 
 async function getGroupOverrideSelect(): Promise<HTMLElement> {
-  // Group-rule controls now live on the read-only "Reference" section tab,
-  // inside the "Species & group rules" accordion.
-  gotoSection('Reference')
-  const accordionButton = await screen.findByRole('button', { name: /Species & group rules/ })
+  // Group-rule controls live on the editable "Prompt" section tab,
+  // inside the "Group-specific instructions" accordion.
+  gotoSection('Prompt')
+  const accordionButton = await screen.findByRole('button', { name: /Group-specific instructions/ })
   if (accordionButton.getAttribute('aria-expanded') !== 'true') {
     fireEvent.click(accordionButton)
   }
@@ -399,6 +414,13 @@ describe('PromptWorkshop', () => {
   ]
 
   beforeEach(() => {
+    authMocks.user = {
+      uid: 'doug-test-user',
+      email: 'doughowe@uoregon.edu',
+      name: 'Doug Howe',
+      groups: ['ZFIN'],
+      providerGroups: ['zfin-curators'],
+    }
     metadataMocks.agents = {}
     metadataMocks.refresh.mockReset()
     serviceMocks.createCustomAgent.mockReset()
@@ -462,7 +484,7 @@ describe('PromptWorkshop', () => {
     expect(payload).not.toHaveProperty('parent_agent_id')
   }, 15000) // Increased because full workshop bootstrap can exceed the default timeout under CI load.
 
-  it('shows locked inherited layers separately from the editable curator overlay', async () => {
+  it('shows locked inherited layers separately from the editable main/base prompt', async () => {
     render(<PromptWorkshop catalog={buildCatalogWithPromptLayers()} />)
 
     await waitFor(() => {
@@ -479,7 +501,6 @@ describe('PromptWorkshop', () => {
     }
     expectBefore('Built-in instructions', 'Output structure')
     expectBefore('Output structure', 'Template instructions')
-    expectBefore('Template instructions', 'Species & group rules')
 
     fireEvent.click(await screen.findByText('Built-in instructions'))
     expect(screen.getByText('Locked core contract')).toBeInTheDocument()
@@ -491,19 +512,20 @@ describe('PromptWorkshop', () => {
     fireEvent.click(await screen.findByText('Template instructions'))
     expect(screen.getByText('System base prompt')).toBeInTheDocument()
 
-    // The editable curator overlay now lives on the "Prompt" section tab and is open by default.
+    // The editable main/base prompt now lives on the "Prompt" section tab and is open by default.
     gotoSection('Prompt')
-    expect(await screen.findByText('Your custom instructions')).toBeInTheDocument()
+    expect(await screen.findByText('Main / base prompt')).toBeInTheDocument()
+    expect(screen.getAllByText('Group-specific instructions').length).toBeGreaterThan(0)
     expect(
-      screen.getByPlaceholderText(/Write any extra instructions you want this agent to follow/)
-    ).toHaveValue('')
+      screen.getByPlaceholderText(/Edit the main prompt for this custom agent/)
+    ).toHaveValue('System base prompt')
   }, 15000)
 
-  it('clearly marks existing overlays that need copied-core review in the prompt preview', async () => {
+  it('clearly marks existing main prompts that need copied-core review', async () => {
     const flaggedAgent = buildCustomAgent({
       custom_prompt: 'Partial Platform Runtime Contract prose with local curator edits.',
       custom_prompt_overlay_status: 'needs_review',
-      custom_prompt_warning: 'Custom overlay contains locked/core prompt markers but did not match exact parent layers for safe cleanup.',
+      custom_prompt_warning: 'Custom-agent prompt contains locked/core prompt markers but did not match exact parent layers for safe cleanup.',
     })
     serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [flaggedAgent], total: 1 })
 
@@ -511,20 +533,13 @@ describe('PromptWorkshop', () => {
 
     await waitForAgentName('My Agent')
 
-    // Overlay editing + preview now live on the "Prompt" section tab.
     gotoSection('Prompt')
-    expect(await screen.findByText('Your custom instructions')).toBeInTheDocument()
-    expect(screen.getAllByText(/Custom overlay contains locked\/core prompt markers/).length).toBeGreaterThan(0)
+    expect(await screen.findByText('Main / base prompt')).toBeInTheDocument()
+    expect(screen.getAllByText(/Custom-agent prompt contains locked\/core prompt markers/).length).toBeGreaterThan(0)
     expect(
-      screen.getByPlaceholderText(/Write any extra instructions you want this agent to follow/)
+      screen.getByPlaceholderText(/Edit the main prompt for this custom agent/)
     ).toHaveValue('Partial Platform Runtime Contract prose with local curator edits.')
-
-    fireEvent.click(await screen.findByText('Final instructions (preview)'))
-    expect(screen.getAllByText((_content, element) => {
-      const text = element?.textContent || ''
-      return text.includes('[Custom overlay needs coordinator review before runtime use]')
-        && text.includes('Partial Platform Runtime Contract prose with local curator edits.')
-    }).length).toBeGreaterThan(0)
+    expect(screen.queryByText('Final instructions (preview)')).not.toBeInTheDocument()
   }, 15000)
 
   it('shows domain-envelope and automatic validation metadata for the selected template', async () => {
@@ -821,11 +836,11 @@ describe('PromptWorkshop', () => {
     )
 
     gotoSection('Prompt')
-    expect(await screen.findByText('Your custom instructions')).toBeInTheDocument()
+    expect(await screen.findByText('Main / base prompt')).toBeInTheDocument()
 
     await waitFor(() => {
       expect(
-        screen.getByPlaceholderText(/Write any extra instructions you want this agent to follow/)
+        screen.getByPlaceholderText(/Edit the main prompt for this custom agent/)
       ).toHaveValue('Updated prompt from Claude')
     })
     expect(screen.getByText('Applied Claude update: Reworked structure and tightened extraction constraints.')).toBeInTheDocument()
@@ -862,11 +877,11 @@ describe('PromptWorkshop', () => {
     customAgentsDeferred.resolve({ custom_agents: [], total: 0 })
 
     gotoSection('Prompt')
-    expect(await screen.findByText('Your custom instructions')).toBeInTheDocument()
+    expect(await screen.findByText('Main / base prompt')).toBeInTheDocument()
 
     await waitFor(() => {
       expect(
-        screen.getByPlaceholderText(/Write any extra instructions you want this agent to follow/)
+        screen.getByPlaceholderText(/Edit the main prompt for this custom agent/)
       ).toHaveValue('Late-arriving update from Claude')
     }, { timeout: 10000 })
     expect(screen.getByText('Applied Claude update: Applied after workshop bootstrap finished.')).toBeInTheDocument()
@@ -1020,7 +1035,7 @@ describe('PromptWorkshop', () => {
     fireEvent.click(await screen.findByRole('option', { name: 'Disease Specialist' }))
 
     await waitForAgentName('Disease Specialist (Custom)')
-    expect(await getGroupOverrideSelect()).toHaveTextContent('WB')
+    expect(await getGroupOverrideSelect()).toHaveTextContent('Select group')
 
     await assertGroupOptions(['WB'], ['FB', 'MGI'])
   }, 15000)
@@ -1181,21 +1196,50 @@ describe('PromptWorkshop', () => {
     expect(await screen.findByText('Built-in instructions')).toBeInTheDocument()
     expect(screen.getByText('Output structure')).toBeInTheDocument()
     expect(screen.getByText('Template instructions')).toBeInTheDocument()
-    expect(screen.getByText('Species & group rules')).toBeInTheDocument()
+    expect(screen.queryByText('Species & group rules')).not.toBeInTheDocument()
 
     // Old jargon is gone from the Reference tab.
     expect(screen.queryByText('Core Prompt')).not.toBeInTheDocument()
     expect(screen.queryByText('Generated Contract')).not.toBeInTheDocument()
     expect(screen.queryByText('Group Rules')).not.toBeInTheDocument()
 
-    // Prompt tab: renamed editable overlay + preview.
+    // Prompt tab: editable main/base prompt plus group-specific instructions.
     gotoSection('Prompt')
-    expect(await screen.findByText('Your custom instructions')).toBeInTheDocument()
-    expect(screen.getByText('Final instructions (preview)')).toBeInTheDocument()
+    expect(await screen.findByText('Main / base prompt')).toBeInTheDocument()
+    expect(screen.getAllByText('Group-specific instructions').length).toBeGreaterThan(0)
+    expect(screen.getByText(/Logged in as Doug Howe/)).toBeInTheDocument()
+    expect(screen.queryByText('Final instructions (preview)')).not.toBeInTheDocument()
 
     // Old jargon is gone from the Prompt tab.
     expect(screen.queryByText('Curator Overlay')).not.toBeInTheDocument()
     expect(screen.queryByText('Effective Prompt Preview')).not.toBeInTheDocument()
+  }, 15000)
+
+  it('infers logged-in group from provider groups when resolved groups are empty', async () => {
+    authMocks.user = {
+      ...authMocks.user,
+      groups: [],
+      providerGroups: ['zfin-curators'],
+    }
+    const catalog = buildCatalogWithPromptLayers()
+    catalog.categories[0].agents[0].group_rules.ZFIN = {
+      group_id: 'ZFIN',
+      content: 'ZFIN template prompt',
+      source_file: 'database',
+    }
+    catalog.available_groups = ['WB', 'ZFIN']
+
+    render(<PromptWorkshop catalog={catalog} />)
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchAgentTemplates).toHaveBeenCalled()
+    })
+
+    gotoSection('Prompt')
+
+    await waitFor(async () => {
+      expect(await getGroupOverrideSelect()).toHaveTextContent('ZFIN')
+    })
   }, 15000)
 
   it('does not expose an Output Schema Key field anywhere in the workshop', async () => {

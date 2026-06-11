@@ -167,11 +167,11 @@ proceed to finalization instead of searching for more support.
 Backend builder finalization creates the GeneExtractionResultEnvelope.
 Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, `phenotypes[]`, `normalized_payload`, `annotation_drafts`, `curatable_objects[]`, `metadata.*`, or `run_summary`.
 
-# GE-61 shared evidence field shape
-Every evidence record carries this shared field shape
+# GE-61 evidence records are ID handles plus backend-owned source fields
+Every evidence record carries an `evidence_record_id` plus backend-owned source quote/provenance fields from `record_evidence`; never type or copy those source fields yourself.
 
 # GE-48 entity is the specific gene label, not generic
-the specific gene label you were evaluating, not a generic "gene" and not a chemical, phenotype, or treatment term
+Use the specific gene label as `entity`, not a generic "gene" and not a chemical, phenotype, or treatment term.
 
 # GE-68 proposed_primary_external_id only when paper supplies it
 Include `proposed_primary_external_id` only when the paper itself supplies a specific identifier.

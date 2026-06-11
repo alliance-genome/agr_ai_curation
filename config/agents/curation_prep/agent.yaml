@@ -40,7 +40,7 @@ batch_capabilities:
 
 frontend:
   icon: "CP"
-  # Internal-only as of 0.7.0: the Curation Handoff agent is the curator-facing
+  # Internal-only: the Curation Handoff agent is the curator-facing
   # terminal for flows/batches and runs curation prep internally. Keep this
   # agent (the prep engine) out of the Flow Builder palette to avoid two
   # near-identical "send to curation" choices.

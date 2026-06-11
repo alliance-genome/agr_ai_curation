@@ -14,6 +14,8 @@ export interface AuthUser {
   uid: string;           // User ID from auth subject claim
   email?: string;        // Email address (nullable per contract)
   name?: string;         // Display name (mapped from display_name, nullable per contract)
+  groups?: string[];     // Resolved internal group IDs when available
+  providerGroups?: string[]; // Raw identity-provider group names
 }
 
 /**
@@ -38,6 +40,20 @@ interface AuthProviderProps {
  */
 const isDevMode = (): boolean => getEnvFlag(['VITE_DEV_MODE', 'REACT_APP_DEV_MODE', 'DEV_MODE'], false);
 
+const getDevUser = (): AuthUser => {
+  const groups = (import.meta.env.VITE_DEV_USER_GROUPS || '')
+    .split(',')
+    .map((group) => group.trim().toUpperCase())
+    .filter(Boolean);
+  return {
+    uid: import.meta.env.VITE_DEV_USER_SUB || 'dev-user-123',
+    email: import.meta.env.VITE_DEV_USER_EMAIL || 'dev@localhost',
+    name: import.meta.env.VITE_DEV_USER_NAME || 'Dev User',
+    groups,
+    providerGroups: groups,
+  };
+};
+
 /**
  * AuthProvider: Manages authentication state via backend OAuth session and httpOnly cookies.
  *
@@ -56,7 +72,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const devMode = isDevMode();
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(devMode);
   const [user, setUser] = useState<AuthUser | null>(
-    devMode ? { uid: 'dev-user-123', email: 'dev@localhost', name: 'Dev User' } : null
+    devMode ? getDevUser() : null
   );
   const [isLoading, setIsLoading] = useState<boolean>(!devMode); // Skip loading in dev mode
   const setJustLoggedOutFlag = (): void => {
@@ -96,6 +112,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           uid: newUserId,
           email: userData.email || undefined,
           name: userData.display_name || undefined,
+          groups: Array.isArray(userData.active_groups) ? userData.active_groups : [],
+          providerGroups: Array.isArray(userData.provider_groups) ? userData.provider_groups : [],
         });
         setIsAuthenticated(true);
 

@@ -148,7 +148,7 @@ def test_catalog_preview_diagnostic_and_runtime_share_prompt_bundle(
     assert runtime_bundle.to_manifest() == catalog_bundle.to_manifest()
 
 
-def test_custom_agent_preview_treats_custom_prompt_as_overlay(
+def test_custom_agent_preview_treats_custom_prompt_as_base_override(
     monkeypatch,
     prompt_parity_service,
 ):
@@ -182,10 +182,9 @@ def test_custom_agent_preview_treats_custom_prompt_as_overlay(
         "core_static",
         "base_prompt",
         "group_rules",
-        "curator_overlay",
     ]
-    assert "Editable base prompt" in response.prompt
-    assert "WB group rules" in response.prompt
+    assert "Editable base prompt" not in response.prompt
+    assert "WB group rules" not in response.prompt
     assert "Curator overlay instructions" in response.prompt
     assert "Curator WB overlay" in response.prompt
 

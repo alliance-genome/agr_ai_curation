@@ -59,7 +59,7 @@ function buildFlaggedAgent(): PromptInfo {
     ],
     custom_prompt_overlay_status: 'needs_review',
     custom_prompt_removed_layer_kinds: ['core_static'],
-    custom_prompt_warning: 'Custom overlay still contains locked/core prompt markers after safe cleanup.',
+    custom_prompt_warning: 'Custom-agent prompt still contains locked/core prompt markers after safe cleanup.',
     tools: [],
   }
 }
@@ -73,7 +73,7 @@ function buildCleanCustomAgent(): PromptInfo {
       {
         id: 'gene:curator_overlay',
         kind: 'curator_overlay',
-        title: 'Curator Overlay',
+        title: 'Main Prompt Override',
         content: 'Curator overlay guidance',
         provenance: 'custom_agent',
         editable: true,
@@ -99,7 +99,7 @@ describe('AgentDetailsPanel', () => {
     expect(screen.getByText(/pick an agent on the left/i)).toBeInTheDocument()
   })
 
-  it('marks flagged custom overlays and excludes them from effective preview rendering', () => {
+  it('marks flagged custom prompt text and excludes it from effective preview rendering', () => {
     render(
       <AgentDetailsPanel
         agent={buildFlaggedAgent()}
@@ -111,7 +111,7 @@ describe('AgentDetailsPanel', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Prompts' }))
 
     expect(serviceMocks.fetchCombinedPrompt).not.toHaveBeenCalled()
-    expect(screen.getByText('Custom overlay still contains locked/core prompt markers after safe cleanup.')).toBeInTheDocument()
+    expect(screen.getByText('Custom-agent prompt still contains locked/core prompt markers after safe cleanup.')).toBeInTheDocument()
     expect(screen.getByText(/Platform Runtime Contract copied fragment/)).toBeInTheDocument()
 
     const effectivePromptSection = screen.getByText('Effective Prompt Preview').closest('div')?.parentElement

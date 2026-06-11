@@ -15,6 +15,7 @@ from src.lib.config import schema_discovery
 from src.lib.openai_agents import streaming_tools
 from src.lib.openai_agents.models import (
     GeneExtractionResultEnvelope,
+    PdfExtractionFinalizationEnvelope,
     PdfExtractionResultEnvelope,
 )
 from src.lib.prompts.context import (
@@ -248,23 +249,28 @@ def _pdf_live_evidence_record() -> dict:
     }
 
 
-def _pdf_finalization_payload(*, evidence_record_id: str = "evidence-pdf-1") -> dict:
+def _pdf_finalization_payload(
+    *,
+    evidence_record_id: str = "evidence-pdf-1",
+    include_evidence_records: bool = False,
+    item_overrides: dict | None = None,
+) -> dict:
     evidence_record = _pdf_live_evidence_record()
     if evidence_record_id != evidence_record["evidence_record_id"]:
         evidence_record = {**evidence_record, "evidence_record_id": evidence_record_id}
-    return {
+    item = {
+        "label": "principal finding",
+        "entity_type": "claim",
+        "source_mentions": ["principal finding"],
+        "evidence_record_ids": [evidence_record_id],
+    }
+    if item_overrides:
+        item = {**item, **item_overrides}
+    payload = {
         "answer": "The principal finding was supported.",
         "summary": "Checked the Results section and retained one supported claim.",
-        "items": [
-            {
-                "label": "principal finding",
-                "entity_type": "claim",
-                "source_mentions": ["principal finding"],
-                "evidence_record_ids": [evidence_record_id],
-            }
-        ],
+        "items": [item],
         "raw_mentions": [],
-        "evidence_records": [evidence_record],
         "normalization_notes": [],
         "exclusions": [],
         "ambiguities": [],
@@ -276,6 +282,9 @@ def _pdf_finalization_payload(*, evidence_record_id: str = "evidence-pdf-1") -> 
             "warnings": [],
         },
     }
+    if include_evidence_records:
+        payload["evidence_records"] = [evidence_record]
+    return payload
 
 
 def _package_schema(schema_name: str):
@@ -401,6 +410,81 @@ def test_pdf_structured_finalization_feedback_accepts_live_evidence_payload():
     assert feedback.accepted_payload["items"][0]["evidence_record_ids"] == [
         "evidence-pdf-1"
     ]
+    accepted_record = feedback.accepted_payload["evidence_records"][0]
+    for key, value in _pdf_live_evidence_record().items():
+        assert accepted_record[key] == value
+
+
+def test_pdf_structured_finalization_feedback_rejects_model_authored_evidence_registry():
+    feedback = streaming_tools._structured_specialist_finalization_feedback(
+        _pdf_finalization_payload(include_evidence_records=True),
+        expected_output_type=PdfExtractionResultEnvelope,
+        finalization_config=_finalization_config("ask_pdf_extraction_specialist"),
+        tool_calls=[streaming_tools.SpecialistToolCall(tool_name="search_document")],
+        live_evidence_records=[_pdf_live_evidence_record()],
+    )
+
+    assert feedback.accepted_payload is None
+    assert feedback.message.startswith("PdfExtractionFinalizationEnvelope rejected")
+    assert "evidence_records" in feedback.message
+
+
+def test_pdf_structured_finalization_feedback_rejects_nested_model_authored_quote_fields():
+    feedback = streaming_tools._structured_specialist_finalization_feedback(
+        _pdf_finalization_payload(
+            item_overrides={
+                "verified_quote": "The model must not type this source quote.",
+            }
+        ),
+        expected_output_type=PdfExtractionResultEnvelope,
+        finalization_config=_finalization_config("ask_pdf_extraction_specialist"),
+        tool_calls=[streaming_tools.SpecialistToolCall(tool_name="search_document")],
+        live_evidence_records=[_pdf_live_evidence_record()],
+    )
+
+    assert feedback.accepted_payload is None
+    assert feedback.message.startswith("PdfExtractionFinalizationEnvelope rejected")
+    assert "items.0.verified_quote" in feedback.message
+
+
+def test_pdf_structured_finalization_config_resolves_id_only_input_schema():
+    config = _finalization_config("ask_pdf_extraction_specialist")
+
+    assert config["input_schema"] == "PdfExtractionFinalizationEnvelope"
+    assert (
+        streaming_tools._structured_finalization_input_type(config)
+        is PdfExtractionFinalizationEnvelope
+    )
+
+
+def test_pdf_prompt_uses_id_only_finalization_contract():
+    prompt_text = (
+        REPO_PACKAGES_DIR / "alliance" / "agents" / "pdf" / "prompt.yaml"
+    ).read_text(encoding="utf-8")
+
+    assert "PdfExtractionFinalizationEnvelope" in prompt_text
+    assert "all verified quotes in `evidence_records[]`" not in prompt_text
+    assert "evidence_records[]` must not be empty" not in prompt_text
+    assert "Do not include `evidence_records`" in prompt_text
+
+
+def test_builder_extractor_prompts_do_not_expose_quote_fields_in_examples():
+    prompt_paths = [
+        REPO_PACKAGES_DIR / "alliance" / "agents" / agent / "prompt.yaml"
+        for agent in (
+            "allele_extractor",
+            "disease_extractor",
+            "gene_expression",
+            "gene_extractor",
+            "phenotype_extractor",
+        )
+    ]
+
+    for prompt_path in prompt_paths:
+        prompt_text = prompt_path.read_text(encoding="utf-8")
+        assert "verified_quote" not in prompt_text, prompt_path
+        assert "source_fragments" not in prompt_text, prompt_path
+        assert "source_span_ids" not in prompt_text, prompt_path
 
 
 def test_pdf_structured_finalization_feedback_rejects_invented_evidence_id():
@@ -470,10 +554,8 @@ def test_pdf_structured_finalization_rejects_hallucinated_empty_answer_evidence(
     )
 
     assert feedback.accepted_payload is None
-    assert any(
-        error.get("field") == "evidence_records"
-        for error in feedback.field_errors
-    )
+    assert feedback.message.startswith("PdfExtractionFinalizationEnvelope rejected")
+    assert "evidence_records" in feedback.message
 
 
 def test_structured_finalization_caps_rejected_attempts():
@@ -1465,7 +1547,7 @@ async def test_builder_materializer_agent_rejects_structured_output_schema():
 
 @pytest.mark.asyncio
 async def test_pdf_specialist_prefers_accepted_finalization_payload(monkeypatch):
-    accepted_payload = _pdf_finalization_payload()
+    accepted_payload = _pdf_finalization_payload(include_evidence_records=True)
     captured_events = []
     captured = {}
 

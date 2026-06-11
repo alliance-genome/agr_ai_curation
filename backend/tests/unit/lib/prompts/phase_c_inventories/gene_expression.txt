@@ -141,8 +141,8 @@ reuse that `evidence_record_id`; do not call `record_evidence` again for the sam
 # GEX-42 stage call payload
 Call `stage_gene_expression_observation` once per retained curatable finding, passing a stable `pending_ref_id`, the verified `evidence_record_ids`, `where_expressed_statement`, subject, reference
 
-# GEX-45 shared evidence field shape
-Every verified evidence record you keep uses this shared field shape
+# GEX-45 evidence records are ID handles plus backend-owned source fields
+Every verified evidence record you keep has an `evidence_record_id` plus backend-owned source quote/provenance fields created by `record_evidence`; never type or copy those source fields yourself.
 
 # GEX-46 two real evidence sinks: stage evidence ids + active-run workspace
 # Reworded in the metadata-mechanism template rule: removed the

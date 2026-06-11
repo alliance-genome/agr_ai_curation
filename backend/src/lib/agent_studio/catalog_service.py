@@ -1234,7 +1234,8 @@ def _build_runtime_instructions(
         else []
     )
     prompt_agent_id = str(getattr(db_agent, "agent_key", "") or "").strip()
-    overlay = None
+    base_prompt_override = None
+    group_prompt_overrides = None
 
     if str(getattr(db_agent, "visibility", "") or "").strip() != "system":
         prompt_agent_id = str(
@@ -1246,12 +1247,19 @@ def _build_runtime_instructions(
             raise ValueError(
                 f"Custom agent '{db_agent.agent_key}' cannot be assembled without a template_source"
             )
-        overlay = _build_curator_overlay(db_agent, group_ids)
+        from src.lib.agent_studio.custom_agent_service import custom_main_prompt_for_parent
+
+        base_prompt_override = custom_main_prompt_for_parent(
+            prompt_agent_id,
+            getattr(db_agent, "instructions", "") or "",
+        )
+        group_prompt_overrides = getattr(db_agent, "group_prompt_overrides", None) or {}
 
     return build_agent_prompt_layers(
         prompt_agent_id,
         group_id=group_ids,
-        overlay=overlay,
+        base_prompt_override=base_prompt_override,
+        group_prompt_overrides=group_prompt_overrides,
         runtime_context=_build_runtime_context(
             runtime_kwargs=runtime_kwargs,
             canonical_tool_ids=canonical_tool_ids,

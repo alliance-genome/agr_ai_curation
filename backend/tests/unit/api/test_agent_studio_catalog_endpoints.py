@@ -185,6 +185,8 @@ class TestAgentStudioCatalogEndpoints:
             observed["agent_id"] = agent_id
             observed["group_id"] = kwargs.get("group_id")
             observed["overlay"] = kwargs.get("overlay")
+            observed["base_prompt_override"] = kwargs.get("base_prompt_override")
+            observed["group_prompt_overrides"] = kwargs.get("group_prompt_overrides")
             return SimpleNamespace(
                 render=lambda: (
                     "Locked core\n\nParent base\n\nWB rules\n\n"
@@ -223,7 +225,9 @@ class TestAgentStudioCatalogEndpoints:
         assert observed == {
             "agent_id": "gene",
             "group_id": "WB",
-            "overlay": "Curator overlay\n\n## Curator group overlay: WB\nCustom WB overlay",
+            "overlay": None,
+            "base_prompt_override": "Curator overlay",
+            "group_prompt_overrides": {"WB": "Custom WB overlay"},
         }
         assert result.layer_manifest["layers"][0]["locked"] is True
 

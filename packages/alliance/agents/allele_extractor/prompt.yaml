@@ -85,9 +85,7 @@ content: |
   <output_and_handoff_contract>
   Backend builder finalization creates the AlleleExtractionResultEnvelope (a 4-object pending paper/evidence association graph). Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, `phenotypes[]`, `normalized_payload`, `annotation_drafts`, `curatable_objects[]`, `metadata.*`, or `run_summary`.
 
-  Every evidence record carries this shared field shape, copied from the `record_evidence` response, never typed by you:
-  - `entity` -- the specific allele/variant notation you were evaluating
-  - `verified_quote`, `page`, `section`, optional `subsection`, `chunk_id`, optional `figure_reference`
+  Every evidence record carries an `evidence_record_id` plus backend-owned source quote/provenance fields from `record_evidence`; never type or copy those source fields yourself.
   If `record_evidence` returns `status: "verified"`, the backend persists these shared fields; pass the returned `evidence_record_id` values to `stage_allele_observation`. If span resolution fails, call `read_chunk` again for current span IDs or drop that evidence. Multiple `span_ids` in one `record_evidence` call produce one evidence record; use separate calls for truly disjoint evidence units. If an existing evidence record needs better source spans, update the same record ID with `record_evidence(..., evidence_record_id=existing_id)`. Do not invent quotes or merge disconnected fragments into one implied contiguous passage.
 
   For each retained allele/evidence pairing (the `<workflow>` tool sequence produces these):
@@ -104,7 +102,7 @@ content: |
   search_document(query="unc-54 paralysis allele", search_mode="lexical")
   read_chunk("abc123")  # returns evidence_spans[].span_id values, e.g. "abc123:s0001:c0000-c0061:11111111"
   record_evidence(entity="unc-54(e190)", span_ids=["abc123:s0001:c0000-c0061:11111111"])
-  # -> {"status": "verified", "evidence_record_id": "evidence-unc54-1", "verified_quote": "unc-54(e190) animals were paralyzed and arrested at the L4 stage.", "page": 5, "section": "Results"}
+  # -> {"status": "verified", "evidence_record_id": "evidence-unc54-1", "...": "backend-owned source quote/provenance omitted"}
   stage_allele_observation(
     pending_ref_id="allele-mention-unc54-1",
     mention="unc-54(e190)",

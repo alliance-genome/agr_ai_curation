@@ -22,7 +22,12 @@ async def test_get_current_user_info_returns_db_user_dict(monkeypatch):
     user_payload = {"sub": "user-1", "email": "user@example.org"}
     result = await users.get_current_user_info(user=user_payload, db=db)
 
-    assert result == {"user_id": "user-1", "email": "user@example.org"}
+    assert result == {
+        "user_id": "user-1",
+        "email": "user@example.org",
+        "provider_groups": [],
+        "active_groups": [],
+    }
     assert calls["args"][0] is db
     assert calls["args"][1] == user_payload
 

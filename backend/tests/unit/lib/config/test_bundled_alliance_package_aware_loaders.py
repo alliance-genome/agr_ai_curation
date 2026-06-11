@@ -241,8 +241,8 @@ def test_bundled_alliance_gene_extractor_prompt_teaches_verified_evidence_flow(m
     assert "<examples>" in prompt_content
     assert prompt_content.count("record_evidence(") >= 3
     assert '"status": "verified"' in prompt_content
-    assert "`verified_quote`" in prompt_content
-    assert "`chunk_id`" in prompt_content
+    assert "backend-owned source quote/provenance omitted" in prompt_content
+    assert "never type or copy those source fields yourself" in prompt_content
     assert (
         "do not `record_evidence` for every mention or for genes you are excluding"
         in prompt_content

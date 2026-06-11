@@ -626,10 +626,10 @@ function AgentDetailsPanel({
                 {overlayReviewMessage}
               </Alert>
             )}
-            {renderLayerSection('Curator Overlay', overlayNeedsReview ? [] : overlayLayers, overlayNeedsReview ? agent.base_prompt : '', {
+            {renderLayerSection('Main Prompt Override', overlayNeedsReview ? [] : overlayLayers, overlayNeedsReview ? agent.base_prompt : '', {
               locked: false,
               editable: !overlayNeedsReview,
-              emptyText: 'No curator overlay is applied.',
+              emptyText: 'No main prompt override is applied.',
             })}
             <Box>
               <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>

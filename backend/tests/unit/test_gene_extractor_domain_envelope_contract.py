@@ -362,7 +362,7 @@ def test_gene_extractor_prompt_agent_and_group_rules_name_domain_envelope_contra
     assert "most specific paper-backed gene or protein" in prompt_content
     assert "useful as a database lookup" in prompt_content
     assert "`payload.identity_resolution_notes`" in prompt_content
-    assert "one to three `identity_resolution_notes`" in prompt_content
+    assert "paper-backed identity/context hints" in prompt_content
     assert "Active validator bindings own final Alliance Gene identity decisions" in prompt_content
     assert "Actin 5C" not in prompt_content
     assert "Opsin-1" not in prompt_content
