@@ -175,6 +175,74 @@ def test_generic_pdf_step_output_projects_answer_table_rows_without_candidate():
     ]
 
 
+def test_generic_pdf_step_output_projects_pipe_answer_table_rows():
+    payload = {
+        "answer": (
+            "Extracted genetic reagents (columns: synonym | source | "
+            "source_identifier | count):\n"
+            "w1118 | Bloomington Drosophila Stock Center | RRID: BDSC_3605 | 1\n"
+            "Sas-4s2214|Sas-4 | Bloomington Drosophila Stock Center | "
+            "RRID: BDSC_12119 | 11\n"
+        ),
+        "items": [
+            {
+                "label": "group-level audit item",
+                "entity_type": "genetic reagent group",
+                "evidence_record_ids": ["ev-1"],
+            }
+        ],
+        "evidence_records": [
+            {
+                "evidence_record_id": "ev-1",
+                "verified_quote": "Server verified quote.",
+            }
+        ],
+    }
+
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[
+            {
+                "step": 1,
+                "agent_id": "pdf_extraction",
+                "agent_name": "General PDF Extraction Agent",
+                "output": json.dumps(payload),
+                "output_preview": "Extracted rows.",
+                "candidate": None,
+            }
+        ],
+        flow_name="PDF Projection Flow",
+        output_format="tsv",
+    )
+
+    result = apply_projection_plan(
+        bundle,
+        default_projection_plan(bundle, output_format="tsv"),
+    )
+
+    assert bundle.artifacts[0].artifact_shape == "generic_pdf_answer_table"
+    assert result.row_source == "object"
+    assert [column.key for column in result.columns] == [
+        "synonym",
+        "source",
+        "source_identifier",
+        "count",
+    ]
+    assert result.rows == [
+        {
+            "synonym": "w1118",
+            "source": "Bloomington Drosophila Stock Center",
+            "source_identifier": "RRID: BDSC_3605",
+            "count": "1",
+        },
+        {
+            "synonym": "Sas-4s2214|Sas-4",
+            "source": "Bloomington Drosophila Stock Center",
+            "source_identifier": "RRID: BDSC_12119",
+            "count": "11",
+        },
+    ]
+
+
 def test_plain_text_step_output_without_candidate_is_not_an_artifact():
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[

@@ -8,6 +8,7 @@ from datetime import datetime
 import io
 import json
 import math
+import re
 from typing import Any, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, Field
@@ -947,49 +948,149 @@ def _payload_object_items(payload: Mapping[str, Any]) -> tuple[list[Mapping[str,
     return [], warnings
 
 
-def _parse_tabular_answer_rows(text: str) -> list[dict[str, str]]:
-    """Extract simple TSV rows embedded in a generic PDF answer."""
+_ANSWER_TABLE_HEADER_CELLS = {
+    "synonym",
+    "source",
+    "source_identifier",
+    "count",
+    "label",
+    "name",
+}
 
-    segments: list[list[str]] = []
+
+def _split_answer_table_line(line: str) -> tuple[list[str], str] | None:
+    if "\t" in line:
+        return [cell.strip() for cell in line.split("\t")], "\t"
+    if " | " in line:
+        return [cell.strip() for cell in re.split(r"\s+\|\s+", line)], " | "
+    return None
+
+
+def _normal_answer_header_cell(value: str) -> str:
+    return value.strip().strip("|:()[]{}").lower()
+
+
+def _header_from_answer_text_line(line: str) -> list[str] | None:
+    lowered = line.lower()
+    if "columns:" not in lowered:
+        return None
+    _, raw_columns = line.split(":", 1)
+    raw_columns = raw_columns.strip().strip(":).")
+    split = _split_answer_table_line(raw_columns)
+    if split is None:
+        return None
+    header = [_normal_answer_header_cell(cell) for cell in split[0]]
+    if any(cell in _ANSWER_TABLE_HEADER_CELLS for cell in header):
+        return header
+    return None
+
+
+def _rows_from_answer_segment(
+    *,
+    header: Sequence[str],
+    lines: Sequence[str],
+    delimiter: str,
+) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for line in lines:
+        split = _split_answer_table_line(line)
+        if split is None:
+            continue
+        cells, line_delimiter = split
+        if delimiter == "\t" and line_delimiter != "\t":
+            continue
+        if delimiter != "\t" and line_delimiter == "\t":
+            continue
+        if len(cells) < len(header):
+            continue
+        if len(cells) > len(header):
+            head_cells = cells[: len(header) - 1]
+            tail_cell = " | ".join(cells[len(header) - 1:])
+            cells = [*head_cells, tail_cell]
+        row = {
+            str(key).strip(): str(value).strip()
+            for key, value in zip(header, cells, strict=False)
+            if str(key).strip()
+        }
+        if any(row.values()):
+            rows.append(row)
+        if len(rows) >= MAX_PROJECTION_ROWS:
+            break
+    return rows
+
+
+def _parse_tabular_answer_rows(text: str) -> list[dict[str, str]]:
+    """Extract simple delimited rows embedded in a generic PDF answer."""
+
+    segments: list[tuple[list[str], str, list[str]]] = []
     current: list[str] = []
+    current_header: list[str] | None = None
+    current_delimiter: str | None = None
+
+    def flush_current() -> None:
+        nonlocal current, current_header, current_delimiter
+        if current_header and current_delimiter and current:
+            segments.append((current_header, current_delimiter, current))
+        current = []
+        current_header = None
+        current_delimiter = None
+
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("```"):
-            if current:
-                segments.append(current)
-                current = []
+            flush_current()
             continue
-        if "\t" not in line:
-            if current:
-                segments.append(current)
-                current = []
+
+        declared_header = _header_from_answer_text_line(line)
+        if declared_header:
+            flush_current()
+            current_header = declared_header
+            current_delimiter = " | "
+            continue
+
+        split = _split_answer_table_line(line)
+        if split is None:
+            flush_current()
+            continue
+        cells, delimiter = split
+        normalized_cells = [_normal_answer_header_cell(cell) for cell in cells]
+        if any(cell in _ANSWER_TABLE_HEADER_CELLS for cell in normalized_cells):
+            flush_current()
+            current_header = normalized_cells
+            current_delimiter = delimiter
+            continue
+        if current_header is None or current_delimiter is None:
             continue
         current.append(line)
-    if current:
-        segments.append(current)
+
+    flush_current()
 
     best_rows: list[dict[str, str]] = []
-    for segment in segments:
-        if len(segment) < 2:
+    for header, delimiter, lines in segments:
+        if not any(cell in _ANSWER_TABLE_HEADER_CELLS for cell in header):
             continue
-        header = [cell.strip().lower() for cell in segment[0].split("\t")]
-        if not any(
-            cell in {"synonym", "source", "source_identifier", "count", "label", "name"}
-            for cell in header
-        ):
-            continue
-        reader = csv.DictReader(io.StringIO("\n".join(segment)), delimiter="\t")
-        rows: list[dict[str, str]] = []
-        for row in reader:
-            clean_row = {
-                str(key or "").strip(): str(value or "").strip()
-                for key, value in row.items()
-                if str(key or "").strip()
-            }
-            if any(clean_row.values()):
-                rows.append(clean_row)
-            if len(rows) >= MAX_PROJECTION_ROWS:
-                break
+        if delimiter == "\t":
+            reader = csv.DictReader(
+                io.StringIO("\n".join(["\t".join(header), *lines])),
+                delimiter="\t",
+            )
+            rows = []
+            for row in reader:
+                clean_row = {
+                    str(key or "").strip(): str(value or "").strip()
+                    for key, value in row.items()
+                    if str(key or "").strip()
+                }
+                if any(clean_row.values()):
+                    rows.append(clean_row)
+                if len(rows) >= MAX_PROJECTION_ROWS:
+                    break
+        else:
+            rows = _rows_from_answer_segment(
+                header=header,
+                lines=lines,
+                delimiter=delimiter,
+            )
         if len(rows) > len(best_rows):
             best_rows = rows
     return best_rows
@@ -997,7 +1098,7 @@ def _parse_tabular_answer_rows(text: str) -> list[dict[str, str]]:
 
 def _payload_answer_table_items(payload: Mapping[str, Any]) -> tuple[list[Mapping[str, Any]], list[str]]:
     answer = payload.get("answer")
-    if not isinstance(answer, str) or "\t" not in answer:
+    if not isinstance(answer, str) or ("\t" not in answer and " | " not in answer):
         return [], []
     rows = _parse_tabular_answer_rows(answer)
     if not rows:
