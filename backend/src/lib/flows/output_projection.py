@@ -988,6 +988,34 @@ def _header_from_answer_text_line(line: str) -> list[str] | None:
     return None
 
 
+def _inline_answer_table_segment(line: str) -> tuple[list[str], str, list[str]] | None:
+    lowered = line.lower()
+    marker_index = lowered.find("format:")
+    if marker_index < 0:
+        return None
+
+    raw_after_marker = line[marker_index + len("format:") :].strip()
+    if " | " not in raw_after_marker or "." not in raw_after_marker:
+        return None
+
+    raw_header, raw_rows = raw_after_marker.split(".", 1)
+    split = _split_answer_table_line(raw_header.strip())
+    if split is None:
+        return None
+    header = [_normal_answer_header_cell(cell) for cell in split[0]]
+    if not any(cell in _ANSWER_TABLE_HEADER_CELLS for cell in header):
+        return None
+
+    rows = [
+        segment.strip().strip(".")
+        for segment in raw_rows.split(";")
+        if " | " in segment and segment.strip().strip(".")
+    ]
+    if not rows:
+        return None
+    return header, split[1], rows
+
+
 def _rows_from_answer_segment(
     *,
     header: Sequence[str],
@@ -1043,6 +1071,12 @@ def _parse_tabular_answer_rows(text: str) -> list[dict[str, str]]:
         line = raw_line.strip()
         if not line or line.startswith("```"):
             flush_current()
+            continue
+
+        inline_segment = _inline_answer_table_segment(line)
+        if inline_segment:
+            flush_current()
+            segments.append(inline_segment)
             continue
 
         declared_header = _header_from_answer_text_line(line)
