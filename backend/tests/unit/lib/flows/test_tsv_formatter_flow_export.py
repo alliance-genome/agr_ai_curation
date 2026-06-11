@@ -121,28 +121,6 @@ async def test_tsv_formatter_projects_generic_pdf_answer_table_without_model_fal
             }
         ],
         flow_name="PDF TSV Flow",
-        projection_plan={
-            "format": "tsv",
-            "row_source": "object",
-            "columns": [
-                {
-                    "key": "synonym",
-                    "field_ref": "object.payload.synonym",
-                },
-                {
-                    "key": "source",
-                    "field_ref": "object.payload.source",
-                },
-                {
-                    "key": "source_identifier",
-                    "field_ref": "object.payload.source_identifier",
-                },
-                {
-                    "key": "count",
-                    "field_ref": "object.payload.count",
-                },
-            ],
-        },
     )
 
     assert save_calls[0]["columns"] == [

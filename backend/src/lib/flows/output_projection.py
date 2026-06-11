@@ -86,6 +86,13 @@ OBJECT_DEFAULT_FIELD_PRIORITY = [
     "object.validation_status",
 ]
 
+GENERIC_PDF_ANSWER_TABLE_FIELD_PRIORITY = [
+    "object.payload.synonym",
+    "object.payload.source",
+    "object.payload.source_identifier",
+    "object.payload.count",
+]
+
 EVIDENCE_DEFAULT_FIELD_PRIORITY = [
     "artifact.adapter_key",
     "object.object_type",
@@ -250,6 +257,7 @@ class FlowOutputArtifact(BaseModel):
     artifact_shape: Literal[
         "domain_envelope",
         "legacy_extraction_envelope",
+        "generic_pdf_answer_table",
         "non_structured",
     ] = "non_structured"
     warnings: list[str] = Field(default_factory=list)
@@ -916,11 +924,14 @@ def _validation_records_from_step_metadata(step: Mapping[str, Any]) -> list[Mapp
 def _payload_shape(payload: Any) -> Literal[
     "domain_envelope",
     "legacy_extraction_envelope",
+    "generic_pdf_answer_table",
     "non_structured",
 ]:
     if isinstance(payload, Mapping):
         if payload.get("envelope_id") and payload.get("domain_pack_id") and isinstance(payload.get("objects"), list):
             return "domain_envelope"
+        if _payload_answer_table_items(payload)[0]:
+            return "generic_pdf_answer_table"
         if any(isinstance(payload.get(key), list) for key in ("curatable_objects", "items", "raw_mentions", "exclusions", "ambiguities")):
             return "legacy_extraction_envelope"
     return "non_structured"
@@ -1246,10 +1257,16 @@ def _catalog_for_rows(
 
 def _default_row_source_for_bundle(
     *,
+    artifacts: Sequence[FlowOutputArtifact],
     rows_by_source: Mapping[str, Sequence[Mapping[str, Any]]],
     output_format: FlowOutputFormat | None,
 ) -> FlowOutputRowSource:
     if output_format == "tsv":
+        if rows_by_source.get("object") and any(
+            artifact.artifact_shape == "generic_pdf_answer_table"
+            for artifact in artifacts
+        ):
+            return "object"
         return "artifact"
     if rows_by_source.get("object"):
         return "object"
@@ -1298,6 +1315,7 @@ def build_flow_output_artifact_bundle(
         artifacts=artifacts,
         field_catalog=field_catalog,
         default_row_source=_default_row_source_for_bundle(
+            artifacts=artifacts,
             rows_by_source=rows_by_source,
             output_format=output_format,
         ),
@@ -1311,9 +1329,7 @@ def default_projection_plan(
     output_format: FlowOutputFormat,
     row_source: FlowOutputRowSource | None = None,
 ) -> FlowOutputProjectionPlan:
-    selected_row_source = row_source or (
-        "artifact" if output_format == "tsv" else bundle.default_row_source
-    )
+    selected_row_source = row_source or bundle.default_row_source
     columns = default_columns_for_row_source(bundle, selected_row_source)
     return FlowOutputProjectionPlan(
         format=output_format,
@@ -1330,6 +1346,30 @@ def default_columns_for_row_source(
     if row_source == "artifact":
         priority = ARTIFACT_DEFAULT_FIELD_REFS
     elif row_source == "object":
+        if any(
+            artifact.artifact_shape == "generic_pdf_answer_table"
+            for artifact in bundle.artifacts
+        ):
+            selected = [
+                field_ref
+                for field_ref in GENERIC_PDF_ANSWER_TABLE_FIELD_PRIORITY
+                if field_ref in available
+            ]
+            if not selected:
+                selected = [
+                    field.ref
+                    for field in bundle.field_catalog
+                    if field.row_source == row_source
+                    and field.ref.startswith("object.payload.")
+                ][:12]
+            return [
+                FlowOutputColumnSpec(
+                    key=field_ref.removeprefix("object.payload."),
+                    header=_field_label(field_ref),
+                    field_ref=field_ref,
+                )
+                for field_ref in selected
+            ]
         priority = OBJECT_DEFAULT_FIELD_PRIORITY
     elif row_source == "evidence":
         priority = EVIDENCE_DEFAULT_FIELD_PRIORITY

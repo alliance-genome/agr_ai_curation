@@ -139,11 +139,40 @@ def test_generic_pdf_step_output_projects_answer_table_rows_without_candidate():
 
     object_rows = bundle.rows_for_source("object")
     assert len(bundle.artifacts) == 1
+    assert bundle.artifacts[0].artifact_shape == "generic_pdf_answer_table"
+    assert bundle.default_row_source == "object"
     assert len(object_rows) == 2
     assert object_rows[0]["object.payload.synonym"] == "Ck:GFP"
     assert object_rows[0]["object.payload.source_identifier"] == "New in paper"
     assert object_rows[1]["object.payload.count"] == "2"
     assert bundle.rows_for_source("evidence")[0]["evidence.evidence_record_id"] == "ev-1"
+
+    result = apply_projection_plan(
+        bundle,
+        default_projection_plan(bundle, output_format="tsv"),
+    )
+
+    assert result.row_source == "object"
+    assert [column.key for column in result.columns] == [
+        "synonym",
+        "source",
+        "source_identifier",
+        "count",
+    ]
+    assert result.rows == [
+        {
+            "synonym": "Ck:GFP",
+            "source": "This study",
+            "source_identifier": "New in paper",
+            "count": "4",
+        },
+        {
+            "synonym": "Actn RNAi",
+            "source": "Source not found",
+            "source_identifier": "Not found",
+            "count": "2",
+        },
+    ]
 
 
 def test_plain_text_step_output_without_candidate_is_not_an_artifact():
