@@ -977,6 +977,8 @@ def _header_from_answer_text_line(line: str) -> list[str] | None:
     _, raw_columns = line.split(":", 1)
     raw_columns = raw_columns.strip().strip(":).")
     split = _split_answer_table_line(raw_columns)
+    if split is None and "," in raw_columns:
+        split = ([cell.strip() for cell in raw_columns.split(",")], ",")
     if split is None:
         return None
     header = [_normal_answer_header_cell(cell) for cell in split[0]]

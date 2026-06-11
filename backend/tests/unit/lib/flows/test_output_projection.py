@@ -178,8 +178,8 @@ def test_generic_pdf_step_output_projects_answer_table_rows_without_candidate():
 def test_generic_pdf_step_output_projects_pipe_answer_table_rows():
     payload = {
         "answer": (
-            "Extracted genetic reagents (columns: synonym | source | "
-            "source_identifier | count):\n"
+            "Extracted genetic reagents (columns: synonym, source, "
+            "source_identifier, count):\n"
             "w1118 | Bloomington Drosophila Stock Center | RRID: BDSC_3605 | 1\n"
             "Sas-4s2214|Sas-4 | Bloomington Drosophila Stock Center | "
             "RRID: BDSC_12119 | 11\n"
