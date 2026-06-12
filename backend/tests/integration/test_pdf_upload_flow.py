@@ -11,8 +11,11 @@ import importlib.util
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from src.lib.pdf_limits import MAX_PDF_FILE_SIZE_BYTES
 from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument
+
+DEBBIE_PDF_FILE_SIZE_BYTES = 77_585_577
 
 
 @pytest.fixture(scope="module")
@@ -44,7 +47,7 @@ def seeded_document():
         filename="integration.pdf",
         file_path=f"{document_id}/integration.pdf",
         file_hash="f" * 64,
-        file_size=4096,
+        file_size=DEBBIE_PDF_FILE_SIZE_BYTES,
         page_count=7,
     )
     session.add(record)
@@ -60,6 +63,8 @@ def seeded_document():
 
 def test_upload_flow_exposes_metadata_via_api(client: TestClient, seeded_document: PDFDocument):
     """A persisted PDF document should surface through list/detail/url endpoints."""
+    assert DEBBIE_PDF_FILE_SIZE_BYTES < MAX_PDF_FILE_SIZE_BYTES
+
     list_response = client.get("/api/pdf-viewer/documents")
     assert list_response.status_code == 200
 
@@ -71,6 +76,7 @@ def test_upload_flow_exposes_metadata_via_api(client: TestClient, seeded_documen
         None,
     )
     assert matching is not None, "Seeded document must appear in list endpoint"
+    assert matching.get("file_size") == DEBBIE_PDF_FILE_SIZE_BYTES
     assert matching.get("viewer_url", "").startswith("/uploads/")
 
     detail_response = client.get(f"/api/pdf-viewer/documents/{seeded_document.id}")
@@ -79,6 +85,7 @@ def test_upload_flow_exposes_metadata_via_api(client: TestClient, seeded_documen
     detail = detail_response.json()
     assert detail.get("filename") == seeded_document.filename
     assert detail.get("file_hash") == seeded_document.file_hash
+    assert detail.get("file_size") == DEBBIE_PDF_FILE_SIZE_BYTES
     assert detail.get("viewer_url", "").endswith("integration.pdf")
 
     url_response = client.get(f"/api/pdf-viewer/documents/{seeded_document.id}/url")

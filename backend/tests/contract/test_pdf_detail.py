@@ -10,6 +10,8 @@ from fastapi import FastAPI
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from src.lib.pdf_limits import MAX_PDF_FILE_SIZE_BYTES
+
 
 def _load_openapi_schema() -> Dict[str, Any]:
     module_path = Path(__file__).resolve().parents[2] / 'src' / 'api' / 'pdf_viewer.py'
@@ -83,3 +85,7 @@ def test_pdf_viewer_detail_contract():
     pattern = viewer_url.get("pattern")
     if pattern is not None:
         assert pattern.startswith("^/uploads/"), "viewer_url must live under /uploads"
+
+    file_size = properties.get("file_size", {})
+    assert file_size.get("exclusiveMinimum") == 0
+    assert file_size.get("maximum") == MAX_PDF_FILE_SIZE_BYTES

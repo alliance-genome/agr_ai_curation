@@ -14,6 +14,7 @@ from src.lib.pdf_viewer.rapidfuzz_matcher import (
     PdfPageText,
     match_quote_to_pdf_pages,
 )
+from src.lib.pdf_limits import MAX_PDF_FILE_SIZE_BYTES
 from src.models.sql.database import get_db
 from src.models.sql.pdf_document import PDFDocument as PdfDocumentModel
 
@@ -24,7 +25,12 @@ class PDFDocumentSummary(BaseModel):
     id: UUID = Field(..., description="Unique identifier for the document")
     filename: str = Field(..., min_length=1, max_length=255)
     page_count: int = Field(..., ge=1, le=50)
-    file_size: int = Field(..., gt=0, le=52_428_800, description="File size in bytes")
+    file_size: int = Field(
+        ...,
+        gt=0,
+        le=MAX_PDF_FILE_SIZE_BYTES,
+        description="File size in bytes",
+    )
     upload_timestamp: datetime
     viewer_url: str = Field(..., pattern=r"^/uploads/.*")
 

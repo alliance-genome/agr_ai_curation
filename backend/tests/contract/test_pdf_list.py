@@ -10,6 +10,8 @@ from fastapi import FastAPI
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from src.lib.pdf_limits import MAX_PDF_FILE_SIZE_BYTES
+
 
 def _load_openapi_schema() -> Dict[str, Any]:
     """Load the pdf_viewer router module without importing the full package."""
@@ -84,3 +86,7 @@ def test_pdf_viewer_list_contract():
     assert expected_fields.issubset(doc_required), "Document summary missing required fields"
 
     assert document_schema.get("properties", {}).get("viewer_url", {}).get("type") == "string"
+
+    file_size = document_schema.get("properties", {}).get("file_size", {})
+    assert file_size.get("exclusiveMinimum") == 0
+    assert file_size.get("maximum") == MAX_PDF_FILE_SIZE_BYTES
