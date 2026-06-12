@@ -3,14 +3,24 @@
 from __future__ import annotations
 
 import ast
-import re
 from collections import defaultdict
 from pathlib import Path
 
 
 VERSIONS_DIR = Path(__file__).resolve().parents[2] / "alembic" / "versions"
-REVISION_RE = re.compile(r"^revision\s*[:=]\s*(.+)$", re.MULTILINE)
-DOWN_REVISION_RE = re.compile(r"^down_revision\s*[:=]\s*(.+)$", re.MULTILINE)
+
+
+def _literal_assignment(module: ast.Module, name: str) -> object:
+    for node in module.body:
+        if isinstance(node, ast.Assign):
+            if any(isinstance(target, ast.Name) and target.id == name for target in node.targets):
+                return ast.literal_eval(node.value)
+        if isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == name:
+                if node.value is None:
+                    return None
+                return ast.literal_eval(node.value)
+    raise KeyError(name)
 
 
 def _load_revision_graph() -> tuple[dict[str, tuple[str, object]], dict[str, set[str]]]:
@@ -19,17 +29,15 @@ def _load_revision_graph() -> tuple[dict[str, tuple[str, object]], dict[str, set
 
     for path in VERSIONS_DIR.glob("*.py"):
         text = path.read_text()
-        revision_match = REVISION_RE.search(text)
-        down_revision_match = DOWN_REVISION_RE.search(text)
-        if revision_match is None:
+        module = ast.parse(text, filename=str(path))
+        try:
+            revision = _literal_assignment(module, "revision")
+        except KeyError:
             continue
-
-        revision = ast.literal_eval(revision_match.group(1).split("=", 1)[-1].strip())
-        down_revision = None
-        if down_revision_match is not None:
-            down_revision = ast.literal_eval(
-                down_revision_match.group(1).split("=", 1)[-1].strip()
-            )
+        try:
+            down_revision = _literal_assignment(module, "down_revision")
+        except KeyError:
+            down_revision = None
 
         revisions[revision] = (path.name, down_revision)
 
@@ -47,4 +55,4 @@ def test_alembic_revision_graph_has_single_head():
 
     heads = sorted(revision for revision in revisions if revision not in children)
 
-    assert heads == ["u7v8w9x0y1z2"]
+    assert heads == ["v8w9x0y1z2a3"]

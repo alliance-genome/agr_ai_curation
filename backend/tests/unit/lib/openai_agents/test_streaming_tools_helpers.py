@@ -15,8 +15,6 @@ from src.lib.config import schema_discovery
 from src.lib.openai_agents import streaming_tools
 from src.lib.openai_agents.models import (
     GeneExtractionResultEnvelope,
-    PdfExtractionFinalizationEnvelope,
-    PdfExtractionResultEnvelope,
 )
 from src.lib.prompts.context import (
     bind_prompt_run,
@@ -238,55 +236,6 @@ def test_builder_materializer_agent_detection_uses_finalization_tool_name():
     )
 
 
-def _pdf_live_evidence_record() -> dict:
-    return {
-        "evidence_record_id": "evidence-pdf-1",
-        "entity": "principal finding",
-        "verified_quote": "The principal finding is supported by this exact sentence.",
-        "page": 2,
-        "section": "Results",
-        "chunk_id": "chunk-pdf-1",
-    }
-
-
-def _pdf_finalization_payload(
-    *,
-    evidence_record_id: str = "evidence-pdf-1",
-    include_evidence_records: bool = False,
-    item_overrides: dict | None = None,
-) -> dict:
-    evidence_record = _pdf_live_evidence_record()
-    if evidence_record_id != evidence_record["evidence_record_id"]:
-        evidence_record = {**evidence_record, "evidence_record_id": evidence_record_id}
-    item = {
-        "label": "principal finding",
-        "entity_type": "claim",
-        "source_mentions": ["principal finding"],
-        "evidence_record_ids": [evidence_record_id],
-    }
-    if item_overrides:
-        item = {**item, **item_overrides}
-    payload = {
-        "answer": "The principal finding was supported.",
-        "summary": "Checked the Results section and retained one supported claim.",
-        "items": [item],
-        "raw_mentions": [],
-        "normalization_notes": [],
-        "exclusions": [],
-        "ambiguities": [],
-        "run_summary": {
-            "candidate_count": 1,
-            "kept_count": 1,
-            "excluded_count": 0,
-            "ambiguous_count": 0,
-            "warnings": [],
-        },
-    }
-    if include_evidence_records:
-        payload["evidence_records"] = [evidence_record]
-    return payload
-
-
 def _package_schema(schema_name: str):
     schemas = schema_discovery.discover_agent_schemas(force_reload=True)
     return schemas[schema_name]
@@ -395,77 +344,23 @@ def _search_document_stream_events() -> list[SimpleNamespace]:
     ]
 
 
-def test_pdf_structured_finalization_feedback_accepts_live_evidence_payload():
-    feedback = streaming_tools._structured_specialist_finalization_feedback(
-        _pdf_finalization_payload(),
-        expected_output_type=PdfExtractionResultEnvelope,
-        finalization_config=_finalization_config("ask_pdf_extraction_specialist"),
-        tool_calls=[streaming_tools.SpecialistToolCall(tool_name="search_document")],
-        live_evidence_records=[_pdf_live_evidence_record()],
-    )
-
-    assert feedback.accepted_payload is not None
-    assert feedback.message == "PdfExtractionResultEnvelope accepted."
-    assert feedback.summary["live_evidence_record_count"] == 1
-    assert feedback.accepted_payload["items"][0]["evidence_record_ids"] == [
-        "evidence-pdf-1"
-    ]
-    accepted_record = feedback.accepted_payload["evidence_records"][0]
-    for key, value in _pdf_live_evidence_record().items():
-        assert accepted_record[key] == value
+def test_pdf_extraction_no_longer_uses_structured_finalization_config():
+    assert _finalization_config("ask_pdf_extraction_specialist") == {}
 
 
-def test_pdf_structured_finalization_feedback_rejects_model_authored_evidence_registry():
-    feedback = streaming_tools._structured_specialist_finalization_feedback(
-        _pdf_finalization_payload(include_evidence_records=True),
-        expected_output_type=PdfExtractionResultEnvelope,
-        finalization_config=_finalization_config("ask_pdf_extraction_specialist"),
-        tool_calls=[streaming_tools.SpecialistToolCall(tool_name="search_document")],
-        live_evidence_records=[_pdf_live_evidence_record()],
-    )
-
-    assert feedback.accepted_payload is None
-    assert feedback.message.startswith("PdfExtractionFinalizationEnvelope rejected")
-    assert "evidence_records" in feedback.message
-
-
-def test_pdf_structured_finalization_feedback_rejects_nested_model_authored_quote_fields():
-    feedback = streaming_tools._structured_specialist_finalization_feedback(
-        _pdf_finalization_payload(
-            item_overrides={
-                "verified_quote": "The model must not type this source quote.",
-            }
-        ),
-        expected_output_type=PdfExtractionResultEnvelope,
-        finalization_config=_finalization_config("ask_pdf_extraction_specialist"),
-        tool_calls=[streaming_tools.SpecialistToolCall(tool_name="search_document")],
-        live_evidence_records=[_pdf_live_evidence_record()],
-    )
-
-    assert feedback.accepted_payload is None
-    assert feedback.message.startswith("PdfExtractionFinalizationEnvelope rejected")
-    assert "items.0.verified_quote" in feedback.message
-
-
-def test_pdf_structured_finalization_config_resolves_id_only_input_schema():
-    config = _finalization_config("ask_pdf_extraction_specialist")
-
-    assert config["input_schema"] == "PdfExtractionFinalizationEnvelope"
-    assert (
-        streaming_tools._structured_finalization_input_type(config)
-        is PdfExtractionFinalizationEnvelope
-    )
-
-
-def test_pdf_prompt_uses_id_only_finalization_contract():
+def test_pdf_prompt_uses_generic_builder_contract():
     prompt_text = (
         REPO_PACKAGES_DIR / "alliance" / "agents" / "pdf" / "prompt.yaml"
     ).read_text(encoding="utf-8")
 
-    assert "PdfExtractionFinalizationEnvelope" in prompt_text
+    assert "list_generic_object_classes" in prompt_text
+    assert "stage_generic_object" in prompt_text
+    assert "finalize_generic_extraction" in prompt_text
+    assert "generic:generic_object" in prompt_text
+    assert "PdfExtractionFinalizationEnvelope" not in prompt_text
     assert "all verified quotes in `evidence_records[]`" not in prompt_text
     assert "evidence_records[]` must not be empty" not in prompt_text
-    assert "Do not include `evidence_records`" in prompt_text
+    assert "legacy PDF extraction fields" in prompt_text
 
 
 def test_builder_extractor_prompts_do_not_expose_quote_fields_in_examples():
@@ -487,77 +382,6 @@ def test_builder_extractor_prompts_do_not_expose_quote_fields_in_examples():
         assert "source_span_ids" not in prompt_text, prompt_path
 
 
-def test_pdf_structured_finalization_feedback_rejects_invented_evidence_id():
-    feedback = streaming_tools._structured_specialist_finalization_feedback(
-        _pdf_finalization_payload(evidence_record_id="invented-evidence"),
-        expected_output_type=PdfExtractionResultEnvelope,
-        finalization_config=_finalization_config("ask_pdf_extraction_specialist"),
-        tool_calls=[streaming_tools.SpecialistToolCall(tool_name="search_document")],
-        live_evidence_records=[_pdf_live_evidence_record()],
-    )
-
-    assert feedback.accepted_payload is None
-    assert feedback.field_errors
-    assert any(
-        error.get("field") == "evidence_record_ids"
-        for error in feedback.field_errors
-    )
-
-
-def test_pdf_structured_finalization_feedback_requires_document_retrieval():
-    feedback = streaming_tools._structured_specialist_finalization_feedback(
-        _pdf_finalization_payload(),
-        expected_output_type=PdfExtractionResultEnvelope,
-        finalization_config=_finalization_config("ask_pdf_extraction_specialist"),
-        tool_calls=[],
-        live_evidence_records=[_pdf_live_evidence_record()],
-    )
-
-    assert feedback.accepted_payload is None
-    assert any(error.get("field") == "tool_calls" for error in feedback.field_errors)
-
-
-def test_pdf_structured_finalization_rejects_hallucinated_empty_answer_evidence():
-    payload = {
-        "answer": "No relevant findings were found.",
-        "summary": "Searches did not find relevant passages.",
-        "items": [],
-        "raw_mentions": [],
-        "evidence_records": [
-            {
-                "evidence_record_id": "invented-empty-answer-evidence",
-                "entity": "negative result",
-                "verified_quote": "This quote was not returned by record_evidence.",
-                "page": 1,
-                "section": "Results",
-                "chunk_id": "chunk-invented",
-            }
-        ],
-        "normalization_notes": [],
-        "exclusions": [],
-        "ambiguities": [],
-        "run_summary": {
-            "candidate_count": 0,
-            "kept_count": 0,
-            "excluded_count": 0,
-            "ambiguous_count": 0,
-            "warnings": [],
-        },
-    }
-
-    feedback = streaming_tools._structured_specialist_finalization_feedback(
-        payload,
-        expected_output_type=PdfExtractionResultEnvelope,
-        finalization_config=_finalization_config("ask_pdf_extraction_specialist"),
-        tool_calls=[streaming_tools.SpecialistToolCall(tool_name="search_document")],
-        live_evidence_records=[],
-    )
-
-    assert feedback.accepted_payload is None
-    assert feedback.message.startswith("PdfExtractionFinalizationEnvelope rejected")
-    assert "evidence_records" in feedback.message
-
-
 def test_structured_finalization_caps_rejected_attempts():
     def passthrough_tool_factory(**_kwargs):
         def decorate(func):
@@ -567,30 +391,30 @@ def test_structured_finalization_caps_rejected_attempts():
 
     state = streaming_tools._StructuredSpecialistFinalizationState(
         required=True,
-        tool_name="finalize_pdf_extraction",
-        agent_name="General PDF Extraction Agent",
-        output_type_name="PdfExtractionResultEnvelope",
-        config={"checks": ["pdf_evidence"]},
+        tool_name="finalize_test_output",
+        agent_name="Structured Output Agent",
+        output_type_name="_Envelope",
+        config={},
         max_attempts=2,
     )
     finalizer = streaming_tools._build_structured_specialist_finalization_tool(
-        expected_output_type=PdfExtractionResultEnvelope,
+        expected_output_type=_Envelope,
         finalization_state=state,
         tool_calls=[],
         live_evidence_records=[],
         function_tool_factory=passthrough_tool_factory,
     )
 
-    first = finalizer(_pdf_finalization_payload())
+    first = finalizer({})
     assert first["status"] == "rejected"
     assert state.attempt_limit_exceeded is False
 
-    second = finalizer(_pdf_finalization_payload())
+    second = finalizer({})
     assert second["status"] == "rejected"
     assert state.attempt_limit_exceeded is True
     assert "structured_finalization_attempt_limit_exceeded" in second["warnings"]
 
-    third = finalizer(_pdf_finalization_payload())
+    third = finalizer({})
     assert third["status"] == "rejected"
     assert "structured_finalization_attempt_limit_exceeded" in third["warnings"]
     assert third["field_errors"][0]["field"] == "finalization_attempts"
@@ -1543,120 +1367,6 @@ async def test_builder_materializer_agent_rejects_structured_output_schema():
             "output_type": "_Envelope",
         }
     ]
-
-
-@pytest.mark.asyncio
-async def test_pdf_specialist_prefers_accepted_finalization_payload(monkeypatch):
-    accepted_payload = _pdf_finalization_payload(include_evidence_records=True)
-    captured_events = []
-    captured = {}
-
-    class _FakeFinalizePdfTool:
-        name = "finalize_pdf_extraction"
-
-        def __init__(self, state):
-            self._state = state
-
-        def accept(self):
-            self._state.accepted_payload = accepted_payload
-
-    def _fake_build_structured_finalization_tool(**kwargs):
-        state = kwargs["finalization_state"]
-        captured["state"] = state
-        return _FakeFinalizePdfTool(state)
-
-    def _run_streamed(runtime_agent, *args, **kwargs):
-        captured["tools"] = list(getattr(runtime_agent, "tools", []) or [])
-        captured["max_turns"] = kwargs.get("max_turns")
-        finalizer = next(
-            tool for tool in captured["tools"] if getattr(tool, "name", "") == "finalize_pdf_extraction"
-        )
-        finalizer.accept()
-        return _FakeRunResult(
-            events=_search_document_stream_events(),
-            final_output={"answer": "Untrusted SDK output"},
-            new_items=[],
-        )
-
-    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
-    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
-    monkeypatch.setattr(
-        streaming_tools,
-        "_build_structured_specialist_finalization_tool",
-        _fake_build_structured_finalization_tool,
-    )
-    monkeypatch.setattr(streaming_tools.Runner, "run_streamed", _run_streamed)
-
-    agent = SimpleNamespace(
-        name="General PDF Extraction Agent",
-        tools=[SimpleNamespace(name="search_document")],
-        output_type=PdfExtractionResultEnvelope,
-        instructions="base instructions",
-        model="gpt-4o",
-    )
-
-    result = await streaming_tools.run_specialist_with_events(
-        agent,
-        "summarize the paper",
-        "General PDF Extraction Agent",
-        max_turns=3,
-        tool_name="ask_pdf_extraction_specialist",
-    )
-
-    assert result == accepted_payload["answer"]
-    assert captured["max_turns"] == 5
-    assert captured["state"].accepted_payload == accepted_payload
-    assert any(
-        event.get("type") == "evidence_summary"
-        and event.get("evidence_records") == accepted_payload["evidence_records"]
-        for event in captured_events
-    )
-    assert not any(event.get("type") == "SPECIALIST_RETRY" for event in captured_events)
-
-
-@pytest.mark.asyncio
-async def test_pdf_specialist_requires_accepted_finalization(monkeypatch):
-    captured_events = []
-
-    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
-    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent: None)
-    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
-    monkeypatch.setattr(
-        streaming_tools.Runner,
-        "run_streamed",
-        lambda *args, **kwargs: _FakeRunResult(
-            events=_search_document_stream_events(),
-            final_output=_pdf_finalization_payload(),
-            new_items=[],
-        ),
-    )
-
-    agent = SimpleNamespace(
-        name="General PDF Extraction Agent",
-        tools=[SimpleNamespace(name="search_document")],
-        output_type=PdfExtractionResultEnvelope,
-        instructions="base instructions",
-        model="gpt-4o",
-    )
-
-    with pytest.raises(
-        streaming_tools.SpecialistOutputError,
-        match="mandatory finalize_pdf_extraction",
-    ):
-        await streaming_tools.run_specialist_with_events(
-            agent,
-            "summarize the paper",
-            "General PDF Extraction Agent",
-            max_turns=3,
-            tool_name="ask_pdf_extraction_specialist",
-        )
-
-    assert any(
-        event.get("type") == "SPECIALIST_ERROR"
-        and event.get("details", {}).get("reason") == "structured_finalization_missing"
-        for event in captured_events
-    )
 
 
 def test_domain_envelope_reduction_prioritizes_materialized_fields_for_supervisor():

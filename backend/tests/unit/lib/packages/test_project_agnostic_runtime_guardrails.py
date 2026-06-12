@@ -168,6 +168,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/contract/alliance/domain_packs/test_export_submission_adapters.py"),
     Path("backend/tests/contract/alliance/domain_packs/test_gene_domain_pack.py"),
     Path("backend/tests/contract/alliance/domain_packs/test_gene_expression_domain_pack.py"),
+    Path("backend/tests/contract/alliance/domain_packs/test_generic_domain_pack.py"),
     Path("backend/tests/contract/alliance/domain_packs/test_live_db_lookup_contract.py"),
     Path("backend/tests/contract/alliance/domain_packs/test_phenotype_builder_domain_pack.py"),
     Path("backend/tests/contract/alliance/domain_packs/test_phenotype_domain_pack.py"),
