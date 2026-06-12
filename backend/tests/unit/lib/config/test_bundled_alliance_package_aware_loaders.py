@@ -99,6 +99,22 @@ def _assert_builder_extractor_tools(tools, *, domain: str):
     assert finalize.startswith("finalize_") and finalize.endswith("_extraction"), suffix
 
 
+def _assert_generic_builder_extractor_tools(tools):
+    prefix = tools[: len(BUILDER_EVIDENCE_TOOL_PREFIX)]
+    suffix = tools[len(BUILDER_EVIDENCE_TOOL_PREFIX) :]
+
+    assert prefix == BUILDER_EVIDENCE_TOOL_PREFIX
+    assert suffix == [
+        "list_generic_object_classes",
+        "stage_generic_object",
+        "patch_generic_object",
+        "discard_generic_object",
+        "list_staged_generic_objects",
+        "find_staged_generic_objects",
+        "finalize_generic_extraction",
+    ]
+
+
 def _iter_dict_nodes(value):
     if isinstance(value, dict):
         yield value
@@ -141,6 +157,19 @@ def test_bundled_alliance_gene_extractor_declares_record_evidence(monkeypatch):
     # verbs.
     assert gene_extractor.output_schema is None
     _assert_builder_extractor_tools(gene_extractor.tools, domain="gene")
+
+
+def test_bundled_alliance_pdf_extraction_uses_generic_builder(monkeypatch):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+
+    agents = agent_loader.load_agent_definitions(force_reload=True)
+    pdf_extraction = agents["pdf_extraction"]
+
+    assert pdf_extraction.output_schema is None
+    assert pdf_extraction.curation.adapter_key == "generic"
+    assert pdf_extraction.curation.domain_pack_id == "generic"
+    assert pdf_extraction.curation.launchable is True
+    _assert_generic_builder_extractor_tools(pdf_extraction.tools)
 
 
 def test_bundled_alliance_gene_expression_declares_record_evidence(monkeypatch):

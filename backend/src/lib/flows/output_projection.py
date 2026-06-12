@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 from collections import defaultdict
-import csv
 from datetime import datetime
-import io
 import json
 import math
-import re
 from typing import Any, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, Field
@@ -26,6 +23,7 @@ from src.lib.openai_agents.config import (
 
 FlowOutputFormat = Literal["csv", "tsv", "json", "chat"]
 FlowOutputRowSource = Literal["artifact", "object", "evidence", "validation_finding"]
+FlowOutputRowStrategy = Literal["object", "object_ledger", "wide_union"]
 FlowOutputJsonShape = Literal["rows", "grouped", "bundle"]
 FlowOutputChatLayout = Literal["table", "sections", "bullets"]
 FlowOutputTransformType = Literal[
@@ -66,6 +64,7 @@ ARTIFACT_DEFAULT_FIELD_REFS = [
     "artifact.agent_id",
     "artifact.agent_name",
     "artifact.adapter_key",
+    "artifact.source_key",
     "envelope.domain_pack_id",
     "envelope.envelope_id",
     "artifact.object_count",
@@ -87,11 +86,18 @@ OBJECT_DEFAULT_FIELD_PRIORITY = [
     "object.validation_status",
 ]
 
-GENERIC_PDF_ANSWER_TABLE_FIELD_PRIORITY = [
-    "object.payload.synonym",
-    "object.payload.source",
-    "object.payload.source_identifier",
-    "object.payload.count",
+OBJECT_LEDGER_FIELD_PRIORITY = [
+    "artifact.extraction_result_id",
+    "artifact.source_key",
+    "artifact.adapter_key",
+    "envelope.domain_pack_id",
+    "object.object_type",
+    "object.object_id",
+    "object.pending_ref_id",
+    "object.payload.class_key",
+    "object.label",
+    "object.evidence_record_ids",
+    "object.validation_status",
 ]
 
 EVIDENCE_DEFAULT_FIELD_PRIORITY = [
@@ -122,6 +128,8 @@ _FIELD_LABEL_OVERRIDES = {
     "artifact.agent_id": "Agent ID",
     "artifact.agent_name": "Agent",
     "artifact.adapter_key": "Adapter",
+    "artifact.source_key": "Source Key",
+    "artifact.is_canonical_curation_data": "Canonical Curation Data",
     "artifact.object_count": "Object Count",
     "artifact.evidence_count": "Evidence Count",
     "artifact.candidate_count": "Candidate Count",
@@ -151,6 +159,7 @@ _ARTIFACT_KEY_BY_REF = {
     "artifact.agent_id": "agent_id",
     "artifact.agent_name": "agent_name",
     "artifact.adapter_key": "adapter_key",
+    "artifact.source_key": "source_key",
     "envelope.domain_pack_id": "domain_pack_id",
     "envelope.envelope_id": "envelope_id",
     "artifact.object_count": "object_count",
@@ -230,6 +239,9 @@ class FlowOutputProjectionPlan(BaseModel):
     group_by: list[str] = Field(default_factory=list)
     json_shape: FlowOutputJsonShape = "rows"
     chat_layout: FlowOutputChatLayout = "table"
+    row_strategy: FlowOutputRowStrategy = "object"
+    source_extraction_result_ids: list[str] = Field(default_factory=list)
+    source_keys: list[str] = Field(default_factory=list)
     missing_value: str = ""
     max_rows: int | None = None
 
@@ -248,6 +260,8 @@ class FlowOutputArtifact(BaseModel):
     agent_id: str = ""
     agent_name: str = ""
     adapter_key: str = ""
+    source_key: str = ""
+    is_canonical_curation_data: bool = False
     extraction_result_id: str | None = None
     envelope_id: str = ""
     domain_pack_id: str = ""
@@ -257,8 +271,7 @@ class FlowOutputArtifact(BaseModel):
     artifact_preview: str = ""
     artifact_shape: Literal[
         "domain_envelope",
-        "legacy_extraction_envelope",
-        "generic_pdf_answer_table",
+        "domain_extraction_result",
         "non_structured",
     ] = "non_structured"
     warnings: list[str] = Field(default_factory=list)
@@ -447,6 +460,8 @@ def _artifact_row(
     agent_id: str,
     agent_name: str,
     adapter_key: str,
+    source_key: str,
+    is_canonical_curation_data: bool,
     domain_pack_id: str,
     envelope_id: str,
     object_count: int,
@@ -460,6 +475,8 @@ def _artifact_row(
         "artifact.agent_id": agent_id,
         "artifact.agent_name": agent_name,
         "artifact.adapter_key": adapter_key,
+        "artifact.source_key": source_key,
+        "artifact.is_canonical_curation_data": is_canonical_curation_data,
         "artifact.object_count": object_count,
         "artifact.evidence_count": evidence_count,
         "artifact.candidate_count": candidate_count,
@@ -478,6 +495,8 @@ def _artifact_context(row: Mapping[str, Any]) -> dict[str, Any]:
             "artifact.agent_id",
             "artifact.agent_name",
             "artifact.adapter_key",
+            "artifact.source_key",
+            "artifact.is_canonical_curation_data",
             "artifact.extraction_result_id",
             "envelope.domain_pack_id",
             "envelope.envelope_id",
@@ -924,240 +943,33 @@ def _validation_records_from_step_metadata(step: Mapping[str, Any]) -> list[Mapp
 
 def _payload_shape(payload: Any) -> Literal[
     "domain_envelope",
-    "legacy_extraction_envelope",
-    "generic_pdf_answer_table",
+    "domain_extraction_result",
     "non_structured",
 ]:
     if isinstance(payload, Mapping):
         if payload.get("envelope_id") and payload.get("domain_pack_id") and isinstance(payload.get("objects"), list):
             return "domain_envelope"
-        if _payload_answer_table_items(payload)[0]:
-            return "generic_pdf_answer_table"
-        if any(isinstance(payload.get(key), list) for key in ("curatable_objects", "items", "raw_mentions", "exclusions", "ambiguities")):
-            return "legacy_extraction_envelope"
+        if isinstance(payload.get("curatable_objects"), list):
+            return "domain_extraction_result"
     return "non_structured"
 
 
-def _payload_object_items(payload: Mapping[str, Any]) -> tuple[list[Mapping[str, Any]], list[str]]:
-    warnings: list[str] = []
-    for key in ("objects", "curatable_objects", "items", "raw_mentions", "exclusions", "ambiguities"):
-        value = payload.get(key)
-        if isinstance(value, list):
-            return [item for item in value if isinstance(item, Mapping)], warnings
-    warnings.append("No supported object list was found for this structured artifact.")
-    return [], warnings
-
-
-_ANSWER_TABLE_HEADER_CELLS = {
-    "synonym",
-    "source",
-    "source_identifier",
-    "count",
-    "label",
-    "name",
-}
-
-
-def _split_answer_table_line(line: str) -> tuple[list[str], str] | None:
-    if "\t" in line:
-        return [cell.strip() for cell in line.split("\t")], "\t"
-    if " | " in line:
-        return [cell.strip() for cell in re.split(r"\s+\|\s+", line)], " | "
-    return None
-
-
-def _normal_answer_header_cell(value: str) -> str:
-    return value.strip().strip("|:()[]{}").lower()
-
-
-def _header_from_answer_text_line(line: str) -> list[str] | None:
-    lowered = line.lower()
-    marker_index = lowered.find("columns:")
-    if marker_index < 0:
-        return None
-    raw_columns = line[marker_index + len("columns:") :]
-    raw_columns = raw_columns.strip().strip(":).")
-    split = _split_answer_table_line(raw_columns)
-    if split is None and "," in raw_columns:
-        split = ([cell.strip() for cell in raw_columns.split(",")], ",")
-    if split is None:
-        return None
-    header = [_normal_answer_header_cell(cell) for cell in split[0]]
-    if any(cell in _ANSWER_TABLE_HEADER_CELLS for cell in header):
-        return header
-    return None
-
-
-def _inline_answer_table_segment(line: str) -> tuple[list[str], str, list[str]] | None:
-    lowered = line.lower()
-    marker_index = lowered.find("format:")
-    if marker_index < 0:
-        return None
-
-    raw_after_marker = line[marker_index + len("format:") :].strip()
-    if " | " not in raw_after_marker or "." not in raw_after_marker:
-        return None
-
-    raw_header, raw_rows = raw_after_marker.split(".", 1)
-    split = _split_answer_table_line(raw_header.strip())
-    if split is None:
-        return None
-    header = [_normal_answer_header_cell(cell) for cell in split[0]]
-    if not any(cell in _ANSWER_TABLE_HEADER_CELLS for cell in header):
-        return None
-
-    rows = [
-        segment.strip().strip(".")
-        for segment in raw_rows.split(";")
-        if " | " in segment and segment.strip().strip(".")
-    ]
-    if not rows:
-        return None
-    return header, split[1], rows
-
-
-def _rows_from_answer_segment(
+def _payload_object_items(
+    payload: Mapping[str, Any],
     *,
-    header: Sequence[str],
-    lines: Sequence[str],
-    delimiter: str,
-) -> list[dict[str, str]]:
-    rows: list[dict[str, str]] = []
-    parsed_line_delimiters = {delimiter}
-    if delimiter == ",":
-        parsed_line_delimiters = {"\t", " | "}
-    for line in lines:
-        split = _split_answer_table_line(line)
-        if split is None:
-            continue
-        cells, line_delimiter = split
-        if line_delimiter not in parsed_line_delimiters:
-            continue
-        if len(cells) < len(header):
-            continue
-        if len(cells) > len(header):
-            head_cells = cells[: len(header) - 1]
-            tail_cell = " | ".join(cells[len(header) - 1:])
-            cells = [*head_cells, tail_cell]
-        row = {
-            str(key).strip(): str(value).strip()
-            for key, value in zip(header, cells, strict=False)
-            if str(key).strip()
-        }
-        if any(row.values()):
-            rows.append(row)
-        if len(rows) >= MAX_PROJECTION_ROWS:
-            break
-    return rows
-
-
-def _parse_tabular_answer_rows(text: str) -> list[dict[str, str]]:
-    """Extract simple delimited rows embedded in a generic PDF answer."""
-
-    segments: list[tuple[list[str], str, list[str]]] = []
-    current: list[str] = []
-    current_header: list[str] | None = None
-    current_delimiter: str | None = None
-
-    def flush_current() -> None:
-        nonlocal current, current_header, current_delimiter
-        if current_header and current_delimiter and current:
-            segments.append((current_header, current_delimiter, current))
-        current = []
-        current_header = None
-        current_delimiter = None
-
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("```"):
-            flush_current()
-            continue
-
-        inline_segment = _inline_answer_table_segment(line)
-        if inline_segment:
-            flush_current()
-            segments.append(inline_segment)
-            continue
-
-        declared_header = _header_from_answer_text_line(line)
-        if declared_header:
-            flush_current()
-            current_header = declared_header
-            current_delimiter = ","
-            continue
-
-        split = _split_answer_table_line(line)
-        if split is None:
-            flush_current()
-            continue
-        cells, delimiter = split
-        normalized_cells = [_normal_answer_header_cell(cell) for cell in cells]
-        if any(cell in _ANSWER_TABLE_HEADER_CELLS for cell in normalized_cells):
-            flush_current()
-            current_header = normalized_cells
-            current_delimiter = delimiter
-            continue
-        if current_header is None or current_delimiter is None:
-            continue
-        current.append(line)
-
-    flush_current()
-
-    best_rows: list[dict[str, str]] = []
-    for header, delimiter, lines in segments:
-        if not any(cell in _ANSWER_TABLE_HEADER_CELLS for cell in header):
-            continue
-        if delimiter == "\t":
-            reader = csv.DictReader(
-                io.StringIO("\n".join(["\t".join(header), *lines])),
-                delimiter="\t",
-            )
-            rows = []
-            for row in reader:
-                clean_row = {
-                    str(key or "").strip(): str(value or "").strip()
-                    for key, value in row.items()
-                    if str(key or "").strip()
-                }
-                if any(clean_row.values()):
-                    rows.append(clean_row)
-                if len(rows) >= MAX_PROJECTION_ROWS:
-                    break
-        else:
-            rows = _rows_from_answer_segment(
-                header=header,
-                lines=lines,
-                delimiter=delimiter,
-            )
-        if len(rows) > len(best_rows):
-            best_rows = rows
-    return best_rows
-
-
-def _payload_answer_table_items(payload: Mapping[str, Any]) -> tuple[list[Mapping[str, Any]], list[str]]:
-    answer = payload.get("answer")
-    if not isinstance(answer, str) or ("\t" not in answer and " | " not in answer):
-        return [], []
-    rows = _parse_tabular_answer_rows(answer)
-    if not rows:
-        return [], []
-    items: list[Mapping[str, Any]] = []
-    for index, row in enumerate(rows, start=1):
-        label = (
-            row.get("synonym")
-            or row.get("label")
-            or row.get("name")
-            or next((value for value in row.values() if value), f"row {index}")
-        )
-        items.append(
-            {
-                "object_type": "extracted_answer_row",
-                "object_id": f"answer-row-{index}",
-                "label": label,
-                "payload": row,
-            }
-        )
-    return items, ["Projected object rows from a TSV-like table in the PDF extraction answer."]
+    shape: str,
+) -> tuple[list[Mapping[str, Any]], list[str]]:
+    warnings: list[str] = []
+    if shape == "domain_envelope":
+        value = payload.get("objects")
+    elif shape == "domain_extraction_result":
+        value = payload.get("curatable_objects")
+    else:
+        value = None
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, Mapping)], warnings
+    warnings.append("No canonical curation object list was found for this artifact.")
+    return [], warnings
 
 
 def _payload_from_step_output(step: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -1192,9 +1004,45 @@ def _candidate_attr(candidate: Any, key: str, default: Any = None) -> Any:
     return getattr(candidate, key, default)
 
 
+def _artifact_source_key(
+    *,
+    step: Mapping[str, Any],
+    candidate: Any,
+    metadata: Mapping[str, Any],
+    agent_id: str,
+    step_number: int | None,
+) -> str:
+    for value in (
+        step.get("source_key"),
+        metadata.get("flow_step_key"),
+        metadata.get("source_key"),
+    ):
+        normalized = _string_value(value)
+        if normalized:
+            return normalized
+
+    key_parts = [
+        _string_value(metadata.get("flow_id")),
+        _string_value(metadata.get("step") or step_number),
+        _string_value(metadata.get("tool_name") or step.get("tool_name")),
+        _string_value(_candidate_attr(candidate, "agent_key") or agent_id),
+    ]
+    source_key = ":".join(part for part in key_parts if part)
+    if source_key:
+        return source_key
+
+    fallback_parts = [
+        _string_value(step_number),
+        _string_value(step.get("tool_name")),
+        _string_value(agent_id),
+    ]
+    return ":".join(part for part in fallback_parts if part)
+
+
 def _build_artifact_from_step(step: Mapping[str, Any]) -> FlowOutputArtifact | None:
     candidate = _step_attr(step, "candidate")
     payload = _candidate_attr(candidate, "payload_json")
+    payload_from_candidate = payload is not None
     if payload is None:
         payload = _payload_from_step_output(step)
     if payload is None:
@@ -1211,7 +1059,16 @@ def _build_artifact_from_step(step: Mapping[str, Any]) -> FlowOutputArtifact | N
     adapter_key = _string_value(_candidate_attr(candidate, "adapter_key") or agent_id)
     candidate_count = int(_candidate_attr(candidate, "candidate_count", 0) or 0)
     metadata = _candidate_attr(candidate, "metadata", {}) or {}
+    if not isinstance(metadata, Mapping):
+        metadata = {}
     extraction_result_id = _string_value(_step_attr(step, "extraction_result_id") or (metadata.get("extraction_result_id") if isinstance(metadata, Mapping) else None)) or None
+    source_key = _artifact_source_key(
+        step=step,
+        candidate=candidate,
+        metadata=metadata,
+        agent_id=agent_id,
+        step_number=step_number,
+    )
     preview = _compact_text(_step_attr(step, "output_preview") or _step_attr(step, "output"))
 
     shape = _payload_shape(payload)
@@ -1222,9 +1079,7 @@ def _build_artifact_from_step(step: Mapping[str, Any]) -> FlowOutputArtifact | N
     if isinstance(payload, Mapping):
         domain_pack_id = _string_value(payload.get("domain_pack_id") or payload.get("adapter_key"))
         envelope_id = _string_value(payload.get("envelope_id"))
-        object_items, object_warnings = _payload_answer_table_items(payload)
-        if not object_items:
-            object_items, object_warnings = _payload_object_items(payload)
+        object_items, object_warnings = _payload_object_items(payload, shape=shape)
         if shape == "non_structured":
             object_items = []
         warnings.extend(object_warnings)
@@ -1237,6 +1092,8 @@ def _build_artifact_from_step(step: Mapping[str, Any]) -> FlowOutputArtifact | N
         agent_id=agent_id,
         agent_name=agent_name,
         adapter_key=adapter_key,
+        source_key=source_key,
+        is_canonical_curation_data=payload_from_candidate,
         domain_pack_id=domain_pack_id,
         envelope_id=envelope_id,
         object_count=object_count,
@@ -1281,6 +1138,15 @@ def _build_artifact_from_step(step: Mapping[str, Any]) -> FlowOutputArtifact | N
                 records=_explicit_evidence_records(payload),
             )
         )
+        payload_metadata = payload.get("metadata")
+        if isinstance(payload_metadata, Mapping):
+            rows_by_source["evidence"].extend(
+                _evidence_rows_from_records(
+                    artifact_context=artifact_context,
+                    object_row=None,
+                    records=_explicit_evidence_records(payload_metadata),
+                )
+            )
         rows_by_source["validation_finding"].extend(
             _validation_rows_from_records(
                 artifact_context=artifact_context,
@@ -1288,6 +1154,14 @@ def _build_artifact_from_step(step: Mapping[str, Any]) -> FlowOutputArtifact | N
                 records=_explicit_validation_findings(payload),
             )
         )
+        if isinstance(payload_metadata, Mapping):
+            rows_by_source["validation_finding"].extend(
+                _validation_rows_from_records(
+                    artifact_context=artifact_context,
+                    object_row=None,
+                    records=_explicit_validation_findings(payload_metadata),
+                )
+            )
 
     step_evidence_records = _step_evidence_records(step)
     if step_evidence_records:
@@ -1334,18 +1208,16 @@ def _build_artifact_from_step(step: Mapping[str, Any]) -> FlowOutputArtifact | N
         evidence_rows=rows_by_source["evidence"],
     )
 
-    if shape == "legacy_extraction_envelope":
-        warnings.append(
-            "Legacy extraction envelope projected through explicit top-level list mappings only."
-        )
     if shape == "non_structured":
-        warnings.append("Only artifact-summary rows are available for this non-structured artifact.")
+        warnings.append("No canonical curation object rows are available for this artifact.")
 
     return FlowOutputArtifact(
         step=step_number,
         agent_id=agent_id,
         agent_name=agent_name,
         adapter_key=adapter_key,
+        source_key=source_key,
+        is_canonical_curation_data=payload_from_candidate,
         extraction_result_id=extraction_result_id,
         envelope_id=envelope_id,
         domain_pack_id=domain_pack_id,
@@ -1400,13 +1272,9 @@ def _default_row_source_for_bundle(
     rows_by_source: Mapping[str, Sequence[Mapping[str, Any]]],
     output_format: FlowOutputFormat | None,
 ) -> FlowOutputRowSource:
+    del artifacts
     if output_format == "tsv":
-        if rows_by_source.get("object") and any(
-            artifact.artifact_shape == "generic_pdf_answer_table"
-            for artifact in artifacts
-        ):
-            return "object"
-        return "artifact"
+        return "object"
     if rows_by_source.get("object"):
         return "object"
     if rows_by_source.get("artifact"):
@@ -1480,45 +1348,36 @@ def default_projection_plan(
 def default_columns_for_row_source(
     bundle: FlowOutputArtifactBundle,
     row_source: FlowOutputRowSource,
+    *,
+    row_strategy: FlowOutputRowStrategy = "object",
+    available_refs: set[str] | None = None,
 ) -> list[FlowOutputColumnSpec]:
-    available = bundle.field_refs_for_source(row_source)
+    available = available_refs if available_refs is not None else bundle.field_refs_for_source(row_source)
     if row_source == "artifact":
         priority = ARTIFACT_DEFAULT_FIELD_REFS
     elif row_source == "object":
-        if any(
-            artifact.artifact_shape == "generic_pdf_answer_table"
-            for artifact in bundle.artifacts
-        ):
-            priority_selected = [
-                field_ref
-                for field_ref in GENERIC_PDF_ANSWER_TABLE_FIELD_PRIORITY
-                if field_ref in available
-            ]
-            selected = [
-                *priority_selected,
-                *[
-                    field.ref
-                    for field in bundle.field_catalog
-                    if field.row_source == row_source
-                    and field.ref.startswith("object.payload.")
-                    and field.ref not in priority_selected
-                ],
-            ]
-            return [
-                FlowOutputColumnSpec(
-                    key=field_ref.removeprefix("object.payload."),
-                    header=_field_label(field_ref),
-                    field_ref=field_ref,
-                )
-                for field_ref in selected
-            ]
-        priority = OBJECT_DEFAULT_FIELD_PRIORITY
+        priority = (
+            OBJECT_LEDGER_FIELD_PRIORITY
+            if row_strategy in {"object_ledger", "wide_union"}
+            else OBJECT_DEFAULT_FIELD_PRIORITY
+        )
     elif row_source == "evidence":
         priority = EVIDENCE_DEFAULT_FIELD_PRIORITY
     else:
         priority = VALIDATION_DEFAULT_FIELD_PRIORITY
 
     selected = [field_ref for field_ref in priority if field_ref in available]
+    if row_source == "object" and row_strategy == "wide_union":
+        selected = [
+            *selected,
+            *[
+                field.ref
+                for field in bundle.field_catalog
+                if field.row_source == row_source
+                and field.ref.startswith("object.payload.")
+                and field.ref not in selected
+            ],
+        ]
     if not selected:
         selected = [
             field.ref
@@ -1581,6 +1440,78 @@ def projection_plan_allows_empty_bundle(plan: FlowOutputProjectionPlan) -> bool:
     )
 
 
+def _source_id_for_row(row: Mapping[str, Any]) -> str:
+    return _string_value(row.get("artifact.extraction_result_id"))
+
+
+def _source_key_for_row(row: Mapping[str, Any]) -> str:
+    explicit_source_key = _string_value(row.get("artifact.source_key"))
+    if explicit_source_key:
+        return explicit_source_key
+    source_id = _source_id_for_row(row)
+    if source_id:
+        return f"extraction_result:{source_id}"
+    return ":".join(
+        [
+            "artifact",
+            _string_value(row.get("artifact.step")),
+            _string_value(row.get("artifact.agent_id")),
+            _string_value(row.get("artifact.adapter_key")),
+        ]
+    )
+
+
+def _source_keys_for_rows(rows: Sequence[Mapping[str, Any]]) -> set[str]:
+    return {_source_key_for_row(row) for row in rows}
+
+
+def _source_ids_for_rows(rows: Sequence[Mapping[str, Any]]) -> set[str]:
+    return {source_id for row in rows if (source_id := _source_id_for_row(row))}
+
+
+def _field_refs_for_rows(rows: Sequence[Mapping[str, Any]]) -> set[str]:
+    return {
+        str(key)
+        for row in rows
+        for key in row
+    }
+
+
+def _canonical_object_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        dict(row)
+        for row in rows
+        if row.get("artifact.is_canonical_curation_data") is True
+    ]
+
+
+def _rows_for_plan(
+    bundle: FlowOutputArtifactBundle,
+    plan: FlowOutputProjectionPlan,
+) -> list[dict[str, Any]]:
+    rows = bundle.rows_for_source(plan.row_source)
+    selected_source_ids = {
+        source_id.strip()
+        for source_id in plan.source_extraction_result_ids
+        if isinstance(source_id, str) and source_id.strip()
+    }
+    selected_source_keys = {
+        source_key.strip()
+        for source_key in plan.source_keys
+        if isinstance(source_key, str) and source_key.strip()
+    }
+    if not selected_source_ids and not selected_source_keys:
+        return rows
+    return [
+        row
+        for row in rows
+        if (
+            (selected_source_ids and _source_id_for_row(row) in selected_source_ids)
+            or (selected_source_keys and _source_key_for_row(row) in selected_source_keys)
+        )
+    ]
+
+
 def validate_projection_plan(
     bundle: FlowOutputArtifactBundle,
     plan: FlowOutputProjectionPlan,
@@ -1589,8 +1520,68 @@ def validate_projection_plan(
 
     errors: list[str] = []
     warnings: list[str] = list(bundle.warnings)
-    rows = bundle.rows_for_source(plan.row_source)
+    all_rows = bundle.rows_for_source(plan.row_source)
+    rows = _rows_for_plan(bundle, plan)
+    if plan.format == "tsv" and plan.row_source == "artifact":
+        errors.append(
+            "Artifact-summary rows cannot be used for curation TSV exports; "
+            "select canonical object rows from a backend extraction result."
+        )
+    if plan.row_strategy != "object" and plan.row_source != "object":
+        errors.append("row_strategy is only supported with row_source='object'.")
+    if (plan.source_extraction_result_ids or plan.source_keys) and plan.row_source != "object":
+        errors.append("source selection is only supported with row_source='object'.")
+    if plan.row_source == "object":
+        requested_source_ids = {
+            source_id.strip()
+            for source_id in plan.source_extraction_result_ids
+            if isinstance(source_id, str) and source_id.strip()
+        }
+        requested_source_keys = {
+            source_key.strip()
+            for source_key in plan.source_keys
+            if isinstance(source_key, str) and source_key.strip()
+        }
+        available_source_ids = _source_ids_for_rows(all_rows)
+        available_source_keys = _source_keys_for_rows(all_rows)
+        missing_source_ids = sorted(requested_source_ids - available_source_ids)
+        if missing_source_ids:
+            errors.append(
+                "source_extraction_result_ids include IDs with no canonical object rows: "
+                + ", ".join(missing_source_ids)
+            )
+        missing_source_keys = sorted(requested_source_keys - available_source_keys)
+        if missing_source_keys:
+            errors.append(
+                "source_keys include keys with no canonical object rows: "
+                + ", ".join(missing_source_keys)
+            )
+        if plan.format == "tsv":
+            noncanonical_rows = [
+                row
+                for row in rows
+                if row.get("artifact.is_canonical_curation_data") is not True
+            ]
+            if noncanonical_rows:
+                errors.append(
+                    "Curation TSV exports require canonical backend extraction data; "
+                    "model-written step output cannot be used as TSV object rows."
+                )
+        source_keys = _source_keys_for_rows(rows)
+        if plan.format == "tsv" and len(source_keys) > 1 and plan.row_strategy == "object":
+            errors.append(
+                "Multiple canonical extraction sources are available for this TSV export; "
+                "select one source_extraction_result_id/source_key or use "
+                "row_strategy='object_ledger' or row_strategy='wide_union' for an "
+                "explicit combined export plan."
+            )
+
     synthetic_literal_row = not rows and projection_plan_allows_empty_bundle(plan)
+    if plan.format == "tsv" and synthetic_literal_row:
+        errors.append(
+            "Curation TSV exports require canonical backend extraction object rows; "
+            "literal-only TSV projections are not allowed."
+        )
     if not rows and not synthetic_literal_row:
         errors.append(f"Row source '{plan.row_source}' is not available for this flow output.")
     if synthetic_literal_row:
@@ -1601,8 +1592,13 @@ def validate_projection_plan(
     if plan.max_rows is not None and (plan.max_rows < 1 or plan.max_rows > MAX_PROJECTION_ROWS):
         errors.append(f"max_rows must be between 1 and {MAX_PROJECTION_ROWS}.")
 
-    available_refs = bundle.field_refs_for_source(plan.row_source)
-    columns = plan.columns or default_columns_for_row_source(bundle, plan.row_source)
+    available_refs = _field_refs_for_rows(rows) if rows else bundle.field_refs_for_source(plan.row_source)
+    columns = plan.columns or default_columns_for_row_source(
+        bundle,
+        plan.row_source,
+        row_strategy=plan.row_strategy,
+        available_refs=available_refs,
+    )
     if not columns:
         errors.append(f"No columns are available for row source '{plan.row_source}'.")
 
@@ -1847,7 +1843,7 @@ def apply_projection_plan(
     if errors:
         raise ValueError("; ".join(errors))
 
-    rows = bundle.rows_for_source(plan.row_source)
+    rows = _rows_for_plan(bundle, plan)
     if not rows and projection_plan_allows_empty_bundle(plan):
         rows = [{}]
     for filter_spec in plan.filters:

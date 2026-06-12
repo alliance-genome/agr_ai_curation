@@ -104,8 +104,13 @@ class TestAgentLoader:
         assert pdf is not None
         assert pdf.supervisor_routing.enabled is True
         assert pdf.supervisor_routing.batchable is False
-        assert pdf.output_schema == "PdfExtractionResultEnvelope"
+        assert pdf.output_schema is None
+        assert pdf.curation.adapter_key == "generic"
+        assert pdf.curation.launchable is True
         assert "record_evidence" in pdf.tools
+        assert "list_generic_object_classes" in pdf.tools
+        assert "stage_generic_object" in pdf.tools
+        assert "finalize_generic_extraction" in pdf.tools
 
     def test_gene_extractor_exposes_curation_routing_metadata(self):
         """Launchable curation extractors should declare package-owned adapter routing."""

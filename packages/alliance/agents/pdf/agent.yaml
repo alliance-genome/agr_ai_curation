@@ -13,9 +13,9 @@ agent_id: pdf_extraction
 name: "General PDF Extraction Agent"
 
 description: >
-  Provides broad document extraction for uploaded PDFs with verified evidence,
-  explicit retention/exclusion decisions, and a concise answer summary for
-  general paper questions when a more specific extractor is not required.
+  Provides broad document extraction for uploaded PDFs as canonical generic
+  curation objects with verified evidence when a more specific extractor is not
+  required.
 
 category: "Extraction"
 subcategory: "PDF Extraction"
@@ -28,29 +28,44 @@ supervisor_routing:
   enabled: true
   description: >
     Ask the General PDF Extraction Agent about the loaded document. Use for
-    broad questions about paper content, methods, results, and figures.
+    broad extraction requests about paper content, methods, results, figures,
+    reagents, claims, or other evidence-backed objects.
   batchable: false  # Document-based agent, processes one document at a time
 
 # -----------------------------------------------------------------------------
 # TOOLS
 # -----------------------------------------------------------------------------
+# Builder tool-loop: inspect the paper -> record evidence -> choose explicit generic
+# class keys -> stage generic objects -> finalize canonical extraction data.
 tools:
   - search_document
   - read_chunk
   - read_section
   - read_subsection
   - record_evidence
+  - list_recorded_evidence
+  - get_recorded_evidence
+  - attach_evidence_to_object
+  - detach_evidence_from_object
+  - discard_recorded_evidence
+  - update_recorded_evidence_metadata
+  - get_agent_contract
+  - agr_species_context_lookup
+  - list_generic_object_classes
+  - stage_generic_object
+  - patch_generic_object
+  - discard_generic_object
+  - list_staged_generic_objects
+  - find_staged_generic_objects
+  - finalize_generic_extraction
 
 # -----------------------------------------------------------------------------
 # OUTPUT SCHEMA
 # -----------------------------------------------------------------------------
-output_schema: PdfExtractionResultEnvelope
-structured_finalization:
-  enabled: true
-  tool_name: finalize_pdf_extraction
-  input_schema: PdfExtractionFinalizationEnvelope
-  checks:
-    - pdf_evidence
+# Builder-pattern agents are FORBIDDEN a model-authored output schema; the backend
+# materializes canonical generic DomainEnvelopeExtractionResult data from staged
+# builder state.
+output_schema: null
 
 # -----------------------------------------------------------------------------
 # MODEL CONFIGURATION
@@ -77,6 +92,14 @@ batch_capabilities:
 frontend:
   icon: "📄"
   show_in_palette: true
+
+# -----------------------------------------------------------------------------
+# CURATION ROUTING
+# -----------------------------------------------------------------------------
+curation:
+  adapter_key: "generic"
+  domain_pack_id: "generic"
+  launchable: true
 
 # -----------------------------------------------------------------------------
 # GROUP RULES

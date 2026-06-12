@@ -34,6 +34,49 @@ def _completed_artifact_step():
     }
 
 
+def _completed_source_step(
+    executor,
+    *,
+    step: int,
+    agent_id: str,
+    adapter_key: str,
+    object_type: str,
+    object_id: str,
+    payload: dict,
+    extraction_result_id: str | None = None,
+    metadata: dict | None = None,
+):
+    source_id = extraction_result_id or f"{adapter_key}-step-{step}"
+    result = {
+        "step": step,
+        "agent_id": agent_id,
+        "agent_name": agent_id.replace("_", " ").title(),
+        "output_preview": f"Extracted {object_type}.",
+        "candidate": executor.ExtractionEnvelopeCandidate(
+            agent_key=agent_id,
+            payload_json={
+                "domain_pack_id": adapter_key,
+                "envelope_id": f"env-{source_id}",
+                "objects": [
+                    {
+                        "object_type": object_type,
+                        "object_id": object_id,
+                        "status": "candidate",
+                        "payload": payload,
+                    }
+                ],
+            },
+            candidate_count=1,
+            adapter_key=adapter_key,
+            conversation_summary=f"Extracted {object_type}.",
+            metadata=metadata or {},
+        ),
+    }
+    if extraction_result_id is not None:
+        result["extraction_result_id"] = extraction_result_id
+    return result
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "agent_id",
@@ -54,7 +97,48 @@ async def test_terminal_formatter_flow_output_fails_without_model_fallback(agent
 
 
 @pytest.mark.asyncio
-async def test_tsv_formatter_projects_generic_pdf_answer_table_without_model_fallback(
+async def test_tsv_formatter_rejects_literal_only_projection_without_objects(monkeypatch):
+    executor = _executor_module()
+    save_calls = []
+
+    async def _fake_save_tsv_impl(
+        data_json: str,
+        filename: str,
+        columns: str | None = None,
+    ) -> dict:
+        save_calls.append({"data": json.loads(data_json), "columns": columns})
+        return {"file_id": "unexpected", "filename": filename, "format": "tsv"}
+
+    monkeypatch.setattr(
+        "src.lib.openai_agents.tools.file_output_tools._save_tsv_impl",
+        _fake_save_tsv_impl,
+    )
+
+    with pytest.raises(
+        executor.FlowTerminalOutputProjectionError,
+        match="literal-only TSV projections are not allowed",
+    ):
+        await executor._try_project_terminal_flow_output(
+            agent_id="tsv_formatter",
+            completed_steps=[],
+            flow_name="No Artifacts",
+            projection_plan={
+                "format": "tsv",
+                "row_source": "artifact",
+                "columns": [
+                    {
+                        "key": "status",
+                        "transform": {"type": "literal", "value": "completed"},
+                    }
+                ],
+            },
+        )
+
+    assert save_calls == []
+
+
+@pytest.mark.asyncio
+async def test_tsv_formatter_rejects_pdf_answer_table_without_canonical_objects(
     monkeypatch,
 ):
     executor = _executor_module()
@@ -108,40 +192,209 @@ async def test_tsv_formatter_projects_generic_pdf_answer_table_without_model_fal
         _fake_save_tsv_impl,
     )
 
+    with pytest.raises(
+        executor.FlowTerminalOutputProjectionError,
+        match="no completed structured artifacts",
+    ):
+        await executor._try_project_terminal_flow_output(
+            agent_id="tsv_formatter",
+            completed_steps=[
+                {
+                    "step": 1,
+                    "agent_id": "pdf_extraction",
+                    "agent_name": "General PDF Extraction Agent",
+                    "output": json.dumps(payload),
+                    "output_preview": "Extracted genetic reagents.",
+                    "candidate": None,
+                }
+            ],
+            flow_name="PDF TSV Flow",
+        )
+
+    assert save_calls == []
+
+
+@pytest.mark.asyncio
+async def test_tsv_formatter_projects_canonical_pdf_curatable_objects_without_model_fallback(
+    monkeypatch,
+):
+    executor = _executor_module()
+    save_calls = []
+    payload = {
+        "summary": "Two generic reagent candidates were retained.",
+        "curatable_objects": [
+            {
+                "object_type": "generic_reagent_candidate",
+                "pending_ref_id": "generic-obj-1",
+                "payload": {
+                    "class_key": "generic:generic_reagent_candidate",
+                    "label": "Ck:GFP",
+                    "source": "This study",
+                    "source_identifier": "New in paper",
+                    "count": 4,
+                },
+                "evidence_record_ids": ["ev-1"],
+            },
+            {
+                "object_type": "generic_reagent_candidate",
+                "pending_ref_id": "generic-obj-2",
+                "payload": {
+                    "class_key": "generic:generic_reagent_candidate",
+                    "label": "Actn RNAi",
+                    "source": "Source not found",
+                    "source_identifier": "Not found",
+                    "count": 2,
+                },
+                "evidence_record_ids": ["ev-2"],
+            },
+        ],
+        "metadata": {
+            "evidence_records": [
+                {"evidence_record_id": "ev-1", "verified_quote": "Ck:GFP was reported."},
+                {"evidence_record_id": "ev-2", "verified_quote": "Actn RNAi was reported."},
+            ]
+        },
+        "run_summary": {"candidate_count": 2, "kept_count": 2},
+    }
+
+    async def _fake_save_tsv_impl(
+        data_json: str,
+        filename: str,
+        columns: str | None = None,
+    ) -> dict:
+        save_calls.append(
+            {
+                "data": json.loads(data_json),
+                "filename": filename,
+                "columns": json.loads(columns or "[]"),
+            }
+        )
+        return {
+            "file_id": "file-pdf-tsv",
+            "filename": "pdf.tsv",
+            "format": "tsv",
+            "size_bytes": 1234,
+            "mime_type": "text/tab-separated-values",
+            "download_url": "/api/files/file-pdf-tsv/download",
+            "created_at": "2026-06-11T00:00:00Z",
+        }
+
+    monkeypatch.setattr(
+        "src.lib.openai_agents.tools.file_output_tools._save_tsv_impl",
+        _fake_save_tsv_impl,
+    )
+
     await executor._try_project_terminal_flow_output(
         agent_id="tsv_formatter",
         completed_steps=[
             {
                 "step": 1,
+                "extraction_result_id": "extract-generic-1",
                 "agent_id": "pdf_extraction",
                 "agent_name": "General PDF Extraction Agent",
-                "output": json.dumps(payload),
                 "output_preview": "Extracted genetic reagents.",
-                "candidate": None,
+                "candidate": executor.ExtractionEnvelopeCandidate(
+                    agent_key="pdf_extraction",
+                    payload_json=payload,
+                    candidate_count=2,
+                    adapter_key="generic",
+                    conversation_summary="Extracted two generic reagents.",
+                ),
             }
         ],
         flow_name="PDF TSV Flow",
     )
 
-    assert save_calls[0]["columns"] == [
-        "synonym",
-        "source",
-        "source_identifier",
-        "count",
+    assert "artifact_preview" not in save_calls[0]["columns"]
+    assert "object_payload_label" in save_calls[0]["columns"]
+    assert [row["object_payload_label"] for row in save_calls[0]["data"]] == [
+        "Ck:GFP",
+        "Actn RNAi",
     ]
-    assert save_calls[0]["data"] == [
-        {
-            "synonym": "Ck:GFP",
-            "source": "This study",
-            "source_identifier": "New in paper",
-            "count": "4",
+
+
+@pytest.mark.asyncio
+async def test_tsv_formatter_applies_explicit_multi_source_export_plan(monkeypatch):
+    executor = _executor_module()
+    save_calls = []
+    completed_steps = [
+        _completed_source_step(
+            executor,
+            step=1,
+            agent_id="gene_extractor",
+            adapter_key="gene",
+            object_type="Gene",
+            object_id="gene-1",
+            payload={"symbol": "BRCA1", "primary_external_id": "TEST:GENE001"},
+            metadata={"flow_id": "flow-1", "step": 1, "tool_name": "ask_gene"},
+        ),
+        _completed_source_step(
+            executor,
+            step=2,
+            agent_id="allele_extractor",
+            adapter_key="allele",
+            object_type="Allele",
+            object_id="allele-1",
+            payload={"allele_symbol": "brca1[tm1]", "primary_external_id": "TEST:ALLELE001"},
+            metadata={"flow_id": "flow-1", "step": 2, "tool_name": "ask_allele"},
+        ),
+    ]
+
+    async def _fake_save_tsv_impl(
+        data_json: str,
+        filename: str,
+        columns: str | None = None,
+    ) -> dict:
+        save_calls.append(
+            {
+                "data": json.loads(data_json),
+                "filename": filename,
+                "columns": json.loads(columns or "[]"),
+            }
+        )
+        return {
+            "file_id": "file-multi-tsv",
+            "filename": "multi.tsv",
+            "format": "tsv",
+            "size_bytes": 1234,
+            "mime_type": "text/tab-separated-values",
+            "download_url": "/api/files/file-multi-tsv/download",
+            "created_at": "2026-06-11T00:00:00Z",
+        }
+
+    monkeypatch.setattr(
+        "src.lib.openai_agents.tools.file_output_tools._save_tsv_impl",
+        _fake_save_tsv_impl,
+    )
+
+    with pytest.raises(
+        executor.FlowTerminalOutputProjectionError,
+        match="Multiple canonical extraction sources",
+    ):
+        await executor._try_project_terminal_flow_output(
+            agent_id="tsv_formatter",
+            completed_steps=completed_steps,
+            flow_name="Multi TSV Flow",
+        )
+
+    await executor._try_project_terminal_flow_output(
+        agent_id="tsv_formatter",
+        completed_steps=completed_steps,
+        flow_name="Multi TSV Flow",
+        projection_plan={
+            "format": "tsv",
+            "row_source": "object",
+            "row_strategy": "object_ledger",
+            "source_keys": [
+                "flow-1:1:ask_gene:gene_extractor",
+                "flow-1:2:ask_allele:allele_extractor",
+            ],
         },
-        {
-            "synonym": "Actn RNAi",
-            "source": "Source not found",
-            "source_identifier": "Not found",
-            "count": "2",
-        },
+    )
+
+    assert [row["source_key"] for row in save_calls[0]["data"]] == [
+        "flow-1:1:ask_gene:gene_extractor",
+        "flow-1:2:ask_allele:allele_extractor",
     ]
 
 

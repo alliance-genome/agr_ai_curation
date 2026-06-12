@@ -8,6 +8,10 @@ from agr_ai_curation_alliance.domain_packs.disease import (
     DiseaseAnnotationSubmissionBlockerAdapter,
 )
 from agr_ai_curation_alliance.domain_packs.gene import GeneMentionEvidenceExportAdapter
+from agr_ai_curation_alliance.domain_packs.generic import (
+    GENERIC_DOMAIN_PACK_ID,
+    get_generated_generic_domain_pack,
+)
 from agr_ai_curation_alliance.domain_packs.loader import get_alliance_domain_pack
 from agr_ai_curation_alliance.domain_packs.gene_expression import (
     GeneExpressionExportAdapter,
@@ -35,6 +39,7 @@ _STRUCTURED_ADAPTER_DOMAIN_PACKS = {
     "allele": "agr.alliance.allele",
     "disease": "agr.alliance.disease",
     "gene": "gene",
+    "generic": GENERIC_DOMAIN_PACK_ID,
     "gene_expression": "agr.alliance.gene_expression",
     "phenotype": "agr.alliance.phenotype",
 }
@@ -42,6 +47,7 @@ _DOMAIN_EXPORT_ADAPTERS = {
     "allele": AllelePaperEvidenceExportAdapter,
     "disease": DiseaseAnnotationExportAdapter,
     "gene": GeneMentionEvidenceExportAdapter,
+    "generic": JsonBundleExportAdapter,
     "gene_expression": GeneExpressionExportAdapter,
     "phenotype": PhenotypeAnnotationExportAdapter,
 }
@@ -60,7 +66,7 @@ def register_curation_adapters(registry) -> None:
 
     structured_normalizer = StructuredPayloadCandidateNormalizer()
     for adapter_key, domain_pack_id in _STRUCTURED_ADAPTER_DOMAIN_PACKS.items():
-        domain_pack = get_alliance_domain_pack(domain_pack_id)
+        domain_pack = _domain_pack_for(adapter_key, domain_pack_id)
         export_adapter = _export_adapter_for(adapter_key)
         submission_transport_adapters = _submission_transport_adapters_for(adapter_key)
         registry.register_adapter(
@@ -79,7 +85,13 @@ def register_curation_adapters(registry) -> None:
         adapter_key=REFERENCE_ADAPTER_KEY,
         candidate_normalizer=ReferenceCandidateNormalizer(),
         export_adapter=JsonBundleExportAdapter(adapter_key=REFERENCE_ADAPTER_KEY),
-    )
+        )
+
+
+def _domain_pack_for(adapter_key: str, domain_pack_id: str):
+    if adapter_key == GENERIC_DOMAIN_PACK_ID:
+        return get_generated_generic_domain_pack()
+    return get_alliance_domain_pack(domain_pack_id)
 
 
 def _export_adapter_for(adapter_key: str):

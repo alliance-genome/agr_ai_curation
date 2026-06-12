@@ -77,6 +77,13 @@ object_definitions:
       object_role: validated_reference
       evidence_role: gene_mention_evidence
       blocking_validation: false
+      generic_extraction:
+        stageable: true
+        task_hints:
+          - gene
+          - gene mention
+          - symbol
+          - allele or genotype context gene
       workspace_display:
         primary_label_field: mention
         secondary_label_field: gene_symbol

@@ -20,6 +20,7 @@ from src.lib.flows.output_projection import (
 def _completed_domain_step():
     return {
         "step": 1,
+        "extraction_result_id": "extract-gene-1",
         "agent_id": "gene_extractor",
         "agent_name": "Gene Extractor",
         "output_preview": "Extracted gene rows.",
@@ -71,7 +72,106 @@ def _completed_domain_step():
     }
 
 
-def test_default_tsv_artifact_projection_matches_compatibility_columns():
+def _completed_generic_pdf_step():
+    return {
+        "step": 1,
+        "extraction_result_id": "extract-generic-1",
+        "agent_id": "pdf_extraction",
+        "agent_name": "General PDF Extraction Agent",
+        "output_preview": "Extracted generic reagent candidates.",
+        "candidate": SimpleNamespace(
+            agent_key="pdf_extraction",
+            adapter_key="generic",
+            candidate_count=2,
+            conversation_summary="Extracted two generic reagents.",
+            payload_json={
+                "summary": "Two genetic reagent candidates were retained.",
+                "curatable_objects": [
+                    {
+                        "object_type": "generic_reagent_candidate",
+                        "pending_ref_id": "generic-obj-1",
+                        "payload": {
+                            "class_key": "generic:generic_reagent_candidate",
+                            "label": "Ck:GFP",
+                            "source": "This study",
+                            "source_identifier": "New in paper",
+                            "count": 4,
+                        },
+                        "evidence_record_ids": ["ev-1"],
+                    },
+                    {
+                        "object_type": "generic_reagent_candidate",
+                        "pending_ref_id": "generic-obj-2",
+                        "payload": {
+                            "class_key": "generic:generic_reagent_candidate",
+                            "label": "Actn RNAi",
+                            "source": "Source not found",
+                            "source_identifier": "Not found",
+                            "count": 2,
+                        },
+                        "evidence_record_ids": ["ev-2"],
+                    },
+                ],
+                "metadata": {
+                    "evidence_records": [
+                        {
+                            "evidence_record_id": "ev-1",
+                            "verified_quote": "Ck:GFP was reported.",
+                        },
+                        {
+                            "evidence_record_id": "ev-2",
+                            "verified_quote": "Actn RNAi was reported.",
+                        },
+                    ]
+                },
+                "run_summary": {"candidate_count": 2, "kept_count": 2},
+            },
+        ),
+    }
+
+
+def _completed_domain_source_step(
+    *,
+    step: int,
+    agent_id: str,
+    adapter_key: str,
+    object_type: str,
+    object_id: str,
+    payload: dict,
+    extraction_result_id: str | None = None,
+    metadata: dict | None = None,
+):
+    source_id = extraction_result_id or f"{adapter_key}-step-{step}"
+    result = {
+        "step": step,
+        "agent_id": agent_id,
+        "agent_name": agent_id.replace("_", " ").title(),
+        "output_preview": f"Extracted {object_type}.",
+        "candidate": SimpleNamespace(
+            agent_key=agent_id,
+            adapter_key=adapter_key,
+            candidate_count=1,
+            metadata=metadata or {},
+            payload_json={
+                "domain_pack_id": adapter_key,
+                "envelope_id": f"env-{source_id}",
+                "objects": [
+                    {
+                        "object_type": object_type,
+                        "object_id": object_id,
+                        "status": "candidate",
+                        "payload": payload,
+                    }
+                ],
+            },
+        ),
+    }
+    if extraction_result_id is not None:
+        result["extraction_result_id"] = extraction_result_id
+    return result
+
+
+def test_default_tsv_projection_uses_canonical_object_rows():
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[_completed_domain_step()],
         flow_name="Projection Flow",
@@ -83,23 +183,14 @@ def test_default_tsv_artifact_projection_matches_compatibility_columns():
         default_projection_plan(bundle, output_format="tsv"),
     )
 
-    assert result.row_source == "artifact"
-    assert result.rows == [
-        {
-            "step": 1,
-            "agent_id": "gene_extractor",
-            "agent_name": "Gene Extractor",
-            "adapter_key": "gene",
-            "domain_pack_id": "gene",
-            "envelope_id": "env-gene-1",
-            "object_count": 2,
-            "candidate_count": 2,
-            "artifact_preview": "Extracted gene rows.",
-        }
-    ]
+    assert result.row_source == "object"
+    assert result.total_count == 2
+    assert "artifact_preview" not in [column.key for column in result.columns]
+    assert result.rows[0]["object_payload_symbol"] == "BRCA1"
+    assert result.rows[1]["object_payload_symbol"] == "TP53"
 
 
-def test_generic_pdf_step_output_projects_answer_table_rows_without_candidate():
+def test_prose_answer_output_cannot_become_curation_tsv_rows():
     payload = {
         "answer": (
             "Extracted rows:\n\n"
@@ -107,21 +198,7 @@ def test_generic_pdf_step_output_projects_answer_table_rows_without_candidate():
             "Ck:GFP\tThis study\tNew in paper\t4\n"
             "Actn RNAi\tSource not found\tNot found\t2\n"
         ),
-        "items": [
-            {
-                "label": "group-level audit item",
-                "entity_type": "genetic reagent group",
-                "evidence_record_ids": ["ev-1"],
-            }
-        ],
-        "evidence_records": [
-            {
-                "evidence_record_id": "ev-1",
-                "verified_quote": "Server verified quote.",
-            }
-        ],
     }
-
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[
             {
@@ -137,239 +214,349 @@ def test_generic_pdf_step_output_projects_answer_table_rows_without_candidate():
         output_format="tsv",
     )
 
-    object_rows = bundle.rows_for_source("object")
-    assert len(bundle.artifacts) == 1
-    assert bundle.artifacts[0].artifact_shape == "generic_pdf_answer_table"
+    assert bundle.artifacts == []
+
+    with pytest.raises(ValueError, match="Row source 'object' is not available"):
+        apply_projection_plan(
+            bundle,
+            default_projection_plan(bundle, output_format="tsv"),
+        )
+
+
+def test_legacy_semantic_lists_cannot_become_curation_tsv_rows():
+    step = {
+        "step": 1,
+        "agent_id": "pdf_extraction",
+        "agent_name": "General PDF Extraction Agent",
+        "candidate": SimpleNamespace(
+            agent_key="pdf_extraction",
+            adapter_key="generic",
+            candidate_count=1,
+            payload_json={
+                "items": [{"label": "Ck:GFP", "status": "candidate"}],
+                "raw_mentions": [{"label": "raw mention"}],
+                "exclusions": [{"label": "excluded"}],
+                "ambiguities": [{"label": "ambiguous"}],
+                "run_summary": {"candidate_count": 1},
+            },
+        ),
+    }
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[step],
+        flow_name="Legacy Projection Flow",
+        output_format="tsv",
+    )
+
+    assert bundle.artifacts[0].artifact_shape == "non_structured"
+    assert bundle.rows_for_source("object") == []
     assert bundle.default_row_source == "object"
-    assert len(object_rows) == 2
-    assert object_rows[0]["object.payload.synonym"] == "Ck:GFP"
-    assert object_rows[0]["object.payload.source_identifier"] == "New in paper"
-    assert object_rows[1]["object.payload.count"] == "2"
+    with pytest.raises(ValueError, match="Row source 'object' is not available"):
+        apply_projection_plan(
+            bundle,
+            default_projection_plan(bundle, output_format="tsv"),
+        )
+
+
+def test_artifact_summary_rows_are_rejected_for_curation_tsv_exports():
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[
+            {
+                "step": 1,
+                "agent_id": "pdf_extraction",
+                "candidate": SimpleNamespace(
+                    agent_key="pdf_extraction",
+                    adapter_key="generic",
+                    candidate_count=1,
+                    payload_json={"answer": "Narrative only."},
+                ),
+            }
+        ],
+        flow_name="Artifact Projection Flow",
+        output_format="tsv",
+    )
+
+    with pytest.raises(ValueError, match="Artifact-summary rows cannot be used"):
+        apply_projection_plan(
+            bundle,
+            FlowOutputProjectionPlan(format="tsv", row_source="artifact"),
+        )
+
+
+def test_literal_only_projection_cannot_create_curation_tsv_without_objects():
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[],
+        flow_name="Projection Flow",
+        output_format="tsv",
+    )
+
+    with pytest.raises(ValueError, match="literal-only TSV projections are not allowed"):
+        apply_projection_plan(
+            bundle,
+            FlowOutputProjectionPlan(
+                format="tsv",
+                row_source="artifact",
+                columns=[
+                    FlowOutputColumnSpec(
+                        key="status",
+                        transform=FlowOutputTransformSpec(
+                            type="literal",
+                            value="completed",
+                        ),
+                    )
+                ],
+            ),
+        )
+
+
+def test_raw_step_output_curatable_objects_cannot_become_curation_tsv_rows():
+    payload = {
+        "summary": "Model-written lookalike payload.",
+        "curatable_objects": [
+            {
+                "object_type": "generic_reagent_candidate",
+                "pending_ref_id": "raw-output-1",
+                "payload": {
+                    "class_key": "generic:generic_reagent_candidate",
+                    "label": "Ck:GFP",
+                },
+            }
+        ],
+    }
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[
+            {
+                "step": 1,
+                "agent_id": "pdf_extraction",
+                "agent_name": "General PDF Extraction Agent",
+                "output": json.dumps(payload),
+                "output_preview": "Model-written JSON.",
+                "candidate": None,
+            }
+        ],
+        flow_name="Raw Output Projection Flow",
+        output_format="tsv",
+    )
+
+    assert bundle.rows_for_source("object")
+    assert bundle.rows_for_source("object")[0]["artifact.is_canonical_curation_data"] is False
+    with pytest.raises(ValueError, match="model-written step output cannot be used"):
+        apply_projection_plan(
+            bundle,
+            default_projection_plan(bundle, output_format="tsv"),
+        )
+
+
+def test_nested_raw_step_output_objects_cannot_become_curation_tsv_rows():
+    payload = {
+        "result": {
+            "domain_pack_id": "gene",
+            "envelope_id": "env-raw-gene",
+            "objects": [
+                {
+                    "object_type": "Gene",
+                    "object_id": "gene-raw-1",
+                    "payload": {"symbol": "BRCA1"},
+                }
+            ],
+        }
+    }
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[
+            {
+                "step": 1,
+                "agent_id": "gene_extractor",
+                "output": json.dumps(payload),
+                "candidate": None,
+            }
+        ],
+        flow_name="Nested Raw Output Flow",
+        output_format="tsv",
+    )
+
+    assert bundle.rows_for_source("object")
+    with pytest.raises(ValueError, match="model-written step output cannot be used"):
+        apply_projection_plan(
+            bundle,
+            default_projection_plan(bundle, output_format="tsv"),
+        )
+
+
+def test_canonical_curatable_objects_default_tsv_exports_one_row_per_object():
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[_completed_generic_pdf_step()],
+        flow_name="PDF Projection Flow",
+        output_format="tsv",
+    )
+
+    result = apply_projection_plan(
+        bundle,
+        default_projection_plan(bundle, output_format="tsv"),
+    )
+
+    assert bundle.artifacts[0].artifact_shape == "domain_extraction_result"
+    assert result.row_source == "object"
+    assert result.total_count == 2
+    assert [row["object_payload_label"] for row in result.rows] == ["Ck:GFP", "Actn RNAi"]
     assert bundle.rows_for_source("evidence")[0]["evidence.evidence_record_id"] == "ev-1"
 
-    result = apply_projection_plan(
-        bundle,
-        default_projection_plan(bundle, output_format="tsv"),
+
+def test_multi_source_tsv_requires_explicit_selection_or_combined_plan():
+    gene_step = _completed_domain_source_step(
+        step=1,
+        agent_id="gene_extractor",
+        adapter_key="gene",
+        extraction_result_id="extract-gene-1",
+        object_type="Gene",
+        object_id="gene-1",
+        payload={"symbol": "BRCA1", "primary_external_id": "TEST:GENE001"},
     )
-
-    assert result.row_source == "object"
-    assert [column.key for column in result.columns] == [
-        "synonym",
-        "source",
-        "source_identifier",
-        "count",
-    ]
-    assert result.rows == [
-        {
-            "synonym": "Ck:GFP",
-            "source": "This study",
-            "source_identifier": "New in paper",
-            "count": "4",
-        },
-        {
-            "synonym": "Actn RNAi",
-            "source": "Source not found",
-            "source_identifier": "Not found",
-            "count": "2",
-        },
-    ]
-
-
-def test_generic_pdf_step_output_projects_pipe_answer_table_rows():
-    payload = {
-        "answer": (
-            "Extracted genetic reagents (columns: synonym, source, "
-            "source_identifier, count):\n"
-            "w1118 | Bloomington Drosophila Stock Center | RRID: BDSC_3605 | 1\n"
-            "Sas-4s2214|Sas-4 | Bloomington Drosophila Stock Center | "
-            "RRID: BDSC_12119 | 11\n"
-        ),
-        "items": [
-            {
-                "label": "group-level audit item",
-                "entity_type": "genetic reagent group",
-                "evidence_record_ids": ["ev-1"],
-            }
-        ],
-        "evidence_records": [
-            {
-                "evidence_record_id": "ev-1",
-                "verified_quote": "Server verified quote.",
-            }
-        ],
-    }
-
+    allele_step = _completed_domain_source_step(
+        step=2,
+        agent_id="allele_extractor",
+        adapter_key="allele",
+        extraction_result_id="extract-allele-1",
+        object_type="Allele",
+        object_id="allele-1",
+        payload={"allele_symbol": "brca1[tm1]", "primary_external_id": "TEST:ALLELE001"},
+    )
     bundle = build_flow_output_artifact_bundle(
-        completed_steps=[
-            {
-                "step": 1,
-                "agent_id": "pdf_extraction",
-                "agent_name": "General PDF Extraction Agent",
-                "output": json.dumps(payload),
-                "output_preview": "Extracted rows.",
-                "candidate": None,
-            }
-        ],
-        flow_name="PDF Projection Flow",
+        completed_steps=[gene_step, allele_step],
+        flow_name="Combined Projection Flow",
         output_format="tsv",
     )
 
-    result = apply_projection_plan(
+    with pytest.raises(ValueError, match="Multiple canonical extraction sources"):
+        apply_projection_plan(
+            bundle,
+            default_projection_plan(bundle, output_format="tsv"),
+        )
+
+    single_source = apply_projection_plan(
         bundle,
-        default_projection_plan(bundle, output_format="tsv"),
-    )
-
-    assert bundle.artifacts[0].artifact_shape == "generic_pdf_answer_table"
-    assert result.row_source == "object"
-    assert [column.key for column in result.columns] == [
-        "synonym",
-        "source",
-        "source_identifier",
-        "count",
-    ]
-    assert result.rows == [
-        {
-            "synonym": "w1118",
-            "source": "Bloomington Drosophila Stock Center",
-            "source_identifier": "RRID: BDSC_3605",
-            "count": "1",
-        },
-        {
-            "synonym": "Sas-4s2214|Sas-4",
-            "source": "Bloomington Drosophila Stock Center",
-            "source_identifier": "RRID: BDSC_12119",
-            "count": "11",
-        },
-    ]
-
-
-def test_generic_pdf_step_output_projects_prefixed_comma_header_with_tab_rows_and_extra_columns():
-    payload = {
-        "answer": (
-            "Answer table: columns: synonym, source, source_identifier, count, note\n"
-            "w1118\tBloomington Drosophila Stock Center\tRRID: BDSC_3605\t1\tcontrol stock\n"
-            "Sas-4s2214|Sas-4\tBloomington Drosophila Stock Center\t"
-            "RRID: BDSC_12119\t11\tmutant allele\n"
+        FlowOutputProjectionPlan(
+            format="tsv",
+            row_source="object",
+            source_extraction_result_ids=["extract-gene-1"],
+            columns=[
+                FlowOutputColumnSpec(key="symbol", field_ref="object.payload.symbol"),
+            ],
         ),
-        "evidence_records": [
-            {
-                "evidence_record_id": "ev-1",
-                "verified_quote": "Server verified quote.",
-            }
-        ],
-    }
+    )
+    assert single_source.rows == [{"symbol": "BRCA1"}]
 
+    ledger = apply_projection_plan(
+        bundle,
+        FlowOutputProjectionPlan(
+            format="tsv",
+            row_source="object",
+            row_strategy="object_ledger",
+            source_extraction_result_ids=["extract-gene-1", "extract-allele-1"],
+        ),
+    )
+    assert ledger.total_count == 2
+    assert [row["artifact_extraction_result_id"] for row in ledger.rows] == [
+        "extract-gene-1",
+        "extract-allele-1",
+    ]
+
+    wide_union = apply_projection_plan(
+        bundle,
+        FlowOutputProjectionPlan(
+            format="tsv",
+            row_source="object",
+            row_strategy="wide_union",
+            source_extraction_result_ids=["extract-gene-1", "extract-allele-1"],
+        ),
+    )
+    wide_columns = [column.key for column in wide_union.columns]
+    assert "object_payload_symbol" in wide_columns
+    assert "object_payload_allele_symbol" in wide_columns
+
+
+def test_pre_persistence_source_keys_bind_multi_source_tsv_exports():
+    gene_step = _completed_domain_source_step(
+        step=1,
+        agent_id="gene_extractor",
+        adapter_key="gene",
+        object_type="Gene",
+        object_id="gene-1",
+        payload={"symbol": "BRCA1", "primary_external_id": "TEST:GENE001"},
+        metadata={"flow_id": "flow-1", "step": 1, "tool_name": "ask_gene"},
+    )
+    allele_step = _completed_domain_source_step(
+        step=2,
+        agent_id="allele_extractor",
+        adapter_key="allele",
+        object_type="Allele",
+        object_id="allele-1",
+        payload={"allele_symbol": "brca1[tm1]", "primary_external_id": "TEST:ALLELE001"},
+        metadata={"flow_id": "flow-1", "step": 2, "tool_name": "ask_allele"},
+    )
     bundle = build_flow_output_artifact_bundle(
-        completed_steps=[
-            {
-                "step": 1,
-                "agent_id": "pdf_extraction",
-                "agent_name": "General PDF Extraction Agent",
-                "output": json.dumps(payload),
-                "output_preview": "Extracted rows.",
-                "candidate": None,
-            }
-        ],
-        flow_name="PDF Projection Flow",
+        completed_steps=[gene_step, allele_step],
+        flow_name="Pre Persistence Flow",
         output_format="tsv",
     )
 
+    assert {row["artifact.source_key"] for row in bundle.rows_for_source("object")} == {
+        "flow-1:1:ask_gene:gene_extractor",
+        "flow-1:2:ask_allele:allele_extractor",
+    }
     result = apply_projection_plan(
         bundle,
-        default_projection_plan(bundle, output_format="tsv"),
+        FlowOutputProjectionPlan(
+            format="tsv",
+            row_source="object",
+            source_keys=["flow-1:1:ask_gene:gene_extractor"],
+            columns=[
+                FlowOutputColumnSpec(key="symbol", field_ref="object.payload.symbol"),
+            ],
+        ),
     )
 
-    assert bundle.artifacts[0].artifact_shape == "generic_pdf_answer_table"
-    assert result.row_source == "object"
-    assert [column.key for column in result.columns] == [
-        "synonym",
-        "source",
-        "source_identifier",
-        "count",
-        "note",
-    ]
-    assert result.rows == [
-        {
-            "synonym": "w1118",
-            "source": "Bloomington Drosophila Stock Center",
-            "source_identifier": "RRID: BDSC_3605",
-            "count": "1",
-            "note": "control stock",
-        },
-        {
-            "synonym": "Sas-4s2214|Sas-4",
-            "source": "Bloomington Drosophila Stock Center",
-            "source_identifier": "RRID: BDSC_12119",
-            "count": "11",
-            "note": "mutant allele",
-        },
-    ]
+    assert result.rows == [{"symbol": "BRCA1"}]
 
 
-def test_generic_pdf_step_output_projects_inline_format_answer_table_rows():
-    payload = {
-        "answer": (
-            "Extracted genetic reagents. Format: synonym | source | source_identifier | count. "
-            "w1118 | Bloomington Drosophila Stock Center | RRID:BDSC_3605 | 1; "
-            "Ck:GFP | this study | New in paper | 3; "
-            "lpp-GAL4 | not specified in extracted table | not specified | 1."
-        ),
-        "evidence_records": [
-            {
-                "evidence_record_id": "ev-1",
-                "verified_quote": "Server verified quote.",
-            }
-        ],
-    }
-
+def test_selected_source_columns_must_exist_in_selected_rows():
+    gene_step = _completed_domain_source_step(
+        step=1,
+        agent_id="gene_extractor",
+        adapter_key="gene",
+        extraction_result_id="extract-gene-1",
+        object_type="Gene",
+        object_id="gene-1",
+        payload={"symbol": "BRCA1", "primary_external_id": "TEST:GENE001"},
+    )
+    allele_step = _completed_domain_source_step(
+        step=2,
+        agent_id="allele_extractor",
+        adapter_key="allele",
+        extraction_result_id="extract-allele-1",
+        object_type="Allele",
+        object_id="allele-1",
+        payload={"allele_symbol": "brca1[tm1]", "primary_external_id": "TEST:ALLELE001"},
+    )
     bundle = build_flow_output_artifact_bundle(
-        completed_steps=[
-            {
-                "step": 1,
-                "agent_id": "pdf_extraction",
-                "agent_name": "General PDF Extraction Agent",
-                "output": json.dumps(payload),
-                "output_preview": "Extracted rows.",
-                "candidate": None,
-            }
-        ],
-        flow_name="PDF Projection Flow",
+        completed_steps=[gene_step, allele_step],
+        flow_name="Selected Source Flow",
         output_format="tsv",
     )
 
-    result = apply_projection_plan(
-        bundle,
-        default_projection_plan(bundle, output_format="tsv"),
-    )
-
-    assert bundle.artifacts[0].artifact_shape == "generic_pdf_answer_table"
-    assert result.row_source == "object"
-    assert [column.key for column in result.columns] == [
-        "synonym",
-        "source",
-        "source_identifier",
-        "count",
-    ]
-    assert result.rows == [
-        {
-            "synonym": "w1118",
-            "source": "Bloomington Drosophila Stock Center",
-            "source_identifier": "RRID:BDSC_3605",
-            "count": "1",
-        },
-        {
-            "synonym": "Ck:GFP",
-            "source": "this study",
-            "source_identifier": "New in paper",
-            "count": "3",
-        },
-        {
-            "synonym": "lpp-GAL4",
-            "source": "not specified in extracted table",
-            "source_identifier": "not specified",
-            "count": "1",
-        },
-    ]
+    with pytest.raises(ValueError, match="unknown field_ref 'object.payload.allele_symbol'"):
+        apply_projection_plan(
+            bundle,
+            FlowOutputProjectionPlan(
+                format="tsv",
+                row_source="object",
+                source_extraction_result_ids=["extract-gene-1"],
+                columns=[
+                    FlowOutputColumnSpec(
+                        key="allele_symbol",
+                        field_ref="object.payload.allele_symbol",
+                    ),
+                ],
+            ),
+        )
 
 
 def test_plain_text_step_output_without_candidate_is_not_an_artifact():
@@ -1046,7 +1233,7 @@ def test_step_level_evidence_count_is_available_without_changing_default_columns
     result = apply_projection_plan(
         bundle,
         FlowOutputProjectionPlan(
-            format="tsv",
+            format="csv",
             row_source="artifact",
             columns=[
                 FlowOutputColumnSpec(
@@ -1168,7 +1355,7 @@ def test_overlarge_max_rows_is_rejected():
         )
 
 
-def test_legacy_items_payload_is_explicitly_mapped_with_warning():
+def test_legacy_items_payload_is_not_mapped_into_object_or_evidence_rows():
     step = {
         "step": 1,
         "agent_id": "gene",
@@ -1200,29 +1387,7 @@ def test_legacy_items_payload_is_explicitly_mapped_with_warning():
         flow_name="Legacy Projection Flow",
     )
 
-    objects = apply_projection_plan(
-        bundle,
-        FlowOutputProjectionPlan(
-            format="json",
-            row_source="object",
-            columns=[
-                FlowOutputColumnSpec(key="label", field_ref="object.label"),
-                FlowOutputColumnSpec(key="status", field_ref="object.status"),
-            ],
-        ),
-    )
-    evidence = apply_projection_plan(
-        bundle,
-        FlowOutputProjectionPlan(
-            format="json",
-            row_source="evidence",
-            columns=[
-                FlowOutputColumnSpec(key="object_id", field_ref="object.object_id"),
-                FlowOutputColumnSpec(key="quote", field_ref="evidence.verified_quote"),
-            ],
-        ),
-    )
-
-    assert objects.rows == [{"label": "APOE", "status": "candidate"}]
-    assert evidence.rows == [{"object_id": "1", "quote": "APOE evidence."}]
-    assert any("Legacy extraction envelope" in warning for warning in bundle.warnings)
+    assert bundle.artifacts[0].artifact_shape == "non_structured"
+    assert bundle.rows_for_source("object") == []
+    assert bundle.rows_for_source("evidence") == []
+    assert any("No canonical curation object rows" in warning for warning in bundle.warnings)

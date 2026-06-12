@@ -1182,6 +1182,227 @@ tools:
             required: true
             description: The list of draft entries the agent wants to hand off for confirmation.
   # ---------------------------------------------------------------------------------------
+  # Generic PDF extraction builder tools. These stage explicit class-keyed objects from the
+  # generated generic domain-pack catalog and finalize through the shared builder contract.
+  # ---------------------------------------------------------------------------------------
+  - tool_id: list_generic_object_classes
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.generic_builder_tools:list_generic_object_classes
+    required_context: []
+    description: Show the compact catalog of generic extraction classes that can be staged.
+    source_file: python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py
+    metadata:
+      name: List Generic Object Classes
+      category: Runtime Metadata
+      audit:
+        display_name: List Generic Object Classes
+      documentation:
+        summary: Returns the available generic extraction class keys, their labels, payload fields, and any validator hints. The agent must choose one explicit class key before staging each generic object.
+        parameters:
+          - name: include_non_stageable
+            type: boolean
+            required: false
+            description: Also include known generated classes that are not currently stageable.
+  - tool_id: stage_generic_object
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.generic_builder_tools:stage_generic_object
+    required_context: []
+    description: Add one new generic extraction object to the run's working list, backed by saved paper evidence.
+    source_file: python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py
+    metadata:
+      name: Stage Generic Object
+      category: Database
+      builder_run_state: true
+      audit:
+        display_name: Stage Generic Object
+      documentation:
+        summary: Records a single evidence-backed generic object from the source document. Every staged object must use an explicit class_key returned by list_generic_object_classes and must include a human-readable label, evidence IDs, and classification notes.
+        parameters:
+          - name: class_key
+            type: string
+            required: true
+            description: The explicit class key chosen from list_generic_object_classes, such as generic:generic_reagent_candidate or gene:gene_mention_evidence.
+          - name: label
+            type: string
+            required: true
+            description: Human-readable label for this extracted object.
+          - name: evidence_record_ids
+            type: array
+            required: true
+            description: The saved evidence records that support this object.
+          - name: classification_notes
+            type: array
+            required: true
+            description: Notes explaining why this class key fits the paper evidence.
+          - name: pending_ref_id
+            type: string
+            required: false
+            description: Optional stable draft identifier for this object.
+          - name: source_label
+            type: string
+            required: false
+            description: The source-paper label or mention when it differs from label.
+          - name: description
+            type: string
+            required: false
+            description: Short evidence-backed description of the object.
+          - name: confidence
+            type: string
+            required: false
+            description: Extractor confidence label for this object.
+          - name: semantic_class
+            type: string
+            required: false
+            description: Class-local semantic type label when the paper gives one.
+          - name: payload
+            type: object
+            required: false
+            description: Class-specific evidence-backed payload fields.
+          - name: attributes
+            type: object
+            required: false
+            description: Additional evidence-backed attributes.
+  - tool_id: patch_generic_object
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.generic_builder_tools:patch_generic_object
+    required_context: []
+    description: Make small corrections to a generic object that is already on the run's working list.
+    source_file: python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py
+    metadata:
+      name: Patch Generic Object
+      category: Database
+      builder_run_state: true
+      audit:
+        display_name: Patch Generic Object
+      documentation:
+        summary: Updates allowed fields on one staged generic object. The class_key remains explicit and is rechecked after every patch.
+        parameters:
+          - name: candidate_id
+            type: string
+            required: true
+            description: Identifies which draft entry this action updates.
+          - name: updates
+            type: array
+            required: true
+            description: Field updates. Use top-level fields, payload.<key>, attributes.<key>, or evidence_record_ids.
+  - tool_id: discard_generic_object
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.generic_builder_tools:discard_generic_object
+    required_context: []
+    description: Drop one staged generic object when it is wrong or unsupported.
+    source_file: python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py
+    metadata:
+      name: Discard Generic Object
+      category: Database
+      builder_run_state: true
+      audit:
+        display_name: Discard Generic Object
+      documentation:
+        summary: Marks one staged generic object as withdrawn so it will not appear in the final result.
+        parameters:
+          - name: candidate_id
+            type: string
+            required: true
+            description: Identifies which draft entry this action discards.
+          - name: reason
+            type: string
+            required: false
+            description: Short note explaining why the draft is being dropped.
+  - tool_id: list_staged_generic_objects
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.generic_builder_tools:list_staged_generic_objects
+    required_context: []
+    description: Show compact summaries for staged generic objects, one page at a time.
+    source_file: python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py
+    metadata:
+      name: List Staged Generic Objects
+      category: Database
+      builder_run_state: true
+      audit:
+        display_name: List Staged Generic Objects
+      documentation:
+        summary: Returns a compact overview of the generic drafts staged so far in this run. Results come back one page at a time.
+        parameters:
+          - name: include_discarded
+            type: boolean
+            required: true
+            description: Whether to also show drafts that were previously withdrawn.
+          - name: limit
+            type: integer
+            required: false
+            description: How many drafts to show on this page.
+          - name: offset
+            type: integer
+            required: false
+            description: How many drafts to skip before this page.
+  - tool_id: find_staged_generic_objects
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.generic_builder_tools:find_staged_generic_objects
+    required_context: []
+    description: Find staged generic objects by content or id without listing the whole working set.
+    source_file: python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py
+    metadata:
+      name: Find Staged Generic Objects
+      category: Database
+      builder_run_state: true
+      audit:
+        display_name: Find Staged Generic Objects
+      documentation:
+        summary: Searches staged generic drafts and returns compact summaries for just the matching entries.
+        parameters:
+          - name: field_value_contains
+            type: string
+            required: false
+            description: Show only drafts whose saved details contain this text.
+          - name: pending_ref_id
+            type: string
+            required: false
+            description: Show only the draft linked to this draft id.
+          - name: evidence_record_id
+            type: string
+            required: false
+            description: Show only drafts that use this saved evidence.
+          - name: candidate_id
+            type: string
+            required: false
+            description: Show only the draft with this exact id.
+          - name: has_validation_errors
+            type: boolean
+            required: false
+            description: Show only drafts that have problems flagged or only those that are clean.
+          - name: include_discarded
+            type: boolean
+            required: false
+            description: Whether to also search drafts that were previously withdrawn.
+          - name: limit
+            type: integer
+            required: false
+            description: How many matching drafts to show on this page.
+          - name: offset
+            type: integer
+            required: false
+            description: How many matching drafts to skip before this page.
+  - tool_id: finalize_generic_extraction
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.generic_builder_tools:finalize_generic_extraction
+    required_context: []
+    description: Submit the run's generic object draft list for canonical extraction finalization.
+    source_file: python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py
+    metadata:
+      name: Finalize Generic Extraction
+      category: Database
+      builder_finalization: true
+      builder_run_state: true
+      audit:
+        display_name: Finalize Generic Extraction
+      documentation:
+        summary: Takes the generic drafts the agent settled on and materializes canonical backend extraction data for curator review and TSV export.
+        parameters:
+          - name: candidate_ids
+            type: array
+            required: true
+            description: The list of staged generic draft entries to finalize.
+  # ---------------------------------------------------------------------------------------
   # Allele extractor builder tools (Phase 4 envelope -> builder migration). Per-domain module
   # allele_builder_tools.py over the project-agnostic ExtractionBuilderWorkspace. Allele is
   # mention-only: the active allele_mention_reference_validation binding owns allele identity, so

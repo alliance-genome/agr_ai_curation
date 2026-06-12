@@ -1,0 +1,189 @@
+pack_id: generic
+display_name: Generic Extraction Domain Pack
+version: 0.1.0
+metadata_api_version: 1.0.0
+description: Evidence-backed generic extraction objects and generated proxy classes for broad PDF curation.
+status: in_development
+model_definitions:
+  - model_id: GenericExtractedObjectPayload
+    display_name: Generic extracted object payload
+    description: Shared payload shape for broad evidence-backed generic extraction records.
+    definition_state: stable
+  - model_id: GenericClaimPayload
+    display_name: Generic extracted claim payload
+    description: Evidence-backed statement, method, result, or conclusion extracted from a document.
+    definition_state: stable
+  - model_id: GenericReagentCandidatePayload
+    display_name: Generic reagent candidate payload
+    description: Evidence-backed reagent, stock, construct, RNAi, transgene, antibody, plasmid, or comparable reagent candidate.
+    definition_state: stable
+object_definitions:
+  - object_type: generic_object
+    display_name: Generic object
+    description: Broad generic extracted object for evidence-backed items that do not fit a more specific stageable class.
+    model_ref: GenericExtractedObjectPayload
+    definition_state: stable
+    definition_notes:
+      - Use only when no more specific returned class key fits the extracted item.
+    metadata:
+      object_role: generic_extracted_object
+      generic_extraction:
+        stageable: true
+        task_hints:
+          - generic
+          - extracted item
+          - uncategorized
+      workspace_display:
+        primary_label_field: label
+        secondary_label_field: semantic_class
+        summary_fields:
+          - source_label
+          - description
+          - confidence
+    fields:
+      - field_path: label
+        field_type: string
+        display_name: Label
+        description: Human-readable label for the extracted object.
+        required: true
+      - field_path: class_key
+        field_type: string
+        display_name: Class key
+        description: Explicit class selected from the generic class catalog.
+        required: true
+      - field_path: semantic_class
+        field_type: string
+        display_name: Semantic class
+        description: Class-local semantic type label.
+      - field_path: source_label
+        field_type: string
+        display_name: Source label
+        description: Label or mention exactly as supported by the source document.
+      - field_path: description
+        field_type: string
+        display_name: Description
+        description: Short evidence-backed description.
+      - field_path: confidence
+        field_type: string
+        display_name: Confidence
+        description: Extractor confidence in the retained item.
+      - field_path: classification_notes
+        field_type: array
+        display_name: Classification notes
+        description: Evidence-backed notes explaining why this class was selected.
+      - field_path: attributes
+        field_type: object
+        display_name: Attributes
+        description: Additional evidence-backed scalar or structured attributes.
+  - object_type: generic_claim
+    display_name: Generic claim
+    description: Evidence-backed statement, result, method detail, conclusion, or comparable claim extracted from a document.
+    model_ref: GenericClaimPayload
+    definition_state: stable
+    metadata:
+      object_role: generic_claim
+      generic_extraction:
+        stageable: true
+        task_hints:
+          - claim
+          - result
+          - method
+          - conclusion
+      workspace_display:
+        primary_label_field: label
+        secondary_label_field: claim_type
+        summary_fields:
+          - claim_text
+          - confidence
+    fields:
+      - field_path: label
+        field_type: string
+        display_name: Label
+        description: Human-readable claim label.
+        required: true
+      - field_path: class_key
+        field_type: string
+        display_name: Class key
+        description: Explicit class selected from the generic class catalog.
+        required: true
+      - field_path: claim_text
+        field_type: string
+        display_name: Claim text
+        description: Concise evidence-backed claim statement.
+        required: true
+      - field_path: claim_type
+        field_type: string
+        display_name: Claim type
+        description: Broad claim category, such as method, result, conclusion, or observation.
+      - field_path: confidence
+        field_type: string
+        display_name: Confidence
+        description: Extractor confidence in the retained claim.
+      - field_path: classification_notes
+        field_type: array
+        display_name: Classification notes
+        description: Evidence-backed notes explaining why this claim class was selected.
+  - object_type: generic_reagent_candidate
+    display_name: Generic reagent candidate
+    description: Evidence-backed stock, construct, RNAi, transgene, antibody, plasmid, or other reagent candidate.
+    model_ref: GenericReagentCandidatePayload
+    definition_state: stable
+    metadata:
+      object_role: generic_reagent_candidate
+      generic_extraction:
+        stageable: true
+        task_hints:
+          - reagent
+          - stock
+          - construct
+          - RNAi
+          - transgene
+          - antibody
+          - plasmid
+      workspace_display:
+        primary_label_field: label
+        secondary_label_field: source_identifier
+        summary_fields:
+          - source
+          - source_identifier
+          - count
+          - reagent_type
+    fields:
+      - field_path: label
+        field_type: string
+        display_name: Label
+        description: Reagent label or synonym as supported by the source document.
+        required: true
+      - field_path: class_key
+        field_type: string
+        display_name: Class key
+        description: Explicit class selected from the generic class catalog.
+        required: true
+      - field_path: source_label
+        field_type: string
+        display_name: Source label
+        description: Reagent text exactly as it appears in the source when different from label.
+      - field_path: source
+        field_type: string
+        display_name: Source
+        description: Supplier, stock center, repository, author, or source stated in the paper.
+      - field_path: source_identifier
+        field_type: string
+        display_name: Source identifier
+        description: RRID, stock number, Addgene identifier, or comparable source identifier.
+      - field_path: count
+        field_type: integer
+        display_name: Count
+        description: Count reported or inferred from the curator's requested aggregation.
+      - field_path: reagent_type
+        field_type: string
+        display_name: Reagent type
+        description: Broad reagent category.
+      - field_path: confidence
+        field_type: string
+        display_name: Confidence
+        description: Extractor confidence in the retained reagent candidate.
+      - field_path: classification_notes
+        field_type: array
+        display_name: Classification notes
+        description: Evidence-backed notes explaining why this reagent class was selected.

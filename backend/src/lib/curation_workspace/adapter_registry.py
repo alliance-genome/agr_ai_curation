@@ -223,6 +223,13 @@ def resolve_curation_domain_pack_by_id(domain_pack_id: str) -> Any | None:
     if not normalized_id:
         return None
 
+    if normalized_id == "generic":
+        from agr_ai_curation_alliance.domain_packs.generic import (
+            get_generated_generic_domain_pack,
+        )
+
+        return get_generated_generic_domain_pack()
+
     from src.lib.domain_packs.registry import load_domain_pack_registry
 
     domain_pack = load_domain_pack_registry().get_pack(normalized_id)
