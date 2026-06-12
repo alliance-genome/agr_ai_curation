@@ -1337,10 +1337,20 @@ def default_projection_plan(
     row_source: FlowOutputRowSource | None = None,
 ) -> FlowOutputProjectionPlan:
     selected_row_source = row_source or bundle.default_row_source
-    columns = default_columns_for_row_source(bundle, selected_row_source)
+    row_strategy: FlowOutputRowStrategy = "object"
+    if output_format == "tsv" and selected_row_source == "object":
+        source_identities = _source_identities_for_rows(bundle.rows_for_source("object"))
+        if len(source_identities) == 1:
+            row_strategy = "wide_union"
+    columns = default_columns_for_row_source(
+        bundle,
+        selected_row_source,
+        row_strategy=row_strategy,
+    )
     return FlowOutputProjectionPlan(
         format=output_format,
         row_source=selected_row_source,
+        row_strategy=row_strategy,
         columns=columns,
     )
 
@@ -1461,6 +1471,17 @@ def _source_key_for_row(row: Mapping[str, Any]) -> str:
     )
 
 
+def _source_identity_for_row(row: Mapping[str, Any]) -> str:
+    source_id = _source_id_for_row(row)
+    if source_id:
+        return f"extraction_result:{source_id}"
+    return f"source_key:{_source_key_for_row(row)}"
+
+
+def _source_identities_for_rows(rows: Sequence[Mapping[str, Any]]) -> set[str]:
+    return {_source_identity_for_row(row) for row in rows}
+
+
 def _source_keys_for_rows(rows: Sequence[Mapping[str, Any]]) -> set[str]:
     return {_source_key_for_row(row) for row in rows}
 
@@ -1567,8 +1588,8 @@ def validate_projection_plan(
                     "Curation TSV exports require canonical backend extraction data; "
                     "model-written step output cannot be used as TSV object rows."
                 )
-        source_keys = _source_keys_for_rows(rows)
-        if plan.format == "tsv" and len(source_keys) > 1 and plan.row_strategy == "object":
+        source_identities = _source_identities_for_rows(rows)
+        if plan.format == "tsv" and len(source_identities) > 1 and plan.row_strategy == "object":
             errors.append(
                 "Multiple canonical extraction sources are available for this TSV export; "
                 "select one source_extraction_result_id/source_key or use "

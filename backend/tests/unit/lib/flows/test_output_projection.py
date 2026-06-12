@@ -178,15 +178,16 @@ def test_default_tsv_projection_uses_canonical_object_rows():
         output_format="tsv",
     )
 
-    result = apply_projection_plan(
-        bundle,
-        default_projection_plan(bundle, output_format="tsv"),
-    )
+    plan = default_projection_plan(bundle, output_format="tsv")
+    result = apply_projection_plan(bundle, plan)
 
     assert result.row_source == "object"
+    assert plan.row_strategy == "wide_union"
     assert result.total_count == 2
     assert "artifact_preview" not in [column.key for column in result.columns]
+    assert "object_payload_primary_external_id" in [column.key for column in result.columns]
     assert result.rows[0]["object_payload_symbol"] == "BRCA1"
+    assert result.rows[0]["object_payload_primary_external_id"] == "TEST:GENE001"
     assert result.rows[1]["object_payload_symbol"] == "TP53"
 
 
@@ -388,16 +389,55 @@ def test_canonical_curatable_objects_default_tsv_exports_one_row_per_object():
         output_format="tsv",
     )
 
-    result = apply_projection_plan(
-        bundle,
-        default_projection_plan(bundle, output_format="tsv"),
-    )
+    plan = default_projection_plan(bundle, output_format="tsv")
+    result = apply_projection_plan(bundle, plan)
 
     assert bundle.artifacts[0].artifact_shape == "domain_extraction_result"
     assert result.row_source == "object"
+    assert plan.row_strategy == "wide_union"
     assert result.total_count == 2
+    column_keys = [column.key for column in result.columns]
+    assert "object_payload_source" in column_keys
+    assert "object_payload_source_identifier" in column_keys
+    assert "object_payload_count" in column_keys
     assert [row["object_payload_label"] for row in result.rows] == ["Ck:GFP", "Actn RNAi"]
+    assert result.rows[0]["object_payload_source"] == "This study"
+    assert result.rows[0]["object_payload_source_identifier"] == "New in paper"
+    assert result.rows[0]["object_payload_count"] == 4
     assert bundle.rows_for_source("evidence")[0]["evidence.evidence_record_id"] == "ev-1"
+
+
+def test_persisted_extraction_ids_define_tsv_source_identity_before_source_keys():
+    gene_step = _completed_domain_source_step(
+        step=1,
+        agent_id="gene_extractor",
+        adapter_key="gene",
+        extraction_result_id="extract-gene-1",
+        object_type="Gene",
+        object_id="gene-1",
+        payload={"symbol": "BRCA1", "primary_external_id": "TEST:GENE001"},
+        metadata={"source_key": "shared-flow-step"},
+    )
+    allele_step = _completed_domain_source_step(
+        step=2,
+        agent_id="allele_extractor",
+        adapter_key="allele",
+        extraction_result_id="extract-allele-1",
+        object_type="Allele",
+        object_id="allele-1",
+        payload={"allele_symbol": "brca1[tm1]", "primary_external_id": "TEST:ALLELE001"},
+        metadata={"source_key": "shared-flow-step"},
+    )
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[gene_step, allele_step],
+        flow_name="Duplicate Source Key Flow",
+        output_format="tsv",
+    )
+    plan = default_projection_plan(bundle, output_format="tsv")
+
+    assert plan.row_strategy == "object"
+    with pytest.raises(ValueError, match="Multiple canonical extraction sources"):
+        apply_projection_plan(bundle, plan)
 
 
 def test_multi_source_tsv_requires_explicit_selection_or_combined_plan():

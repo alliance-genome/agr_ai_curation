@@ -307,10 +307,16 @@ async def test_tsv_formatter_projects_canonical_pdf_curatable_objects_without_mo
 
     assert "artifact_preview" not in save_calls[0]["columns"]
     assert "object_payload_label" in save_calls[0]["columns"]
+    assert "object_payload_source" in save_calls[0]["columns"]
+    assert "object_payload_source_identifier" in save_calls[0]["columns"]
+    assert "object_payload_count" in save_calls[0]["columns"]
     assert [row["object_payload_label"] for row in save_calls[0]["data"]] == [
         "Ck:GFP",
         "Actn RNAi",
     ]
+    assert save_calls[0]["data"][0]["object_payload_source"] == "This study"
+    assert save_calls[0]["data"][0]["object_payload_source_identifier"] == "New in paper"
+    assert save_calls[0]["data"][0]["object_payload_count"] == "4"
 
 
 @pytest.mark.asyncio
