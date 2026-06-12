@@ -392,6 +392,7 @@ def build_default_model_retry():
     the turn. Disable by setting ``OPENAI_MODEL_MAX_RETRIES=0``.
     """
     # Import here to avoid circular dependency at module load.
+    from agents import retry_policies
     from agents.retry import ModelRetrySettings, ModelRetryBackoffSettings
 
     try:
@@ -407,6 +408,12 @@ def build_default_model_retry():
             max_delay=_get_env_float("OPENAI_MODEL_RETRY_MAX_DELAY", 8.0),
             multiplier=_get_env_float("OPENAI_MODEL_RETRY_MULTIPLIER", 2.0),
             jitter=True,
+        ),
+        policy=retry_policies.any(
+            retry_policies.provider_suggested(),
+            retry_policies.retry_after(),
+            retry_policies.network_error(),
+            retry_policies.http_status([408, 409, 429, 500, 502, 503, 504]),
         ),
     )
 
@@ -919,6 +926,57 @@ def get_flow_output_projection_planner_preview_limit() -> int:
 
 
 # --- Timeouts ---
+
+def _get_env_optional_nonnegative_float(
+    key: str,
+    default: Optional[float],
+) -> Optional[float]:
+    """Parse optional nonnegative float environment values.
+
+    Blank, "none", "null", or values <= 0 disable the setting.
+    """
+    raw = os.getenv(key)
+    if raw is None:
+        return default
+
+    value = raw.strip().lower()
+    if not value or value in {"0", "none", "null", "off", "disabled"}:
+        return None
+
+    try:
+        parsed = float(value)
+    except ValueError:
+        logger.warning("Invalid float value for %s: %s, using default %s", key, raw, default)
+        return default
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def get_openai_responses_websocket_ping_interval_seconds() -> Optional[float]:
+    """WebSocket ping interval for OpenAI Responses transport.
+
+    OPENAI_RESPONSES_WEBSOCKET_PING_INTERVAL_SECONDS controls how often the
+    SDK sends keepalive pings. Blank/none/0 disables pinging. Default 20.
+    """
+    return _get_env_optional_nonnegative_float(
+        "OPENAI_RESPONSES_WEBSOCKET_PING_INTERVAL_SECONDS",
+        20.0,
+    )
+
+
+def get_openai_responses_websocket_ping_timeout_seconds() -> Optional[float]:
+    """WebSocket ping timeout for OpenAI Responses transport.
+
+    OPENAI_RESPONSES_WEBSOCKET_PING_TIMEOUT_SECONDS controls how long the SDK
+    waits for a ping response before closing the websocket. Blank/none/0
+    disables heartbeat timeouts. Default disabled for long reasoning turns.
+    """
+    return _get_env_optional_nonnegative_float(
+        "OPENAI_RESPONSES_WEBSOCKET_PING_TIMEOUT_SECONDS",
+        None,
+    )
+
 
 def get_package_runner_timeout_seconds() -> float:
     """Subprocess timeout for an isolated package tool call (PACKAGE_RUNNER_TIMEOUT_SECONDS).

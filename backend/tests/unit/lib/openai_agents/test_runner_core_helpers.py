@@ -1,5 +1,6 @@
 """Unit tests for runner core helper behavior."""
 
+import logging
 from types import SimpleNamespace
 from datetime import datetime
 
@@ -36,7 +37,7 @@ def test_configure_api_mode_uses_provider_mode(monkeypatch):
     assert transport_calls[-1] == "websocket"
 
 
-def test_configure_api_mode_can_disable_openai_responses_websocket(monkeypatch):
+def test_configure_api_mode_can_disable_openai_responses_websocket(monkeypatch, caplog):
     calls = []
     transport_calls = []
     monkeypatch.setenv("OPENAI_RESPONSES_WEBSOCKET_ENABLED", "false")
@@ -56,10 +57,12 @@ def test_configure_api_mode_can_disable_openai_responses_websocket(monkeypatch):
         lambda transport: transport_calls.append(transport),
     )
 
-    runner._configure_api_mode()
+    with caplog.at_level(logging.WARNING, logger=runner.logger.name):
+        runner._configure_api_mode()
 
     assert calls[-1] == "responses"
     assert transport_calls[-1] == "http"
+    assert "forces slower HTTP Responses transport" in caplog.text
 
 
 def test_configure_api_mode_keeps_websocket_disabled_for_non_responses_provider(monkeypatch):
@@ -84,6 +87,67 @@ def test_configure_api_mode_keeps_websocket_disabled_for_non_responses_provider(
     runner._configure_api_mode()
 
     assert transport_calls[-1] == "http"
+
+
+def test_request_websocket_keepalive_defaults_disable_ping_timeout(monkeypatch):
+    monkeypatch.delenv("OPENAI_RESPONSES_WEBSOCKET_PING_INTERVAL_SECONDS", raising=False)
+    monkeypatch.delenv("OPENAI_RESPONSES_WEBSOCKET_PING_TIMEOUT_SECONDS", raising=False)
+
+    assert runner._request_ws_keepalive_options() == {
+        "ping_interval": 20.0,
+        "ping_timeout": None,
+    }
+
+
+def test_request_websocket_keepalive_reads_env_overrides(monkeypatch):
+    monkeypatch.setenv("OPENAI_RESPONSES_WEBSOCKET_PING_INTERVAL_SECONDS", "15")
+    monkeypatch.setenv("OPENAI_RESPONSES_WEBSOCKET_PING_TIMEOUT_SECONDS", "120")
+
+    assert runner._request_ws_keepalive_options() == {
+        "ping_interval": 15.0,
+        "ping_timeout": 120.0,
+    }
+
+
+def test_request_websocket_keepalive_zero_timeout_maps_to_none(monkeypatch):
+    monkeypatch.setenv("OPENAI_RESPONSES_WEBSOCKET_PING_INTERVAL_SECONDS", "20")
+    monkeypatch.setenv("OPENAI_RESPONSES_WEBSOCKET_PING_TIMEOUT_SECONDS", "0")
+
+    assert runner._request_ws_keepalive_options() == {
+        "ping_interval": 20.0,
+        "ping_timeout": None,
+    }
+
+
+def test_build_request_openai_provider_passes_websocket_keepalive_options(monkeypatch):
+    captured = {}
+
+    class _FakeOpenAIProvider:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setenv("OPENAI_RESPONSES_WEBSOCKET_ENABLED", "true")
+    monkeypatch.setenv("OPENAI_RESPONSES_WEBSOCKET_PING_INTERVAL_SECONDS", "25")
+    monkeypatch.setenv("OPENAI_RESPONSES_WEBSOCKET_PING_TIMEOUT_SECONDS", "0")
+    monkeypatch.setattr(runner, "OpenAIProvider", _FakeOpenAIProvider)
+    monkeypatch.setattr(
+        runner,
+        "get_default_runner_provider",
+        lambda: SimpleNamespace(
+            provider_id="openai",
+            driver="openai_native",
+            api_mode="responses",
+        ),
+    )
+
+    provider = runner._build_request_openai_provider(openai_client=object())
+
+    assert isinstance(provider, _FakeOpenAIProvider)
+    assert captured["use_responses_websocket"] is True
+    assert captured["responses_websocket_options"] == {
+        "ping_interval": 25.0,
+        "ping_timeout": None,
+    }
 
 
 def test_create_openai_client_kwargs_includes_configured_key_and_base(monkeypatch):

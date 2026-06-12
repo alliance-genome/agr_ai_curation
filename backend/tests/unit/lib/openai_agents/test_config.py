@@ -14,6 +14,7 @@ from src.lib.openai_agents.config import (
     get_base_url,
     get_groq_tool_call_max_retries,
     get_groq_tool_call_retry_delay_seconds,
+    get_openai_responses_websocket_ping_timeout_seconds,
     get_model_for_agent,
     is_retryable_groq_tool_call_error,
     resolve_model_provider,
@@ -384,6 +385,7 @@ def test_build_model_settings_enables_model_retry_by_default(monkeypatch):
     assert settings.retry.max_retries == 3
     assert settings.retry.backoff is not None
     assert settings.retry.backoff.jitter is True
+    assert settings.retry.policy is not None
 
 
 def test_build_model_settings_retry_disabled_when_max_retries_zero(monkeypatch):
@@ -393,6 +395,12 @@ def test_build_model_settings_retry_disabled_when_max_retries_zero(monkeypatch):
     settings = build_model_settings(model="gpt-5.5")
 
     assert settings.retry is None
+
+
+def test_openai_responses_websocket_ping_timeout_invalid_env_uses_default(monkeypatch):
+    monkeypatch.setenv("OPENAI_RESPONSES_WEBSOCKET_PING_TIMEOUT_SECONDS", "not-a-float")
+
+    assert get_openai_responses_websocket_ping_timeout_seconds() is None
 
 
 def test_get_api_key_uses_provider_env_mapping(monkeypatch):

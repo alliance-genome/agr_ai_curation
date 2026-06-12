@@ -61,6 +61,8 @@ from .config import (
     get_max_turns,
     get_groq_tool_call_max_retries,
     get_groq_tool_call_retry_delay_seconds,
+    get_openai_responses_websocket_ping_interval_seconds,
+    get_openai_responses_websocket_ping_timeout_seconds,
     is_retryable_groq_tool_call_error,
     reasoning_summary_request_settings,
     resolve_model_provider,
@@ -156,7 +158,11 @@ def _openai_responses_websocket_enabled(provider: Any) -> bool:
     return True
 
 
-_REQUEST_WS_KEEPALIVE = {"ping_interval": 20.0, "ping_timeout": 60.0}
+def _request_ws_keepalive_options() -> dict[str, float | None]:
+    return {
+        "ping_interval": get_openai_responses_websocket_ping_interval_seconds(),
+        "ping_timeout": get_openai_responses_websocket_ping_timeout_seconds(),
+    }
 
 
 def _build_request_openai_provider(openai_client: AsyncOpenAI) -> OpenAIProvider:
@@ -165,16 +171,22 @@ def _build_request_openai_provider(openai_client: AsyncOpenAI) -> OpenAIProvider
     A single ``OpenAIProvider`` caches one warm WebSocket connection on its resolved
     model, so reusing this provider's ``RunConfig`` across the supervisor run and its
     nested specialist runs keeps the entire request on one authenticated WebSocket
-    connection instead of reconnecting per call. Keepalive (``ping_timeout``) is raised
+    connection instead of reconnecting per call. Keepalive settings are env-tunable
     so long reasoning turns are not dropped. When the websocket transport is disabled
     (``OPENAI_RESPONSES_WEBSOCKET_ENABLED=false`` or a non-OpenAI/non-Responses provider),
     this falls back to the plain HTTP-transport provider.
     """
     if _openai_responses_websocket_enabled(get_default_runner_provider()):
+        keepalive_options = _request_ws_keepalive_options()
+        logger.info(
+            "Using OpenAI Responses WebSocket provider (ping_interval=%s, ping_timeout=%s)",
+            keepalive_options.get("ping_interval"),
+            keepalive_options.get("ping_timeout"),
+        )
         return OpenAIProvider(
             openai_client=openai_client,
             use_responses_websocket=True,
-            responses_websocket_options=dict(_REQUEST_WS_KEEPALIVE),
+            responses_websocket_options=keepalive_options,
         )
     return OpenAIProvider(openai_client=openai_client)
 
@@ -189,6 +201,15 @@ def _configure_api_mode():
 
     websocket_enabled = _openai_responses_websocket_enabled(provider)
     set_default_openai_responses_transport("websocket" if websocket_enabled else "http")
+    if (
+        provider.api_mode == "responses"
+        and str(getattr(provider, "driver", "openai_native")).strip().lower() == "openai_native"
+        and _env_flag_disabled("OPENAI_RESPONSES_WEBSOCKET_ENABLED")
+    ):
+        logger.warning(
+            "OPENAI_RESPONSES_WEBSOCKET_ENABLED=false forces slower HTTP Responses "
+            "transport; use only as a diagnostic fallback."
+        )
     logger.info(
         "Using %s API mode for default runner provider=%s (responses_transport=%s)",
         provider.api_mode,
