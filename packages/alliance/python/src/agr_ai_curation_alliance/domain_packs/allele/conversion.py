@@ -621,7 +621,6 @@ def materialize_allele_builder_state(
 
     for candidate in candidates:
         staged_fields = copy.deepcopy(dict(getattr(candidate, "staged_fields", {}) or {}))
-        candidate_pending_ref = _candidate_pending_ref_id(candidate, staged_fields, retained_count)
         mention_text = _clean_text(staged_fields.get("mention"))
         if mention_text is None:
             issues.append(
@@ -724,6 +723,7 @@ def materialize_allele_builder_state(
                 pending_ref_id=mention_ref_id,
                 definition_state=DefinitionState.IN_DEVELOPMENT,
                 payload=mention_payload,
+                evidence_record_ids=evidence_ids,
                 metadata=_mention_object_metadata(),
             )
         )
@@ -735,6 +735,7 @@ def materialize_allele_builder_state(
         association_evidence_ids: list[str] = []
         for evidence_index, evidence_record in enumerate(resolved_evidence, start=1):
             evidence_id = _clean_text(evidence_record.get("evidence_record_id"))
+            assert evidence_id is not None
             evidence_ref_id = f"evidence-quote-{retained_count}-{evidence_index}"
             association_evidence_ids.append(evidence_id)
             association_object_refs.append(

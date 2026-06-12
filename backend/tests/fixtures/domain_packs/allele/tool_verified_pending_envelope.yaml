@@ -36,6 +36,9 @@ envelope:
           curie: NCBITaxon:6239
         source_mentions:
           - daf-2(m41)
+      evidence_record_ids:
+        - daf-2-m41-evidence-1
+        - daf-2-m41-evidence-2
       pending_ref_id: allele-mention-1
       status: pending
       definition_state: in_development

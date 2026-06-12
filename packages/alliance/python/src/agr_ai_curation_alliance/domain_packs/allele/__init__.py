@@ -179,16 +179,7 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
             mention_payload["associated_gene"] = {"symbol": associated_gene}
         mention_payload["taxon"] = {"curie": taxon}
 
-        mention_object = CuratableObjectEnvelope(
-            object_type="AlleleMention",
-            pending_ref_id=mention_ref_id,
-            status=CuratableObjectStatus.PENDING,
-            definition_state=DefinitionState.IN_DEVELOPMENT,
-            payload=mention_payload,
-            metadata={"object_role": "metadata_only"},
-        )
-        objects.append(mention_object)
-
+        evidence_objects: list[CuratableObjectEnvelope] = []
         for evidence_index, evidence_record in enumerate(evidence_records, start=1):
             record = _required_mapping(evidence_record, "evidence_records[]")
             evidence_ref_id = f"evidence-quote-{retained_count}-{evidence_index}"
@@ -203,7 +194,7 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
                     object_type="EvidenceQuote",
                 )
             )
-            objects.append(
+            evidence_objects.append(
                 CuratableObjectEnvelope(
                     object_type="EvidenceQuote",
                     pending_ref_id=evidence_ref_id,
@@ -213,6 +204,18 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
                     metadata={"object_role": "metadata_only"},
                 )
             )
+
+        mention_object = CuratableObjectEnvelope(
+            object_type="AlleleMention",
+            pending_ref_id=mention_ref_id,
+            status=CuratableObjectStatus.PENDING,
+            definition_state=DefinitionState.IN_DEVELOPMENT,
+            payload=mention_payload,
+            evidence_record_ids=evidence_record_ids,
+            metadata={"object_role": "metadata_only"},
+        )
+        objects.append(mention_object)
+        objects.extend(evidence_objects)
 
         association_refs = [
             ObjectRef(pending_ref_id=reference_ref_id, object_type="Reference"),

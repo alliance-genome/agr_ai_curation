@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any, Mapping
 
+from src.lib.domain_packs.loader import load_domain_fixture_pack
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
     ValidationBindingState,
+    ValidatorBinding,
 )
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
 from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
@@ -50,6 +53,34 @@ def _unresolved_result_payload(request):
         "curator_message": None,
         "explanation": "Contract fixture unresolved validator result.",
     }
+
+
+def _binding_has_evidence_record_selector(binding: ValidatorBinding) -> bool:
+    return any(
+        selector.source == "evidence_record"
+        for selector in binding.input_fields.values()
+    )
+
+
+def _records_from_mapping(container: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    records = container.get("evidence_records")
+    if not isinstance(records, list):
+        return []
+    return [record for record in records if isinstance(record, Mapping)]
+
+
+def _records_from_extraction_metadata(container: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    extraction_metadata = container.get("extraction_metadata")
+    if not isinstance(extraction_metadata, Mapping):
+        return []
+    return _records_from_mapping(extraction_metadata)
+
+
+def _has_evidence_records(container: Mapping[str, Any]) -> bool:
+    return bool(
+        _records_from_mapping(container)
+        or _records_from_extraction_metadata(container)
+    )
 
 
 def test_alliance_domain_pack_validation_metadata_states_are_discoverable():
@@ -196,6 +227,59 @@ def test_alliance_evidence_record_selectors_use_verified_quote_path():
                     )
 
     assert legacy_quote_selectors == []
+
+
+def test_alliance_fixture_evidence_record_selectors_have_explicit_object_evidence_ids():
+    alliance_registry = load_alliance_domain_pack_registry()
+    violations: list[str] = []
+
+    for pack in alliance_registry.loaded_packs:
+        registry = DomainPackValidationRegistry.from_domain_pack(pack)
+        evidence_binding_ids = {
+            binding.binding_id
+            for binding in registry.bindings
+            if binding.state is ValidationBindingState.ACTIVE
+            and _binding_has_evidence_record_selector(binding)
+        }
+        if not evidence_binding_ids:
+            continue
+
+        for fixture_ref in pack.metadata.fixture_packs:
+            fixture_pack = load_domain_fixture_pack(pack.pack_path / fixture_ref.path)
+            for fixture in fixture_pack.fixtures:
+                envelope = fixture.envelope
+                if not _has_evidence_records(envelope.metadata):
+                    continue
+                matches = registry.match_bindings(
+                    envelope,
+                    states=[ValidationBindingState.ACTIVE],
+                )
+                for match in matches:
+                    if match.binding.binding_id not in evidence_binding_ids:
+                        continue
+                    if match.object_envelope is None:
+                        continue
+                    if match.object_envelope.evidence_record_ids:
+                        continue
+                    if (
+                        _has_evidence_records(match.object_envelope.payload)
+                        or _has_evidence_records(match.object_envelope.metadata)
+                    ):
+                        continue
+                    violations.append(
+                        ":".join(
+                            [
+                                pack.pack_id,
+                                fixture_ref.fixture_pack_id,
+                                fixture.name,
+                                match.binding.binding_id,
+                                match.object_envelope.object_type,
+                                match.object_envelope.pending_ref_id or "<no-ref>",
+                            ]
+                        )
+                    )
+
+    assert violations == []
 
 
 def test_alliance_validator_metadata_has_curator_facing_display_names():

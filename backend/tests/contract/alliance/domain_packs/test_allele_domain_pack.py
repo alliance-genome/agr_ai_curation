@@ -328,6 +328,119 @@ def test_allele_mention_binding_selects_crb_examples_for_validation():
         }
 
 
+def test_allele_mention_binding_does_not_use_envelope_evidence_without_object_ids():
+    registry = DomainPackValidationRegistry.from_domain_pack(_allele_pack())
+    envelope = DomainEnvelope(
+        envelope_id="allele-missing-object-evidence-fixture",
+        domain_pack_id=ALLELE_DOMAIN_PACK_ID,
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="AlleleMention",
+                pending_ref_id="allele-mention-1",
+                object_role="metadata_only",
+                payload={
+                    "mention": {"text": "Mst1 Flox/Flox"},
+                    "associated_gene": {"symbol": "Stk4"},
+                    "taxon": {"curie": "NCBITaxon:10090"},
+                },
+                metadata={"object_role": "metadata_only"},
+            ),
+        ],
+        metadata={
+            "evidence_records": [
+                {
+                    "evidence_record_id": "evidence-mst1",
+                    "verified_quote": "Mst1 Flox/Flox mice were crossed as described.",
+                },
+                {
+                    "evidence_record_id": "evidence-mst2",
+                    "verified_quote": "Mst2 -/- mice were maintained separately.",
+                },
+            ]
+        },
+    )
+    matches = [
+        match
+        for match in registry.match_bindings(
+            envelope,
+            states=[ValidationBindingState.ACTIVE],
+        )
+        if match.binding.binding_id == "allele_mention_reference_validation"
+    ]
+
+    assert len(matches) == 1
+    selector_result = build_domain_validation_request(matches[0])
+
+    assert selector_result.findings == ()
+    assert selector_result.request is not None
+    assert selector_result.selected_inputs == {
+        "mention": "Mst1 Flox/Flox",
+        "associated_gene": "Stk4",
+        "taxon": "NCBITaxon:10090",
+    }
+    assert selector_result.evidence == []
+
+
+def test_allele_mention_binding_uses_only_explicit_object_evidence_ids():
+    registry = DomainPackValidationRegistry.from_domain_pack(_allele_pack())
+    envelope = DomainEnvelope(
+        envelope_id="allele-explicit-object-evidence-fixture",
+        domain_pack_id=ALLELE_DOMAIN_PACK_ID,
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="AlleleMention",
+                pending_ref_id="allele-mention-1",
+                object_role="metadata_only",
+                payload={
+                    "mention": {"text": "Mst1 Flox/Flox"},
+                    "associated_gene": {"symbol": "Stk4"},
+                    "taxon": {"curie": "NCBITaxon:10090"},
+                },
+                evidence_record_ids=["evidence-mst1"],
+                metadata={"object_role": "metadata_only"},
+            ),
+        ],
+        metadata={
+            "evidence_records": [
+                {
+                    "evidence_record_id": "evidence-mst1",
+                    "verified_quote": "Mst1 Flox/Flox mice were crossed as described.",
+                },
+                {
+                    "evidence_record_id": "evidence-mst2",
+                    "verified_quote": "Mst2 -/- mice were maintained separately.",
+                },
+            ]
+        },
+    )
+    matches = [
+        match
+        for match in registry.match_bindings(
+            envelope,
+            states=[ValidationBindingState.ACTIVE],
+        )
+        if match.binding.binding_id == "allele_mention_reference_validation"
+    ]
+
+    assert len(matches) == 1
+    selector_result = build_domain_validation_request(matches[0])
+
+    assert selector_result.findings == ()
+    assert selector_result.request is not None
+    assert selector_result.selected_inputs == {
+        "mention": "Mst1 Flox/Flox",
+        "associated_gene": "Stk4",
+        "taxon": "NCBITaxon:10090",
+        "evidence_quote": "Mst1 Flox/Flox mice were crossed as described.",
+    }
+    assert selector_result.evidence == [
+        {
+            "evidence_record_id": "evidence-mst1",
+            "verified_quote": "Mst1 Flox/Flox mice were crossed as described.",
+        }
+    ]
+
+
 def test_allele_mention_validation_materializes_resolved_and_unresolved_paths():
     registry = DomainPackValidationRegistry.from_domain_pack(_allele_pack())
     envelope = DomainEnvelope(
@@ -639,6 +752,10 @@ def test_tool_verified_allele_fixture_converts_to_pending_envelope():
     }
     assert mention.payload["associated_gene"] == {"symbol": "daf-2"}
     assert mention.payload["taxon"] == {"curie": "NCBITaxon:6239"}
+    assert mention.evidence_record_ids == [
+        "daf-2-m41-evidence-1",
+        "daf-2-m41-evidence-2",
+    ]
     assert all(obj.object_type != "Allele" for obj in envelope.objects)
 
     finding_codes = [finding.code for finding in envelope.validation_findings]

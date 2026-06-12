@@ -64,6 +64,8 @@ fixtures:
           curie: NCBITaxon:6239
         source_mentions:
         - unc-54(e190)
+      evidence_record_ids:
+      - evidence-unc54-1
       metadata:
         object_role: metadata_only
     - object_type: EvidenceQuote

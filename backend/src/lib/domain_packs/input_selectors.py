@@ -801,16 +801,20 @@ def _candidate_evidence_records(
     envelope: DomainEnvelope,
     domain_object: CuratableObjectEnvelope,
 ) -> tuple[Mapping[str, Any], ...]:
-    raw_records = [
+    object_records = [
         *_records_from_mapping(domain_object.payload),
         *_records_from_mapping(domain_object.metadata),
-        *_records_from_mapping(envelope.metadata),
         *_records_from_extraction_metadata(domain_object.metadata),
+    ]
+    if not domain_object.evidence_record_ids:
+        return _dedupe_records_by_id(object_records)
+
+    raw_records = [
+        *object_records,
+        *_records_from_mapping(envelope.metadata),
         *_records_from_extraction_metadata(envelope.metadata),
     ]
     deduped_records = _dedupe_records_by_id(raw_records)
-    if not domain_object.evidence_record_ids:
-        return deduped_records
 
     by_id = {
         record_id: record

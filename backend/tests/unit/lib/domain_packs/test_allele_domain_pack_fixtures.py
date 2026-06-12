@@ -63,6 +63,7 @@ def test_allele_domain_pack_loads_tool_verified_pending_fixture():
     assert association.metadata["write_behavior"]["status"] == "blocked"
     mention = next(obj for obj in envelope.objects if obj.object_type == "AlleleMention")
     assert mention.payload["taxon"] == {"curie": "NCBITaxon:6239"}
+    assert mention.evidence_record_ids == ["daf-2-m41-evidence-1"]
 
 
 def test_tool_verified_allele_fixture_builds_active_mention_validation_request():
