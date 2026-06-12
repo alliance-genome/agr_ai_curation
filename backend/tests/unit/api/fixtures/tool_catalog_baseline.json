@@ -1341,6 +1341,42 @@
     "required_context": [],
     "source_file": "python/src/agr_ai_curation_alliance/tools/gene_builder_tools.py"
   },
+  "discard_generic_object": {
+    "agent_methods": null,
+    "audit": {
+      "display_name": "Discard Generic Object"
+    },
+    "binding_kind": "static",
+    "builder_run_state": true,
+    "category": "Database",
+    "description": "Drop one staged generic object when it is wrong or unsupported.",
+    "documentation": {
+      "parameters": [
+        {
+          "description": "Identifies which draft entry this action discards.",
+          "name": "candidate_id",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "Short note explaining why the draft is being dropped.",
+          "name": "reason",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "summary": "Marks one staged generic object as withdrawn so it will not appear in the final result."
+    },
+    "methods": null,
+    "name": "Discard Generic Object",
+    "package_backed": true,
+    "package_display_name": "Alliance Defaults",
+    "package_export_name": "default",
+    "package_id": "agr.alliance",
+    "package_version": "1.0.0",
+    "required_context": [],
+    "source_file": "python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py"
+  },
   "discard_phenotype_observation": {
     "agent_methods": null,
     "audit": {
@@ -1536,6 +1572,37 @@
     "package_version": "1.0.0",
     "required_context": [],
     "source_file": "python/src/agr_ai_curation_alliance/tools/gene_builder_tools.py"
+  },
+  "finalize_generic_extraction": {
+    "agent_methods": null,
+    "audit": {
+      "display_name": "Finalize Generic Extraction"
+    },
+    "binding_kind": "static",
+    "builder_finalization": true,
+    "builder_run_state": true,
+    "category": "Database",
+    "description": "Submit the run's generic object draft list for canonical extraction finalization.",
+    "documentation": {
+      "parameters": [
+        {
+          "description": "The list of staged generic draft entries to finalize.",
+          "name": "candidate_ids",
+          "required": true,
+          "type": "array"
+        }
+      ],
+      "summary": "Takes the generic drafts the agent settled on and materializes canonical backend extraction data for curator review and TSV export."
+    },
+    "methods": null,
+    "name": "Finalize Generic Extraction",
+    "package_backed": true,
+    "package_display_name": "Alliance Defaults",
+    "package_export_name": "default",
+    "package_id": "agr.alliance",
+    "package_version": "1.0.0",
+    "required_context": [],
+    "source_file": "python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py"
   },
   "finalize_phenotype_extraction": {
     "agent_methods": null,
@@ -1855,6 +1922,78 @@
     "package_version": "1.0.0",
     "required_context": [],
     "source_file": "python/src/agr_ai_curation_alliance/tools/gene_builder_tools.py"
+  },
+  "find_staged_generic_objects": {
+    "agent_methods": null,
+    "audit": {
+      "display_name": "Find Staged Generic Objects"
+    },
+    "binding_kind": "static",
+    "builder_run_state": true,
+    "category": "Database",
+    "description": "Find staged generic objects by content or id without listing the whole working set.",
+    "documentation": {
+      "parameters": [
+        {
+          "description": "Show only drafts whose saved details contain this text.",
+          "name": "field_value_contains",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Show only the draft linked to this draft id.",
+          "name": "pending_ref_id",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Show only drafts that use this saved evidence.",
+          "name": "evidence_record_id",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Show only the draft with this exact id.",
+          "name": "candidate_id",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Show only drafts that have problems flagged or only those that are clean.",
+          "name": "has_validation_errors",
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "description": "Whether to also search drafts that were previously withdrawn.",
+          "name": "include_discarded",
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "description": "How many matching drafts to show on this page.",
+          "name": "limit",
+          "required": false,
+          "type": "integer"
+        },
+        {
+          "description": "How many matching drafts to skip before this page.",
+          "name": "offset",
+          "required": false,
+          "type": "integer"
+        }
+      ],
+      "summary": "Searches staged generic drafts and returns compact summaries for just the matching entries."
+    },
+    "methods": null,
+    "name": "Find Staged Generic Objects",
+    "package_backed": true,
+    "package_display_name": "Alliance Defaults",
+    "package_export_name": "default",
+    "package_id": "agr.alliance",
+    "package_version": "1.0.0",
+    "required_context": [],
+    "source_file": "python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py"
   },
   "find_staged_phenotype_observations": {
     "agent_methods": null,
@@ -2484,6 +2623,35 @@
     "required_context": [],
     "source_file": "python/src/agr_ai_curation_alliance/tools/agr_curation.py"
   },
+  "list_generic_object_classes": {
+    "agent_methods": null,
+    "audit": {
+      "display_name": "List Generic Object Classes"
+    },
+    "binding_kind": "static",
+    "category": "Runtime Metadata",
+    "description": "Show the compact catalog of generic extraction classes that can be staged.",
+    "documentation": {
+      "parameters": [
+        {
+          "description": "Also include known generated classes that are not currently stageable.",
+          "name": "include_non_stageable",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "summary": "Returns the available generic extraction class keys, their labels, payload fields, and any validator hints. The agent must choose one explicit class key before staging each generic object."
+    },
+    "methods": null,
+    "name": "List Generic Object Classes",
+    "package_backed": true,
+    "package_display_name": "Alliance Defaults",
+    "package_export_name": "default",
+    "package_id": "agr.alliance",
+    "package_version": "1.0.0",
+    "required_context": [],
+    "source_file": "python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py"
+  },
   "list_recorded_evidence": {
     "agent_methods": null,
     "binding_kind": "context_factory",
@@ -2710,6 +2878,48 @@
     "package_version": "1.0.0",
     "required_context": [],
     "source_file": "python/src/agr_ai_curation_alliance/tools/gene_builder_tools.py"
+  },
+  "list_staged_generic_objects": {
+    "agent_methods": null,
+    "audit": {
+      "display_name": "List Staged Generic Objects"
+    },
+    "binding_kind": "static",
+    "builder_run_state": true,
+    "category": "Database",
+    "description": "Show compact summaries for staged generic objects, one page at a time.",
+    "documentation": {
+      "parameters": [
+        {
+          "description": "Whether to also show drafts that were previously withdrawn.",
+          "name": "include_discarded",
+          "required": true,
+          "type": "boolean"
+        },
+        {
+          "description": "How many drafts to show on this page.",
+          "name": "limit",
+          "required": false,
+          "type": "integer"
+        },
+        {
+          "description": "How many drafts to skip before this page.",
+          "name": "offset",
+          "required": false,
+          "type": "integer"
+        }
+      ],
+      "summary": "Returns a compact overview of the generic drafts staged so far in this run. Results come back one page at a time."
+    },
+    "methods": null,
+    "name": "List Staged Generic Objects",
+    "package_backed": true,
+    "package_display_name": "Alliance Defaults",
+    "package_export_name": "default",
+    "package_id": "agr.alliance",
+    "package_version": "1.0.0",
+    "required_context": [],
+    "source_file": "python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py"
   },
   "list_staged_phenotype_observations": {
     "agent_methods": null,
@@ -3032,6 +3242,42 @@
     "package_version": "1.0.0",
     "required_context": [],
     "source_file": "python/src/agr_ai_curation_alliance/tools/gene_builder_tools.py"
+  },
+  "patch_generic_object": {
+    "agent_methods": null,
+    "audit": {
+      "display_name": "Patch Generic Object"
+    },
+    "binding_kind": "static",
+    "builder_run_state": true,
+    "category": "Database",
+    "description": "Make small corrections to a generic object that is already on the run's working list.",
+    "documentation": {
+      "parameters": [
+        {
+          "description": "Identifies which draft entry this action updates.",
+          "name": "candidate_id",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "Field updates. Use top-level fields, payload.<key>, attributes.<key>, or evidence_record_ids.",
+          "name": "updates",
+          "required": true,
+          "type": "array"
+        }
+      ],
+      "summary": "Updates allowed fields on one staged generic object. The class_key remains explicit and is rechecked after every patch."
+    },
+    "methods": null,
+    "name": "Patch Generic Object",
+    "package_backed": true,
+    "package_display_name": "Alliance Defaults",
+    "package_export_name": "default",
+    "package_id": "agr.alliance",
+    "package_version": "1.0.0",
+    "required_context": [],
+    "source_file": "python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py"
   },
   "patch_phenotype_observation": {
     "agent_methods": null,
@@ -4515,6 +4761,96 @@
     "package_version": "1.0.0",
     "required_context": [],
     "source_file": "python/src/agr_ai_curation_alliance/tools/gene_builder_tools.py"
+  },
+  "stage_generic_object": {
+    "agent_methods": null,
+    "audit": {
+      "display_name": "Stage Generic Object"
+    },
+    "binding_kind": "static",
+    "builder_run_state": true,
+    "category": "Database",
+    "description": "Add one new generic extraction object to the run's working list, backed by saved paper evidence.",
+    "documentation": {
+      "parameters": [
+        {
+          "description": "The explicit class key chosen from list_generic_object_classes, such as generic:generic_reagent_candidate or gene:gene_mention_evidence.",
+          "name": "class_key",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "Human-readable label for this extracted object.",
+          "name": "label",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The saved evidence records that support this object.",
+          "name": "evidence_record_ids",
+          "required": true,
+          "type": "array"
+        },
+        {
+          "description": "Notes explaining why this class key fits the paper evidence.",
+          "name": "classification_notes",
+          "required": true,
+          "type": "array"
+        },
+        {
+          "description": "Optional stable draft identifier for this object.",
+          "name": "pending_ref_id",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "The source-paper label or mention when it differs from label.",
+          "name": "source_label",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Short evidence-backed description of the object.",
+          "name": "description",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Extractor confidence label for this object.",
+          "name": "confidence",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Class-local semantic type label when the paper gives one.",
+          "name": "semantic_class",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Class-specific evidence-backed payload fields.",
+          "name": "payload",
+          "required": false,
+          "type": "object"
+        },
+        {
+          "description": "Additional evidence-backed attributes.",
+          "name": "attributes",
+          "required": false,
+          "type": "object"
+        }
+      ],
+      "summary": "Records a single evidence-backed generic object from the source document. Every staged object must use an explicit class_key returned by list_generic_object_classes and must include a human-readable label, evidence IDs, and classification notes."
+    },
+    "methods": null,
+    "name": "Stage Generic Object",
+    "package_backed": true,
+    "package_display_name": "Alliance Defaults",
+    "package_export_name": "default",
+    "package_id": "agr.alliance",
+    "package_version": "1.0.0",
+    "required_context": [],
+    "source_file": "python/src/agr_ai_curation_alliance/tools/generic_builder_tools.py"
   },
   "stage_phenotype_observation": {
     "agent_methods": null,

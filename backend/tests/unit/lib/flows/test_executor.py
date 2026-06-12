@@ -1762,7 +1762,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert "compact CSV export" in planner_calls[0]["node_data"]["custom_instructions"]
         assert formatter_invocations == []
         assert save_calls[0]["filename"] == "Test_Flow_csv_export"
-        assert save_calls[0]["data"][0]["object_payload_label"] == "TP53"
+        assert "TP53" in save_calls[0]["data"][0]["artifact_preview"]
         assert execution_state["completed_steps"][-1]["agent_id"] == "csv_output_formatter"
         assert execution_state["completed_steps"][-1]["output"] == result_text
         assert "extraction_handoff_audit" not in execution_state["completed_steps"][-1]
