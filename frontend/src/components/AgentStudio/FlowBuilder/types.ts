@@ -70,6 +70,8 @@ export interface FlowNodeData {
   agent_description?: string
   /** Curator's task/request that initiates the flow (required for task_input nodes) */
   task_instructions?: string
+  /** Optional human-authored goal for this step, persisted with backend-created flows */
+  step_goal?: string
   /** Additional custom instructions appended to agent prompts */
   custom_instructions?: string
   prompt_version?: number
@@ -77,6 +79,8 @@ export interface FlowNodeData {
   include_evidence?: boolean
   /** For output/formatter steps only. Controls the human-readable output descriptor. */
   output_filename_template?: string
+  /** For terminal formatter steps. Backend-validated projection plan for curation exports. */
+  projection_plan?: Record<string, unknown>
   output_key: string
   validation_attachments?: ValidationAttachmentSelection[]
   validation_groups?: ValidationAttachmentGroup[]

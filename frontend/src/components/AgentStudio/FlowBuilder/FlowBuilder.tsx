@@ -72,6 +72,7 @@ import type {
   AgentNode,
   AgentNodeData,
   FlowDefinition,
+  FlowNodeData,
   FlowResponse,
   FlowEdge,
   FlowEdgeRole,
@@ -121,6 +122,44 @@ const buildDefaultValidationSelections = (
     enabled: attachment.default_enabled,
   })) ?? []
 )
+
+const flowNodeDataForPersistence = (data: AgentNodeData): FlowNodeData => {
+  const persisted: FlowNodeData = {
+    agent_id: data.agent_id,
+    agent_display_name: data.agent_display_name,
+    output_key: data.output_key,
+  }
+
+  if (data.agent_description !== undefined) {
+    persisted.agent_description = data.agent_description
+  }
+  if (data.task_instructions !== undefined) {
+    persisted.task_instructions = data.task_instructions
+  }
+  if (data.step_goal !== undefined) {
+    persisted.step_goal = data.step_goal
+  }
+  if (data.custom_instructions !== undefined) {
+    persisted.custom_instructions = data.custom_instructions
+  }
+  if (data.prompt_version !== undefined) {
+    persisted.prompt_version = data.prompt_version
+  }
+  if (data.include_evidence !== undefined) {
+    persisted.include_evidence = data.include_evidence
+  }
+  if (data.output_filename_template !== undefined) {
+    persisted.output_filename_template = data.output_filename_template
+  }
+  if (data.projection_plan !== undefined) {
+    persisted.projection_plan = data.projection_plan
+  }
+  if (data.validation_attachments !== undefined) {
+    persisted.validation_attachments = data.validation_attachments.map(validationAttachmentForPersistence)
+  }
+
+  return persisted
+}
 
 const activeValidationBindingOptions = (
   node?: AgentNode
@@ -857,11 +896,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
           id: n.id,
           type: n.data.agent_id === 'task_input' ? 'task_input' : 'agent',
           position: n.position,
-          data: {
-            ...n.data,
-            validation_attachments: n.data.validation_attachments?.map(validationAttachmentForPersistence),
-            validation_groups: undefined,
-          },
+          data: flowNodeDataForPersistence(n.data),
         })),
         edges: edges.map((e) => {
           const role = edgeRole(e as FlowEdge)

@@ -745,6 +745,14 @@ describe('FlowBuilder', () => {
         })
       )
     })
+
+    const createPayload = serviceMocks.createFlow.mock.calls[0][0]
+    createPayload.flow_definition.nodes.forEach((node: { data: Record<string, unknown> }) => {
+      expect(node.data).not.toHaveProperty('hasError')
+      expect(node.data).not.toHaveProperty('errorMessage')
+      expect(node.data).not.toHaveProperty('isSelected')
+      expect(node.data).not.toHaveProperty('validation_groups')
+    })
   }, 15000) // Builder bootstrap plus save dialog interactions can exceed 5s in the full suite.
 
   it('creates extraction agents without prompt input-source routing', async () => {
