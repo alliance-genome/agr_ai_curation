@@ -15,6 +15,7 @@ from src.lib.openai_agents.config import (
     get_groq_tool_call_max_retries,
     get_groq_tool_call_retry_delay_seconds,
     get_openai_responses_websocket_ping_timeout_seconds,
+    get_pdf_max_file_size_bytes,
     get_model_for_agent,
     is_retryable_groq_tool_call_error,
     resolve_model_provider,
@@ -401,6 +402,18 @@ def test_openai_responses_websocket_ping_timeout_invalid_env_uses_default(monkey
     monkeypatch.setenv("OPENAI_RESPONSES_WEBSOCKET_PING_TIMEOUT_SECONDS", "not-a-float")
 
     assert get_openai_responses_websocket_ping_timeout_seconds() is None
+
+
+def test_pdf_max_file_size_default_is_150mb(monkeypatch):
+    monkeypatch.delenv("PDF_MAX_FILE_SIZE_BYTES", raising=False)
+
+    assert get_pdf_max_file_size_bytes() == 150 * 1024 * 1024
+
+
+def test_pdf_max_file_size_env_override(monkeypatch):
+    monkeypatch.setenv("PDF_MAX_FILE_SIZE_BYTES", str(125 * 1024 * 1024))
+
+    assert get_pdf_max_file_size_bytes() == 125 * 1024 * 1024
 
 
 def test_get_api_key_uses_provider_env_mapping(monkeypatch):

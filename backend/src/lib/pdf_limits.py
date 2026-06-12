@@ -2,7 +2,7 @@
 
 from src.lib.openai_agents.config import get_pdf_max_file_size_bytes
 
-# Env-configurable via PDF_MAX_FILE_SIZE_BYTES (default 100 MB); see config.py.
+# Env-configurable via PDF_MAX_FILE_SIZE_BYTES (default 150 MB); see config.py.
 MAX_PDF_FILE_SIZE_BYTES = get_pdf_max_file_size_bytes()
 # Derived MB value (kept in sync with the byte limit; not separately configurable).
 MAX_PDF_FILE_SIZE_MB = MAX_PDF_FILE_SIZE_BYTES // (1024 * 1024)

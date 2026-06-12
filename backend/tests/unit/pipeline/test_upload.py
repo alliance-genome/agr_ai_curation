@@ -3,9 +3,9 @@
 import pytest
 from pathlib import Path
 import hashlib
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import Mock, AsyncMock
 
-from src.lib.pdf_limits import MAX_PDF_FILE_SIZE_BYTES
+from src.lib.pdf_limits import MAX_PDF_FILE_SIZE_BYTES, MAX_PDF_FILE_SIZE_MB
 from src.lib.pipeline.upload import (
     PDFUploadHandler,
     save_uploaded_pdf,
@@ -150,7 +150,7 @@ class TestPDFUploadHandler:
 
         assert validation["is_valid"] is False
         assert validation["checks"]["file_size_ok"] is False
-        assert "100 MB" in str(validation["errors"])
+        assert f"{MAX_PDF_FILE_SIZE_MB} MB" in str(validation["errors"])
 
     @pytest.mark.asyncio
     async def test_store_raw_pdf_success(self, upload_handler, mock_pdf_file):

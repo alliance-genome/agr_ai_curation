@@ -1373,11 +1373,11 @@ def get_file_output_max_size_bytes() -> int:
 def get_pdf_max_file_size_bytes() -> int:
     """Max byte size of an uploaded/processed PDF (PDF_MAX_FILE_SIZE_BYTES).
 
-    Rejects oversized PDF uploads. Default 104857600 (100 MB).
+    Rejects oversized PDF uploads. Default 157286400 (150 MB).
     """
     return max(
         1,
-        _get_env_int_with_fallback("PDF_MAX_FILE_SIZE_BYTES", 100 * 1024 * 1024),
+        _get_env_int_with_fallback("PDF_MAX_FILE_SIZE_BYTES", 150 * 1024 * 1024),
     )
 
 

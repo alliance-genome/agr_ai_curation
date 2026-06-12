@@ -12,7 +12,11 @@ import pytest
 from fastapi import BackgroundTasks, UploadFile
 from sqlalchemy.exc import IntegrityError
 
-from src.lib.pdf_limits import MAX_PDF_FILE_SIZE_BYTES
+from src.lib.pdf_limits import (
+    MAX_PDF_FILE_SIZE_BYTES,
+    MAX_PDF_FILE_SIZE_MB,
+    pdf_file_size_limit_message,
+)
 from src.lib.pdf_jobs.upload_intake_service import (
     UploadIntakeDuplicateError,
     UploadIntakeService,
@@ -128,7 +132,7 @@ class _FailingUploadHandler:
         pass
 
     async def save_uploaded_pdf(self, _file):
-        raise UploadError("PDF file size (100.00 MB) exceeds the maximum allowed (100 MB).")
+        raise UploadError(pdf_file_size_limit_message(MAX_PDF_FILE_SIZE_BYTES + 1))
 
 
 @pytest.mark.asyncio
@@ -241,7 +245,7 @@ async def test_intake_upload_maps_upload_handler_validation_errors_to_validation
         upload_handler_factory=lambda storage_path: _FailingUploadHandler(storage_path=storage_path),
     )
 
-    with pytest.raises(UploadIntakeValidationError, match="100 MB"):
+    with pytest.raises(UploadIntakeValidationError, match=f"{MAX_PDF_FILE_SIZE_MB} MB"):
         await service.intake_upload(
             background_tasks=BackgroundTasks(),
             file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
@@ -253,7 +257,7 @@ async def test_intake_upload_maps_upload_handler_validation_errors_to_validation
 
 
 @pytest.mark.asyncio
-async def test_intake_upload_rejects_pdf_larger_than_100mb_before_db_work(tmp_path):
+async def test_intake_upload_rejects_pdf_larger_than_configured_limit_before_db_work(tmp_path):
     session = _FakeSession()
     dispatch = _DispatchRecorder()
     create_document_calls = []
@@ -275,7 +279,7 @@ async def test_intake_upload_rejects_pdf_larger_than_100mb_before_db_work(tmp_pa
         tenant_name_resolver=lambda _sub: "tenant-user-1",
     )
 
-    with pytest.raises(UploadIntakeValidationError, match="100 MB"):
+    with pytest.raises(UploadIntakeValidationError, match=f"{MAX_PDF_FILE_SIZE_MB} MB"):
         await service.intake_upload(
             background_tasks=BackgroundTasks(),
             file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
@@ -463,7 +467,7 @@ async def test_intake_upload_file_size_constraint_error_maps_to_validation_error
         tenant_name_resolver=lambda _sub: "tenant-user-1",
     )
 
-    with pytest.raises(UploadIntakeValidationError, match="100 MB"):
+    with pytest.raises(UploadIntakeValidationError, match=f"{MAX_PDF_FILE_SIZE_MB} MB"):
         await service.intake_upload(
             background_tasks=BackgroundTasks(),
             file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),

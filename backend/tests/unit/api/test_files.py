@@ -243,7 +243,7 @@ class TestRecordFileEndpoint:
             "filename": "huge.csv",
             "file_path": str(temp_storage_dir / "outputs" / "huge.csv"),
             "file_type": "csv",
-            "file_size": 200 * 1024 * 1024,  # 200 MB > 100 MB limit
+            "file_size": 200 * 1024 * 1024,  # 200 MB > generated output limit
             "curator_id": "test-user-123",
             "session_id": valid_session_id,
             "trace_id": valid_trace_id,

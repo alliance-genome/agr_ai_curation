@@ -16,12 +16,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.api.auth import get_auth_dependency
 from src.lib.file_outputs.storage import FileOutputStorageService, PathSecurityError
-from src.lib.pdf_limits import MAX_PDF_FILE_SIZE_BYTES
+from src.lib.openai_agents.config import get_file_output_max_size_bytes
 from src.models.sql.database import get_db
 from src.models.sql.file_output import FileOutput
 from src.schemas.file_output import (
@@ -41,8 +40,8 @@ CONTENT_TYPE_MAP = {
     "json": "application/json",
 }
 
-# Max file size (100 MB)
-MAX_FILE_SIZE = MAX_PDF_FILE_SIZE_BYTES
+# Max generated output file size. Keep separate from PDF upload limits.
+MAX_FILE_SIZE = get_file_output_max_size_bytes()
 
 
 def _get_curator_id(user: dict) -> str:

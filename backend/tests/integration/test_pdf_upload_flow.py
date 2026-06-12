@@ -16,6 +16,7 @@ from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument
 
 DEBBIE_PDF_FILE_SIZE_BYTES = 77_585_577
+PREVIOUS_LIMIT_REGRESSION_PDF_FILE_SIZE_BYTES = 120 * 1024 * 1024
 
 
 @pytest.fixture(scope="module")
@@ -38,16 +39,17 @@ def client(viewer_app: FastAPI) -> TestClient:
     return TestClient(viewer_app)
 
 
-@pytest.fixture
-def seeded_document():
+@pytest.fixture(params=[DEBBIE_PDF_FILE_SIZE_BYTES, PREVIOUS_LIMIT_REGRESSION_PDF_FILE_SIZE_BYTES])
+def seeded_document(request):
     session = SessionLocal()
     document_id = uuid4()
+    file_size = request.param
     record = PDFDocument(
         id=document_id,
-        filename="integration.pdf",
-        file_path=f"{document_id}/integration.pdf",
-        file_hash="f" * 64,
-        file_size=DEBBIE_PDF_FILE_SIZE_BYTES,
+        filename=f"integration-{file_size}.pdf",
+        file_path=f"{document_id}/integration-{file_size}.pdf",
+        file_hash=(uuid4().hex * 2)[:64],
+        file_size=file_size,
         page_count=7,
     )
     session.add(record)
@@ -63,7 +65,7 @@ def seeded_document():
 
 def test_upload_flow_exposes_metadata_via_api(client: TestClient, seeded_document: PDFDocument):
     """A persisted PDF document should surface through list/detail/url endpoints."""
-    assert DEBBIE_PDF_FILE_SIZE_BYTES < MAX_PDF_FILE_SIZE_BYTES
+    assert seeded_document.file_size < MAX_PDF_FILE_SIZE_BYTES
 
     list_response = client.get("/api/pdf-viewer/documents")
     assert list_response.status_code == 200
@@ -76,7 +78,7 @@ def test_upload_flow_exposes_metadata_via_api(client: TestClient, seeded_documen
         None,
     )
     assert matching is not None, "Seeded document must appear in list endpoint"
-    assert matching.get("file_size") == DEBBIE_PDF_FILE_SIZE_BYTES
+    assert matching.get("file_size") == seeded_document.file_size
     assert matching.get("viewer_url", "").startswith("/uploads/")
 
     detail_response = client.get(f"/api/pdf-viewer/documents/{seeded_document.id}")
@@ -85,8 +87,8 @@ def test_upload_flow_exposes_metadata_via_api(client: TestClient, seeded_documen
     detail = detail_response.json()
     assert detail.get("filename") == seeded_document.filename
     assert detail.get("file_hash") == seeded_document.file_hash
-    assert detail.get("file_size") == DEBBIE_PDF_FILE_SIZE_BYTES
-    assert detail.get("viewer_url", "").endswith("integration.pdf")
+    assert detail.get("file_size") == seeded_document.file_size
+    assert detail.get("viewer_url", "").endswith(seeded_document.filename)
 
     url_response = client.get(f"/api/pdf-viewer/documents/{seeded_document.id}/url")
     assert url_response.status_code == 200
