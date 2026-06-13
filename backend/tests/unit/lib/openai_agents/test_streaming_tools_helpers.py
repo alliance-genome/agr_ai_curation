@@ -1407,18 +1407,21 @@ def test_domain_envelope_reduction_prioritizes_materialized_fields_for_superviso
         expected_output_type=GeneExtractionResultEnvelope,
     )
 
-    assert "Use these validated/materialized values" in result
-    assert "primary_external_id=FB:FBgn0259685" in result
-    assert "gene_symbol=crb" in result
-    assert "taxon=NCBITaxon:7227" in result
+    assert "Extraction result ready: gene" in result
+    assert "Objects found: 1" in result
+    assert "Recommended supervisor action: answer_from_manifest" in result
+    assert "gene_mention_evidence gene-mention-evidence-1: Crumbs" in result
+    assert "crb" in result
+    assert "FB:FBgn0259685" in result
+    assert "NCBITaxon:7227" in result
     assert "proposed_primary_external_id" not in result
     assert "verified_quote" not in result
-    assert "Validation findings: resolved=1." in result
+    assert "Validation findings: total=1" in result
     with pytest.raises(json.JSONDecodeError):
         json.loads(result)
 
 
-def test_domain_envelope_reduction_includes_resolved_validator_values():
+def test_domain_envelope_reduction_includes_materialized_validator_values_from_yaml_fields():
     envelope_output = json.dumps(
         {
             "envelope_id": "env-test-allele",
@@ -1430,7 +1433,11 @@ def test_domain_envelope_reduction_includes_resolved_validator_values():
                     "object_role": "curatable_unit",
                     "pending_ref_id": "allele-assoc-crb-11A22",
                     "status": "pending",
-                    "payload": {"mention": "crb 11A22"},
+                    "payload": {
+                        "allele_label": "crb 11A22",
+                        "allele_identifier": "FB:FBal0001817",
+                        "verified_quote": "crb 11A22 was recovered.",
+                    },
                 }
             ],
             "validation_findings": [
@@ -1461,11 +1468,12 @@ def test_domain_envelope_reduction_includes_resolved_validator_values():
         expected_output_type=GeneExtractionResultEnvelope,
     )
 
-    assert "Validation findings: resolved=1." in result
-    assert "Resolved validator finding: crb 11A22" in result
-    assert "curie=FB:FBal0001817" in result
-    assert "symbol=crb<sup>11A22</sup>" in result
-    assert "taxon=NCBITaxon:7227" in result
+    assert "Extraction result ready: agr.alliance.allele" in result
+    assert "AllelePaperEvidenceAssociation allele-assoc-crb-11A22: crb 11A22" in result
+    assert "FB:FBal0001817" in result
+    assert "crb<sup>11A22</sup>" not in result
+    assert "verified_quote" not in result
+    assert "Validation findings: total=1" in result
 
 
 def test_builder_domain_envelope_reduction_without_output_type_stays_compact():
@@ -1482,46 +1490,9 @@ def test_builder_domain_envelope_reduction_without_output_type_stays_compact():
                     "pending_ref_id": "gene-expression-1",
                     "status": "validated",
                     "payload": {
-                        "symbol": "rpm-1",
-                        "taxon": "NCBITaxon:6239",
+                        "expression_annotation_subject": {"gene_symbol": "rpm-1"},
+                        "when_expressed_stage_name": "L4",
                         "where_expressed_statement": huge_note,
-                    },
-                }
-            ],
-            "validation_findings": [{"status": "resolved"}],
-        }
-    )
-
-    result = streaming_tools._reduce_specialist_output_for_supervisor(
-        envelope_output,
-        expected_output_type=None,
-        finalized_domain_envelope=True,
-    )
-
-    assert len(result) < 2000
-    assert "Validated domain envelope result for agr.alliance.gene_expression" in result
-    assert "symbol=rpm-1" in result
-    assert "taxon=NCBITaxon:6239" in result
-    assert huge_note not in result
-    with pytest.raises(json.JSONDecodeError):
-        json.loads(result)
-
-
-def test_builder_domain_envelope_reduction_counts_curatable_objects():
-    envelope_output = json.dumps(
-        {
-            "envelope_id": "env-test-builder-curatable",
-            "domain_pack_id": "agr.alliance.gene_expression",
-            "domain_pack_version": "0.1.0",
-            "curatable_objects": [
-                {
-                    "object_type": "GeneExpressionAnnotation",
-                    "object_role": "curatable_unit",
-                    "pending_ref_id": "gene-expression-1",
-                    "status": "validated",
-                    "payload": {
-                        "symbol": "rpm-1",
-                        "taxon": "NCBITaxon:6239",
                     },
                 }
             ],
@@ -1535,15 +1506,52 @@ def test_builder_domain_envelope_reduction_counts_curatable_objects():
         finalized_domain_envelope=True,
     )
 
-    assert "Validated domain envelope result for agr.alliance.gene_expression" in result
-    assert "GeneExpressionAnnotation gene-expression-1 (validated)" in result
-    assert "symbol=rpm-1" in result
+    assert len(result) < 2000
+    assert "Extraction result ready: agr.alliance.gene_expression" in result
+    assert "GeneExpressionAnnotation gene-expression-1: rpm-1" in result
+    assert "L4" in result
+    assert huge_note not in result
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(result)
+
+
+def test_builder_domain_envelope_reduction_counts_curatable_objects():
+    envelope_output = json.dumps(
+        {
+            "envelope_id": "env-test-builder-curatable",
+            "domain_pack_id": "agr.alliance.gene_expression",
+            "domain_pack_version": "0.1.0",
+            "objects": [
+                {
+                    "object_type": "GeneExpressionAnnotation",
+                    "object_role": "curatable_unit",
+                    "pending_ref_id": "gene-expression-1",
+                    "status": "validated",
+                    "payload": {
+                        "expression_annotation_subject": {"gene_symbol": "rpm-1"},
+                        "where_expressed_statement": "body wall muscle",
+                    },
+                }
+            ],
+            "validation_findings": [],
+        }
+    )
+
+    result = streaming_tools._reduce_specialist_output_for_supervisor(
+        envelope_output,
+        expected_output_type=None,
+        finalized_domain_envelope=True,
+    )
+
+    assert "Extraction result ready: agr.alliance.gene_expression" in result
+    assert "Objects found: 1" in result
+    assert "GeneExpressionAnnotation gene-expression-1: rpm-1" in result
     assert "Object count: 0." not in result
     with pytest.raises(json.JSONDecodeError):
         json.loads(result)
 
 
-def test_domain_envelope_reduction_uses_unusual_payload_scalars_not_raw_json():
+def test_domain_envelope_reduction_missing_policy_does_not_guess_payload_scalars():
     envelope_output = json.dumps(
         {
             "envelope_id": "env-test-unusual",
@@ -1570,8 +1578,9 @@ def test_domain_envelope_reduction_uses_unusual_payload_scalars_not_raw_json():
     )
 
     assert "Validated domain envelope result for agr.alliance.unusual" in result
-    assert "nonstandard_curator_value=kept compactly" in result
-    assert "numeric_observation=7" in result
+    assert "no safe supervisor manifest could be rendered" in result
+    assert "nonstandard_curator_value" not in result
+    assert "numeric_observation" not in result
     with pytest.raises(json.JSONDecodeError):
         json.loads(result)
 
@@ -1580,7 +1589,7 @@ def test_domain_envelope_reduction_empty_objects_never_returns_raw_json():
     envelope_output = json.dumps(
         {
             "envelope_id": "env-test-empty",
-            "domain_pack_id": "agr.alliance.empty",
+            "domain_pack_id": "gene",
             "objects": [],
             "validation_findings": [],
         }
@@ -1592,8 +1601,9 @@ def test_domain_envelope_reduction_empty_objects_never_returns_raw_json():
         finalized_domain_envelope=True,
     )
 
-    assert "Validated domain envelope result for agr.alliance.empty" in result
-    assert "Object count: 0." in result
+    assert "Extraction result ready: gene" in result
+    assert "Objects found: 0" in result
+    assert "Recommended supervisor action: report_empty_result" in result
     with pytest.raises(json.JSONDecodeError):
         json.loads(result)
 

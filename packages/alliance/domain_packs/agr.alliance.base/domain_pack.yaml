@@ -135,6 +135,10 @@ object_definitions:
       - Payload fields are a scaffold for first-pass domain packs, not a complete export contract.
     metadata:
       object_role: curatable_unit
+      supervisor_manifest:
+        primary_label_field: where_expressed_statement
+        summary_fields:
+          - when_expressed_stage_name
       provider_refs:
         alliance_linkml:
           schema_ref: alliance.linkml

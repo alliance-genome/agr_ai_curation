@@ -548,27 +548,41 @@ def build_internal_extraction_result_event(
     tool_name: str,
     specialist_name: str,
     finalization: ExtractionBuilderFinalization,
+    extraction_result_id: str | None = None,
+    result_ref: str | None = None,
+    persistence_status: Mapping[str, Any] | None = None,
     timestamp: str | None = None,
 ) -> dict[str, Any]:
     """Build the backend-only chat/persistence event from a finalized payload."""
 
     canonical_output = json.dumps(finalization.payload)
+    details: dict[str, Any] = {
+        "toolName": tool_name,
+        "friendlyName": f"{specialist_name}: Internal Extraction Result",
+        "success": True,
+        "isSpecialistInternal": True,
+        "builderFinalization": finalization.summary(),
+    }
+    internal: dict[str, Any] = {
+        "tool_output": canonical_output,
+        "canonical_payload": deepcopy(finalization.payload),
+        "builder_finalization": finalization.summary(),
+        "output_length": len(canonical_output),
+    }
+    if extraction_result_id:
+        details["extraction_result_id"] = extraction_result_id
+        internal["extraction_result_id"] = extraction_result_id
+    if result_ref:
+        details["result_ref"] = result_ref
+        internal["result_ref"] = result_ref
+    if persistence_status:
+        details["persistence"] = dict(persistence_status)
+        internal["persistence"] = dict(persistence_status)
     return {
         "type": INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
         "timestamp": timestamp or _now_iso(),
-        "details": {
-            "toolName": tool_name,
-            "friendlyName": f"{specialist_name}: Internal Extraction Result",
-            "success": True,
-            "isSpecialistInternal": True,
-            "builderFinalization": finalization.summary(),
-        },
-        "internal": {
-            "tool_output": canonical_output,
-            "canonical_payload": deepcopy(finalization.payload),
-            "builder_finalization": finalization.summary(),
-            "output_length": len(canonical_output),
-        },
+        "details": details,
+        "internal": internal,
     }
 
 

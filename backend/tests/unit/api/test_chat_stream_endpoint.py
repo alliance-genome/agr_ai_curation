@@ -111,7 +111,8 @@ def _stub_stream_turn_persistence(monkeypatch):
         assistant_message: str,
         trace_id: str | None,
         extraction_candidates,
-        document_id: str | None,
+        persisted_extraction_refs=None,
+        document_id: str | None = None,
     ):
         chat._persist_extraction_candidates(
             candidates=extraction_candidates,
@@ -741,6 +742,99 @@ def test_chat_stream_endpoint_persists_internal_extraction_result_without_stream
     assert persisted_requests[0].origin_session_id == "session-chat-internal"
     assert persisted_requests[0].candidate_count == 1
     assert persisted_requests[0].metadata["tool_name"] == "ask_gene_expression_specialist"
+
+
+def test_chat_stream_endpoint_does_not_repersist_inline_extraction_result(monkeypatch):
+    chat._LOCAL_CANCEL_EVENTS.clear()
+    chat._LOCAL_SESSION_OWNERS.clear()
+
+    captured_finalize = {}
+
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(
+        monkeypatch,
+        "document_state",
+        SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
+    )
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {"ask_gene_expression_specialist": "gene-expression"})
+
+    async def _register_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return True
+
+    async def _unregister_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return None
+
+    async def _clear_cancel_signal(_session_id: str):
+        return None
+
+    async def _check_cancel_signal(_session_id: str) -> bool:
+        return False
+
+    async def _run_agent_streamed(**_kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-inline"}}
+        yield {
+            "type": chat_common.INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
+            "details": {
+                "toolName": "ask_gene_expression_specialist",
+                "extraction_result_id": "11111111-1111-4111-8111-111111111111",
+                "result_ref": "extraction-result:11111111-1111-4111-8111-111111111111",
+            },
+            "internal": {
+                "canonical_payload": {
+                    "envelope_id": "env-1",
+                    "domain_pack_id": "gene",
+                    "objects": [],
+                }
+            },
+        }
+        yield {
+            "type": "TOOL_COMPLETE",
+            "details": {"toolName": "ask_gene_expression_specialist"},
+            "internal": {"tool_output": "Extraction result ready: gene"},
+        }
+        yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+    def _finalize(**kwargs):
+        captured_finalize.update(kwargs)
+        return _assistant_record(
+            session_id=kwargs["session_id"],
+            turn_id=kwargs["turn_id"],
+            content=kwargs["assistant_message"],
+            trace_id=kwargs["trace_id"],
+        )
+
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _check_cancel_signal)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _run_agent_streamed)
+    _patch_chat_impl(monkeypatch, "_persist_completed_chat_stream_turn", _finalize)
+
+    response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(message="Extract findings", session_id="session-inline"),
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+    asyncio.run(response.background())
+
+    assert [event["type"] for event in events] == ["RUN_STARTED", "TOOL_COMPLETE", "turn_completed"]
+    assert captured_finalize["extraction_candidates"] == []
+    refs = captured_finalize["persisted_extraction_refs"]
+    assert len(refs) == 1
+    assert refs[0].result_ref == "extraction-result:11111111-1111-4111-8111-111111111111"
 
 
 def test_chat_stream_endpoint_emits_evidence_summary_after_record_evidence(monkeypatch):

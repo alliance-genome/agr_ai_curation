@@ -310,7 +310,7 @@ def _recording_persist_extraction_results(persisted_requests=None):
         return [
             SimpleNamespace(
                 extraction_result=SimpleNamespace(
-                    extraction_result_id=f"persisted-{index}",
+                    extraction_result_id=f"11111111-1111-1111-1111-{index + 1:012d}",
                     document_id=request.document_id,
                     adapter_key=request.adapter_key,
                     agent_key=request.agent_key,
@@ -4696,10 +4696,12 @@ class TestExecuteFlowTermination:
         flow_finished = next(event for event in events if event.get("type") == "FLOW_FINISHED")
         assert flow_finished["data"]["status"] == "completed"
         assert flow_finished["data"]["review_session_ids"] == ["session-gene"]
-        assert flow_finished["data"]["extraction_result_ids"] == ["persisted-0"]
+        result_id = "11111111-1111-1111-1111-000000000001"
+        assert flow_finished["data"]["extraction_result_ids"] == [result_id]
         assert flow_finished["data"]["extraction_result_refs"] == [
             {
-                "extraction_result_id": "persisted-0",
+                "result_ref": f"extraction-result:{result_id}",
+                "extraction_result_id": result_id,
                 "adapter_key": "gene",
                 "agent_key": "gene",
                 "candidate_count": 1,

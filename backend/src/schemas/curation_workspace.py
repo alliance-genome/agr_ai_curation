@@ -1505,6 +1505,14 @@ class CurationExtractionResultRecord(CurationWorkspaceBaseModel):
     payload_json: dict[str, Any] | list[Any] = Field(
         description="Persisted extraction envelope payload",
     )
+    idempotency_key: Optional[str] = Field(
+        default=None,
+        description="Persistence idempotency key for duplicate-prevention debugging",
+    )
+    payload_hash: Optional[str] = Field(
+        default=None,
+        description="Canonical payload hash used by idempotent persistence paths",
+    )
     created_at: datetime = Field(description="Persistence timestamp")
     metadata: dict[str, Any] = Field(
         default_factory=dict,
@@ -2395,6 +2403,14 @@ class CurationExtractionPersistenceRequest(CurationWorkspaceBaseModel):
     )
     payload_json: dict[str, Any] | list[Any] = Field(
         description="Structured extraction envelope payload",
+    )
+    idempotency_key: Optional[str] = Field(
+        default=None,
+        description="Optional duplicate-prevention key for idempotent persistence",
+    )
+    payload_hash: Optional[str] = Field(
+        default=None,
+        description="Optional canonical payload hash for idempotent persistence",
     )
     metadata: dict[str, Any] = Field(
         default_factory=dict,

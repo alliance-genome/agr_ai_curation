@@ -14,6 +14,7 @@ from src.lib.openai_agents.agents.supervisor_agent import (
     _LEDGER_REPLAY_INSTRUCTION,
     SupervisorCallLedger,
 )
+from src.lib.openai_agents.streaming_tools import SupervisorExtractionHandoff
 
 
 def _make_ledger(*, max_total_calls: int = 25, max_calls_per_tool: int = 8) -> SupervisorCallLedger:
@@ -38,6 +39,26 @@ class _CountingFactory:
         return _run()
 
 
+def _make_handoff(
+    *,
+    result_ref: str = "extraction-result:00000000-0000-4000-8000-000000000001",
+    result_status: str = "non_empty_extraction_ready",
+    object_count: int = 3,
+) -> SupervisorExtractionHandoff:
+    return SupervisorExtractionHandoff(
+        tool_name="ask_allele_specialist",
+        specialist_name="Allele/Variant Extraction",
+        result_ref=result_ref,
+        extraction_result_id=result_ref.removeprefix("extraction-result:"),
+        result_status=result_status,
+        object_count=object_count,
+        domain_pack_id="agr.alliance.allele",
+        adapter_key="ALLELE",
+        agent_key="allele_extraction",
+        created_new=True,
+    )
+
+
 @pytest.mark.asyncio
 async def test_sequential_repeat_runs_once_and_replays_with_instruction():
     """A repeated (tool, query) runs the specialist once; the repeat replays cached text."""
@@ -55,6 +76,66 @@ async def test_sequential_repeat_runs_once_and_replays_with_instruction():
     # Second call replays the cached text prefixed with the terminal instruction.
     assert second.startswith(_LEDGER_REPLAY_INSTRUCTION)
     assert "allele unresolved" in second
+
+
+@pytest.mark.asyncio
+async def test_cached_extraction_replay_points_to_existing_result_ref_without_blocking_new_work():
+    """A repeated extraction query gets result-ref guidance; distinct work still runs."""
+    ledger = _make_ledger()
+    factory = _CountingFactory(
+        result=(
+            "Extraction result ready: agr.alliance.allele\n"
+            "Result ref: extraction-result:00000000-0000-4000-8000-000000000001"
+        )
+    )
+
+    first = await ledger.run_or_replay("ask_allele_specialist", "find allele X", factory)
+    ledger.record_extraction_handoff(
+        "ask_allele_specialist",
+        "find allele X",
+        _make_handoff(),
+    )
+    second = await ledger.run_or_replay("ask_allele_specialist", "find allele X", factory)
+
+    assert factory.calls == 1
+    assert first.startswith("Extraction result ready")
+    assert second.startswith(_LEDGER_REPLAY_INSTRUCTION)
+    assert 'inspect_results(result_ref="extraction-result:00000000-0000-4000-8000-000000000001"' in second
+    assert "3 retained objects" in second
+    assert "Rerun a specialist only when the curator changes scope" in second
+    assert ledger.latest_extraction_handoffs()[0].result_ref.endswith("000000000001")
+
+    # The guidance is not a specialist ban. A materially different request still
+    # invokes its own specialist under the normal per-turn budget.
+    generic_factory = _CountingFactory(result="broader PDF extraction ran")
+    generic = await ledger.run_or_replay(
+        "ask_generic_pdf_extraction_specialist",
+        "search the full PDF for anything else relevant",
+        generic_factory,
+    )
+    assert generic == "broader PDF extraction ran"
+    assert generic_factory.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_cached_empty_extraction_replay_guides_report_or_clarify_path():
+    """Empty extraction replays should steer away from silent retry loops."""
+    ledger = _make_ledger()
+    factory = _CountingFactory(result="Extraction result ready: empty")
+
+    await ledger.run_or_replay("ask_allele_specialist", "find allele X", factory)
+    ledger.record_extraction_handoff(
+        "ask_allele_specialist",
+        "find allele X",
+        _make_handoff(result_status="empty_extraction", object_count=0),
+    )
+    replay = await ledger.run_or_replay("ask_allele_specialist", "find allele X", factory)
+
+    assert factory.calls == 1
+    assert replay.startswith(_LEDGER_REPLAY_INSTRUCTION)
+    assert "already produced an empty extraction result" in replay
+    assert "ask for clarification" in replay
+    assert "materially different retry" in replay
 
 
 @pytest.mark.asyncio

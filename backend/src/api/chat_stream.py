@@ -205,6 +205,7 @@ async def chat_endpoint(
         trace_id = None
         run_finished = False
         extraction_candidates: List[ExtractionEnvelopeCandidate] = []
+        persisted_extraction_refs: List[PersistedExtractionResultRef] = []
 
         async for event in run_agent_streamed(
             context_messages=context_messages,
@@ -225,6 +226,13 @@ async def chat_endpoint(
 
             if event_type == "RUN_STARTED" and "trace_id" in event_data:
                 trace_id = event_data.get("trace_id")
+
+            persisted_ref = _build_persisted_extraction_result_ref_from_tool_event(
+                event,
+                tool_agent_map=tool_agent_map,
+            )
+            if persisted_ref:
+                persisted_extraction_refs.append(persisted_ref)
 
             candidate = _build_extraction_candidate_from_tool_event(
                 event,
@@ -275,6 +283,15 @@ async def chat_endpoint(
                 )
                 if chat_message.turn_id and not assistant_turn.created:
                     db.rollback()
+                    _link_persisted_extraction_results_to_chat_turn(
+                        refs=persisted_extraction_refs,
+                        session_id=session_id,
+                        turn_id=chat_message.turn_id,
+                        trace_id=trace_id,
+                        assistant_message_id=str(assistant_turn.message.message_id),
+                        db=db,
+                    )
+                    db.commit()
                     logger.info(
                         "Discarding duplicate non-stream completion for replayed turn %s",
                         chat_message.turn_id,
@@ -290,6 +307,14 @@ async def chat_endpoint(
                         ),
                     )
                     return ChatResponse(response=assistant_turn.message.content, session_id=session_id)
+                _link_persisted_extraction_results_to_chat_turn(
+                    refs=persisted_extraction_refs,
+                    session_id=session_id,
+                    turn_id=assistant_turn.message.turn_id or chat_message.turn_id or "",
+                    trace_id=trace_id,
+                    assistant_message_id=str(assistant_turn.message.message_id),
+                    db=db,
+                )
                 db.commit()
                 _queue_chat_title_backfill(
                     background_tasks,
@@ -501,6 +526,7 @@ async def chat_stream_endpoint(
         runner_error_type: Optional[str] = None
         interrupted_message: Optional[str] = None
         extraction_candidates: List[ExtractionEnvelopeCandidate] = []
+        persisted_extraction_refs: List[PersistedExtractionResultRef] = []
         evidence_records: List[Dict[str, Any]] = []
         evidence_summary_event_received = False
 
@@ -583,6 +609,13 @@ async def chat_stream_endpoint(
                         flat_event[key] = value
                     yield _stream_event_sse(flat_event)
                     continue
+
+                persisted_ref = _build_persisted_extraction_result_ref_from_tool_event(
+                    event,
+                    tool_agent_map=tool_agent_map,
+                )
+                if persisted_ref:
+                    persisted_extraction_refs.append(persisted_ref)
 
                 candidate = _build_extraction_candidate_from_tool_event(
                     event,
@@ -689,6 +722,7 @@ async def chat_stream_endpoint(
                         assistant_message=full_response,
                         trace_id=trace_id,
                         extraction_candidates=extraction_candidates,
+                        persisted_extraction_refs=persisted_extraction_refs,
                         document_id=document_id,
                     )
                 except ChatHistorySessionNotFoundError:

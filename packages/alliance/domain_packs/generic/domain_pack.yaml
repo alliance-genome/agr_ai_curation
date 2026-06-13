@@ -33,6 +33,13 @@ object_definitions:
           - generic
           - extracted item
           - uncategorized
+      supervisor_manifest:
+        primary_label_field: label
+        secondary_label_field: semantic_class
+        summary_fields:
+          - source_label
+          - description
+          - confidence
       workspace_display:
         primary_label_field: label
         secondary_label_field: semantic_class
@@ -89,6 +96,12 @@ object_definitions:
           - result
           - method
           - conclusion
+      supervisor_manifest:
+        primary_label_field: label
+        secondary_label_field: claim_type
+        summary_fields:
+          - claim_text
+          - confidence
       workspace_display:
         primary_label_field: label
         secondary_label_field: claim_type
@@ -140,6 +153,13 @@ object_definitions:
           - transgene
           - antibody
           - plasmid
+      supervisor_manifest:
+        primary_label_field: label
+        secondary_label_field: source_identifier
+        summary_fields:
+          - source
+          - count
+          - reagent_type
       workspace_display:
         primary_label_field: label
         secondary_label_field: source_identifier

@@ -1,6 +1,8 @@
 # ruff: noqa: F403,F405
 """Execute-flow chat streaming endpoint."""
 
+from uuid import UUID
+
 from .chat_common import *
 from .chat_common import (
     _EXECUTE_FLOW_RUNTIME_FLOW_RUN_ID_KEY,
@@ -97,7 +99,8 @@ def _flow_ref_lines(
     for value in values[:max_items]:
         if isinstance(value, dict):
             ref_id = (
-                value.get("extraction_result_id")
+                value.get("result_ref")
+                or _canonical_extraction_result_ref(value.get("extraction_result_id"))
                 or value.get("review_session_id")
                 or value.get("file_id")
                 or value.get("id")
@@ -114,6 +117,20 @@ def _flow_ref_lines(
     if len(values) > max_items:
         lines.append(f"  - ... {len(values) - max_items} more")
     return lines
+
+
+def _canonical_extraction_result_ref(value: Any) -> str | None:
+    """Return canonical extraction-result:<uuid> refs for UUID-shaped IDs only."""
+
+    text = str(value or "").strip()
+    if not text:
+        return None
+    raw_id = text.removeprefix("extraction-result:")
+    try:
+        result_id = UUID(raw_id)
+    except (TypeError, ValueError):
+        return None
+    return f"extraction-result:{result_id}"
 
 
 def _build_flow_memory_assistant_message(
@@ -175,8 +192,9 @@ def _build_flow_memory_assistant_message(
         *_flow_ref_lines("Review session refs", review_session_ids),
         *_flow_ref_lines("File refs", file_refs),
         "- Detail lookup:",
-        "  - Use inspect_curation_context with flow_run_id/extraction_result_id for extraction details, review_session_id for review workspace details, or file_id for bounded file metadata/previews.",
-        "  - Use inspect_chat_traces with the trace_id for trace details.",
+        "  - Use inspect_results with target=\"flow_run\" and flow_run_id for persisted extraction-result details, or inspect_results with a listed extraction-result:<uuid> ref for one result.",
+        "  - Review workspace lookup, file download/preview, and curation prep are separate explicit actions and are not handled by inspect_results.",
+        "  - Use inspect_chat_traces with the trace_id for debugging behavior and tool execution.",
         "- Final user-visible output:",
         final_output_block,
     ]

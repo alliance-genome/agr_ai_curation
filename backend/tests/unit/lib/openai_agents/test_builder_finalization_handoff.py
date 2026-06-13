@@ -13,6 +13,28 @@ from src.lib.openai_agents import streaming_tools
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
 
+@pytest.fixture(autouse=True)
+def _stub_inline_builder_persistence(monkeypatch):
+    counter = {"value": 0}
+
+    def _fake_persist_builder_finalization_for_supervisor(**_kwargs):
+        counter["value"] += 1
+        extraction_result_id = f"00000000-0000-4000-8000-{counter['value']:012d}"
+        return SimpleNamespace(
+            extraction_result_id=extraction_result_id,
+            result_ref=f"extraction-result:{extraction_result_id}",
+            created_new=True,
+            idempotency_key=f"inline-extraction:test-{counter['value']}",
+            payload_hash=f"payload-hash-{counter['value']}",
+        )
+
+    monkeypatch.setattr(
+        streaming_tools,
+        "_persist_builder_finalization_for_supervisor",
+        _fake_persist_builder_finalization_for_supervisor,
+    )
+
+
 def _workspace() -> builder.ExtractionBuilderWorkspace:
     return builder.ExtractionBuilderWorkspace(
         run_id="trace-handoff",
@@ -552,7 +574,8 @@ async def test_builder_finalized_specialist_skips_model_authored_output_staging(
         tool_name="ask_gene_expression_specialist",
     )
 
-    assert "Full canonical envelope is retained by the specialist runtime" in final_output
+    assert "no safe supervisor manifest could be rendered" in final_output
+    assert "raw canonical envelope was not passed to the supervisor" in final_output
     with pytest.raises(json.JSONDecodeError):
         json.loads(final_output)
     assert "curatable_objects" not in final_output
@@ -1163,14 +1186,15 @@ async def test_specialist_internal_event_uses_post_validator_builder_payload(mon
         tool_agent_map={"ask_gene_expression_specialist": "gene-expression"},
         conversation_summary="extract",
     )
+    persisted_ref = chat_common._build_persisted_extraction_result_ref_from_tool_event(
+        internal_event,
+        tool_agent_map={"ask_gene_expression_specialist": "gene-expression"},
+    )
 
-    assert isinstance(candidate, dict)
-    assert candidate["raw_output"]["curatable_objects"][0]["payload"][
-        "validator_marker"
-    ] == "post-dispatch"
-    assert candidate["raw_output"]["metadata"]["validator_appended_findings"] == [
-        {"code": "domain_pack.validator_resolved", "message": "Resolved wg"}
-    ]
+    assert candidate is None
+    assert persisted_ref is not None
+    assert persisted_ref.result_ref.startswith("extraction-result:")
+    assert persisted_ref.agent_key == "gene-expression"
 
 
 @pytest.mark.asyncio

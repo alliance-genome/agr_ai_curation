@@ -86,6 +86,24 @@ const FORMATTER_SPECIALISTS = new Set([
   'ask_json_formatter_specialist',
 ])
 
+function explicitWarning(details?: any): boolean {
+  return details?.fatal === false || String(details?.severity || '').toLowerCase() === 'warning'
+}
+
+function explicitError(details?: any): boolean {
+  return details?.fatal === true || String(details?.severity || '').toLowerCase() === 'error'
+}
+
+function looksLikeValidatorWarning(details?: any): boolean {
+  const text = [
+    details?.reason,
+    details?.code,
+    details?.error,
+    details?.message,
+  ].filter(Boolean).join(' ').toLowerCase()
+  return text.includes('validator') || text.includes('validation')
+}
+
 /**
  * Parses a Server-Sent Event (SSE) into an AuditEvent object.
  *
@@ -249,6 +267,8 @@ export function getEventPrefix(type: AuditEventType, details?: any): string {
  * ```
  */
 export function getEventSeverity(type: AuditEventType, details?: any): AuditSeverity {
+  if (explicitWarning(details)) return 'warning'
+  if (explicitError(details)) return 'error'
   if (type.includes('ERROR')) return 'error'
 
   // Processing events: show animated indicator
@@ -573,6 +593,13 @@ export function getEventLabel(event: AuditEvent): string {
 
     case 'SPECIALIST_ERROR': {
       const specialistError = event.details as SpecialistErrorDetails
+      if (explicitWarning(specialistError)) {
+        const warningLabel = looksLikeValidatorWarning(specialistError)
+          ? 'Validator warning'
+          : `${specialistError.specialist} warning`
+        const warningText = specialistError.message || specialistError.error
+        return warningText ? `${warningLabel}: ${warningText}` : warningLabel
+      }
       return specialistError.message || `${specialistError.specialist} failed: ${specialistError.error}`
     }
 

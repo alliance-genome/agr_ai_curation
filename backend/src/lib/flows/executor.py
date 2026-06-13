@@ -3629,8 +3629,10 @@ def _is_flow_domain_envelope_payload(payload: Any) -> bool:
 def _flow_extraction_result_ref(
     record: CurationExtractionResultRecord,
 ) -> dict[str, Any]:
+    result_id = str(record.extraction_result_id)
     return {
-        "extraction_result_id": record.extraction_result_id,
+        "result_ref": f"extraction-result:{result_id}",
+        "extraction_result_id": result_id,
         "adapter_key": record.adapter_key,
         "agent_key": record.agent_key,
         "candidate_count": record.candidate_count,

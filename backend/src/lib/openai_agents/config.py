@@ -836,6 +836,44 @@ def get_tool_page_max_limit() -> int:
     return max(1, _get_env_int_with_fallback("TOOL_PAGE_MAX_LIMIT", 50))
 
 
+def get_supervisor_manifest_page_size() -> int:
+    """Default object page size for extraction-result supervisor manifests.
+
+    Controls how many YAML-declared manifest rows are handed to the supervisor
+    or returned by inspect_results objects views when no explicit limit is
+    supplied. Default 100.
+    """
+    return max(1, _get_env_int_with_fallback("SUPERVISOR_MANIFEST_PAGE_SIZE", 100))
+
+
+def get_inspect_results_evidence_page_size() -> int:
+    """Default evidence page size for inspect_results evidence views.
+
+    Bounds how many evidence records the supervisor can fetch in one
+    inspect_results(action="evidence") call when no explicit limit is supplied.
+    Default 20.
+    """
+    return max(1, _get_env_int_with_fallback("INSPECT_RESULTS_EVIDENCE_PAGE_SIZE", 20))
+
+
+def get_inspect_results_list_page_size() -> int:
+    """Default result-list page size for inspect_results list views.
+
+    Bounds how many result summaries inspect_results(action="list") returns
+    when no explicit limit is supplied. Default 5.
+    """
+    return max(1, _get_env_int_with_fallback("INSPECT_RESULTS_LIST_PAGE_SIZE", 5))
+
+
+def get_inspect_results_validation_page_size() -> int:
+    """Default validation finding page size for inspect_results validation views.
+
+    Bounds how many validation findings inspect_results(action="validation")
+    returns when no explicit limit is supplied. Default 5.
+    """
+    return max(1, _get_env_int_with_fallback("INSPECT_RESULTS_VALIDATION_PAGE_SIZE", 5))
+
+
 def get_list_recorded_evidence_limit() -> int:
     """Default cap on records returned by list_recorded_evidence (LIST_RECORDED_EVIDENCE_LIMIT).
 
@@ -863,6 +901,48 @@ def get_supervisor_field_text_limit() -> int:
     Default 500.
     """
     return max(1, _get_env_int_with_fallback("SUPERVISOR_FIELD_TEXT_LIMIT", 500))
+
+
+def get_inspect_results_evidence_text_limit() -> int:
+    """Char limit for one inspect_results evidence text field.
+
+    Truncates quote/evidence text returned only by
+    inspect_results(action="evidence"). Default 500.
+    """
+    return max(1, _get_env_int_with_fallback("INSPECT_RESULTS_EVIDENCE_TEXT_LIMIT", 500))
+
+
+def get_inspect_results_validation_detail_list_limit() -> int:
+    """Max list items returned inside one inspect_results validation detail value.
+
+    Bounds nested list values inside validation finding details returned to the
+    supervisor. Default 5.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback("INSPECT_RESULTS_VALIDATION_DETAIL_LIST_LIMIT", 5),
+    )
+
+
+def get_inspect_results_json_depth_limit() -> int:
+    """Max nested JSON depth returned by inspect_results detail views.
+
+    Bounds recursive JSON compaction for validation/evidence detail payloads.
+    Default 6.
+    """
+    return max(1, _get_env_int_with_fallback("INSPECT_RESULTS_JSON_DEPTH_LIMIT", 6))
+
+
+def get_inspect_results_json_object_item_limit() -> int:
+    """Max mapping keys returned by inspect_results compact JSON views.
+
+    Bounds object/mapping entries inside nested JSON returned to the supervisor.
+    Default 25.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback("INSPECT_RESULTS_JSON_OBJECT_ITEM_LIMIT", 25),
+    )
 
 
 def get_supervisor_max_list_limit() -> int:

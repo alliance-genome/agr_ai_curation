@@ -94,6 +94,23 @@ describe('AuditEventItem - Severity Styling (T017)', () => {
     const eventItem = container.querySelector('[data-severity="error"]')
     expect(eventItem).toBeInTheDocument()
   })
+
+  it('displays warning severity styling for non-fatal specialist validator warnings', () => {
+    const event = createTestEvent('SPECIALIST_ERROR', {
+      specialist: 'Allele/Variant Extraction',
+      output_type: 'DomainEnvelopeExtractionResult',
+      error: 'validator dispatch timed out',
+      message: 'Extraction retained with a validator warning.',
+      fatal: false,
+      severity: 'warning',
+      reason: 'domain_validator_dispatch_failed',
+    } as any)
+
+    const { container } = render(<AuditEventItem event={event} />)
+
+    expect(container.querySelector('[data-severity="warning"]')).toBeInTheDocument()
+    expect(screen.getByText(/Validator warning:/)).toBeInTheDocument()
+  })
 })
 
 // ===================================================================

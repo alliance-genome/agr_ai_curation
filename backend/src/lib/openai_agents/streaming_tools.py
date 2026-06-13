@@ -62,6 +62,11 @@ from .evidence_summary import (
 from .event_types import (
     INTERNAL_EXTRACTION_RESULT_EVENT_TYPE as _INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
 )
+from .extraction_manifest import (
+    ExtractionManifestError,
+    build_and_render_extraction_manifest,
+    build_extraction_manifest_page,
+)
 from .tools.evidence_workspace import (
     reset_active_evidence_records,
     set_active_evidence_records,
@@ -96,7 +101,16 @@ from src.lib.prompts.context import (
     append_pending_prompt_runtime_context,
     commit_pending_prompts,
 )
-from src.lib.context import get_current_user_id
+from src.lib.context import (
+    get_current_session_id,
+    get_current_trace_id,
+    get_current_user_id,
+)
+from src.lib.curation_workspace.extraction_results import (
+    InlineExtractionPersistenceResult,
+    persist_inline_validated_extraction_result,
+)
+from src.schemas.curation_workspace import CurationExtractionSourceKind
 from src.schemas.domain_validator import is_domain_validator_result_schema
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
@@ -105,6 +119,75 @@ logger = logging.getLogger(__name__)
 INTERNAL_EXTRACTION_RESULT_EVENT_TYPE = _INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 _DOCUMENT_REQUIRED_TOOL_NAMES = set(DOCUMENT_REQUIRED_TOOL_NAMES)
 _STRUCTURED_FINALIZATION_CHECK_PDF_EVIDENCE = "pdf_evidence"
+
+
+@dataclass(frozen=True)
+class SupervisorExtractionHandoff:
+    """Structured extraction-result metadata from the latest specialist run."""
+
+    tool_name: str
+    specialist_name: str
+    result_ref: str
+    extraction_result_id: str
+    result_status: str
+    object_count: int
+    domain_pack_id: Optional[str] = None
+    adapter_key: Optional[str] = None
+    agent_key: Optional[str] = None
+    created_new: Optional[bool] = None
+
+
+_LAST_SUPERVISOR_EXTRACTION_HANDOFF: ContextVar[
+    SupervisorExtractionHandoff | None
+] = ContextVar("last_supervisor_extraction_handoff", default=None)
+
+
+def pop_last_supervisor_extraction_handoff() -> SupervisorExtractionHandoff | None:
+    """Return and clear the latest structured extraction-result handoff."""
+
+    handoff = _LAST_SUPERVISOR_EXTRACTION_HANDOFF.get()
+    _LAST_SUPERVISOR_EXTRACTION_HANDOFF.set(None)
+    return handoff
+
+
+def _set_last_supervisor_extraction_handoff(
+    handoff: SupervisorExtractionHandoff | None,
+) -> None:
+    _LAST_SUPERVISOR_EXTRACTION_HANDOFF.set(handoff)
+
+
+def _build_supervisor_extraction_handoff(
+    *,
+    tool_name: str,
+    specialist_name: str,
+    payload: Mapping[str, Any],
+    inline_persistence: InlineExtractionPersistenceResult,
+    adapter_key: str | None,
+    agent_key: str | None,
+) -> SupervisorExtractionHandoff | None:
+    try:
+        page = build_extraction_manifest_page(
+            payload,
+            extraction_result_id=inline_persistence.extraction_result_id,
+            result_ref=inline_persistence.result_ref,
+            adapter_key=adapter_key,
+            agent_key=agent_key,
+            limit=1,
+        )
+    except ExtractionManifestError:
+        return None
+    return SupervisorExtractionHandoff(
+        tool_name=tool_name,
+        specialist_name=specialist_name,
+        result_ref=inline_persistence.result_ref,
+        extraction_result_id=inline_persistence.extraction_result_id,
+        result_status=str(page.get("result_status") or "empty_extraction"),
+        object_count=int(page.get("object_count") or 0),
+        domain_pack_id=str(page.get("domain_pack_id") or "") or None,
+        adapter_key=adapter_key,
+        agent_key=agent_key,
+        created_new=inline_persistence.created_new,
+    )
 _STRUCTURED_FINALIZATION_CHECK_LOOKUP_PROVENANCE = "lookup_provenance"
 # Env-configurable (defaults unchanged); see config.py getters and .env.example:
 #   STRUCTURED_FINALIZATION_MAX_ATTEMPTS, STRUCTURED_FINALIZATION_HARD_MAX_ATTEMPTS.
@@ -118,42 +201,6 @@ _STRUCTURED_FINALIZATION_HARD_MAX_ATTEMPTS = get_structured_finalization_hard_ma
 # Env-configurable via LAYER2_FORCE_TOOL_FINALIZATION_ENABLED (default True).
 LAYER2_FORCE_TOOL_FINALIZATION_ENABLED = get_layer2_force_tool_finalization_enabled()
 _GROQ_SCHEMA_CONSTRAINTS_ADAPTER_KEY = "groq_schema_constraints"
-_DOMAIN_ENVELOPE_SUPERVISOR_FIELD_PRIORITY = (
-    "mention",
-    "label",
-    "name",
-    "primary_external_id",
-    "curie",
-    "gene_symbol",
-    "symbol",
-    "taxon",
-    "taxon_id",
-    "species",
-    "data_provider",
-    "term_id",
-    "term_label",
-    "ontology_id",
-    "ontology_term_id",
-    "disease_id",
-)
-_DOMAIN_ENVELOPE_SUPERVISOR_FIELD_SKIP = {
-    "chunk_id",
-    "confidence",
-    "data_provider_hint",
-    "evidence_record_id",
-    "evidence_record_ids",
-    "figure_reference",
-    "identity_resolution_notes",
-    "page",
-    "proposed_primary_external_id",
-    "proposed_gene_symbol",
-    "proposed_symbol",
-    "proposed_taxon",
-    "section",
-    "subsection",
-    "taxon_hint",
-    "verified_quote",
-}
 
 
 def _elapsed_ms(started_at: float) -> int:
@@ -2612,6 +2659,8 @@ def _reduce_specialist_output_for_supervisor(
     *,
     expected_output_type: Any,
     finalized_domain_envelope: bool = False,
+    extraction_result_id: str | None = None,
+    result_ref: str | None = None,
 ) -> str:
     """Return a supervisor-safe handoff without replaying raw structured JSON."""
 
@@ -2628,7 +2677,11 @@ def _reduce_specialist_output_for_supervisor(
         return answer_text
 
     if _is_domain_envelope_extraction_output_type(expected_output_type) or finalized_domain_envelope:
-        summary_text = _domain_envelope_supervisor_summary(payload)
+        summary_text = _domain_envelope_supervisor_summary(
+            payload,
+            extraction_result_id=extraction_result_id,
+            result_ref=result_ref,
+        )
         if summary_text:
             return summary_text
         return _domain_envelope_supervisor_minimal_summary(payload)
@@ -2655,84 +2708,34 @@ def _reduce_specialist_output_for_supervisor(
     return final_output
 
 
-def _domain_envelope_supervisor_summary(payload: Dict[str, Any]) -> str:
-    """Build a compact supervisor-facing summary from a materialized envelope."""
+def _domain_envelope_supervisor_summary(
+    payload: Dict[str, Any],
+    *,
+    extraction_result_id: str | None = None,
+    result_ref: str | None = None,
+) -> str:
+    """Build a supervisor-facing manifest from a canonical domain envelope."""
 
-    objects = _domain_envelope_supervisor_objects(payload)
-    if not isinstance(objects, list) or not objects:
-        return ""
-
-    domain_pack_id = str(payload.get("domain_pack_id") or "domain envelope")
-    lines = [
-        (
-            f"Validated domain envelope result for {domain_pack_id}. "
-            "Use these validated/materialized values in the final answer."
+    try:
+        return build_and_render_extraction_manifest(
+            payload,
+            extraction_result_id=extraction_result_id,
+            result_ref=result_ref,
         )
-    ]
-
-    for index, item in enumerate(objects[:5], start=1):
-        if not isinstance(item, dict):
-            continue
-        object_type = str(item.get("object_type") or "object").strip()
-        status = str(item.get("status") or "unknown").strip()
-        pending_ref = str(
-            item.get("pending_ref_id") or item.get("object_id") or ""
-        ).strip()
-        payload_fields = _domain_envelope_supervisor_payload_fields(
-            item.get("payload")
-        ) or _domain_envelope_supervisor_fallback_payload_fields(
-            item.get("payload")
+    except ExtractionManifestError as exc:
+        domain_pack_id = str(payload.get("domain_pack_id") or "domain envelope")
+        return (
+            f"Validated domain envelope result for {domain_pack_id}, but no safe "
+            f"supervisor manifest could be rendered: {exc}. The raw canonical "
+            "envelope was not passed to the supervisor."
         )
-        label_parts = [f"{index}.", object_type]
-        if pending_ref:
-            label_parts.append(pending_ref)
-        label_parts.append(f"({status})")
-        line = " ".join(label_parts)
-        if payload_fields:
-            line = f"{line}: {payload_fields}"
-        lines.append(line)
-
-    if len(lines) == 1:
-        return ""
-
-    findings = payload.get("validation_findings")
-    if isinstance(findings, list):
-        status_counts: Dict[str, int] = {}
-        resolved_messages: List[str] = []
-        unresolved_messages: List[str] = []
-        for finding in findings:
-            if not isinstance(finding, dict):
-                continue
-            status = str(finding.get("status") or "unknown").strip() or "unknown"
-            status_counts[status] = status_counts.get(status, 0) + 1
-            if status == "resolved" and len(resolved_messages) < 5:
-                resolved_summary = _domain_envelope_resolved_finding_summary(finding)
-                if resolved_summary:
-                    resolved_messages.append(resolved_summary)
-            if status != "resolved" and len(unresolved_messages) < 3:
-                code = str(finding.get("code") or "validation finding").strip()
-                message = str(finding.get("message") or "").strip()
-                unresolved_messages.append(
-                    f"{code}: {_truncate_for_supervisor_summary(message, limit=180)}"
-                )
-        if status_counts:
-            counts = ", ".join(
-                f"{status}={count}" for status, count in sorted(status_counts.items())
-            )
-            lines.append(f"Validation findings: {counts}.")
-        for message in resolved_messages:
-            lines.append(f"Resolved validator finding: {message}")
-        for message in unresolved_messages:
-            lines.append(f"Unresolved validator finding: {message}")
-
-    return "\n".join(lines)
 
 
 def _domain_envelope_supervisor_minimal_summary(payload: Dict[str, Any]) -> str:
     """Return a compact non-JSON summary for unusual domain-envelope payloads."""
 
     domain_pack_id = str(payload.get("domain_pack_id") or "domain envelope")
-    objects = _domain_envelope_supervisor_objects(payload)
+    objects = payload.get("objects")
     object_count = len(objects) if isinstance(objects, list) else 0
     lines = [
         (
@@ -2748,88 +2751,98 @@ def _domain_envelope_supervisor_minimal_summary(payload: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _domain_envelope_supervisor_objects(payload: Dict[str, Any]) -> list[Any]:
-    """Return objects from either domain-envelope or curation-prep payload shapes."""
-
-    curatable_objects = payload.get("curatable_objects")
-    if isinstance(curatable_objects, list):
-        return curatable_objects
-    objects = payload.get("objects")
-    if isinstance(objects, list):
-        return objects
-    return []
-
-
-def _domain_envelope_resolved_finding_summary(finding: Dict[str, Any]) -> str:
-    details = finding.get("details")
-    if not isinstance(details, dict):
-        return ""
-
-    validation_result = details.get("validation_result")
-    if not isinstance(validation_result, dict):
-        validation_result = {}
-    resolved_values = validation_result.get("resolved_values")
-    if not isinstance(resolved_values, dict):
-        resolved_values = {}
-
-    lookup_attempts = details.get("lookup_attempts")
-    if not isinstance(lookup_attempts, list):
-        lookup_attempts = []
-
-    validation_request = details.get("validation_request")
-    if not isinstance(validation_request, dict):
-        validation_request = {}
-
-    target_label = _domain_envelope_request_label(validation_request)
-    resolved_id = _first_scalar_value(
-        resolved_values,
-        ("curie", "primary_external_id", "external_id", "id", "identifier"),
-    ) or _first_lookup_attempt_scalar(lookup_attempts, "resolved_id")
-    resolved_symbol = _first_scalar_value(
-        resolved_values,
-        ("symbol", "allele_symbol", "gene_symbol", "label", "name"),
-    ) or _first_lookup_attempt_scalar(lookup_attempts, "resolved_label")
-    resolved_taxon = _first_scalar_value(resolved_values, ("taxon", "taxon_curie"))
-
-    parts: list[str] = []
-    if target_label:
-        parts.append(_truncate_for_supervisor_summary(target_label, limit=80))
-    if resolved_id:
-        parts.append(f"curie={_truncate_for_supervisor_summary(resolved_id)}")
-    if resolved_symbol:
-        parts.append(f"symbol={_truncate_for_supervisor_summary(resolved_symbol)}")
-    if resolved_taxon:
-        parts.append(f"taxon={_truncate_for_supervisor_summary(resolved_taxon)}")
-    if not parts:
-        message = str(finding.get("message") or "").strip()
-        return _truncate_for_supervisor_summary(message, limit=180) if message else ""
-    return "; ".join(parts)
-
-
-def _domain_envelope_request_label(validation_request: Dict[str, Any]) -> str:
-    for source_key in ("selected_inputs",):
-        source = validation_request.get(source_key)
-        if not isinstance(source, dict):
-            continue
-        label = _first_scalar_value(
-            source,
-            ("mention", "label", "name", "symbol", "curie", "id"),
+def _persist_builder_finalization_for_supervisor(
+    *,
+    builder_finalization: Any,
+    builder_workspace: ExtractionBuilderWorkspace,
+    tool_name: str,
+    specialist_name: str,
+    adapter_key: str | None,
+    agent_key: str | None,
+    trace_id: str | None,
+) -> InlineExtractionPersistenceResult:
+    document_id = str(builder_workspace.document_id or "").strip()
+    normalized_adapter_key = str(adapter_key or "").strip()
+    normalized_agent_key = str(agent_key or "").strip()
+    normalized_tool_name = str(tool_name or "").strip()
+    missing = [
+        field_name
+        for field_name, value in {
+            "document_id": document_id,
+            "adapter_key": normalized_adapter_key,
+            "agent_key": normalized_agent_key,
+            "tool_name": normalized_tool_name,
+        }.items()
+        if not value
+    ]
+    if missing:
+        raise SpecialistOutputError(
+            specialist_name=specialist_name,
+            output_type_name="inline_extraction_persistence",
+            message=(
+                "Validated extraction could not be persisted inline because required "
+                f"context is missing: {', '.join(missing)}."
+            ),
+            details=[
+                {
+                    "reason": "inline_extraction_persistence_missing_context",
+                    "missing": missing,
+                    "builder_run_id": builder_workspace.run_id,
+                    "builder_invocation_id": builder_workspace.builder_invocation_id,
+                }
+            ],
         )
-        if label:
-            return label
 
-    target = validation_request.get("target")
-    if not isinstance(target, dict):
-        return ""
-    input_values = target.get("input_values")
-    if isinstance(input_values, dict):
-        label = _first_scalar_value(
-            input_values,
-            ("mention", "label", "name", "symbol", "curie", "id"),
+    try:
+        return persist_inline_validated_extraction_result(
+            payload_json=builder_finalization.payload,
+            document_id=document_id,
+            agent_key=normalized_agent_key,
+            adapter_key=normalized_adapter_key,
+            tool_name=normalized_tool_name,
+            source_kind=CurationExtractionSourceKind.CHAT,
+            origin_session_id=get_current_session_id(),
+            trace_id=trace_id or get_current_trace_id() or builder_workspace.run_id,
+            user_id=get_current_user_id(),
+            builder_finalization=builder_finalization,
+            metadata={
+                "specialist_name": specialist_name,
+                "domain_pack_id": builder_workspace.domain_pack_id,
+            },
         )
-        if label:
-            return label
-    return _first_scalar_value(target, ("object_id", "object_type", "field_path")) or ""
+    except SpecialistOutputError:
+        raise
+    except Exception as exc:
+        logger.exception(
+            "Inline extraction persistence failed for %s",
+            specialist_name,
+            extra={
+                "specialist_name": specialist_name,
+                "tool_name": normalized_tool_name,
+                "adapter_key": normalized_adapter_key,
+                "agent_key": normalized_agent_key,
+                "document_id": document_id,
+                "builder_run_id": builder_workspace.run_id,
+                "builder_invocation_id": builder_workspace.builder_invocation_id,
+                "operation": "inline_extraction_persistence_failed",
+            },
+        )
+        raise SpecialistOutputError(
+            specialist_name=specialist_name,
+            output_type_name="inline_extraction_persistence",
+            message=(
+                "Validated extraction could not be persisted inline, so no extraction "
+                "result is ready for supervisor handoff."
+            ),
+            details=[
+                {
+                    "reason": "inline_extraction_persistence_failed",
+                    "error": str(exc),
+                    "builder_run_id": builder_workspace.run_id,
+                    "builder_invocation_id": builder_workspace.builder_invocation_id,
+                }
+            ],
+        ) from exc
 
 
 def _first_scalar_value(source: Dict[str, Any], keys: tuple[str, ...]) -> str:
@@ -2839,85 +2852,6 @@ def _first_scalar_value(source: Dict[str, Any], keys: tuple[str, ...]) -> str:
             text = str(value).strip()
             if text:
                 return text
-    return ""
-
-
-def _first_lookup_attempt_scalar(
-    lookup_attempts: list[Any],
-    key: str,
-) -> str:
-    for attempt in lookup_attempts:
-        if not isinstance(attempt, dict):
-            continue
-        value = attempt.get(key)
-        if _is_supervisor_summary_scalar(value):
-            text = str(value).strip()
-            if text:
-                return text
-    return ""
-
-
-def _domain_envelope_supervisor_payload_fields(payload: Any) -> str:
-    if not isinstance(payload, dict):
-        return ""
-
-    selected: list[tuple[str, str]] = []
-    seen: set[str] = set()
-
-    def add_field(key: str) -> None:
-        if key in seen or key in _DOMAIN_ENVELOPE_SUPERVISOR_FIELD_SKIP:
-            return
-        value = payload.get(key)
-        if not _is_supervisor_summary_scalar(value):
-            return
-        text = _truncate_for_supervisor_summary(str(value).strip())
-        if not text:
-            return
-        seen.add(key)
-        selected.append((key, text))
-
-    for key in _DOMAIN_ENVELOPE_SUPERVISOR_FIELD_PRIORITY:
-        add_field(key)
-
-    for key in sorted(payload):
-        if len(selected) >= 10:
-            break
-        if not _looks_like_materialized_identity_field(key):
-            continue
-        add_field(key)
-
-    return "; ".join(f"{key}={value}" for key, value in selected)
-
-
-def _domain_envelope_supervisor_fallback_payload_fields(payload: Any) -> str:
-    """Summarize unusual scalar payload fields without raw JSON fallback."""
-
-    if not isinstance(payload, dict):
-        return ""
-
-    selected: list[tuple[str, str]] = []
-    for key in sorted(payload):
-        if len(selected) >= 8:
-            break
-        if key in _DOMAIN_ENVELOPE_SUPERVISOR_FIELD_SKIP:
-            continue
-        value = payload.get(key)
-        if not _is_supervisor_summary_scalar(value):
-            continue
-        text = _truncate_for_supervisor_summary(str(value).strip())
-        if text:
-            selected.append((key, text))
-
-    if selected:
-        return "; ".join(f"{key}={value}" for key, value in selected)
-
-    keys = [
-        str(key)
-        for key in sorted(payload)
-        if key not in _DOMAIN_ENVELOPE_SUPERVISOR_FIELD_SKIP
-    ][:8]
-    if keys:
-        return "payload_keys=" + ", ".join(keys)
     return ""
 
 
@@ -3121,19 +3055,6 @@ def _is_supervisor_summary_scalar(value: Any) -> bool:
     if isinstance(value, str):
         return bool(value.strip())
     return isinstance(value, (int, float, bool))
-
-
-def _looks_like_materialized_identity_field(key: str) -> bool:
-    normalized = key.lower()
-    if normalized in _DOMAIN_ENVELOPE_SUPERVISOR_FIELD_SKIP:
-        return False
-    return (
-        normalized.endswith("_id")
-        or normalized.endswith("_curie")
-        or normalized.endswith("_symbol")
-        or normalized.endswith("_label")
-        or normalized in {"id", "curie", "symbol", "label", "name", "taxon"}
-    )
 
 
 def _truncate_for_supervisor_summary(value: str, *, limit: int = 120) -> str:
@@ -4416,6 +4337,7 @@ async def run_specialist_with_events(
     Returns:
         The specialist's final output as a string
     """
+    _set_last_supervisor_extraction_handoff(None)
     start_time = datetime.now(timezone.utc)
     wall_started_at = time.monotonic()
     phase_timings_ms: Dict[str, int] = {}
@@ -5874,14 +5796,42 @@ async def run_specialist_with_events(
         retained_evidence_source
     )
 
+    inline_persistence: InlineExtractionPersistenceResult | None = None
     internal_event_started_at = time.monotonic()
     if tool_name and builder_finalization is not None:
         final_output = json.dumps(builder_finalization.payload)
+        inline_persistence = _persist_builder_finalization_for_supervisor(
+            builder_finalization=builder_finalization,
+            builder_workspace=builder_workspace,
+            tool_name=tool_name,
+            specialist_name=specialist_name,
+            adapter_key=runtime_curation_adapter_key,
+            agent_key=runtime_canonical_agent_key,
+            trace_id=trace_run.trace_id if trace_run is not None else None,
+        )
+        handoff = _build_supervisor_extraction_handoff(
+            tool_name=tool_name,
+            specialist_name=specialist_name,
+            payload=builder_finalization.payload,
+            inline_persistence=inline_persistence,
+            adapter_key=runtime_curation_adapter_key,
+            agent_key=runtime_canonical_agent_key,
+        )
+        if handoff is not None:
+            _set_last_supervisor_extraction_handoff(handoff)
         add_specialist_event(
             build_internal_extraction_result_event(
                 tool_name=tool_name,
                 specialist_name=specialist_name,
                 finalization=builder_finalization,
+                extraction_result_id=inline_persistence.extraction_result_id,
+                result_ref=inline_persistence.result_ref,
+                persistence_status={
+                    "phase": "inline_validated_extraction",
+                    "created_new": inline_persistence.created_new,
+                    "idempotency_key": inline_persistence.idempotency_key,
+                    "payload_hash": inline_persistence.payload_hash,
+                },
                 timestamp=datetime.now(timezone.utc).isoformat(),
             )
         )
@@ -5909,6 +5859,12 @@ async def run_specialist_with_events(
         final_output,
         expected_output_type=expected_output_type,
         finalized_domain_envelope=builder_finalization is not None,
+        extraction_result_id=(
+            inline_persistence.extraction_result_id
+            if inline_persistence is not None
+            else None
+        ),
+        result_ref=inline_persistence.result_ref if inline_persistence is not None else None,
     )
     phase_timings_ms["supervisor_output_reduction_ms"] = _elapsed_ms(
         supervisor_reduction_started_at

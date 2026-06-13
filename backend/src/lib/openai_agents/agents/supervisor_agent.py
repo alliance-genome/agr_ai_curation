@@ -32,7 +32,11 @@ from typing import Awaitable, Optional, List, Literal, Dict, Any, Callable, Sequ
 
 from agents import Agent, ModelSettings, RunConfig, RunContextWrapper, function_tool
 
-from ..streaming_tools import run_specialist_with_events
+from ..streaming_tools import (
+    SupervisorExtractionHandoff,
+    pop_last_supervisor_extraction_handoff,
+    run_specialist_with_events,
+)
 
 # Prompt cache and context tracking imports
 from src.lib.context import (
@@ -50,9 +54,9 @@ from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGE
 from src.lib.curation_workspace.extraction_results import (
     list_extraction_results,
 )
+from src.lib.openai_agents.inspect_results import inspect_results
 from src.lib.openai_agents.supervisor_context_tools import (
     inspect_chat_traces,
-    inspect_curation_context,
 )
 from src.lib.prompts.assembly import build_agent_prompt_layers, prompt_templates_for_bundle
 from src.lib.prompts.context import bind_prompt_run, set_pending_prompts
@@ -68,13 +72,13 @@ ReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh"]
 
 CURATION_PREP_CONFIRMATION_QUESTION = "Ready to prepare these for curation?"
 _CURATION_PREP_TOOL_NAME = "prepare_for_curation"
-_INSPECT_CURATION_CONTEXT_TOOL_NAME = "inspect_curation_context"
+_INSPECT_RESULTS_TOOL_NAME = "inspect_results"
 _INSPECT_CHAT_TRACES_TOOL_NAME = "inspect_chat_traces"
 _SUPERVISOR_BUILTIN_TOOL_NAMES = frozenset(
     {
         "export_to_file",
         _CURATION_PREP_TOOL_NAME,
-        _INSPECT_CURATION_CONTEXT_TOOL_NAME,
+        _INSPECT_RESULTS_TOOL_NAME,
         _INSPECT_CHAT_TRACES_TOOL_NAME,
     }
 )
@@ -444,6 +448,18 @@ _LEDGER_REPLAY_INSTRUCTION = (
     "You already asked this and received the result below. Report it to the user; "
     "do not call this specialist with the same request again."
 )
+_LEDGER_REPLAY_RESULT_GUIDANCE = (
+    "This repeated request already produced {status_phrase} at {result_ref}. "
+    "For summary, list, confidence, or detail follow-ups, answer from the manifest "
+    "below or use inspect_results(result_ref=\"{result_ref}\", action=\"summary\" "
+    "or \"objects\"). Rerun a specialist only when the curator changes scope or "
+    "asks for a broader/narrower extraction."
+)
+_LEDGER_REPLAY_EMPTY_RESULT_GUIDANCE = (
+    "This repeated request already produced an empty extraction result at "
+    "{result_ref}. Report the empty result, ask for clarification, or make one "
+    "materially different retry if the curator's intended scope is clear."
+)
 _LEDGER_BUDGET_EXCEEDED_MESSAGE = (
     "You have made enough specialist lookups for this turn. Stop and summarize what "
     "you have for the user, including anything that could not be resolved."
@@ -486,10 +502,38 @@ class SupervisorCallLedger:
         self._futures: Dict[tuple[str, str], "asyncio.Future[str]"] = {}
         self._max_total_calls = max_total_calls
         self._max_calls_per_tool = max_calls_per_tool
+        self._extraction_handoffs: Dict[
+            tuple[str, str], SupervisorExtractionHandoff
+        ] = {}
+        self._extraction_handoff_order: List[tuple[str, str]] = []
         # Distinct underlying invocations actually started this turn (cache hits
         # and concurrent-collapse awaiters do not count toward the budget).
         self._total_invocations = 0
         self._per_tool_invocations: Dict[str, int] = {}
+
+    def record_extraction_handoff(
+        self,
+        tool_name: str,
+        query: str,
+        handoff: SupervisorExtractionHandoff,
+    ) -> None:
+        """Remember a structured extraction result produced during this turn."""
+
+        if not handoff.result_ref:
+            return
+        key = (tool_name, _normalize_ledger_query(query))
+        if key not in self._extraction_handoffs:
+            self._extraction_handoff_order.append(key)
+        self._extraction_handoffs[key] = handoff
+
+    def latest_extraction_handoffs(self) -> List[SupervisorExtractionHandoff]:
+        """Return same-turn extraction result refs in production order."""
+
+        return [
+            self._extraction_handoffs[key]
+            for key in self._extraction_handoff_order
+            if key in self._extraction_handoffs
+        ]
 
     async def run_or_replay(
         self,
@@ -531,7 +575,7 @@ class SupervisorCallLedger:
             # owner's run. Either way the underlying specialist runs only once.
             was_done = future.done()
             result = await future
-            return self._with_replay_instruction(result) if was_done else result
+            return self._with_replay_instruction(key, result) if was_done else result
 
         try:
             result = await runner_coro_factory()
@@ -570,11 +614,37 @@ class SupervisorCallLedger:
             return _LEDGER_BUDGET_EXCEEDED_MESSAGE
         return None
 
-    @staticmethod
-    def _with_replay_instruction(result: str) -> str:
+    def _with_replay_instruction(self, key: tuple[str, str], result: str) -> str:
         """Wrap a cached result with the plain-language terminal instruction."""
 
-        return f"{_LEDGER_REPLAY_INSTRUCTION}\n\n{result}"
+        handoff = self._extraction_handoffs.get(key)
+        if handoff is None:
+            return f"{_LEDGER_REPLAY_INSTRUCTION}\n\n{result}"
+        return (
+            f"{_LEDGER_REPLAY_INSTRUCTION}\n"
+            f"{_ledger_extraction_replay_guidance(handoff)}\n\n"
+            f"{result}"
+        )
+
+
+def _ledger_extraction_replay_guidance(
+    handoff: SupervisorExtractionHandoff,
+) -> str:
+    """Build non-blocking same-turn guidance for cached extraction replays."""
+
+    if handoff.result_status == "empty_extraction":
+        return _LEDGER_REPLAY_EMPTY_RESULT_GUIDANCE.format(
+            result_ref=handoff.result_ref
+        )
+    status_phrase = (
+        f"{handoff.object_count} retained object"
+        if handoff.object_count == 1
+        else f"{handoff.object_count} retained objects"
+    )
+    return _LEDGER_REPLAY_RESULT_GUIDANCE.format(
+        result_ref=handoff.result_ref,
+        status_phrase=status_phrase,
+    )
 
 
 def _create_streaming_tool(
@@ -610,14 +680,18 @@ def _create_streaming_tool(
         # run's RunConfig via the tool context in openai-agents 0.17+.
         effective_run_config = getattr(ctx, "run_config", None) or run_config
 
-        def _runner_coro_factory() -> Awaitable[str]:
-            return run_specialist_with_events(
+        async def _runner_coro_factory() -> str:
+            result = await run_specialist_with_events(
                 agent=agent,
                 input_text=query,
                 specialist_name=specialist_name,
                 run_config=effective_run_config,
                 tool_name=tool_name,  # Pass tool_name for batching nudge tracking
             )
+            handoff = pop_last_supervisor_extraction_handoff()
+            if ledger is not None and handoff is not None:
+                ledger.record_extraction_handoff(tool_name, query, handoff)
+            return result
 
         # In standard chat the supervisor is built fresh per turn with a ledger
         # closed over here (NOT a tool argument, so the model-visible schema stays
@@ -829,12 +903,17 @@ def _build_runtime_tool_availability_note(
         "download results."
     )
     notes.append(
-        "TRACE AND CURATION LOOKUP: Use inspect_curation_context for bounded "
-        "details about extraction results, evidence, validation findings, or "
-        "exact field slices. Use inspect_chat_traces for questions about why a "
-        "previous chat answer behaved a certain way or what tools ran. Start "
-        "with inventory/summary details and narrow from refs; do not ask "
-        "specialists to repeat full JSON for lookup."
+        "EXTRACTION RESULT COMPLETION: A non-empty extractor manifest is "
+        "normally enough to answer the curator's current request unless the "
+        "curator asks to broaden/narrow/rerun or the manifest says the "
+        "requested scope was not handled. Answer from the manifest; use "
+        "inspect_results to browse existing persisted results, more manifest "
+        "objects, evidence, validation findings, or exact YAML-declared field "
+        "slices. Do not call extractors again only to summarize existing "
+        "results or gain confidence. Use export_to_file only for explicit "
+        "export/download requests and prepare_for_curation only after explicit "
+        "confirmation. Use inspect_chat_traces for behavior/debug questions "
+        "about why a previous answer behaved a certain way or what tools ran."
     )
 
     return "\n\n".join(notes)
@@ -1096,11 +1175,12 @@ def create_supervisor_agent(
     @function_tool(
         name_override=_CURATION_PREP_TOOL_NAME,
         description_override=(
-            "Prepare the confirmed chat extraction context for curation workspace follow-up. "
+            "Prepare persisted canonical extraction results from this chat for curation workspace follow-up. "
             f'Use only after you already asked "{CURATION_PREP_CONFIRMATION_QUESTION}" and the curator '
             "explicitly confirmed in a later turn. Pass the curator's confirmation text verbatim in "
             "`user_confirmation`. Include confirmed adapter_keys when they are clear from the "
-            "conversation. Do not call this tool to ask for confirmation."
+            "conversation. This is separate from inspect_results browsing and export_to_file output. "
+            "Do not call this tool to ask for confirmation."
         ),
     )
     async def prepare_for_curation_tool(
@@ -1119,47 +1199,46 @@ def create_supervisor_agent(
     specialist_tools.append(prepare_for_curation_tool)
 
     @function_tool(
-        name_override=_INSPECT_CURATION_CONTEXT_TOOL_NAME,
+        name_override=_INSPECT_RESULTS_TOOL_NAME,
         description_override=(
-            "Inspect bounded canonical curation context for this main chat. Use for "
-            "specific follow-up questions about persisted/current extraction results, "
-            "review sessions, file outputs, objects, evidence, validation findings, "
-            "or exact field paths. Returns summaries and slices, not full canonical "
-            "payloads or full file contents."
+            "Inspect persisted canonical extraction results for this chat. Use "
+            "action=\"help\" for the contract; action=\"list\" or \"summary\" "
+            "for available results; action=\"objects\" or \"object\" for "
+            "YAML-declared manifest fields; action=\"field\" for one "
+            "YAML-declared scalar field; action=\"evidence\" for bounded "
+            "evidence text; and action=\"validation\" for validation findings. "
+            "Requires result_ref values in extraction-result:<uuid> form when "
+            "addressing a specific result. This tool browses existing results "
+            "and does not export, prepare for curation, inspect files, inspect "
+            "review sessions, or debug trace behavior."
         ),
     )
-    async def inspect_curation_context_tool(
-        scope: str = "current_chat",
-        detail: str = "inventory",
-        extraction_result_id: str | None = None,
-        trace_id: str | None = None,
-        flow_run_id: str | None = None,
-        review_session_id: str | None = None,
-        file_id: str | None = None,
-        adapter_keys: List[str] | None = None,
+    async def inspect_results_tool(
+        action: str = "help",
+        result_ref: str | None = None,
+        target: str = "latest",
         object_ref: str | None = None,
         field_path: str | None = None,
+        adapter_keys: List[str] | None = None,
+        flow_run_id: str | None = None,
         limit: int | None = None,
         cursor: str | None = None,
     ) -> str:
-        """Inspect bounded extraction/review context for the active chat."""
+        """Inspect bounded persisted extraction results for the active chat."""
 
-        return await inspect_curation_context(
-            scope=scope,
-            detail=detail,
-            extraction_result_id=extraction_result_id,
-            trace_id=trace_id,
-            flow_run_id=flow_run_id,
-            review_session_id=review_session_id,
-            file_id=file_id,
-            adapter_keys=adapter_keys,
+        return await inspect_results(
+            action=action,
+            result_ref=result_ref,
+            target=target,
             object_ref=object_ref,
             field_path=field_path,
+            adapter_keys=adapter_keys,
+            flow_run_id=flow_run_id,
             limit=limit,
             cursor=cursor,
         )
 
-    specialist_tools.append(inspect_curation_context_tool)
+    specialist_tools.append(inspect_results_tool)
 
     @function_tool(
         name_override=_INSPECT_CHAT_TRACES_TOOL_NAME,
@@ -1167,7 +1246,10 @@ def create_supervisor_agent(
             "Inspect authorized TraceReview summaries for trace IDs associated with "
             "this main chat session. Use when the curator asks why a prior answer "
             "selected, omitted, searched, validated, or failed something. Trace IDs "
-            "must resolve from this chat inventory before TraceReview is queried."
+            "must resolve from this chat inventory before TraceReview is queried. "
+            "Do not use this for normal extraction-result browsing; use "
+            "inspect_results for persisted extraction objects, evidence, fields, "
+            "and validation."
         ),
     )
     async def inspect_chat_traces_tool(
@@ -1203,10 +1285,12 @@ def create_supervisor_agent(
     # Allows supervisor to export data as downloadable CSV, TSV, or JSON files
     @function_tool(
         name_override="export_to_file",
-        description_override="""Export data to a downloadable file. Use when user asks to:
+        description_override="""Export data to a downloadable file. Use only when the user explicitly asks to:
 - Export, download, or save data as CSV, TSV, or JSON
 - Get a spreadsheet or file version of results
 - "Give me this as CSV", "TSV format please", "Download as JSON"
+
+For existing extraction results, use inspect_results first to select the bounded objects/fields to export. Do not use this tool for ordinary result browsing, summarization, curation prep, or trace debugging.
 
 Supported formats: csv, tsv, json
 

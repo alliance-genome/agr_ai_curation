@@ -3,6 +3,7 @@
 import inspect
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -207,6 +208,19 @@ def _chat_message_record(**overrides):
     }
     payload.update(overrides)
     return ChatMessageRecord(**payload)
+
+
+def test_supervisor_prompt_explains_result_inspection_boundaries():
+    repo_root = Path(__file__).resolve().parents[6]
+    prompt_text = (repo_root / "config/agents/supervisor/prompt.yaml").read_text()
+    normalized_prompt = " ".join(prompt_text.split())
+
+    assert "inspect_results(action=\"help\")" in prompt_text
+    assert "extraction-result:<uuid>" in prompt_text
+    assert "do not call another extractor just to summarize" in normalized_prompt
+    assert "Export and curation prep are separate explicit actions" in prompt_text
+    assert "trace inspection only to debug behavior" in prompt_text
+    assert "inspect_curation_context" not in prompt_text
 
 
 @pytest.mark.asyncio
@@ -2065,8 +2079,9 @@ def test_create_supervisor_agent_without_document_adds_unavailable_note(monkeypa
         lambda **decorator_kwargs: (
             lambda fn: (
                 setattr(fn, "name", decorator_kwargs.get("name_override", fn.__name__)),
+                setattr(fn, "description", decorator_kwargs.get("description_override", "")),
                 fn,
-            )[1]
+            )[2]
         ),
     )
     monkeypatch.setattr(
@@ -2116,8 +2131,9 @@ async def test_ordinary_non_flow_export_to_file_uses_standard_csv_save_tool(monk
         lambda **decorator_kwargs: (
             lambda fn: (
                 setattr(fn, "name", decorator_kwargs.get("name_override", fn.__name__)),
+                setattr(fn, "description", decorator_kwargs.get("description_override", "")),
                 fn,
-            )[1]
+            )[2]
         ),
     )
     monkeypatch.setattr(supervisor_agent, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
@@ -2192,8 +2208,9 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
         lambda **decorator_kwargs: (
             lambda fn: (
                 setattr(fn, "name", decorator_kwargs.get("name_override", fn.__name__)),
+                setattr(fn, "description", decorator_kwargs.get("description_override", "")),
                 fn,
-            )[1]
+            )[2]
         ),
     )
     monkeypatch.setattr(
@@ -2208,18 +2225,34 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
     assert "No domain specialist tools are currently installed" in created.instructions
     assert [getattr(tool, "name", "") for tool in created.tools] == [
         "prepare_for_curation",
-        "inspect_curation_context",
+        "inspect_results",
         "inspect_chat_traces",
         "export_to_file",
     ]
     inspect_tool = next(
         tool
         for tool in created.tools
-        if getattr(tool, "name", "") == "inspect_curation_context"
+        if getattr(tool, "name", "") == "inspect_results"
     )
     inspect_params = inspect.signature(inspect_tool).parameters
-    assert "review_session_id" in inspect_params
-    assert "file_id" in inspect_params
+    assert "action" in inspect_params
+    assert "result_ref" in inspect_params
+    assert "object_ref" in inspect_params
+    assert "review_session_id" not in inspect_params
+    assert "file_id" not in inspect_params
+    tools_by_name = {getattr(tool, "name", ""): tool for tool in created.tools}
+    assert (
+        "persisted canonical extraction results"
+        in tools_by_name["prepare_for_curation"].description
+    )
+    assert (
+        "use inspect_results for persisted extraction objects"
+        in tools_by_name["inspect_chat_traces"].description
+    )
+    assert (
+        "Use only when the user explicitly asks"
+        in tools_by_name["export_to_file"].description
+    )
     assert captured_langfuse["metadata"]["specialist_count"] == 4
 
 
