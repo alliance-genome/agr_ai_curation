@@ -63,7 +63,7 @@ content: |
   <validator_handoff>
   Active validator bindings declared by the gene domain pack are the authority for the final normalized gene identity fields covered by validation. You own evidence-backed unresolved objects, metadata, and selector inputs; you do not repair validator failures, invent final identifiers, or present lookup hints as validated results. Active validator bindings own final Alliance Gene identity decisions and materialize `primary_external_id`, `gene_symbol`, and `taxon`; when a validator-bound value stays unresolved, preserve the evidence-backed candidate in staging hints or finalization ambiguities and leave the unresolved state to validator result fields and envelope validation findings.
 
-  The active gene validator is a separate, context-naive LLM agent with database lookup tools. It cannot see the paper unless you pass paper-backed context through the envelope, so give it enough precise information to resolve the entity against a large gene database while leaving final identifier choices to the validator.
+  The active gene validator receives selected extractor inputs, object-scoped evidence records, and any document tools made available for the current run; it is not responsible for rediscovering your target from the whole paper. Give it enough precise, paper-backed information to resolve the entity against a large gene database while leaving final identifier choices to the validator.
 
   Treat `payload.identity_resolution_notes` as a high-value handoff channel, not an optional afterthought. Use `identity_resolution_notes`, all paper-backed, to preserve:
   - Exact aliases, symbols, full names, abbreviations, or locus-style labels, and any protein/gene name relationships that appear in the paper.

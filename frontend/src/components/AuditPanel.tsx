@@ -230,6 +230,7 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
       'DOMAIN_COMPLETED',
       'DOMAIN_CATEGORY_ERROR',
       'DOMAIN_SKIPPED',
+      'DOMAIN_WARNING',
       'FLOW_STEP_EVIDENCE',
       'FLOW_STEP_TIMING',
       'FLOW_VALIDATION_GROUP_TIMING',

@@ -618,6 +618,37 @@ def test_validator_request_payload_reports_runtime_capabilities_for_scoped_evide
     }
 
 
+def test_validator_runtime_capabilities_scope_from_request_evidence_for_bare_quote():
+    request = _verbose_validation_request().model_copy(
+        update={
+            "target": ValidationTarget(
+                domain_pack_id="fixture.dispatch",
+                object_type="GeneAssertion",
+                object_id="object-1",
+                field_path="gene.identifier",
+                input_values={"identifier": "BAD:0001", "evidence_quote": "crb quote"},
+            ),
+        },
+        deep=True,
+    )
+
+    payload = validator_request_payload_for_agent(
+        request,
+        runtime_context=ValidatorRuntimeContext(
+            document_id="doc-123",
+            user_id="user-1",
+        ),
+    )
+
+    assert payload["validator_runtime_capabilities"] == {
+        "paper_search_available": True,
+        "scoped_evidence_update_available": True,
+        "allowed_evidence_record_ids": ["evidence-1"],
+        "target_object_id": "object-1",
+        "target_field_path": "gene.identifier",
+    }
+
+
 def test_validator_request_dedupe_key_includes_field_and_evidence_context():
     base_request = _validation_request().model_copy(
         update={
@@ -2392,11 +2423,83 @@ def test_package_scoped_validator_agent_adds_scoped_runtime_tools(
         "update_recorded_evidence_metadata",
         "finalize_validator_result",
     ]
-    assert "Extractor-provided evidence" in captured["agent"].instructions
-    assert "document_id and user_id" not in captured["agent"].instructions
+    instructions = captured["agent"].instructions
+    assert "Extractor-provided evidence" in instructions
+    assert (
+        "`selected_inputs.evidence_quote` or `selected_inputs.evidence_quotes`"
+        in instructions
+    )
+    assert "search_document" in instructions
+    assert "document_id and user_id" not in instructions
+    assert "paper; you do not" not in instructions
     assert captured["payload"]["validator_runtime_capabilities"][
         "scoped_evidence_update_available"
     ] is True
+
+
+def test_package_scoped_validator_agent_describes_missing_runtime_paper_tools(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from packages.alliance.agents.gene.schema import GeneResultEnvelope
+    from src.lib.agent_studio.diagnostic_tools.tool_definitions import (
+        _unwrap_function_tool,
+    )
+
+    request = _validation_request()
+    source_agent = SimpleNamespace(
+        output_type=GeneResultEnvelope,
+        tools=[],
+        instructions="Base validator instructions.",
+    )
+    captured = {}
+
+    monkeypatch.setattr(
+        "src.lib.config.agent_loader.get_agent_definition_for_package",
+        lambda package_id, agent_id: AgentDefinition(
+            folder_name="gene",
+            agent_id=agent_id,
+            name="Gene Validation",
+            package_id=package_id,
+        ),
+    )
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        lambda agent_key: source_agent,
+    )
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.resolve_tools",
+        lambda tool_ids, execution_context: pytest.fail(
+            "paper tools should not resolve without document/user runtime context"
+        ),
+    )
+
+    def _fake_run_sync(agent, **kwargs):
+        captured["agent"] = agent
+        captured["payload"] = json.loads(kwargs["input"])
+        tool = next(
+            tool for tool in agent.tools if tool.name == "finalize_validator_result"
+        )
+        _unwrap_function_tool(tool)(result=_result_payload(request))
+        return {"status": "resolved"}
+
+    monkeypatch.setattr("agents.Runner.run_sync", _fake_run_sync)
+
+    run_package_scoped_validator_agent(
+        request,
+        binding=cast(Any, SimpleNamespace(max_tool_calls=4)),
+    )
+
+    assert [tool.name for tool in captured["agent"].tools] == [
+        "finalize_validator_result"
+    ]
+    instructions = captured["agent"].instructions
+    assert "Paper search and evidence update tools are unavailable" in instructions
+    assert (
+        "`selected_inputs.evidence_quote` or `selected_inputs.evidence_quotes`"
+        in instructions
+    )
+    assert "paper; you do not" not in instructions
+    assert "validator_runtime_capabilities" not in captured["payload"]
 
 
 def test_package_scoped_validator_agent_clears_accepted_result_after_rejection(

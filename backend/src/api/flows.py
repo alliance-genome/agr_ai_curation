@@ -32,16 +32,23 @@ from ..lib.flows.validation_attachments import (
     FlowValidationAttachmentError,
     apply_flow_validation_attachment_defaults,
 )
+from ..lib.agent_studio.catalog_service import AGENT_REGISTRY, get_agent_metadata
+from ..lib.agent_studio.flow_agent_policy import (
+    agent_allows_ordinary_flow_step,
+    attachment_only_validator_reason,
+)
 from ..lib.openai_agents.config import get_flow_list_page_size_default
 from ..models.api_schemas import OperationResult
 from ..models.sql import get_db, CurationFlow
 from ..schemas.flows import (
     CreateFlowRequest,
+    DEFAULT_FLOW_EDGE_ROLE,
     FlowDefinition,
     FlowListResponse,
     FlowResponse,
     FlowSummaryResponse,
     UpdateFlowRequest,
+    VALIDATION_ATTACHMENT_EDGE_ROLE,
 )
 from ..services.user_service import set_global_user_from_cognito
 
@@ -53,10 +60,18 @@ router = APIRouter(prefix="/api/flows")
 DEFAULT_FLOW_LIST_PAGE_SIZE = get_flow_list_page_size_default()
 
 
-def _validated_flow_definition_payload(flow_definition) -> dict[str, Any]:
+def _validated_flow_definition_payload(
+    flow_definition: FlowDefinition,
+    *,
+    db_user_id: int | None = None,
+    enforce_agent_step_policy: bool = False,
+) -> dict[str, Any]:
     """Return flow definition JSON with metadata-backed validation defaults."""
 
-    return _validated_flow_definition(flow_definition).model_dump()
+    validated = _validated_flow_definition(flow_definition)
+    if enforce_agent_step_policy:
+        _validate_flow_agent_step_policy(validated, db_user_id=db_user_id)
+    return validated.model_dump()
 
 
 def _validated_flow_definition(flow_definition: FlowDefinition) -> FlowDefinition:
@@ -66,6 +81,80 @@ def _validated_flow_definition(flow_definition: FlowDefinition) -> FlowDefinitio
         return apply_flow_validation_attachment_defaults(flow_definition)
     except FlowValidationAttachmentError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _flow_agent_policy_entry(
+    agent_id: str,
+    *,
+    db_user_id: int | None,
+) -> dict[str, Any] | None:
+    """Return the metadata needed to enforce ordinary-flow-step policy."""
+
+    registry_entry = AGENT_REGISTRY.get(agent_id)
+    if isinstance(registry_entry, dict):
+        return registry_entry
+
+    metadata_kwargs: dict[str, Any] = {}
+    if db_user_id is not None:
+        metadata_kwargs["db_user_id"] = db_user_id
+
+    try:
+        metadata = get_agent_metadata(agent_id, **metadata_kwargs)
+    except ValueError:
+        return None
+
+    return {
+        "name": metadata.get("display_name", agent_id),
+        "category": metadata.get("category") or "",
+        "supervisor": metadata.get("supervisor") or {},
+    }
+
+
+def _validate_flow_agent_step_policy(
+    flow_definition: FlowDefinition,
+    *,
+    db_user_id: int | None,
+) -> None:
+    """Reject attachment-only validators wired as ordinary flow steps."""
+
+    validation_attachment_targets = {
+        edge.target
+        for edge in flow_definition.edges
+        if edge.role == VALIDATION_ATTACHMENT_EDGE_ROLE
+    }
+    control_flow_edges_by_node: dict[str, list[str]] = {}
+    for edge in flow_definition.edges:
+        if edge.role != DEFAULT_FLOW_EDGE_ROLE:
+            continue
+        control_flow_edges_by_node.setdefault(edge.source, []).append(edge.id)
+        control_flow_edges_by_node.setdefault(edge.target, []).append(edge.id)
+
+    for node in flow_definition.nodes:
+        agent_id = node.data.agent_id
+        if agent_id == "task_input":
+            continue
+
+        entry = _flow_agent_policy_entry(agent_id, db_user_id=db_user_id)
+        if entry is None or agent_allows_ordinary_flow_step(agent_id, entry):
+            continue
+
+        control_flow_edge_ids = control_flow_edges_by_node.get(node.id, [])
+        if node.id in validation_attachment_targets and not control_flow_edge_ids:
+            continue
+
+        agent_name = str(entry.get("name") or node.data.agent_display_name or agent_id)
+        reason = attachment_only_validator_reason(agent_name)
+        if control_flow_edge_ids:
+            reason = (
+                f"{reason} Remove ordinary control-flow edge(s) connected to "
+                f"node '{node.id}': {', '.join(control_flow_edge_ids)}."
+            )
+        else:
+            reason = (
+                f"{reason} Node '{node.id}' is not connected as a validation "
+                "attachment target."
+            )
+        raise HTTPException(status_code=422, detail=reason)
 
 
 def _flow_to_response(flow: CurationFlow) -> FlowResponse:
@@ -324,7 +413,11 @@ async def create_flow(
         user_id=db_user.id,
         name=request.name,
         description=request.description,
-        flow_definition=_validated_flow_definition_payload(request.flow_definition),
+        flow_definition=_validated_flow_definition_payload(
+            request.flow_definition,
+            db_user_id=db_user.id,
+            enforce_agent_step_policy=True,
+        ),
     )
 
     try:
@@ -397,7 +490,11 @@ async def update_flow(
         node_count = len(request.flow_definition.nodes) if request.flow_definition.nodes else 0
         edge_count = len(request.flow_definition.edges) if request.flow_definition.edges else 0
         logger.debug('[Flow Update] Updating flow_definition: %s nodes, %s edges', node_count, edge_count)
-        flow.flow_definition = _validated_flow_definition_payload(request.flow_definition)
+        flow.flow_definition = _validated_flow_definition_payload(
+            request.flow_definition,
+            db_user_id=flow.user_id,
+            enforce_agent_step_policy=True,
+        )
         # CRITICAL: SQLAlchemy doesn't detect changes to mutable JSONB fields
         # We must explicitly flag it as modified for the UPDATE to be emitted
         flag_modified(flow, "flow_definition")

@@ -88,6 +88,10 @@ content: |
   single_reference (the source paper) is resolved downstream from the curation workspace document identity, not from free text. Do NOT stage a reference; pending reference resolution is the intended posture for this pass. Do NOT extract or stage the annotation_type / curation method; the backend fixes it to manually_curated.
   </validator_handoff>
 
+  <source_mentions_contract>
+  `source_mentions` are the exact paper phrases that name or anchor the staged finding. Copy short phrases from the paper text, including alternate spellings, shorthand, genotype notation, table labels, or source/provider wording that a validator may need for lookup or disambiguation. Do not normalize, paraphrase, or invent `source_mentions`; do not put full evidence quotes there; and do not use them instead of `evidence_record_ids`. The verified quote and provenance stay in `record_evidence`, while `source_mentions` preserves the compact paper wording validators should consider.
+  </source_mentions_contract>
+
   <workflow>
   You must call document retrieval tools before answering. Work in this order for retained diseases:
   1. Search/read the document for candidate disease mentions and experimental context. Use `search_document` to sweep the paper for disease mentions and likely evidence locations, and `read_section`/`read_subsection` for complete coverage of Results, Discussion, figure legends, tables, and methods context.
@@ -95,7 +99,7 @@ content: |
   3. Stage each retained disease with `stage_disease_observation`, passing a stable `pending_ref_id`, the exact `mention`, the `disease_name`, the verified `evidence_record_ids`, one or more `source_mentions`, `role`, `confidence`, `data_provider`, and the paper-supported subject/relation/ECO hints (see `<output_and_handoff_contract>`).
   4. Call `list_staged_disease_observations` to review, use `patch_disease_observation`/`discard_disease_observation` to fix issues, then call `finalize_disease_extraction(candidate_ids=[...])` exactly once with the candidate IDs your stage calls returned.
 
-  Supporting evidence-workspace tools: `list_recorded_evidence`/`get_recorded_evidence` review queued active-run evidence. Attach every retained evidence record to the staged `pending_ref_id` and at least one concrete `field_path` it supports (for example `disease_name`, `role`, `source_mentions`, `evidence_code_curie`, `condition_relations`, or a subject hint field); do not leave new evidence object-level only. Use `attach_evidence_to_object`/`detach_evidence_from_object` only to correct concrete target fields, `discard_recorded_evidence` to remove wrong or weak evidence without deleting audit history, and `update_recorded_evidence_metadata` for editable agent-owned metadata such as entity, field_path, or agent_note. Source quote/provenance changes go through same-ID `record_evidence`, not metadata edits.
+  Supporting evidence-workspace tools: `list_recorded_evidence`/`get_recorded_evidence` review queued active-run evidence. Attach every retained evidence record to the staged `pending_ref_id` and at least one concrete `field_path` it supports (for example `disease_name`, `role`, `source_mentions`, `evidence_code_curies`, `condition_relations`, or a subject hint field); do not leave new evidence object-level only. Use `attach_evidence_to_object`/`detach_evidence_from_object` only to correct concrete target fields, `discard_recorded_evidence` to remove wrong or weak evidence without deleting audit history, and `update_recorded_evidence_metadata` for editable agent-owned metadata such as entity, field_path, or agent_note. Source quote/provenance changes go through same-ID `record_evidence`, not metadata edits.
   </workflow>
 
   <experimental_condition_rules>
@@ -130,7 +134,7 @@ content: |
   - `confidence` (high, medium, or low),
   - `data_provider` (the paper-backed organism/provider abbreviation, e.g. MGI for mouse, ZFIN for zebrafish, FB for Drosophila, WB for C. elegans, HGNC/OMIM/RGD/SGD as appropriate),
   - the verified `evidence_record_ids`,
-  - one or more `source_mentions` (paper text anchors),
+  - one or more `source_mentions` following `<source_mentions_contract>`,
   - the SUBJECT when the paper supports it: `subject_type` (gene, allele, or agm), `subject_identifier`, and `subject_label`,
   - `disease_relation_name` when the paper supports it (see `<subject_and_relation_rules>`),
   - `evidence_code_curies` (ECO CURIEs) only when the paper states the evidence type and supplies/implies an exact ECO identifier,

@@ -1346,6 +1346,14 @@ def _validator_evidence_scope_for_request(
         if evidence_record_id and evidence_record_id not in allowed_ids:
             allowed_ids.append(evidence_record_id)
 
+    for record in request.evidence:
+        record_field_path = _optional_string(record.get("field_path"))
+        if target_field_path and record_field_path and record_field_path != target_field_path:
+            continue
+        evidence_record_id = _optional_string(record.get("evidence_record_id"))
+        if evidence_record_id and evidence_record_id not in allowed_ids:
+            allowed_ids.append(evidence_record_id)
+
     target_object_id = _optional_string(request.target.object_id)
     return _ValidatorEvidenceScope(
         allowed_evidence_record_ids=frozenset(allowed_ids),
@@ -1357,7 +1365,17 @@ def _validator_evidence_scope_for_request(
 
 
 def _request_has_scoped_evidence_context(request: DomainValidationRequest) -> bool:
-    return bool(_validator_evidence_scope_for_request(request).allowed_evidence_record_ids)
+    # Only selected-input quote bundles force individual validator runs. Bare
+    # request.evidence still scopes runtime evidence tools for single-result
+    # validators, but ordinary request evidence remains batchable.
+    target_field_path = _optional_string(request.target.field_path)
+    for bundle in _selected_evidence_quote_bundles(request.selected_inputs):
+        bundle_field_path = _optional_string(bundle.get("field_path"))
+        if target_field_path and bundle_field_path and bundle_field_path != target_field_path:
+            continue
+        if _optional_string(bundle.get("evidence_record_id")):
+            return True
+    return False
 
 
 def _validator_evidence_context_identity(
@@ -1405,7 +1423,7 @@ def _validator_runtime_capabilities_payload(
     if not paper_tools_available:
         unavailable_reasons.append("document_id and user_id are required for paper search and evidence updates")
     if not scope.allowed_evidence_record_ids:
-        unavailable_reasons.append("no field-scoped evidence quote bundle was supplied for this validation target")
+        unavailable_reasons.append("no target-scoped evidence record was supplied for this validation target")
     return {
         "paper_search_available": paper_tools_available,
         "scoped_evidence_update_available": scoped_evidence_available,
@@ -1622,7 +1640,8 @@ def _append_validator_source_context_instructions(
         if not batch
         else (
             "Batch validator runs do not receive scoped evidence mutation tools; "
-            "use supplied `selected_inputs.evidence_quotes` when present."
+            "use supplied `selected_inputs.evidence_quote` or "
+            "`selected_inputs.evidence_quotes` when present."
         )
     )
     paper_tool_text = (
@@ -1635,13 +1654,14 @@ def _append_validator_source_context_instructions(
             "Paper search and evidence update tools are unavailable for this "
             "runtime because document_id and user_id were not supplied; rely on "
             "the structured inputs, database lookup tools, and any supplied "
-            "`selected_inputs.evidence_quotes`."
+            "`selected_inputs.evidence_quote` or `selected_inputs.evidence_quotes`."
         )
     )
     instruction_block = (
-        "Extractor-provided evidence: `selected_inputs.evidence_quotes`, when "
-        "present, contains verified PDF quote text selected by the extractor for "
-        "this field. Treat these quotes as source context, not as a validator "
+        "Extractor-provided evidence: `selected_inputs.evidence_quote` or "
+        "`selected_inputs.evidence_quotes`, when present, contains verified PDF "
+        "quote text selected by the extractor for this field. Treat these quotes "
+        "as source context, not as a validator "
         "decision. If they are sufficient for the expected field(s), use them in "
         "your validation result. "
         f"{paper_tool_text} "

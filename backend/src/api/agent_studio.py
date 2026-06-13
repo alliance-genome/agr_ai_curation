@@ -77,6 +77,7 @@ from src.lib.agent_studio.flow_tools import (
     set_current_flow_context,
     clear_current_flow_context,
 )
+from src.lib.agent_studio.flow_agent_policy import flow_palette_show_in_palette
 from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry
 from src.lib.agent_studio.custom_agent_service import (
     CustomAgentAccessError,
@@ -252,6 +253,16 @@ def _merge_custom_agents_into_catalog(
         template_prompt_info = parent_agents_by_id.get(template_source) if template_source else None
         template_name = template_prompt_info.agent_name if template_prompt_info else template_source
         category = getattr(custom, "category", None) or "Custom"
+        custom_id = make_custom_agent_id(custom.id)
+        custom_flow_policy_entry = {
+            "category": category,
+            "supervisor": {
+                "enabled": bool(getattr(custom, "supervisor_enabled", False)),
+            },
+            "frontend": {
+                "show_in_palette": bool(getattr(custom, "show_in_palette", True)),
+            },
+        }
         tools = list(getattr(custom, "tool_ids", None) or [])
         template_group_rules = template_prompt_info.group_rules if template_prompt_info else {}
         raw_overrides = (
@@ -315,7 +326,7 @@ def _merge_custom_agents_into_catalog(
         prompt_layers, effective_prompt_hash, layer_manifest = catalog_service.layer_projection(prompt_bundle)
 
         prompt_info = PromptInfo(
-            agent_id=make_custom_agent_id(custom.id),
+            agent_id=custom_id,
             agent_name=custom.name,
             description=custom.description or (
                 f"Custom agent from {template_name}" if template_name else "Custom scratch agent"
@@ -334,6 +345,10 @@ def _merge_custom_agents_into_catalog(
             tools=tools,
             subcategory=(
                 "My Custom Agents" if custom.user_id == db_user.id else "Shared Agents"
+            ),
+            show_in_palette=flow_palette_show_in_palette(
+                custom_id,
+                custom_flow_policy_entry,
             ),
             documentation=None,
             prompt_id=str(custom.id),

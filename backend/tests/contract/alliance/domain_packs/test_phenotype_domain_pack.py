@@ -210,6 +210,13 @@ def test_phenotype_pack_declares_roles_and_validator_bindings():
             "required": False,
             "context_only": True,
         },
+        "source_mentions": {
+            "source": "payload",
+            "path": "source_mentions",
+            "required": False,
+            "allow_multiple": True,
+            "context_only": True,
+        },
         "evidence_quote": {
             "source": "evidence_record",
             "path": "verified_quote",
@@ -598,6 +605,7 @@ def test_pending_phenotype_term_without_curie_dispatches_with_context():
     assert selector_result.selected_inputs["data_provider"] == "MGI"
     assert selector_result.selected_inputs["taxon_id"] == "NCBITaxon:10090"
     assert selector_result.selected_inputs["evidence_record_id"] == "verified_exact"
+    assert selector_result.selected_inputs["source_mentions"] == ["reduced brood size"]
     assert selector_result.selected_inputs["evidence_quote"] == (
         "daf-2(e1370) adults produced 40% fewer progeny than wild type."
     )
@@ -709,6 +717,7 @@ def test_phenotype_term_curie_remains_optional_fast_path_for_dispatch():
     assert selector_result.request is not None
     assert selector_result.selected_inputs["curie"] == "WBPhenotype:0000886"
     assert selector_result.selected_inputs["label"] == "reduced brood size"
+    assert selector_result.selected_inputs["source_mentions"] == ["reduced brood size"]
     assert selector_result.selected_inputs["data_provider"] == "WB"
     assert selector_result.selected_inputs["taxon_id"] == "NCBITaxon:6239"
 
@@ -1029,6 +1038,7 @@ def _phenotype_condition_payload() -> dict[str, Any]:
         "phenotype_annotation_object": "abnormal sensory cilia morphology",
         "negated": False,
         "data_provider": {"abbreviation": "WB"},
+        "source_mentions": ["abnormal sensory cilia morphology"],
         "evidence_record_ids": ["evidence-1"],
         "evidence_records": [
             {
@@ -1172,13 +1182,21 @@ def test_phenotype_condition_binding_fans_out_one_composite_per_condition():
     )
 
     requests = [build_domain_validation_request(match) for match in composite_matches]
-    assert all(result.request is not None for result in requests)
-    first, second = (result.request for result in requests)
+    first = requests[0].request
+    second = requests[1].request
+    assert first is not None
+    assert second is not None
     assert first.selected_inputs["condition_class_curie"] == "ZECO:0000111"
     assert first.selected_inputs["condition_chemical_curie"] == "CHEBI:9168"
     assert first.selected_inputs["condition_relation_type"] == "has_condition"
+    assert first.selected_inputs["source_mentions"] == [
+        "abnormal sensory cilia morphology"
+    ]
     assert second.selected_inputs["condition_class_curie"] == "ZECO:0000160"
     assert "condition_chemical_curie" not in second.selected_inputs
     assert second.selected_inputs["condition_relation_type"] == "has_condition"
+    assert second.selected_inputs["source_mentions"] == [
+        "abnormal sensory cilia morphology"
+    ]
     # Both carry the annotation's backend-resolved evidence (evidence contract: no LLM quote).
     assert first.evidence and first.evidence[0]["verified_quote"]

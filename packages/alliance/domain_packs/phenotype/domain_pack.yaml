@@ -316,6 +316,12 @@ object_definitions:
           curator_action_note: >-
               Display-only label is not a LinkML edit target; updates grounded
               phenotype term fields such as phenotype_terms[0].curie.
+      - field_path: phenotype_terms[0].source_mentions
+        field_type: array
+        display_name: First phenotype term source mentions
+        metadata:
+          protected: true
+          curator_action_note: Source mentions anchor pending ontology candidates to paper text.
       - field_path: phenotype_terms[0].source_mentions[0]
         field_type: string
         display_name: First phenotype term source mention
@@ -400,6 +406,12 @@ object_definitions:
       - field_path: source_mentions[0]
         field_type: string
         display_name: First source mention
+        metadata:
+          protected: true
+          curator_action_note: Source mentions are paper evidence anchors, not normalized edit targets.
+      - field_path: source_mentions
+        field_type: array
+        display_name: Source mentions
         metadata:
           protected: true
           curator_action_note: Source mentions are paper evidence anchors, not normalized edit targets.
@@ -761,6 +773,12 @@ object_definitions:
       - field_path: label
         field_type: string
         display_name: Curator-facing label
+      - field_path: source_mentions
+        field_type: array
+        display_name: Source mentions
+        metadata:
+          protected: true
+          curator_action_note: Source mentions anchor pending ontology candidates to paper text.
       - field_path: source_mentions[0]
         field_type: string
         display_name: First source mention
@@ -949,6 +967,12 @@ metadata:
             path: ontology_lookup_hint.evidence_record_id
             required: false
             context_only: true
+          source_mentions:
+            source: payload
+            path: source_mentions
+            required: false
+            allow_multiple: true
+            context_only: true
           evidence_quote:
             source: evidence_record
             path: verified_quote
@@ -1034,6 +1058,12 @@ metadata:
             source: payload
             path: condition_relations.condition_relation_type.name
             required: false
+          source_mentions:
+            source: payload
+            path: source_mentions
+            required: false
+            allow_multiple: true
+            context_only: true
         expected_result_fields:
           term_name: condition_relations.condition_relation_type.name
           vocabulary: condition_relations.condition_relation_type.vocabulary
@@ -1105,6 +1135,12 @@ metadata:
             source: payload
             path: condition_relations.conditions.condition_free_text
             required: false
+          source_mentions:
+            source: payload
+            path: source_mentions
+            required: false
+            allow_multiple: true
+            context_only: true
           # NOTE: unlike disease/gene_expression, the phenotype pack does not declare an
           # annotation-level data_provider.abbreviation field (provider context lives on the term
           # ontology_lookup_hint), so the optional context_only data_provider_abbreviation input is

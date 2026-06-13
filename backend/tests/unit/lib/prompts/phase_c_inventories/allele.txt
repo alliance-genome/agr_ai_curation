@@ -74,8 +74,8 @@ Do not answer from memory or training data, guess allele IDs, guess symbols or n
 # AV-14 selected_inputs handoff: mention primary, hints not authoritative facts
 the request's `selected_inputs` are an extractor's proposals and context, not already-validated facts
 `selected_inputs.associated_gene`: the gene the extractor thinks this allele belongs to.
-The extractor that built this request had access to the paper; you do not.
-do not treat the extractor's lookup hints as the final identity
+The extractor built this request from the paper.
+do not treat the extractor's lookup hints or paper text as the final identity
 
 # AV-17 species filtering table rows + species-known-requires-data_provider (contract tokens)
 mouse, M. musculus, Mus, murine | MGI

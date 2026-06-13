@@ -23,7 +23,6 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-import pytest
 import yaml
 
 from src.lib.domain_packs.loader import load_domain_fixture_pack
@@ -163,6 +162,7 @@ def test_allele_builder_materializer_produces_clean_extraction_output():
     assert mention["payload"]["mention"]["text"] == "unc-54(e190)"
     assert mention["payload"]["associated_gene"]["symbol"] == "unc-54"
     assert mention["payload"]["taxon"]["curie"] == "NCBITaxon:6239"
+    assert mention["evidence_record_ids"] == ["evidence-unc54-1"]
 
     assert payload["metadata"]["provenance"]["source"] == ALLELE_MATERIALIZER_ID
     # No resolver/helper machinery: the allele validator owns identity.

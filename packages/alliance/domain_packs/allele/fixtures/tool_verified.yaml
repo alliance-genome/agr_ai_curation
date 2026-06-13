@@ -52,6 +52,8 @@ fixtures:
               curie: NCBITaxon:6239
             source_mentions:
               - daf-2(m41)
+          evidence_record_ids:
+            - daf-2-m41-evidence-1
           metadata:
             object_role: metadata_only
         - object_type: EvidenceQuote

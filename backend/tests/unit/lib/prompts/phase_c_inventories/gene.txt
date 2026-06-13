@@ -70,8 +70,8 @@ Work in resolve mode when only `mention` plus species/taxon/provider context is 
 # GV-16 provider precedence
 prefer `data_provider_hint` first, then `taxon_hint`, then `species`-derived provider context
 
-# GV-18 extractor had the paper, you do not; disambiguation context (contract tokens)
-The extractor that built this request had access to the paper; you do not.
+# GV-18 extractor paper context is bounded disambiguation context (contract tokens)
+The extractor built this request from the paper.
 `identity_resolution_notes`
 request-level `evidence` records
 more specific paper-supported search phrase

@@ -216,6 +216,37 @@ describe('AuditPanel - Event Display (T018)', () => {
     })
   })
 
+  it('renders DOMAIN_WARNING SSE events in the audit list', async () => {
+    render(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[
+          {
+            type: 'DOMAIN_WARNING',
+            timestamp: '2026-02-26T00:00:02.000Z',
+            session_id: 'session123',
+            details: {
+              domain: 'flow',
+              reason: 'flow_step_unavailable',
+              message: 'Flow step 2 skipped because the validator is attachment-only.',
+              step: 2,
+              agent_id: 'allele_validation',
+              agent_name: 'Allele Validation',
+            },
+          }
+        ]}
+      />
+    )
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          '[DOMAIN WARNING] Flow step 2 skipped because the validator is attachment-only.'
+        )
+      ).toBeInTheDocument()
+    })
+  })
+
   it('continues processing audit events after the shared SSE stream is reset', async () => {
     const firstRunEvents = [
       {

@@ -366,6 +366,12 @@ object_definitions:
       - field_path: taxon.curie
         field_type: string
         display_name: Taxon CURIE
+      - field_path: source_mentions
+        field_type: array
+        display_name: Source mentions
+        metadata:
+          protected: true
+          curator_action_note: Source mentions preserve exact paper wording for validator context, not normalized edit targets.
       - field_path: source_mentions[0]
         field_type: string
         display_name: First source mention
@@ -477,10 +483,16 @@ metadata:
             source: payload
             path: taxon.curie
             required: false
+          source_mentions:
+            source: payload
+            path: source_mentions
+            required: false
+            allow_multiple: true
+            context_only: true
           evidence_quote:
             source: evidence_record
             path: verified_quote
-            required: false
+            required: true
             context_only: true
         expected_result_fields:
           curie: allele.primary_external_id

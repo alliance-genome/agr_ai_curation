@@ -665,6 +665,94 @@ def test_evidence_selector_reads_nested_extraction_metadata_records(tmp_path: Pa
     ]
 
 
+def test_evidence_selector_does_not_fallback_to_envelope_records_without_object_ids(
+    tmp_path: Path,
+):
+    result = _run_selector(
+        tmp_path,
+        """
+          selected:
+            source: payload
+            path: value
+          evidence_quote:
+            source: evidence_record
+            path: verified_quote
+            required: false
+            context_only: true
+""",
+        _assertion_envelope(
+            payload={"value": "AGR:1"},
+            envelope_metadata={
+                "evidence_records": [
+                    {
+                        "evidence_record_id": "evidence-1",
+                        "verified_quote": "First envelope quote.",
+                    },
+                    {
+                        "evidence_record_id": "evidence-2",
+                        "verified_quote": "Second envelope quote.",
+                    },
+                ]
+            },
+        ),
+    )
+
+    assert result.findings == ()
+    assert result.request is not None
+    assert result.selected_inputs == {"selected": "AGR:1"}
+    assert result.evidence == []
+
+
+def test_evidence_selector_keeps_object_local_records_without_object_ids(
+    tmp_path: Path,
+):
+    result = _run_selector(
+        tmp_path,
+        """
+          selected:
+            source: payload
+            path: value
+          evidence_quote:
+            source: evidence_record
+            path: verified_quote
+            required: false
+            context_only: true
+""",
+        _assertion_envelope(
+            payload={
+                "value": "AGR:1",
+                "evidence_records": [
+                    {
+                        "evidence_record_id": "evidence-local",
+                        "verified_quote": "Object-local quote.",
+                    },
+                ],
+            },
+            envelope_metadata={
+                "evidence_records": [
+                    {
+                        "evidence_record_id": "evidence-envelope",
+                        "verified_quote": "Envelope quote must not be inherited.",
+                    }
+                ]
+            },
+        ),
+    )
+
+    assert result.findings == ()
+    assert result.request is not None
+    assert result.selected_inputs == {
+        "selected": "AGR:1",
+        "evidence_quote": "Object-local quote.",
+    }
+    assert result.evidence == [
+        {
+            "evidence_record_id": "evidence-local",
+            "verified_quote": "Object-local quote.",
+        }
+    ]
+
+
 def test_evidence_selector_filters_by_field_path_without_unrelated_fallback(
     tmp_path: Path,
 ):

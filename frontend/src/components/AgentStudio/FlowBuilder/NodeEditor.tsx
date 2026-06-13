@@ -210,7 +210,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, onViewPrompts, onViewDoma
     ? 'Validation Steering Prompt (Optional)'
     : 'Custom Instructions (Optional)'
   const customInstructionsTooltip = isValidationAgentNode
-    ? 'Use this prompt to focus a validation agent on a specific envelope object, field path, or curator concern. It is saved with this flow step.'
+    ? 'Use this prompt to focus a validation agent on a specific envelope object, field path, or curator concern. It is saved with this validator node.'
     : 'These instructions take the highest priority and override the agent\'s base prompt and group rules for this flow step. Use them to add constraints or focus the agent\'s behavior.'
   const actionableValidationAttachments = validationAttachments.filter(
     (attachment) => attachment.state === 'active' && Boolean(attachment.validator_binding_id)
@@ -399,7 +399,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, onViewPrompts, onViewDoma
               '& .MuiAlert-icon': { mr: 1, py: 0 },
             }}
           >
-            Custom validation agents persist as regular flow steps. Use the steering prompt to target the envelope object, field path, or validation question.
+            Custom validation agents attach to extraction steps as validation sidecars. Use the steering prompt to target the envelope object, field path, or validation question.
           </Alert>
         )}
 

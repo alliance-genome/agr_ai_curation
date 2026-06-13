@@ -4398,7 +4398,7 @@
           "type": "array"
         },
         {
-          "description": "The exact paper phrases the agent read this finding from.",
+          "description": "Exact short paper phrases that name or anchor this finding; validators use them for lookup and disambiguation context, while verified quote/provenance stays in evidence_record_ids.",
           "name": "source_mentions",
           "required": true,
           "type": "array"
@@ -4505,7 +4505,7 @@
           "type": "array"
         },
         {
-          "description": "The exact paper phrases the agent read this finding from.",
+          "description": "Exact short paper phrases that name or anchor this finding; validators use them for lookup and disambiguation context, while verified quote/provenance stays in evidence_record_ids.",
           "name": "source_mentions",
           "required": true,
           "type": "array"
@@ -4882,7 +4882,7 @@
           "type": "array"
         },
         {
-          "description": "The exact paper phrases the agent read this finding from.",
+          "description": "Exact short paper phrases that name or anchor this finding; validators use them for lookup and disambiguation context, while verified quote/provenance stays in evidence_record_ids.",
           "name": "source_mentions",
           "required": true,
           "type": "array"

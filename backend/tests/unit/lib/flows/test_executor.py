@@ -722,6 +722,7 @@ MOCK_REGISTRY = {
         "description": "Curate diseases",
         "category": "Validation",
         "subcategory": "Data Validation",
+        "supervisor": {"enabled": True},
         "factory": lambda: None,
         "requires_document": False,
         "curation": {
@@ -806,6 +807,7 @@ def _metadata_from_registry(
         "requires_document": requires_document,
         "required_params": ["document_id", "user_id"] if requires_document else [],
         "curation": entry.get("curation"),
+        "supervisor": entry.get("supervisor") or {},
     }
 
 
@@ -866,6 +868,48 @@ class TestDbUserIdPropagation:
 
         assert observed == [77]
         assert mock_get_agent.call_args.kwargs.get("db_user_id") == 77
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_attachment_only_validator_is_not_ordinary_flow_step(
+        self, mock_get_agent, mock_streaming, monkeypatch
+    ):
+        def _metadata(agent_id, **_kwargs):
+            assert agent_id == "allele_validation"
+            return {
+                "agent_id": agent_id,
+                "display_name": "Allele Validation Agent",
+                "description": "Validate alleles",
+                "category": "Validation",
+                "requires_document": False,
+                "required_params": [],
+                "supervisor": {"enabled": False},
+            }
+
+        monkeypatch.setattr("src.lib.flows.executor.get_agent_metadata", _metadata)
+
+        flow = _make_flow([_agent_node("n1", "allele_validation")])
+        tools, created_names, unavailable_steps, _execution_state = get_all_agent_tools(
+            flow,
+            include_unavailable=True,
+        )
+
+        assert tools == []
+        assert created_names == set()
+        assert unavailable_steps == [
+            {
+                "step": 1,
+                "agent_id": "allele_validation",
+                "agent_name": "Allele Validation Agent",
+                "reason": (
+                    "Allele Validation Agent is an attachment-only validator. Add it "
+                    "as a validation attachment on an extraction step so it receives "
+                    "a structured extraction envelope and DomainValidationRequest."
+                ),
+            }
+        ]
+        mock_get_agent.assert_not_called()
+        mock_streaming.assert_not_called()
 
 
 class TestActiveGroupPropagation:

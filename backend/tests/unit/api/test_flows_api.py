@@ -172,3 +172,128 @@ def test_flow_response_defaults_legacy_saved_edge_roles():
     response = flows._flow_to_response(stored_flow)
 
     assert response.flow_definition.edges[0].role == "control_flow"
+
+
+def test_flow_definition_payload_rejects_attachment_only_validator_control_flow(
+    monkeypatch,
+):
+    payload = _minimal_flow_definition_payload()
+    payload["nodes"][1]["data"].update(
+        {
+            "agent_id": "allele_validation",
+            "agent_display_name": "Allele Validation",
+            "output_key": "allele_validation_output",
+        }
+    )
+    monkeypatch.setattr(
+        flows,
+        "apply_flow_validation_attachment_defaults",
+        lambda flow_definition: flow_definition,
+    )
+    monkeypatch.setattr(
+        flows,
+        "AGENT_REGISTRY",
+        {
+            "allele_validation": {
+                "name": "Allele Validation",
+                "category": "Validation",
+                "supervisor": {"enabled": False},
+            }
+        },
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        flows._validated_flow_definition_payload(
+            FlowDefinition.model_validate(payload),
+            enforce_agent_step_policy=True,
+        )
+
+    assert exc.value.status_code == 422
+    assert "attachment-only validator" in str(exc.value.detail)
+    assert "e1" in str(exc.value.detail)
+
+
+def test_flow_definition_payload_allows_attachment_only_validator_sidecar(
+    monkeypatch,
+):
+    payload = _minimal_flow_definition_payload()
+    payload["nodes"].append(
+        {
+            "id": "validator_1",
+            "type": "agent",
+            "position": {"x": 200, "y": 100},
+            "data": {
+                "agent_id": "allele_validation",
+                "agent_display_name": "Allele Validation",
+                "output_key": "allele_validation_output",
+            },
+        }
+    )
+    payload["edges"].append(
+        {
+            "id": "v1",
+            "source": "extract_1",
+            "target": "validator_1",
+            "role": "validation_attachment",
+            "satisfies_binding_id": "allele_mention_reference_validation",
+        }
+    )
+    monkeypatch.setattr(
+        flows,
+        "apply_flow_validation_attachment_defaults",
+        lambda flow_definition: flow_definition,
+    )
+    monkeypatch.setattr(
+        flows,
+        "AGENT_REGISTRY",
+        {
+            "allele_validation": {
+                "name": "Allele Validation",
+                "category": "Validation",
+                "supervisor": {"enabled": False},
+            }
+        },
+    )
+
+    result = flows._validated_flow_definition_payload(
+        FlowDefinition.model_validate(payload),
+        enforce_agent_step_policy=True,
+    )
+
+    assert result["edges"][1]["role"] == "validation_attachment"
+
+
+def test_flow_definition_payload_allows_supervisor_enabled_validator_step(
+    monkeypatch,
+):
+    payload = _minimal_flow_definition_payload()
+    payload["nodes"][1]["data"].update(
+        {
+            "agent_id": "ontology_term_validation",
+            "agent_display_name": "Ontology Term Validation",
+            "output_key": "ontology_term_validation_output",
+        }
+    )
+    monkeypatch.setattr(
+        flows,
+        "apply_flow_validation_attachment_defaults",
+        lambda flow_definition: flow_definition,
+    )
+    monkeypatch.setattr(
+        flows,
+        "AGENT_REGISTRY",
+        {
+            "ontology_term_validation": {
+                "name": "Ontology Term Validation",
+                "category": "Validation",
+                "supervisor": {"enabled": True},
+            }
+        },
+    )
+
+    result = flows._validated_flow_definition_payload(
+        FlowDefinition.model_validate(payload),
+        enforce_agent_step_policy=True,
+    )
+
+    assert result["nodes"][1]["data"]["agent_id"] == "ontology_term_validation"
