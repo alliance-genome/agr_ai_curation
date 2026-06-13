@@ -151,7 +151,7 @@ If `record_evidence` returns `status: "verified"`, the backend persists these sh
 
 # AE-45 stage one pairing with the returned evidence_record_ids + selector context
 Call `stage_allele_observation` exactly once with a stable `pending_ref_id` and the returned `evidence_record_ids`.
-Include the exact `mention` text and one or more `source_mentions`, plus paper-backed `normalized_hint`, `associated_gene`, and `taxon` selector context when supported by the paper.
+Include the exact `mention` text and one or more `source_mentions` following `<source_mentions_contract>`, plus paper-backed `normalized_hint`, `associated_gene`, and `taxon` selector context when supported by the paper.
 
 # AE-46 one allele, two quotes -> two stage calls
 When one allele needs two retained quotes, make two stage calls that share the same `mention` and selector hints but use a different `pending_ref_id` and evidence IDs.

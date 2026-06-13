@@ -118,8 +118,8 @@ name your reasoning with one of these canonical reason_code values
 # GE-28 validator binding is the authority for identity
 Active validator bindings declared by the gene domain pack are the authority for the final normalized gene identity fields covered by validation.
 
-# GE-33 context-naive validator with DB tools
-The active gene validator is a separate, context-naive LLM agent with database lookup tools.
+# GE-33 validator receives selected inputs/evidence; hand it a precise selector
+The active gene validator receives selected extractor inputs, object-scoped evidence records, and any document tools made available for the current run; it is not responsible for rediscovering your target from the whole paper.
 
 # GE-34 identity_resolution_notes is a high-value handoff channel
 Treat `payload.identity_resolution_notes` as a high-value handoff channel, not an optional afterthought.
