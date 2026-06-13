@@ -30,6 +30,7 @@ export type AuditEventType =
   | 'DOMAIN_COMPLETED'      // Domain finishes execution
   | 'DOMAIN_CATEGORY_ERROR' // Domain task failure
   | 'DOMAIN_SKIPPED'        // Domain skipped due to missing requirements
+  | 'DOMAIN_WARNING'        // Domain warning / degraded flow step
   | 'FLOW_STEP_EVIDENCE'    // Flow step emitted evidence records/counts
   | 'FLOW_STEP_TIMING'      // Flow step emitted runtime timing breakdown
   | 'FLOW_VALIDATION_GROUP_TIMING' // Flow validation group emitted runtime timing breakdown
@@ -92,6 +93,7 @@ export type AuditEventDetails =
   | DomainCompletedDetails
   | DomainCategoryErrorDetails
   | DomainSkippedDetails
+  | DomainWarningDetails
   | FlowStepEvidenceDetails
   | FlowStepTimingDetails
   | FlowValidationGroupTimingDetails
@@ -229,6 +231,15 @@ export interface DomainCategoryErrorDetails {
 export interface DomainSkippedDetails {
   domain: string        // Domain skipped
   reason: string        // Reason code / description
+}
+
+export interface DomainWarningDetails {
+  domain?: string       // Domain or flow component issuing the warning
+  reason?: string       // Reason code / description
+  message?: string      // Human-readable warning text
+  step?: number         // Flow step number, when applicable
+  agent_id?: string     // Agent that triggered the warning
+  agent_name?: string   // Human-readable agent name
 }
 
 export interface FlowStepEvidenceDetails {

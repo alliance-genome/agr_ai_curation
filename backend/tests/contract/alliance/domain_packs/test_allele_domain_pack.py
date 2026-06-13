@@ -250,10 +250,17 @@ def test_allele_pack_declares_object_roles_and_validator_bindings():
             "path": "taxon.curie",
             "required": False,
         },
+        "source_mentions": {
+            "source": "payload",
+            "path": "source_mentions",
+            "required": False,
+            "allow_multiple": True,
+            "context_only": True,
+        },
         "evidence_quote": {
             "source": "evidence_record",
             "path": "verified_quote",
-            "required": False,
+            "required": True,
             "context_only": True,
         },
     }
@@ -284,6 +291,7 @@ def test_allele_mention_binding_selects_crb_examples_for_validation():
                         "mention": {"text": mention},
                         "associated_gene": {"symbol": "crb"},
                         "taxon": {"curie": "NCBITaxon:7227"},
+                        "source_mentions": [mention],
                     },
                     evidence_record_ids=[f"evidence-{index}"],
                     metadata={"object_role": "metadata_only"},
@@ -316,6 +324,7 @@ def test_allele_mention_binding_selects_crb_examples_for_validation():
             "mention": mention,
             "associated_gene": "crb",
             "taxon": "NCBITaxon:7227",
+            "source_mentions": [mention],
             "evidence_quote": f"{mention} embryos showed altered polarity.",
         }
         assert selector_result.request.target.input_values == (
@@ -342,6 +351,12 @@ def test_allele_mention_binding_does_not_use_envelope_evidence_without_object_id
                     "mention": {"text": "Mst1 Flox/Flox"},
                     "associated_gene": {"symbol": "Stk4"},
                     "taxon": {"curie": "NCBITaxon:10090"},
+                    "source_mentions": [
+                        "Mst1 f/f",
+                        "Mst1f/f",
+                        "Mst1 flox/flox",
+                        "Mst1 Flox/Flox",
+                    ],
                 },
                 metadata={"object_role": "metadata_only"},
             ),
@@ -371,14 +386,26 @@ def test_allele_mention_binding_does_not_use_envelope_evidence_without_object_id
     assert len(matches) == 1
     selector_result = build_domain_validation_request(matches[0])
 
-    assert selector_result.findings == ()
-    assert selector_result.request is not None
+    assert {finding.code for finding in selector_result.findings} == {
+        "selector_missing"
+    }
+    assert selector_result.request is None
     assert selector_result.selected_inputs == {
         "mention": "Mst1 Flox/Flox",
         "associated_gene": "Stk4",
         "taxon": "NCBITaxon:10090",
+        "source_mentions": [
+            "Mst1 f/f",
+            "Mst1f/f",
+            "Mst1 flox/flox",
+            "Mst1 Flox/Flox",
+        ],
     }
     assert selector_result.evidence == []
+    assert (
+        selector_result.findings[0].details["selector_problem"]["input_name"]
+        == "evidence_quote"
+    )
 
 
 def test_allele_mention_binding_uses_only_explicit_object_evidence_ids():
@@ -395,6 +422,12 @@ def test_allele_mention_binding_uses_only_explicit_object_evidence_ids():
                     "mention": {"text": "Mst1 Flox/Flox"},
                     "associated_gene": {"symbol": "Stk4"},
                     "taxon": {"curie": "NCBITaxon:10090"},
+                    "source_mentions": [
+                        "Mst1 f/f",
+                        "Mst1f/f",
+                        "Mst1 flox/flox",
+                        "Mst1 Flox/Flox",
+                    ],
                 },
                 evidence_record_ids=["evidence-mst1"],
                 metadata={"object_role": "metadata_only"},
@@ -431,6 +464,12 @@ def test_allele_mention_binding_uses_only_explicit_object_evidence_ids():
         "mention": "Mst1 Flox/Flox",
         "associated_gene": "Stk4",
         "taxon": "NCBITaxon:10090",
+        "source_mentions": [
+            "Mst1 f/f",
+            "Mst1f/f",
+            "Mst1 flox/flox",
+            "Mst1 Flox/Flox",
+        ],
         "evidence_quote": "Mst1 Flox/Flox mice were crossed as described.",
     }
     assert selector_result.evidence == [

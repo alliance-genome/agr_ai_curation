@@ -37,13 +37,30 @@ def test_flow_context_set_get_clear():
     assert flow_tools.get_current_flow_context() is None
 
 
-def test_get_flow_agent_ids_excludes_supervisor_and_task_input(monkeypatch):
+def test_get_flow_agent_ids_excludes_supervisor_task_input_and_attachment_only_validators(monkeypatch):
     monkeypatch.setattr(
         flow_tools,
         "AGENT_REGISTRY",
-        {"supervisor": {}, "task_input": {}, "pdf_extraction": {}, "gene": {}, "chat_output": {}},
+        {
+            "supervisor": {},
+            "task_input": {},
+            "pdf_extraction": {"category": "Extraction"},
+            "chat_output": {"category": "Output"},
+            "allele_validation": {
+                "category": "Validation",
+                "supervisor": {"enabled": False},
+            },
+            "ontology_term_validation": {
+                "category": "Validation",
+                "supervisor": {"enabled": True},
+            },
+        },
     )
-    assert flow_tools._get_flow_agent_ids() == ["chat_output", "gene", "pdf_extraction"]
+    assert flow_tools._get_flow_agent_ids() == [
+        "chat_output",
+        "ontology_term_validation",
+        "pdf_extraction",
+    ]
 
 
 def test_validate_flow_handler_reports_errors_warnings_and_suggestions(monkeypatch):
@@ -172,6 +189,44 @@ def test_get_flow_templates_handler_uses_registry(monkeypatch):
     assert "Found" in result["message"]
 
 
+def test_search_flow_agents_hides_attachment_only_validators(monkeypatch):
+    monkeypatch.setattr(
+        flow_tools,
+        "AGENT_REGISTRY",
+        {
+            "pdf_extraction": {
+                "name": "PDF Specialist",
+                "description": "Extract entities",
+                "category": "Extraction",
+                "requires_document": True,
+            },
+            "allele_validation": {
+                "name": "Allele Validation",
+                "description": "Validate alleles",
+                "category": "Validation",
+                "requires_document": False,
+                "supervisor": {"enabled": False},
+            },
+            "ontology_term_validation": {
+                "name": "Ontology Term Validation",
+                "description": "Validate ontology terms",
+                "category": "Validation",
+                "requires_document": False,
+                "supervisor": {"enabled": True},
+            },
+        },
+    )
+
+    result = flow_tools._get_available_agents_handler()(category="Validation")
+
+    assert result["validation_agents"] == ["ontology_term_validation"]
+    assert "allele_validation" not in {
+        agent["agent_id"]
+        for agents in result["categories"].values()
+        for agent in agents
+    }
+
+
 def test_get_flow_templates_handler_filters_missing_steps_and_resolves_installed_aliases(monkeypatch):
     monkeypatch.setattr(
         flow_tools,
@@ -246,7 +301,13 @@ def test_get_available_agents_handler_groups_categories(monkeypatch):
             "supervisor": {"category": "Routing"},
             "task_input": {"category": "Input"},
             "pdf_extraction": {"name": "PDF", "description": "Extract", "category": "Extraction", "requires_document": True},
-            "gene": {"name": "Gene", "description": "Validate", "category": "Validation", "requires_document": False},
+            "gene": {
+                "name": "Gene",
+                "description": "Validate",
+                "category": "Validation",
+                "requires_document": False,
+                "supervisor": {"enabled": True},
+            },
             "chat_output": {
                 "name": "Chat Output",
                 "description": "Render",
@@ -425,6 +486,64 @@ def test_get_current_flow_handler_ignores_validation_attachment_sidecar_edges():
     assert "Parallel flows not yet supported" not in result["execution_order_markdown"]
     assert not any(
         warning["node_id"] == "custom_validator_1"
+        for warning in result["validation_warnings"]
+    )
+
+
+def test_get_current_flow_handler_flags_attachment_only_validator_step(monkeypatch):
+    handler = flow_tools._get_current_flow_handler()
+    monkeypatch.setattr(
+        flow_tools,
+        "AGENT_REGISTRY",
+        {
+            "allele_validation": {
+                "name": "Allele Validation",
+                "category": "Validation",
+                "supervisor": {"enabled": False},
+            }
+        },
+    )
+    flow_tools.set_current_flow_context(
+        {
+            "flow_name": "Standalone Validator Flow",
+            "entry_node_id": "task_input_0",
+            "nodes": [
+                {
+                    "id": "task_input_0",
+                    "type": "task_input",
+                    "data": {
+                        "agent_id": "task_input",
+                        "agent_display_name": "Initial Instructions",
+                        "task_instructions": "Validate alleles.",
+                        "output_key": "task_input",
+                    },
+                },
+                {
+                    "id": "validator_1",
+                    "type": "agent",
+                    "data": {
+                        "agent_id": "allele_validation",
+                        "agent_display_name": "Allele Validation",
+                        "output_key": "allele_validation_output",
+                    },
+                },
+            ],
+            "edges": [
+                {"id": "e1", "source": "task_input_0", "target": "validator_1"},
+            ],
+        }
+    )
+
+    result = handler()
+
+    assert result["success"] is True
+    assert result["has_critical_issues"] is True
+    assert result["steps"][1]["flow_step_policy_warning"].startswith(
+        "Allele Validation is an attachment-only validator"
+    )
+    assert any(
+        warning["node_id"] == "validator_1"
+        and "attachment-only validator" in warning["message"]
         for warning in result["validation_warnings"]
     )
 
@@ -704,6 +823,7 @@ def _multi_agent_registry():
             "description": "Validate gene identifiers",
             "category": "Validation",
             "requires_document": False,
+            "supervisor": {"enabled": True},
         },
         "disease_extractor": {
             "name": "Disease Specialist",

@@ -49,9 +49,12 @@ content: |
   - `selected_inputs.normalized_hint`: an extractor-proposed cleaned-up symbol.
   - `selected_inputs.associated_gene`: the gene the extractor thinks this allele belongs to.
   - `selected_inputs.taxon`: paper-backed taxon context.
+  - `selected_inputs.source_mentions`: exact paper phrases captured by the extractor.
   - `selected_inputs.evidence_quote`: the source quote the extractor used.
 
-  The extractor that built this request had access to the paper; you do not. Use that context to choose bounded database searches and to tell similar candidates apart, but do not treat the extractor's lookup hints as the final identity.
+  The extractor built this request from the paper. Treat `selected_inputs`, supplied evidence records, compact evidence metadata, and any document tools made available for the current run as paper context for bounded lookup and disambiguation. Use that context to choose bounded database searches and to tell similar candidates apart, but do not treat the extractor's lookup hints or paper text as the final identity.
+
+  `selected_inputs.source_mentions` are the exact paper phrases the extractor captured for the target finding. Treat them as paper context for bounded lookup and disambiguation only: they can supply alternate spellings, shorthand, genotype notation, table labels, or source/provider wording that may explain what the paper meant. They are not normalized IDs, not validated facts, and not a replacement for database lookup or `evidence_quote`; never resolve a target from `source_mentions` alone.
 
   ## Species filtering
 
@@ -80,7 +83,7 @@ content: |
 
   Search the literal compact allele symbol, notation, or ID supplied by the user or paper first: do not rewrite or normalize it before the first lookup. The database lookup layer handles fuzzy matching, synonym matching, and database-specific symbol rendering differences, so do not rewrite the paper text into a guessed database spelling before the first lookup. Keep supporting evidence quotes out of the `allele_symbol` argument; use them only to decide which returned candidate, if any, matches the intended allele. Never pass a whole evidence sentence, descriptive clause, phenotype sentence, or paragraph into `allele_symbol`. Evidence text is context for judging candidates, not the allele search query.
 
-  When a paper mention includes genotype, zygosity, strain background, tissue, construct, or other surrounding notation, use the evidence quote, `associated_gene`, `normalized_hint`, and species/provider context to decide whether the returned database candidates resolve the intended allele. If the literal source-supported search returns no candidates, only try additional compact allele-like search strings that are directly supported by `selected_inputs`, the evidence quote, or database-returned candidate context. Do not use a full sentence or surrounding prose as the search string. Record all lookup attempts and leave the target unresolved when the database evidence is still missing or ambiguous.
+  When a paper mention includes genotype, zygosity, strain background, tissue, construct, or other surrounding notation, use `source_mentions`, the evidence quote, `associated_gene`, `normalized_hint`, and species/provider context to decide whether the returned database candidates resolve the intended allele. If the literal source-supported search returns no candidates, only try additional compact allele-like search strings that are directly supported by `selected_inputs`, the evidence quote, or database-returned candidate context. Do not use a full sentence or surrounding prose as the search string. Record all lookup attempts and leave the target unresolved when the database evidence is still missing or ambiguous.
   </resolution_and_validation_rules>
 
   <lookup_workflow>

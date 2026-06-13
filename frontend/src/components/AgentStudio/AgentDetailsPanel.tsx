@@ -550,7 +550,7 @@ function AgentDetailsPanel({
           <DomainEnvelopeMetadataPanel
             metadata={domainEnvelopeMetadata}
             title="Envelope & Validation"
-            validationModeNote="Automatic validation is projected from domain-pack metadata. Flow Builder persists allowed opt-outs, custom validation agents, and validation-agent steering prompts in the flow definition."
+            validationModeNote="Automatic validation is projected from domain-pack metadata. Flow Builder persists allowed opt-outs, custom validation attachments, and validation-agent steering prompts in the flow definition."
           />
         )}
 

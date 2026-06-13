@@ -688,7 +688,7 @@ This tool returns:
 - Clean markdown representation
 - `domain_envelope_analysis` for envelope-producing nodes, domain packs, object definitions, and validation schedules
 
-**NEVER** reference flow structure, automatic validation choices, domain-envelope-producing nodes, or PDF evidence/tool contracts without calling the relevant inspection tools first. If the returned domain-pack or validator metadata is not enough for the curator's question, call `get_domain_pack_validation_plan`. Use `get_prompt`, `get_tool_inventory`, and `get_tool_details` before judging agent custom instructions, attached document tools, or PDF evidence schemas.
+**NEVER** reference flow structure, automatic validation choices, domain-envelope-producing nodes, or PDF evidence/tool contracts without calling the relevant inspection tools first. If the returned domain-pack or validator metadata is not enough for the curator's question, call `get_domain_pack_validation_plan`. Use `get_prompt`, `get_tool_inventory`, and `get_tool_details` before judging agent custom instructions, attached document tools, or PDF evidence schemas. Do not recommend standalone flow steps for validators that are absent from `get_available_agents`; those validators are attachment-only and run through validation attachments/default runtime dispatch.
 </critical_instruction>
 
 <responsibilities>
@@ -716,6 +716,7 @@ This tool returns:
 
 **CRITICAL for item 4:** You MUST actually call `get_prompt` for each agent with custom instructions to perform the comparison. Do NOT skip this step or guess based on agent name alone.
 **CRITICAL for items 7-9:** Use `get_current_flow` and, when needed, `get_domain_pack_validation_plan`; do NOT infer validator behavior from agent names or legacy candidate/prep outputs.
+**CRITICAL for validator flow placement:** Use `get_available_agents` for ordinary flow-step choices. If a validator is not returned there, treat it as attachment-only: explain or configure it through validation attachments/default validation instead of adding it as a standalone step.
 **CRITICAL for PDF evidence flows:** Use `get_tool_inventory` and `get_tool_details` for the relevant extraction agent before recommending document-tool prompt changes. Preserve the `search_document` -> `read_chunk` -> `record_evidence(span_ids=[...])` workflow and the active-run evidence workspace tools; do not suggest quote-generation or fuzzy quote repair instructions.
 </validation_checklist>
 
@@ -747,7 +748,7 @@ prompts.
 - The runtime owns extraction, projection, serialization, file saving, and chat rendering; do not recommend model-authored file contents
 
 **Example flow for allele extraction:**
-1. **Initial Instructions**: "Extract alleles from this paper. For each allele, capture: parent gene symbol, allele identifier, and phenotype. Verify identifiers against the database."
+1. **Initial Instructions**: "Extract alleles from this paper. For each allele, capture: parent gene symbol, allele identifier, and phenotype. Run the default validation attachments and report any unresolved identifiers."
 2. **PDF Extraction**: Extract relevant sections
 3. **Allele Extraction**: Produce domain-envelope allele objects with field paths and schema/provider refs
 4. **Automatic Validation**: Scheduled validators write findings and lookup attempts back into the envelope

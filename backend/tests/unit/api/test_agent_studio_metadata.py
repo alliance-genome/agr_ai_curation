@@ -414,6 +414,7 @@ class TestGetRegistryMetadata:
         assert custom.subcategory == "My Custom Agents"
         assert custom.has_group_rules is True
         assert custom.group_rules["WB"].content == "Custom WB Rules"
+        assert custom.show_in_palette is False
 
     def test_merge_custom_agents_marks_project_shared_agents(self, monkeypatch):
         """Catalog augmentation should label non-owner custom agents as shared."""

@@ -124,7 +124,15 @@ class PhenotypeStageInput(_StrictToolModel):
     pending_ref_id: StrictStr
     phenotype_annotation_object: StrictStr
     evidence_record_ids: List[StrictStr] = Field(min_length=1, max_length=20)
-    source_mentions: List[StrictStr] = Field(min_length=1, max_length=20)
+    source_mentions: List[StrictStr] = Field(
+        min_length=1,
+        max_length=20,
+        description=(
+            "Exact short paper phrases that name or anchor this finding; "
+            "validators use them for lookup and disambiguation context, while "
+            "verified quote/provenance stays in evidence_record_ids."
+        ),
+    )
     subject_identifier: Optional[StrictStr] = None
     subject_label: Optional[StrictStr] = None
     subject_type: Optional[StrictStr] = None

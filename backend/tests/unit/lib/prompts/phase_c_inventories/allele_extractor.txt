@@ -110,8 +110,8 @@ call `discard_allele_observation` with a short free-text reason
 Active validator bindings declared by the allele domain pack are the authority for final normalized allele identity fields such as `primary_external_id`, `allele_symbol`, and association identifiers derived from them.
 does not repair validator failures, invent normalized identifiers, or present lookup hints as validated results.
 
-# AE-27 context-naive validator; hand it a precise selector
-The downstream allele validator is a separate, context-naive LLM that has database lookup tools but has not read the paper. Hand it a precise selector: the exact compact allele/variant notation in `mention`, plus paper-supported `associated_gene` and `taxon` context when available.
+# AE-27 validator receives selected inputs/evidence; hand it a precise selector
+The downstream allele validator receives selected extractor inputs, object-scoped evidence records, and any document tools made available for the current run; it is not responsible for rediscovering your target from the whole paper. Hand it a precise selector: the exact compact allele/variant notation in `mention`, plus paper-supported `associated_gene`, `taxon`, `source_mentions`, and evidence context when available.
 Do not rely on the validator to recover the intended allele from surrounding prose alone.
 
 # AE-28 preserve notation; fill associated_gene/taxon only when supported; normalized_hint sparse

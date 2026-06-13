@@ -1673,7 +1673,7 @@ function PromptWorkshop({
                     metadata={domainEnvelopeMetadata}
                     compact
                     title="Envelope & Validation"
-                    validationModeNote="This template produces domain-envelope objects. Automatic validation defaults come from the domain pack; custom validation can be added in Flow Builder with validation agents and steering prompts."
+                    validationModeNote="This template produces domain-envelope objects. Automatic validation defaults come from the domain pack; custom validation can be added in Flow Builder with validation attachments and steering prompts."
                   />
                   <Divider sx={{ opacity: 0.5 }} />
                 </>

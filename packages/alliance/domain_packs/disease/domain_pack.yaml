@@ -770,6 +770,12 @@ object_definitions:
         metadata:
           evidence_source_field: true
           definition_state_category: complete
+      - field_path: source_mentions
+        field_type: array
+        display_name: Source mentions
+        metadata:
+          protected: true
+          curator_action_note: Source mentions preserve exact paper wording for validator context, not normalized edit targets.
       - field_path: evidence_records[0].evidence_record_id
         field_type: string
         display_name: First evidence record ID
@@ -1183,6 +1189,12 @@ object_definitions:
           multivalued: true
           validator_binding_id: disease_evidence_code_lookup
           validator_state: active
+      - field_path: source_mentions
+        field_type: array
+        display_name: Source mentions
+        metadata:
+          protected: true
+          curator_action_note: Source mentions preserve exact paper wording for validator context, not normalized edit targets.
       # R4 optional slots (declared on the concrete subtype so validator dispatch fires).
       - field_path: annotation_type_name
         field_type: string
@@ -1608,6 +1620,12 @@ object_definitions:
           multivalued: true
           validator_binding_id: disease_evidence_code_lookup
           validator_state: active
+      - field_path: source_mentions
+        field_type: array
+        display_name: Source mentions
+        metadata:
+          protected: true
+          curator_action_note: Source mentions preserve exact paper wording for validator context, not normalized edit targets.
       # R4 optional slots (declared on the concrete subtype so validator dispatch fires).
       - field_path: annotation_type_name
         field_type: string
@@ -2031,6 +2049,12 @@ object_definitions:
           multivalued: true
           validator_binding_id: disease_evidence_code_lookup
           validator_state: active
+      - field_path: source_mentions
+        field_type: array
+        display_name: Source mentions
+        metadata:
+          protected: true
+          curator_action_note: Source mentions preserve exact paper wording for validator context, not normalized edit targets.
       # R4 optional slots (declared on the concrete subtype so validator dispatch fires).
       - field_path: annotation_type_name
         field_type: string
@@ -2435,6 +2459,12 @@ metadata:
             source: payload
             path: disease_annotation_object.name
             required: false
+          source_mentions:
+            source: payload
+            path: source_mentions
+            required: false
+            allow_multiple: true
+            context_only: true
           ontology_family:
             source: literal
             value: disease
@@ -2494,6 +2524,12 @@ metadata:
           term_name:
             source: payload
             path: disease_relation_name
+          source_mentions:
+            source: payload
+            path: source_mentions
+            required: false
+            allow_multiple: true
+            context_only: true
         expected_result_fields:
           term_name: disease_relation_name
           vocabulary: disease_relation_vocabulary
@@ -2538,6 +2574,12 @@ metadata:
             source: payload
             path: condition_relations.condition_relation_type.name
             required: false
+          source_mentions:
+            source: payload
+            path: source_mentions
+            required: false
+            allow_multiple: true
+            context_only: true
         expected_result_fields:
           term_name: condition_relations.condition_relation_type.name
           vocabulary: condition_relations.condition_relation_type.vocabulary
@@ -2565,6 +2607,12 @@ metadata:
           abbreviation:
             source: payload
             path: data_provider.abbreviation
+          source_mentions:
+            source: payload
+            path: source_mentions
+            required: false
+            allow_multiple: true
+            context_only: true
         expected_result_fields:
           abbreviation: data_provider.abbreviation
         required: true
@@ -2601,6 +2649,12 @@ metadata:
             source: payload
             path: disease_annotation_subject.subject_label
             required: false
+          source_mentions:
+            source: payload
+            path: source_mentions
+            required: false
+            allow_multiple: true
+            context_only: true
         expected_result_fields:
           subject_identifier: disease_annotation_subject.subject_identifier
           subject_type: disease_annotation_subject.subject_type
@@ -2646,6 +2700,12 @@ metadata:
             source: literal
             value:
               - ECO
+          source_mentions:
+            source: payload
+            path: source_mentions
+            required: false
+            allow_multiple: true
+            context_only: true
         expected_result_fields:
           curie: evidence_code_curies
         required: true
@@ -2715,6 +2775,12 @@ metadata:
             source: payload
             path: genetic_sex_name
             required: false
+          source_mentions:
+            source: payload
+            path: source_mentions
+            required: false
+            allow_multiple: true
+            context_only: true
         expected_result_fields:
           term_name: genetic_sex_name
           vocabulary: genetic_sex_vocabulary
@@ -2749,6 +2815,12 @@ metadata:
             source: payload
             path: disease_qualifier_names
             required: false
+          source_mentions:
+            source: payload
+            path: source_mentions
+            required: false
+            allow_multiple: true
+            context_only: true
         expected_result_fields:
           term_name: disease_qualifier_names
         required: true
@@ -2786,6 +2858,12 @@ metadata:
             source: payload
             path: data_provider.abbreviation
             required: false
+            context_only: true
+          source_mentions:
+            source: payload
+            path: source_mentions
+            required: false
+            allow_multiple: true
             context_only: true
         expected_result_fields:
           primary_external_id: with_gene_identifiers
@@ -2870,6 +2948,12 @@ metadata:
             source: payload
             path: condition_relations.conditions.condition_free_text
             required: false
+          source_mentions:
+            source: payload
+            path: source_mentions
+            required: false
+            allow_multiple: true
+            context_only: true
           data_provider_abbreviation:
             source: payload
             path: data_provider.abbreviation

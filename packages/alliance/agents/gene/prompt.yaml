@@ -48,17 +48,22 @@ content: |
   When you are called from an active domain-pack validator binding, the request's `selected_inputs` are an extractor's proposals and context, not already-validated facts. Gene extraction may give you:
   - `mention`: the exact paper mention text.
   - `proposed_gene_id`: an extractor-proposed Alliance Gene CURIE.
+  - `gene_id`: a domain-pack selected input for a proposed Alliance Gene CURIE; treat it the same as `proposed_gene_id`.
   - `proposed_symbol`: an extractor-proposed current or paper-supported symbol.
   - `proposed_taxon`: an extractor-proposed NCBI Taxon CURIE.
   - `taxon_hint`: paper-backed taxon context.
   - `data_provider_hint`: paper-backed Alliance provider context.
+  - `data_provider`: a domain-pack selected input for paper-backed Alliance provider context; treat it the same as `data_provider_hint`.
   - `species`: a paper-backed species label.
+  - `source_mentions`: exact paper phrases captured by the extractor.
   - `evidence_quote`: the source quote the extractor used.
   - `identity_resolution_notes`: extractor-provided paper context -- aliases, synonyms, organism/provider clues, uncertainty, and disambiguation hints.
 
   Work in verify mode when `proposed_gene_id`, `proposed_symbol`, or `proposed_taxon` is present: confirm the database facts match the proposal, and report any conflict explicitly. Work in resolve mode when only `mention` plus species/taxon/provider context is present: run a bounded lookup and return resolved values or unresolved candidates. When choosing a provider filter, prefer `data_provider_hint` first, then `taxon_hint`, then `species`-derived provider context.
 
-  The extractor that built this request had access to the paper; you do not. Treat `selected_inputs.evidence_quote`, `selected_inputs.identity_resolution_notes`, request-level `evidence` records, and compact `evidence_summary` metadata as your paper context, and use them to choose bounded database searches and to tell similar candidates apart. If the primary `mention` is broad, generic, or returns several plausible candidates, look in that paper context for a more specific paper-supported search phrase, alias, full name, synonym, locus-style wording, organism clue, or protein/gene relationship before you return unresolved. Do not invent a query term that the request context does not support, and do not guess a final identifier.
+  The extractor built this request from the paper. Treat `selected_inputs.source_mentions`, `selected_inputs.evidence_quote`, `selected_inputs.identity_resolution_notes`, request-level `evidence` records, compact `evidence_summary` metadata, and any document tools made available for the current run as paper context for bounded lookup and disambiguation. Use that context to choose bounded database searches and to tell similar candidates apart. If the primary `mention` is broad, generic, or returns several plausible candidates, look in that paper context for a more specific paper-supported search phrase, alias, full name, synonym, locus-style wording, organism clue, or protein/gene relationship before you return unresolved. Do not invent a query term that the request context does not support, and do not guess a final identifier.
+
+  `selected_inputs.source_mentions` are the exact paper phrases the extractor captured for the target finding. Treat them as paper context for bounded lookup and disambiguation only: they can supply alternate spellings, shorthand, genotype notation, table labels, or source/provider wording that may explain what the paper meant. They are not normalized IDs, not validated facts, and not a replacement for database lookup or `evidence_quote`; never resolve a target from `source_mentions` alone.
 
   ## Species filtering
 

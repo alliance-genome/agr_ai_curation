@@ -1441,7 +1441,7 @@ tools:
           - name: source_mentions
             type: array
             required: true
-            description: The exact paper phrases the agent read this finding from.
+            description: Exact short paper phrases that name or anchor this finding; validators use them for lookup and disambiguation context, while verified quote/provenance stays in evidence_record_ids.
           - name: normalized_hint
             type: any
             required: false
@@ -1654,7 +1654,7 @@ tools:
           - name: source_mentions
             type: array
             required: true
-            description: The exact paper phrases the agent read this finding from.
+            description: Exact short paper phrases that name or anchor this finding; validators use them for lookup and disambiguation context, while verified quote/provenance stays in evidence_record_ids.
           - name: subject_identifier
             type: any
             required: false
@@ -1909,7 +1909,7 @@ tools:
           - name: source_mentions
             type: array
             required: true
-            description: The exact paper phrases the agent read this finding from.
+            description: Exact short paper phrases that name or anchor this finding; validators use them for lookup and disambiguation context, while verified quote/provenance stays in evidence_record_ids.
           - name: disease_curie
             type: any
             required: false

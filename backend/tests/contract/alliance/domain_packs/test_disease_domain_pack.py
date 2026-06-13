@@ -258,6 +258,13 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
         "path": "disease_annotation_object.name",
         "required": False,
     }
+    assert disease_term_binding["input_fields"]["source_mentions"] == {
+        "source": "payload",
+        "path": "source_mentions",
+        "required": False,
+        "allow_multiple": True,
+        "context_only": True,
+    }
     assert disease_term_binding["input_fields"]["ontology_term_type"]["source"] == (
         "literal"
     )
@@ -463,6 +470,13 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
         "source": "evidence_record",
         "path": "verified_quote",
         "required": False,
+        "context_only": True,
+    }
+    assert composite_binding["input_fields"]["source_mentions"] == {
+        "source": "payload",
+        "path": "source_mentions",
+        "required": False,
+        "allow_multiple": True,
         "context_only": True,
     }
     # Composite binding is batchable.
@@ -1159,6 +1173,7 @@ def _two_condition_payload() -> dict[str, Any]:
         "role": "primary",
         "confidence": "high",
         "data_provider": {"abbreviation": "MGI"},
+        "source_mentions": ["rapamycin-modulated disease model"],
         "evidence_record_ids": ["evidence-1"],
         "evidence_records": [
             {
@@ -1235,20 +1250,28 @@ def test_experimental_condition_binding_fans_out_one_composite_per_condition():
     # Each per-condition composite request resolves THIS condition's own components AND the
     # shared relation context (the sibling under the outer multivalued list).
     requests = [build_domain_validation_request(match) for match in composite_matches]
-    assert all(result.request is not None for result in requests)
-    first, second = (result.request for result in requests)
+    first = requests[0].request
+    second = requests[1].request
+    assert first is not None
+    assert second is not None
 
     assert first.selected_inputs["condition_class_curie"] == "ZECO:0000111"
     assert first.selected_inputs["condition_chemical_curie"] == "CHEBI:9168"
     assert first.selected_inputs["condition_statement"] == "treated with 3 pM rapamycin"
     # Relation context substituted from the OUTER multivalued index (relation 0).
     assert first.selected_inputs["condition_relation_type"] == "has_condition"
+    assert first.selected_inputs["source_mentions"] == [
+        "rapamycin-modulated disease model"
+    ]
 
     assert second.selected_inputs["condition_class_curie"] == "ZECO:0000160"
     # The second condition stated no chemical -> that optional component is absent.
     assert "condition_chemical_curie" not in second.selected_inputs
     assert second.selected_inputs["condition_statement"] == "incubated at 37C"
     assert second.selected_inputs["condition_relation_type"] == "has_condition"
+    assert second.selected_inputs["source_mentions"] == [
+        "rapamycin-modulated disease model"
+    ]
 
     # The two composite requests are distinct and target their own indexed condition.
     assert first.target.field_path == "condition_relations[0].conditions[0]"

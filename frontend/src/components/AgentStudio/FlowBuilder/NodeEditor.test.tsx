@@ -344,6 +344,6 @@ describe('NodeEditor', () => {
     )
 
     expect(screen.getByText('Validation Steering Prompt (Optional)')).toBeInTheDocument()
-    expect(screen.getByText(/Custom validation agents persist as regular flow steps/i)).toBeInTheDocument()
+    expect(screen.getByText(/Custom validation agents attach to extraction steps/i)).toBeInTheDocument()
   })
 })

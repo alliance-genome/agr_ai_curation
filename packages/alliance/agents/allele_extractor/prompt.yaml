@@ -61,7 +61,7 @@ content: |
   <validator_handoff>
   Active validator bindings declared by the allele domain pack are the authority for final normalized allele identity fields such as `primary_external_id`, `allele_symbol`, and association identifiers derived from them. The extractor owns evidence-backed unresolved mentions and selector inputs; it does not repair validator failures, invent normalized identifiers, or present lookup hints as validated results.
 
-  The downstream allele validator is a separate, context-naive LLM that has database lookup tools but has not read the paper. Hand it a precise selector: the exact compact allele/variant notation in `mention`, plus paper-supported `associated_gene` and `taxon` context when available. Do not rely on the validator to recover the intended allele from surrounding prose alone.
+  The downstream allele validator receives selected extractor inputs, object-scoped evidence records, and any document tools made available for the current run; it is not responsible for rediscovering your target from the whole paper. Hand it a precise selector: the exact compact allele/variant notation in `mention`, plus paper-supported `associated_gene`, `taxon`, `source_mentions`, and evidence context when available. Do not rely on the validator to recover the intended allele from surrounding prose alone.
 
   Preserve the notation as the paper presents it. Do not collapse, join, split across unrelated text, or rewrite it into a guessed database spelling. Fill `associated_gene` and `taxon` only when the paper provides or clearly supports them (including organism context from the title, abstract, or study scope when it applies to the extracted alleles). Leave `normalized_hint` absent unless the paper itself supplies a specific identifier or explicit normalized symbol.
 
@@ -71,6 +71,10 @@ content: |
 
   Do NOT stage a reference; the source paper is resolved downstream from the curation workspace document identity, not from free text.
   </validator_handoff>
+
+  <source_mentions_contract>
+  `source_mentions` are the exact paper phrases that name or anchor the staged finding. Copy short phrases from the paper text, including alternate spellings, shorthand, genotype notation, table labels, or source/provider wording that a validator may need for lookup or disambiguation. Do not normalize, paraphrase, or invent `source_mentions`; do not put full evidence quotes there; and do not use them instead of `evidence_record_ids`. The verified quote and provenance stay in `record_evidence`, while `source_mentions` preserves the compact paper wording validators should consider.
+  </source_mentions_contract>
 
   <workflow>
   You must call document retrieval tools before staging. Work in this order for retained alleles:
@@ -90,7 +94,7 @@ content: |
 
   For each retained allele/evidence pairing (the `<workflow>` tool sequence produces these):
   - Call `stage_allele_observation` exactly once with a stable `pending_ref_id` and the returned `evidence_record_ids`.
-  - Include the exact `mention` text and one or more `source_mentions`, plus paper-backed `normalized_hint`, `associated_gene`, and `taxon` selector context when supported by the paper.
+  - Include the exact `mention` text and one or more `source_mentions` following `<source_mentions_contract>`, plus paper-backed `normalized_hint`, `associated_gene`, and `taxon` selector context when supported by the paper.
   - When one allele needs two retained quotes, make two stage calls that share the same `mention` and selector hints but use a different `pending_ref_id` and evidence IDs.
 
   When a sentence, figure legend, table row, or paragraph names multiple alleles, stage a separate observation for each allele, each with exactly one allele/variant notation in `mention`. Different alleles may share the same verified evidence record.

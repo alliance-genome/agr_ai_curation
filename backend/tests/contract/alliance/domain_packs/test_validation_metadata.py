@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping
 
+import yaml
+
 from src.lib.domain_packs.loader import load_domain_fixture_pack
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
@@ -28,6 +30,36 @@ if str(ALLIANCE_PYTHON_SRC) not in sys.path:
 from agr_ai_curation_alliance.domain_packs import (  # noqa: E402
     load_alliance_domain_pack_registry,
 )
+
+SOURCE_MENTIONS_EXTRACTOR_CONTRACT = (
+    "`source_mentions` are the exact paper phrases that name or anchor the "
+    "staged finding. Copy short phrases from the paper text, including "
+    "alternate spellings, shorthand, genotype notation, table labels, or "
+    "source/provider wording that a validator may need for lookup or "
+    "disambiguation. Do not normalize, paraphrase, or invent "
+    "`source_mentions`; do not put full evidence quotes there; and do not "
+    "use them instead of `evidence_record_ids`. The verified quote and "
+    "provenance stay in `record_evidence`, while `source_mentions` preserves "
+    "the compact paper wording validators should consider."
+)
+SOURCE_MENTIONS_VALIDATOR_CONTEXT = (
+    "`selected_inputs.source_mentions` are the exact paper phrases the "
+    "extractor captured for the target finding. Treat them as paper context "
+    "for bounded lookup and disambiguation only: they can supply alternate "
+    "spellings, shorthand, genotype notation, table labels, or "
+    "source/provider wording that may explain what the paper meant. They are "
+    "not normalized IDs, not validated facts, and not a replacement for "
+    "database lookup or `evidence_quote`; never resolve a target from "
+    "`source_mentions` alone."
+)
+SOURCE_MENTIONS_TOOL_DESCRIPTION = (
+    "Exact short paper phrases that name or anchor this finding; validators "
+    "use them for lookup and disambiguation context, while verified "
+    "quote/provenance stays in evidence_record_ids."
+)
+SOURCE_MENTIONS_VALIDATOR_EXEMPTIONS = {
+    ("agr.alliance.disease", "disease_annotation_type_cv_lookup"),
+}
 
 
 def _unresolved_result_payload(request):
@@ -81,6 +113,17 @@ def _has_evidence_records(container: Mapping[str, Any]) -> bool:
         _records_from_mapping(container)
         or _records_from_extraction_metadata(container)
     )
+
+
+def _object_types_declaring_source_mentions(pack) -> set[str]:
+    return {
+        object_definition.object_type
+        for object_definition in pack.metadata.object_definitions
+        if any(
+            field_definition.field_path == "source_mentions"
+            for field_definition in object_definition.fields
+        )
+    }
 
 
 def test_alliance_domain_pack_validation_metadata_states_are_discoverable():
@@ -227,6 +270,81 @@ def test_alliance_evidence_record_selectors_use_verified_quote_path():
                     )
 
     assert legacy_quote_selectors == []
+
+
+def test_source_mentions_objects_pass_context_to_active_validators():
+    alliance_registry = load_alliance_domain_pack_registry()
+    pack_ids = {
+        "agr.alliance.allele",
+        "agr.alliance.disease",
+        "agr.alliance.phenotype",
+    }
+    violations: list[str] = []
+
+    for pack_id in sorted(pack_ids):
+        pack = alliance_registry.get_pack(pack_id)
+        source_mention_object_types = _object_types_declaring_source_mentions(pack)
+        registry = DomainPackValidationRegistry.from_domain_pack(pack)
+
+        for binding in registry.bindings:
+            if binding.state is not ValidationBindingState.ACTIVE:
+                continue
+            if (pack_id, binding.binding_id) in SOURCE_MENTIONS_VALIDATOR_EXEMPTIONS:
+                continue
+            if not set(binding.object_types).intersection(source_mention_object_types):
+                continue
+
+            selector = binding.input_fields.get("source_mentions")
+            if (
+                selector is None
+                or selector.source != "payload"
+                or selector.path != "source_mentions"
+                or selector.required is not False
+                or selector.allow_multiple is not True
+                or selector.context_only is not True
+            ):
+                violations.append(f"{pack_id}:{binding.binding_id}")
+
+    assert violations == []
+
+
+def test_source_mentions_prompt_and_tool_language_is_consistent():
+    extractor_prompt_paths = [
+        REPO_ROOT / "packages/alliance/agents/allele_extractor/prompt.yaml",
+        REPO_ROOT / "packages/alliance/agents/disease_extractor/prompt.yaml",
+        REPO_ROOT / "packages/alliance/agents/phenotype_extractor/prompt.yaml",
+    ]
+    validator_prompt_paths = [
+        REPO_ROOT / "packages/alliance/agents/allele/prompt.yaml",
+        REPO_ROOT / "packages/alliance/agents/controlled_vocabulary/prompt.yaml",
+        REPO_ROOT / "packages/alliance/agents/data_provider/prompt.yaml",
+        REPO_ROOT / "packages/alliance/agents/experimental_condition/prompt.yaml",
+        REPO_ROOT / "packages/alliance/agents/gene/prompt.yaml",
+        REPO_ROOT / "packages/alliance/agents/ontology_term/prompt.yaml",
+        REPO_ROOT / "packages/alliance/agents/subject_entity/prompt.yaml",
+    ]
+
+    for path in extractor_prompt_paths:
+        assert SOURCE_MENTIONS_EXTRACTOR_CONTRACT in path.read_text()
+    for path in validator_prompt_paths:
+        prompt_text = path.read_text()
+        assert SOURCE_MENTIONS_VALIDATOR_CONTEXT in prompt_text
+        assert "had access to the paper; you do not" not in prompt_text
+        assert "paper; you do not" not in prompt_text
+
+    bindings = yaml.safe_load(
+        (REPO_ROOT / "packages/alliance/tools/bindings.yaml").read_text()
+    )
+    descriptions = [
+        parameter["description"]
+        for tool in bindings["tools"]
+        for parameter in tool.get("metadata", {})
+        .get("documentation", {})
+        .get("parameters", [])
+        if parameter.get("name") == "source_mentions"
+    ]
+    assert len(descriptions) == 3
+    assert set(descriptions) == {SOURCE_MENTIONS_TOOL_DESCRIPTION}
 
 
 def test_alliance_fixture_evidence_record_selectors_have_explicit_object_evidence_ids():
@@ -681,7 +799,11 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     )
     assert disease_provider_binding.state is ValidationBindingState.ACTIVE
     assert disease_provider_binding.field_paths == ("data_provider.abbreviation",)
-    assert set(disease_provider_binding.input_fields) == {"abbreviation"}
+    assert set(disease_provider_binding.input_fields) == {
+        "abbreviation",
+        "source_mentions",
+    }
+    assert disease_provider_binding.input_fields["source_mentions"].context_only is True
     assert disease_provider_binding.expected_result_fields == {
         "abbreviation": "data_provider.abbreviation",
     }

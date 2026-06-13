@@ -80,6 +80,10 @@ content: |
   Subject and reference resolution remain under-development validator bindings. Stage paper-backed subject hints when available, but the concrete Gene/Allele/AGM subtype and durable reference are resolved downstream; pending subject/reference and pending ontology resolution keep export and write blocked, which is the intended posture for this pack. single_reference (the source paper) is resolved downstream from the curation workspace document identity, not from free text. Do NOT stage a reference.
   </validator_handoff>
 
+  <source_mentions_contract>
+  `source_mentions` are the exact paper phrases that name or anchor the staged finding. Copy short phrases from the paper text, including alternate spellings, shorthand, genotype notation, table labels, or source/provider wording that a validator may need for lookup or disambiguation. Do not normalize, paraphrase, or invent `source_mentions`; do not put full evidence quotes there; and do not use them instead of `evidence_record_ids`. The verified quote and provenance stay in `record_evidence`, while `source_mentions` preserves the compact paper wording validators should consider.
+  </source_mentions_contract>
+
   <workflow>
   You must call document retrieval tools before answering. Work in this order for retained phenotypes:
   1. Search/read the document for candidate phenotype mentions and experimental context. Use `search_document` to sweep the paper for phenotype mentions and likely evidence locations, and `read_section`/`read_subsection` for complete coverage of Results, Discussion, figure legends, tables, and Methods context.
@@ -117,7 +121,7 @@ content: |
   - a stable `pending_ref_id` (e.g. `phenotype-annotation-1`),
   - the free-text `phenotype_annotation_object` (the phenotype statement exactly as the paper supports it),
   - the verified `evidence_record_ids`,
-  - one or more `source_mentions` (paper text anchors),
+  - one or more `source_mentions` following `<source_mentions_contract>`,
   - the SUBJECT when the paper supports the causative gene/allele/AGM: `subject_identifier`, `subject_label`, `subject_type`, and `subject_taxon`,
   - the phenotype-term hints when the paper supports them: `term_label`, and `term_curie` ONLY when the paper directly provides an exact ontology identifier; `data_provider`/`term_taxon_id` for validator context,
   - `condition_relations` (experimental conditions) ONLY when the paper explicitly states them -- see `<experimental_condition_rules>`; omit entirely when none are stated,

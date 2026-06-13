@@ -31,6 +31,7 @@ import type {
   DomainCompletedDetails,
   DomainCategoryErrorDetails,
   DomainSkippedDetails,
+  DomainWarningDetails,
   FlowStepEvidenceDetails,
   FlowStepTimingDetails,
   FlowValidationGroupTimingDetails,
@@ -222,6 +223,7 @@ export function getEventPrefix(type: AuditEventType, details?: any): string {
     DOMAIN_COMPLETED: '[DOMAIN]',
     DOMAIN_CATEGORY_ERROR: '[DOMAIN ERROR]',
     DOMAIN_SKIPPED: '[DOMAIN]',
+    DOMAIN_WARNING: '[DOMAIN WARNING]',
     FLOW_STEP_EVIDENCE: '[EVIDENCE]',
     FLOW_STEP_TIMING: '[TIMING]',
     FLOW_VALIDATION_GROUP_TIMING: '[TIMING]',
@@ -307,6 +309,7 @@ export function getEventSeverity(type: AuditEventType, details?: any): AuditSeve
   }
 
   if (type.startsWith('DOMAIN_')) {
+    if (type === 'DOMAIN_WARNING') return 'warning'
     if (details?.hasError) return 'warning'
     if (details?.error) return 'warning'
   }
@@ -489,6 +492,15 @@ export function getEventLabel(event: AuditEvent): string {
     case 'DOMAIN_SKIPPED': {
       const skipped = event.details as DomainSkippedDetails
       return `${formatDomainName(skipped.domain)} domain skipped (${skipped.reason})`
+    }
+
+    case 'DOMAIN_WARNING': {
+      const warning = event.details as DomainWarningDetails
+      if (warning.message) return warning.message
+      const domain = warning.domain ? formatDomainName(warning.domain) : 'Domain'
+      const step = typeof warning.step === 'number' ? ` at flow step ${warning.step}` : ''
+      const reason = warning.reason ? ` (${warning.reason})` : ''
+      return `${domain} warning${step}${reason}`
     }
 
     case 'FLOW_STEP_EVIDENCE': {

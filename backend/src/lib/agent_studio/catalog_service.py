@@ -55,6 +55,7 @@ from .models import (
     AgentCapability,
     DataSourceInfo,
 )
+from .flow_agent_policy import flow_palette_show_in_palette
 
 logger = logging.getLogger(__name__)
 _HOST_RUNTIME_SRC_DIR = Path(__file__).resolve().parents[2]
@@ -959,10 +960,6 @@ def _build_catalog() -> PromptCatalog:
 
         # Special case: non-agent entries (task_input) don't need database prompts
         if agent_id == "task_input":
-            # Resolve show_in_palette from frontend config (defaults to True)
-            frontend_config = config.get("frontend", {})
-            show_in_palette = frontend_config.get("show_in_palette", True)
-
             # Create PromptInfo with no base prompt for display-only entries
             prompt_info = PromptInfo(
                 agent_id=agent_id,
@@ -974,7 +971,7 @@ def _build_catalog() -> PromptCatalog:
                 group_rules={},
                 tools=expand_tools_for_agent(agent_id, config.get("tools", [])),
                 subcategory=config.get("subcategory"),
-                show_in_palette=show_in_palette,
+                show_in_palette=flow_palette_show_in_palette(agent_id, config),
                 documentation=_convert_documentation(config.get("documentation")),
                 prompt_id=None,
                 prompt_version=None,
@@ -1007,9 +1004,6 @@ def _build_catalog() -> PromptCatalog:
                 created_by=prompt.created_by,
             )
 
-        # Resolve show_in_palette from frontend config (defaults to True)
-        frontend_config = config.get("frontend", {})
-        show_in_palette = frontend_config.get("show_in_palette", True)
         prompt_layer_error = None
         try:
             prompt_bundle = build_agent_prompt_layers(agent_id)
@@ -1038,7 +1032,7 @@ def _build_catalog() -> PromptCatalog:
             prompt_layer_error=prompt_layer_error,
             tools=expand_tools_for_agent(agent_id, config.get("tools", [])),
             subcategory=config.get("subcategory"),
-            show_in_palette=show_in_palette,
+            show_in_palette=flow_palette_show_in_palette(agent_id, config),
             documentation=_convert_documentation(config.get("documentation")),
             # Version metadata from database
             prompt_id=str(system_prompt.id) if system_prompt.id else None,
@@ -1750,9 +1744,20 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
             "agent_id": agent_id,
             "display_name": db_agent.name,
             "description": db_agent.description,
+            "category": getattr(db_agent, "category", None)
+            or (agent_definition.category if agent_definition is not None else None),
+            "subcategory": (
+                agent_definition.subcategory if agent_definition is not None else None
+            ),
             "requires_document": requires_document,
             "required_params": required_params,
             "curation": curation_metadata,
+            "supervisor": {
+                "enabled": bool(getattr(db_agent, "supervisor_enabled", False)),
+            },
+            "frontend": {
+                "show_in_palette": bool(getattr(db_agent, "show_in_palette", True)),
+            },
             "package_id": (
                 agent_definition.package_id
                 if agent_definition is not None
@@ -1765,9 +1770,13 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
             "agent_id": agent_id,
             "display_name": "Initial Instructions",
             "description": "Define the curator's task that starts the flow",
+            "category": "Input",
+            "subcategory": "Input",
             "requires_document": False,
             "required_params": [],
             "curation": None,
+            "supervisor": {"enabled": False},
+            "frontend": {"show_in_palette": False},
             "package_id": None,
         }
 
@@ -1776,9 +1785,17 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
             "agent_id": agent_id,
             "display_name": agent_definition.name,
             "description": agent_definition.description,
+            "category": agent_definition.category,
+            "subcategory": agent_definition.subcategory,
             "requires_document": agent_definition.requires_document,
             "required_params": list(agent_definition.required_params),
             "curation": curation_metadata,
+            "supervisor": {
+                "enabled": bool(agent_definition.supervisor_routing.enabled),
+            },
+            "frontend": {
+                "show_in_palette": bool(agent_definition.frontend.show_in_palette),
+            },
             "package_id": agent_definition.package_id,
         }
 

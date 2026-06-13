@@ -94,6 +94,7 @@ def test_tool_verified_allele_fixture_builds_active_mention_validation_request()
         "normalized_hint": "WB:WBVar00000001",
         "associated_gene": "daf-2",
         "taxon": "NCBITaxon:6239",
+        "source_mentions": ["daf-2(m41)"],
         "evidence_quote": "daf-2(m41) animals formed dauer larvae at 25 C.",
     }
 

@@ -132,6 +132,68 @@ def test_build_catalog_accepts_group_rules_and_legacy_mod_rules(monkeypatch):
     assert agent.group_rules["FB"].content == "fb rules"
 
 
+def test_build_catalog_hides_attachment_only_validators_from_flow_palette(monkeypatch):
+    """FlowBuilder visibility should reuse supervisor-callable validator policy."""
+    prompts = {}
+    for agent_id in ("allele_validation", "ontology_term_validation", "chat_output"):
+        prompts[f"{agent_id}:system:base"] = PromptTemplate(
+            id=uuid.uuid4(),
+            agent_name=agent_id,
+            prompt_type="system",
+            group_id=None,
+            content=f"{agent_id} base prompt",
+            version=1,
+            is_active=True,
+        )
+
+    monkeypatch.setattr(catalog_service, "AGENT_REGISTRY", {
+        "allele_validation": {
+            "name": "Allele Validation Agent",
+            "description": "Validate allele identifiers",
+            "category": "Validation",
+            "tools": [],
+            "subcategory": "Data Validation",
+            "frontend": {"show_in_palette": True},
+            "supervisor": {"enabled": False},
+        },
+        "ontology_term_validation": {
+            "name": "Ontology Term Resolver Agent",
+            "description": "Resolve ontology terms",
+            "category": "Validation",
+            "tools": [],
+            "subcategory": "Data Validation",
+            "frontend": {"show_in_palette": True},
+            "supervisor": {"enabled": True},
+        },
+        "chat_output": {
+            "name": "Chat Output Agent",
+            "description": "Summarize flow outputs",
+            "category": "Output",
+            "tools": [],
+            "subcategory": "Output",
+            "frontend": {"show_in_palette": True},
+            "supervisor": {"enabled": False},
+        },
+    })
+    monkeypatch.setattr(catalog_service, "expand_tools_for_agent", lambda _a, _t: [])
+    monkeypatch.setattr(catalog_service, "build_agent_prompt_layers", lambda _agent_id: None)
+
+    from src.lib.prompts import cache as prompt_cache
+    monkeypatch.setattr(prompt_cache, "is_initialized", lambda: True)
+    monkeypatch.setattr(prompt_cache, "get_all_active_prompts", lambda: prompts)
+
+    catalog = catalog_service._build_catalog()
+    by_id = {
+        agent.agent_id: agent
+        for category in catalog.categories
+        for agent in category.agents
+    }
+
+    assert by_id["allele_validation"].show_in_palette is False
+    assert by_id["ontology_term_validation"].show_in_palette is True
+    assert by_id["chat_output"].show_in_palette is True
+
+
 def test_build_catalog_surfaces_prompt_layer_projection_errors(monkeypatch):
     """Layer assembly failures should be visible in catalog metadata."""
     base_prompt = PromptTemplate(

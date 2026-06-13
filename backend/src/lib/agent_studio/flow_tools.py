@@ -33,6 +33,10 @@ from src.lib.openai_agents.bounded_list import (
 from .catalog_service import AGENT_REGISTRY
 from .diagnostic_tools import get_diagnostic_tools_registry
 from .domain_envelope_tools import current_flow_domain_envelope_analysis
+from .flow_agent_policy import (
+    agent_allows_ordinary_flow_step,
+    attachment_only_validator_reason,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -130,13 +134,16 @@ def clear_current_flow_context() -> None:
 def _get_flow_agent_ids() -> List[str]:
     """Get list of agent IDs available for use in flows.
 
-    Excludes 'supervisor' (flows have their own supervisor) and
-    'task_input' (not an agent, handled specially as flow input).
+    Excludes internal agents and attachment-only validators. Validation agents
+    use the same YAML ``supervisor_routing.enabled`` source of truth as chat:
+    direct-callable validators can be ordinary flow steps; disabled validators
+    are only reachable through validation attachments on extraction steps.
     Returns sorted list for consistent ordering.
     """
     return sorted([
-        agent_id for agent_id in AGENT_REGISTRY.keys()
-        if agent_id not in ("supervisor", "task_input")
+        agent_id
+        for agent_id, entry in AGENT_REGISTRY.items()
+        if agent_allows_ordinary_flow_step(agent_id, entry)
     ])
 
 
@@ -848,8 +855,7 @@ def _get_available_agents_handler():
 
         matched: List[Dict[str, Any]] = []
         for agent_id, config in AGENT_REGISTRY.items():
-            # Skip supervisor (internal routing) and task_input (flow input node)
-            if agent_id in ("supervisor", "task_input"):
+            if not agent_allows_ordinary_flow_step(agent_id, config):
                 continue
 
             agent_category = config.get("category", "Unknown")
@@ -1049,6 +1055,21 @@ def _get_current_flow_handler():
         validation_warnings = []  # Collect issues for easy detection
         markdown_lines = [f"# {flow_name}", "", f"**{len(execution_order)} steps in execution order:**", ""]
 
+        def _attachment_only_warning_for_node(node: Dict[str, Any]) -> Optional[str]:
+            node_data = node.get("data", node)
+            agent_id = node_data.get("agent_id", "unknown")
+            entry = AGENT_REGISTRY.get(agent_id)
+            if not isinstance(entry, dict):
+                return None
+            if agent_allows_ordinary_flow_step(agent_id, entry):
+                return None
+            agent_name = str(
+                entry.get("name")
+                or node_data.get("agent_display_name")
+                or agent_id
+            )
+            return attachment_only_validator_reason(agent_name)
+
         for i, node in enumerate(execution_order, 1):
             node_data = node.get("data", node)  # Handle both nested and flat structures
             node_type = node.get("type", "agent")
@@ -1062,6 +1083,9 @@ def _get_current_flow_handler():
 
             # Check if this is a task_input node
             is_task_input = node_type == "task_input" or agent_id == "task_input"
+            flow_step_policy_warning = (
+                None if is_task_input else _attachment_only_warning_for_node(node)
+            )
 
             step_info = {
                 "step": i,
@@ -1089,6 +1113,13 @@ def _get_current_flow_handler():
                 step_info["output_filename_template"] = output_filename_template
             if validation_attachments:
                 step_info["validation_attachments"] = validation_attachments
+            if flow_step_policy_warning:
+                step_info["flow_step_policy_warning"] = flow_step_policy_warning
+                validation_warnings.append({
+                    "type": "CRITICAL",
+                    "node_id": node.get("id"),
+                    "message": flow_step_policy_warning,
+                })
 
             steps.append(step_info)
 
@@ -1106,6 +1137,10 @@ def _get_current_flow_handler():
                     markdown_lines.append("- **Task Instructions:** ⚠️ EMPTY (this is required content)")
             else:
                 markdown_lines.append("- **Input:** Flow task and loaded document context")
+                if flow_step_policy_warning:
+                    markdown_lines.append(
+                        f"- **Flow Placement:** CRITICAL - {flow_step_policy_warning}"
+                    )
                 if custom_instructions:
                     markdown_lines.append(
                         f"- **Custom Instructions:** {_truncate_preview(custom_instructions, 200)}"
@@ -1182,6 +1217,9 @@ def _get_current_flow_handler():
             for node in disconnected:
                 node_data = node.get("data", node)
                 markdown_lines.append(f"- {node_data.get('agent_display_name', node_data.get('agent_id', 'unknown'))}")
+                flow_step_policy_warning = _attachment_only_warning_for_node(node)
+                if flow_step_policy_warning:
+                    markdown_lines.append(f"  - CRITICAL: {flow_step_policy_warning}")
             markdown_lines.append("")
 
         # Add edge information
@@ -1198,6 +1236,13 @@ def _get_current_flow_handler():
         # Add warnings for disconnected nodes
         for node in disconnected:
             node_data = node.get("data", node)
+            flow_step_policy_warning = _attachment_only_warning_for_node(node)
+            if flow_step_policy_warning:
+                validation_warnings.append({
+                    "type": "CRITICAL",
+                    "node_id": node.get("id"),
+                    "message": flow_step_policy_warning,
+                })
             validation_warnings.append({
                 "type": "WARNING",
                 "node_id": node.get("id"),

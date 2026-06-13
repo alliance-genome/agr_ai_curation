@@ -81,6 +81,10 @@ from src.lib.domain_packs.validator_dispatch import (
     validator_result_from_agent_output,
 )
 from src.lib.file_outputs import sanitize_output_descriptor
+from src.lib.agent_studio.flow_agent_policy import (
+    agent_allows_ordinary_flow_step,
+    attachment_only_validator_reason,
+)
 from src.lib.flows.output_projection import (
     FlowOutputArtifactBundle,
     FlowOutputProjectionPlan,
@@ -2392,6 +2396,7 @@ def _resolve_flow_agent_entry(
         "requires_document": metadata.get("requires_document", False),
         "required_params": metadata.get("required_params", []),
         "curation": metadata.get("curation"),
+        "supervisor": metadata.get("supervisor") or {},
     }
 
 
@@ -3003,6 +3008,21 @@ def get_all_agent_tools(
                 "agent_id": agent_id,
                 "agent_name": data.get("agent_display_name") or agent_id,
                 "reason": "agent could not be resolved from unified registry",
+            })
+            continue
+
+        if not agent_allows_ordinary_flow_step(agent_id, entry):
+            agent_name = entry.get("name", agent_id)
+            reason = attachment_only_validator_reason(agent_name)
+            logger.warning(
+                "[Flow Executor] Agent '%s' is attachment-only, skipping ordinary flow step",
+                agent_id,
+            )
+            unavailable_steps.append({
+                "step": step_num,
+                "agent_id": agent_id,
+                "agent_name": agent_name,
+                "reason": reason,
             })
             continue
 
