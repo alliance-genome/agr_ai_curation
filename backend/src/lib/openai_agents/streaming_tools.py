@@ -4319,6 +4319,7 @@ async def run_specialist_with_events(
     run_config: Optional[RunConfig] = None,
     max_turns: Optional[int] = None,
     tool_name: Optional[str] = None,
+    inline_chat_persistence: bool = True,
 ) -> str:
     """
     Run a specialist agent and collect its internal tool call events.
@@ -4333,6 +4334,12 @@ async def run_specialist_with_events(
         run_config: Optional run configuration
         max_turns: Maximum turns for the specialist
         tool_name: The tool name (e.g., "ask_gene_specialist") for batching nudge tracking
+        inline_chat_persistence: When True (chat supervisor path), validated builder
+            finalization is persisted inline as a CHAT-source extraction result and the
+            INTERNAL_EXTRACTION_RESULT event carries the persisted identifiers. When
+            False (flow execution path), inline CHAT persistence is skipped entirely;
+            flows own their FLOW-source persistence separately, so the internal event is
+            emitted without CHAT persisted identifiers.
 
     Returns:
         The specialist's final output as a string
@@ -5800,41 +5807,56 @@ async def run_specialist_with_events(
     internal_event_started_at = time.monotonic()
     if tool_name and builder_finalization is not None:
         final_output = json.dumps(builder_finalization.payload)
-        inline_persistence = _persist_builder_finalization_for_supervisor(
-            builder_finalization=builder_finalization,
-            builder_workspace=builder_workspace,
-            tool_name=tool_name,
-            specialist_name=specialist_name,
-            adapter_key=runtime_curation_adapter_key,
-            agent_key=runtime_canonical_agent_key,
-            trace_id=trace_run.trace_id if trace_run is not None else None,
-        )
-        handoff = _build_supervisor_extraction_handoff(
-            tool_name=tool_name,
-            specialist_name=specialist_name,
-            payload=builder_finalization.payload,
-            inline_persistence=inline_persistence,
-            adapter_key=runtime_curation_adapter_key,
-            agent_key=runtime_canonical_agent_key,
-        )
-        if handoff is not None:
-            _set_last_supervisor_extraction_handoff(handoff)
-        add_specialist_event(
-            build_internal_extraction_result_event(
+        if inline_chat_persistence:
+            inline_persistence = _persist_builder_finalization_for_supervisor(
+                builder_finalization=builder_finalization,
+                builder_workspace=builder_workspace,
                 tool_name=tool_name,
                 specialist_name=specialist_name,
-                finalization=builder_finalization,
-                extraction_result_id=inline_persistence.extraction_result_id,
-                result_ref=inline_persistence.result_ref,
-                persistence_status={
-                    "phase": "inline_validated_extraction",
-                    "created_new": inline_persistence.created_new,
-                    "idempotency_key": inline_persistence.idempotency_key,
-                    "payload_hash": inline_persistence.payload_hash,
-                },
-                timestamp=datetime.now(timezone.utc).isoformat(),
+                adapter_key=runtime_curation_adapter_key,
+                agent_key=runtime_canonical_agent_key,
+                trace_id=trace_run.trace_id if trace_run is not None else None,
             )
-        )
+            handoff = _build_supervisor_extraction_handoff(
+                tool_name=tool_name,
+                specialist_name=specialist_name,
+                payload=builder_finalization.payload,
+                inline_persistence=inline_persistence,
+                adapter_key=runtime_curation_adapter_key,
+                agent_key=runtime_canonical_agent_key,
+            )
+            if handoff is not None:
+                _set_last_supervisor_extraction_handoff(handoff)
+            add_specialist_event(
+                build_internal_extraction_result_event(
+                    tool_name=tool_name,
+                    specialist_name=specialist_name,
+                    finalization=builder_finalization,
+                    extraction_result_id=inline_persistence.extraction_result_id,
+                    result_ref=inline_persistence.result_ref,
+                    persistence_status={
+                        "phase": "inline_validated_extraction",
+                        "created_new": inline_persistence.created_new,
+                        "idempotency_key": inline_persistence.idempotency_key,
+                        "payload_hash": inline_persistence.payload_hash,
+                    },
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                )
+            )
+        else:
+            # Flow execution path: inline CHAT persistence is a chat-stream concept and
+            # must not run here. Flows persist their own FLOW-source rows separately via
+            # the executor. Restore the pre-branch flow emission: the internal extraction
+            # event WITHOUT CHAT persisted identifiers (no extraction_result_id/result_ref/
+            # persistence_status), and no supervisor extraction handoff.
+            add_specialist_event(
+                build_internal_extraction_result_event(
+                    tool_name=tool_name,
+                    specialist_name=specialist_name,
+                    finalization=builder_finalization,
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                )
+            )
     elif (
         tool_name
         and structured_finalization_state.required

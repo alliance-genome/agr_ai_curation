@@ -6,6 +6,7 @@ import pytest
 
 from src.lib.domain_packs.supervisor_manifest import (
     SupervisorManifestPolicyError,
+    supervisor_manifest_policy_for_object,
     validate_supervisor_manifest_policies,
 )
 from src.schemas.domain_pack_metadata import (
@@ -150,3 +151,82 @@ def test_supervisor_manifest_rejects_unknown_field_paths():
 
     with pytest.raises(SupervisorManifestPolicyError, match="undeclared"):
         validate_supervisor_manifest_policies(metadata)
+
+
+def _labeled_fields() -> list[DomainPackFieldDefinition]:
+    return [
+        DomainPackFieldDefinition(
+            field_path="label",
+            field_type=DomainPackFieldType.STRING,
+            display_name="Label",
+        ),
+        DomainPackFieldDefinition(
+            field_path="symbol",
+            field_type=DomainPackFieldType.STRING,
+            display_name="Symbol",
+        ),
+        DomainPackFieldDefinition(
+            field_path="curie",
+            field_type=DomainPackFieldType.STRING,
+            display_name="Validated CURIE",
+        ),
+    ]
+
+
+def test_supervisor_manifest_falls_back_to_workspace_display_policy_source():
+    """When no supervisor_manifest exists, workspace_display is the policy source."""
+
+    metadata = _metadata(
+        object_metadata={
+            "object_role": "curatable_unit",
+            "workspace_display": {
+                "primary_label_field": "label",
+                "secondary_label_field": "symbol",
+                "summary_fields": ["curie"],
+            },
+        },
+        fields=_labeled_fields(),
+    )
+
+    # Validation accepts the workspace_display-only pack.
+    validate_supervisor_manifest_policies(metadata)
+
+    policy = supervisor_manifest_policy_for_object(metadata, "Assertion")
+
+    assert policy.source == "workspace_display"
+    assert [field.path for field in policy.primary_label_fields] == ["label"]
+    assert policy.primary_label_fields[0].label == "Label"
+    assert policy.secondary_label_field is not None
+    assert policy.secondary_label_field.path == "symbol"
+    assert policy.secondary_label_field.label == "Symbol"
+    assert [field.path for field in policy.summary_fields] == ["curie"]
+    assert policy.summary_fields[0].label == "Validated CURIE"
+    assert policy.field_paths == ("label", "symbol", "curie")
+
+
+def test_supervisor_manifest_overrides_workspace_display_when_both_present():
+    """supervisor_manifest takes precedence over workspace_display."""
+
+    metadata = _metadata(
+        object_metadata={
+            "object_role": "curatable_unit",
+            "supervisor_manifest": {
+                "primary_label_field": "symbol",
+                "summary_fields": ["curie"],
+            },
+            "workspace_display": {
+                "primary_label_field": "label",
+                "secondary_label_field": "symbol",
+                "summary_fields": ["curie"],
+            },
+        },
+        fields=_labeled_fields(),
+    )
+
+    policy = supervisor_manifest_policy_for_object(metadata, "Assertion")
+
+    assert policy.source == "supervisor_manifest"
+    assert [field.path for field in policy.primary_label_fields] == ["symbol"]
+    # The broader workspace_display secondary label is not used when overridden.
+    assert policy.secondary_label_field is None
+    assert [field.path for field in policy.summary_fields] == ["curie"]

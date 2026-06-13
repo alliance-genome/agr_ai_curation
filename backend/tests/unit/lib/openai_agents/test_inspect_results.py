@@ -383,6 +383,72 @@ async def test_inspect_results_evidence_inventory_hides_text_until_object_ref(mo
     ]
 
 
+def _payload_with_mixed_findings() -> dict:
+    payload = _payload()
+    payload["validation_findings"] = [
+        {
+            "severity": "warning",
+            "status": "open",
+            "message": "Review the mapped identifier.",
+            "field_ref": {
+                "object_ref": {
+                    "pending_ref_id": "assertion-1",
+                    "object_type": "Assertion",
+                },
+                "field_path": "curie",
+            },
+        },
+        {
+            "severity": "error",
+            "status": "open",
+            "message": "Identifier did not resolve.",
+            "object_ref": {
+                "pending_ref_id": "assertion-1",
+                "object_type": "Assertion",
+            },
+        },
+        {
+            "severity": "blocker",
+            "status": "open",
+            "message": "Required field is missing.",
+            "object_ref": {
+                "pending_ref_id": "assertion-1",
+                "object_type": "Assertion",
+            },
+        },
+        {
+            "severity": "info",
+            "status": "resolved",
+            "message": "Identifier resolved cleanly.",
+            "object_ref": {
+                "pending_ref_id": "assertion-1",
+                "object_type": "Assertion",
+            },
+        },
+    ]
+    return payload
+
+
+@pytest.mark.asyncio
+async def test_inspect_results_list_splits_validation_warning_and_error_counts(monkeypatch):
+    _patch_records(
+        monkeypatch,
+        [_InspectRecord(payload_json=_payload_with_mixed_findings())],
+    )
+
+    response = await inspect_results_module.inspect_results(action="list")
+
+    payload = json.loads(response)
+    assert payload["status"] == "ok"
+    assert len(payload["results"]) == 1
+    summary = payload["results"][0]
+    # warning severity -> warnings; error + blocker -> errors; info is ignored.
+    assert summary["validation_warning_count"] == 1
+    assert summary["validation_error_count"] == 2
+    # The old single combined count is no longer emitted.
+    assert "validation_finding_count" not in summary
+
+
 @pytest.mark.asyncio
 async def test_inspect_results_validation_filters_by_object_and_field(monkeypatch):
     _patch_records(monkeypatch, [_InspectRecord()])

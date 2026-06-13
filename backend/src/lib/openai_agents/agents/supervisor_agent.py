@@ -654,6 +654,7 @@ def _create_streaming_tool(
     specialist_name: str,
     run_config: Optional[RunConfig] = None,
     ledger: Optional[SupervisorCallLedger] = None,
+    inline_chat_persistence: bool = True,
 ) -> Callable:
     """
     Create a streaming tool wrapper for a specialist agent.
@@ -667,6 +668,11 @@ def _create_streaming_tool(
         tool_description: Description for the LLM
         specialist_name: Human-readable name for audit events
         run_config: Optional run configuration
+        ledger: Optional supervisor call ledger (chat path only; flows pass None)
+        inline_chat_persistence: When True (chat supervisor path), the specialist run
+            persists validated builder finalization inline as a CHAT-source extraction
+            result. When False (flow execution path), inline CHAT persistence is skipped
+            so flows do not leave shadow CHAT rows alongside their own FLOW-source rows.
 
     Returns:
         A function_tool decorated async function
@@ -687,6 +693,7 @@ def _create_streaming_tool(
                 specialist_name=specialist_name,
                 run_config=effective_run_config,
                 tool_name=tool_name,  # Pass tool_name for batching nudge tracking
+                inline_chat_persistence=inline_chat_persistence,
             )
             handoff = pop_last_supervisor_extraction_handoff()
             if ledger is not None and handoff is not None:
@@ -1003,6 +1010,7 @@ def _create_dynamic_specialist_tools(
                 tool_description=description,
                 specialist_name=specialist_name,
                 ledger=ledger,
+                inline_chat_persistence=True,
             )
             specialist_tools.append(streaming_tool)
 

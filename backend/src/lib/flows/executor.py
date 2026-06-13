@@ -1450,6 +1450,9 @@ async def _run_custom_flow_validator_agent(
         tool_name=tool_name,
         tool_description=f"Run validator attachment {validator_agent_id}",
         specialist_name=node_data.get("agent_display_name") or validator_agent_id,
+        # Flow execution: flows persist their own FLOW-source extraction rows; inline
+        # CHAT persistence must not fire here (would write a shadow CHAT-source row).
+        inline_chat_persistence=False,
     )
     provider_payload = {
         "source_envelope": {
@@ -3179,6 +3182,10 @@ def get_all_agent_tools(
                 tool_name=tool_name,
                 tool_description=tool_description,
                 specialist_name=specialist_name,
+                # Flow execution: flows persist their own FLOW-source extraction rows;
+                # inline CHAT persistence must not fire here (would write a shadow
+                # CHAT-source row in addition to the FLOW-source row).
+                inline_chat_persistence=False,
             )
 
         curation = entry.get("curation")

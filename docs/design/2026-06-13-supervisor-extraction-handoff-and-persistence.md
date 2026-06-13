@@ -827,3 +827,44 @@ Yes, this covers the core issues:
 - Non-fatal validator warnings stop looking like hard specialist failures.
 
 One adjacent concern remains separate: validator performance/max-turn behavior for tricky allele cases such as `mod-5(vlc47)`. That should be optimized too, but it should not block preserving and answering from the successful extraction.
+
+## Post-Implementation Review Findings (2026-06-13)
+
+After the initial implementation landed on `feature/supervisor-extraction-handoff-persistence` (commits `e48241be`, `8910a093`, `b7313c83`), a multi-agent review compared the branch against this plan. Summary: Parts 1-5 are implemented as designed and are forward-only compliant (the hardcoded `_DOMAIN_ENVELOPE_SUPERVISOR_FIELD_PRIORITY/_SKIP` lists, `_domain_envelope_supervisor_fallback_payload_fields()`, `inspect_curation_context`, `_current_turn_records()`, and `_authorized_extraction_results()` are deleted, not aliased; the inline path rejects legacy `items/raw_mentions` envelopes; no Generic PDF hard-block was added). No forward-only violations were found.
+
+The review identified the following follow-up work items, in priority order.
+
+### Follow-up 1: Flow-run shadow CHAT-source row (behavior bug)
+
+`run_specialist_with_events()` is shared between the chat supervisor and the flow executor (the flow executor builds streaming tools via `_create_streaming_tool()`, the same path as chat — see `backend/src/lib/flows/executor.py:2599-2600`). The new inline persistence hook at `streaming_tools.py:5801` fires unconditionally on `tool_name and builder_finalization is not None` and hardcodes `source_kind=CurationExtractionSourceKind.CHAT` (`streaming_tools.py:2803`).
+
+Consequence: a flow run that invokes a builder-backed specialist now writes a CHAT-source inline row **in addition to** the FLOW-source row the flow persists separately (`executor.py:_persist_flow_extraction_candidates`). These are distinct rows (different `source_kind`), so it is not an idempotency duplicate, but flows now leave shadow CHAT extraction rows that did not exist before this branch.
+
+Decision: the inline persistence hook is a chat-stream concept (Part 2 is explicitly scoped to the chat stream). The fix is to make inline CHAT persistence fire only on the chat path and **not** during flow execution. Flows keep their existing FLOW-source persistence unchanged. Thread an explicit `inline_chat_persistence` flag through `_create_streaming_tool()` -> `run_specialist_with_events()` (chat = `True`, flow = `False`); when `False`, restore the pre-branch flow behavior for that block (emit the internal extraction event without CHAT inline persistence rather than writing a CHAT row). Do not introduce a compatibility shim or a context-var heuristic based on the Flows-editing-tab `get_current_flow_context()`, which is not set during flow execution.
+
+### Follow-up 2: Integration tests (largest gap)
+
+Part 6 enumerated ten integration scenarios; `git diff main...HEAD` touches nothing under `backend/tests/integration/`. None are implemented. They must be added (they require `docker-compose.test.yml`, not the live backend container):
+
+1. Chat extraction persists immediately after inline validation, before `RUN_FINISHED`.
+2. Streaming and non-streaming chat paths both use inline persistence with no divergent behavior.
+3. Cancelling after a validated extraction but before final answer leaves an inspectable/exportable `extraction_results` row.
+4. Completing the turn after inline persistence does not create a duplicate row.
+5. Follow-up question after a successful extraction inspects/exports "those objects" via the persisted ref.
+6. Same-turn follow-up resolves the produced extraction through `inspect_results(result_ref=...)` / `target="latest"` without `scope=current_turn`.
+7. Allele trace-shaped fixture: 16 allele observations returned as a manifest; a later empty summarization attempt cannot erase/replace that extraction.
+8. Chat supervisor trace-shaped fixture: after a non-empty allele extraction, the next supervisor action is a curator-facing answer or bounded inspect/export, not a second summarizing extractor call.
+9. Empty extraction trace-shaped fixture: the supervisor reports no retained objects and either clarifies or makes at most one materially different retry.
+10. Gillian TSV regression: PDF/generic extraction persists immediately and export reads canonical rows, not artifact summaries.
+
+### Follow-up 3: Thin backend persistence coverage
+
+- The `IntegrityError`-on-insert reload branch (`extraction_results.py:695-708`) is untested; only the pre-check existing-row reload is covered. Add a test that exercises the unique-conflict-then-reload race path.
+- No test exercises the partial unique index at an actual DB boundary (unit tests use a fake session). Add a real-DB integration assertion that a second insert with the same idempotency key does not create a second row.
+- No backend-layer test asserts that a non-fatal validator dispatch error yields a persisted extraction row carrying the `validator_error` finding (this is currently only asserted on the frontend severity side). Add it at the `persist_inline_validated_extraction_result` layer.
+
+### Follow-up 4: Minor coverage/polish
+
+- The `workspace_display`-as-policy-source branch (`supervisor_manifest.py:_display_config` precedence) is unit-untested because every pack ships an explicit `supervisor_manifest` override. Add a unit test for the `source="workspace_display"` fallback branch.
+- `inspect_results(action="list")` returns a single `validation_finding_count` rather than split warning/error counts as the plan suggested (design line 462). Split into warning/error counts. Low priority.
+- Note: the `next_actions` export example in the manifest renderer uses the real `export_to_file(format_type=..., data=..., filename_hint=...)` signature rather than the doc's illustrative `source_result_ref=..., format=...`. This is correct as-is; no change needed.

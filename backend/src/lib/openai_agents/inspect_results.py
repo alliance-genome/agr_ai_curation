@@ -39,6 +39,7 @@ from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     DomainEnvelope,
     ValidationFinding,
+    ValidationFindingSeverity,
     parse_field_path,
 )
 from src.schemas.domain_pack_metadata import DomainPackMetadata
@@ -775,13 +776,18 @@ def _record_summary(record: Any) -> dict[str, Any]:
         envelope = _canonical_envelope_for_record(record)
         canonical_status = "canonical_domain_envelope"
         object_count: int | None = len(envelope.objects)
-        validation_count: int | None = len(envelope.validation_findings)
+        warning_count, error_count = _validation_severity_counts(
+            envelope.validation_findings
+        )
+        validation_warning_count: int | None = warning_count
+        validation_error_count: int | None = error_count
         domain_pack_id = envelope.domain_pack_id
         result_status = envelope.status.value
     except (TypeError, ValueError, ValidationError):
         canonical_status = "unsupported_payload"
         object_count = None
-        validation_count = None
+        validation_warning_count = None
+        validation_error_count = None
         domain_pack_id = None
         result_status = None
     return {
@@ -799,8 +805,31 @@ def _record_summary(record: Any) -> dict[str, Any]:
         "result_status": result_status,
         "canonical_status": canonical_status,
         "object_count": object_count,
-        "validation_finding_count": validation_count,
+        "validation_warning_count": validation_warning_count,
+        "validation_error_count": validation_error_count,
     }
+
+
+def _validation_severity_counts(
+    findings: Sequence[ValidationFinding],
+) -> tuple[int, int]:
+    """Split validation findings into (warning_count, error_count) by severity.
+
+    Errors include both ``error`` and ``blocker`` severities, matching the manifest
+    renderer's severity grouping.
+    """
+
+    warning_count = 0
+    error_count = 0
+    for finding in findings:
+        if finding.severity in {
+            ValidationFindingSeverity.ERROR,
+            ValidationFindingSeverity.BLOCKER,
+        }:
+            error_count += 1
+        elif finding.severity is ValidationFindingSeverity.WARNING:
+            warning_count += 1
+    return warning_count, error_count
 
 
 def _manifest_page_for_record(

@@ -195,6 +195,9 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/integration/test_performance.py"),
     Path("backend/tests/integration/test_protected_endpoints.py"),
     Path("backend/tests/integration/test_session_timeout.py"),
+    Path("backend/tests/integration/test_chat_stream_inline_persistence.py"),
+    Path("backend/tests/integration/test_inspect_results_resolution.py"),
+    Path("backend/tests/integration/persistence/test_inline_extraction_persistence.py"),
     # Alliance domain-pack contract tests (inherently Alliance-specific by location).
     Path("backend/tests/contract/alliance/domain_packs/test_disease_relation_subset_enforcement.py"),
     Path("backend/tests/live_integration/test_backend_batch_live_processing.py"),
