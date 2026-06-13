@@ -38,6 +38,10 @@ def _load_revision_graph() -> tuple[dict[str, tuple[str, object]], dict[str, set
             down_revision = _literal_assignment(module, "down_revision")
         except KeyError:
             down_revision = None
+        assert isinstance(revision, str)
+        assert down_revision is None or isinstance(down_revision, str | tuple)
+        if isinstance(down_revision, tuple):
+            assert all(isinstance(parent, str) for parent in down_revision)
 
         revisions[revision] = (path.name, down_revision)
 
@@ -55,4 +59,4 @@ def test_alembic_revision_graph_has_single_head():
 
     heads = sorted(revision for revision in revisions if revision not in children)
 
-    assert heads == ["v8w9x0y1z2a3"]
+    assert heads == ["w8x9y0z1a2b3"]

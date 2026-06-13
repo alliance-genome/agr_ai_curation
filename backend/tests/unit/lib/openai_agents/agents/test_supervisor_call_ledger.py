@@ -52,7 +52,7 @@ def _make_handoff(
         extraction_result_id=result_ref.removeprefix("extraction-result:"),
         result_status=result_status,
         object_count=object_count,
-        domain_pack_id="agr.alliance.allele",
+        domain_pack_id="fixture.pack.allele",
         adapter_key="ALLELE",
         agent_key="allele_extraction",
         created_new=True,
@@ -84,7 +84,7 @@ async def test_cached_extraction_replay_points_to_existing_result_ref_without_bl
     ledger = _make_ledger()
     factory = _CountingFactory(
         result=(
-            "Extraction result ready: agr.alliance.allele\n"
+            "Extraction result ready: fixture.pack.allele\n"
             "Result ref: extraction-result:00000000-0000-4000-8000-000000000001"
         )
     )
