@@ -109,6 +109,10 @@ object_definitions:
     metadata:
       object_role: curatable_unit
       association_kind: allele_paper_evidence
+      supervisor_manifest:
+        primary_label_field: allele_label
+        summary_fields:
+          - allele_identifier
       workspace_display:
         primary_label_fields:
           - allele_label

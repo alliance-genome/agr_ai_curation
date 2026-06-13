@@ -181,6 +181,11 @@ object_definitions:
       object_role: curatable_unit
       association_kind: phenotype_assertion
       semantic_source: domain_envelope.objects
+      supervisor_manifest:
+        primary_label_field: phenotype_terms[0].label
+        secondary_label_field: phenotype_annotation_object
+        summary_fields:
+          - phenotype_terms[0].curie
       workspace_display:
         primary_label_field: phenotype_terms[0].label
         secondary_label_field: phenotype_annotation_object

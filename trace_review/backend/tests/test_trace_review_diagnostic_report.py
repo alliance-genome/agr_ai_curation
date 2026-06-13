@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import Mock, patch
 
 from src.analyzers.extraction_timeline import ExtractionTimelineAnalyzer
@@ -13,7 +14,7 @@ from src.services.cache_manager import CacheManager
 
 
 class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
-    def _make_request(self) -> SimpleNamespace:
+    def _make_request(self) -> Any:
         cache_manager = CacheManager(ttl_hours=1)
         return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(cache_manager=cache_manager)))
 
@@ -595,12 +596,12 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
         "src.api.claude.ToolCallAnalyzer.extract_tool_calls",
         return_value={
             "total_count": 1,
-            "unique_tools": ["inspect_curation_context"],
+            "unique_tools": ["inspect_results"],
             "duplicates": {},
             "tool_calls": [
                 {
                     "call_id": None,
-                    "name": "inspect_curation_context",
+                    "name": "inspect_results",
                     "time": None,
                     "duration": None,
                     "status": None,

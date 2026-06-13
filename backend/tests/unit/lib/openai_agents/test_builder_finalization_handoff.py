@@ -13,6 +13,28 @@ from src.lib.openai_agents import streaming_tools
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
 
+@pytest.fixture(autouse=True)
+def _stub_inline_builder_persistence(monkeypatch):
+    counter = {"value": 0}
+
+    def _fake_persist_builder_finalization_for_supervisor(**_kwargs):
+        counter["value"] += 1
+        extraction_result_id = f"00000000-0000-4000-8000-{counter['value']:012d}"
+        return SimpleNamespace(
+            extraction_result_id=extraction_result_id,
+            result_ref=f"extraction-result:{extraction_result_id}",
+            created_new=True,
+            idempotency_key=f"inline-extraction:test-{counter['value']}",
+            payload_hash=f"payload-hash-{counter['value']}",
+        )
+
+    monkeypatch.setattr(
+        streaming_tools,
+        "_persist_builder_finalization_for_supervisor",
+        _fake_persist_builder_finalization_for_supervisor,
+    )
+
+
 def _workspace() -> builder.ExtractionBuilderWorkspace:
     return builder.ExtractionBuilderWorkspace(
         run_id="trace-handoff",
@@ -552,7 +574,8 @@ async def test_builder_finalized_specialist_skips_model_authored_output_staging(
         tool_name="ask_gene_expression_specialist",
     )
 
-    assert "Full canonical envelope is retained by the specialist runtime" in final_output
+    assert "no safe supervisor manifest could be rendered" in final_output
+    assert "raw canonical envelope was not passed to the supervisor" in final_output
     with pytest.raises(json.JSONDecodeError):
         json.loads(final_output)
     assert "curatable_objects" not in final_output
@@ -1163,14 +1186,15 @@ async def test_specialist_internal_event_uses_post_validator_builder_payload(mon
         tool_agent_map={"ask_gene_expression_specialist": "gene-expression"},
         conversation_summary="extract",
     )
+    persisted_ref = chat_common._build_persisted_extraction_result_ref_from_tool_event(
+        internal_event,
+        tool_agent_map={"ask_gene_expression_specialist": "gene-expression"},
+    )
 
-    assert isinstance(candidate, dict)
-    assert candidate["raw_output"]["curatable_objects"][0]["payload"][
-        "validator_marker"
-    ] == "post-dispatch"
-    assert candidate["raw_output"]["metadata"]["validator_appended_findings"] == [
-        {"code": "domain_pack.validator_resolved", "message": "Resolved wg"}
-    ]
+    assert candidate is None
+    assert persisted_ref is not None
+    assert persisted_ref.result_ref.startswith("extraction-result:")
+    assert persisted_ref.agent_key == "gene-expression"
 
 
 @pytest.mark.asyncio
@@ -1461,3 +1485,178 @@ async def test_specialist_retry_failure_records_builder_validation_failure(
     assert errors[0]["reason"] == "missing_structured_output_after_retry"
     assert errors[0]["retry_events"] == 0
     assert errors[0]["specialist_name"] == "Gene Expression Extractor"
+
+
+def _spy_inline_persistence(monkeypatch):
+    """Replace the inline persist helper with a spy that records its calls.
+
+    Returns the call-record list. Each call appends the kwargs the production
+    code used so tests can assert whether inline CHAT persistence fired.
+    """
+
+    calls: list[dict] = []
+
+    def _spy(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(
+            extraction_result_id="00000000-0000-4000-8000-000000000001",
+            result_ref="extraction-result:00000000-0000-4000-8000-000000000001",
+            created_new=True,
+            idempotency_key="inline-extraction:spy-1",
+            payload_hash="payload-hash-spy-1",
+        )
+
+    monkeypatch.setattr(
+        streaming_tools,
+        "_persist_builder_finalization_for_supervisor",
+        _spy,
+    )
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_chat_path_inline_persistence_persists_chat_row_and_carries_ids(
+    monkeypatch,
+):
+    """Chat path (inline_chat_persistence=True): persist a CHAT row and emit ids.
+
+    Regression guard for Follow-up 1: the chat supervisor path must keep firing
+    inline CHAT persistence and tag the INTERNAL_EXTRACTION_RESULT event with the
+    persisted extraction_result_id/result_ref.
+    """
+
+    captured_events: list[dict] = []
+    _disable_package_tool_rebinding(monkeypatch)
+    persist_calls = _spy_inline_persistence(monkeypatch)
+
+    async def _echo_validator_dispatch(serialized_payload, *_args, **_kwargs):
+        return serialized_payload
+
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(
+        streaming_tools,
+        "RunConfig",
+        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+    )
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _BuilderFinalizingRunResult(),
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "_dispatch_domain_envelope_validators_for_chat",
+        _echo_validator_dispatch,
+    )
+
+    agent = SimpleNamespace(
+        name="Gene Expression Extractor",
+        tools=[_builder_finalizer_tool()],
+        output_type=None,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    await streaming_tools.run_specialist_with_events(
+        agent=agent,
+        input_text="extract gene expression evidence",
+        specialist_name="Gene Expression Extractor",
+        max_turns=3,
+        tool_name="ask_gene_expression_specialist",
+        inline_chat_persistence=True,
+    )
+
+    # The CHAT-source inline persist helper fired exactly once.
+    assert len(persist_calls) == 1
+
+    internal_event = next(
+        event
+        for event in captured_events
+        if event.get("type") == "INTERNAL_EXTRACTION_RESULT"
+    )
+    # The event carries the persisted CHAT identifiers.
+    assert internal_event["internal"]["extraction_result_id"] == (
+        "00000000-0000-4000-8000-000000000001"
+    )
+    assert internal_event["internal"]["result_ref"] == (
+        "extraction-result:00000000-0000-4000-8000-000000000001"
+    )
+    assert internal_event["details"]["persistence"]["phase"] == (
+        "inline_validated_extraction"
+    )
+
+
+@pytest.mark.asyncio
+async def test_flow_path_skips_inline_chat_persistence_and_emits_event_without_ids(
+    monkeypatch,
+):
+    """Flow path (inline_chat_persistence=False): no CHAT row, event has no ids.
+
+    Regression guard for Follow-up 1: a flow-context specialist run must NOT call
+    the inline CHAT persist helper (it would write a shadow CHAT-source row in
+    addition to the flow's own FLOW-source row). The INTERNAL_EXTRACTION_RESULT
+    event is still emitted, but without CHAT persisted identifiers, restoring the
+    pre-branch flow behavior.
+    """
+
+    captured_events: list[dict] = []
+    _disable_package_tool_rebinding(monkeypatch)
+    persist_calls = _spy_inline_persistence(monkeypatch)
+
+    async def _echo_validator_dispatch(serialized_payload, *_args, **_kwargs):
+        return serialized_payload
+
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(
+        streaming_tools,
+        "RunConfig",
+        lambda *args, **kwargs: SimpleNamespace(**kwargs),
+    )
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _BuilderFinalizingRunResult(),
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "_dispatch_domain_envelope_validators_for_chat",
+        _echo_validator_dispatch,
+    )
+
+    agent = SimpleNamespace(
+        name="Gene Expression Extractor",
+        tools=[_builder_finalizer_tool()],
+        output_type=None,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    await streaming_tools.run_specialist_with_events(
+        agent=agent,
+        input_text="extract gene expression evidence",
+        specialist_name="Gene Expression Extractor",
+        max_turns=3,
+        tool_name="ask_gene_expression_specialist",
+        inline_chat_persistence=False,
+    )
+
+    # No CHAT-source inline persistence happened on the flow path.
+    assert persist_calls == []
+
+    # The internal extraction event is still emitted so the supervisor gets the
+    # canonical payload, but it carries no CHAT persisted identifiers.
+    internal_event = next(
+        event
+        for event in captured_events
+        if event.get("type") == "INTERNAL_EXTRACTION_RESULT"
+    )
+    assert "extraction_result_id" not in internal_event["internal"]
+    assert "result_ref" not in internal_event["internal"]
+    assert "persistence" not in internal_event["internal"]
+    assert "extraction_result_id" not in internal_event["details"]
+    assert "result_ref" not in internal_event["details"]
+    assert "persistence" not in internal_event["details"]
+    # And no supervisor extraction handoff was registered for the flow path.
+    assert streaming_tools.pop_last_supervisor_extraction_handoff() is None

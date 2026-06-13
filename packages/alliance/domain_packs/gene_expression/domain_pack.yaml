@@ -307,6 +307,13 @@ object_definitions:
             gene_primary_external_id: RGD:1586167
             gene_symbol: Tmem67
             data_provider: RGD
+      supervisor_manifest:
+        primary_label_field: expression_annotation_subject.gene_symbol
+        secondary_label_field: where_expressed_statement
+        summary_fields:
+          - when_expressed_stage_name
+          - relation.name
+          - expression_experiment.expression_assay_used.name
       workspace_display:
         primary_label_field: expression_annotation_subject.gene_symbol
         secondary_label_field: where_expressed_statement

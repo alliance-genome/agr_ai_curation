@@ -6,11 +6,13 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from src.lib.curation_workspace import extraction_results as module
 from src.lib.curation_workspace.extraction_results import (
     build_extraction_envelope_candidate,
     build_extraction_envelope_candidate_with_evidence,
+    persist_inline_validated_extraction_result,
     persist_extraction_result,
     persist_extraction_results,
 )
@@ -105,9 +107,16 @@ def _sample_persisted_domain_envelope_payload() -> dict:
 
 
 class _FakeSession:
-    def __init__(self, *, fail_commit: bool = False, fail_flush: bool = False):
+    def __init__(
+        self,
+        *,
+        fail_commit: bool = False,
+        fail_flush: bool = False,
+        existing_rows=None,
+    ):
         self.fail_commit = fail_commit
         self.fail_flush = fail_flush
+        self.existing_rows = list(existing_rows or [])
         self.added = None
         self.added_records = []
         self.commit_calls = 0
@@ -115,10 +124,15 @@ class _FakeSession:
         self.refresh_calls = 0
         self.rollback_calls = 0
         self.closed = False
+        self.execute_calls = 0
 
     def add(self, record):
         self.added = record
         self.added_records.append(record)
+
+    def execute(self, _statement):
+        self.execute_calls += 1
+        return _FakeExecuteRowsResult(self.existing_rows)
 
     def flush(self):
         self.flush_calls += 1
@@ -129,6 +143,62 @@ class _FakeSession:
         self.commit_calls += 1
         if self.fail_commit:
             raise RuntimeError("db write failed")
+
+    def refresh(self, record):
+        self.refresh_calls += 1
+        record.id = uuid4()
+        record.created_at = datetime.now(timezone.utc)
+
+    def rollback(self):
+        self.rollback_calls += 1
+
+    def close(self):
+        self.closed = True
+
+
+class _RaceConflictSession:
+    """Fake session that loses the unique-index race on insert.
+
+    The pre-check idempotency lookup sees no row, the insert flush raises
+    ``IntegrityError`` (the race winner committed first), and the post-rollback
+    reload returns the existing row.
+    """
+
+    def __init__(self, *, race_winner_row):
+        self._race_winner_row = race_winner_row
+        self.added = None
+        self.added_records = []
+        self.flush_calls = 0
+        self.commit_calls = 0
+        self.refresh_calls = 0
+        self.rollback_calls = 0
+        self.execute_calls = 0
+        self.closed = False
+        self._insert_conflict_raised = False
+
+    def add(self, record):
+        self.added = record
+        self.added_records.append(record)
+
+    def execute(self, _statement):
+        self.execute_calls += 1
+        # Before the conflict, the pre-check sees no existing row. After the
+        # rollback, the reload sees the row the race winner committed.
+        rows = [self._race_winner_row] if self._insert_conflict_raised else []
+        return _FakeExecuteRowsResult(rows)
+
+    def flush(self):
+        self.flush_calls += 1
+        if not self._insert_conflict_raised:
+            self._insert_conflict_raised = True
+            raise IntegrityError(
+                "INSERT INTO curation_extraction_results",
+                {},
+                Exception("duplicate key value violates unique constraint"),
+            )
+
+    def commit(self):
+        self.commit_calls += 1
 
     def refresh(self, record):
         self.refresh_calls += 1
@@ -197,6 +267,17 @@ class _FakeScalarResult:
 
     def all(self):
         return list(self._rows)
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+
+class _FakeExecuteRowsResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def scalars(self):
+        return _FakeScalarResult(self._rows)
 
 
 class _FakeExecuteResult:
@@ -717,6 +798,219 @@ def test_persist_extraction_result_rolls_back_on_commit_error():
     assert session.commit_calls == 1
     assert session.rollback_calls == 1
     assert session.refresh_calls == 0
+
+
+def test_persist_inline_validated_extraction_result_creates_idempotent_row():
+    session = _FakeSession()
+    builder_finalization = SimpleNamespace(
+        summary=lambda: {
+            "builder_run_id": "trace-1",
+            "builder_invocation_id": "builder-invocation-1",
+            "candidate_ids": ["candidate-1"],
+            "source_candidate_ids": ["source-candidate-1"],
+        }
+    )
+
+    response = persist_inline_validated_extraction_result(
+        payload_json=_sample_persisted_domain_envelope_payload(),
+        document_id=str(uuid4()),
+        agent_key="gene",
+        adapter_key="gene",
+        tool_name="ask_gene_specialist",
+        source_kind=CurationExtractionSourceKind.CHAT,
+        origin_session_id="session-1",
+        trace_id="trace-1",
+        user_id="user-1",
+        builder_finalization=builder_finalization,
+        db=session,
+    )
+
+    assert len(session.added_records) == 1
+    assert session.flush_calls == 1
+    assert session.commit_calls == 0
+    assert session.rollback_calls == 0
+    assert session.added.idempotency_key == response.idempotency_key
+    assert session.added.payload_hash == response.payload_hash
+    assert session.added.extraction_metadata["persistence_phase"] == (
+        "inline_validated_extraction"
+    )
+    assert session.added.extraction_metadata["builder_finalization"][
+        "builder_invocation_id"
+    ] == "builder-invocation-1"
+    assert response.created_new is True
+    assert response.result_ref == f"extraction-result:{response.extraction_result_id}"
+
+
+def test_persist_inline_validated_extraction_result_reloads_existing_idempotent_row():
+    existing_id = uuid4()
+    document_id = uuid4()
+    existing = SimpleNamespace(
+        id=existing_id,
+        document_id=document_id,
+        adapter_key="gene",
+        agent_key="gene",
+        source_kind=CurationExtractionSourceKind.CHAT,
+        origin_session_id="session-1",
+        trace_id="trace-1",
+        flow_run_id=None,
+        user_id="user-1",
+        candidate_count=1,
+        conversation_summary=None,
+        payload_json=_sample_persisted_domain_envelope_payload(),
+        idempotency_key="inline-extraction:existing",
+        payload_hash="existing-hash",
+        extraction_metadata={"persistence_phase": "inline_validated_extraction"},
+        created_at=datetime.now(timezone.utc),
+    )
+    session = _FakeSession(existing_rows=[existing])
+
+    response = persist_inline_validated_extraction_result(
+        payload_json=_sample_persisted_domain_envelope_payload(),
+        document_id=str(document_id),
+        agent_key="gene",
+        adapter_key="gene",
+        tool_name="ask_gene_specialist",
+        source_kind=CurationExtractionSourceKind.CHAT,
+        origin_session_id="session-1",
+        trace_id="trace-1",
+        user_id="user-1",
+        builder_finalization={
+            "builder_run_id": "trace-1",
+            "builder_invocation_id": "builder-invocation-1",
+        },
+        db=session,
+    )
+
+    assert response.created_new is False
+    assert response.extraction_result_id == str(existing_id)
+    assert response.result_ref == f"extraction-result:{existing_id}"
+    assert session.added_records == []
+    assert session.flush_calls == 0
+
+
+def test_persist_inline_validated_extraction_result_rejects_legacy_row_sources():
+    with pytest.raises(ValueError, match="strict canonical domain envelope"):
+        persist_inline_validated_extraction_result(
+            payload_json=_sample_envelope_payload(),
+            document_id=str(uuid4()),
+            agent_key="gene",
+            adapter_key="gene",
+            tool_name="ask_gene_specialist",
+            source_kind=CurationExtractionSourceKind.CHAT,
+            origin_session_id="session-1",
+            trace_id="trace-1",
+            user_id="user-1",
+            builder_finalization={
+                "builder_run_id": "trace-1",
+                "builder_invocation_id": "builder-invocation-1",
+            },
+            db=_FakeSession(),
+        )
+
+
+def test_persist_inline_validated_extraction_result_reloads_after_insert_conflict():
+    """The unique-index race loser rolls back and returns the race winner's row."""
+
+    document_id = uuid4()
+    existing_id = uuid4()
+    builder_finalization = {
+        "builder_run_id": "trace-1",
+        "builder_invocation_id": "builder-invocation-1",
+    }
+    race_winner_row = SimpleNamespace(
+        id=existing_id,
+        document_id=document_id,
+        adapter_key="gene",
+        agent_key="gene",
+        source_kind=CurationExtractionSourceKind.CHAT,
+        origin_session_id="session-1",
+        trace_id="trace-1",
+        flow_run_id=None,
+        user_id="user-1",
+        candidate_count=1,
+        conversation_summary=None,
+        payload_json=_sample_persisted_domain_envelope_payload(),
+        idempotency_key="inline-extraction:race-winner",
+        payload_hash="race-winner-hash",
+        extraction_metadata={"persistence_phase": "inline_validated_extraction"},
+        created_at=datetime.now(timezone.utc),
+    )
+    session = _RaceConflictSession(race_winner_row=race_winner_row)
+
+    response = persist_inline_validated_extraction_result(
+        payload_json=_sample_persisted_domain_envelope_payload(),
+        document_id=str(document_id),
+        agent_key="gene",
+        adapter_key="gene",
+        tool_name="ask_gene_specialist",
+        source_kind=CurationExtractionSourceKind.CHAT,
+        origin_session_id="session-1",
+        trace_id="trace-1",
+        user_id="user-1",
+        builder_finalization=builder_finalization,
+        db=session,
+    )
+
+    # The race loser attempted exactly one insert, hit the conflict, rolled back,
+    # and did not insert a second time.
+    assert len(session.added_records) == 1
+    assert session.flush_calls == 1
+    assert session.rollback_calls == 1
+    assert session.refresh_calls == 0
+    # Pre-check lookup (empty) + post-rollback reload (race winner) = 2 lookups.
+    assert session.execute_calls == 2
+    # The returned row is the existing race winner, flagged as not newly created.
+    assert response.created_new is False
+    assert response.extraction_result_id == str(existing_id)
+    assert response.result_ref == f"extraction-result:{existing_id}"
+
+
+def test_persist_inline_validated_extraction_result_retains_non_fatal_validator_finding():
+    """A non-fatal ``validator_error`` finding survives into the persisted payload."""
+
+    session = _FakeSession()
+    payload = _sample_persisted_domain_envelope_payload()
+    payload["validation_findings"] = [
+        {
+            "severity": "warning",
+            "status": "open",
+            "code": "domain_pack.validator_error",
+            "message": "Allele validator could not be run for the target.",
+            "object_ref": {
+                "pending_ref_id": "gene-notch",
+                "object_type": "gene_mention_evidence",
+            },
+            "details": {"fatal": False},
+        }
+    ]
+
+    response = persist_inline_validated_extraction_result(
+        payload_json=payload,
+        document_id=str(uuid4()),
+        agent_key="gene",
+        adapter_key="gene",
+        tool_name="ask_gene_specialist",
+        source_kind=CurationExtractionSourceKind.CHAT,
+        origin_session_id="session-1",
+        trace_id="trace-1",
+        user_id="user-1",
+        builder_finalization={
+            "builder_run_id": "trace-1",
+            "builder_invocation_id": "builder-invocation-1",
+        },
+        db=session,
+    )
+
+    assert response.created_new is True
+    persisted_findings = session.added.payload_json["validation_findings"]
+    assert len(persisted_findings) == 1
+    finding = persisted_findings[0]
+    assert finding["code"] == "domain_pack.validator_error"
+    assert finding["severity"] == "warning"
+    assert finding["details"]["fatal"] is False
+    # The persistence-layer response payload also carries the surviving finding.
+    response_findings = response.extraction_result.payload_json["validation_findings"]
+    assert response_findings == persisted_findings
 
 
 def test_persist_extraction_results_flushes_all_records_on_shared_session():

@@ -1454,6 +1454,9 @@ async def _run_custom_flow_validator_agent(
         tool_name=tool_name,
         tool_description=f"Run validator attachment {validator_agent_id}",
         specialist_name=node_data.get("agent_display_name") or validator_agent_id,
+        # Flow execution: flows persist their own FLOW-source extraction rows; inline
+        # CHAT persistence must not fire here (would write a shadow CHAT-source row).
+        inline_chat_persistence=False,
     )
     provider_payload = {
         "source_envelope": {
@@ -3199,6 +3202,10 @@ def get_all_agent_tools(
                 tool_name=tool_name,
                 tool_description=tool_description,
                 specialist_name=specialist_name,
+                # Flow execution: flows persist their own FLOW-source extraction rows;
+                # inline CHAT persistence must not fire here (would write a shadow
+                # CHAT-source row in addition to the FLOW-source row).
+                inline_chat_persistence=False,
             )
 
         curation = entry.get("curation")
@@ -3649,8 +3656,10 @@ def _is_flow_domain_envelope_payload(payload: Any) -> bool:
 def _flow_extraction_result_ref(
     record: CurationExtractionResultRecord,
 ) -> dict[str, Any]:
+    result_id = str(record.extraction_result_id)
     return {
-        "extraction_result_id": record.extraction_result_id,
+        "result_ref": f"extraction-result:{result_id}",
+        "extraction_result_id": result_id,
         "adapter_key": record.adapter_key,
         "agent_key": record.agent_key,
         "candidate_count": record.candidate_count,

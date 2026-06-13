@@ -33,7 +33,6 @@ domain_pack:
           primary_label_field: gene.symbol
           summary_fields:
             - gene.identifier
-            - gene.symbol
       fields:
         - field_path: gene.identifier
           field_type: string

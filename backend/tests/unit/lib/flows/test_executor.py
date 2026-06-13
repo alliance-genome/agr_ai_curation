@@ -310,7 +310,7 @@ def _recording_persist_extraction_results(persisted_requests=None):
         return [
             SimpleNamespace(
                 extraction_result=SimpleNamespace(
-                    extraction_result_id=f"persisted-{index}",
+                    extraction_result_id=f"11111111-1111-1111-1111-{index + 1:012d}",
                     document_id=request.document_id,
                     adapter_key=request.adapter_key,
                     agent_key=request.agent_key,
@@ -1292,7 +1292,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         invocations = []
 
-        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
                 invocations.append((tool_name, query))
@@ -1341,7 +1341,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         invocations = []
 
-        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
                 invocations.append((tool_name, query))
@@ -1417,7 +1417,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         )
         validation_candidates = []
 
-        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
                 add_specialist_event({
@@ -1532,7 +1532,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         validation_candidates = []
 
-        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
                 return "Finalized one extraction through builder tools."
@@ -1629,7 +1629,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             evidence_records=[evidence_record],
         )
 
-        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
                 return json.dumps(payload)
@@ -1723,7 +1723,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         formatter_invocations = []
         save_calls = []
 
-        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
                 if tool_name == "ask_csv_output_formatter_specialist":
@@ -1831,7 +1831,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         formatter_invocations = []
         save_calls = []
 
-        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
                 formatter_invocations.append((tool_name, query))
@@ -1953,7 +1953,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         formatter_invocations = []
 
-        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
                 formatter_invocations.append((tool_name, query))
@@ -1997,7 +1997,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         invocations = []
 
-        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
                 invocations.append(query)
@@ -2033,7 +2033,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         """Extraction node validation choices should feed runtime scheduling metadata."""
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
 
-        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
                 return "extracted"
@@ -2961,7 +2961,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         events = []
 
-        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str):
                 events.append(f"tool:{tool_name}")
@@ -3046,7 +3046,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         observed = {}
 
-        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
                 if tool_name == "ask_csv_output_formatter_specialist":
@@ -3121,7 +3121,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         captured = {}
 
-        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
                 return json.dumps(
@@ -3260,7 +3260,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         captured = {}
 
-        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
                 return json.dumps(
@@ -3378,7 +3378,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         """Curation prep should fail clearly when earlier flow steps did not produce extraction envelopes."""
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
 
-        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
                 return "not a structured extraction envelope"
@@ -3890,7 +3890,7 @@ class TestFlowEvidenceAccumulation:
             ]
         )
 
-        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
                 return next(outputs)
@@ -4740,10 +4740,12 @@ class TestExecuteFlowTermination:
         flow_finished = next(event for event in events if event.get("type") == "FLOW_FINISHED")
         assert flow_finished["data"]["status"] == "completed"
         assert flow_finished["data"]["review_session_ids"] == ["session-gene"]
-        assert flow_finished["data"]["extraction_result_ids"] == ["persisted-0"]
+        result_id = "11111111-1111-1111-1111-000000000001"
+        assert flow_finished["data"]["extraction_result_ids"] == [result_id]
         assert flow_finished["data"]["extraction_result_refs"] == [
             {
-                "extraction_result_id": "persisted-0",
+                "result_ref": f"extraction-result:{result_id}",
+                "extraction_result_id": result_id,
                 "adapter_key": "gene",
                 "agent_key": "gene",
                 "candidate_count": 1,

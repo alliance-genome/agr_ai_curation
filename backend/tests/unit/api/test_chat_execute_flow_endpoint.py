@@ -502,7 +502,8 @@ def test_execute_flow_endpoint_background_backfill_uses_final_assistant_aware_ti
                 "adapter_keys": ["fb_gene"],
                 "extraction_result_refs": [
                     {
-                        "extraction_result_id": "er-flow-context-1",
+                        "result_ref": "extraction-result:33333333-3333-3333-3333-333333333333",
+                        "extraction_result_id": "33333333-3333-3333-3333-333333333333",
                         "adapter_key": "fb_gene",
                         "agent_key": "gene",
                         "candidate_count": 1,
@@ -758,7 +759,8 @@ def test_execute_flow_endpoint_injects_flow_context_without_leaking_internal_pay
                 "adapter_keys": ["gene"],
                 "extraction_result_refs": [
                     {
-                        "extraction_result_id": "er-flow-context-1",
+                        "result_ref": "extraction-result:33333333-3333-3333-3333-333333333333",
+                        "extraction_result_id": "33333333-3333-3333-3333-333333333333",
                         "adapter_key": "gene",
                         "agent_key": "gene",
                         "candidate_count": 1,
@@ -795,7 +797,7 @@ def test_execute_flow_endpoint_injects_flow_context_without_leaking_internal_pay
     assert "<FLOW_INTERNAL_CONTEXT_JSON>" not in history_assistant_msg
     assert "ask_gene_specialist" not in history_assistant_msg
     assert "{\"selected_gene\":\"TP53\"}" not in history_assistant_msg
-    assert "er-flow-context-1" in history_assistant_msg
+    assert "extraction-result:33333333-3333-3333-3333-333333333333" in history_assistant_msg
     assert "review-flow-context-1" in history_assistant_msg
 
 
@@ -1089,7 +1091,8 @@ def test_build_flow_memory_message_contains_refs_not_hidden_payloads():
         agents_used=["Agent A"],
         extraction_result_refs=[
             {
-                "extraction_result_id": "er-123",
+                "result_ref": "extraction-result:33333333-3333-3333-3333-333333333333",
+                "extraction_result_id": "33333333-3333-3333-3333-333333333333",
                 "adapter_key": "fb_gene",
                 "agent_key": "gene",
                 "candidate_count": 1,
@@ -1106,13 +1109,15 @@ def test_build_flow_memory_message_contains_refs_not_hidden_payloads():
     assert "specialist_outputs" not in assistant_message
     assert "flow-run-123" in assistant_message
     assert "document-123" in assistant_message
-    assert "er-123" in assistant_message
+    assert "extraction-result:33333333-3333-3333-3333-333333333333" in assistant_message
     assert "review-123" in assistant_message
     assert "f1" in assistant_message
+    assert "inspect_curation_context" not in assistant_message
+    assert 'Use inspect_results with target="flow_run" and flow_run_id' in assistant_message
     assert (
-        "Use inspect_curation_context with flow_run_id/extraction_result_id for extraction details, "
-        "review_session_id for review workspace details, or file_id for bounded file metadata/previews."
-    ) in assistant_message
+        "Review workspace lookup, file download/preview, and curation prep are separate explicit actions"
+        in assistant_message
+    )
 
 
 def test_execute_flow_failure_messages_surface_missing_reason():

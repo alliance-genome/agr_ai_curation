@@ -14,6 +14,11 @@ from src.lib.openai_agents.config import (
     get_base_url,
     get_groq_tool_call_max_retries,
     get_groq_tool_call_retry_delay_seconds,
+    get_inspect_results_json_depth_limit,
+    get_inspect_results_json_object_item_limit,
+    get_inspect_results_list_page_size,
+    get_inspect_results_validation_detail_list_limit,
+    get_inspect_results_validation_page_size,
     get_openai_responses_websocket_ping_timeout_seconds,
     get_pdf_max_file_size_bytes,
     get_model_for_agent,
@@ -414,6 +419,34 @@ def test_pdf_max_file_size_env_override(monkeypatch):
     monkeypatch.setenv("PDF_MAX_FILE_SIZE_BYTES", str(125 * 1024 * 1024))
 
     assert get_pdf_max_file_size_bytes() == 125 * 1024 * 1024
+
+
+def test_inspect_results_display_limits_are_env_configured(monkeypatch):
+    monkeypatch.setenv("INSPECT_RESULTS_LIST_PAGE_SIZE", "7")
+    monkeypatch.setenv("INSPECT_RESULTS_VALIDATION_PAGE_SIZE", "9")
+    monkeypatch.setenv("INSPECT_RESULTS_VALIDATION_DETAIL_LIST_LIMIT", "11")
+    monkeypatch.setenv("INSPECT_RESULTS_JSON_DEPTH_LIMIT", "13")
+    monkeypatch.setenv("INSPECT_RESULTS_JSON_OBJECT_ITEM_LIMIT", "15")
+
+    assert get_inspect_results_list_page_size() == 7
+    assert get_inspect_results_validation_page_size() == 9
+    assert get_inspect_results_validation_detail_list_limit() == 11
+    assert get_inspect_results_json_depth_limit() == 13
+    assert get_inspect_results_json_object_item_limit() == 15
+
+
+def test_inspect_results_display_limits_clamp_to_positive(monkeypatch):
+    monkeypatch.setenv("INSPECT_RESULTS_LIST_PAGE_SIZE", "0")
+    monkeypatch.setenv("INSPECT_RESULTS_VALIDATION_PAGE_SIZE", "-3")
+    monkeypatch.setenv("INSPECT_RESULTS_VALIDATION_DETAIL_LIST_LIMIT", "0")
+    monkeypatch.setenv("INSPECT_RESULTS_JSON_DEPTH_LIMIT", "-1")
+    monkeypatch.setenv("INSPECT_RESULTS_JSON_OBJECT_ITEM_LIMIT", "0")
+
+    assert get_inspect_results_list_page_size() == 1
+    assert get_inspect_results_validation_page_size() == 1
+    assert get_inspect_results_validation_detail_list_limit() == 1
+    assert get_inspect_results_json_depth_limit() == 1
+    assert get_inspect_results_json_object_item_limit() == 1
 
 
 def test_get_api_key_uses_provider_env_mapping(monkeypatch):

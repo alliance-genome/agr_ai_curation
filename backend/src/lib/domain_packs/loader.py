@@ -69,7 +69,16 @@ def _load_contract_model(
 def load_domain_pack_metadata(path: Path) -> DomainPackMetadata:
     """Load and validate a domain-pack metadata file."""
 
-    return _load_contract_model(path, DomainPackMetadata, DomainPackMetadataError)
+    metadata = _load_contract_model(path, DomainPackMetadata, DomainPackMetadataError)
+    try:
+        from .supervisor_manifest import validate_supervisor_manifest_policies
+
+        validate_supervisor_manifest_policies(metadata)
+    except ValueError as exc:
+        raise DomainPackMetadataError(
+            f"Invalid {path.name} at {path}: {exc}"
+        ) from exc
+    return metadata
 
 
 def load_domain_fixture_pack(path: Path) -> DomainFixturePack:

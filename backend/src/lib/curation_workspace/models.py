@@ -252,6 +252,8 @@ class CurationExtractionResultRecord(Base):
     )
     conversation_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     payload_json: Mapped[dict[str, Any] | list[Any]] = mapped_column(JSONB, nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(String(), nullable=True)
+    payload_hash: Mapped[str | None] = mapped_column(String(), nullable=True)
     extraction_metadata: Mapped[dict[str, Any]] = mapped_column(
         "metadata",
         JSONB,
@@ -277,6 +279,13 @@ class CurationExtractionResultRecord(Base):
             "ix_extraction_results_flow_run",
             "flow_run_id",
             postgresql_where=text("flow_run_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_extraction_results_idempotency_key",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+            sqlite_where=text("idempotency_key IS NOT NULL"),
         ),
     )
 

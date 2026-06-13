@@ -6,10 +6,12 @@ from typing import Any
 from .evidence_resolver import DeterministicEvidenceAnchorResolver
 from .extraction_results import (
     ExtractionEnvelopeCandidate,
+    InlineExtractionPersistenceResult,
     build_extraction_envelope_candidate,
     build_extraction_envelope_candidate_with_evidence,
     build_safe_agent_key_map,
     list_extraction_results,
+    persist_inline_validated_extraction_result,
     persist_extraction_result,
     persist_extraction_results,
     resolve_agent_key_from_tool_name,
@@ -82,6 +84,7 @@ __all__ = [
     "CurationDraft",
     "CurationEvidenceRecord",
     "ExtractionEnvelopeCandidate",
+    "InlineExtractionPersistenceResult",
     "DEFAULT_ASYNC_CANDIDATE_THRESHOLD",
     "AsyncioPipelineTaskScheduler",
     "build_extraction_envelope_candidate",
@@ -100,6 +103,7 @@ __all__ = [
     "PostCurationPipelineRequest",
     "PostCurationPipelineResult",
     "execute_post_curation_pipeline",
+    "persist_inline_validated_extraction_result",
     "persist_extraction_result",
     "persist_extraction_results",
     "resolve_agent_key_from_tool_name",

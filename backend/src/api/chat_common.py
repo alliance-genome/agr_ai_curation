@@ -18,11 +18,12 @@ import asyncio
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Literal, NoReturn, Optional
+from typing import Any, Callable, Dict, List, Literal, Mapping, NoReturn, Optional, Sequence
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 from sqlalchemy.exc import SQLAlchemyError
@@ -56,6 +57,9 @@ from ..lib.curation_workspace import (
     ExtractionEnvelopeCandidate,
     build_extraction_envelope_candidate,
     persist_extraction_results,
+)
+from ..lib.curation_workspace.models import (
+    CurationExtractionResultRecord as CurationExtractionResultRecordModel,
 )
 from ..lib.curation_workspace.extraction_results import get_agent_curation_metadata
 from ..lib.openai_agents import run_agent_streamed
@@ -98,6 +102,16 @@ logger = logging.getLogger("src.api.chat")
 
 # Create router with prefix
 router = APIRouter(prefix="/api")
+
+
+@dataclass(frozen=True)
+class PersistedExtractionResultRef:
+    """Stable ref for an extraction row already persisted inline."""
+
+    extraction_result_id: str
+    result_ref: str
+    tool_name: str | None = None
+    agent_key: str | None = None
 
 
 def _build_context_messages_from_history(
@@ -163,10 +177,15 @@ def _build_extraction_candidate_from_tool_event(
         return None
 
     details = event.get("details", {}) or {}
+    details = details if isinstance(details, dict) else {}
     internal_payload = event.get("internal", {}) or {}
+    internal_payload = internal_payload if isinstance(internal_payload, dict) else {}
+    if _persisted_extraction_result_id(details, internal_payload):
+        return None
+
     tool_name = str(details.get("toolName") or "").strip()
     agent_key = tool_agent_map.get(tool_name)
-    if not agent_key or not isinstance(internal_payload, dict):
+    if not agent_key:
         return None
 
     candidate_metadata = dict(metadata or {})
@@ -198,6 +217,56 @@ def _build_extraction_candidate_from_tool_event(
         conversation_summary=conversation_summary,
         metadata=candidate_metadata,
     )
+
+
+def _build_persisted_extraction_result_ref_from_tool_event(
+    event: Dict[str, Any],
+    *,
+    tool_agent_map: Dict[str, str],
+) -> Optional[PersistedExtractionResultRef]:
+    """Read the stable persisted extraction ref from a backend-only event."""
+
+    if event.get("type") != INTERNAL_EXTRACTION_RESULT_EVENT_TYPE:
+        return None
+
+    details = event.get("details", {}) or {}
+    details = details if isinstance(details, dict) else {}
+    internal_payload = event.get("internal", {}) or {}
+    internal_payload = internal_payload if isinstance(internal_payload, dict) else {}
+    extraction_result_id = _persisted_extraction_result_id(details, internal_payload)
+    if extraction_result_id is None:
+        return None
+
+    result_ref = _persisted_result_ref(details, internal_payload)
+    tool_name = str(details.get("toolName") or "").strip() or None
+    return PersistedExtractionResultRef(
+        extraction_result_id=extraction_result_id,
+        result_ref=result_ref or f"extraction-result:{extraction_result_id}",
+        tool_name=tool_name,
+        agent_key=tool_agent_map.get(tool_name or ""),
+    )
+
+
+def _persisted_extraction_result_id(
+    details: Mapping[str, Any],
+    internal_payload: Mapping[str, Any],
+) -> str | None:
+    for source in (details, internal_payload):
+        value = source.get("extraction_result_id")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _persisted_result_ref(
+    details: Mapping[str, Any],
+    internal_payload: Mapping[str, Any],
+) -> str | None:
+    for source in (details, internal_payload):
+        value = source.get("result_ref")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
 
 
 def _extract_evidence_records(value: Any) -> List[Dict[str, Any]]:
@@ -349,11 +418,15 @@ def _persist_extraction_candidates(
     if not candidates or not document_id:
         return
 
-    persist_extraction_results(
-        [
+    requests: list[CurationExtractionPersistenceRequest] = []
+    for candidate in candidates:
+        adapter_key = str(candidate.adapter_key or "").strip()
+        if not adapter_key:
+            continue
+        requests.append(
             CurationExtractionPersistenceRequest(
                 document_id=document_id,
-                adapter_key=candidate.adapter_key,
+                adapter_key=adapter_key,
                 agent_key=candidate.agent_key,
                 source_kind=source_kind,
                 origin_session_id=session_id,
@@ -365,10 +438,58 @@ def _persist_extraction_candidates(
                 payload_json=candidate.payload_json,
                 metadata=dict(candidate.metadata),
             )
-            for candidate in candidates
-        ],
+        )
+    if not requests:
+        return
+
+    persist_extraction_results(
+        requests,
         db=db,
     )
+
+
+def _link_persisted_extraction_results_to_chat_turn(
+    *,
+    refs: Sequence[PersistedExtractionResultRef],
+    session_id: str,
+    turn_id: str,
+    trace_id: Optional[str],
+    assistant_message_id: str | None,
+    db: Session,
+) -> None:
+    """Attach final chat-turn metadata to rows created by inline persistence."""
+
+    extraction_result_ids: list[UUID] = []
+    for ref in refs:
+        try:
+            extraction_result_ids.append(UUID(str(ref.extraction_result_id)))
+        except (AttributeError, TypeError, ValueError):
+            logger.warning(
+                "Skipping invalid persisted extraction_result_id during chat-turn linkage: %r",
+                ref.extraction_result_id,
+            )
+    if not extraction_result_ids:
+        return
+
+    records = (
+        db.execute(
+            select(CurationExtractionResultRecordModel).where(
+                CurationExtractionResultRecordModel.id.in_(extraction_result_ids)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for record in records:
+        metadata = dict(record.extraction_metadata or {})
+        metadata["final_chat_turn"] = {
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "trace_id": trace_id,
+            "assistant_message_id": assistant_message_id,
+        }
+        record.extraction_metadata = metadata
+    db.flush()
 
 
 # Env-configurable via FLOW_MEMORY_MAX_VISIBLE_OUTPUT_CHARS (default 2500); see config.py.
@@ -1158,6 +1279,7 @@ def _persist_completed_chat_stream_turn(
     assistant_message: str,
     trace_id: Optional[str],
     extraction_candidates: List[ExtractionEnvelopeCandidate],
+    persisted_extraction_refs: Sequence[PersistedExtractionResultRef] | None = None,
     document_id: Optional[str],
 ) -> ChatMessageRecord:
     """Persist the completed stream assistant turn using a fresh SQL session."""
@@ -1179,6 +1301,15 @@ def _persist_completed_chat_stream_turn(
             role="assistant",
         )
         if existing_assistant_turn is not None:
+            _link_persisted_extraction_results_to_chat_turn(
+                refs=persisted_extraction_refs or [],
+                session_id=session_id,
+                turn_id=turn_id,
+                trace_id=trace_id,
+                assistant_message_id=str(existing_assistant_turn.message_id),
+                db=completion_db,
+            )
+            completion_db.commit()
             return existing_assistant_turn
 
         _persist_extraction_candidates(
@@ -1201,6 +1332,14 @@ def _persist_completed_chat_stream_turn(
                 content=assistant_message,
                 turn_id=turn_id,
                 trace_id=trace_id,
+            )
+            _link_persisted_extraction_results_to_chat_turn(
+                refs=persisted_extraction_refs or [],
+                session_id=session_id,
+                turn_id=turn_id,
+                trace_id=trace_id,
+                assistant_message_id=str(assistant_turn.message.message_id),
+                db=completion_db,
             )
             completion_db.commit()
         except Exception as exc:

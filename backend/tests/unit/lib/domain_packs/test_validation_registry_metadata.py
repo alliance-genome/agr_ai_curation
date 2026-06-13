@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel
 
-from agr_ai_curation_runtime import agr_lookup
+from src.agr_ai_curation_runtime import agr_lookup
 from src.lib import lookup_status
 from src.lib.domain_packs.loader import (
     DomainPackMetadataError,
@@ -91,6 +92,11 @@ object_definitions:
     model_ref: GeneAssertionPayload
     metadata:
       object_role: curatable_unit
+      supervisor_manifest:
+        primary_label_field: gene.symbol
+        secondary_label_field: gene.identifier
+        summary_fields:
+          - confidence
       provider_refs:
         fixture_provider:
           class: GeneAssertion
@@ -537,9 +543,10 @@ def test_registry_matches_bindings_by_state_field_type_and_object_role(tmp_path:
 
     assert by_binding["fixture.agent_validator"].object_type == "GeneAssertion"
     assert by_binding["fixture.identifier_prefix"].field_path == "gene.identifier"
+    identifier_field = by_binding["fixture.identifier_prefix"].field_definition
+    assert identifier_field is not None
     assert (
-        by_binding["fixture.identifier_prefix"].field_definition.field_type.value
-        == "string"
+        identifier_field.field_type.value == "string"
     )
     identifier_policy = registry.policy_for("GeneAssertion", "gene.identifier")
     assert identifier_policy is not None
@@ -892,6 +899,7 @@ def test_structural_checks_keep_under_development_bindings_metadata_only(
 
     required_finding = findings_by_code["domain_pack.required_field_missing"]
     assert required_finding.severity is ValidationFindingSeverity.BLOCKER
+    assert required_finding.field_ref is not None
     assert required_finding.field_ref.field_path == "gene.identifier"
     assert (
         required_finding.details["validation_metadata"]["metadata_source"]
@@ -943,7 +951,7 @@ def test_structural_checks_mark_field_definition_source_when_policy_absent(
     result = run_domain_envelope_structural_checks(
         envelope,
         pack,
-        registry=RegistryWithoutFormalFieldPolicies(registry),
+        registry=cast(Any, RegistryWithoutFormalFieldPolicies(registry)),
     )
 
     required_finding = [

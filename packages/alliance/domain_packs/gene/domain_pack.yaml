@@ -84,6 +84,12 @@ object_definitions:
           - gene mention
           - symbol
           - allele or genotype context gene
+      supervisor_manifest:
+        primary_label_field: mention
+        secondary_label_field: gene_symbol
+        summary_fields:
+          - primary_external_id
+          - taxon
       workspace_display:
         primary_label_field: mention
         secondary_label_field: gene_symbol

@@ -968,6 +968,30 @@ describe('getEventLabel (T015)', () => {
     expect(label).toContain('Agent timeout')
   })
 
+  it('formats non-fatal SPECIALIST_ERROR validator events as warnings', () => {
+    const event: AuditEvent = {
+      id: '123',
+      type: 'SPECIALIST_ERROR',
+      timestamp: new Date(),
+      sessionId: 'session123',
+      details: {
+        specialist: 'Allele/Variant Extraction',
+        output_type: 'DomainEnvelopeExtractionResult',
+        error: 'validator dispatch timed out',
+        message: 'One validator timed out; extraction was retained with a finding.',
+        fatal: false,
+        severity: 'warning',
+        reason: 'domain_validator_dispatch_failed',
+      } as any,
+    }
+
+    const label = getEventLabel(event)
+
+    expect(label).toContain('Validator warning:')
+    expect(label).toContain('extraction was retained')
+    expect(label).not.toContain('failed:')
+  })
+
   it('handles all 10 event types', () => {
     const testEvents: Array<{ type: AuditEventType, details: any }> = [
       { type: 'SUPERVISOR_START', details: { message: 'Test' } },
@@ -1006,6 +1030,24 @@ describe('getEventLabel (T015)', () => {
 describe('getEventSeverity (T016)', () => {
   it('returns "error" for SUPERVISOR_ERROR', () => {
     expect(getEventSeverity('SUPERVISOR_ERROR')).toBe('error')
+  })
+
+  it('renders explicit non-fatal SPECIALIST_ERROR details as warning', () => {
+    expect(
+      getEventSeverity('SPECIALIST_ERROR', {
+        fatal: false,
+        severity: 'warning',
+      }),
+    ).toBe('warning')
+  })
+
+  it('keeps explicit fatal SPECIALIST_ERROR details as error', () => {
+    expect(
+      getEventSeverity('SPECIALIST_ERROR', {
+        fatal: true,
+        severity: 'error',
+      }),
+    ).toBe('error')
   })
 
   it('returns "success" for *_COMPLETE events', () => {

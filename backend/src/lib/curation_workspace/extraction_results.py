@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import re
 from dataclasses import dataclass, field
@@ -11,6 +12,7 @@ from typing import Any, Iterable, Mapping, Optional, Sequence
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.lib.openai_agents.evidence_summary import (
@@ -54,6 +56,18 @@ class ExtractionEnvelopeCandidate:
     adapter_key: Optional[str] = None
     conversation_summary: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class InlineExtractionPersistenceResult:
+    """Stable identifiers returned after inline validated extraction persistence."""
+
+    extraction_result_id: str
+    result_ref: str
+    created_new: bool
+    idempotency_key: str
+    payload_hash: str
+    extraction_result: CurationExtractionResultRecord
 
 
 def build_safe_agent_key_map(agent_keys: Iterable[str]) -> dict[str, str]:
@@ -583,6 +597,131 @@ def persist_extraction_result(
             session.close()
 
 
+def persist_inline_validated_extraction_result(
+    *,
+    payload_json: Mapping[str, Any],
+    document_id: str,
+    agent_key: str,
+    adapter_key: str,
+    tool_name: str,
+    source_kind: Any,
+    origin_session_id: str | None = None,
+    trace_id: str | None = None,
+    flow_run_id: str | None = None,
+    user_id: str | None = None,
+    builder_finalization: Any | None = None,
+    metadata: Mapping[str, Any] | None = None,
+    db: Optional[Session] = None,
+) -> InlineExtractionPersistenceResult:
+    """Persist a validated canonical domain envelope and return its stable ref.
+
+    This helper is intentionally stricter than the legacy candidate builder:
+    builder-backed chat extractions must persist canonical ``objects`` envelopes
+    only, never old row sources or prose-derived artifacts.
+    """
+
+    if not _is_strict_canonical_domain_envelope_payload(payload_json):
+        raise ValueError(
+            "Inline extraction persistence requires a strict canonical domain envelope "
+            "with envelope_id, domain_pack_id, and objects."
+        )
+
+    canonical_payload = _sanitize_persisted_json_value(dict(payload_json))
+    payload_hash = _canonical_payload_hash(canonical_payload)
+    builder_summary = _builder_finalization_summary(builder_finalization)
+    idempotency_key = _inline_extraction_idempotency_key(
+        source_kind=source_kind,
+        origin_session_id=origin_session_id,
+        trace_id=trace_id,
+        tool_name=tool_name,
+        agent_key=agent_key,
+        adapter_key=adapter_key,
+        builder_run_id=builder_summary.get("builder_run_id"),
+        builder_invocation_id=builder_summary.get("builder_invocation_id"),
+        canonical_payload_hash=payload_hash,
+    )
+    candidate_count = len(canonical_payload.get("objects", []))
+
+    owns_session = db is None
+    session = db or SessionLocal()
+
+    try:
+        existing = _load_extraction_result_by_idempotency_key(
+            session,
+            idempotency_key,
+        )
+        if existing is not None:
+            return _inline_persistence_result(
+                existing,
+                created_new=False,
+                idempotency_key=idempotency_key,
+                payload_hash=payload_hash,
+            )
+
+        persistence_metadata = dict(metadata or {})
+        persistence_metadata.update(
+            {
+                "persistence_phase": "inline_validated_extraction",
+                "tool_name": str(tool_name or "").strip(),
+                "builder_finalization": builder_summary,
+                "payload_hash": payload_hash,
+                "idempotency_key": idempotency_key,
+            }
+        )
+        request = CurationExtractionPersistenceRequest(
+            document_id=document_id,
+            adapter_key=adapter_key,
+            agent_key=agent_key,
+            source_kind=source_kind,
+            origin_session_id=origin_session_id,
+            trace_id=trace_id,
+            flow_run_id=flow_run_id,
+            user_id=user_id,
+            candidate_count=max(candidate_count, 0),
+            conversation_summary=None,
+            payload_json=canonical_payload,
+            idempotency_key=idempotency_key,
+            payload_hash=payload_hash,
+            metadata=persistence_metadata,
+        )
+        record = _build_extraction_result_record(request)
+        session.add(record)
+
+        try:
+            if owns_session:
+                session.commit()
+            else:
+                session.flush()
+        except IntegrityError:
+            session.rollback()
+            existing = _load_extraction_result_by_idempotency_key(
+                session,
+                idempotency_key,
+            )
+            if existing is not None:
+                return _inline_persistence_result(
+                    existing,
+                    created_new=False,
+                    idempotency_key=idempotency_key,
+                    payload_hash=payload_hash,
+                )
+            raise
+
+        session.refresh(record)
+        return _inline_persistence_result(
+            record,
+            created_new=True,
+            idempotency_key=idempotency_key,
+            payload_hash=payload_hash,
+        )
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        if owns_session:
+            session.close()
+
+
 def persist_extraction_results(
     requests: Sequence[CurationExtractionPersistenceRequest],
     *,
@@ -731,6 +870,123 @@ def _is_domain_envelope_payload(payload: Any) -> bool:
     return isinstance(payload.get("objects"), list)
 
 
+def _is_strict_canonical_domain_envelope_payload(payload: Any) -> bool:
+    """Return True only for canonical domain envelopes accepted by inline persistence."""
+
+    if not _is_domain_envelope_payload(payload):
+        return False
+    if any(key in payload for key in _ENVELOPE_EXTRACTION_KEYS):
+        return False
+    return True
+
+
+def _canonical_payload_hash(payload: Mapping[str, Any]) -> str:
+    serialized = json.dumps(
+        payload,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _inline_extraction_idempotency_key(
+    *,
+    source_kind: Any,
+    origin_session_id: str | None,
+    trace_id: str | None,
+    tool_name: str,
+    agent_key: str,
+    adapter_key: str,
+    builder_run_id: Any,
+    builder_invocation_id: Any,
+    canonical_payload_hash: str,
+) -> str:
+    material = {
+        "source_kind": _source_kind_value(source_kind),
+        "origin_session_id": _optional_idempotency_text(origin_session_id),
+        "trace_id": _optional_idempotency_text(trace_id),
+        "tool_name": _required_idempotency_text(tool_name, "tool_name"),
+        "agent_key": _required_idempotency_text(agent_key, "agent_key"),
+        "adapter_key": _required_idempotency_text(adapter_key, "adapter_key"),
+        "builder_run_id": _optional_idempotency_text(builder_run_id),
+        "builder_invocation_id": _optional_idempotency_text(builder_invocation_id),
+        "canonical_payload_hash": _required_idempotency_text(
+            canonical_payload_hash,
+            "canonical_payload_hash",
+        ),
+    }
+    serialized = json.dumps(
+        material,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    return f"inline-extraction:{digest}"
+
+
+def _source_kind_value(source_kind: Any) -> str:
+    return _required_idempotency_text(
+        getattr(source_kind, "value", source_kind),
+        "source_kind",
+    )
+
+
+def _required_idempotency_text(value: Any, field_name: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"Inline extraction persistence requires {field_name}.")
+    return text
+
+
+def _optional_idempotency_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _builder_finalization_summary(builder_finalization: Any | None) -> dict[str, Any]:
+    if builder_finalization is None:
+        return {}
+    summary = getattr(builder_finalization, "summary", None)
+    if callable(summary):
+        value = summary()
+        if isinstance(value, Mapping):
+            return dict(value)
+    if isinstance(builder_finalization, Mapping):
+        return dict(builder_finalization)
+    return {}
+
+
+def _load_extraction_result_by_idempotency_key(
+    session: Session,
+    idempotency_key: str,
+) -> CurationExtractionResultRecordModel | None:
+    statement = select(CurationExtractionResultRecordModel).where(
+        CurationExtractionResultRecordModel.idempotency_key == idempotency_key
+    )
+    return session.execute(statement).scalars().first()
+
+
+def _inline_persistence_result(
+    record: CurationExtractionResultRecordModel,
+    *,
+    created_new: bool,
+    idempotency_key: str,
+    payload_hash: str,
+) -> InlineExtractionPersistenceResult:
+    schema = _record_to_schema(record)
+    extraction_result_id = schema.extraction_result_id
+    return InlineExtractionPersistenceResult(
+        extraction_result_id=extraction_result_id,
+        result_ref=f"extraction-result:{extraction_result_id}",
+        created_new=created_new,
+        idempotency_key=idempotency_key,
+        payload_hash=payload_hash,
+        extraction_result=schema,
+    )
+
+
 def get_agent_curation_metadata(agent_key: str) -> dict[str, Any] | None:
     from src.lib.agent_studio.catalog_service import get_agent_metadata
 
@@ -777,6 +1033,8 @@ def _record_to_schema(
         candidate_count=record.candidate_count,
         conversation_summary=record.conversation_summary,
         payload_json=record.payload_json,
+        idempotency_key=getattr(record, "idempotency_key", None),
+        payload_hash=getattr(record, "payload_hash", None),
         created_at=created_at,
         metadata=dict(record.extraction_metadata or {}),
     )
@@ -799,6 +1057,8 @@ def _build_extraction_result_record(
         candidate_count=request.candidate_count,
         conversation_summary=_sanitize_persisted_text(request.conversation_summary),
         payload_json=_sanitize_persisted_json_value(request.payload_json),
+        idempotency_key=_sanitize_persisted_text(request.idempotency_key),
+        payload_hash=_sanitize_persisted_text(request.payload_hash),
         extraction_metadata=_sanitize_persisted_json_value(dict(request.metadata)),
     )
 
@@ -835,11 +1095,13 @@ def _sanitize_persisted_json_value(value: Any) -> Any:
 
 __all__ = [
     "ExtractionEnvelopeCandidate",
+    "InlineExtractionPersistenceResult",
     "build_extraction_envelope_candidate",
     "build_extraction_envelope_candidate_with_evidence",
     "build_safe_agent_key_map",
     "get_agent_curation_metadata",
     "list_extraction_results",
+    "persist_inline_validated_extraction_result",
     "persist_extraction_result",
     "persist_extraction_results",
     "resolve_agent_key_from_tool_name",
