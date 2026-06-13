@@ -1365,6 +1365,9 @@ def _validator_evidence_scope_for_request(
 
 
 def _request_has_scoped_evidence_context(request: DomainValidationRequest) -> bool:
+    # Only selected-input quote bundles force individual validator runs. Bare
+    # request.evidence still scopes runtime evidence tools for single-result
+    # validators, but ordinary request evidence remains batchable.
     target_field_path = _optional_string(request.target.field_path)
     for bundle in _selected_evidence_quote_bundles(request.selected_inputs):
         bundle_field_path = _optional_string(bundle.get("field_path"))

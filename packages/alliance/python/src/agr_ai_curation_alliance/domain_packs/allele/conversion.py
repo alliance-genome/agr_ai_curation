@@ -227,18 +227,6 @@ def _normalized_evidence_records(
     return normalized
 
 
-def _candidate_pending_ref_id(candidate: Any, staged_fields: Mapping[str, Any], index: int) -> str:
-    pending_ref_id = _clean_text(staged_fields.get("pending_ref_id"))
-    if pending_ref_id:
-        return pending_ref_id
-    pending_ref_ids = getattr(candidate, "pending_ref_ids", None) or []
-    if pending_ref_ids:
-        pending_ref_id = _clean_text(pending_ref_ids[0])
-        if pending_ref_id:
-            return pending_ref_id
-    return f"allele-mention-{index + 1}"
-
-
 def _mention_payload(staged_fields: Mapping[str, Any], *, source_mentions: Sequence[str]) -> dict[str, Any]:
     """Build the AlleleMention payload (the active validator-binding input object).
 
@@ -735,7 +723,11 @@ def materialize_allele_builder_state(
         association_evidence_ids: list[str] = []
         for evidence_index, evidence_record in enumerate(resolved_evidence, start=1):
             evidence_id = _clean_text(evidence_record.get("evidence_record_id"))
-            assert evidence_id is not None
+            if evidence_id is None:
+                raise ValueError(
+                    "Allele builder materialization requires every resolved "
+                    "evidence record to include evidence_record_id."
+                )
             evidence_ref_id = f"evidence-quote-{retained_count}-{evidence_index}"
             association_evidence_ids.append(evidence_id)
             association_object_refs.append(
