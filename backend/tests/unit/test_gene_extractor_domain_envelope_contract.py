@@ -357,7 +357,7 @@ def test_gene_extractor_prompt_agent_and_group_rules_name_domain_envelope_contra
     assert "agr_species_context_lookup" in prompt_content
     assert "agr_species_context_lookup" in agent_data["tools"]
     assert "agr_curation_query" not in agent_data["tools"]
-    assert "context-naive LLM agent" in prompt_content
+    assert "receives selected extractor inputs, object-scoped evidence records" in prompt_content
     assert "high-value handoff channel" in prompt_content
     assert "most specific paper-backed gene or protein" in prompt_content
     assert "useful as a database lookup" in prompt_content

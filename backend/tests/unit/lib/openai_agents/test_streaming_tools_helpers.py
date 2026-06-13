@@ -2160,9 +2160,22 @@ def _chat_dispatch_domain_cases():
                             "mention": {"text": "crb 11A22"},
                             "associated_gene": {"symbol": "crb"},
                             "taxon": {"curie": "NCBITaxon:7227"},
+                            "source_mentions": ["crb 11A22"],
                         },
+                        evidence_record_ids=["evidence-crb-allele-1"],
                     )
                 ],
+                metadata={
+                    "evidence_records": [
+                        {
+                            "evidence_record_id": "evidence-crb-allele-1",
+                            "verified_quote": (
+                                "crb 11A22 embryos showed altered epithelial polarity."
+                            ),
+                            "field_path": "mention",
+                        }
+                    ]
+                },
             ),
             {"allele_mention_reference_validation"},
             0,
