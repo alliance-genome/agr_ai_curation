@@ -73,26 +73,34 @@ def migration_connection():
 
     engine = create_engine(database_url)
     schema_name = f"repair_event_removal_{uuid4().hex}"
-    connection = engine.connect()
+    connection = None
+    schema_created = False
 
     try:
         try:
+            connection = engine.connect()
             connection.execute(text(f"CREATE SCHEMA {schema_name}"))
+            connection.commit()
+            schema_created = True
+            connection.execute(text(f"SET search_path TO {schema_name}"))
             connection.commit()
         except OperationalError as exc:
             pytest.skip(f"test database is not reachable: {exc.__class__.__name__}")
 
-        connection.execute(text(f"SET search_path TO {schema_name}"))
-        connection.commit()
+        assert connection is not None
         yield connection
     finally:
-        connection.rollback()
-        try:
-            connection.execute(text(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE"))
-            connection.commit()
-        finally:
-            connection.close()
-            engine.dispose()
+        if connection is not None:
+            connection.rollback()
+            try:
+                if schema_created:
+                    connection.execute(
+                        text(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE")
+                    )
+                    connection.commit()
+            finally:
+                connection.close()
+        engine.dispose()
 
 
 def test_upgrade_refreshes_history_and_action_log_check_constraints(monkeypatch):
