@@ -715,6 +715,34 @@ def get_supervisor_max_calls_per_specialist() -> int:
 # for the documented rationale and consequences of each.
 # =============================================================================
 
+# --- Agent / turn limits ---
+
+
+def _get_single_shot_output_agent_max_turns(key: str) -> int:
+    """Read a one-shot structured-output agent turn budget with the SDK-default bound."""
+    return max(1, _get_env_int_with_fallback(key, 10))
+
+
+def get_guardrail_single_shot_max_turns() -> int:
+    """Turn budget for single-shot guardrail structured-output agents (GUARDRAIL_SINGLE_SHOT_MAX_TURNS).
+
+    These agents have no tools and only emit structured safety/topic decisions.
+    Default 10 matches the Agents SDK default they previously inherited while
+    making the bound explicit at every Runner call site.
+    """
+    return _get_single_shot_output_agent_max_turns("GUARDRAIL_SINGLE_SHOT_MAX_TURNS")
+
+
+def get_hierarchy_resolution_max_turns() -> int:
+    """Turn budget for the one-shot document hierarchy classifier (HIERARCHY_RESOLUTION_MAX_TURNS).
+
+    The hierarchy agent has no tools and returns structured section metadata.
+    Default 10 matches the Agents SDK default it previously inherited while
+    making the bound explicit at the Runner call site.
+    """
+    return _get_single_shot_output_agent_max_turns("HIERARCHY_RESOLUTION_MAX_TURNS")
+
+
 # --- Validator dispatch ---
 
 def get_max_parallel_validators() -> int:

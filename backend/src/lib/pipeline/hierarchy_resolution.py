@@ -16,9 +16,7 @@ more reliable than trying to find headers in the document.
 """
 
 import logging
-import json
 import os
-import asyncio
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
@@ -260,6 +258,7 @@ async def _call_llm_for_hierarchy(
     """
     from agents import Agent, Runner, ModelSettings
     from openai.types.shared import Reasoning
+    from src.lib.openai_agents.config import get_hierarchy_resolution_max_turns
 
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -366,7 +365,11 @@ Common abstract locations when not explicitly labeled:
         )
 
         # Run the agent
-        result = await Runner.run(hierarchy_agent, user_prompt)
+        result = await Runner.run(
+            hierarchy_agent,
+            user_prompt,
+            max_turns=get_hierarchy_resolution_max_turns(),
+        )
 
         # Store raw response for debugging
         raw_response = {

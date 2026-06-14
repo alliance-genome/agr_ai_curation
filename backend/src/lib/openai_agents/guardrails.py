@@ -32,6 +32,7 @@ from agents import (
     TResponseInputItem,
 )
 
+from .config import get_guardrail_single_shot_max_turns
 from .models import Answer
 
 logger = logging.getLogger(__name__)
@@ -187,7 +188,8 @@ async def llm_safety_guardrail(
     result = await Runner.run(
         _safety_guardrail_agent,
         input_data,
-        context=ctx.context
+        context=ctx.context,
+        max_turns=get_guardrail_single_shot_max_turns(),
     )
 
     output = result.final_output
@@ -266,7 +268,8 @@ Scientific questions are ALWAYS on-topic even if not directly about the allowed 
         result = await Runner.run(
             topic_agent,
             input_data,
-            context=ctx.context
+            context=ctx.context,
+            max_turns=get_guardrail_single_shot_max_turns(),
         )
 
         output = result.final_output
@@ -430,7 +433,7 @@ def create_tool_required_output_guardrail(
             output_guardrails=[tool_guardrail],
         )
     """
-    from agents import output_guardrail, OutputGuardrailTripwireTriggered
+    from agents import output_guardrail
 
     @output_guardrail
     async def tool_required_guardrail(

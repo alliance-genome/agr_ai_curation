@@ -88,8 +88,11 @@ async def test_pii_pattern_guardrail_passes_clean_user_message_list():
 
 @pytest.mark.asyncio
 async def test_llm_safety_guardrail_maps_runner_result(monkeypatch):
-    async def _fake_run(_guardrail_agent, _input_data, context):
+    monkeypatch.setenv("GUARDRAIL_SINGLE_SHOT_MAX_TURNS", "3")
+
+    async def _fake_run(_guardrail_agent, _input_data, context, max_turns):
         assert context == {"trace_id": "trace-1"}
+        assert max_turns == 3
         return SimpleNamespace(
             final_output=guardrails.SafetyCheckOutput(
                 is_safe=False,
@@ -112,8 +115,11 @@ async def test_llm_safety_guardrail_maps_runner_result(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_create_topic_guardrail_trips_for_off_topic_query(monkeypatch):
-    async def _fake_run(_topic_agent, _input_data, context):
+    monkeypatch.setenv("GUARDRAIL_SINGLE_SHOT_MAX_TURNS", "4")
+
+    async def _fake_run(_topic_agent, _input_data, context, max_turns):
         assert context == {"trace_id": "trace-2"}
+        assert max_turns == 4
         return SimpleNamespace(
             final_output=guardrails.TopicCheckOutput(
                 is_on_topic=False,
