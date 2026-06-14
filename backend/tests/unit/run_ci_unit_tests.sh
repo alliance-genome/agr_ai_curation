@@ -140,16 +140,12 @@ smoke = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = smoke
 spec.loader.exec_module(smoke)
 
-lockfile_path = repo_root / smoke.OPENAI_AGENTS_LOCKFILE_RELATIVE_PATH
-expected_version = smoke.parse_openai_agents_lockfile_pin(lockfile_path)
-installed_version = smoke.installed_openai_agents_version()
-if installed_version != expected_version:
-    raise SystemExit(
-        "openai-agents pin drift: "
-        f"installed {installed_version} != lockfile {expected_version} ({lockfile_path})"
-    )
+try:
+    payload = smoke.check_sdk_version_pin(checks=[], repo_root=repo_root)
+except smoke.SmokeFailure as exc:
+    raise SystemExit(str(exc)) from None
 
-print(f"openai-agents-pin-check: ok ({installed_version})")
+print(f"openai-agents-pin-check: ok ({payload['installed_version']})")
 PY
 }
 

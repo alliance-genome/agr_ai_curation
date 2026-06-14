@@ -88,7 +88,7 @@ def test_parse_args_allows_stream_chat_message_override():
 
 def _write_openai_agents_lockfile(repo_root: Path, version: str) -> Path:
     lockfile_path = repo_root / "backend" / "requirements.lock.txt"
-    lockfile_path.parent.mkdir(parents=True)
+    lockfile_path.parent.mkdir(parents=True, exist_ok=True)
     lockfile_path.write_text(
         "\n".join(
             [
