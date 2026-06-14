@@ -883,12 +883,9 @@ def _normalize_limit(limit: Optional[int]) -> Tuple[int, List[str]]:
 
 
 def _bulk_symbol_soft_cap() -> int:
-    try:
-        cap = int(os.getenv(BULK_SYMBOL_SOFT_CAP_ENV, str(BULK_SYMBOL_SOFT_CAP_DEFAULT)))
-    except (TypeError, ValueError):
-        return BULK_SYMBOL_SOFT_CAP_DEFAULT
+    cap = int(os.getenv(BULK_SYMBOL_SOFT_CAP_ENV, str(BULK_SYMBOL_SOFT_CAP_DEFAULT)))
     if cap <= 0:
-        return BULK_SYMBOL_SOFT_CAP_DEFAULT
+        raise ValueError(f"{BULK_SYMBOL_SOFT_CAP_ENV} must be positive")
     return cap
 
 

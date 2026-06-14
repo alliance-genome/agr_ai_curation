@@ -384,6 +384,15 @@ def test_search_genes_bulk_under_symbol_soft_cap_has_no_cap_warning(monkeypatch)
     assert result.data["requested_count"] == 2
 
 
+@pytest.mark.parametrize("cap_value", ["not-an-int", "0", "-1"])
+def test_bulk_symbol_soft_cap_invalid_env_fails_loudly(monkeypatch, cap_value):
+    """Invalid cap configuration should surface instead of silently defaulting."""
+    monkeypatch.setenv("AGR_BULK_SYMBOL_SOFT_CAP", cap_value)
+
+    with pytest.raises(ValueError):
+        agr_curation._bulk_symbol_soft_cap()
+
+
 def test_query_search_genes_bulk_mixed_results_are_partial(monkeypatch):
     """Mixed resolved and not-found gene inputs should be explicit partial resolution."""
     query_fn = _unwrap_function_tool(agr_curation.agr_curation_query)
