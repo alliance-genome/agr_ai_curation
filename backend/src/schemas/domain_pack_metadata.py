@@ -68,7 +68,7 @@ def _resolve_env_backed_int(value: Any, field_name: str) -> Any:
 
     env_name = match.group("name")
     raw_value = os.environ.get(env_name)
-    if raw_value is None:
+    if raw_value is None or raw_value.strip() == "":
         raw_value = match.group("default")
     if raw_value is None:
         raise ValueError(
