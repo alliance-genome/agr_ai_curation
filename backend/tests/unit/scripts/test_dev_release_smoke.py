@@ -66,7 +66,7 @@ def test_parse_args_allows_stream_chat_message_override():
     assert args.stream_chat_message == "Stream this exact prompt."
 
 
-def test_batch_plumbing_flow_uses_deterministic_file_output_payload():
+def test_batch_plumbing_flow_projects_canonical_object_rows():
     smoke = _load_smoke_module()
 
     flow = smoke.build_batch_plumbing_flow_definition()
@@ -79,56 +79,51 @@ def test_batch_plumbing_flow_uses_deterministic_file_output_payload():
     assert "record_evidence" in pdf_goal
     assert "exactly one curatable item" in pdf_goal
     assert "evidence_record_id" in pdf_goal
-    assert "check=batch_file_output" in formatter_goal
-    assert "status=completed" in formatter_goal
+    assert "canonical extraction object rows" in formatter_goal
+    assert "evidence_record_ids" in formatter_goal
     assert "batch_release_smoke_result_json" in formatter_goal
     assert projection_plan["format"] == "json"
-    assert projection_plan["row_source"] == "artifact"
+    assert projection_plan["row_source"] == "object"
     assert projection_plan["json_shape"] == "rows"
-    assert projection_plan["max_rows"] == 1
+    assert projection_plan["filters"] == [
+        {"field_ref": "object.evidence_record_ids", "op": "is_not_empty"}
+    ]
     assert projection_plan["columns"] == [
+        {"key": "item", "header": "Item", "field_ref": "object.label"},
         {
-            "key": "check",
-            "header": "Check",
-            "transform": {
-                "type": "literal",
-                "value": "batch_file_output",
-            },
-        },
-        {
-            "key": "status",
-            "header": "Status",
-            "transform": {
-                "type": "literal",
-                "value": "completed",
-            },
+            "key": "evidence_record_ids",
+            "header": "Evidence Record IDs",
+            "field_ref": "object.evidence_record_ids",
         },
     ]
 
 
-def test_require_batch_plumbing_payload_requires_exact_json_artifact():
+def test_require_batch_plumbing_payload_requires_canonical_object_rows():
     smoke = _load_smoke_module()
 
+    # Canonical object rows carrying an evidence-record reference pass.
     smoke.require_batch_plumbing_payload(
         {
             "001_batch_release_smoke_result_json_export_20260607T123456Z.json": [
-                {"check": "batch_file_output", "status": "completed"}
+                {"item": "crb", "evidence_record_ids": ["evidence-abc123"]}
             ]
         },
         output_format="json",
     )
 
+    # Unparsed (string) artifact fails.
     with pytest.raises(smoke.SmokeFailure, match="parsed JSON"):
         smoke.require_batch_plumbing_payload(
-            {"batch_release_smoke_result.txt": '[{"check":"batch_file_output","status":"completed"}]'},
+            {"batch_release_smoke_result.txt": '[{"item":"crb","evidence_record_ids":["evidence-abc123"]}]'},
             output_format="json",
         )
 
-    with pytest.raises(smoke.SmokeFailure, match="deterministic JSON payload"):
+    # Rows without an evidence-record reference fail.
+    with pytest.raises(smoke.SmokeFailure, match="evidence-record reference"):
         smoke.require_batch_plumbing_payload(
             {
                 "001_batch_release_smoke_result_json_export_20260607T123456Z.json": [
-                    {"check": "batch_file_output", "status": "changed"}
+                    {"item": "crb", "evidence_record_ids": []}
                 ]
             },
             output_format="json",

@@ -57,8 +57,12 @@ DEFAULT_FLOW_QUERY = (
 DEFAULT_FLOW_MODEL = "gpt-5.4-mini"
 DEFAULT_CHAT_MODEL = "gpt-5.5"
 DEFAULT_SPECIALIST_MODEL = "gpt-5.4-mini"
-EXPECTED_BATCH_PLUMBING_ROW = {"check": "batch_file_output", "status": "completed"}
-EXPECTED_BATCH_PLUMBING_PAYLOAD = [EXPECTED_BATCH_PLUMBING_ROW]
+# Batch plumbing exports now project canonical extraction object rows. The curation
+# CSV/TSV export path rejects artifact-summary rows ("Artifact-summary rows cannot be
+# used for curation TSV exports; select canonical object rows from a backend extraction
+# result"), so the plumbing legs assert structure -- at least one object row carrying an
+# evidence-record reference -- rather than an exact deterministic payload.
+EXPECTED_BATCH_PLUMBING_COLUMN_KEYS = ("item", "evidence_record_ids")
 DEFAULT_WORKSPACE_ADAPTER_KEY = "gene"
 DEFAULT_SHARED_SAMPLE_PDF = Path(
     "/home/ctabone/analysis/alliance/ai_curation_new/agr_ai_curation/sample_fly_publication.pdf"
@@ -1385,9 +1389,9 @@ def build_batch_plumbing_flow_definition(output_format: str = "json") -> Dict[st
                     "task_instructions": (
                         "For this batch release smoke, first read the loaded paper and extract one "
                         "text-supported curatable item, calling record_evidence for exactly one "
-                        "verbatim supporting quote. Then have the formatter create only a simple "
-                        "downloadable smoke-status artifact. Do not carry quoted paper text, evidence "
-                        "snippets, citations, or extracted findings into the formatter step."
+                        "verbatim supporting quote and retaining the returned evidence_record_id. "
+                        "Then save that single canonical item to one downloadable file containing "
+                        "its label and evidence_record_ids."
                     ),
                     "output_key": "task_input_text",
                 },
@@ -1419,37 +1423,36 @@ def build_batch_plumbing_flow_definition(output_format: str = "json") -> Dict[st
                     "output_key": "final_output",
                     "custom_instructions": (
                         f"For this smoke, use the {formatter_label} save-file tool path. "
-                        "Create exactly one downloadable file from the runtime projection plan, "
-                        "do not ask the previous specialist to rewrite data, and do not include "
-                        "extra prose or alternate rows."
+                        "Create exactly one downloadable file from the runtime projection plan "
+                        "over the canonical extraction objects, do not ask the previous specialist "
+                        "to rewrite data, and do not include extra prose or alternate rows."
                     ),
                     "step_goal": (
-                        f"Save exactly one {formatter_label} downloadable file with columns "
-                        "check and status. The only row must be "
-                        "check=batch_file_output and status=completed. Use filename "
-                        f"{filename_stem}."
+                        f"Save exactly one {formatter_label} downloadable file named {filename_stem} "
+                        "built from the canonical extraction object rows. Include each retained "
+                        "object's label and its evidence_record_ids. Do not invent rows or evidence "
+                        "IDs and do not add unrelated prose."
                     ),
                     "projection_plan": {
                         "format": output_format,
-                        "row_source": "artifact",
+                        "row_source": "object",
                         "json_shape": "rows",
-                        "max_rows": 1,
+                        "filters": [
+                            {
+                                "field_ref": "object.evidence_record_ids",
+                                "op": "is_not_empty",
+                            }
+                        ],
                         "columns": [
                             {
-                                "key": "check",
-                                "header": "Check",
-                                "transform": {
-                                    "type": "literal",
-                                    "value": "batch_file_output",
-                                },
+                                "key": "item",
+                                "header": "Item",
+                                "field_ref": "object.label",
                             },
                             {
-                                "key": "status",
-                                "header": "Status",
-                                "transform": {
-                                    "type": "literal",
-                                    "value": "completed",
-                                },
+                                "key": "evidence_record_ids",
+                                "header": "Evidence Record IDs",
+                                "field_ref": "object.evidence_record_ids",
                             },
                         ],
                     },
@@ -2154,10 +2157,15 @@ def require_batch_plumbing_payload(payloads: Dict[str, Any], *, output_format: s
         f"Batch plumbing ZIP did not contain a parsed {output_format.upper()} artifact: {payloads}",
     )
     require(
-        any(payload == EXPECTED_BATCH_PLUMBING_PAYLOAD for payload in parsed_payloads),
+        any(
+            isinstance(payload, list)
+            and len(payload) >= 1
+            and _has_evidence_record_reference(payload)
+            for payload in parsed_payloads
+        ),
         (
-            f"Batch plumbing ZIP did not contain the expected deterministic "
-            f"{output_format.upper()} payload: {payloads}"
+            f"Batch plumbing {output_format.upper()} artifact had no canonical object rows "
+            f"carrying an evidence-record reference: {payloads}"
         ),
     )
     filename_pattern = re.compile(
