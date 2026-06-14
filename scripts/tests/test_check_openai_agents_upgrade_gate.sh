@@ -47,12 +47,13 @@ EOF
 run_gate() {
   local repo_dir="$1"
   local pr_body_file="$2"
+  local diff_range="${3:-main...HEAD}"
 
   set +e
   output="$(
     bash "${SCRIPT_PATH}" \
       --repo-root "${repo_dir}" \
-      --diff-range "main...HEAD" \
+      --diff-range "${diff_range}" \
       --pr-body-file "${pr_body_file}" \
       2>&1
   )"
@@ -126,9 +127,22 @@ test_passes_when_pin_version_changes_with_smoke_evidence() {
   assert_contains "dev_release_smoke PASS evidence marker present" "${output}"
 }
 
+test_fails_when_diff_range_is_invalid() {
+  local temp_dir body output status
+  temp_dir="$(mktemp -d)"
+  make_repo "${temp_dir}/repo"
+  printf 'No smoke evidence needed.\n' > "${temp_dir}/body.md"
+
+  run_gate "${temp_dir}/repo" "${temp_dir}/body.md" "missing-ref...HEAD"
+
+  assert_exit_code "2" "${status}"
+  assert_contains "Invalid --diff-range or git diff failed: missing-ref...HEAD" "${output}"
+}
+
 test_skips_when_pin_is_unchanged
 test_skips_when_pin_line_comment_changes_without_version_change
 test_fails_when_pin_version_changes_without_smoke_evidence
 test_passes_when_pin_version_changes_with_smoke_evidence
+test_fails_when_diff_range_is_invalid
 
 echo "check_openai_agents_upgrade_gate tests passed"

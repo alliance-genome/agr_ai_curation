@@ -61,10 +61,14 @@ if [[ ! -f "${pr_body_file}" ]]; then
   exit 2
 fi
 
-diff_output="$(
+if ! diff_output="$(
   git diff --unified=0 --no-ext-diff "${diff_range}" -- \
-    backend/requirements.txt backend/requirements.lock.txt || true
-)"
+    backend/requirements.txt backend/requirements.lock.txt 2>&1
+)"; then
+  echo "Invalid --diff-range or git diff failed: ${diff_range}" >&2
+  printf '%s\n' "${diff_output}" >&2
+  exit 2
+fi
 
 old_versions="$(
   printf '%s\n' "${diff_output}" \

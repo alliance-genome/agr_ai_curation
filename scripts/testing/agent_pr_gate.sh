@@ -257,6 +257,12 @@ run_check "openai-agents-sdk-upgrade-smoke-evidence" \
   "bash scripts/testing/check_openai_agents_upgrade_gate.sh --diff-range \"${DIFF_RANGE}\" --pr-body-file \"${PR_BODY_FILE}\""
 
 run_path_scoped_check \
+  "openai-agents-upgrade-gate-shell-regression-suite" \
+  "bash scripts/tests/test_check_openai_agents_upgrade_gate.sh" \
+  "scripts/testing/check_openai_agents_upgrade_gate.sh, scripts/tests/test_check_openai_agents_upgrade_gate.sh" \
+  scripts/testing/check_openai_agents_upgrade_gate.sh scripts/tests/test_check_openai_agents_upgrade_gate.sh
+
+run_path_scoped_check \
   "installer-shell-regression-suite" \
   "bash scripts/install/tests/run.sh" \
   "scripts/install/**, docker-compose.production.yml, packages/core/**, packages/alliance/**" \
