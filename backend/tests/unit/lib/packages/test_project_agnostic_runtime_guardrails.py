@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import shutil
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest  # type: ignore[reportMissingImports]
@@ -228,16 +228,21 @@ def _reset_runtime_caches():
     agent_loader.reset_cache()
     prompt_loader.reset_cache()
     schema_discovery.reset_cache()
-    streaming_tools._tool_metadata_by_name.cache_clear()
-    streaming_tools.builder_finalization_tool_names.cache_clear()
+    _reset_streaming_tool_caches(streaming_tools)
     runtime_validation.reset_startup_agent_validation_report()
     yield
     agent_loader.reset_cache()
     prompt_loader.reset_cache()
     schema_discovery.reset_cache()
-    streaming_tools._tool_metadata_by_name.cache_clear()
-    streaming_tools.builder_finalization_tool_names.cache_clear()
+    _reset_streaming_tool_caches(streaming_tools)
     runtime_validation.reset_startup_agent_validation_report()
+
+
+def _reset_streaming_tool_caches(streaming_tools: ModuleType) -> None:
+    streaming_tools._tool_metadata_by_name.cache_clear()
+    streaming_tools._tool_provider_adapter_factories.cache_clear()
+    streaming_tools.builder_finalization_tool_names.cache_clear()
+    streaming_tools._run_state_tool_impls.cache_clear()
 
 
 def _copy_runtime_package(source: Path, packages_dir: Path, directory_name: str) -> Path:
