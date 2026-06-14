@@ -774,7 +774,15 @@ def test_output_projection_planner_tool_surface_excludes_file_savers():
     assert all(not name.startswith("save_") for name in tool_names)
 
 
-def _patch_projection_planner_runtime(monkeypatch, executor):
+_PROJECTION_PLANNER_MAX_TURNS_SENTINEL = 99
+
+
+def _patch_projection_planner_runtime(
+    monkeypatch,
+    executor,
+    *,
+    max_turns=_PROJECTION_PLANNER_MAX_TURNS_SENTINEL,
+):
     class FakeAgent:
         def __init__(self, **kwargs):
             self.name = kwargs["name"]
@@ -809,13 +817,71 @@ def _patch_projection_planner_runtime(monkeypatch, executor):
         "build_model_settings",
         lambda **kwargs: {"settings": kwargs},
     )
-    monkeypatch.setattr(executor, "get_max_turns", lambda: 60)
+    monkeypatch.setattr(executor, "get_max_turns", lambda: max_turns)
 
 
 async def _invoke_projection_tool(tool, payload: dict) -> dict:
     tool_ctx = SimpleNamespace(tool_name=getattr(tool, "name", "tool"))
     raw_result = await tool.on_invoke_tool(tool_ctx, json.dumps(payload))
     return json.loads(raw_result)
+
+
+@pytest.mark.asyncio
+async def test_projection_planner_forwards_configured_max_turns(monkeypatch):
+    executor = _executor_module()
+    _patch_projection_planner_runtime(monkeypatch, executor)
+    bundle = executor.build_flow_output_artifact_bundle(
+        completed_steps=[_completed_artifact_step()],
+        flow_name="Planner Budget Flow",
+        output_format="csv",
+    )
+    default_plan = executor.default_projection_plan(bundle, output_format="csv")
+    run_calls = []
+
+    async def _fake_run(agent, run_input, **kwargs):
+        run_calls.append({"input": run_input, "max_turns": kwargs.get("max_turns")})
+        finalize_tool = next(
+            tool
+            for tool in agent.tools
+            if getattr(tool, "name", "") == "finalize_output_projection"
+        )
+        response = await _invoke_projection_tool(
+            finalize_tool,
+            {
+                "plan_json": json.dumps(
+                    {
+                        "format": "csv",
+                        "row_source": "object",
+                        "columns": [
+                            {
+                                "key": "gene_symbol",
+                                "field_ref": "object.payload.symbol",
+                            }
+                        ],
+                    }
+                )
+            },
+        )
+        assert response["status"] == "ok"
+        return SimpleNamespace(final_output="done")
+
+    monkeypatch.setattr(executor.Runner, "run", _fake_run)
+
+    result = await executor._run_output_projection_planner(
+        bundle=bundle,
+        output_format="csv",
+        default_plan=default_plan,
+        agent_id="csv_output_formatter",
+        agent_name="CSV Formatter",
+        node_data={"custom_instructions": "Export gene symbols."},
+        resolved_query="Create the final CSV.",
+    )
+
+    assert len(run_calls) == 1
+    assert (
+        run_calls[0]["max_turns"] == _PROJECTION_PLANNER_MAX_TURNS_SENTINEL
+    )
+    assert result.rows == [{"gene_symbol": "TP53"}, {"gene_symbol": "BRCA1"}]
 
 
 @pytest.mark.asyncio
@@ -904,10 +970,9 @@ async def test_projection_planner_retries_after_invalid_finalization(monkeypatch
     )
 
     assert len(run_calls) == 2
-    # Planner uses the standard agent turn budget (get_max_turns(), patched to 60
-    # in this fixture), not a tight clamp — an 8-turn cap exhausted before
-    # finalizing richer multi-column bundles. See hotfix 0.7.3.
-    assert run_calls[0]["max_turns"] == 60
+    # Planner uses the configured agent turn budget, not a tight clamp. An
+    # 8-turn cap exhausted before finalizing richer multi-column bundles.
+    assert run_calls[0]["max_turns"] == _PROJECTION_PLANNER_MAX_TURNS_SENTINEL
     assert run_calls[0]["model"] == "resolved:configured-test-model:test-provider"
     assert run_calls[0]["tool_names"] == [
         "inspect_output_artifacts",
