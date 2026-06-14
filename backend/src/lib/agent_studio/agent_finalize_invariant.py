@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from types import SimpleNamespace
 from typing import Sequence
 
 
@@ -29,19 +28,12 @@ def _normalize_tool_ids(tool_ids: Sequence[str] | None) -> list[str]:
     return normalized
 
 
-def _builder_finalization_tool_names() -> frozenset[str]:
+def _registry_builder_finalization_tool_names() -> frozenset[str]:
     from src.lib.openai_agents.streaming_tools import (
-        _builder_finalization_tool_names as registry_builder_finalization_tool_names,
+        builder_finalization_tool_names as registry_builder_finalization_tool_names,
     )
 
     return registry_builder_finalization_tool_names()
-
-
-def _has_builder_finalize_tool(tool_ids: Sequence[str]) -> bool:
-    from src.lib.openai_agents.streaming_tools import _is_builder_materializer_agent
-
-    tool_stubs = [SimpleNamespace(name=tool_id) for tool_id in tool_ids]
-    return bool(_is_builder_materializer_agent(SimpleNamespace(tools=tool_stubs)))
 
 
 def _is_extractor_agent_category(category: str | None) -> bool:
@@ -66,9 +58,9 @@ def validate_agent_finalize_tool_invariant(
     normalized_agent_key = str(agent_key or "").strip() or "<unknown-agent>"
     normalized_tool_ids = _normalize_tool_ids(tool_ids)
     output_schema = str(output_schema_key or "").strip()
-    finalization_tool_names = _builder_finalization_tool_names()
+    finalization_tool_names = _registry_builder_finalization_tool_names()
     builder_finalize_tools = sorted(set(normalized_tool_ids) & set(finalization_tool_names))
-    has_finalize_tool = _has_builder_finalize_tool(normalized_tool_ids)
+    has_finalize_tool = bool(builder_finalize_tools)
     is_extractor_agent = _is_extractor_agent_category(category)
 
     violations: list[AgentFinalizeInvariantViolation] = []
