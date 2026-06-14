@@ -215,6 +215,23 @@ def test_experimental_condition_schema_accepts_resolved_chemical_condition(
     assert result.normalized_components[0].validator_agent.agent_id == "chemical_validation"
 
 
+def test_experimental_condition_batch_envelope_accepts_status_without_condition_status(
+    monkeypatch,
+):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+    schema_discovery.discover_agent_schemas(force_reload=True)
+    schema = schema_discovery.get_schema_for_agent("experimental_condition")
+
+    payload = _base_payload(status="unresolved")
+
+    assert "condition_status" not in payload
+    assert "condition_status" not in schema.model_fields
+
+    result = schema.model_validate(payload)
+
+    assert result.status == "unresolved"
+
+
 def test_experimental_condition_schema_preserves_ambiguous_disease_condition(
     monkeypatch,
 ):
