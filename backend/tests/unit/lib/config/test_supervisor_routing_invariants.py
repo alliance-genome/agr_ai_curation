@@ -5,6 +5,7 @@ import re
 
 from src.lib.config import agent_loader
 from src.lib.domain_packs.registry import load_domain_pack_registry
+from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
 
 from ..packages import find_repo_root
 
@@ -44,19 +45,20 @@ def _iter_domain_pack_validator_refs():
     registry = load_domain_pack_registry(ALLIANCE_DOMAIN_PACKS_DIR)
 
     for loaded_pack in registry.loaded_packs:
-        bindings = loaded_pack.metadata.metadata.get("validator_bindings", {})
-        for bucket in ("active", "under_development"):
-            for binding in bindings.get(bucket, []):
-                validator_agent = binding.get("validator_agent")
-                if not validator_agent:
-                    continue
-                yield {
-                    "pack_id": loaded_pack.pack_id,
-                    "bucket": bucket,
-                    "binding_id": binding["binding_id"],
-                    "package_id": validator_agent["package_id"],
-                    "agent_id": validator_agent["agent_id"],
-                }
+        validation_registry = DomainPackValidationRegistry.from_domain_pack(loaded_pack)
+        for binding in validation_registry.bindings:
+            if binding.validator_agent is None:
+                continue
+            yield {
+                "pack_id": loaded_pack.pack_id,
+                "state": binding.state.value,
+                "source_scope": binding.source_scope,
+                "source_object_type": binding.source_object_type,
+                "source_field_path": binding.source_field_path,
+                "binding_id": binding.binding_id,
+                "package_id": binding.validator_agent.package_id,
+                "agent_id": binding.validator_agent.agent_id,
+            }
 
 
 def test_supervisor_prompt_references_only_registered_specialist_tools(
