@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from enum import Enum
 from pathlib import PurePosixPath
@@ -20,6 +21,9 @@ from .domain_envelope import (
 _SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 _PACK_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _SYMBOLIC_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+_ENV_INT_REF_PATTERN = re.compile(
+    r"^\$\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?::-(?P<default>-?\d+))?\}$"
+)
 
 
 def _validate_semver(value: str, field_name: str) -> str:
@@ -44,6 +48,39 @@ def _validate_symbolic_name(value: str, field_name: str) -> str:
             "digits, dots, underscores, hyphens, or colons"
         )
     return value
+
+
+def _resolve_env_backed_int(value: Any, field_name: str) -> Any:
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be an integer, not a boolean")
+    if value is None or isinstance(value, int):
+        return value
+    if not isinstance(value, str):
+        return value
+
+    text = value.strip()
+    if text.lstrip("-").isdigit():
+        return int(text)
+
+    match = _ENV_INT_REF_PATTERN.match(text)
+    if match is None:
+        return value
+
+    env_name = match.group("name")
+    raw_value = os.environ.get(env_name)
+    if raw_value is None:
+        raw_value = match.group("default")
+    if raw_value is None:
+        raise ValueError(
+            f"{field_name} references unset environment variable {env_name} "
+            "without a default"
+        )
+    try:
+        return int(raw_value)
+    except ValueError as exc:
+        raise ValueError(
+            f"{field_name} environment variable {env_name} must be an integer"
+        ) from exc
 
 
 def _validate_relative_pack_path(value: str, field_name: str) -> str:
@@ -326,6 +363,11 @@ class DomainPackValidatorBatchConfig(DomainPackMetadataBaseModel):
     family: Optional[str] = None
     max_size: Optional[int] = Field(default=None, ge=1)
 
+    @field_validator("max_size", mode="before")
+    @classmethod
+    def _validate_max_size(cls, value: Any) -> Any:
+        return _resolve_env_backed_int(value, "validator_bindings.batch.max_size")
+
     @field_validator("family")
     @classmethod
     def _validate_family(cls, value: Optional[str]) -> Optional[str]:
@@ -355,6 +397,11 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
         default_factory=DomainPackValidatorCuratorOverride
     )
     definition_state: DefinitionState = DefinitionState.STABLE
+
+    @field_validator("max_tool_calls", mode="before")
+    @classmethod
+    def _validate_max_tool_calls(cls, value: Any) -> Any:
+        return _resolve_env_backed_int(value, "validator_bindings.max_tool_calls")
 
     @field_validator("binding_id")
     @classmethod
@@ -386,6 +433,11 @@ class DomainPackUnderDevelopmentValidatorBinding(DomainPackMetadataBaseModel):
     expected_result_fields: dict[str, Any] = Field(default_factory=dict)
     max_tool_calls: Optional[int] = Field(default=None, ge=0)
     definition_state: DefinitionState = DefinitionState.IN_DEVELOPMENT
+
+    @field_validator("max_tool_calls", mode="before")
+    @classmethod
+    def _validate_max_tool_calls(cls, value: Any) -> Any:
+        return _resolve_env_backed_int(value, "validator_bindings.max_tool_calls")
 
     @field_validator("binding_id")
     @classmethod

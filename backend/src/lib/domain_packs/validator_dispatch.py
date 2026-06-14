@@ -1088,11 +1088,7 @@ def run_package_scoped_validator_agent(
     payload = json.dumps(provider_payload, sort_keys=True)
     if hasattr(Runner, "run_sync"):
         run_kwargs: dict[str, Any] = {"input": payload}
-        effective_max_tool_calls = (
-            binding.max_tool_calls
-            if binding.max_tool_calls is not None
-            else _DEFAULT_VALIDATOR_MAX_TOOL_CALLS
-        )
+        effective_max_tool_calls = _effective_validator_max_tool_calls(binding)
         run_kwargs["max_turns"] = _max_turns_with_validator_finalization(
             effective_max_tool_calls,
             minimum=4,
@@ -1243,11 +1239,7 @@ def run_package_scoped_validator_agent_batch(
     payload = json.dumps(provider_payload, sort_keys=True)
     if hasattr(Runner, "run_sync"):
         run_kwargs: dict[str, Any] = {"input": payload}
-        effective_max_tool_calls = (
-            binding.max_tool_calls
-            if binding.max_tool_calls is not None
-            else _DEFAULT_VALIDATOR_MAX_TOOL_CALLS
-        )
+        effective_max_tool_calls = _effective_validator_max_tool_calls(binding)
         # Per-JOB-aware budget: the batch agent validates every job in one run and
         # a composite validator (e.g. experimental_condition) makes several
         # per-component lookups per job, so the turn budget must scale with
@@ -1689,6 +1681,12 @@ def _max_turns_with_validator_finalization(
     minimum: int,
 ) -> int:
     return max(max_tool_calls + 2, minimum)
+
+
+def _effective_validator_max_tool_calls(binding: ValidatorBinding) -> int:
+    if binding.max_tool_calls is not None:
+        return binding.max_tool_calls
+    return _DEFAULT_VALIDATOR_MAX_TOOL_CALLS
 
 
 def _build_finalize_validator_result_tool(
