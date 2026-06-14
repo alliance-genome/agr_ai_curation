@@ -3,7 +3,6 @@
 import importlib
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -309,6 +308,82 @@ def test_query_search_genes_bulk_all_not_found_is_no_matches(monkeypatch):
     assert [item["count"] for item in result.data["items"]] == [0, 0]
 
 
+def test_search_genes_bulk_applies_symbol_soft_cap_and_warning(monkeypatch):
+    """Oversized gene bulk lookup should process a deterministic prefix and warn."""
+    query_fn = _unwrap_function_tool(agr_curation.agr_curation_query)
+    searched_symbols = []
+
+    class FakeDb:
+        @staticmethod
+        def search_entities(entity_type, search_pattern, taxon_curie, include_synonyms, limit):
+            _ = entity_type, taxon_curie, include_synonyms, limit
+            searched_symbols.append(search_pattern)
+            return []
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    monkeypatch.setenv("AGR_BULK_SYMBOL_SOFT_CAP", "2")
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"FB": "NCBITaxon:7227"})
+    monkeypatch.setattr(agr_curation, "_GROUP_MAPPING_LOAD_ERROR", None)
+
+    result = query_fn(
+        method="search_genes_bulk",
+        gene_symbols=["alpha", "beta", "gamma", "alpha"],
+        data_provider="FB",
+        limit=10,
+    )
+
+    assert result.status == "ok"
+    assert result.warnings == ["bulk_symbol_cap_applied:2:3"]
+    assert searched_symbols == ["alpha", "beta"]
+    assert [item["input"] for item in result.data["items"]] == ["alpha", "beta"]
+    assert result.data["requested_count"] == 2
+
+
+def test_search_genes_bulk_under_symbol_soft_cap_has_no_cap_warning(monkeypatch):
+    """Under-cap gene bulk lookup should keep processing and warning behavior unchanged."""
+    query_fn = _unwrap_function_tool(agr_curation.agr_curation_query)
+    searched_symbols = []
+
+    class FakeDb:
+        @staticmethod
+        def search_entities(entity_type, search_pattern, taxon_curie, include_synonyms, limit):
+            _ = entity_type, taxon_curie, include_synonyms, limit
+            searched_symbols.append(search_pattern)
+            return []
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    monkeypatch.setenv("AGR_BULK_SYMBOL_SOFT_CAP", "3")
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"FB": "NCBITaxon:7227"})
+    monkeypatch.setattr(agr_curation, "_GROUP_MAPPING_LOAD_ERROR", None)
+
+    result = query_fn(
+        method="search_genes_bulk",
+        gene_symbols=["alpha", "beta"],
+        data_provider="FB",
+        limit=10,
+    )
+
+    assert result.status == "ok"
+    assert not [
+        warning
+        for warning in (result.warnings or [])
+        if warning.startswith("bulk_symbol_cap_applied:")
+    ]
+    assert searched_symbols == ["alpha", "beta"]
+    assert [item["input"] for item in result.data["items"]] == ["alpha", "beta"]
+    assert result.data["requested_count"] == 2
+
+
 def test_query_search_genes_bulk_mixed_results_are_partial(monkeypatch):
     """Mixed resolved and not-found gene inputs should be explicit partial resolution."""
     query_fn = _unwrap_function_tool(agr_curation.agr_curation_query)
@@ -476,6 +551,50 @@ def test_query_search_alleles_bulk_all_not_found_is_no_matches(monkeypatch):
         "no_matches",
         "no_matches",
     ]
+
+
+def test_search_alleles_bulk_applies_symbol_soft_cap_before_fuzzy_fallback(monkeypatch):
+    """Oversized allele bulk lookup should not run per-symbol fuzzy fallback past the cap."""
+    query_fn = _unwrap_function_tool(agr_curation.agr_curation_query)
+    searched_symbols = []
+    fuzzy_symbols = []
+
+    class FakeDb:
+        @staticmethod
+        def search_entities(entity_type, search_pattern, taxon_curie, include_synonyms, limit):
+            _ = entity_type, taxon_curie, include_synonyms, limit
+            searched_symbols.append(search_pattern)
+            return []
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    def fake_fuzzy_search(_db, search_pattern, taxon_curie, include_synonyms, limit):
+        _ = taxon_curie, include_synonyms, limit
+        fuzzy_symbols.append(search_pattern)
+        return []
+
+    monkeypatch.setenv("AGR_BULK_SYMBOL_SOFT_CAP", "2")
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"FB": "NCBITaxon:7227"})
+    monkeypatch.setattr(agr_curation, "_GROUP_MAPPING_LOAD_ERROR", None)
+    monkeypatch.setattr(agr_curation, "_search_alleles_fuzzy_via_db", fake_fuzzy_search)
+
+    result = query_fn(
+        method="search_alleles_bulk",
+        allele_symbols=["alpha", "beta", "gamma"],
+        data_provider="FB",
+        limit=10,
+    )
+
+    assert result.status == "ok"
+    assert result.warnings == ["bulk_symbol_cap_applied:2:3"]
+    assert searched_symbols == ["alpha", "beta"]
+    assert fuzzy_symbols == ["alpha", "beta"]
+    assert [item["input"] for item in result.data["items"]] == ["alpha", "beta"]
+    assert result.data["requested_count"] == 2
 
 
 def test_query_search_genes_bulk_searches_spaced_symbols(monkeypatch):
