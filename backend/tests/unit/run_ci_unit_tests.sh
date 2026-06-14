@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+REPO_ROOT="$(cd "${BACKEND_DIR}/.." && pwd)"
 IGNORE_FILE="${SCRIPT_DIR}/.ci-ignore-paths"
 DOMAIN_ENVELOPE_RELEASE_PATH_FILE="${SCRIPT_DIR}/.domain-envelope-release-test-paths"
 SUITE="all"
@@ -122,6 +123,36 @@ load_path_file() {
   fi
 }
 
+assert_openai_agents_pin() {
+  REPO_ROOT="${REPO_ROOT}" python - <<'PY'
+import importlib.util
+import os
+from pathlib import Path
+import sys
+
+repo_root = Path(os.environ["REPO_ROOT"])
+module_path = repo_root / "scripts" / "testing" / "dev_release_smoke.py"
+spec = importlib.util.spec_from_file_location("dev_release_smoke", module_path)
+if spec is None or spec.loader is None:
+    raise SystemExit(f"Unable to load smoke module from {module_path}")
+
+smoke = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = smoke
+spec.loader.exec_module(smoke)
+
+lockfile_path = repo_root / smoke.OPENAI_AGENTS_LOCKFILE_RELATIVE_PATH
+expected_version = smoke.parse_openai_agents_lockfile_pin(lockfile_path)
+installed_version = smoke.installed_openai_agents_version()
+if installed_version != expected_version:
+    raise SystemExit(
+        "openai-agents pin drift: "
+        f"installed {installed_version} != lockfile {expected_version} ({lockfile_path})"
+    )
+
+print(f"openai-agents-pin-check: ok ({installed_version})")
+PY
+}
+
 if [[ ! -f "${IGNORE_FILE}" ]]; then
   echo "Missing ignore file: ${IGNORE_FILE}" >&2
   exit 1
@@ -146,6 +177,7 @@ case "${SUITE}" in
 
     cd "${BACKEND_DIR}"
     mkdir -p "$(dirname "${UNIT_TEST_JUNIT_XML}")" "$(dirname "${UNIT_TEST_SUMMARY_FILE}")"
+    assert_openai_agents_pin
 
     pytest_args=(
       tests/unit/
