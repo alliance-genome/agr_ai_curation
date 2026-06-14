@@ -12,12 +12,12 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
-sys.path.insert(
-    0,
-    str(Path(__file__).parent.parent.parent.parent / "packages" / "alliance" / "python" / "src"),
-)
+REPO_ROOT = Path(__file__).resolve().parents[4]
+ALLIANCE_PYTHON_SRC = REPO_ROOT / "packages" / "alliance" / "python" / "src"
+if str(ALLIANCE_PYTHON_SRC) not in sys.path:
+    sys.path.insert(0, str(ALLIANCE_PYTHON_SRC))
 
-from agr_ai_curation_alliance.tools import agr_curation
+from agr_ai_curation_alliance.tools import agr_curation  # noqa: E402
 
 pytestmark = [pytest.mark.integration, pytest.mark.database_integration]
 

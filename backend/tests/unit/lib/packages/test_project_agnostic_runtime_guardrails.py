@@ -185,6 +185,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/contract/test_documents_upload.py"),
     Path("backend/tests/contract/test_list_documents.py"),
     Path("backend/tests/integration/conftest.py"),
+    Path("backend/tests/integration/alliance/test_allele_fuzzy_db_lookup.py"),
     Path("backend/tests/integration/evidence_test_support.py"),
     Path("backend/tests/integration/test_cross_user_access.py"),
     Path("backend/tests/integration/test_curation_submission_e2e.py"),
