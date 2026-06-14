@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import importlib.metadata
 import io
 import json
 import mimetypes
@@ -57,6 +58,8 @@ DEFAULT_FLOW_QUERY = (
 DEFAULT_FLOW_MODEL = "gpt-5.4-mini"
 DEFAULT_CHAT_MODEL = "gpt-5.5"
 DEFAULT_SPECIALIST_MODEL = "gpt-5.4-mini"
+OPENAI_AGENTS_DISTRIBUTION = "openai-agents"
+OPENAI_AGENTS_LOCKFILE_RELATIVE_PATH = Path("backend/requirements.lock.txt")
 # Batch plumbing exports now project canonical extraction object rows. The curation
 # CSV/TSV export path rejects artifact-summary rows ("Artifact-summary rows cannot be
 # used for curation TSV exports; select canonical object rows from a backend extraction
@@ -280,6 +283,7 @@ def append_check(
 def compute_scope_limitations(args: argparse.Namespace) -> list[str]:
     limitations: list[str] = []
     for name, enabled in (
+        ("sdk_pin_check", args.skip_sdk_pin_check),
         ("provider_health", args.skip_provider_health),
         ("user_info", args.skip_user_info),
         ("chat", args.skip_chat),
@@ -293,6 +297,69 @@ def compute_scope_limitations(args: argparse.Namespace) -> list[str]:
         if enabled:
             limitations.append(name)
     return limitations
+
+
+def parse_openai_agents_lockfile_pin(lockfile_path: Path) -> str:
+    require(lockfile_path.exists(), f"OpenAI Agents lockfile not found: {lockfile_path}")
+
+    pins: list[str] = []
+    for raw_line in lockfile_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = re.match(r"^openai-agents(?:\[.*?\])?\s*==\s*([^\s#;]+)", line)
+        if match:
+            pins.append(match.group(1))
+
+    require(
+        len(pins) == 1,
+        f"Expected exactly one openai-agents pin in {lockfile_path}, found {len(pins)}",
+    )
+    return pins[0]
+
+
+def installed_openai_agents_version() -> str:
+    return importlib.metadata.version(OPENAI_AGENTS_DISTRIBUTION)
+
+
+def check_sdk_version_pin(
+    *,
+    checks: list[Dict[str, Any]],
+    repo_root: Optional[Path] = None,
+) -> Dict[str, Any]:
+    root = repo_root or resolve_repo_root()
+    lockfile_path = root / OPENAI_AGENTS_LOCKFILE_RELATIVE_PATH
+
+    try:
+        expected_version = parse_openai_agents_lockfile_pin(lockfile_path)
+        installed_version = installed_openai_agents_version()
+    except Exception as exc:
+        payload = {
+            "distribution": OPENAI_AGENTS_DISTRIBUTION,
+            "lockfile_path": str(lockfile_path),
+            "error": str(exc),
+        }
+        append_check(checks, step="sdk_version_pin", ok=False, status_code=0, payload=payload)
+        raise SmokeFailure(f"OpenAI Agents SDK pin check failed: {exc}") from exc
+
+    # packages/alliance/requirements/runtime.txt is a known secondary unpinned
+    # source; the backend lockfile is the authoritative drift guard for images.
+    payload = {
+        "distribution": OPENAI_AGENTS_DISTRIBUTION,
+        "installed_version": installed_version,
+        "lockfile_version": expected_version,
+        "lockfile_path": str(lockfile_path),
+    }
+    ok = installed_version == expected_version
+    append_check(checks, step="sdk_version_pin", ok=ok, status_code=0, payload=payload)
+    require(
+        ok,
+        (
+            f"Installed openai-agents version {installed_version!r} does not match "
+            f"lockfile pin {expected_version!r} in {lockfile_path}"
+        ),
+    )
+    return payload
 
 
 def require_safe_fixture_deletion_principal(current_user: Dict[str, Any]) -> None:
@@ -2403,6 +2470,10 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
     secondary_pdf: Optional[Path] = None
 
     try:
+        if not args.skip_sdk_pin_check:
+            print_step("Checking installed OpenAI Agents SDK against lockfile pin")
+            evidence["preflight"]["sdk_version_pin"] = check_sdk_version_pin(checks=checks)
+
         verify_api_key_mode(api_key, allow_dev_mode_fallback=args.allow_dev_mode_fallback)
         if args.skip_user_info and not args.allow_dev_mode_fallback:
             raise SmokeFailure(
@@ -3115,6 +3186,11 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--skip-provider-health", action="store_true", help="Skip /api/admin/health/llm-providers")
+    parser.add_argument(
+        "--skip-sdk-pin-check",
+        action="store_true",
+        help="Skip the installed openai-agents vs backend lockfile pin preflight",
+    )
     parser.add_argument("--skip-user-info", action="store_true", help="Skip /api/users/me preflight")
     parser.add_argument("--skip-chat", action="store_true", help="Skip the chat smoke stage")
     parser.add_argument("--skip-flow", action="store_true", help="Skip the flow smoke stage")

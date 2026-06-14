@@ -23,6 +23,7 @@ def _load_smoke_module():
 def test_compute_scope_limitations_includes_debug_relaxations():
     smoke = _load_smoke_module()
     args = SimpleNamespace(
+        skip_sdk_pin_check=False,
         skip_provider_health=False,
         skip_user_info=True,
         skip_chat=False,
@@ -44,11 +45,30 @@ def test_compute_scope_limitations_includes_debug_relaxations():
     ]
 
 
+def test_compute_scope_limitations_includes_sdk_pin_check_skip():
+    smoke = _load_smoke_module()
+    args = SimpleNamespace(
+        skip_sdk_pin_check=True,
+        skip_provider_health=False,
+        skip_user_info=False,
+        skip_chat=False,
+        skip_flow=False,
+        skip_workspace=False,
+        skip_batch=False,
+        include_rerank_provider_smoke=True,
+        allow_dev_mode_fallback=False,
+        allow_duplicate_reuse=False,
+    )
+
+    assert smoke.compute_scope_limitations(args) == ["sdk_pin_check"]
+
+
 def test_parse_args_keeps_rerank_provider_smoke_opt_in_by_default():
     smoke = _load_smoke_module()
 
     args = smoke.parse_args([])
 
+    assert args.skip_sdk_pin_check is False
     assert args.include_rerank_provider_smoke is False
     assert args.rerank_provider_smoke_base_url == "http://localhost:8000"
     assert args.rerank_provider_smoke_script == "scripts/testing/rerank_provider_smoke_local.sh"
@@ -64,6 +84,77 @@ def test_parse_args_allows_stream_chat_message_override():
 
     assert args.chat_message == smoke.DEFAULT_CHAT_MESSAGE
     assert args.stream_chat_message == "Stream this exact prompt."
+
+
+def _write_openai_agents_lockfile(repo_root: Path, version: str) -> Path:
+    lockfile_path = repo_root / "backend" / "requirements.lock.txt"
+    lockfile_path.parent.mkdir(parents=True, exist_ok=True)
+    lockfile_path.write_text(
+        "\n".join(
+            [
+                "# generated lockfile fixture",
+                "openai==2.41.0",
+                f"openai-agents=={version}",
+                "openinference-instrumentation-openai-agents==1.6.1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return lockfile_path
+
+
+def test_check_sdk_version_pin_accepts_matching_installed_version(monkeypatch, tmp_path):
+    smoke = _load_smoke_module()
+    lockfile_path = _write_openai_agents_lockfile(tmp_path, "0.17.4")
+    checks = []
+
+    def _fake_version(distribution: str) -> str:
+        assert distribution == "openai-agents"
+        return "0.17.4"
+
+    monkeypatch.setattr(smoke.importlib.metadata, "version", _fake_version)
+
+    payload = smoke.check_sdk_version_pin(checks=checks, repo_root=tmp_path)
+
+    assert payload == {
+        "distribution": "openai-agents",
+        "installed_version": "0.17.4",
+        "lockfile_version": "0.17.4",
+        "lockfile_path": str(lockfile_path),
+    }
+    assert checks == [
+        {
+            "step": "sdk_version_pin",
+            "ok": True,
+            "status_code": 0,
+            "payload": payload,
+        }
+    ]
+
+
+def test_check_sdk_version_pin_rejects_installed_version_drift(monkeypatch, tmp_path):
+    smoke = _load_smoke_module()
+    lockfile_path = _write_openai_agents_lockfile(tmp_path, "0.17.4")
+    checks = []
+
+    monkeypatch.setattr(smoke.importlib.metadata, "version", lambda _distribution: "0.12.5")
+
+    with pytest.raises(smoke.SmokeFailure, match="does not match lockfile pin"):
+        smoke.check_sdk_version_pin(checks=checks, repo_root=tmp_path)
+
+    assert checks == [
+        {
+            "step": "sdk_version_pin",
+            "ok": False,
+            "status_code": 0,
+            "payload": {
+                "distribution": "openai-agents",
+                "installed_version": "0.12.5",
+                "lockfile_version": "0.17.4",
+                "lockfile_path": str(lockfile_path),
+            },
+        }
+    ]
 
 
 def test_batch_plumbing_flow_projects_canonical_object_rows():
