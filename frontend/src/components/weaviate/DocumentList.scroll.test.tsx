@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Box } from '@mui/material';
+import { gridClasses } from '@mui/x-data-grid';
 import { fireEvent, render, screen, waitFor, within } from '../../test/test-utils';
 import DocumentList from './DocumentList';
 import type { DocumentSummary } from '../../services/weaviate';
@@ -90,6 +91,10 @@ function makeRect(width: number, height: number): DOMRect {
   } as DOMRect;
 }
 
+const gridClassSelector = (className: string): string => `.${className}`;
+
+const hasGridClass = (element: HTMLElement, className: string): boolean => element.classList.contains(className);
+
 function installMeasuredLayout(viewportHeight: number): LayoutMocks {
   const tableHeight = viewportHeight === 620 ? 300 : 580;
   const width = viewportHeight === 620 ? 1024 : 1280;
@@ -103,22 +108,22 @@ function installMeasuredLayout(viewportHeight: number): LayoutMocks {
 
     if (
       element.dataset.testid === 'documents-table-scroll-region' ||
-      element.classList.contains('MuiDataGrid-root') ||
-      element.classList.contains('MuiDataGrid-main') ||
-      element.classList.contains('MuiDataGrid-virtualScroller')
+      hasGridClass(element, gridClasses.root) ||
+      hasGridClass(element, gridClasses.main) ||
+      hasGridClass(element, gridClasses.virtualScroller)
     ) {
       return { width: width - 48, height: tableHeight };
     }
 
-    if (element.classList.contains('MuiDataGrid-columnHeaders')) {
+    if (hasGridClass(element, gridClasses.columnHeaders)) {
       return { width: width - 48, height: 56 };
     }
 
-    if (element.classList.contains('MuiDataGrid-footerContainer')) {
+    if (hasGridClass(element, gridClasses.footerContainer)) {
       return { width: width - 48, height: 52 };
     }
 
-    if (element.classList.contains('MuiDataGrid-row')) {
+    if (hasGridClass(element, gridClasses.row)) {
       return { width: width - 48, height: rowHeight };
     }
 
@@ -159,7 +164,7 @@ function installMeasuredLayout(viewportHeight: number): LayoutMocks {
   const scrollHeightSpy = vi
     .spyOn(HTMLElement.prototype, 'scrollHeight', 'get')
     .mockImplementation(function getScrollHeight(this: HTMLElement) {
-      if (this.classList.contains('MuiDataGrid-virtualScroller')) {
+      if (hasGridClass(this, gridClasses.virtualScroller)) {
         return totalRows * rowHeight;
       }
 
@@ -291,8 +296,10 @@ describe('DocumentList real DataGrid scroll behavior', () => {
     const scrollRegion = screen.getByTestId('documents-table-scroll-region');
     expect(scrollRegion).toHaveStyle({ overflow: 'hidden' });
 
+    // MUI X 6 does not expose the virtual scroller as a slot prop, so this test
+    // uses MUI's exported class map as the stable hook for the real scroll node.
     const virtualScroller = await waitFor(() => {
-      const element = scrollRegion.querySelector<HTMLElement>('.MuiDataGrid-virtualScroller');
+      const element = scrollRegion.querySelector<HTMLElement>(gridClassSelector(gridClasses.virtualScroller));
       expect(element).not.toBeNull();
       expect(element!.clientHeight).toBeGreaterThan(0);
       expect(element!.scrollHeight).toBeGreaterThan(element!.clientHeight);
