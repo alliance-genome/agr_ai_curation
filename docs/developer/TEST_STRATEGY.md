@@ -79,6 +79,20 @@ docker compose -f docker-compose.test.yml run --rm backend-contract-tests \
 
 The path list is `backend/tests/contract/.alliance-domain-pack-test-paths`.
 
+## Guardrail Catalog
+
+Invariant, scan, and smoke guards are catalogued in
+`docs/testing/guardrail-catalog.md`. Any new guardrail test should add a catalog
+row in the same change, including what it protects, its trace or incident, and
+the repo-relative test module or guard file.
+
+The cheap structural catalog check is:
+
+```bash
+docker compose -f docker-compose.test.yml run --rm backend-unit-tests \
+  bash -lc "python -m pytest tests/unit/test_guardrail_catalog.py -v --tb=short"
+```
+
 ## LinkML and Domain-Pack Fixtures
 
 Alliance domain packs pin LinkML provider refs in package metadata. Tests should

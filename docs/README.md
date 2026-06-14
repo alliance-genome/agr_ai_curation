@@ -11,6 +11,7 @@ This index defines where authoritative project knowledge lives.
 | Curator documentation index | `docs/curator/README.md` | Entry point for curator workflows |
 | Configuration model | `config/README.md` | Configuration hierarchy and ownership |
 | Test scope and intent | `docs/developer/TEST_STRATEGY.md` | Test boundaries and health guidance |
+| Guardrail catalog | `docs/testing/guardrail-catalog.md` | Invariant, scan, and smoke guards with their protecting test paths |
 | Domain-envelope architecture | `docs/developer/guides/DOMAIN_ENVELOPES.md` | 0.7.0 envelope/domain-pack source-of-truth, validation, materialization, export, and submission contracts |
 | Gene Expression 0.7.0 release contract | `docs/developer/guides/GENE_EXPRESSION_0_7_0.md` | Pinned LinkML source, fixtures, validation behavior, export shape, known limitations, and non-Alliance domain-pack walkthrough |
 | Symphony execution contract | `.symphony/WORKFLOW.md` | State and behavior for unattended execution |
