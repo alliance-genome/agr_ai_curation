@@ -1,5 +1,6 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '../../test/test-utils';
+import { Box } from '@mui/material';
+import { render, screen, fireEvent, waitFor, within } from '../../test/test-utils';
 import DocumentList from './DocumentList';
 import type { DocumentSummary } from '../../services/weaviate';
 import {
@@ -73,12 +74,14 @@ vi.mock('@mui/x-data-grid', async () => {
     checkboxSelection = false,
     rowSelectionModel,
     onRowSelectionModelChange,
+    sx,
   }: {
     rows?: any[];
     columns?: any[];
     checkboxSelection?: boolean;
     rowSelectionModel?: string[];
     onRowSelectionModelChange?: (ids: string[]) => void;
+    sx?: Record<string, unknown>;
   }) => {
     const [internalSelection, setInternalSelection] = React.useState<string[]>([]);
     const selectedIds =
@@ -92,7 +95,14 @@ vi.mock('@mui/x-data-grid', async () => {
     };
 
     return (
-      <div className="MuiDataGrid-root" role="grid">
+      <div
+        className="MuiDataGrid-root"
+        role="grid"
+        style={{
+          height: typeof sx?.height === 'string' ? sx.height : undefined,
+          minHeight: typeof sx?.minHeight === 'number' ? `${sx.minHeight}px` : undefined,
+        }}
+      >
         <table>
           <thead>
             <tr>
@@ -330,6 +340,44 @@ describe('DocumentList', () => {
     // DataGrid should handle pagination internally
     const grid = container.querySelector('.MuiDataGrid-root');
     expect(grid).toBeInTheDocument();
+  });
+
+  it('keeps the table in a bounded scroll region with lower row actions reachable', () => {
+    const docs = Array.from({ length: 40 }, (_, index) => {
+      const rowNumber = index + 1;
+      return createTestDocument({
+        id: `doc-${rowNumber}`,
+        filename: `doc-${rowNumber}.pdf`,
+        title: `Document ${rowNumber}`,
+      });
+    });
+
+    render(
+      <Box sx={{ display: 'flex', height: 620 }}>
+        <DocumentList
+          {...defaultProps}
+          documents={docs}
+          totalCount={docs.length}
+          checkboxSelection={true}
+          filterBar={<Box>Filter bar visible</Box>}
+        />
+      </Box>
+    );
+
+    const scrollRegion = screen.getByTestId('documents-table-scroll-region');
+    expect(scrollRegion).toHaveStyle({
+      overflow: 'hidden',
+    });
+
+    const grid = screen.getByRole('grid');
+    expect(grid).toHaveStyle({
+      height: '100%',
+      minHeight: '0px',
+    });
+
+    const finalRow = screen.getByText('doc-40.pdf').closest('tr');
+    expect(finalRow).not.toBeNull();
+    expect(within(finalRow!).getAllByRole('button').length).toBeGreaterThan(0);
   });
 
   it('handles sorting', () => {

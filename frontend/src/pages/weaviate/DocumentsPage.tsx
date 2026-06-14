@@ -474,7 +474,17 @@ const DocumentsPage: React.FC = () => {
   );
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <Box
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        flex: '1 1 auto',
+        minHeight: 0,
+        height: '100%',
+        width: '100%',
+        overflow: 'hidden',
+      }}
+    >
       {/* Selection Bar - shows when documents are selected */}
       {selectedDocumentIds.length > 0 && (
         <Paper
@@ -517,7 +527,15 @@ const DocumentsPage: React.FC = () => {
       )}
 
       {/* Main Content */}
-      <Box sx={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <Box
+        sx={{
+          flex: '1 1 auto',
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+      >
         <Suspense fallback={<DocumentsPageSectionFallback />}>
           <PdfJobsPanel jobs={jobs} loading={jobsLoading} onCancelJob={handleCancelJob} />
           <DocumentList

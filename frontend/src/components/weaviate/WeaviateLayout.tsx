@@ -8,7 +8,7 @@ const WeaviateLayout: React.FC = () => {
   const drawerWidth = isSidebarOpen ? 240 : 64
 
   return (
-    <Box sx={{ display: 'flex', width: '100%', height: '100%' }}>
+    <Box sx={{ display: 'flex', width: '100%', height: '100%', minHeight: 0 }}>
       <Sidebar
         open={isSidebarOpen}
         onToggle={() => setIsSidebarOpen(!isSidebarOpen)}
@@ -19,6 +19,9 @@ const WeaviateLayout: React.FC = () => {
           flexGrow: 1,
           p: 3,
           width: '100%',
+          height: '100%',
+          minWidth: 0,
+          minHeight: 0,
           marginLeft: `${drawerWidth}px`,
           transition: theme => theme.transitions.create(['margin', 'width'], {
             easing: theme.transitions.easing.sharp,
@@ -28,10 +31,23 @@ const WeaviateLayout: React.FC = () => {
           mx: 'auto',
           display: 'flex',
           flexDirection: 'column',
-          alignItems: 'center',
+          alignItems: 'stretch',
+          overflow: 'hidden',
         }}
       >
-        <Box sx={{ width: '100%', maxWidth: '1200px' }}>
+        <Box
+          data-testid="weaviate-outlet-frame"
+          sx={{
+            width: '100%',
+            maxWidth: '1200px',
+            flex: '1 1 auto',
+            minHeight: 0,
+            mx: 'auto',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
+        >
           <Outlet />
         </Box>
       </Box>

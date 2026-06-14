@@ -487,7 +487,17 @@ const DocumentList: React.FC<DocumentListProps> = ({
   const hasDocuments = documents.length > 0;
 
   return (
-    <Box sx={{ flexGrow: 1, minHeight: 0, width: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <Box
+      sx={{
+        flex: '1 1 auto',
+        minHeight: 0,
+        width: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+        position: 'relative',
+      }}
+    >
       <Stack
         direction={{ xs: 'column', sm: 'row' }}
         spacing={1}
@@ -600,7 +610,14 @@ const DocumentList: React.FC<DocumentListProps> = ({
         />
       )}
 
-      <Box sx={{ flexGrow: hasDocuments ? 1 : 0, minHeight: 0, overflowX: 'hidden' }}>
+      <Box
+        data-testid="documents-table-scroll-region"
+        sx={{
+          flex: hasDocuments ? '1 1 0' : '0 0 auto',
+          minHeight: 0,
+          overflow: 'hidden',
+        }}
+      >
         {!hasDocuments ? (
           <TableContainer component={Paper} variant="outlined" sx={{ maxWidth: '100%', overflowX: 'hidden' }}>
             <Table size="small" sx={{ tableLayout: 'fixed' }}>
@@ -653,6 +670,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
             autoHeight={false}
             sx={{
               height: '100%',
+              minHeight: 0,
               '& .MuiDataGrid-cell': {
                 color: 'text.primary',
                 borderBottom: '1px solid',
