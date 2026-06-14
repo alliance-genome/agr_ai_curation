@@ -5,10 +5,10 @@ from __future__ import annotations
 import re
 import shutil
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
-import pytest
+import pytest  # type: ignore[reportMissingImports]
 
 from . import find_repo_root
 from src.lib.agent_studio import runtime_validation
@@ -224,15 +224,26 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
 
 @pytest.fixture(autouse=True)
 def _reset_runtime_caches():
+    from src.lib.openai_agents import streaming_tools
+
     agent_loader.reset_cache()
     prompt_loader.reset_cache()
     schema_discovery.reset_cache()
+    _reset_streaming_tool_caches(streaming_tools)
     runtime_validation.reset_startup_agent_validation_report()
     yield
     agent_loader.reset_cache()
     prompt_loader.reset_cache()
     schema_discovery.reset_cache()
+    _reset_streaming_tool_caches(streaming_tools)
     runtime_validation.reset_startup_agent_validation_report()
+
+
+def _reset_streaming_tool_caches(streaming_tools: ModuleType) -> None:
+    streaming_tools._tool_metadata_by_name.cache_clear()
+    streaming_tools._tool_provider_adapter_factories.cache_clear()
+    streaming_tools.builder_finalization_tool_names.cache_clear()
+    streaming_tools._run_state_tool_impls.cache_clear()
 
 
 def _copy_runtime_package(source: Path, packages_dir: Path, directory_name: str) -> Path:
