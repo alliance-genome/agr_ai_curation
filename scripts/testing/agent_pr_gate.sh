@@ -37,7 +37,9 @@ fi
 PASS_COUNT=0
 FAIL_COUNT=0
 CHECKS_TSV="$(mktemp)"
-trap 'rm -f "${CHECKS_TSV}" /tmp/agent_gate.out /tmp/agent_gate.err' EXIT
+PR_BODY_FILE="$(mktemp)"
+printf '%s' "${AGENT_GATE_IGNORE_JUSTIFICATION:-}" > "${PR_BODY_FILE}"
+trap 'rm -f "${CHECKS_TSV}" "${PR_BODY_FILE}" /tmp/agent_gate.out /tmp/agent_gate.err' EXIT
 
 record_check() {
   local name="$1"
@@ -250,6 +252,9 @@ if errors:
     sys.exit(1)
 print('yaml-parse-check: ok')
 PY"
+
+run_check "openai-agents-sdk-upgrade-smoke-evidence" \
+  "bash scripts/testing/check_openai_agents_upgrade_gate.sh --diff-range \"${DIFF_RANGE}\" --pr-body-file \"${PR_BODY_FILE}\""
 
 run_path_scoped_check \
   "installer-shell-regression-suite" \

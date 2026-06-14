@@ -648,6 +648,7 @@ Evidence:
 
 Runs the deep deployed-backend smoke for dev release validation:
 
+- checks the installed `openai-agents` package against the backend lockfile pin
 - verifies backend health
 - checks/wakes the PDF extraction worker
 - uploads a real sample PDF through the backend API
@@ -680,6 +681,9 @@ Notes:
   restarts the local Compose backend.
 - Evidence output:
   - `/tmp/agr_ai_curation_dev_release_smoke/dev_release_smoke_<timestamp>.json`
+- Any PR that changes the `openai-agents` pin must pass the full smoke and add a
+  PR body evidence line like:
+  `SDK-Smoke-Evidence: dev_release_smoke PASS <evidence-link-or-path>`
 
 Full local-stack coverage example:
 

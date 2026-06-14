@@ -1,6 +1,7 @@
 # Auto-generated lockfile — DO NOT EDIT MANUALLY
 # Generated: 2026-06-08 from backend/requirements.txt in a clean python:3.11-slim container
-# Full re-resolve to latest; SDK upgrade openai-agents 0.17.4 / openai 2.41.0.
+# Full re-resolve to latest; upgrade-gated exact SDK pin openai-agents 0.17.4 / openai 2.41.0.
+# Future openai-agents bumps require dev_release_smoke.py PASS evidence.
 # agr-curation-api-client pinned 0.12.1: 0.12.1 fixes get_data_providers() to use
 # species.genomeassembly_id (live curation DB schema); 0.12.0 queried the dropped
 # assembly_curie column. 0.12.0/0.12.1 have identical requires_dist, and 0.11/0.12
