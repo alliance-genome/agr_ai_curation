@@ -1383,10 +1383,11 @@ def build_batch_plumbing_flow_definition(output_format: str = "json") -> Dict[st
                     "agent_id": "task_input",
                     "agent_display_name": "Initial Instructions",
                     "task_instructions": (
-                        "For this batch release smoke, first confirm the loaded PDF can be read. "
-                        "Then create only a simple downloadable smoke-status artifact. Do not carry "
-                        "quoted paper text, evidence snippets, citations, or extracted findings into "
-                        "the formatter step."
+                        "For this batch release smoke, first read the loaded paper and extract one "
+                        "text-supported curatable item, calling record_evidence for exactly one "
+                        "verbatim supporting quote. Then have the formatter create only a simple "
+                        "downloadable smoke-status artifact. Do not carry quoted paper text, evidence "
+                        "snippets, citations, or extracted findings into the formatter step."
                     ),
                     "output_key": "task_input_text",
                 },
@@ -1400,10 +1401,11 @@ def build_batch_plumbing_flow_definition(output_format: str = "json") -> Dict[st
                     "agent_display_name": "PDF Specialist",
                     "output_key": "pdf_findings",
                     "step_goal": (
-                        "Read enough of the document to prove document access, then return exactly "
-                        "this plain ASCII sentence: PDF specialist completed document access for "
-                        "batch smoke. Do not include quotes, evidence snippets, citations, JSON, "
-                        "markdown, or extracted paper content."
+                        "Read the loaded paper and extract exactly one curatable item that is "
+                        "explicitly supported by the document text. Call record_evidence for one "
+                        "verbatim supporting quote, retain the returned evidence_record_id, and "
+                        "finalize with that single item. Keep it to one item with one evidence "
+                        "record; do not enumerate the whole paper."
                     ),
                 },
             },

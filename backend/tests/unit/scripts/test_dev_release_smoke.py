@@ -76,8 +76,9 @@ def test_batch_plumbing_flow_uses_deterministic_file_output_payload():
     formatter_goal = nodes["json_1"]["data"]["step_goal"]
     projection_plan = nodes["json_1"]["data"]["projection_plan"]
 
-    assert "prove document access" in pdf_goal
-    assert "Do not include quotes" in pdf_goal
+    assert "record_evidence" in pdf_goal
+    assert "exactly one curatable item" in pdf_goal
+    assert "evidence_record_id" in pdf_goal
     assert "check=batch_file_output" in formatter_goal
     assert "status=completed" in formatter_goal
     assert "batch_release_smoke_result_json" in formatter_goal
