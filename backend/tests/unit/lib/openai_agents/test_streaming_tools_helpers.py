@@ -223,7 +223,7 @@ def test_non_domain_envelope_output_schema_keeps_default_sdk_strictness():
 
 
 def test_builder_materializer_agent_detection_uses_finalization_tool_name():
-    assert streaming_tools._is_builder_materializer_agent(
+    assert streaming_tools.is_builder_materializer_agent(
         SimpleNamespace(
             tools=[
                 SimpleNamespace(name="search_document"),
@@ -231,7 +231,7 @@ def test_builder_materializer_agent_detection_uses_finalization_tool_name():
             ]
         )
     )
-    assert not streaming_tools._is_builder_materializer_agent(
+    assert not streaming_tools.is_builder_materializer_agent(
         SimpleNamespace(tools=[SimpleNamespace(name="search_document")])
     )
 

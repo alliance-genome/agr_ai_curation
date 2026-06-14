@@ -811,7 +811,7 @@ _BUILDER_FINALIZATION_METADATA_KEY = "builder_finalization"
 
 
 @lru_cache(maxsize=1)
-def _builder_finalization_tool_names() -> frozenset[str]:
+def builder_finalization_tool_names() -> frozenset[str]:
     """Return the registry-derived set of builder-materializer finalize-tool names.
 
     A tool is a builder finalize tool when its package tool-binding metadata
@@ -826,9 +826,9 @@ def _builder_finalization_tool_names() -> frozenset[str]:
     )
 
 
-def _is_builder_materializer_agent(agent: Agent) -> bool:
+def is_builder_materializer_agent(agent: Agent) -> bool:
     """Return whether an agent finalizes backend-materialized builder output."""
-    finalization_tool_names = _builder_finalization_tool_names()
+    finalization_tool_names = builder_finalization_tool_names()
     return any(
         _extract_tool_name(tool) in finalization_tool_names
         for tool in (getattr(agent, "tools", None) or [])
@@ -1365,7 +1365,7 @@ def _structured_specialist_finalization_required(
     if _structured_specialist_finalization_tool_name(finalization_config) is None:
         return False
     existing_tool_names = _agent_tool_names(agent)
-    if any(name in _builder_finalization_tool_names() for name in existing_tool_names):
+    if any(name in builder_finalization_tool_names() for name in existing_tool_names):
         return False
     return True
 
@@ -3104,7 +3104,7 @@ def _run_state_tool_impls() -> Dict[str, str]:
     the same module as the tool's public ``callable`` binding. Deriving this from binding metadata
     (rather than a hardcoded per-type literal) keeps run-state binding a domain-pack/registry
     concern, so adding a new builder data type needs no platform edit. (Mirrors Phase 0's
-    ``_builder_finalization_tool_names``.)
+    ``builder_finalization_tool_names``.)
     """
     from src.lib.packages.tool_registry import load_tool_registry
 
@@ -4131,7 +4131,7 @@ def _builder_finalizer_tool_calls(
 ) -> List[SpecialistToolCall]:
     """Return builder finalizer tool calls observed in the specialist stream."""
 
-    finalizer_names = _builder_finalization_tool_names()
+    finalizer_names = builder_finalization_tool_names()
     return [
         call
         for call in tool_calls
@@ -4371,7 +4371,7 @@ async def run_specialist_with_events(
     expected_output_type = getattr(agent, "output_type", None)
     runtime_curation_adapter_key = _agent_runtime_curation_adapter_key(agent)
     runtime_canonical_agent_key = _agent_runtime_canonical_agent_key(agent)
-    builder_materializer_agent = _is_builder_materializer_agent(agent)
+    builder_materializer_agent = is_builder_materializer_agent(agent)
     if builder_materializer_agent and expected_output_type is not None:
         output_type_name = getattr(expected_output_type, "__name__", "response")
         raise SpecialistOutputError(

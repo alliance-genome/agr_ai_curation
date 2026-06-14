@@ -8,6 +8,9 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from src.lib.agent_studio.agent_finalize_invariant import (
+    validate_agent_finalize_tool_invariant,
+)
 from src.lib.config.models_loader import list_models, load_models
 from src.models.sql.agent import Agent as DBAgent
 from src.models.sql.database import SessionLocal
@@ -316,6 +319,13 @@ def build_agent_runtime_report(
         output_schema_key = str(getattr(row, "output_schema_key", "") or "").strip()
         if output_schema_key and _resolve_output_schema(output_schema_key) is None:
             row_errors.append(f"Unknown output_schema_key '{output_schema_key}'")
+        for violation in validate_agent_finalize_tool_invariant(
+            agent_key=str(getattr(row, "agent_key", "") or ""),
+            category=str(getattr(row, "category", "") or ""),
+            output_schema_key=output_schema_key,
+            tool_ids=canonical_tool_ids,
+        ):
+            row_errors.append(violation.detail)
 
         visibility = str(getattr(row, "visibility", "") or "").strip()
         user_id = getattr(row, "user_id", None)

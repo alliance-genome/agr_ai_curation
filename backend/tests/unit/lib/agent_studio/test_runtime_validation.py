@@ -20,6 +20,7 @@ def _agent(**kwargs):
     defaults = {
         "agent_key": "agent_key",
         "name": "Agent",
+        "category": None,
         "visibility": "private",
         "user_id": 1,
         "project_id": None,
@@ -263,6 +264,117 @@ def test_build_agent_runtime_report_escalates_template_drift_in_strict_mode(monk
     report = module.build_agent_runtime_report(strict_mode=True)
     assert report["status"] == "unhealthy"
     assert any("Likely missing critical tools from template 'demo_agent'" in msg for msg in report["errors"])
+
+
+def test_build_agent_runtime_report_rejects_extractor_output_schema_without_finalize(monkeypatch):
+    import src.lib.agent_studio.runtime_validation as module
+
+    monkeypatch.setattr(module, "_fetch_active_agents", lambda: [
+        _agent(
+            agent_key="doug_shape",
+            category="Extraction",
+            output_schema_key="GeneExpressionEnvelope",
+            tool_ids=["stage_gene_expression_observation"],
+        )
+    ])
+    monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: (set(), None))
+    monkeypatch.setattr(module, "_resolve_output_schema", lambda schema_key: object())
+    monkeypatch.setattr(module, "load_models", lambda: None)
+    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5.4-mini")])
+    monkeypatch.setattr(
+        module,
+        "_load_runtime_policy",
+        lambda: {
+            "tool_bindings": {"stage_gene_expression_observation": {"required_context": []}},
+            "canonicalize_tool_id": lambda tool_id: tool_id,
+            "document_tool_ids": set(),
+            "package_required_tool_ids": set(),
+        },
+    )
+
+    report = module.build_agent_runtime_report(strict_mode=False)
+
+    assert report["status"] == "unhealthy"
+    assert any(
+        "doug_shape: builder/extractor agent declares output_schema 'GeneExpressionEnvelope'"
+        in msg
+        for msg in report["errors"]
+    )
+    assert any(
+        "doug_shape: extractor agent is missing a builder finalize tool" in msg
+        for msg in report["errors"]
+    )
+
+
+def test_build_agent_runtime_report_rejects_output_schema_with_finalize_tool(monkeypatch):
+    import src.lib.agent_studio.runtime_validation as module
+
+    monkeypatch.setattr(module, "_fetch_active_agents", lambda: [
+        _agent(
+            agent_key="hybrid_validator",
+            category="Validation",
+            output_schema_key="GeneResultEnvelope",
+            tool_ids=["search_genes", "finalize_gene_extraction"],
+        )
+    ])
+    monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: (set(), None))
+    monkeypatch.setattr(module, "_resolve_output_schema", lambda schema_key: object())
+    monkeypatch.setattr(module, "load_models", lambda: None)
+    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5.4-mini")])
+    monkeypatch.setattr(
+        module,
+        "_load_runtime_policy",
+        lambda: {
+            "tool_bindings": {
+                "search_genes": {"required_context": []},
+                "finalize_gene_extraction": {"required_context": []},
+            },
+            "canonicalize_tool_id": lambda tool_id: tool_id,
+            "document_tool_ids": set(),
+            "package_required_tool_ids": set(),
+        },
+    )
+
+    report = module.build_agent_runtime_report(strict_mode=False)
+
+    assert report["status"] == "unhealthy"
+    assert any(
+        "hybrid_validator: declares both output_schema 'GeneResultEnvelope' "
+        "and builder finalize tool(s): finalize_gene_extraction" in msg
+        for msg in report["errors"]
+    )
+
+
+def test_validate_and_cache_agent_runtime_contracts_raises_for_finalize_invariant(monkeypatch):
+    import src.lib.agent_studio.runtime_validation as module
+
+    monkeypatch.setattr(module, "_fetch_active_agents", lambda: [
+        _agent(
+            agent_key="extractor_without_finalizer",
+            category="Extraction",
+            output_schema_key=None,
+            tool_ids=["search_document", "read_section"],
+        )
+    ])
+    monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: (set(), None))
+    monkeypatch.setattr(module, "load_models", lambda: None)
+    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5.4-mini")])
+    monkeypatch.setattr(
+        module,
+        "_load_runtime_policy",
+        lambda: {
+            "tool_bindings": {
+                "search_document": {"required_context": ["document_id"]},
+                "read_section": {"required_context": ["document_id"]},
+            },
+            "canonicalize_tool_id": lambda tool_id: tool_id,
+            "document_tool_ids": {"search_document", "read_section"},
+            "package_required_tool_ids": set(),
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="extractor_without_finalizer"):
+        module.validate_and_cache_agent_runtime_contracts(strict_mode=False)
 
 
 def test_validate_and_cache_agent_runtime_contracts_caches_report(monkeypatch):

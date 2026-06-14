@@ -947,7 +947,7 @@ tools:
       category: Database
       # Marks this tool as a builder-materializer finalize tool. The platform
       # runtime derives the set of builder finalize-tool names from this flag
-      # (see streaming_tools._builder_finalization_tool_names) so adding a new
+      # (see streaming_tools.builder_finalization_tool_names) so adding a new
       # builder data type is a domain-pack edit, not a platform edit.
       builder_finalization: true
       builder_run_state: true
@@ -1168,7 +1168,7 @@ tools:
       category: Database
       # Marks this tool as a builder-materializer finalize tool. The platform runtime derives
       # the set of builder finalize-tool names from this flag
-      # (streaming_tools._builder_finalization_tool_names) so this is a domain-pack edit, not a
+      # (streaming_tools.builder_finalization_tool_names) so this is a domain-pack edit, not a
       # platform edit.
       builder_finalization: true
       builder_run_state: true
@@ -1603,7 +1603,7 @@ tools:
       category: Database
       # Marks this tool as a builder-materializer finalize tool. The platform runtime derives
       # the set of builder finalize-tool names from this flag
-      # (streaming_tools._builder_finalization_tool_names) so this is a domain-pack edit, not a
+      # (streaming_tools.builder_finalization_tool_names) so this is a domain-pack edit, not a
       # platform edit.
       builder_finalization: true
       builder_run_state: true
@@ -1841,7 +1841,7 @@ tools:
       category: Database
       # Marks this tool as a builder-materializer finalize tool. The platform runtime derives
       # the set of builder finalize-tool names from this flag
-      # (streaming_tools._builder_finalization_tool_names) so this is a domain-pack edit, not a
+      # (streaming_tools.builder_finalization_tool_names) so this is a domain-pack edit, not a
       # platform edit.
       builder_finalization: true
       builder_run_state: true
@@ -2101,7 +2101,7 @@ tools:
       category: Database
       # Marks this tool as a builder-materializer finalize tool. The platform runtime derives the
       # set of builder finalize-tool names from this flag
-      # (streaming_tools._builder_finalization_tool_names) so this is a domain-pack edit, not a
+      # (streaming_tools.builder_finalization_tool_names) so this is a domain-pack edit, not a
       # platform edit.
       builder_finalization: true
       builder_run_state: true
