@@ -136,9 +136,10 @@ def _install_fake_agent_modules(monkeypatch, final_output, raise_error=False):
 
     class FakeRunner:
         @staticmethod
-        async def run(agent, user_prompt):
+        async def run(agent, user_prompt, max_turns):
             captured["run_agent"] = agent
             captured["user_prompt"] = user_prompt
+            captured["max_turns"] = max_turns
             if raise_error:
                 raise RuntimeError("llm failed")
             return SimpleNamespace(final_output=final_output)
@@ -177,6 +178,7 @@ async def test_call_llm_for_hierarchy_success_with_structured_output(monkeypatch
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-5.4-mini")
     monkeypatch.setenv("HIERARCHY_LLM_REASONING", "medium")
+    monkeypatch.setenv("HIERARCHY_RESOLUTION_MAX_TURNS", "6")
 
     sections, abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
         [{"title": "Intro", "preview": "overview"}]
@@ -188,6 +190,7 @@ async def test_call_llm_for_hierarchy_success_with_structured_output(monkeypatch
     assert raw["sections_count"] == 1
     assert raw["abstract_section_title"] == "Intro"
     assert captured["temperature"] is None
+    assert captured["max_turns"] == 6
     assert isinstance(captured["reasoning"], fake_reasoning_cls)
     assert captured["reasoning"].effort == "medium"
     assert "Intro" in captured["user_prompt"]
