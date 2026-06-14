@@ -4,6 +4,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CATALOG_PATH = REPO_ROOT / "docs/testing/guardrail-catalog.md"
 PATH_COLUMN = "Test module / guard file"
+TRACE_COLUMN = "Trace"
 
 
 def _markdown_table_cells(line: str) -> list[str]:
@@ -24,6 +25,7 @@ def _strip_code_span(value: str) -> str:
 def _catalog_rows() -> list[dict[str, str]]:
     lines = CATALOG_PATH.read_text(encoding="utf-8").splitlines()
     rows: list[dict[str, str]] = []
+    catalog_table_count = 0
 
     for index, line in enumerate(lines):
         if not line.startswith("|"):
@@ -33,11 +35,15 @@ def _catalog_rows() -> list[dict[str, str]]:
         if PATH_COLUMN not in headers:
             continue
 
+        catalog_table_count += 1
+        if TRACE_COLUMN not in headers:
+            raise AssertionError("guardrail catalog table is missing a Trace column")
+
         if index + 1 >= len(lines):
             raise AssertionError("guardrail catalog table is missing separator row")
 
         separator = _markdown_table_cells(lines[index + 1])
-        if not _is_separator_row(separator):
+        if len(separator) != len(headers) or not _is_separator_row(separator):
             raise AssertionError("guardrail catalog table has an invalid separator row")
 
         for row_line in lines[index + 2 :]:
@@ -50,7 +56,8 @@ def _catalog_rows() -> list[dict[str, str]]:
                     f"guardrail catalog row has {len(cells)} cells; expected {len(headers)}: {row_line}"
                 )
             rows.append(dict(zip(headers, cells, strict=True)))
-        break
+
+    assert catalog_table_count, "guardrail catalog table is missing"
 
     return rows
 
@@ -67,10 +74,12 @@ def test_guardrail_catalog_referenced_paths_exist() -> None:
     for row in rows:
         guard_id = row.get("Guard ID", "").strip()
         guard_name = row.get("Guard name", "").strip()
+        trace = row.get(TRACE_COLUMN, "").strip()
         raw_path = row.get(PATH_COLUMN, "").strip()
 
         assert guard_id, f"catalog row is missing a Guard ID: {row}"
         assert guard_name, f"catalog row is missing a Guard name: {row}"
+        assert trace, f"catalog row is missing a Trace: {row}"
         assert raw_path, f"catalog row is missing a guard path: {row}"
 
         repo_relative_path = Path(_strip_code_span(raw_path))
