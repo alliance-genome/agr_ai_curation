@@ -263,6 +263,12 @@ run_path_scoped_check \
   scripts/testing/check_openai_agents_upgrade_gate.sh scripts/tests/test_check_openai_agents_upgrade_gate.sh
 
 run_path_scoped_check \
+  "agent-lsp-diagnostics-shell-regression-suite" \
+  "bash scripts/tests/test_agent_lsp_diagnostics.sh" \
+  "scripts/utilities/agent_lsp.py, scripts/tests/test_agent_lsp_diagnostics.sh" \
+  scripts/utilities/agent_lsp.py scripts/tests/test_agent_lsp_diagnostics.sh
+
+run_path_scoped_check \
   "installer-shell-regression-suite" \
   "bash scripts/install/tests/run.sh" \
   "scripts/install/**, docker-compose.production.yml, packages/core/**, packages/alliance/**" \
