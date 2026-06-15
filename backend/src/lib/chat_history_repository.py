@@ -352,6 +352,7 @@ class ChatHistoryRepository:
         user_auth_sub: str,
         message_limit: int = 100,
         message_cursor: ChatMessageCursor | None = None,
+        excluded_message_types: set[str] | None = None,
     ) -> ChatSessionDetail | None:
         """Fetch one active session and one chronological page of transcript rows."""
 
@@ -367,6 +368,7 @@ class ChatHistoryRepository:
             chat_kind=session.chat_kind,
             limit=message_limit,
             cursor=message_cursor,
+            excluded_message_types=excluded_message_types,
         )
         return ChatSessionDetail(
             session=_session_record(session),
@@ -624,6 +626,8 @@ class ChatHistoryRepository:
         chat_kind: str,
         limit: int = 100,
         cursor: ChatMessageCursor | None = None,
+        excluded_message_types: set[str] | None = None,
+        after_created_at: datetime | None = None,
     ) -> ChatMessagePage:
         """List transcript rows for one visible session in chronological order."""
 
@@ -637,6 +641,8 @@ class ChatHistoryRepository:
             chat_kind=session.chat_kind,
             limit=limit,
             cursor=cursor,
+            excluded_message_types=excluded_message_types,
+            after_created_at=after_created_at,
         )
 
     def list_recent_messages(
@@ -821,6 +827,80 @@ class ChatHistoryRepository:
         ).all()
         return [_message_record(message) for message in messages]
 
+    def get_message_by_id(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        chat_kind: str,
+        message_id: UUID,
+    ) -> ChatMessageRecord | None:
+        """Return one visible transcript row by durable message id."""
+
+        session = self._require_active_session_for_kind(
+            session_id=session_id,
+            user_auth_sub=user_auth_sub,
+            chat_kind=chat_kind,
+        )
+        message = self._db.scalar(
+            select(ChatMessageModel).where(
+                ChatMessageModel.session_id == session.session_id,
+                ChatMessageModel.chat_kind == session.chat_kind,
+                ChatMessageModel.message_id == message_id,
+            )
+        )
+        if message is None:
+            return None
+
+        return _message_record(message)
+
+    def search_session_messages_ranked(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        chat_kind: str,
+        query: str,
+        limit: int = 20,
+        excluded_message_types: set[str] | None = None,
+    ) -> list[ChatMessageRecord]:
+        """Search transcript rows within one visible session by full-text relevance."""
+
+        page_size = _validate_page_size(
+            limit,
+            field_name="limit",
+            max_value=MAX_MESSAGE_PAGE_SIZE,
+        )
+        session = self._require_active_session_for_kind(
+            session_id=session_id,
+            user_auth_sub=user_auth_sub,
+            chat_kind=chat_kind,
+        )
+        normalized_query = _normalize_required_text(query, field_name="query")
+        search_query = func.websearch_to_tsquery("english", normalized_query)
+        relevance_rank = func.ts_rank_cd(
+            ChatMessageModel.search_vector,
+            search_query,
+        )
+        stmt = select(ChatMessageModel).where(
+            ChatMessageModel.session_id == session.session_id,
+            ChatMessageModel.chat_kind == session.chat_kind,
+            ChatMessageModel.search_vector.op("@@")(search_query),
+        )
+        if excluded_message_types:
+            stmt = stmt.where(ChatMessageModel.message_type.notin_(excluded_message_types))
+
+        messages = self._db.scalars(
+            stmt
+            .order_by(
+                relevance_rank.desc(),
+                ChatMessageModel.created_at.desc(),
+                ChatMessageModel.message_id.desc(),
+            )
+            .limit(page_size)
+        ).all()
+        return [_message_record(message) for message in messages]
+
     def update_message_by_turn_id(
         self,
         *,
@@ -863,6 +943,8 @@ class ChatHistoryRepository:
         if trace_id is not _UNSET:
             normalized_trace_id = None
             if trace_id is not None:
+                if not isinstance(trace_id, str):
+                    raise TypeError("trace_id must be a string or None")
                 normalized_trace_id = _normalize_optional_text(
                     trace_id,
                     field_name="trace_id",
@@ -1033,6 +1115,8 @@ class ChatHistoryRepository:
         chat_kind: str,
         limit: int,
         cursor: ChatMessageCursor | None,
+        excluded_message_types: set[str] | None = None,
+        after_created_at: datetime | None = None,
     ) -> ChatMessagePage:
         page_size = _validate_page_size(
             limit,
@@ -1043,6 +1127,10 @@ class ChatHistoryRepository:
             ChatMessageModel.session_id == session_id,
             ChatMessageModel.chat_kind == chat_kind,
         )
+        if excluded_message_types:
+            stmt = stmt.where(ChatMessageModel.message_type.notin_(excluded_message_types))
+        if after_created_at is not None:
+            stmt = stmt.where(ChatMessageModel.created_at > after_created_at)
 
         if cursor is not None:
             stmt = stmt.where(

@@ -13,6 +13,7 @@ from src.lib.openai_agents.config import (
     get_transcript_excerpt_edge_turns,
     get_transcript_page_size,
 )
+from src.lib.openai_agents.chat_compaction_session import CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ def capture_feedback_conversation_transcript(
         return None
 
     chat_kind = _normalized_session_chat_kind(detail.session)
-    messages = list(detail.messages)
+    messages = _visible_messages(detail.messages)
     cursor: ChatMessageCursor | None = detail.next_message_cursor
     while cursor is not None:
         if chat_kind is None:
@@ -55,7 +56,7 @@ def capture_feedback_conversation_transcript(
             limit=TRANSCRIPT_PAGE_SIZE,
             cursor=cursor,
         )
-        messages.extend(message_page.items)
+        messages.extend(_visible_messages(message_page.items))
         cursor = message_page.next_cursor
 
     session_payload: dict[str, Any] = {
@@ -86,6 +87,14 @@ def capture_feedback_conversation_transcript(
         "session": session_payload,
         "messages": [_serialize_message(message) for message in messages],
     }
+
+
+def _visible_messages(messages: Any) -> list[ChatMessageRecord]:
+    return [
+        message
+        for message in messages
+        if getattr(message, "message_type", None) != CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE
+    ]
 
 
 def _normalized_session_chat_kind(session: Any) -> str | None:

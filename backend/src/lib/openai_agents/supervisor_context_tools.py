@@ -39,6 +39,9 @@ from src.lib.openai_agents.config import (
     get_supervisor_max_list_limit,
     get_supervisor_text_preview_limit,
 )
+from src.lib.openai_agents.chat_compaction_session import (
+    CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE,
+)
 from src.models.sql.database import SessionLocal
 
 
@@ -56,6 +59,12 @@ def _tool_response(status: str, message: str, **extra: Any) -> str:
     payload = {"status": status, "message": message}
     payload.update(extra)
     return json.dumps(_bounded_json(payload), ensure_ascii=True, default=str)
+
+
+def _recall_response(status: str, message: str, **extra: Any) -> str:
+    payload = {"status": status, "message": message}
+    payload.update(extra)
+    return json.dumps(payload, ensure_ascii=True, default=str)
 
 
 def _optional_text(value: Any) -> str | None:
@@ -137,6 +146,236 @@ def _list_session_messages(
         return []
     finally:
         db.close()
+
+
+def _recall_message_payload(message: ChatMessageRecord, *, ordinal: int) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "ordinal": ordinal,
+        "message_id": str(message.message_id),
+        "turn_id": message.turn_id,
+        "role": message.role,
+        "message_type": message.message_type,
+        "created_at": message.created_at.isoformat(),
+        "content": message.content,
+    }
+    if message.role == "flow":
+        flow_assistant_message = extract_flow_assistant_message(message)
+        if flow_assistant_message is not None:
+            payload["flow_assistant_message"] = flow_assistant_message
+    return payload
+
+
+def _recall_visible_messages(*, session_id: str, user_id: str) -> list[ChatMessageRecord]:
+    return [
+        message
+        for message in _list_session_messages(session_id=session_id, user_id=user_id)
+        if message.message_type != CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE
+    ]
+
+
+def _resolve_recall_turn_messages(
+    messages: Sequence[ChatMessageRecord],
+    *,
+    turn_ref: str | None,
+) -> list[ChatMessageRecord]:
+    if not messages:
+        return []
+    ref = str(turn_ref or "latest").strip()
+    if not ref or ref.lower() == "latest":
+        for message in reversed(messages):
+            if message.turn_id:
+                return [item for item in messages if item.turn_id == message.turn_id]
+        return [messages[-1]]
+
+    turn_ids: list[str] = []
+    for message in messages:
+        if message.turn_id and message.turn_id not in turn_ids:
+            turn_ids.append(message.turn_id)
+    if ref.isdigit():
+        index = int(ref) - 1
+        if 0 <= index < len(turn_ids):
+            turn_id = turn_ids[index]
+            return [item for item in messages if item.turn_id == turn_id]
+
+    for message in messages:
+        if ref in {
+            str(message.turn_id or ""),
+            str(message.message_id),
+        }:
+            return [item for item in messages if item.turn_id == message.turn_id] if message.turn_id else [message]
+    return []
+
+
+def _exclude_compaction_messages(
+    messages: Sequence[ChatMessageRecord],
+) -> list[ChatMessageRecord]:
+    return [
+        message
+        for message in messages
+        if message.message_type != CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE
+    ]
+
+
+def _uuid_ref(value: str) -> UUID | None:
+    try:
+        return UUID(value)
+    except ValueError:
+        return None
+
+
+def _direct_recall_turn_messages(
+    *,
+    session_id: str,
+    user_id: str,
+    turn_ref: str,
+) -> list[ChatMessageRecord]:
+    db = SessionLocal()
+    try:
+        repository = ChatHistoryRepository(db)
+        message_id = _uuid_ref(turn_ref)
+        if message_id is not None:
+            message = repository.get_message_by_id(
+                session_id=session_id,
+                user_auth_sub=user_id,
+                chat_kind=ASSISTANT_CHAT_KIND,
+                message_id=message_id,
+            )
+            if message is not None and message.message_type != CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE:
+                if message.turn_id:
+                    return _exclude_compaction_messages(
+                        repository.list_messages_for_turn(
+                            session_id=session_id,
+                            user_auth_sub=user_id,
+                            chat_kind=ASSISTANT_CHAT_KIND,
+                            turn_id=message.turn_id,
+                        )
+                    )
+                return [message]
+
+        return _exclude_compaction_messages(
+            repository.list_messages_for_turn(
+                session_id=session_id,
+                user_auth_sub=user_id,
+                chat_kind=ASSISTANT_CHAT_KIND,
+                turn_id=turn_ref,
+            )
+        )
+    except ChatHistorySessionNotFoundError:
+        return []
+    finally:
+        db.close()
+
+
+async def recall_chat_history(
+    *,
+    detail: str = "recent",
+    turn_ref: str | None = None,
+    query: str | None = None,
+    limit: int | None = None,
+    cursor: str | None = None,
+) -> str:
+    """Recall exact transcript text for the active standard chat session."""
+
+    session_id = get_current_session_id()
+    user_id = get_current_user_id()
+    if not session_id or not user_id:
+        return _recall_response(
+            "unavailable",
+            "Transcript recall is only available inside an active chat session.",
+        )
+
+    normalized_detail = str(detail or "recent").strip() or "recent"
+    bounded_limit = normalize_page_limit(limit, default=5, maximum=_MAX_LIST_LIMIT)
+    if normalized_detail == "recent":
+        messages = _recall_visible_messages(session_id=session_id, user_id=user_id)
+        page, truncated, next_cursor = recent_page(
+            [
+                _recall_message_payload(message, ordinal=index + 1)
+                for index, message in enumerate(messages)
+            ],
+            limit=bounded_limit,
+            cursor=cursor,
+        )
+        total_count = len(messages)
+        return _recall_response(
+            "ok",
+            f"Returned {len(page)} exact transcript message(s) from this chat.",
+            detail="recent",
+            session_id=session_id,
+            messages=page,
+            total_count=total_count,
+            truncated=truncated,
+            next_cursor=next_cursor,
+        )
+
+    if normalized_detail == "turn":
+        normalized_turn_ref = str(turn_ref or "latest").strip() or "latest"
+        if normalized_turn_ref.lower() == "latest" or normalized_turn_ref.isdigit():
+            messages = _recall_visible_messages(session_id=session_id, user_id=user_id)
+            selected = _resolve_recall_turn_messages(
+                messages,
+                turn_ref=normalized_turn_ref,
+            )
+        else:
+            selected = _direct_recall_turn_messages(
+                session_id=session_id,
+                user_id=user_id,
+                turn_ref=normalized_turn_ref,
+            )
+        return _recall_response(
+            "ok" if selected else "not_found",
+            "Returned exact transcript rows for the requested turn."
+            if selected
+            else "No transcript turn matched that reference in this chat.",
+            detail="turn",
+            session_id=session_id,
+            turn_ref=normalized_turn_ref,
+            messages=[
+                _recall_message_payload(message, ordinal=index + 1)
+                for index, message in enumerate(selected)
+            ],
+        )
+
+    if normalized_detail == "search":
+        normalized_query = str(query or "").strip()
+        if not normalized_query:
+            return _recall_response(
+                "invalid_query",
+                "Search detail requires a non-empty query.",
+                detail="search",
+            )
+        db = SessionLocal()
+        try:
+            repository = ChatHistoryRepository(db)
+            results = repository.search_session_messages_ranked(
+                session_id=session_id,
+                user_auth_sub=user_id,
+                chat_kind=ASSISTANT_CHAT_KIND,
+                query=normalized_query,
+                limit=bounded_limit,
+                excluded_message_types={CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE},
+            )
+        except ChatHistorySessionNotFoundError:
+            results = []
+        finally:
+            db.close()
+        return _recall_response(
+            "ok",
+            f"Found {len(results)} exact transcript message(s) in this chat.",
+            detail="search",
+            session_id=session_id,
+            query=normalized_query,
+            messages=[
+                _recall_message_payload(message, ordinal=index + 1)
+                for index, message in enumerate(results)
+            ],
+        )
+
+    return _recall_response(
+        "invalid_detail",
+        "Unsupported recall detail. Use recent, turn, or search.",
+        detail=normalized_detail,
+    )
 
 
 def _trace_inventory_records(
@@ -413,4 +652,4 @@ async def inspect_chat_traces(
     )
 
 
-__all__ = ["inspect_chat_traces"]
+__all__ = ["inspect_chat_traces", "recall_chat_history"]

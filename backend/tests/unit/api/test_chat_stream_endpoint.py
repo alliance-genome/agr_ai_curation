@@ -99,7 +99,6 @@ def _stub_stream_turn_persistence(monkeypatch):
         return chat.PreparedChatStreamTurn(
             turn_id=requested_turn_id or "generated-turn",
             effective_user_message=user_message,
-            context_messages=[{"role": "user", "content": user_message}],
         )
 
     def _finalize(
@@ -144,7 +143,6 @@ def test_chat_stream_endpoint_has_idempotent_cleanup_background_task(monkeypatch
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
-    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
     async def _register_active_stream(
         session_id: str,
@@ -264,15 +262,6 @@ def test_chat_stream_endpoint_background_backfill_uses_final_assistant_aware_tit
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
     _patch_chat_impl(
         monkeypatch,
-        "_build_context_messages_from_durable_messages",
-        lambda *_args, **_kwargs: (
-            [{"role": "user", "content": _kwargs.get("user_message", "")}]
-            if _kwargs.get("user_message") is not None
-            else []
-        ),
-    )
-    _patch_chat_impl(
-        monkeypatch,
         "_generate_title_from_turn",
         lambda *, user_message, assistant_message=None: (
             "assistant-aware-title" if assistant_message else "user-only-title"
@@ -346,7 +335,6 @@ def test_chat_stream_endpoint_passes_model_overrides_to_runner(monkeypatch):
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
-    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
     async def _register_active_stream(
         session_id: str,
@@ -417,7 +405,6 @@ def test_chat_stream_endpoint_leaves_model_overrides_unset_when_omitted(monkeypa
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
-    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
     async def _register_active_stream(
         session_id: str,
@@ -483,7 +470,6 @@ def test_chat_stream_endpoint_rejects_same_user_when_session_already_active(monk
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
-    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
     with pytest.raises(chat.HTTPException) as exc:
         asyncio.run(
@@ -512,7 +498,6 @@ def test_chat_stream_endpoint_persists_extraction_envelopes_after_success(monkey
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
     )
     _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
-    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     _patch_chat_impl(
         monkeypatch,
         "get_supervisor_tool_agent_map",
@@ -648,7 +633,6 @@ def test_chat_stream_endpoint_persists_internal_extraction_result_without_stream
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
     )
     _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
-    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     _patch_chat_impl(
         monkeypatch,
         "get_supervisor_tool_agent_map",
@@ -872,7 +856,6 @@ def test_chat_stream_endpoint_emits_evidence_summary_after_record_evidence(monke
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
-    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _register_active_stream(
@@ -958,7 +941,6 @@ def test_chat_stream_endpoint_uses_runner_emitted_evidence_summary(monkeypatch):
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
-    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {"ask_gene_extractor_specialist": "gene_extractor"})
     _patch_chat_impl(
         monkeypatch,
@@ -1062,7 +1044,6 @@ def test_chat_stream_endpoint_flattens_details_evidence_summary(monkeypatch):
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
-    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _register_active_stream(
@@ -1162,7 +1143,6 @@ def test_chat_stream_endpoint_infers_scope_for_scope_free_extraction_envelopes(m
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
     )
     _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
-    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     _patch_chat_impl(
         monkeypatch,
         "get_supervisor_tool_agent_map",
@@ -1282,7 +1262,6 @@ def test_chat_stream_endpoint_emits_turn_failed_when_completion_side_effect_pers
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
     )
     _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
-    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     _patch_chat_impl(
         monkeypatch,
         "get_supervisor_tool_agent_map",
@@ -1601,7 +1580,6 @@ def test_chat_stream_endpoint_replays_existing_assistant_turn_without_runner(mon
         lambda **_kwargs: chat.PreparedChatStreamTurn(
             turn_id="turn-replay",
             effective_user_message="hello",
-            context_messages=[],
             replay_assistant_turn=_assistant_record(
                 session_id="session-replay",
                 turn_id="turn-replay",
@@ -1828,7 +1806,6 @@ def test_chat_stream_endpoint_raises_when_tool_map_resolution_fails(monkeypatch)
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
     )
     _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
-    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
     def _raise_tool_map():
         raise RuntimeError("agent registry unavailable")

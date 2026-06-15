@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import cast
 from uuid import uuid4
 
-from src.lib.chat_history_repository import ASSISTANT_CHAT_KIND, ChatMessageRecord
+from src.lib.chat_history_repository import ASSISTANT_CHAT_KIND, ChatHistoryRepository, ChatMessageRecord
 from src.lib.feedback import transcript as transcript_module
 
 
@@ -96,7 +97,7 @@ def test_capture_feedback_conversation_transcript_collects_all_pages():
             next_cursor=None,
         ),
     ]
-    repository = _Repository(detail, pages)
+    repository = cast(ChatHistoryRepository, _Repository(detail, pages))
 
     transcript = transcript_module.capture_feedback_conversation_transcript(
         repository=repository,
@@ -115,8 +116,46 @@ def test_capture_feedback_conversation_transcript_collects_all_pages():
     ]
 
 
+def test_capture_feedback_conversation_transcript_hides_context_compaction_rows():
+    detail = SimpleNamespace(
+        session=SimpleNamespace(
+            session_id="session-1",
+            title=None,
+            generated_title=None,
+            effective_title=None,
+            active_document_id=None,
+            created_at=datetime(2026, 4, 22, 12, 0, tzinfo=timezone.utc),
+            updated_at=datetime(2026, 4, 22, 12, 5, tzinfo=timezone.utc),
+            last_message_at=datetime(2026, 4, 22, 12, 6, tzinfo=timezone.utc),
+            chat_kind="assistant_chat",
+        ),
+        messages=[
+            _message(session_id="session-1", role="user", content="hello", minute=1),
+            _message(
+                session_id="session-1",
+                role="assistant",
+                content="Compacted standard-chat model-live context projection",
+                minute=2,
+                message_type="context_compaction",
+            ),
+        ],
+        next_message_cursor=None,
+    )
+    repository = cast(ChatHistoryRepository, _Repository(detail, pages=[]))
+
+    transcript = transcript_module.capture_feedback_conversation_transcript(
+        repository=repository,
+        session_id="session-1",
+        user_auth_sub="auth-sub-1",
+    )
+
+    assert transcript is not None
+    assert transcript["message_count"] == 1
+    assert [message["content"] for message in transcript["messages"]] == ["hello"]
+
+
 def test_capture_feedback_conversation_transcript_returns_none_for_missing_session():
-    repository = _Repository(detail=None, pages=[])
+    repository = cast(ChatHistoryRepository, _Repository(detail=None, pages=[]))
 
     assert (
         transcript_module.capture_feedback_conversation_transcript(

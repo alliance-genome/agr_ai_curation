@@ -49,6 +49,7 @@ from .langfuse_client import (
     is_openai_agents_tracing_enabled,
 )
 from .agents.supervisor_agent import create_supervisor_agent
+from .chat_compaction_session import build_standard_chat_compaction_session
 from .audit_labels import (
     BUILTIN_SPECIALIST_DISPLAY_NAMES,
     resolve_tool_display_name as _shared_resolve_tool_display_name,
@@ -731,6 +732,8 @@ async def _run_agent_with_groq_retry(
     document_name: Optional[str],
     user_message: str,
     trace_id: str,
+    chat_session_id: Optional[str] = None,
+    chat_turn_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Run tracing stream with Groq-specific retry on transient tool-call parse failures."""
     max_retries = get_groq_tool_call_max_retries() if _is_groq_runtime_model(getattr(agent, "model", None)) else 0
@@ -747,6 +750,8 @@ async def _run_agent_with_groq_retry(
                 document_name=document_name,
                 user_message=user_message,
                 trace_id=trace_id,
+                chat_session_id=chat_session_id,
+                chat_turn_id=chat_turn_id,
             ):
                 yield event
             return
@@ -914,6 +919,8 @@ async def _run_agent_with_tracing(
     document_name: Optional[str],
     user_message: str,
     trace_id: str,
+    chat_session_id: Optional[str] = None,
+    chat_turn_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     Internal generator that runs the agent within Langfuse trace context.
@@ -1010,8 +1017,24 @@ async def _run_agent_with_tracing(
             tool_calls=structured_tool_calls,
             live_evidence_records=evidence_records,
         )
+    sdk_session = None
+    if chat_session_id and chat_turn_id:
+        sdk_session = build_standard_chat_compaction_session(
+            session_id=chat_session_id,
+            user_id=user_id,
+            current_turn_id=chat_turn_id,
+            model=str(getattr(agent, "model", "") or ""),
+            client=openai_client,
+        )
+        await sdk_session.run_compaction({"compaction_mode": "input"})
     llm_run_start = time.monotonic()
-    result = Runner.run_streamed(agent, input=input_items, max_turns=max_turns, run_config=run_config)
+    result = Runner.run_streamed(
+        agent,
+        input=input_items,
+        max_turns=max_turns,
+        run_config=run_config,
+        session=sdk_session,
+    )
     write_extraction_trace_event(
         event_type="model.reasoning_summary.request",
         trace_id=trace_id,
@@ -1839,6 +1862,7 @@ async def run_agent_streamed(
     context_messages: List[Dict[str, Any]],
     user_id: str,
     session_id: Optional[str] = None,
+    turn_id: Optional[str] = None,
     document_id: Optional[str] = None,
     document_name: Optional[str] = None,
     active_groups: Optional[List[str]] = None,
@@ -1872,6 +1896,7 @@ async def run_agent_streamed(
                           current user message
         user_id: The user's user ID for tenant isolation
         session_id: Optional chat session UUID for Langfuse trace grouping
+        turn_id: Optional durable turn id for standard-chat context compaction
         document_id: Optional UUID of the PDF document (enables PDF specialist)
         document_name: Optional name of the document for context
         active_groups: Optional list of group IDs (for example ["group-a", "group-b"]) for injecting
@@ -2159,6 +2184,8 @@ async def run_agent_streamed(
                         document_name=document_name,
                         user_message=user_message,
                         trace_id=trace_id,
+                        chat_session_id=session_id if not provided_runtime_agent else None,
+                        chat_turn_id=turn_id if not provided_runtime_agent else None,
                     ):
                         # Capture completion data to update span
                         if event.get("type") == "RUN_FINISHED":
@@ -2407,6 +2434,8 @@ async def run_agent_streamed(
                     document_name=document_name,
                     user_message=user_message,
                     trace_id=fallback_trace_id,
+                    chat_session_id=session_id if not provided_runtime_agent else None,
+                    chat_turn_id=turn_id if not provided_runtime_agent else None,
                 ):
                     yield event
             finally:
@@ -2454,6 +2483,8 @@ async def run_agent_streamed(
                 document_name=document_name,
                 user_message=user_message,
                 trace_id=fallback_trace_id,
+                chat_session_id=session_id if not provided_runtime_agent else None,
+                chat_turn_id=turn_id if not provided_runtime_agent else None,
             ):
                 yield event
         finally:

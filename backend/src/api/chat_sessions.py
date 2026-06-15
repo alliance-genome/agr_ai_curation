@@ -3,6 +3,7 @@
 
 from .chat_common import *
 from ..lib.chat_context_report import build_chat_context_report
+from ..lib.openai_agents.chat_compaction_session import CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE
 
 
 @router.post("/chat/session", response_model=SessionResponse)
@@ -169,6 +170,7 @@ async def get_session_history(
             user_auth_sub=user_id,
             message_limit=message_limit,
             message_cursor=_decode_message_cursor(message_cursor),
+            excluded_message_types={CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE},
         )
     except ValueError as exc:
         raise_sanitized_http_exception(
@@ -199,7 +201,10 @@ async def get_session_history(
     return ChatSessionDetailResponse(
         session=_serialize_session(detail.session, title_override=generated_title),
         active_document=active_document,
-        messages=[_serialize_message(message) for message in detail.messages],
+        messages=[
+            _serialize_message(message)
+            for message in detail.messages
+        ],
         message_limit=message_limit,
         next_message_cursor=_encode_message_cursor(detail.next_message_cursor),
     )
