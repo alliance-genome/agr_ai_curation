@@ -743,6 +743,41 @@ def get_hierarchy_resolution_max_turns() -> int:
     return _get_single_shot_output_agent_max_turns("HIERARCHY_RESOLUTION_MAX_TURNS")
 
 
+def get_standard_chat_context_token_budget() -> int:
+    """Model-live context budget for standard assistant chat (STANDARD_CHAT_CONTEXT_TOKEN_BUDGET).
+
+    This is the budget the standard-chat compaction trigger compares against.
+    Default 400000 matches the current GPT-5 family context target used by the
+    supervisor; tune lower to compact sooner or higher when moving to a larger
+    context model.
+    """
+    return max(1, _get_env_int_with_fallback("STANDARD_CHAT_CONTEXT_TOKEN_BUDGET", 400_000))
+
+
+def get_standard_chat_compaction_threshold_percent() -> int:
+    """Percent of context budget that triggers standard-chat compaction.
+
+    STANDARD_CHAT_COMPACTION_THRESHOLD_PERCENT defaults to 70 so compaction runs
+    before the model-live transcript approaches the full context window.
+    """
+    return min(
+        100,
+        max(1, _get_env_int_with_fallback("STANDARD_CHAT_COMPACTION_THRESHOLD_PERCENT", 70)),
+    )
+
+
+def get_standard_chat_compaction_token_threshold() -> int:
+    """Estimated token threshold for standard-chat compaction.
+
+    Derived from STANDARD_CHAT_CONTEXT_TOKEN_BUDGET and
+    STANDARD_CHAT_COMPACTION_THRESHOLD_PERCENT so the threshold stays tied to
+    the configured context budget.
+    """
+    budget = get_standard_chat_context_token_budget()
+    percent = get_standard_chat_compaction_threshold_percent()
+    return max(1, (budget * percent) // 100)
+
+
 # --- Validator dispatch ---
 
 def get_max_parallel_validators() -> int:

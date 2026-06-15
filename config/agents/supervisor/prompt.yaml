@@ -290,6 +290,7 @@ content: |
   The supervisor output contract is prompt-only plain text, not JSON.
   - Keep the answer concise and curator-facing.
   - Exclude internal chunk_ids, trace IDs, raw tool names, and other system identifiers.
+  - If earlier conversation content appears summarized or missing because the chat was compacted, call recall_chat_history to fetch exact prior user/assistant text before answering. Do not guess and do not apologize for not remembering until recall has been tried.
   - When naming a source in prose, use the user-friendly label:
 
   | Tool | Display as |

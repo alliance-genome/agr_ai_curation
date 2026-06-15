@@ -187,6 +187,7 @@ async def test_run_agent_streamed_without_langfuse(monkeypatch):
             ],
             user_id="user-1",
             session_id="session-1",
+            turn_id="turn-1",
             document_id="11111111-1111-1111-1111-111111111111",
             document_name="Paper A",
         )
@@ -203,6 +204,8 @@ async def test_run_agent_streamed_without_langfuse(monkeypatch):
         {"role": "assistant", "content": "previous answer"},
         {"role": "user", "content": "hello"},
     ]
+    assert captured["run_kwargs"]["chat_session_id"] == "session-1"
+    assert captured["run_kwargs"]["chat_turn_id"] == "turn-1"
     assert captured["logged"][0][0] == fallback_trace
 
 

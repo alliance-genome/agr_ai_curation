@@ -57,6 +57,7 @@ from src.lib.curation_workspace.extraction_results import (
 from src.lib.openai_agents.inspect_results import inspect_results
 from src.lib.openai_agents.supervisor_context_tools import (
     inspect_chat_traces,
+    recall_chat_history,
 )
 from src.lib.prompts.assembly import build_agent_prompt_layers, prompt_templates_for_bundle
 from src.lib.prompts.context import bind_prompt_run, set_pending_prompts
@@ -74,12 +75,14 @@ CURATION_PREP_CONFIRMATION_QUESTION = "Ready to prepare these for curation?"
 _CURATION_PREP_TOOL_NAME = "prepare_for_curation"
 _INSPECT_RESULTS_TOOL_NAME = "inspect_results"
 _INSPECT_CHAT_TRACES_TOOL_NAME = "inspect_chat_traces"
+_RECALL_CHAT_HISTORY_TOOL_NAME = "recall_chat_history"
 _SUPERVISOR_BUILTIN_TOOL_NAMES = frozenset(
     {
         "export_to_file",
         _CURATION_PREP_TOOL_NAME,
         _INSPECT_RESULTS_TOOL_NAME,
         _INSPECT_CHAT_TRACES_TOOL_NAME,
+        _RECALL_CHAT_HISTORY_TOOL_NAME,
     }
 )
 _EXPLICIT_PREP_CONFIRMATION_RE = re.compile(
@@ -947,7 +950,9 @@ def _build_runtime_tool_availability_note(
         "results or gain confidence. Use export_to_file only for explicit "
         "export/download requests and prepare_for_curation only after explicit "
         "confirmation. Use inspect_chat_traces for behavior/debug questions "
-        "about why a previous answer behaved a certain way or what tools ran."
+        "about why a previous answer behaved a certain way or what tools ran. "
+        "Use recall_chat_history for exact prior user/assistant transcript text "
+        "when earlier chat turns may have been compacted out of live context."
     )
 
     return "\n\n".join(notes)
@@ -1315,6 +1320,38 @@ def create_supervisor_agent(
         )
 
     specialist_tools.append(inspect_chat_traces_tool)
+
+    @function_tool(
+        name_override=_RECALL_CHAT_HISTORY_TOOL_NAME,
+        description_override=(
+            "Recall exact prior transcript text for this main chat session. Use "
+            "detail=\"recent\" for a bounded recent transcript page, detail=\"turn\" "
+            "with turn_ref=\"latest\", a turn id, message id, or 1-based turn ordinal "
+            "to fetch a specific turn, and detail=\"search\" with query to full-text "
+            "search this conversation. Use this when earlier turns may have been "
+            "compacted or summarized and you need exact user/assistant wording. This "
+            "does not inspect TraceReview behavior; use inspect_chat_traces for why "
+            "tools ran or failed."
+        ),
+    )
+    async def recall_chat_history_tool(
+        detail: str = "recent",
+        turn_ref: str | None = None,
+        query: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> str:
+        """Recall exact transcript text for the active main chat."""
+
+        return await recall_chat_history(
+            detail=detail,
+            turn_ref=turn_ref,
+            query=query,
+            limit=limit,
+            cursor=cursor,
+        )
+
+    specialist_tools.append(recall_chat_history_tool)
 
     # Export to File tool (always available - supervisor built-in, not a specialist agent)
     # Allows supervisor to export data as downloadable CSV, TSV, or JSON files

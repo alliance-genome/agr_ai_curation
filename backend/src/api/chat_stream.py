@@ -532,9 +532,12 @@ async def chat_stream_endpoint(
 
         try:
             async for event in run_agent_streamed(
-                context_messages=prepared_turn.context_messages,
+                context_messages=[
+                    {"role": "user", "content": prepared_turn.effective_user_message}
+                ],
                 user_id=user_id,
                 session_id=current_session_id,
+                turn_id=current_turn_id,
                 document_id=document_id,
                 document_name=document_name,
                 active_groups=active_groups,

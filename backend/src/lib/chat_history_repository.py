@@ -821,6 +821,49 @@ class ChatHistoryRepository:
         ).all()
         return [_message_record(message) for message in messages]
 
+    def search_session_messages_ranked(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        chat_kind: str,
+        query: str,
+        limit: int = 20,
+    ) -> list[ChatMessageRecord]:
+        """Search transcript rows within one visible session by full-text relevance."""
+
+        page_size = _validate_page_size(
+            limit,
+            field_name="limit",
+            max_value=MAX_MESSAGE_PAGE_SIZE,
+        )
+        session = self._require_active_session_for_kind(
+            session_id=session_id,
+            user_auth_sub=user_auth_sub,
+            chat_kind=chat_kind,
+        )
+        normalized_query = _normalize_required_text(query, field_name="query")
+        search_query = func.websearch_to_tsquery("english", normalized_query)
+        relevance_rank = func.ts_rank_cd(
+            ChatMessageModel.search_vector,
+            search_query,
+        )
+        messages = self._db.scalars(
+            select(ChatMessageModel)
+            .where(
+                ChatMessageModel.session_id == session.session_id,
+                ChatMessageModel.chat_kind == session.chat_kind,
+                ChatMessageModel.search_vector.op("@@")(search_query),
+            )
+            .order_by(
+                relevance_rank.desc(),
+                ChatMessageModel.created_at.desc(),
+                ChatMessageModel.message_id.desc(),
+            )
+            .limit(page_size)
+        ).all()
+        return [_message_record(message) for message in messages]
+
     def update_message_by_turn_id(
         self,
         *,

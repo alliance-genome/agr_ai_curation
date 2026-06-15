@@ -950,6 +950,7 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
         "prepare_for_curation",
         "inspect_results",
         "inspect_chat_traces",
+        "recall_chat_history",
         "export_to_file",
     ]
     inspect_tool = next(
@@ -976,7 +977,7 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
         "Use only when the user explicitly asks"
         in tools_by_name["export_to_file"].description
     )
-    assert captured_langfuse["metadata"]["specialist_count"] == 4
+    assert captured_langfuse["metadata"]["specialist_count"] == 5
 
 
 def test_create_supervisor_agent_with_document_extracts_sections_and_enables_guardrails(monkeypatch):
