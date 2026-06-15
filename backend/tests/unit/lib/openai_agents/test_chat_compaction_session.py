@@ -65,13 +65,19 @@ class _FakeRepository:
     def __init__(self, _db, messages, appended):
         self._messages = messages
         self._appended = appended
+        self.list_calls = []
 
     def get_session(self, **_kwargs):
         return SimpleNamespace(session_id="session-1")
 
     def list_messages(self, **kwargs):
+        self.list_calls.append(kwargs)
         assert kwargs["limit"] == module.MAX_MESSAGE_PAGE_SIZE
-        return SimpleNamespace(items=self._messages, next_cursor=None)
+        messages = self._messages
+        after_created_at = kwargs.get("after_created_at")
+        if after_created_at is not None:
+            messages = [message for message in messages if message.created_at > after_created_at]
+        return SimpleNamespace(items=messages, next_cursor=None)
 
     def append_message(self, **kwargs):
         self._appended.append(kwargs)
@@ -121,6 +127,63 @@ def test_durable_session_get_items_excludes_current_turn_and_keeps_flow_refs(mon
             "role": "assistant",
             "content": "Flow refs only: flow_run_id=flow-1 extraction-result:abc",
         },
+    ]
+
+
+def test_durable_session_get_items_fetches_only_rows_after_projection(monkeypatch):
+    projection_created_at = datetime(2026, 6, 15, 12, 3, tzinfo=timezone.utc)
+    projection = SimpleNamespace(
+        created_at=projection_created_at,
+        payload_json={
+            "schema": module._PROJECTION_SCHEMA,
+            "items": [
+                {"role": "user", "content": "projected old question"},
+                {"role": "assistant", "content": "projected old answer"},
+            ],
+            "covered_turn_ids": ["turn-1"],
+        },
+    )
+    messages = [
+        _message(role="user", content="old question", turn_id="turn-1", minute=1),
+        _message(role="assistant", content="old answer", turn_id="turn-1", minute=2),
+        _message(role="user", content="new question", turn_id="turn-2", minute=4),
+        _message(role="assistant", content="new answer", turn_id="turn-2", minute=5),
+        _message(role="user", content="current prompt", turn_id="turn-3", minute=6),
+    ]
+    db = _FakeDb(projection=projection)
+    appended = []
+    repository_holder = {}
+
+    def _repository(fake_db):
+        repository = _FakeRepository(fake_db, messages, appended)
+        repository_holder["repository"] = repository
+        return repository
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: db)
+    monkeypatch.setattr(module, "ChatHistoryRepository", _repository)
+
+    session = module.DurableChatHistorySession(
+        session_id="session-1",
+        user_id="user-1",
+        current_turn_id="turn-3",
+    )
+
+    assert asyncio.run(session.get_items()) == [
+        {"role": "user", "content": "projected old question"},
+        {"role": "assistant", "content": "projected old answer"},
+        {"role": "user", "content": "new question"},
+        {"role": "assistant", "content": "new answer"},
+    ]
+    assert repository_holder["repository"].list_calls == [
+        {
+            "session_id": "session-1",
+            "user_auth_sub": "user-1",
+            "chat_kind": module.ASSISTANT_CHAT_KIND,
+            "limit": module.MAX_MESSAGE_PAGE_SIZE,
+            "cursor": None,
+            "excluded_message_types": {module.CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE},
+            "after_created_at": projection_created_at,
+        }
     ]
 
 

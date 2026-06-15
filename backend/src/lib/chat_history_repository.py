@@ -627,6 +627,7 @@ class ChatHistoryRepository:
         limit: int = 100,
         cursor: ChatMessageCursor | None = None,
         excluded_message_types: set[str] | None = None,
+        after_created_at: datetime | None = None,
     ) -> ChatMessagePage:
         """List transcript rows for one visible session in chronological order."""
 
@@ -641,6 +642,7 @@ class ChatHistoryRepository:
             limit=limit,
             cursor=cursor,
             excluded_message_types=excluded_message_types,
+            after_created_at=after_created_at,
         )
 
     def list_recent_messages(
@@ -914,6 +916,8 @@ class ChatHistoryRepository:
         if trace_id is not _UNSET:
             normalized_trace_id = None
             if trace_id is not None:
+                if not isinstance(trace_id, str):
+                    raise TypeError("trace_id must be a string or None")
                 normalized_trace_id = _normalize_optional_text(
                     trace_id,
                     field_name="trace_id",
@@ -1085,6 +1089,7 @@ class ChatHistoryRepository:
         limit: int,
         cursor: ChatMessageCursor | None,
         excluded_message_types: set[str] | None = None,
+        after_created_at: datetime | None = None,
     ) -> ChatMessagePage:
         page_size = _validate_page_size(
             limit,
@@ -1097,6 +1102,8 @@ class ChatHistoryRepository:
         )
         if excluded_message_types:
             stmt = stmt.where(ChatMessageModel.message_type.notin_(excluded_message_types))
+        if after_created_at is not None:
+            stmt = stmt.where(ChatMessageModel.created_at > after_created_at)
 
         if cursor is not None:
             stmt = stmt.where(

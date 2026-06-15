@@ -332,13 +332,13 @@ class DurableChatHistorySession(Session):
                 chat_kind=ASSISTANT_CHAT_KIND,
                 limit=MAX_MESSAGE_PAGE_SIZE,
                 cursor=cursor,
+                excluded_message_types={CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE},
+                after_created_at=after,
             )
             messages.extend(page.items)
             if page.next_cursor is None:
                 break
             cursor = page.next_cursor
-        if after is not None:
-            messages = [message for message in messages if message.created_at > after]
         return _completed_exchange_items(messages, excluded_turn_ids=excluded_turn_ids)
 
     def _projection_items(self, projection: ChatMessageModel) -> list[dict[str, Any]]:
