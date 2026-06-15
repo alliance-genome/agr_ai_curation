@@ -154,7 +154,7 @@ def test_flow_definition_payload_defaults_saved_edges_to_control_flow():
     assert payload["edges"][0]["role"] == "control_flow"
 
 
-def test_flow_response_defaults_legacy_saved_edge_roles():
+def test_flow_response_defaults_legacy_saved_edge_roles(monkeypatch):
     flow_id = uuid4()
     now = datetime.now(timezone.utc)
     stored_flow = SimpleNamespace(
@@ -168,10 +168,76 @@ def test_flow_response_defaults_legacy_saved_edge_roles():
         created_at=now,
         updated_at=now,
     )
+    monkeypatch.setattr(
+        flows,
+        "_flow_agent_policy_entry",
+        lambda *_args, **_kwargs: {
+            "name": "Fixture Agent",
+            "category": "Extraction",
+            "supervisor": {"enabled": True},
+        },
+    )
 
     response = flows._flow_to_response(stored_flow)
 
     assert response.flow_definition.edges[0].role == "control_flow"
+
+
+def test_flow_definition_payload_rejects_missing_agent_reference(monkeypatch):
+    monkeypatch.setattr(
+        flows,
+        "apply_flow_validation_attachment_defaults",
+        lambda flow_definition: flow_definition,
+    )
+    monkeypatch.setattr(
+        flows,
+        "_flow_agent_policy_entry",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        flows._validated_flow_definition_payload(
+            FlowDefinition.model_validate(_minimal_flow_definition_payload()),
+            db_user_id=7,
+            enforce_agent_references=True,
+        )
+
+    assert exc.value.status_code == 422
+    assert "references unavailable agent" in str(exc.value.detail)
+    assert "fixture_agent_without_pack" in str(exc.value.detail)
+
+
+def test_flow_response_rejects_missing_agent_reference_on_load(monkeypatch):
+    flow_id = uuid4()
+    now = datetime.now(timezone.utc)
+    stored_flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Broken saved flow",
+        description=None,
+        flow_definition=_minimal_flow_definition_payload(),
+        execution_count=0,
+        last_executed_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    monkeypatch.setattr(
+        flows,
+        "apply_flow_validation_attachment_defaults",
+        lambda flow_definition: flow_definition,
+    )
+    monkeypatch.setattr(
+        flows,
+        "_flow_agent_policy_entry",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        flows._flow_to_response(stored_flow)
+
+    assert exc.value.status_code == 422
+    assert "references unavailable agent" in str(exc.value.detail)
+    assert "fixture_agent_without_pack" in str(exc.value.detail)
 
 
 def test_flow_definition_payload_rejects_attachment_only_validator_control_flow(

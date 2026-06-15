@@ -349,6 +349,12 @@ def _dedupe_tool_ids(tool_ids: List[str]) -> List[str]:
     return deduped
 
 
+def _builder_finalization_tool_ids() -> set[str]:
+    from src.lib.openai_agents.streaming_tools import builder_finalization_tool_names
+
+    return set(builder_finalization_tool_names())
+
+
 def _tool_policy_by_key(db: Session) -> Dict[str, Any]:
     return {
         entry.tool_key: entry
@@ -359,9 +365,13 @@ def _tool_policy_by_key(db: Session) -> Dict[str, Any]:
 def _system_managed_tool_ids(db: Session, tool_ids: List[str]) -> List[str]:
     """Tools inherited from system templates that curators cannot attach manually."""
     policy_by_key = _tool_policy_by_key(db)
+    builder_finalization_tool_ids = _builder_finalization_tool_ids()
     managed: List[str] = []
     for tool_id in _dedupe_tool_ids(tool_ids):
-        if tool_id not in _SYSTEM_MANAGED_INHERITED_TOOL_IDS:
+        if (
+            tool_id not in _SYSTEM_MANAGED_INHERITED_TOOL_IDS
+            and tool_id not in builder_finalization_tool_ids
+        ):
             continue
         policy = policy_by_key.get(tool_id)
         if policy is None or not policy.allow_attach:
@@ -390,7 +400,13 @@ def _validate_requested_tool_ids(
         return []
 
     policy_by_key = _tool_policy_by_key(db)
-    inherited_system_managed = set(_dedupe_tool_ids(inherited_tool_ids or [])) & _SYSTEM_MANAGED_INHERITED_TOOL_IDS
+    builder_finalization_tool_ids = _builder_finalization_tool_ids()
+    inherited_system_managed = {
+        tool_id
+        for tool_id in _dedupe_tool_ids(inherited_tool_ids or [])
+        if tool_id in _SYSTEM_MANAGED_INHERITED_TOOL_IDS
+        or tool_id in builder_finalization_tool_ids
+    }
     unknown = sorted({
         tool_id
         for tool_id in normalized
@@ -412,6 +428,29 @@ def _validate_requested_tool_ids(
         raise ValueError(f"Tool(s) are not attachable: {', '.join(disallowed)}")
 
     return normalized
+
+
+def _validate_envelope_output_requires_finalize_tool(
+    *,
+    output_schema_key: Optional[str],
+    tool_ids: List[str],
+) -> None:
+    output_schema = str(output_schema_key or "").strip()
+    if not output_schema:
+        return
+
+    builder_finalize_tools = sorted(
+        set(_dedupe_tool_ids(tool_ids)) & _builder_finalization_tool_ids()
+    )
+    if builder_finalize_tools:
+        return
+
+    raise ValueError(
+        "Agents using an envelope output schema must include a builder finalize "
+        f"tool before saving. Output schema '{output_schema}' has no finalize_* "
+        "tool in tool_ids; add the appropriate builder-finalization tool or clear "
+        "the output schema."
+    )
 
 
 def _validate_model_id(model_id: str) -> str:
@@ -552,6 +591,15 @@ def create_custom_agent(
         )
     else:
         effective_tool_ids = parent_tool_ids
+    effective_output_schema_key = (
+        output_schema_key
+        if output_schema_key is not None
+        else parent_defaults["output_schema_key"]
+    )
+    _validate_envelope_output_requires_finalize_tool(
+        output_schema_key=effective_output_schema_key,
+        tool_ids=list(effective_tool_ids),
+    )
 
     custom_agent = CustomAgent(
         id=custom_uuid,
@@ -567,9 +615,13 @@ def create_custom_agent(
             if model_temperature is not None
             else parent_defaults["model_temperature"]
         ),
-        model_reasoning=model_reasoning if model_reasoning is not None else parent_defaults["model_reasoning"],
+        model_reasoning=(
+            model_reasoning
+            if model_reasoning is not None
+            else parent_defaults["model_reasoning"]
+        ),
         tool_ids=list(effective_tool_ids),
-        output_schema_key=output_schema_key if output_schema_key is not None else parent_defaults["output_schema_key"],
+        output_schema_key=effective_output_schema_key,
         group_rules_enabled=include_group_rules,
         group_rules_component=parent_agent_key,
         mod_prompt_overrides=normalized_group_overrides,
@@ -848,38 +900,7 @@ def update_custom_agent(
         and next_group_overrides != current_group_overrides
     )
 
-    if prompt_changed or group_overrides_changed:
-        next_version = _get_next_version(db, custom_agent.id)
-        db.add(
-            CustomAgentVersion(
-                custom_agent_id=custom_agent.id,
-                version=next_version,
-                custom_prompt=custom_agent.custom_prompt,
-                mod_prompt_overrides=current_group_overrides,
-                notes=notes or "Auto-snapshot before prompt update",
-            )
-        )
-
-    if prompt_changed:
-        custom_agent.custom_prompt = next_custom_prompt
-    if group_overrides_changed and next_group_overrides is not None:
-        _write_group_prompt_overrides(custom_agent, next_group_overrides)
-
-    if name is not None:
-        custom_agent.name = name
-    if description is not None:
-        custom_agent.description = description
-    if icon is not None:
-        custom_agent.icon = icon
-    if include_group_rules is not None:
-        custom_agent.group_rules_enabled = include_group_rules
-    if model_id is not None:
-        clean_model_id = _validate_model_id(model_id)
-        custom_agent.model_id = clean_model_id
-    if model_temperature is not None:
-        custom_agent.model_temperature = float(model_temperature)
-    if model_reasoning is not None:
-        custom_agent.model_reasoning = model_reasoning
+    next_tool_ids = list(custom_agent.tool_ids or [])
     if tool_ids is not None:
         inherited_tool_ids: List[str] = []
         template_source = getattr(custom_agent, "template_source", None)
@@ -899,17 +920,61 @@ def update_custom_agent(
             tool_ids,
             inherited_tool_ids=inherited_tool_ids,
         ) or []
-        validated_tool_ids = _merge_system_managed_tool_ids(
+        next_tool_ids = _merge_system_managed_tool_ids(
             validated_tool_ids,
             inherited_system_tool_ids,
         )
         existing_tool_ids = list(custom_agent.tool_ids or [])
-        if existing_tool_ids and not validated_tool_ids and not allow_empty_tool_ids:
+        if existing_tool_ids and not next_tool_ids and not allow_empty_tool_ids:
             raise ValueError(
-                "Refusing to clear all tool_ids from an existing agent without explicit override. "
+                "Refusing to clear all tool_ids from an existing agent without "
+                "explicit override. "
                 "Re-attach at least one tool before saving."
             )
-        custom_agent.tool_ids = validated_tool_ids
+    next_output_schema_key = (
+        output_schema_key
+        if output_schema_key is not None
+        else custom_agent.output_schema_key
+    )
+    _validate_envelope_output_requires_finalize_tool(
+        output_schema_key=next_output_schema_key,
+        tool_ids=list(next_tool_ids),
+    )
+
+    if prompt_changed or group_overrides_changed:
+        next_version = _get_next_version(db, custom_agent.id)
+        db.add(
+            CustomAgentVersion(
+                custom_agent_id=custom_agent.id,
+                version=next_version,
+                custom_prompt=custom_agent.custom_prompt,
+                mod_prompt_overrides=current_group_overrides,
+                notes=notes or "Auto-snapshot before prompt update",
+            )
+        )
+
+    if prompt_changed:
+        custom_agent.custom_prompt = str(next_custom_prompt)
+    if group_overrides_changed and next_group_overrides is not None:
+        _write_group_prompt_overrides(custom_agent, next_group_overrides)
+
+    if name is not None:
+        custom_agent.name = name
+    if description is not None:
+        custom_agent.description = description
+    if icon is not None:
+        custom_agent.icon = icon
+    if include_group_rules is not None:
+        custom_agent.group_rules_enabled = include_group_rules
+    if model_id is not None:
+        clean_model_id = _validate_model_id(model_id)
+        custom_agent.model_id = clean_model_id
+    if model_temperature is not None:
+        custom_agent.model_temperature = float(model_temperature)
+    if model_reasoning is not None:
+        custom_agent.model_reasoning = model_reasoning
+    if tool_ids is not None:
+        custom_agent.tool_ids = next_tool_ids
     if output_schema_key is not None:
         custom_agent.output_schema_key = output_schema_key
 
@@ -998,6 +1063,7 @@ def get_custom_agent_runtime_info(
     own_session = db is None
     if own_session:
         db = SessionLocal()
+    assert db is not None
 
     try:
         custom_agent = db.query(CustomAgent).filter(

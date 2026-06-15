@@ -65,22 +65,35 @@ def _validated_flow_definition_payload(
     *,
     db_user_id: int | None = None,
     enforce_agent_step_policy: bool = False,
+    enforce_agent_references: bool = False,
 ) -> dict[str, Any]:
     """Return flow definition JSON with metadata-backed validation defaults."""
 
-    validated = _validated_flow_definition(flow_definition)
+    validated = _validated_flow_definition(
+        flow_definition,
+        db_user_id=db_user_id,
+        enforce_agent_references=enforce_agent_references,
+    )
     if enforce_agent_step_policy:
         _validate_flow_agent_step_policy(validated, db_user_id=db_user_id)
     return validated.model_dump()
 
 
-def _validated_flow_definition(flow_definition: FlowDefinition) -> FlowDefinition:
+def _validated_flow_definition(
+    flow_definition: FlowDefinition,
+    *,
+    db_user_id: int | None = None,
+    enforce_agent_references: bool = False,
+) -> FlowDefinition:
     """Return a flow definition hydrated with metadata-backed validation defaults."""
 
     try:
-        return apply_flow_validation_attachment_defaults(flow_definition)
+        validated = apply_flow_validation_attachment_defaults(flow_definition)
     except FlowValidationAttachmentError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if enforce_agent_references:
+        _validate_flow_agent_references(validated, db_user_id=db_user_id)
+    return validated
 
 
 def _flow_agent_policy_entry(
@@ -157,11 +170,43 @@ def _validate_flow_agent_step_policy(
         raise HTTPException(status_code=422, detail=reason)
 
 
+def _validate_flow_agent_references(
+    flow_definition: FlowDefinition,
+    *,
+    db_user_id: int | None,
+) -> None:
+    """Reject flows that reference agent_ids unavailable to the saving/loading user."""
+
+    missing_references: list[str] = []
+    for node in flow_definition.nodes:
+        agent_id = str(node.data.agent_id or "").strip()
+        if not agent_id or agent_id == "task_input":
+            continue
+        if _flow_agent_policy_entry(agent_id, db_user_id=db_user_id) is not None:
+            continue
+        agent_name = str(node.data.agent_display_name or agent_id)
+        missing_references.append(
+            f"node '{node.id}' ({agent_name}) references missing agent_id '{agent_id}'"
+        )
+
+    if missing_references:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Flow references unavailable agent(s): "
+                + "; ".join(missing_references)
+                + ". Re-select an available agent before saving or running this flow."
+            ),
+        )
+
+
 def _flow_to_response(flow: CurationFlow) -> FlowResponse:
     """Convert a stored flow to an API response with validation defaults hydrated."""
 
     flow_definition = _validated_flow_definition(
-        FlowDefinition.model_validate(flow.flow_definition)
+        FlowDefinition.model_validate(flow.flow_definition),
+        db_user_id=flow.user_id,
+        enforce_agent_references=True,
     )
     return FlowResponse(
         id=flow.id,
@@ -416,6 +461,7 @@ async def create_flow(
         flow_definition=_validated_flow_definition_payload(
             request.flow_definition,
             db_user_id=db_user.id,
+            enforce_agent_references=True,
             enforce_agent_step_policy=True,
         ),
     )
@@ -493,6 +539,7 @@ async def update_flow(
         flow.flow_definition = _validated_flow_definition_payload(
             request.flow_definition,
             db_user_id=flow.user_id,
+            enforce_agent_references=True,
             enforce_agent_step_policy=True,
         )
         # CRITICAL: SQLAlchemy doesn't detect changes to mutable JSONB fields
