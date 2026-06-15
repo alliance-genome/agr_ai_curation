@@ -18,6 +18,7 @@ import time
 import uuid
 from collections import deque
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, AsyncGenerator, Dict, Any, Optional, List
 
@@ -412,6 +413,59 @@ def _build_agents_run_config(
             ),
         },
     )
+
+
+def build_isolated_openai_run_config(parent_run_config: Any | None) -> tuple[Any, OpenAIProvider]:
+    """Create a child RunConfig with its own OpenAI provider/websocket lifecycle.
+
+    Chat turns intentionally reuse one warm provider across the supervisor and nested
+    specialist runs. Multi-step flows need a tighter owner for each step so closing the
+    supervisor's provider cannot race an SDK streaming task that still belongs to a
+    child step.
+    """
+
+    openai_client = SafeAsyncOpenAI()
+    openai_provider = _build_request_openai_provider(openai_client)
+    base_config = parent_run_config or RunConfig(
+        model_provider=openai_provider,
+        tracing_disabled=not is_openai_agents_tracing_enabled(),
+        trace_include_sensitive_data=True,
+    )
+    try:
+        run_config = replace(
+            base_config,
+            model_provider=openai_provider,
+            trace_include_sensitive_data=True,
+        )
+    except TypeError:
+        run_config = base_config
+        setattr(run_config, "model_provider", openai_provider)
+        setattr(run_config, "trace_include_sensitive_data", True)
+        if not hasattr(run_config, "tracing_disabled"):
+            setattr(
+                run_config,
+                "tracing_disabled",
+                not is_openai_agents_tracing_enabled(),
+            )
+    return run_config, openai_provider
+
+
+async def close_isolated_openai_provider(
+    openai_provider: OpenAIProvider,
+    *,
+    trace_id: str | None = None,
+    user_id: str | None = None,
+) -> None:
+    """Close an isolated OpenAI provider without masking the run outcome."""
+
+    try:
+        await openai_provider.aclose()
+    except Exception:
+        logger.warning(
+            "Failed to close isolated OpenAI provider websocket",
+            extra={"trace_id": trace_id, "user_id": user_id},
+            exc_info=True,
+        )
 
 
 def _now_iso() -> str:
@@ -905,9 +959,9 @@ async def _run_agent_with_tracing(
         document_id=document_id,
         document_name=document_name,
     )
-    # Make the per-request RunConfig (and its warm websocket provider) available to
-    # deeply nested runs invoked outside the SDK tool-context path (e.g. custom flow
-    # validators) so they reuse the same connection instead of opening a new one.
+    # Make the per-request RunConfig available to deeply nested runs invoked outside
+    # the SDK tool-context path. Chat helpers can reuse its warm provider directly;
+    # flow helpers clone it onto step-owned providers for explicit teardown.
     run_config_token = set_current_run_config(run_config)
 
     # Create live event list for real-time specialist event streaming
