@@ -513,7 +513,7 @@ def test_compact_tool_result_recall_hints_fetch_exact_turn_and_trace_payload(
 ):
     monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "500")
 
-    exact_turn_phrase = "Early Agent Studio note: preserve WB:WBGene00006789 exactly."
+    exact_turn_phrase = "Early Agent Studio note: preserve record-alpha-6789 exactly."
     exact_payload_value = "TraceReview exact payload body " * 300
     compact = json.loads(
         api_module._provider_tool_result_content(
