@@ -16,7 +16,7 @@ import uuid
 from copy import deepcopy
 from datetime import datetime, timezone  # noqa: F401 - Agent Studio module API surface.
 from pathlib import Path as FilePath
-from typing import Any, Callable, Dict, List, NoReturn, Optional
+from typing import Any, Callable, Dict, List, NoReturn, Optional, cast
 
 import anthropic
 import boto3
@@ -699,6 +699,8 @@ async def get_registry_metadata(
             category = custom.category or "Custom"
             custom_id = make_custom_agent_id(custom.id)
             template_source = _custom_agent_template_source(custom)
+            # A missing template source should miss these catalogs and use get() defaults.
+            template_metadata_key = cast(str, template_source)
 
             agents[custom_id] = AgentMetadata(
                 name=custom.name,
@@ -709,14 +711,10 @@ async def get_registry_metadata(
                 ),
                 supervisor_tool=f"ask_{custom_id.replace('-', '_')}_specialist",
                 validation_attachments=deepcopy(
-                    validation_attachments_by_agent.get(template_source, [])
-                    if template_source is not None
-                    else []
+                    validation_attachments_by_agent.get(template_metadata_key, [])
                 ),
                 domain_envelope=deepcopy(
-                    domain_envelope_metadata_by_agent.get(template_source)
-                    if template_source is not None
-                    else None
+                    domain_envelope_metadata_by_agent.get(template_metadata_key)
                 ),
             )
 
