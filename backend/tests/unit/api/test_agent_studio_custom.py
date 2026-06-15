@@ -265,10 +265,16 @@ class TestCustomAgentCrudContract:
             "set_global_user_from_cognito",
             lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
         )
+        validation_message = (
+            "Agents using an envelope output schema must include a builder finalize "
+            "tool before saving. Output schema 'gene_extraction' has no finalize_* "
+            "tool in tool_ids; add the appropriate builder-finalization tool or clear "
+            "the output schema."
+        )
         monkeypatch.setattr(
             api_module,
             "create_custom_agent",
-            lambda **_kwargs: (_ for _ in ()).throw(ValueError("Unknown model_id: not-real")),
+            lambda **_kwargs: (_ for _ in ()).throw(ValueError(validation_message)),
         )
 
         db = SimpleNamespace(
@@ -291,9 +297,9 @@ class TestCustomAgentCrudContract:
             )
 
         assert exc_info.value.status_code == 400
-        assert exc_info.value.detail == "Custom agent request is invalid"
-        assert "Unknown model_id" not in str(exc_info.value.detail)
-        assert "Unknown model_id" in caplog.text
+        assert exc_info.value.detail == validation_message
+        assert "builder finalize tool" in str(exc_info.value.detail)
+        assert "builder finalize tool" in caplog.text
 
     def test_list_endpoint_filters_by_template_source_only(self, monkeypatch):
         import src.api.agent_studio_custom as api_module
@@ -614,6 +620,36 @@ class TestCustomAgentCrudErrorsAndBranches:
         assert conflict_exc.value.status_code == 409
         assert conflict_exc.value.detail == "A custom agent with this name already exists"
         assert "name already exists" in caplog.text
+        db.rollback.assert_called_once()
+
+        validation_message = (
+            "Agents using an envelope output schema must include a builder finalize "
+            "tool before saving. Output schema 'gene_extraction' has no finalize_* "
+            "tool in tool_ids; add the appropriate builder-finalization tool or clear "
+            "the output schema."
+        )
+        monkeypatch.setattr(
+            api_module,
+            "update_custom_agent",
+            lambda **_kwargs: (_ for _ in ()).throw(ValueError(validation_message)),
+        )
+        db = _db_mock()
+        with pytest.raises(HTTPException) as validation_exc:
+            asyncio.run(
+                api_module.update_custom_agent_endpoint(
+                    custom_agent_id=custom_agent.id,
+                    request=api_module.UpdateCustomAgentRequest(
+                        output_schema_key="gene_extraction",
+                        tool_ids=[],
+                        allow_empty_tool_ids=True,
+                    ),
+                    user={"sub": "auth-sub"},
+                    db=db,
+                )
+            )
+        assert validation_exc.value.status_code == 400
+        assert validation_exc.value.detail == validation_message
+        assert "builder finalize tool" in str(validation_exc.value.detail)
         db.rollback.assert_called_once()
 
         db_unique = IntegrityError(

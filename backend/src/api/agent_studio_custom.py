@@ -310,7 +310,7 @@ async def create_custom_agent_endpoint(
         _raise_custom_agent_validation_http_exception(
             exc=exc,
             status_code=400,
-            detail="Custom agent request is invalid",
+            detail=str(exc) or "Custom agent request is invalid",
             log_message="Failed to create custom agent",
             log_extra=log_context,
         )
@@ -424,7 +424,7 @@ async def update_custom_agent_endpoint(
         _raise_custom_agent_validation_http_exception(
             exc=exc,
             status_code=400,
-            detail="Custom agent update is invalid",
+            detail=str(exc) or "Custom agent update is invalid",
             log_message=f"Failed to update custom agent '{custom_agent_id}'",
             log_extra=log_context,
         )
