@@ -618,7 +618,7 @@ INST
 # requests, round counting, and report generation in one place.
 #
 # Sets these variables for the caller:
-#   CLAUDE_STATUS       quiet | pending | detected | maxed_out | error
+#   CLAUDE_STATUS       quiet | pending | actionable_feedback | maxed_out | error
 #   CLAUDE_REPORT_FILE  path to the report file (empty if quiet)
 
 emit_pr_success_with_claude_check() {
@@ -749,7 +749,7 @@ INST
         return 11
       fi
 
-      if [[ "${CLAUDE_STATUS}" == "detected" && -n "${CLAUDE_REPORT_FILE}" ]]; then
+      if [[ "${CLAUDE_STATUS}" == "actionable_feedback" && -n "${CLAUDE_REPORT_FILE}" ]]; then
         echo "READY_FOR_PR_CLAUDE_REPORT_FILE=${CLAUDE_REPORT_FILE}"
         echo "READY_FOR_PR_CLAUDE_ROUND=${loop_round:-1}"
         echo "READY_FOR_PR_CLAUDE_MAX_ROUNDS=${loop_max:-5}"
