@@ -331,6 +331,7 @@ describe('FlowBuilder', () => {
       + "references missing agent_id 'old_agent'. Re-select an available agent "
       + "before saving or running this flow."
     )
+    const schemaWarningMessage = 'Flow has a validator attachment that needs review.'
 
     serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Stale Flow'))
     serviceMocks.getFlow.mockResolvedValue(buildFlowResponse({
@@ -339,6 +340,10 @@ describe('FlowBuilder', () => {
         {
           type: 'CRITICAL',
           message: staleReferenceMessage,
+        },
+        {
+          type: 'WARNING',
+          message: schemaWarningMessage,
         },
       ],
       has_critical_issues: true,
@@ -356,7 +361,9 @@ describe('FlowBuilder', () => {
       expect(serviceMocks.getFlow).toHaveBeenCalledWith('flow-1')
     })
     expect(
-      await screen.findByText(`Flow loaded with validation issue: ${staleReferenceMessage}`)
+      await screen.findByText(
+        `Flow loaded with validation issue: ${staleReferenceMessage} ${schemaWarningMessage}`
+      )
     ).toBeInTheDocument()
   }, 15000)
 

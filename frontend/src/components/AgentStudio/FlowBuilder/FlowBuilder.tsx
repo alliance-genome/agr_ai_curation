@@ -661,8 +661,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       setNodes(flowNodes)
       setEdges(flowEdges)
       if (flow.has_critical_issues && flow.validation_warnings?.length) {
+        const warningMessages = flow.validation_warnings.map((warning) => warning.message).join(' ')
         setSnackbar({
-          message: `Flow loaded with validation issue: ${flow.validation_warnings[0].message}`,
+          message: `Flow loaded with validation issue: ${warningMessages}`,
           severity: 'error',
         })
       }
