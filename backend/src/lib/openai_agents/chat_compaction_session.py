@@ -77,8 +77,6 @@ def _chat_replay_items(items: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     replay_items: list[dict[str, Any]] = []
     for item in items:
         role = str(item.get("role") or "").strip()
-        if item.get("type") == "message":
-            role = str(item.get("role") or "").strip()
         if role not in {"user", "assistant"}:
             continue
         content = _content_text(item.get("content"))
@@ -133,7 +131,7 @@ def should_compact_standard_chat_context(context: dict[str, Any]) -> bool:
 
     session_items = context.get("session_items")
     if not isinstance(session_items, list):
-        return False
+        raise TypeError("SDK compaction context must include list session_items")
     estimated_tokens = estimate_standard_chat_context_tokens(session_items)
     threshold = get_standard_chat_compaction_token_threshold()
     should_compact = estimated_tokens >= threshold

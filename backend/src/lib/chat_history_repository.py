@@ -352,6 +352,7 @@ class ChatHistoryRepository:
         user_auth_sub: str,
         message_limit: int = 100,
         message_cursor: ChatMessageCursor | None = None,
+        excluded_message_types: set[str] | None = None,
     ) -> ChatSessionDetail | None:
         """Fetch one active session and one chronological page of transcript rows."""
 
@@ -367,6 +368,7 @@ class ChatHistoryRepository:
             chat_kind=session.chat_kind,
             limit=message_limit,
             cursor=message_cursor,
+            excluded_message_types=excluded_message_types,
         )
         return ChatSessionDetail(
             session=_session_record(session),
@@ -624,6 +626,7 @@ class ChatHistoryRepository:
         chat_kind: str,
         limit: int = 100,
         cursor: ChatMessageCursor | None = None,
+        excluded_message_types: set[str] | None = None,
     ) -> ChatMessagePage:
         """List transcript rows for one visible session in chronological order."""
 
@@ -637,6 +640,7 @@ class ChatHistoryRepository:
             chat_kind=session.chat_kind,
             limit=limit,
             cursor=cursor,
+            excluded_message_types=excluded_message_types,
         )
 
     def list_recent_messages(
@@ -829,6 +833,7 @@ class ChatHistoryRepository:
         chat_kind: str,
         query: str,
         limit: int = 20,
+        excluded_message_types: set[str] | None = None,
     ) -> list[ChatMessageRecord]:
         """Search transcript rows within one visible session by full-text relevance."""
 
@@ -848,13 +853,16 @@ class ChatHistoryRepository:
             ChatMessageModel.search_vector,
             search_query,
         )
+        stmt = select(ChatMessageModel).where(
+            ChatMessageModel.session_id == session.session_id,
+            ChatMessageModel.chat_kind == session.chat_kind,
+            ChatMessageModel.search_vector.op("@@")(search_query),
+        )
+        if excluded_message_types:
+            stmt = stmt.where(ChatMessageModel.message_type.notin_(excluded_message_types))
+
         messages = self._db.scalars(
-            select(ChatMessageModel)
-            .where(
-                ChatMessageModel.session_id == session.session_id,
-                ChatMessageModel.chat_kind == session.chat_kind,
-                ChatMessageModel.search_vector.op("@@")(search_query),
-            )
+            stmt
             .order_by(
                 relevance_rank.desc(),
                 ChatMessageModel.created_at.desc(),
@@ -1076,6 +1084,7 @@ class ChatHistoryRepository:
         chat_kind: str,
         limit: int,
         cursor: ChatMessageCursor | None,
+        excluded_message_types: set[str] | None = None,
     ) -> ChatMessagePage:
         page_size = _validate_page_size(
             limit,
@@ -1086,6 +1095,8 @@ class ChatHistoryRepository:
             ChatMessageModel.session_id == session_id,
             ChatMessageModel.chat_kind == chat_kind,
         )
+        if excluded_message_types:
+            stmt = stmt.where(ChatMessageModel.message_type.notin_(excluded_message_types))
 
         if cursor is not None:
             stmt = stmt.where(

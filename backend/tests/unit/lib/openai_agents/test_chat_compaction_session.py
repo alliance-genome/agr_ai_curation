@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from src.lib.chat_history_repository import ASSISTANT_CHAT_KIND, ChatMessageRecord
 from src.lib.chat_transcript import FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
 from src.lib.openai_agents import chat_compaction_session as module
@@ -179,3 +181,8 @@ def test_standard_chat_compaction_trigger_uses_env_threshold(monkeypatch):
     assert module.should_compact_standard_chat_context(
         {"session_items": [{"role": "user", "content": "x" * 300}]}
     )
+
+
+def test_standard_chat_compaction_trigger_rejects_malformed_sdk_context():
+    with pytest.raises(TypeError, match="session_items"):
+        module.should_compact_standard_chat_context({"session_items": {"role": "user"}})

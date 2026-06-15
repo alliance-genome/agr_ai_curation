@@ -457,14 +457,6 @@ async def chat_stream_endpoint(
             exc=exc,
         )
 
-    if prepared_turn.context_messages:
-        logger.info(
-            "Including %s durable context messages for session %s",
-            len(prepared_turn.context_messages),
-            session_id,
-            extra={"session_id": session_id, "user_id": user_id, "turn_id": prepared_turn.turn_id},
-        )
-
     if prepared_turn.replay_assistant_turn is not None:
         generated_title_candidate = _generate_title_from_turn(
             user_message=prepared_turn.effective_user_message,

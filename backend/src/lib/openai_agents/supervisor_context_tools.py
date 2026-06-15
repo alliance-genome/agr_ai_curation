@@ -276,17 +276,14 @@ async def recall_chat_history(
         db = SessionLocal()
         try:
             repository = ChatHistoryRepository(db)
-            results = [
-                message
-                for message in repository.search_session_messages_ranked(
-                    session_id=session_id,
-                    user_auth_sub=user_id,
-                    chat_kind=ASSISTANT_CHAT_KIND,
-                    query=normalized_query,
-                    limit=bounded_limit,
-                )
-                if message.message_type != CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE
-            ]
+            results = repository.search_session_messages_ranked(
+                session_id=session_id,
+                user_auth_sub=user_id,
+                chat_kind=ASSISTANT_CHAT_KIND,
+                query=normalized_query,
+                limit=bounded_limit,
+                excluded_message_types={CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE},
+            )
         except ChatHistorySessionNotFoundError:
             results = []
         finally:

@@ -338,6 +338,7 @@ class FakeChatHistoryRepository:
         user_auth_sub: str,
         message_limit: int = 100,
         message_cursor=None,
+        excluded_message_types: set[str] | None = None,
     ) -> ChatSessionDetail | None:
         if not session_id.strip():
             raise ValueError("session_id is required")
@@ -350,6 +351,7 @@ class FakeChatHistoryRepository:
             chat_kind=session.chat_kind,
             limit=message_limit,
             cursor=message_cursor,
+            excluded_message_types=excluded_message_types,
         )
         return ChatSessionDetail(
             session=session,
@@ -365,6 +367,7 @@ class FakeChatHistoryRepository:
         chat_kind: str,
         limit: int = 100,
         cursor: ChatMessageCursor | None = None,
+        excluded_message_types: set[str] | None = None,
     ) -> ChatMessagePage:
         if not session_id.strip():
             raise ValueError("session_id is required")
@@ -377,6 +380,10 @@ class FakeChatHistoryRepository:
                 message
                 for message in self.detail_messages.get((user_auth_sub, session_id), [])
                 if message.chat_kind == chat_kind
+                and (
+                    not excluded_message_types
+                    or message.message_type not in excluded_message_types
+                )
             ],
             key=lambda message: (message.created_at, message.message_id),
         )
@@ -605,125 +612,6 @@ def _db_stub(*, commits: list[str] | None = None, rollbacks: list[str] | None = 
         commit=lambda: commits.append("commit") if commits is not None else None,
         rollback=lambda: rollbacks.append("rollback") if rollbacks is not None else None,
     )
-
-
-def test_build_context_messages_from_history_appends_current_user_turn():
-    context_messages = chat._build_context_messages_from_history(
-        [
-            {"role": "user", "content": "first question"},
-            {"role": "assistant", "content": "first answer"},
-        ],
-        user_message="follow-up question",
-    )
-
-    assert context_messages == [
-        {"role": "user", "content": "first question"},
-        {"role": "assistant", "content": "first answer"},
-        {"role": "user", "content": "follow-up question"},
-    ]
-
-
-def test_build_context_messages_from_history_raises_on_malformed_history_message():
-    with pytest.raises(ValueError, match="history_messages\\[0\\] is missing a role"):
-        chat._build_context_messages_from_history(
-            [{"role": "", "content": "first question"}],
-            user_message="follow-up question",
-        )
-
-
-def test_build_context_messages_from_durable_messages_preserves_completed_exchange_semantics():
-    repository = FakeChatHistoryRepository(
-        sessions=[_session_record(session_id="session-context")],
-        detail_messages={
-            ("user-1", "session-context"): [
-                _message_record(
-                    session_id="session-context",
-                    role="user",
-                    content="first question",
-                    turn_id="turn-1",
-                    created_at=_ts(9, 1),
-                ),
-                _message_record(
-                    session_id="session-context",
-                    role="assistant",
-                    content="first answer",
-                    turn_id="turn-1",
-                    created_at=_ts(9, 2),
-                ),
-                _message_record(
-                    session_id="session-context",
-                    role="user",
-                    content="stale interrupted question",
-                    message_type="text",
-                    created_at=_ts(9, 3),
-                ),
-                _message_record(
-                    session_id="session-context",
-                    role="flow",
-                    content="flow memory",
-                    message_type="text",
-                    created_at=_ts(9, 4),
-                ),
-            ]
-        },
-    )
-
-    context_messages = chat._build_context_messages_from_durable_messages(
-        repository,
-        user_id="user-1",
-        session_id="session-context",
-        user_message="current question",
-    )
-
-    assert context_messages == [
-        {"role": "user", "content": "first question"},
-        {"role": "assistant", "content": "first answer"},
-        {"role": "user", "content": "current question"},
-    ]
-
-
-def test_build_context_messages_from_durable_messages_rehydrates_flow_memory_from_summary_rows():
-    repository = FakeChatHistoryRepository(
-        sessions=[_session_record(session_id="session-flow-context")],
-        detail_messages={
-            ("user-1", "session-flow-context"): [
-                _message_record(
-                    session_id="session-flow-context",
-                    role="user",
-                    content="Run gene selection flow",
-                    turn_id="turn-flow-1",
-                    created_at=_ts(9, 1),
-                ),
-                _message_record(
-                    session_id="session-flow-context",
-                    role="flow",
-                    content="Selected TP53 for highest evidence confidence.",
-                    turn_id="turn-flow-1",
-                    message_type=chat.FLOW_SUMMARY_MESSAGE_TYPE,
-                    payload_json={
-                        "flow_id": "flow-1",
-                        "status": "completed",
-                        chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY: "Flow refs: flow_run_id=flow-run-1 extraction_result_id=er-1",
-                    },
-                    created_at=_ts(9, 2),
-                ),
-            ]
-        },
-    )
-
-    context_messages = chat._build_context_messages_from_durable_messages(
-        repository,
-        user_id="user-1",
-        session_id="session-flow-context",
-        user_message="follow-up question",
-    )
-
-    assert context_messages == [
-        {"role": "user", "content": "Run gene selection flow"},
-        {"role": "assistant", "content": "Flow refs: flow_run_id=flow-run-1 extraction_result_id=er-1"},
-        {"role": "user", "content": "follow-up question"},
-    ]
-
 
 
 @pytest.mark.asyncio
@@ -1011,11 +899,6 @@ async def test_chat_endpoint_uses_last_run_finished_response(monkeypatch):
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
-    _patch_chat_impl(
-        monkeypatch,
-        "_build_context_messages_from_durable_messages",
-        lambda *_args, **_kwargs: pytest.fail("non-stream chat should use SDK session replay"),
-    )
 
     async def _stream(**_kwargs):
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
@@ -1048,7 +931,6 @@ async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(mo
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
-    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
     async def _register_active_stream(
         session_id: str,
@@ -1135,7 +1017,6 @@ async def test_chat_endpoint_retries_after_tool_map_failure_releases_same_turn_c
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
-    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
     async def _register_active_stream(
         session_id: str,
@@ -1344,7 +1225,7 @@ async def test_chat_endpoint_replays_completed_turn_without_rerunning(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_chat_endpoint_replay_reseeds_prompt_history_for_the_next_turn(monkeypatch):
+async def test_chat_endpoint_replay_keeps_next_turn_runner_input_current_only(monkeypatch):
     commits: list[str] = []
     captured_context_messages = []
     repository = FakeChatHistoryRepository(
@@ -1407,18 +1288,6 @@ async def test_chat_endpoint_replay_reseeds_prompt_history_for_the_next_turn(mon
     )
 
     assert replay_result.response == "stored answer"
-    assert chat._build_context_messages_from_durable_messages(
-        repository,
-        user_id="user-1",
-        session_id="session-replay",
-        user_message="",
-    ) == [
-        {"role": "user", "content": "first question"},
-        {"role": "assistant", "content": "first answer"},
-        {"role": "user", "content": "replayed question"},
-        {"role": "assistant", "content": "stored answer"},
-        {"role": "user", "content": ""},
-    ]
 
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
@@ -1443,7 +1312,7 @@ async def test_chat_endpoint_replay_reseeds_prompt_history_for_the_next_turn(mon
 
 
 @pytest.mark.asyncio
-async def test_chat_endpoint_follow_up_turn_rehydrates_replayed_exchange_on_stale_worker(monkeypatch):
+async def test_chat_endpoint_follow_up_turn_keeps_runner_input_current_only(monkeypatch):
     commits: list[str] = []
     captured_context_messages = []
     repository = FakeChatHistoryRepository(
@@ -1506,20 +1375,6 @@ async def test_chat_endpoint_follow_up_turn_rehydrates_replayed_exchange_on_stal
     assert captured_context_messages == [
         [{"role": "user", "content": "follow-up question"}]
     ]
-    assert chat._build_context_messages_from_durable_messages(
-        repository,
-        user_id="user-1",
-        session_id="session-replay",
-        user_message="",
-    ) == [
-        {"role": "user", "content": "first question"},
-        {"role": "assistant", "content": "first answer"},
-        {"role": "user", "content": "replayed question"},
-        {"role": "assistant", "content": "stored answer"},
-        {"role": "user", "content": "follow-up question"},
-        {"role": "assistant", "content": "next answer"},
-        {"role": "user", "content": ""},
-    ]
     assert commits == ["commit", "commit"]
 
 
@@ -1533,7 +1388,6 @@ async def test_chat_endpoint_passes_model_overrides_to_runner(monkeypatch):
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
-    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
     async def _stream(**kwargs):
         captured.update(kwargs)
@@ -1576,7 +1430,6 @@ async def test_chat_endpoint_leaves_model_overrides_unset_when_omitted(monkeypat
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
-    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
     async def _stream(**kwargs):
         captured.update(kwargs)
@@ -1617,7 +1470,6 @@ async def test_chat_endpoint_raises_500_on_run_error_event(monkeypatch, caplog):
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
-    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
     async def _stream(**_kwargs):
         yield {"type": "RUN_ERROR", "data": {"message": "model exploded"}}
@@ -1652,7 +1504,6 @@ async def test_chat_endpoint_raises_500_when_extraction_persistence_fails(monkey
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
     )
     _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
-    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     _patch_chat_impl(
         monkeypatch,
         "get_supervisor_tool_agent_map",
@@ -1823,7 +1674,6 @@ async def test_chat_endpoint_wraps_unexpected_exceptions(monkeypatch, caplog):
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
-    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
     async def _raise(**_kwargs):
         raise RuntimeError("boom")
@@ -2174,6 +2024,34 @@ async def test_get_session_history_hides_context_compaction_projection_rows(monk
         "Visible answer",
     ]
     assert all(message.message_type != "context_compaction" for message in payload.messages)
+
+
+def test_generate_title_from_messages_ignores_context_compaction_projection_rows():
+    title = chat._generate_title_from_messages(
+        [
+            _message_record(
+                session_id="session-title",
+                role="assistant",
+                content="Compacted standard-chat model-live context projection (2 item(s))",
+                message_type="context_compaction",
+                created_at=_ts(9, 1),
+            ),
+            _message_record(
+                session_id="session-title",
+                role="user",
+                content="How does TP53 evidence compare?",
+                created_at=_ts(9, 2),
+            ),
+            _message_record(
+                session_id="session-title",
+                role="assistant",
+                content="TP53 evidence is stronger in the curated row.",
+                created_at=_ts(9, 3),
+            ),
+        ]
+    )
+
+    assert title == "How does TP53 evidence compare?"
 
 
 @pytest.mark.asyncio

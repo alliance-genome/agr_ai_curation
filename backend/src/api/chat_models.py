@@ -230,7 +230,6 @@ class PreparedChatStreamTurn:
 
     turn_id: str
     effective_user_message: str
-    context_messages: List[Dict[str, str]]
     replay_assistant_turn: ChatMessageRecord | None = None
 
 

@@ -170,6 +170,7 @@ async def get_session_history(
             user_auth_sub=user_id,
             message_limit=message_limit,
             message_cursor=_decode_message_cursor(message_cursor),
+            excluded_message_types={CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE},
         )
     except ValueError as exc:
         raise_sanitized_http_exception(
@@ -203,7 +204,6 @@ async def get_session_history(
         messages=[
             _serialize_message(message)
             for message in detail.messages
-            if message.message_type != CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE
         ],
         message_limit=message_limit,
         next_message_cursor=_encode_message_cursor(detail.next_message_cursor),

@@ -95,14 +95,11 @@ def test_recall_chat_history_search_returns_exact_current_session_results(monkey
             assert kwargs["user_auth_sub"] == "user-recall"
             assert kwargs["chat_kind"] == ASSISTANT_CHAT_KIND
             assert kwargs["query"] == "alpha beta"
+            assert kwargs["excluded_message_types"] == {
+                module.CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE
+            }
             return [
                 matching,
-                _message(
-                    role="assistant",
-                    content="projection row",
-                    turn_id=None,
-                    message_type=module.CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE,
-                ),
             ]
 
     db = SimpleNamespace(close=lambda: None)
