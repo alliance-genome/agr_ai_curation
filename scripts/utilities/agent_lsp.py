@@ -24,6 +24,12 @@ from typing import Any
 
 DEFAULT_CACHE_ROOT = Path.home() / ".cache" / "agr-ai-curation" / "agent-lsp"
 SOURCE_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx"}
+# Symphony runs this helper from lightweight issue workspaces that often do not
+# have the backend virtualenv installed. Treat missing-import/module-source
+# Pyright rules as environment baseline noise so third-party dependency gaps do
+# not hide actionable diagnostics in changed files. If diagnostics later run in
+# a fully provisioned Python env, narrow this before relying on it for import
+# contract coverage.
 PYRIGHT_DEPENDENCY_RESOLUTION_RULES = {
     "reportMissingImports",
     "reportMissingModuleSource",
@@ -548,12 +554,11 @@ def run_pyright_diagnostics(root: Path, py_files: list[str], timeout: float) -> 
     dependency_resolution, actionable = classify_pyright_diagnostics(
         [diagnostic for diagnostic in diagnostics if isinstance(diagnostic, dict)]
     )
+    actionable_error_count = sum(
+        1 for diagnostic in actionable if diagnostic.get("severity") == "error"
+    )
     if completed.returncode in (0, 1):
-        command["returncode"] = (
-            1
-            if any(diagnostic.get("severity") == "error" for diagnostic in actionable)
-            else 0
-        )
+        command["returncode"] = 1 if actionable_error_count else 0
     command.update(
         {
             "raw_returncode": completed.returncode,
@@ -563,6 +568,7 @@ def run_pyright_diagnostics(root: Path, py_files: list[str], timeout: float) -> 
                 len(dependency_resolution),
             ),
             "actionable_diagnostic_count": len(actionable),
+            "actionable_error_count": actionable_error_count,
             "dependency_resolution_noise_count": len(dependency_resolution),
             "dependency_resolution_noise": [
                 summarize_pyright_diagnostic(diagnostic)

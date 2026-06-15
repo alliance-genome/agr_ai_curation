@@ -25,6 +25,7 @@ if scenario == "missing_only":
     assert pyright["raw_returncode"] == 1, pyright
     assert pyright["dependency_resolution_noise_count"] == 1, pyright
     assert pyright["actionable_diagnostic_count"] == 0, pyright
+    assert pyright["actionable_error_count"] == 0, pyright
     assert "Dependency-resolution diagnostics classified as baseline noise: 1" in pyright["stdout"]
 elif scenario == "mixed":
     assert data["status"] == "failed", data
@@ -32,8 +33,17 @@ elif scenario == "mixed":
     assert pyright["raw_returncode"] == 1, pyright
     assert pyright["dependency_resolution_noise_count"] == 1, pyright
     assert pyright["actionable_diagnostic_count"] == 1, pyright
+    assert pyright["actionable_error_count"] == 1, pyright
     assert '"response" is possibly unbound' in pyright["stdout"]
     assert 'Import "sqlalchemy" could not be resolved' not in pyright["stdout"]
+elif scenario == "actionable_warning":
+    assert data["status"] == "ok", data
+    assert pyright["returncode"] == 0, pyright
+    assert pyright["raw_returncode"] == 0, pyright
+    assert pyright["dependency_resolution_noise_count"] == 0, pyright
+    assert pyright["actionable_diagnostic_count"] == 1, pyright
+    assert pyright["actionable_error_count"] == 0, pyright
+    assert "reportUnusedImport" in pyright["stdout"]
 else:
     raise AssertionError(f"unknown scenario: {scenario}")
 PY
@@ -145,7 +155,56 @@ EOF
   rm -rf "${temp_dir}"
 }
 
+test_pyright_actionable_warnings_do_not_fail() {
+  local temp_dir output
+  temp_dir="$(mktemp -d)"
+  mkdir -p "${temp_dir}/bin"
+  printf 'import os\n' > "${temp_dir}/warning_only.py"
+
+  cat > "${temp_dir}/bin/ruff" <<'EOF'
+#!/usr/bin/env bash
+echo "All checks passed!"
+exit 0
+EOF
+  cat > "${temp_dir}/bin/pyright" <<'EOF'
+#!/usr/bin/env bash
+cat <<JSON
+{
+  "version": "1.1.409",
+  "generalDiagnostics": [
+    {
+      "file": "${PWD}/warning_only.py",
+      "severity": "warning",
+      "message": "Import \"os\" is not accessed",
+      "range": {
+        "start": { "line": 0, "character": 7 },
+        "end": { "line": 0, "character": 9 }
+      },
+      "rule": "reportUnusedImport"
+    }
+  ],
+  "summary": {
+    "filesAnalyzed": 1,
+    "errorCount": 0,
+    "warningCount": 1,
+    "informationCount": 0
+  }
+}
+JSON
+exit 0
+EOF
+  chmod +x "${temp_dir}/bin/ruff" "${temp_dir}/bin/pyright"
+
+  output="${temp_dir}/output.json"
+  PATH="${temp_dir}/bin:${PATH}" python3 "${SCRIPT_PATH}" --root "${temp_dir}" diagnostics warning_only.py > "${output}"
+  assert_json "${output}" "actionable_warning"
+
+  echo "  PASS: test_pyright_actionable_warnings_do_not_fail"
+  rm -rf "${temp_dir}"
+}
+
 echo "Running agent_lsp diagnostics tests..."
 test_pyright_dependency_noise_is_non_blocking
 test_pyright_actionable_diagnostics_still_fail
-echo "agent_lsp diagnostics tests passed (2/2)"
+test_pyright_actionable_warnings_do_not_fail
+echo "agent_lsp diagnostics tests passed (3/3)"
