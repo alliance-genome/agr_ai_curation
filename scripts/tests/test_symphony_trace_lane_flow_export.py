@@ -26,6 +26,15 @@ def run_export(trace_root: pathlib.Path, *extra_args: str) -> dict:
     return json.loads(output)
 
 
+def run_export_failure(trace_root: pathlib.Path, *extra_args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(  # noqa: S603
+        [sys.executable, str(EXPORTER), "--trace-root", str(trace_root), *extra_args],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+
 def test_reconstructs_explicit_linear_transition() -> None:
     tmp_path = pathlib.Path(tempfile.mkdtemp(prefix="symphony-lane-flow-test-"))
     run_dir = tmp_path / "issues" / "ALL-588" / "2026-06-14T14-42-48Z-30"
@@ -192,9 +201,169 @@ def test_reconstructs_scripted_lane_completion() -> None:
     ]
 
 
+def test_corrupt_trace_line_fails_with_path_and_line() -> None:
+    tmp_path = pathlib.Path(tempfile.mkdtemp(prefix="symphony-lane-flow-test-"))
+    run_dir = tmp_path / "issues" / "ALL-590" / "2026-06-14T16-00-00Z-01"
+    run_dir.mkdir(parents=True)
+    (run_dir / "trace.ndjson").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "timestamp": "2026-06-14T16:00:00Z",
+                        "issue_identifier": "ALL-590",
+                        "issue_state": "In Progress",
+                    }
+                ),
+                '{"timestamp": "2026-06-14T16:00:01Z"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = run_export_failure(tmp_path, "--issue", "ALL-590")
+
+    assert result.returncode == 1
+    assert "invalid JSON in" in result.stderr
+    assert "trace.ndjson:2:" in result.stderr
+
+
+def test_corrupt_session_metadata_fails_with_path() -> None:
+    tmp_path = pathlib.Path(tempfile.mkdtemp(prefix="symphony-lane-flow-test-"))
+    run_dir = tmp_path / "issues" / "ALL-591" / "2026-06-14T17-00-00Z-01"
+    run_dir.mkdir(parents=True)
+    (run_dir / "session-meta.json").write_text('{"issue_identifier": "ALL-591"', encoding="utf-8")
+    write_jsonl(
+        run_dir / "trace.ndjson",
+        [
+            {
+                "timestamp": "2026-06-14T17:00:00Z",
+                "issue_identifier": "ALL-591",
+                "issue_state": "In Progress",
+            }
+        ],
+    )
+
+    result = run_export_failure(tmp_path, "--issue", "ALL-591")
+
+    assert result.returncode == 1
+    assert "invalid JSON in" in result.stderr
+    assert "session-meta.json" in result.stderr
+
+
+def test_preserves_failed_linear_transition_attempt() -> None:
+    tmp_path = pathlib.Path(tempfile.mkdtemp(prefix="symphony-lane-flow-test-"))
+    run_dir = tmp_path / "issues" / "ALL-592" / "2026-06-14T18-00-00Z-01"
+    run_dir.mkdir(parents=True)
+    failed_output = "\n".join(
+        [
+            "LINEAR_STATE_STATUS=error",
+            "LINEAR_STATE_FROM=Ready for PR",
+            "LINEAR_STATE_TO=Human Review Prep",
+            "LINEAR_STATE_TARGET_ID=state-human-review-prep",
+            "LINEAR_STATE_ERROR=Linear issueUpdate did not succeed.",
+        ]
+    )
+    write_jsonl(
+        run_dir / "trace.ndjson",
+        [
+            {
+                "timestamp": "2026-06-14T18:00:00Z",
+                "issue_identifier": "ALL-592",
+                "issue_state": "Ready for PR",
+                "payload": {"method": "item/started", "params": {}},
+            },
+            {
+                "timestamp": "2026-06-14T18:00:10Z",
+                "issue_identifier": "ALL-592",
+                "issue_state": "Ready for PR",
+                "payload": {
+                    "method": "item/completed",
+                    "params": {
+                        "item": {
+                            "id": "failed-linear-state",
+                            "aggregatedOutput": failed_output,
+                        }
+                    },
+                },
+            },
+        ],
+    )
+
+    payload = run_export(tmp_path, "--issue", "ALL-592")
+
+    assert payload["issue_flows"][0]["lane_flow"][1] == {
+        "error": "Linear issueUpdate did not succeed.",
+        "from": "Ready for PR",
+        "source": "command_completed",
+        "source_id": "failed-linear-state",
+        "status": "error",
+        "target_id": "state-human-review-prep",
+        "timestamp": "2026-06-14T18:00:10Z",
+        "to": "Human Review Prep",
+        "type": "linear_transition",
+    }
+
+
+def test_preserves_repeated_transitions_without_command_id() -> None:
+    tmp_path = pathlib.Path(tempfile.mkdtemp(prefix="symphony-lane-flow-test-"))
+    run_dir = tmp_path / "issues" / "ALL-593" / "2026-06-14T19-00-00Z-01"
+    run_dir.mkdir(parents=True)
+    linear_output = "\n".join(
+        [
+            "LINEAR_STATE_STATUS=ok",
+            "LINEAR_STATE_FROM=In Progress",
+            "LINEAR_STATE_TO=Needs Review",
+            "LINEAR_STATE_TARGET_ID=state-needs-review",
+        ]
+    )
+    write_jsonl(
+        run_dir / "trace.ndjson",
+        [
+            {
+                "timestamp": "2026-06-14T19:00:00Z",
+                "issue_identifier": "ALL-593",
+                "issue_state": "In Progress",
+                "payload": {"method": "item/started", "params": {}},
+            },
+            {
+                "timestamp": "2026-06-14T19:00:10Z",
+                "issue_identifier": "ALL-593",
+                "issue_state": "In Progress",
+                "payload": {
+                    "method": "item/commandExecution/outputDelta",
+                    "params": {"delta": linear_output},
+                },
+            },
+            {
+                "timestamp": "2026-06-14T19:00:20Z",
+                "issue_identifier": "ALL-593",
+                "issue_state": "In Progress",
+                "payload": {
+                    "method": "item/commandExecution/outputDelta",
+                    "params": {"delta": linear_output},
+                },
+            },
+        ],
+    )
+
+    payload = run_export(tmp_path, "--issue", "ALL-593")
+
+    assert [
+        entry["timestamp"]
+        for entry in payload["issue_flows"][0]["lane_flow"]
+        if entry["type"] == "linear_transition"
+    ] == ["2026-06-14T19:00:10Z", "2026-06-14T19:00:20Z"]
+
+
 def main() -> int:
     test_reconstructs_explicit_linear_transition()
     test_reconstructs_scripted_lane_completion()
+    test_corrupt_trace_line_fails_with_path_and_line()
+    test_corrupt_session_metadata_fails_with_path()
+    test_preserves_failed_linear_transition_attempt()
+    test_preserves_repeated_transitions_without_command_id()
     return 0
 
 

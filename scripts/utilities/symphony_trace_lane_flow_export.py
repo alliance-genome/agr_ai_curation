@@ -18,7 +18,11 @@ from collections.abc import Iterable
 from typing import Any
 
 
-LINEAR_STATE_RE = re.compile(r"^LINEAR_STATE_(STATUS|FROM|TO|TARGET_ID)=(.*)$", re.MULTILINE)
+LINEAR_STATE_RE = re.compile(r"^LINEAR_STATE_(STATUS|FROM|TO|TARGET_ID|ERROR)=(.*)$", re.MULTILINE)
+
+
+class TraceInputError(RuntimeError):
+    """Raised when trace input is present but unsafe to reconstruct from."""
 
 
 def main() -> int:
@@ -30,11 +34,15 @@ def main() -> int:
         return 2
 
     issue_filter = set(args.issue or [])
-    issue_flows = [
-        flow
-        for run_dir in iter_run_dirs(trace_root, issue_filter)
-        if (flow := build_issue_flow(run_dir)) is not None
-    ]
+    try:
+        issue_flows = [
+            flow
+            for run_dir in iter_run_dirs(trace_root, issue_filter)
+            if (flow := build_issue_flow(run_dir)) is not None
+        ]
+    except TraceInputError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
 
     payload = {
         "generated_at": dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z"),
@@ -102,6 +110,7 @@ def build_issue_flow(run_dir: pathlib.Path) -> dict[str, Any] | None:
     issue_identifier = (
         string_value(session_meta.get("issue_identifier"))
         or first_string(events, "issue_identifier")
+        # The trace directory is the final deterministic source when trace payloads omit identity.
         or run_dir.parent.name
     )
 
@@ -117,18 +126,22 @@ def build_issue_flow(run_dir: pathlib.Path) -> dict[str, Any] | None:
 def read_ndjson(path: pathlib.Path) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     with path.open(encoding="utf-8") as handle:
-        for line in handle:
+        for line_number, line in enumerate(handle, start=1):
             line = line.strip()
             if not line:
                 continue
 
             try:
                 record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+            except json.JSONDecodeError as exc:
+                raise TraceInputError(
+                    f"invalid JSON in {path}:{line_number}:{exc.colno}: {exc.msg}"
+                ) from exc
 
             if isinstance(record, dict):
                 records.append(record)
+            else:
+                raise TraceInputError(f"expected JSON object in {path}:{line_number}")
 
     return records
 
@@ -139,15 +152,18 @@ def read_json_object(path: pathlib.Path) -> dict[str, Any]:
 
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
+    except json.JSONDecodeError as exc:
+        raise TraceInputError(f"invalid JSON in {path}:{exc.lineno}:{exc.colno}: {exc.msg}") from exc
 
-    return value if isinstance(value, dict) else {}
+    if not isinstance(value, dict):
+        raise TraceInputError(f"expected JSON object in {path}")
+
+    return value
 
 
 def build_lane_flow(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     flow: list[dict[str, Any]] = []
-    seen_transitions: set[tuple[str | None, str | None, str | None, str | None]] = set()
+    seen_command_transitions: set[tuple[str, str | None, str | None, str | None, str | None]] = set()
 
     for event in events:
         if not flow and (lane := string_value(event.get("issue_state"))):
@@ -161,17 +177,13 @@ def build_lane_flow(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             )
 
         for transition in linear_transition_events(event):
-            key = (
-                string_value(transition.get("from")),
-                string_value(transition.get("to")),
-                string_value(transition.get("target_id")),
-                string_value(transition.get("source_id")),
-            )
-            if key in seen_transitions:
-                continue
+            key = command_transition_dedupe_key(transition)
+            if key:
+                if key in seen_command_transitions:
+                    continue
+                seen_command_transitions.add(key)
 
             flow.append(transition)
-            seen_transitions.add(key)
 
         flow.extend(scripted_lane_events(event))
 
@@ -217,7 +229,7 @@ def scripted_lane_events(event: dict[str, Any]) -> list[dict[str, Any]]:
     }
 
     if output_transition:
-        for key in ("from", "to", "status", "target_id"):
+        for key in ("from", "to", "status", "target_id", "error"):
             if value := string_value(output_transition.get(key)):
                 scripted_event[key] = value
 
@@ -252,7 +264,7 @@ def parse_linear_state_transition(text: str | None) -> dict[str, str] | None:
     to_state = string_value(fields.get("to"))
     status = string_value(fields.get("status"))
 
-    if not from_state or not to_state or status != "ok":
+    if not from_state or not to_state or not status:
         return None
 
     transition = {
@@ -260,8 +272,24 @@ def parse_linear_state_transition(text: str | None) -> dict[str, str] | None:
         "to": to_state,
         "status": status,
         "target_id": string_value(fields.get("target_id")),
+        "error": string_value(fields.get("error")),
     }
     return drop_none(transition)
+
+
+def command_transition_dedupe_key(transition: dict[str, Any]) -> tuple[str, str | None, str | None, str | None, str | None] | None:
+    source = string_value(transition.get("source"))
+    source_id = string_value(transition.get("source_id"))
+    if source not in {"command_output_delta", "command_completed"} or not source_id:
+        return None
+
+    return (
+        source_id,
+        string_value(transition.get("from")),
+        string_value(transition.get("to")),
+        string_value(transition.get("target_id")),
+        string_value(transition.get("status")),
+    )
 
 
 def first_string(events: list[dict[str, Any]], key: str) -> str | None:
