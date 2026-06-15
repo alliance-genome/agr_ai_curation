@@ -4,6 +4,7 @@ import React from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import FlowBuilder, { rebuildValidationGroupsFromEdges } from './FlowBuilder'
+import type { FlowResponse } from './types'
 
 const serviceMocks = vi.hoisted(() => ({
   createFlow: vi.fn(),
@@ -169,12 +170,7 @@ vi.mock('./PromptViewer', () => ({
   default: () => null,
 }))
 
-function buildFlowResponse(overrides: Partial<Parameters<typeof serviceMocks.createFlow>[0]> & {
-  id?: string
-  name?: string
-  description?: string | null
-  updated_at?: string
-} = {}) {
+function buildFlowResponse(overrides: Partial<FlowResponse> = {}): FlowResponse {
   return {
     id: overrides.id ?? 'flow-1',
     user_id: 7,
@@ -184,6 +180,8 @@ function buildFlowResponse(overrides: Partial<Parameters<typeof serviceMocks.cre
     last_executed_at: null,
     created_at: '2026-04-03T00:00:00Z',
     updated_at: overrides.updated_at ?? '2026-04-03T00:00:00Z',
+    validation_warnings: overrides.validation_warnings ?? [],
+    has_critical_issues: overrides.has_critical_issues ?? false,
     flow_definition: {
       version: '1.0' as const,
       entry_node_id: 'node_0',
@@ -324,6 +322,49 @@ describe('FlowBuilder', () => {
 
     await user.click(within(fileActions).getByRole('button', { name: 'Save flow as' }))
     expect(await screen.findByRole('dialog', { name: 'Save Flow As' })).toBeInTheDocument()
+  }, 15000)
+
+  it('loads a flow with stale agent references and surfaces the repair warning', async () => {
+    const user = userEvent.setup()
+    const staleReferenceMessage = (
+      "Flow references unavailable agent(s): node 'agent_1' (Old Agent) "
+      + "references missing agent_id 'old_agent'. Re-select an available agent "
+      + "before saving or running this flow."
+    )
+    const schemaWarningMessage = 'Flow has a validator attachment that needs review.'
+
+    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Stale Flow'))
+    serviceMocks.getFlow.mockResolvedValue(buildFlowResponse({
+      name: 'Stale Flow',
+      validation_warnings: [
+        {
+          type: 'CRITICAL',
+          message: staleReferenceMessage,
+        },
+        {
+          type: 'WARNING',
+          message: schemaWarningMessage,
+        },
+      ],
+      has_critical_issues: true,
+    }))
+
+    render(<FlowBuilder />)
+
+    await screen.findByText('1 step')
+    await user.click(screen.getByText('File'))
+    await user.click(within(await screen.findByRole('menu')).getByText('Open Flow...'))
+    const openDialog = await screen.findByRole('dialog', { name: 'Open Flow' })
+    await user.click(within(openDialog).getByText('Stale Flow'))
+
+    await waitFor(() => {
+      expect(serviceMocks.getFlow).toHaveBeenCalledWith('flow-1')
+    })
+    expect(
+      await screen.findByText(
+        `Flow loaded with validation issue: ${staleReferenceMessage} ${schemaWarningMessage}`
+      )
+    ).toBeInTheDocument()
   }, 15000)
 
   it('disables file action save shortcuts when there are no flow nodes', async () => {

@@ -274,7 +274,11 @@ def test_create_custom_agent_creates_unified_custom_agent(monkeypatch):
             category="Validation",
         ),
     )
-    monkeypatch.setattr(service, "get_model", lambda _model_id: SimpleNamespace(model_id=_model_id))
+    monkeypatch.setattr(
+        service,
+        "get_model",
+        lambda _model_id: SimpleNamespace(model_id=_model_id),
+    )
 
     custom = service.create_custom_agent(
         db=FakeDB(),
@@ -433,7 +437,11 @@ def test_create_custom_agent_allows_inherited_system_managed_tool_ids(monkeypatc
             model_id="gpt-5.5",
             model_temperature=0.1,
             model_reasoning="medium",
-            tool_ids=["search_document", "record_evidence"],
+            tool_ids=[
+                "search_document",
+                "record_evidence",
+                "finalize_allele_extraction",
+            ],
             output_schema_key="AlleleVariantExtractionEnvelope",
             category="Extraction",
         ),
@@ -457,10 +465,14 @@ def test_create_custom_agent_allows_inherited_system_managed_tool_ids(monkeypatc
         tool_ids=["search_document", "record_evidence"],
     )
 
-    assert custom.tool_ids == ["search_document", "record_evidence"]
+    assert custom.tool_ids == [
+        "search_document",
+        "record_evidence",
+        "finalize_allele_extraction",
+    ]
 
 
-def test_create_custom_agent_preserves_inherited_system_managed_tool_ids(monkeypatch):
+def test_create_custom_agent_rejects_envelope_without_finalize_tool(monkeypatch):
     import src.lib.agent_studio.custom_agent_service as service
 
     class FakeQuery:
@@ -500,6 +512,74 @@ def test_create_custom_agent_preserves_inherited_system_managed_tool_ids(monkeyp
         lambda: SimpleNamespace(
             list_all=lambda _db: [
                 SimpleNamespace(tool_key="search_document", allow_attach=True),
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "get_model",
+        lambda _model_id: SimpleNamespace(model_id=_model_id),
+    )
+    monkeypatch.setattr(
+        service,
+        "_builder_finalization_tool_ids",
+        lambda: {"finalize_allele_extraction"},
+    )
+
+    with pytest.raises(ValueError, match="envelope output schema.*finalize_\\* tool"):
+        service.create_custom_agent(
+            db=FakeDB(),
+            user_id=7,
+            template_source="allele_extractor",
+            name="MGI Allele Extractor",
+            tool_ids=["search_document", "record_evidence"],
+        )
+
+
+def test_create_custom_agent_preserves_inherited_system_managed_tool_ids(monkeypatch):
+    import src.lib.agent_studio.custom_agent_service as service
+
+    class FakeQuery:
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def first(self):
+            return None
+
+    class FakeDB:
+        def add(self, _obj):
+            return None
+
+        def flush(self):
+            return None
+
+        def query(self, *_args, **_kwargs):
+            return FakeQuery()
+
+    monkeypatch.setattr(
+        service,
+        "_resolve_system_template_agent",
+        lambda _db, _agent_id: SimpleNamespace(
+            agent_key="allele_extractor",
+            instructions="base system prompt",
+            model_id="gpt-5.5",
+            model_temperature=0.1,
+            model_reasoning="medium",
+            tool_ids=[
+                "search_document",
+                "record_evidence",
+                "finalize_allele_extraction",
+            ],
+            output_schema_key="AlleleVariantExtractionEnvelope",
+            category="Extraction",
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "get_tool_policy_cache",
+        lambda: SimpleNamespace(
+            list_all=lambda _db: [
+                SimpleNamespace(tool_key="search_document", allow_attach=True),
                 SimpleNamespace(tool_key="record_evidence", allow_attach=False),
             ],
         ),
@@ -514,7 +594,11 @@ def test_create_custom_agent_preserves_inherited_system_managed_tool_ids(monkeyp
         tool_ids=["search_document"],
     )
 
-    assert custom.tool_ids == ["search_document", "record_evidence"]
+    assert custom.tool_ids == [
+        "search_document",
+        "record_evidence",
+        "finalize_allele_extraction",
+    ]
 
 
 def test_create_custom_agent_rejects_unknown_inherited_non_runtime_tool_ids(monkeypatch):
@@ -615,6 +699,38 @@ def test_update_custom_agent_rejects_unknown_tool_ids(monkeypatch):
         )
 
 
+def test_update_custom_agent_rejects_envelope_without_finalize_tool(monkeypatch):
+    import src.lib.agent_studio.custom_agent_service as service
+
+    custom_agent = SimpleNamespace(
+        id=uuid.uuid4(),
+        user_id=7,
+        name="Existing Agent",
+        custom_prompt="Prompt",
+        group_prompt_overrides={},
+        include_group_rules=True,
+        model_id="gpt-5.5",
+        model_temperature=0.1,
+        model_reasoning=None,
+        tool_ids=["search_document"],
+        output_schema_key="AlleleVariantExtractionEnvelope",
+        template_source=None,
+    )
+
+    monkeypatch.setattr(
+        service,
+        "_builder_finalization_tool_ids",
+        lambda: {"finalize_allele_extraction"},
+    )
+
+    with pytest.raises(ValueError, match="envelope output schema.*finalize_\\* tool"):
+        service.update_custom_agent(
+            db=SimpleNamespace(),
+            custom_agent=custom_agent,
+            description="Updated description",
+        )
+
+
 def test_update_custom_agent_rejects_locked_group_prompt_override():
     import src.lib.agent_studio.custom_agent_service as service
 
@@ -657,7 +773,11 @@ def test_update_custom_agent_preserves_inherited_system_managed_tool_ids(monkeyp
         model_id="gpt-5.5",
         model_temperature=0.1,
         model_reasoning=None,
-        tool_ids=["search_document", "record_evidence"],
+        tool_ids=[
+            "search_document",
+            "record_evidence",
+            "finalize_allele_extraction",
+        ],
         output_schema_key="AlleleVariantExtractionEnvelope",
         template_source="allele_extractor",
     )
@@ -666,7 +786,11 @@ def test_update_custom_agent_preserves_inherited_system_managed_tool_ids(monkeyp
         service,
         "_resolve_system_template_agent",
         lambda _db, _agent_id: SimpleNamespace(
-            tool_ids=["search_document", "record_evidence"],
+            tool_ids=[
+                "search_document",
+                "record_evidence",
+                "finalize_allele_extraction",
+            ],
         ),
     )
     monkeypatch.setattr(
@@ -686,7 +810,11 @@ def test_update_custom_agent_preserves_inherited_system_managed_tool_ids(monkeyp
         tool_ids=["search_document"],
     )
 
-    assert custom_agent.tool_ids == ["search_document", "record_evidence"]
+    assert custom_agent.tool_ids == [
+        "search_document",
+        "record_evidence",
+        "finalize_allele_extraction",
+    ]
 
 
 def test_update_custom_agent_preserves_inherited_system_managed_tool_ids_when_policy_missing(monkeypatch):
@@ -702,7 +830,11 @@ def test_update_custom_agent_preserves_inherited_system_managed_tool_ids_when_po
         model_id="gpt-5.5",
         model_temperature=0.1,
         model_reasoning=None,
-        tool_ids=["search_document", "record_evidence"],
+        tool_ids=[
+            "search_document",
+            "record_evidence",
+            "finalize_allele_extraction",
+        ],
         output_schema_key="AlleleVariantExtractionEnvelope",
         template_source="allele_extractor",
     )
@@ -711,7 +843,11 @@ def test_update_custom_agent_preserves_inherited_system_managed_tool_ids_when_po
         service,
         "_resolve_system_template_agent",
         lambda _db, _agent_id: SimpleNamespace(
-            tool_ids=["search_document", "record_evidence"],
+            tool_ids=[
+                "search_document",
+                "record_evidence",
+                "finalize_allele_extraction",
+            ],
         ),
     )
     monkeypatch.setattr(
@@ -730,7 +866,11 @@ def test_update_custom_agent_preserves_inherited_system_managed_tool_ids_when_po
         tool_ids=["search_document", "record_evidence"],
     )
 
-    assert custom_agent.tool_ids == ["search_document", "record_evidence"]
+    assert custom_agent.tool_ids == [
+        "search_document",
+        "record_evidence",
+        "finalize_allele_extraction",
+    ]
 
 
 def test_update_custom_agent_rejects_clearing_existing_tool_ids_without_override():
