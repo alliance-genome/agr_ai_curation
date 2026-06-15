@@ -16,7 +16,7 @@ import uuid
 from copy import deepcopy
 from datetime import datetime, timezone  # noqa: F401 - Agent Studio module API surface.
 from pathlib import Path as FilePath
-from typing import Any, Callable, Dict, List, NoReturn, Optional
+from typing import Any, Callable, Dict, List, NoReturn, Optional, cast
 
 import anthropic
 import boto3
@@ -107,6 +107,11 @@ from src.lib.agent_studio.tool_idea_service import (
 )
 from src.lib.agent_studio.streaming import flatten_runner_event as _flatten_runner_event
 from src.lib.openai_agents.config import get_domain_reference_max_values
+from src.lib.openai_agents.config import (
+    get_agent_studio_opus_context_editing_keep_tool_uses,
+    get_agent_studio_opus_context_editing_trigger_tokens,
+    get_agent_studio_provider_tool_result_inline_max_chars,
+)
 from src.lib.alerts.tool_failure_notifier import notify_tool_failure
 from src.lib.chat_history_repository import (
     ChatHistoryRepository,
@@ -694,6 +699,8 @@ async def get_registry_metadata(
             category = custom.category or "Custom"
             custom_id = make_custom_agent_id(custom.id)
             template_source = _custom_agent_template_source(custom)
+            # A missing template source should miss these catalogs and use get() defaults.
+            template_metadata_key = cast(str, template_source)
 
             agents[custom_id] = AgentMetadata(
                 name=custom.name,
@@ -704,10 +711,10 @@ async def get_registry_metadata(
                 ),
                 supervisor_tool=f"ask_{custom_id.replace('-', '_')}_specialist",
                 validation_attachments=deepcopy(
-                    validation_attachments_by_agent.get(template_source, [])
+                    validation_attachments_by_agent.get(template_metadata_key, [])
                 ),
                 domain_envelope=deepcopy(
-                    domain_envelope_metadata_by_agent.get(template_source)
+                    domain_envelope_metadata_by_agent.get(template_metadata_key)
                 ),
             )
 
@@ -1150,6 +1157,7 @@ CHAT_HISTORY_TOOL_CHAT_KINDS = opus_tools.CHAT_HISTORY_TOOL_CHAT_KINDS
 LIST_RECENT_CHATS_TOOL = opus_tools.LIST_RECENT_CHATS_TOOL
 SEARCH_CHAT_HISTORY_TOOL = opus_tools.SEARCH_CHAT_HISTORY_TOOL
 GET_CHAT_CONVERSATION_TOOL = opus_tools.GET_CHAT_CONVERSATION_TOOL
+GET_CHAT_TURN_TOOL = opus_tools.GET_CHAT_TURN_TOOL
 SEARCH_TRACES_TOOL = opus_tools.SEARCH_TRACES_TOOL
 GET_TRACE_SUMMARY_TOOL = opus_tools.GET_TRACE_SUMMARY_TOOL
 GET_TOOL_CALLS_SUMMARY_TOOL = opus_tools.GET_TOOL_CALLS_SUMMARY_TOOL
@@ -1625,6 +1633,140 @@ def _tool_call_audit_entry(
         ),
         "result_summary": _summarize_audit_value(tool_result),
     }
+
+
+def _build_anthropic_context_management_config() -> Dict[str, Any]:
+    """Request native Anthropic tool-result clearing for long Opus tool loops."""
+
+    return {
+        "edits": [
+            {
+                "type": "clear_tool_uses_20250919",
+                "trigger": {
+                    "type": "input_tokens",
+                    "value": get_agent_studio_opus_context_editing_trigger_tokens(),
+                },
+                "keep": {
+                    "type": "tool_uses",
+                    "value": get_agent_studio_opus_context_editing_keep_tool_uses(),
+                },
+                "clear_tool_inputs": False,
+            }
+        ]
+    }
+
+
+def _summarize_provider_tool_result_value(
+    value: Any,
+    *,
+    depth: int = 0,
+) -> Any:
+    """Return a compact structural summary safe for provider continuation."""
+
+    return _summarize_audit_value(value, depth=depth)
+
+
+def _collect_provider_payload_refs(
+    value: Any,
+    refs: set[str],
+    *,
+    key: str | None = None,
+) -> None:
+    if len(refs) >= _DOMAIN_REFERENCE_MAX_VALUES:
+        return
+    if key == "payload_id" and isinstance(value, str) and value.strip():
+        refs.add(value.strip())
+        return
+    if isinstance(value, dict):
+        for item_key, item_value in value.items():
+            _collect_provider_payload_refs(
+                item_value,
+                refs,
+                key=str(item_key),
+            )
+            if len(refs) >= _DOMAIN_REFERENCE_MAX_VALUES:
+                return
+        return
+    if isinstance(value, list):
+        for item in value:
+            _collect_provider_payload_refs(item, refs)
+            if len(refs) >= _DOMAIN_REFERENCE_MAX_VALUES:
+                return
+
+
+def _provider_tool_result_recall_hints(
+    *,
+    tool_name: str,
+    tool_input: Any,
+    tool_result: Any,
+    session_id: str,
+    turn_id: str,
+) -> Dict[str, Any]:
+    payload_refs: set[str] = set()
+    _collect_provider_payload_refs(tool_result, payload_refs)
+    hints: Dict[str, Any] = {
+        "chat_turn": {
+            "tool": "get_chat_turn",
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "purpose": "Reload durable current-session turn text and tool-call summaries after provider context editing.",
+        },
+        "repeat_or_narrow_tool": {
+            "tool": tool_name,
+            "input": _json_safe(tool_input),
+            "purpose": "Rerun the same lookup, or rerun it with narrower pagination/chunk parameters, when exact current-turn details are needed.",
+        },
+    }
+    if payload_refs:
+        hints["trace_payloads"] = {
+            "tool": "get_trace_payload",
+            "payload_ids": sorted(payload_refs),
+            "purpose": "Fetch exact TraceReview payload chunks by payload_id instead of replaying large payloads in live context.",
+        }
+    elif tool_name in {"get_trace_payloads", "get_trace_reconstruction", "get_trace_tree"}:
+        hints["trace_payloads"] = {
+            "tool": "get_trace_payloads",
+            "purpose": "List exact TraceReview payload ids, then call get_trace_payload for the specific chunk needed.",
+        }
+    return hints
+
+
+def _provider_tool_result_content(
+    *,
+    tool_name: str,
+    tool_input: Any,
+    tool_result: Any,
+    session_id: str,
+    turn_id: str,
+) -> str:
+    """Serialize a bounded tool result for Anthropic continuation only."""
+
+    raw_content = json.dumps(tool_result, default=str)
+    inline_max_chars = get_agent_studio_provider_tool_result_inline_max_chars()
+    if len(raw_content) <= inline_max_chars:
+        return raw_content
+
+    compact_payload = {
+        "status": "compacted_tool_result",
+        "tool_name": tool_name,
+        "tool_result_compacted": True,
+        "raw_result_json_chars": len(raw_content),
+        "provider_inline_max_chars": inline_max_chars,
+        "summary": _summarize_provider_tool_result_value(_json_safe(tool_result)),
+        "recall": _provider_tool_result_recall_hints(
+            tool_name=tool_name,
+            tool_input=tool_input,
+            tool_result=_json_safe(tool_result),
+            session_id=session_id,
+            turn_id=turn_id,
+        ),
+        "instruction": (
+            "The full tool result was streamed to the UI but omitted from live "
+            "provider continuation context. Use the recall tools above or rerun "
+            "the exact lookup with narrower arguments before relying on omitted details."
+        ),
+    }
+    return json.dumps(compact_payload, default=str)
 
 
 def _resolve_saved_workshop_agent(
@@ -2386,6 +2528,24 @@ async def _handle_tool_call(
                 "error": str(exc),
             }
 
+    elif tool_name == "get_chat_turn":
+        try:
+            session_id = _require_tool_string(tool_input, "session_id")
+            turn_id = _require_tool_string(tool_input, "turn_id")
+            return _with_chat_history_repository(
+                lambda repository: _get_chat_turn_payload(
+                    repository=repository,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    user_auth_sub=user_auth_sub,
+                )
+            )
+        except ValueError as exc:
+            return {
+                "success": False,
+                "error": str(exc),
+            }
+
     elif tool_name == "get_service_logs":
         container = tool_input.get("container", "backend")
         lines = tool_input.get("lines", 2000)
@@ -2412,15 +2572,19 @@ async def _handle_tool_call(
         )
 
     elif tool_name == "get_domain_envelope_state":
-        return agent_studio_domain_envelope_tools.get_domain_envelope_state(
-            session_factory=SessionLocal,
-            user_auth_sub=user_auth_sub,
-            envelope_id=tool_input.get("envelope_id"),
-            object_id=tool_input.get("object_id"),
-            field_path=tool_input.get("field_path"),
-            include_object_payload=tool_input.get("include_object_payload", False),
-            history_limit=tool_input.get("history_limit"),
-        )
+        try:
+            envelope_id = _require_tool_string(tool_input, "envelope_id")
+            return agent_studio_domain_envelope_tools.get_domain_envelope_state(
+                session_factory=SessionLocal,
+                user_auth_sub=user_auth_sub,
+                envelope_id=envelope_id,
+                object_id=tool_input.get("object_id"),
+                field_path=tool_input.get("field_path"),
+                include_object_payload=tool_input.get("include_object_payload", False),
+                history_limit=tool_input.get("history_limit"),
+            )
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
 
     elif tool_name == "get_domain_pack_validation_plan":
         return agent_studio_domain_envelope_tools.get_domain_pack_validation_plan(
@@ -2429,13 +2593,17 @@ async def _handle_tool_call(
         )
 
     elif tool_name == "get_domain_envelope_review_rows":
-        return agent_studio_domain_envelope_tools.get_domain_envelope_review_rows(
-            session_factory=SessionLocal,
-            user_auth_sub=user_auth_sub,
-            envelope_id=tool_input.get("envelope_id"),
-            revision=tool_input.get("revision"),
-            object_id=tool_input.get("object_id"),
-        )
+        try:
+            envelope_id = _require_tool_string(tool_input, "envelope_id")
+            return agent_studio_domain_envelope_tools.get_domain_envelope_review_rows(
+                session_factory=SessionLocal,
+                user_auth_sub=user_auth_sub,
+                envelope_id=envelope_id,
+                revision=tool_input.get("revision"),
+                object_id=tool_input.get("object_id"),
+            )
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
 
     elif tool_name == "get_export_submission_readiness":
         try:
@@ -2449,10 +2617,14 @@ async def _handle_tool_call(
             )
         except ValueError as exc:
             return {"success": False, "error": str(exc)}
+        try:
+            session_id = _require_tool_string(tool_input, "session_id")
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
         return agent_studio_domain_envelope_tools.get_export_submission_readiness(
             session_factory=SessionLocal,
             user_auth_sub=user_auth_sub,
-            session_id=tool_input.get("session_id"),
+            session_id=session_id,
             candidate_ids=candidate_ids,
             expected_envelope_revisions=expected_revisions,
             mode=tool_input.get("mode", "readiness"),
@@ -2787,6 +2959,23 @@ def _get_chat_conversation_payload(
     )
 
 
+def _get_chat_turn_payload(
+    *,
+    repository: ChatHistoryRepository,
+    session_id: str,
+    turn_id: str,
+    user_auth_sub: str,
+) -> Dict[str, Any]:
+    return agent_studio_chat_session.get_chat_turn_payload(
+        repository=repository,
+        session_id=session_id,
+        turn_id=turn_id,
+        user_auth_sub=user_auth_sub,
+        serialize_session=_serialize_chat_history_session,
+        serialize_message=_serialize_chat_history_message,
+    )
+
+
 def _extract_latest_user_message(messages: List[ChatMessage]) -> str:
     return agent_studio_chat_session.extract_latest_user_message(messages)
 
@@ -2992,12 +3181,13 @@ async def chat_with_opus(
         logger.error('Failed to persist Agent Studio chat request: %s', exc, exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to persist Agent Studio chat request") from exc
 
-    if prepared_turn.replay_assistant_turn is not None:
+    replay_assistant_turn = prepared_turn.replay_assistant_turn
+    if replay_assistant_turn is not None:
         async def replay_stream():
             for event in _build_agent_studio_replay_events(
                 session_id=prepared_turn.session_id,
                 turn_id=prepared_turn.turn_id,
-                assistant_turn=prepared_turn.replay_assistant_turn,
+                assistant_turn=replay_assistant_turn,
             ):
                 yield event
 
@@ -3088,12 +3278,13 @@ async def chat_with_opus(
             # Using effort="medium" for optimal quality/cost balance (76% fewer tokens)
             api_params = {
                 "model": anthropic_model_id,
-                "betas": ["effort-2025-11-24"],
+                "betas": ["effort-2025-11-24", "context-management-2025-06-27"],
                 "max_tokens": 16384,
                 "system": system_prompt,
                 "messages": current_messages,
                 "tools": _get_all_opus_tools(request.context),
                 "output_config": {"effort": "medium"},
+                "context_management": _build_anthropic_context_management_config(),
             }
             if _should_force_workshop_prompt_refresh(
                 context=request.context,
@@ -3244,7 +3435,13 @@ async def chat_with_opus(
                             tool_results_for_api.append({
                                 "type": "tool_result",
                                 "tool_use_id": block.id,
-                                "content": json.dumps(tool_result, default=str),
+                                "content": _provider_tool_result_content(
+                                    tool_name=block.name,
+                                    tool_input=safe_tool_input,
+                                    tool_result=safe_tool_result,
+                                    session_id=prepared_turn.session_id,
+                                    turn_id=prepared_turn.turn_id,
+                                ),
                             })
 
                     # Add assistant message and tool results for next turn

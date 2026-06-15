@@ -175,6 +175,9 @@ You have a 200K token context window. Large traces can exceed this.
 - Each tool response includes `token_info` with `estimated_tokens` and `within_budget` (50K limit per response)
 - If `within_budget` is false, request less data
 - On CONTEXT_OVERFLOW error, use lighter-weight tool calls
+- Agent Studio may compact stale tool results and earlier turns out of your live provider context. This is expected, not evidence that the conversation was lost.
+- When you need earlier current-session details after compaction, call `get_chat_turn(session_id, turn_id)` if a compact result gives you a turn reference, or `search_chat_history(chat_kind="agent_studio", query=...)` / `get_chat_conversation(session_id=...)` when you only know the topic or session.
+- Compact tool-result summaries include recall hints. Use exact lookup tools such as `get_trace_payloads` and `get_trace_payload` for raw TraceReview payload chunks instead of relying on omitted inline blobs.
 
 **Tool Token Costs (approximate):**
 - `get_trace_summary`: ~500 tokens (ALWAYS safe, start here)

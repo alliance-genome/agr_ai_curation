@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from uuid import uuid4
 
 import src.api.agent_studio as api_module
 from src.lib.agent_studio.models import ChatContext
@@ -12,6 +13,7 @@ from src.lib.chat_history_repository import (
     ALL_CHAT_KINDS_SENTINEL,
     AGENT_STUDIO_CHAT_KIND,
     ASSISTANT_CHAT_KIND,
+    ChatMessageRecord,
     ChatSessionPage,
     ChatSessionRecord,
 )
@@ -33,14 +35,30 @@ def _session_record(*, session_id: str, chat_kind: str) -> ChatSessionRecord:
     )
 
 
+def _message_record(*, session_id: str, turn_id: str, role: str, content: str) -> ChatMessageRecord:
+    timestamp = datetime(2026, 4, 23, 3, 16, tzinfo=timezone.utc)
+    return ChatMessageRecord(
+        message_id=uuid4(),
+        session_id=session_id,
+        chat_kind=AGENT_STUDIO_CHAT_KIND,
+        turn_id=turn_id,
+        role=role,
+        message_type="text",
+        content=content,
+        payload_json=None,
+        trace_id=None,
+        created_at=timestamp,
+    )
+
+
 def test_chat_history_tools_are_registered_for_opus():
     tools = api_module._get_all_opus_tools(ChatContext(active_tab="agents"))
     tools_by_name = {tool["name"]: tool for tool in tools}
 
-    assert {"list_recent_chats", "search_chat_history", "get_chat_conversation"} <= set(
+    assert {"list_recent_chats", "search_chat_history", "get_chat_conversation", "get_chat_turn"} <= set(
         api_module._COMMON_TOOLS
     )
-    assert {"list_recent_chats", "search_chat_history", "get_chat_conversation"} <= set(
+    assert {"list_recent_chats", "search_chat_history", "get_chat_conversation", "get_chat_turn"} <= set(
         tools_by_name
     )
 
@@ -62,6 +80,9 @@ def test_chat_history_tools_are_registered_for_opus():
 
     conversation_schema = tools_by_name["get_chat_conversation"]["input_schema"]
     assert conversation_schema["required"] == ["session_id"]
+
+    turn_schema = tools_by_name["get_chat_turn"]["input_schema"]
+    assert turn_schema["required"] == ["session_id", "turn_id"]
 
 
 def test_handle_tool_call_list_recent_chats_forwards_user_auth_sub(monkeypatch):
@@ -174,3 +195,63 @@ def test_handle_tool_call_search_chat_history_requires_query():
 
     assert result["success"] is False
     assert result["error"] == "Missing required parameter: query"
+
+
+def test_handle_tool_call_get_chat_turn_loads_current_session_turn(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _FakeRepository:
+        def __init__(self, _db):
+            pass
+
+        def get_session(self, **kwargs):
+            captured["get_session_kwargs"] = kwargs
+            return _session_record(
+                session_id=kwargs["session_id"],
+                chat_kind=AGENT_STUDIO_CHAT_KIND,
+            )
+
+        def list_messages_for_turn(self, **kwargs):
+            captured["turn_kwargs"] = kwargs
+            return [
+                _message_record(
+                    session_id=kwargs["session_id"],
+                    turn_id=kwargs["turn_id"],
+                    role="user",
+                    content="Earlier compacted question",
+                ),
+                _message_record(
+                    session_id=kwargs["session_id"],
+                    turn_id=kwargs["turn_id"],
+                    role="assistant",
+                    content="Earlier answer with tool-call summary",
+                ),
+            ]
+
+    monkeypatch.setattr(api_module, "SessionLocal", lambda: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(api_module, "ChatHistoryRepository", _FakeRepository)
+
+    result = asyncio.run(
+        api_module._handle_tool_call(
+            tool_name="get_chat_turn",
+            tool_input={"session_id": "agent-studio-session-1", "turn_id": "opus-turn-2"},
+            context=None,
+            user_email="dev@example.org",
+            user_auth_sub="auth-sub-turn",
+            messages=[],
+        )
+    )
+
+    assert result["success"] is True
+    assert result["turn_id"] == "opus-turn-2"
+    assert [message["role"] for message in result["messages"]] == ["user", "assistant"]
+    assert captured["get_session_kwargs"] == {
+        "session_id": "agent-studio-session-1",
+        "user_auth_sub": "auth-sub-turn",
+    }
+    assert captured["turn_kwargs"] == {
+        "session_id": "agent-studio-session-1",
+        "user_auth_sub": "auth-sub-turn",
+        "chat_kind": AGENT_STUDIO_CHAT_KIND,
+        "turn_id": "opus-turn-2",
+    }
