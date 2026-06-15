@@ -15,7 +15,7 @@ set -euo pipefail
 #
 # Exit codes:
 #   0  — quiet, pending (awaiting re-review response), or maxed_out
-#  10  — detected (feedback found, report file written)
+#  10  — actionable_feedback (Claude feedback found, report file written)
 #   2  — error
 # =============================================================================
 
