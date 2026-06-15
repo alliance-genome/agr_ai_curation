@@ -24,6 +24,16 @@ from typing import Any
 
 DEFAULT_CACHE_ROOT = Path.home() / ".cache" / "agr-ai-curation" / "agent-lsp"
 SOURCE_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx"}
+# Symphony runs this helper from lightweight issue workspaces that often do not
+# have the backend virtualenv installed. Treat missing-import/module-source
+# Pyright rules as environment baseline noise so third-party dependency gaps do
+# not hide actionable diagnostics in changed files. If diagnostics later run in
+# a fully provisioned Python env, narrow this before relying on it for import
+# contract coverage.
+PYRIGHT_DEPENDENCY_RESOLUTION_RULES = {
+    "reportMissingImports",
+    "reportMissingModuleSource",
+}
 
 
 def run_command(
@@ -454,6 +464,121 @@ def zero_based_position(line: int, character: int, zero_based: bool) -> dict[str
     return {"line": max(0, line - 1), "character": max(0, character - 1)}
 
 
+def classify_pyright_diagnostics(
+    diagnostics: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    dependency_resolution: list[dict[str, Any]] = []
+    actionable: list[dict[str, Any]] = []
+    for diagnostic in diagnostics:
+        if diagnostic.get("rule") in PYRIGHT_DEPENDENCY_RESOLUTION_RULES:
+            dependency_resolution.append(diagnostic)
+        else:
+            actionable.append(diagnostic)
+    return dependency_resolution, actionable
+
+
+def diagnostic_location(diagnostic: dict[str, Any]) -> str:
+    file_name = diagnostic.get("file") or "<unknown>"
+    start = (diagnostic.get("range") or {}).get("start") or {}
+    line = int(start.get("line") or 0) + 1
+    character = int(start.get("character") or 0) + 1
+    return f"{file_name}:{line}:{character}"
+
+
+def summarize_pyright_diagnostic(diagnostic: dict[str, Any]) -> dict[str, Any]:
+    start = (diagnostic.get("range") or {}).get("start") or {}
+    line = start.get("line")
+    character = start.get("character")
+    return {
+        "file": diagnostic.get("file"),
+        "line": int(line) + 1 if line is not None else None,
+        "character": int(character) + 1 if character is not None else None,
+        "severity": diagnostic.get("severity"),
+        "message": diagnostic.get("message"),
+        "rule": diagnostic.get("rule"),
+    }
+
+
+def render_pyright_actionable_output(
+    actionable_diagnostics: list[dict[str, Any]],
+    dependency_resolution_count: int,
+) -> str:
+    lines: list[str] = []
+    if actionable_diagnostics:
+        lines.append("Pyright actionable diagnostics:")
+        for diagnostic in actionable_diagnostics:
+            severity = diagnostic.get("severity") or "diagnostic"
+            message = diagnostic.get("message") or ""
+            rule = diagnostic.get("rule")
+            suffix = f" ({rule})" if rule else ""
+            lines.append(f"  {diagnostic_location(diagnostic)} - {severity}: {message}{suffix}")
+    else:
+        lines.append("Pyright actionable diagnostics: none")
+
+    if dependency_resolution_count:
+        lines.append(
+            "Dependency-resolution diagnostics classified as baseline noise: "
+            f"{dependency_resolution_count}"
+        )
+
+    counts = {"error": 0, "warning": 0, "information": 0}
+    for diagnostic in actionable_diagnostics:
+        severity = diagnostic.get("severity")
+        if severity in counts:
+            counts[severity] += 1
+    lines.append(
+        f"{counts['error']} errors, {counts['warning']} warnings, "
+        f"{counts['information']} informations"
+    )
+    return "\n".join(lines) + "\n"
+
+
+def run_pyright_diagnostics(root: Path, py_files: list[str], timeout: float) -> dict[str, Any]:
+    completed = run_command(["pyright", *py_files, "--outputjson"], cwd=root, timeout=timeout)
+    command: dict[str, Any] = {
+        "name": "pyright",
+        "returncode": completed.returncode,
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
+    }
+
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return command
+
+    diagnostics = payload.get("generalDiagnostics")
+    if not isinstance(diagnostics, list):
+        return command
+
+    dependency_resolution, actionable = classify_pyright_diagnostics(
+        [diagnostic for diagnostic in diagnostics if isinstance(diagnostic, dict)]
+    )
+    actionable_error_count = sum(
+        1 for diagnostic in actionable if diagnostic.get("severity") == "error"
+    )
+    if completed.returncode in (0, 1):
+        command["returncode"] = 1 if actionable_error_count else 0
+    command.update(
+        {
+            "raw_returncode": completed.returncode,
+            "raw_stdout": completed.stdout,
+            "stdout": render_pyright_actionable_output(
+                actionable,
+                len(dependency_resolution),
+            ),
+            "actionable_diagnostic_count": len(actionable),
+            "actionable_error_count": actionable_error_count,
+            "dependency_resolution_noise_count": len(dependency_resolution),
+            "dependency_resolution_noise": [
+                summarize_pyright_diagnostic(diagnostic)
+                for diagnostic in dependency_resolution
+            ],
+        }
+    )
+    return command
+
+
 def run_diagnostics(root: Path, files: list[str], timeout: float) -> dict[str, Any]:
     py_files = [name for name in files if Path(name).suffix == ".py"]
     ts_files = [name for name in files if Path(name).suffix in {".ts", ".tsx", ".js", ".jsx"}]
@@ -470,15 +595,7 @@ def run_diagnostics(root: Path, files: list[str], timeout: float) -> dict[str, A
             }
         )
     if py_files and shutil.which("pyright"):
-        completed = run_command(["pyright", *py_files], cwd=root, timeout=timeout)
-        commands.append(
-            {
-                "name": "pyright",
-                "returncode": completed.returncode,
-                "stdout": completed.stdout,
-                "stderr": completed.stderr,
-            }
-        )
+        commands.append(run_pyright_diagnostics(root, py_files, timeout))
     if ts_files and (root / "frontend" / "package.json").is_file():
         completed = run_command(
             ["npm", "run", "type-check:changed", "--", "--base", "origin/main"],
