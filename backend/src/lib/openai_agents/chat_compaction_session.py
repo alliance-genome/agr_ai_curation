@@ -245,6 +245,7 @@ class DurableChatHistorySession(Session):
             covered_turn_ids |= self._current_turn_ids()
             projected_items = _dedupe_items_preserving_latest([*base_items, *projection_items])
             self._upsert_projection(
+                db=db,
                 repository=repository,
                 existing=projection,
                 items=projected_items,
@@ -360,6 +361,7 @@ class DurableChatHistorySession(Session):
     def _upsert_projection(
         self,
         *,
+        db,
         repository: ChatHistoryRepository,
         existing: ChatMessageModel | None,
         items: list[dict[str, Any]],
@@ -373,9 +375,8 @@ class DurableChatHistorySession(Session):
         }
         content = self._projection_content(items)
         if existing is not None:
-            existing.content = content
-            existing.payload_json = payload
-            return
+            db.delete(existing)
+            db.flush()
 
         repository.append_message(
             session_id=self.session_id,

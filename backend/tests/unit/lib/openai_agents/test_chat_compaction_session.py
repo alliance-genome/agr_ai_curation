@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -51,6 +51,12 @@ class _FakeDb:
     def execute(self, stmt):
         self.deleted.append(stmt)
 
+    def delete(self, model):
+        self.deleted.append(model)
+
+    def flush(self):
+        pass
+
     def commit(self):
         self.commits += 1
 
@@ -63,6 +69,7 @@ class _FakeDb:
 
 class _FakeRepository:
     def __init__(self, _db, messages, appended):
+        self._db = _db
         self._messages = messages
         self._appended = appended
         self.list_calls = []
@@ -81,6 +88,17 @@ class _FakeRepository:
 
     def append_message(self, **kwargs):
         self._appended.append(kwargs)
+        if kwargs["message_type"] == module.CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE:
+            previous_created_at = getattr(self._db.projection, "created_at", None)
+            if isinstance(previous_created_at, datetime):
+                created_at = previous_created_at + timedelta(minutes=10)
+            else:
+                created_at = datetime(2026, 6, 15, 12, 10, tzinfo=timezone.utc)
+            self._db.projection = SimpleNamespace(
+                created_at=created_at,
+                content=kwargs["content"],
+                payload_json=kwargs["payload_json"],
+            )
         return SimpleNamespace(message=SimpleNamespace(message_id=uuid4()))
 
 
@@ -183,6 +201,102 @@ def test_durable_session_get_items_fetches_only_rows_after_projection(monkeypatc
             "cursor": None,
             "excluded_message_types": {module.CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE},
             "after_created_at": projection_created_at,
+        }
+    ]
+
+
+def test_durable_session_recreates_projection_so_replay_cutoff_advances(monkeypatch):
+    initial_projection_created_at = datetime(2026, 6, 15, 12, 3, tzinfo=timezone.utc)
+    initial_projection = SimpleNamespace(
+        created_at=initial_projection_created_at,
+        payload_json={
+            "schema": module._PROJECTION_SCHEMA,
+            "items": [
+                {"role": "user", "content": "projected old question"},
+                {"role": "assistant", "content": "projected old answer"},
+            ],
+            "covered_turn_ids": ["turn-1"],
+        },
+    )
+    messages = [
+        _message(role="user", content="turn two question", turn_id="turn-2", minute=4),
+        _message(role="assistant", content="turn two answer", turn_id="turn-2", minute=5),
+        _message(role="user", content="turn three question", turn_id="turn-3", minute=6),
+        _message(role="assistant", content="turn three answer", turn_id="turn-3", minute=7),
+        _message(role="user", content="current prompt", turn_id="turn-4", minute=8),
+    ]
+    db = _FakeDb(projection=initial_projection)
+    appended = []
+    repositories = []
+
+    def _repository(fake_db):
+        repository = _FakeRepository(fake_db, messages, appended)
+        repositories.append(repository)
+        return repository
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: db)
+    monkeypatch.setattr(module, "ChatHistoryRepository", _repository)
+
+    turn_two_session = module.DurableChatHistorySession(
+        session_id="session-1",
+        user_id="user-1",
+        current_turn_id="turn-2",
+    )
+    asyncio.run(
+        turn_two_session.add_items(
+            [
+                {"role": "user", "content": "turn two question"},
+                {"role": "assistant", "content": "turn two answer"},
+            ]
+        )
+    )
+    first_updated_projection = db.projection
+    assert first_updated_projection is not None
+    assert first_updated_projection.created_at > initial_projection_created_at
+
+    turn_three_session = module.DurableChatHistorySession(
+        session_id="session-1",
+        user_id="user-1",
+        current_turn_id="turn-3",
+    )
+    asyncio.run(
+        turn_three_session.add_items(
+            [
+                {"role": "user", "content": "turn three question"},
+                {"role": "assistant", "content": "turn three answer"},
+            ]
+        )
+    )
+    latest_projection = db.projection
+    assert latest_projection is not None
+    assert latest_projection.created_at > first_updated_projection.created_at
+    assert db.deleted == [initial_projection, first_updated_projection]
+    assert latest_projection.payload_json["covered_turn_ids"] == [
+        "turn-1",
+        "turn-2",
+        "turn-3",
+    ]
+
+    replay_session = module.DurableChatHistorySession(
+        session_id="session-1",
+        user_id="user-1",
+        current_turn_id="turn-4",
+    )
+    assert (
+        asyncio.run(replay_session.get_items())
+        == latest_projection.payload_json["items"]
+    )
+
+    replay_repository = repositories[-1]
+    assert replay_repository.list_calls == [
+        {
+            "session_id": "session-1",
+            "user_auth_sub": "user-1",
+            "chat_kind": module.ASSISTANT_CHAT_KIND,
+            "limit": module.MAX_MESSAGE_PAGE_SIZE,
+            "cursor": None,
+            "excluded_message_types": {module.CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE},
+            "after_created_at": latest_projection.created_at,
         }
     ]
 
