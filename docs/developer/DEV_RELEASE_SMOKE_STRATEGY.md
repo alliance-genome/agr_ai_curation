@@ -7,6 +7,15 @@ Primary script target: `scripts/testing/dev_release_smoke.py`
 Execution cadence: implement one slice at a time, validate it, run a GPT-5.5
 xhigh code-review pass, then move to the next slice
 
+SDK upgrade gate: `openai-agents` is intentionally pinned exactly in
+`backend/requirements.txt` and `backend/requirements.lock.txt`. Any PR that
+changes that pin must pass the full `scripts/testing/dev_release_smoke.py`
+suite, which now starts with an installed-vs-lockfile SDK-version assertion and
+then exercises real chat, extractor finalization, flow completion, and batch
+behavior against the deployed backend. Record the passing evidence in the PR body
+as `SDK-Smoke-Evidence: dev_release_smoke PASS <evidence-link-or-path>` so the
+Agent PR Gate can enforce the upgrade policy.
+
 ## 1) Why this document exists
 
 This document is the durable source of truth for the dev-release smoke effort.
@@ -52,6 +61,7 @@ As of this document:
 
 1. `scripts/testing/dev_release_smoke.py` now covers the full intended
    release-critical API path on dev:
+   - installed `openai-agents` vs backend lockfile pin preflight
    - health and auth preflight
    - PDFX readiness
    - upload + artifacts
@@ -756,6 +766,9 @@ Before a production rollout is considered, the following should all be true:
 3. The smoke evidence JSON is retained and referenced in the deployment notes.
 4. Chris has manually exercised the UI/browser path on dev.
 5. Any migration or data-impact review has been completed separately.
+6. If an `openai-agents` pin changed, the PR includes a
+   `SDK-Smoke-Evidence: dev_release_smoke PASS <evidence-link-or-path>` line
+   pointing to the full smoke evidence from the upgraded SDK run.
 
 If the deep smoke fails, the release candidate should be considered blocked
 until the failure is explained and resolved.
