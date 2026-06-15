@@ -129,6 +129,11 @@ export interface FlowResponse {
   last_executed_at: string | null
   created_at: string
   updated_at: string
+  validation_warnings?: Array<{
+    type: 'CRITICAL' | 'WARNING'
+    message: string
+  }>
+  has_critical_issues?: boolean
 }
 
 export interface FlowSummaryResponse {

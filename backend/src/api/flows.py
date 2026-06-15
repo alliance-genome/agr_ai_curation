@@ -47,6 +47,7 @@ from ..schemas.flows import (
     FlowListResponse,
     FlowResponse,
     FlowSummaryResponse,
+    FlowValidationWarning,
     UpdateFlowRequest,
     VALIDATION_ATTACHMENT_EDGE_ROLE,
 )
@@ -175,7 +176,25 @@ def _validate_flow_agent_references(
     *,
     db_user_id: int | None,
 ) -> None:
-    """Reject flows that reference agent_ids unavailable to the saving/loading user."""
+    """Reject flows that reference agent_ids unavailable to the saving user."""
+
+    missing_references = _missing_flow_agent_reference_messages(
+        flow_definition,
+        db_user_id=db_user_id,
+    )
+    if missing_references:
+        raise HTTPException(
+            status_code=422,
+            detail=_missing_flow_agent_references_detail(missing_references),
+        )
+
+
+def _missing_flow_agent_reference_messages(
+    flow_definition: FlowDefinition,
+    *,
+    db_user_id: int | None,
+) -> list[str]:
+    """Return messages for flow nodes that reference unavailable agents."""
 
     missing_references: list[str] = []
     for node in flow_definition.nodes:
@@ -189,15 +208,17 @@ def _validate_flow_agent_references(
             f"node '{node.id}' ({agent_name}) references missing agent_id '{agent_id}'"
         )
 
-    if missing_references:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "Flow references unavailable agent(s): "
-                + "; ".join(missing_references)
-                + ". Re-select an available agent before saving or running this flow."
-            ),
-        )
+    return missing_references
+
+
+def _missing_flow_agent_references_detail(missing_references: list[str]) -> str:
+    """Build the curator-facing unavailable-agent validation message."""
+
+    return (
+        "Flow references unavailable agent(s): "
+        + "; ".join(missing_references)
+        + ". Re-select an available agent before saving or running this flow."
+    )
 
 
 def _flow_to_response(flow: CurationFlow) -> FlowResponse:
@@ -206,7 +227,20 @@ def _flow_to_response(flow: CurationFlow) -> FlowResponse:
     flow_definition = _validated_flow_definition(
         FlowDefinition.model_validate(flow.flow_definition),
         db_user_id=flow.user_id,
-        enforce_agent_references=True,
+    )
+    missing_references = _missing_flow_agent_reference_messages(
+        flow_definition,
+        db_user_id=flow.user_id,
+    )
+    validation_warnings = (
+        [
+            FlowValidationWarning(
+                type="CRITICAL",
+                message=_missing_flow_agent_references_detail(missing_references),
+            )
+        ]
+        if missing_references
+        else []
     )
     return FlowResponse(
         id=flow.id,
@@ -218,6 +252,8 @@ def _flow_to_response(flow: CurationFlow) -> FlowResponse:
         last_executed_at=flow.last_executed_at,
         created_at=flow.created_at,
         updated_at=flow.updated_at,
+        validation_warnings=validation_warnings,
+        has_critical_issues=bool(validation_warnings),
     )
 
 

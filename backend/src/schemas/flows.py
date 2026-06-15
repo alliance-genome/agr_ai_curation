@@ -495,6 +495,13 @@ class UpdateFlowRequest(BaseModel):
 # Response Schemas
 # =============================================================================
 
+class FlowValidationWarning(BaseModel):
+    """Validation issue surfaced when a stored flow loads with repairable problems."""
+
+    type: Literal["CRITICAL", "WARNING"]
+    message: str
+
+
 class FlowSummaryResponse(BaseModel):
     """Summary of a flow (for list view - excludes full flow_definition)."""
 
@@ -525,6 +532,8 @@ class FlowResponse(BaseModel):
     last_executed_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
+    validation_warnings: List[FlowValidationWarning] = Field(default_factory=list)
+    has_critical_issues: bool = False
 
 
 class FlowListResponse(BaseModel):

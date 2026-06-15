@@ -660,6 +660,12 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
 
       setNodes(flowNodes)
       setEdges(flowEdges)
+      if (flow.has_critical_issues && flow.validation_warnings?.length) {
+        setSnackbar({
+          message: `Flow loaded with validation issue: ${flow.validation_warnings[0].message}`,
+          severity: 'error',
+        })
+      }
 
       // Update nodeId counter to avoid collisions
       const maxId = Math.max(...flowNodes.map((n) => parseInt(n.id.replace('node_', '')) || 0), 0)

@@ -181,6 +181,8 @@ def test_flow_response_defaults_legacy_saved_edge_roles(monkeypatch):
     response = flows._flow_to_response(stored_flow)
 
     assert response.flow_definition.edges[0].role == "control_flow"
+    assert response.validation_warnings == []
+    assert response.has_critical_issues is False
 
 
 def test_flow_definition_payload_rejects_missing_agent_reference(monkeypatch):
@@ -207,7 +209,7 @@ def test_flow_definition_payload_rejects_missing_agent_reference(monkeypatch):
     assert "fixture_agent_without_pack" in str(exc.value.detail)
 
 
-def test_flow_response_rejects_missing_agent_reference_on_load(monkeypatch):
+def test_flow_response_reports_missing_agent_reference_on_load(monkeypatch):
     flow_id = uuid4()
     now = datetime.now(timezone.utc)
     stored_flow = SimpleNamespace(
@@ -232,12 +234,13 @@ def test_flow_response_rejects_missing_agent_reference_on_load(monkeypatch):
         lambda *_args, **_kwargs: None,
     )
 
-    with pytest.raises(HTTPException) as exc:
-        flows._flow_to_response(stored_flow)
+    response = flows._flow_to_response(stored_flow)
 
-    assert exc.value.status_code == 422
-    assert "references unavailable agent" in str(exc.value.detail)
-    assert "fixture_agent_without_pack" in str(exc.value.detail)
+    assert response.id == flow_id
+    assert response.has_critical_issues is True
+    assert response.validation_warnings[0].type == "CRITICAL"
+    assert "references unavailable agent" in response.validation_warnings[0].message
+    assert "fixture_agent_without_pack" in response.validation_warnings[0].message
 
 
 def test_flow_definition_payload_rejects_attachment_only_validator_control_flow(

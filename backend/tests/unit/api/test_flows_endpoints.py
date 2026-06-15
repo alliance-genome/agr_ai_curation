@@ -143,6 +143,30 @@ async def test_get_flow_hydrates_metadata_validation_attachments_on_read(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_get_flow_reports_missing_agent_reference_on_read(monkeypatch):
+    owned = _flow(name="Owned")
+    monkeypatch.setattr(flows, "verify_flow_ownership", lambda *_args, **_kwargs: owned)
+    monkeypatch.setattr(
+        flows,
+        "apply_flow_validation_attachment_defaults",
+        lambda flow_definition: flow_definition,
+    )
+    monkeypatch.setattr(
+        flows,
+        "_flow_agent_policy_entry",
+        lambda *_args, **_kwargs: None,
+    )
+
+    response = await flows.get_flow(flow_id=owned.id, user={"sub": "u1"}, db=object())
+
+    assert response.id == owned.id
+    assert response.has_critical_issues is True
+    assert response.validation_warnings[0].type == "CRITICAL"
+    assert "references unavailable agent" in response.validation_warnings[0].message
+    assert "gene_expression" in response.validation_warnings[0].message
+
+
+@pytest.mark.asyncio
 async def test_create_flow_success(monkeypatch):
     class _DB:
         def __init__(self):
@@ -212,6 +236,7 @@ async def test_create_flow_hydrates_metadata_validation_attachments(monkeypatch)
         db=db,
     )
 
+    assert db.added is not None
     attachments = db.added.flow_definition["nodes"][1]["data"]["validation_attachments"]
     states = {attachment["state"] for attachment in attachments}
 
