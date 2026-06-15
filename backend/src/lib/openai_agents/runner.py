@@ -431,22 +431,11 @@ def build_isolated_openai_run_config(parent_run_config: Any | None) -> tuple[Any
         tracing_disabled=not is_openai_agents_tracing_enabled(),
         trace_include_sensitive_data=True,
     )
-    try:
-        run_config = replace(
-            base_config,
-            model_provider=openai_provider,
-            trace_include_sensitive_data=True,
-        )
-    except TypeError:
-        run_config = base_config
-        setattr(run_config, "model_provider", openai_provider)
-        setattr(run_config, "trace_include_sensitive_data", True)
-        if not hasattr(run_config, "tracing_disabled"):
-            setattr(
-                run_config,
-                "tracing_disabled",
-                not is_openai_agents_tracing_enabled(),
-            )
+    run_config = replace(
+        base_config,
+        model_provider=openai_provider,
+        trace_include_sensitive_data=True,
+    )
     return run_config, openai_provider
 
 
