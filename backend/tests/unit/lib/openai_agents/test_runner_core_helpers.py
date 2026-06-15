@@ -150,6 +150,36 @@ def test_build_request_openai_provider_passes_websocket_keepalive_options(monkey
     }
 
 
+def test_build_isolated_openai_run_config_replaces_provider_and_preserves_trace(monkeypatch):
+    provider = object()
+    monkeypatch.setattr(runner, "SafeAsyncOpenAI", lambda: object())
+    monkeypatch.setattr(
+        runner,
+        "_build_request_openai_provider",
+        lambda openai_client: provider,
+    )
+    parent_config = runner.RunConfig(
+        model_provider=object(),
+        tracing_disabled=False,
+        trace_include_sensitive_data=False,
+        workflow_name="AI Curation flow",
+        group_id="session-1",
+        trace_metadata={"langfuse_trace_id": "trace-1"},
+    )
+
+    child_config, child_provider = runner.build_isolated_openai_run_config(parent_config)
+
+    assert child_provider is provider
+    assert child_config.model_provider is provider
+    assert child_config.tracing_disabled is False
+    assert child_config.trace_include_sensitive_data is True
+    assert child_config.workflow_name == "AI Curation flow"
+    assert child_config.group_id == "session-1"
+    assert child_config.trace_metadata["langfuse_trace_id"] == "trace-1"
+    assert parent_config.model_provider is not provider
+    assert parent_config.trace_include_sensitive_data is False
+
+
 def test_create_openai_client_kwargs_includes_configured_key_and_base(monkeypatch):
     monkeypatch.setattr(
         runner,

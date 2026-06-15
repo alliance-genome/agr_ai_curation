@@ -32,9 +32,9 @@ _current_output_filename_stem: ContextVar[Optional[str]] = ContextVar(
     'output_filename_stem',
     default=None,
 )
-# RunConfig for the current request (carries the per-request warm websocket
-# provider) so deeply nested runs invoked outside the SDK tool-context path
-# (e.g. custom flow validators) can reuse the same provider/connection.
+# RunConfig for the current request (carries trace metadata and, on chat paths, the
+# per-request warm websocket provider). Flow helpers may clone it onto step-owned
+# providers so each step has an explicit transport lifecycle.
 _current_run_config: ContextVar[Optional[Any]] = ContextVar('run_config', default=None)
 
 
@@ -120,11 +120,10 @@ def reset_current_output_filename_stem(token: Token[Optional[str]]) -> None:
 
 
 def set_current_run_config(run_config: Any) -> Token[Optional[Any]]:
-    """Set the current request's RunConfig (carries the per-request warm websocket provider).
+    """Set the current request's RunConfig.
 
-    Returns a token for reset_current_run_config(). Lets deeply nested runs invoked
-    outside the SDK tool-context path (e.g. custom flow validators) reuse the same
-    RunConfig/provider instead of opening a new websocket connection.
+    Returns a token for reset_current_run_config(). Deeply nested runs can use this
+    config directly on chat paths or clone it onto their own provider on flow paths.
     """
     return _current_run_config.set(run_config)
 

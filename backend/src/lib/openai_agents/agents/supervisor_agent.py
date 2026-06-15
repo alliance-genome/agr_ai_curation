@@ -655,6 +655,7 @@ def _create_streaming_tool(
     run_config: Optional[RunConfig] = None,
     ledger: Optional[SupervisorCallLedger] = None,
     inline_chat_persistence: bool = True,
+    isolate_run_config: bool = False,
 ) -> Callable:
     """
     Create a streaming tool wrapper for a specialist agent.
@@ -673,6 +674,10 @@ def _create_streaming_tool(
             persists validated builder finalization inline as a CHAT-source extraction
             result. When False (flow execution path), inline CHAT persistence is skipped
             so flows do not leave shadow CHAT rows alongside their own FLOW-source rows.
+        isolate_run_config: When True, clone the parent RunConfig onto a fresh OpenAI
+            provider for this invocation and close it after the specialist stream drains.
+            Flow steps use this so each step owns its WebSocket lifecycle, while chat
+            keeps warm provider reuse across a single turn.
 
     Returns:
         A function_tool decorated async function
@@ -687,18 +692,40 @@ def _create_streaming_tool(
         effective_run_config = getattr(ctx, "run_config", None) or run_config
 
         async def _runner_coro_factory() -> str:
-            result = await run_specialist_with_events(
-                agent=agent,
-                input_text=query,
-                specialist_name=specialist_name,
-                run_config=effective_run_config,
-                tool_name=tool_name,  # Pass tool_name for batching nudge tracking
-                inline_chat_persistence=inline_chat_persistence,
-            )
-            handoff = pop_last_supervisor_extraction_handoff()
-            if ledger is not None and handoff is not None:
-                ledger.record_extraction_handoff(tool_name, query, handoff)
-            return result
+            run_config_for_specialist = effective_run_config
+            isolated_provider = None
+            close_isolated_provider = None
+            if isolate_run_config:
+                from src.lib.openai_agents.runner import (
+                    build_isolated_openai_run_config as _build_isolated_openai_run_config,
+                    close_isolated_openai_provider as _close_isolated_openai_provider,
+                )
+
+                run_config_for_specialist, isolated_provider = (
+                    _build_isolated_openai_run_config(effective_run_config)
+                )
+                close_isolated_provider = _close_isolated_openai_provider
+
+            try:
+                result = await run_specialist_with_events(
+                    agent=agent,
+                    input_text=query,
+                    specialist_name=specialist_name,
+                    run_config=run_config_for_specialist,
+                    tool_name=tool_name,  # Pass tool_name for batching nudge tracking
+                    inline_chat_persistence=inline_chat_persistence,
+                )
+                handoff = pop_last_supervisor_extraction_handoff()
+                if ledger is not None and handoff is not None:
+                    ledger.record_extraction_handoff(tool_name, query, handoff)
+                return result
+            finally:
+                if isolated_provider is not None and close_isolated_provider is not None:
+                    await close_isolated_provider(
+                        isolated_provider,
+                        trace_id=get_current_trace_id(),
+                        user_id=get_current_user_id(),
+                    )
 
         # In standard chat the supervisor is built fresh per turn with a ledger
         # closed over here (NOT a tool argument, so the model-visible schema stays

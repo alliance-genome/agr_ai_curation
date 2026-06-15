@@ -1457,6 +1457,7 @@ async def _run_custom_flow_validator_agent(
         # Flow execution: flows persist their own FLOW-source extraction rows; inline
         # CHAT persistence must not fire here (would write a shadow CHAT-source row).
         inline_chat_persistence=False,
+        isolate_run_config=True,
     )
     provider_payload = {
         "source_envelope": {
@@ -1494,9 +1495,9 @@ async def _run_custom_flow_validator_agent(
     )
     payload = json.dumps(provider_payload, sort_keys=True)
     if hasattr(streaming_tool, "on_invoke_tool"):
-        # Reuse the current request's warm websocket provider for this nested
-        # validator run (it is invoked outside the SDK tool-context path, so there
-        # is no ctx to inherit from); falls back to None if no run is active.
+        # Pass the parent RunConfig only as a trace/template source. The flow tool
+        # wrapper clones it onto a step-owned provider so the validator WebSocket
+        # closes cleanly before flow teardown.
         tool_ctx = SimpleNamespace(tool_name=tool_name, run_config=get_current_run_config())
         return await streaming_tool.on_invoke_tool(
             tool_ctx,
@@ -2763,10 +2764,10 @@ def get_all_agent_tools(
                         projected_chat_output = direct_formatter_result
                 elif hasattr(tool_callable, "on_invoke_tool"):
                     # Newer openai-agents tool invokers dereference ctx.tool_name and,
-                    # on handled tool errors, ctx.run_config (0.17+). Reuse the flow
-                    # supervisor run's RunConfig (its warm websocket provider) so the
-                    # nested specialist run shares the same connection instead of opening
-                    # a new one; fall back to None when the SDK did not supply one.
+                    # on handled tool errors, ctx.run_config (0.17+). Pass the parent
+                    # RunConfig as a trace/template source; the flow tool wrapper clones
+                    # it onto a step-owned provider so each flow-step WebSocket closes
+                    # before the supervisor provider is torn down.
                     tool_ctx = SimpleNamespace(
                         tool_name=tool_name,
                         run_config=getattr(ctx, "run_config", None),
@@ -3206,6 +3207,7 @@ def get_all_agent_tools(
                 # inline CHAT persistence must not fire here (would write a shadow
                 # CHAT-source row in addition to the FLOW-source row).
                 inline_chat_persistence=False,
+                isolate_run_config=True,
             )
 
         curation = entry.get("curation")
