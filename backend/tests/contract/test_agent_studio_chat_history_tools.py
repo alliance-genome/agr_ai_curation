@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4
 
 from src.api import agent_studio as api_module
@@ -44,7 +45,7 @@ class _FakeSuccessfulStream:
 
 
 class _FakeMessagesApi:
-    def __init__(self, captured: dict[str, object]):
+    def __init__(self, captured: dict[str, Any]):
         self._captured = captured
 
     def stream(self, **kwargs):
@@ -64,7 +65,7 @@ class _FakeMessagesApi:
 
 
 class _FakeAnthropicClient:
-    def __init__(self, captured: dict[str, object]):
+    def __init__(self, captured: dict[str, Any]):
         self.beta = SimpleNamespace(messages=_FakeMessagesApi(captured))
 
 
@@ -73,7 +74,7 @@ def test_agent_studio_chat_endpoint_registers_chat_history_tools_on_the_wire(
     chat_contract_auth_headers,
     monkeypatch,
 ):
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(
@@ -149,9 +150,12 @@ def test_agent_studio_chat_endpoint_registers_chat_history_tools_on_the_wire(
     ] == ["TEXT_DELTA", "DONE"]
 
     tools_by_name = {tool["name"]: tool for tool in captured["tools"]}
-    assert {"list_recent_chats", "search_chat_history", "get_chat_conversation"} <= set(
-        tools_by_name
-    )
+    assert {
+        "list_recent_chats",
+        "search_chat_history",
+        "get_chat_conversation",
+        "get_chat_turn",
+    } <= set(tools_by_name)
     assert tools_by_name["list_recent_chats"]["input_schema"]["required"] == ["chat_kind"]
     assert tools_by_name["list_recent_chats"]["input_schema"]["properties"]["chat_kind"]["enum"] == [
         "assistant_chat",
@@ -163,3 +167,4 @@ def test_agent_studio_chat_endpoint_registers_chat_history_tools_on_the_wire(
         "chat_kind",
     ]
     assert tools_by_name["get_chat_conversation"]["input_schema"]["required"] == ["session_id"]
+    assert tools_by_name["get_chat_turn"]["input_schema"]["required"] == ["session_id", "turn_id"]

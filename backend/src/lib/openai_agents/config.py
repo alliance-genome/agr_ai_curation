@@ -1114,6 +1114,54 @@ def get_agent_studio_endpoint_timeout_seconds() -> float:
     return max(1.0, _get_env_float_with_fallback("AGENT_STUDIO_ENDPOINT_TIMEOUT_SECONDS", 30.0))
 
 
+def get_agent_studio_opus_context_editing_trigger_tokens() -> int:
+    """Input-token threshold for Anthropic tool context editing.
+
+    Agent Studio Opus asks Anthropic to clear stale tool uses/results after the
+    live request context crosses this threshold. Default 140000, approximately
+    70% of the 200K-token Opus context budget used by Agent Studio.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_OPUS_CONTEXT_EDITING_TRIGGER_TOKENS",
+            140_000,
+        ),
+    )
+
+
+def get_agent_studio_opus_context_editing_keep_tool_uses() -> int:
+    """Recent tool-use count Anthropic should keep when context editing triggers.
+
+    Keeping a small tail preserves local tool-loop continuity while older tool
+    results can be rehydrated through durable chat/TraceReview recall tools.
+    Default 3.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_OPUS_CONTEXT_EDITING_KEEP_TOOL_USES",
+            3,
+        ),
+    )
+
+
+def get_agent_studio_provider_tool_result_inline_max_chars() -> int:
+    """Max raw tool-result JSON chars replayed to provider continuation.
+
+    Larger Agent Studio tool results are replaced with compact provider-only
+    summaries and recall instructions while the frontend still receives the full
+    result event. Default 12000.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS",
+            12_000,
+        ),
+    )
+
+
 def get_trace_review_export_timeout_seconds() -> float:
     """HTTP timeout for the TraceReview export call (TRACE_REVIEW_EXPORT_TIMEOUT_SECONDS).
 

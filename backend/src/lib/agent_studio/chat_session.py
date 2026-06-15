@@ -148,6 +148,51 @@ def get_chat_conversation_payload(
     }
 
 
+def get_chat_turn_payload(
+    *,
+    repository: ChatHistoryRepository,
+    session_id: str,
+    turn_id: str,
+    user_auth_sub: str,
+    serialize_session: Callable[[ChatSessionRecord], Dict[str, Any]] = serialize_chat_history_session,
+    serialize_message: Callable[[ChatMessageRecord], Dict[str, Any]] = serialize_chat_history_message,
+) -> Dict[str, Any]:
+    session = repository.get_session(
+        session_id=session_id,
+        user_auth_sub=user_auth_sub,
+    )
+    if session is None:
+        return {
+            "success": False,
+            "error": "Chat session not found.",
+        }
+    if not session.chat_kind:
+        raise ValueError("chat_kind is required to load a chat turn")
+
+    messages = repository.list_messages_for_turn(
+        session_id=session_id,
+        user_auth_sub=user_auth_sub,
+        chat_kind=session.chat_kind,
+        turn_id=turn_id,
+    )
+    if not messages:
+        return {
+            "success": False,
+            "error": "Chat turn not found.",
+            "session": serialize_session(session),
+            "turn_id": turn_id,
+        }
+
+    return {
+        "success": True,
+        "chat_kind": session.chat_kind,
+        "session": serialize_session(session),
+        "turn_id": turn_id,
+        "message_count": len(messages),
+        "messages": [serialize_message(message) for message in messages],
+    }
+
+
 def extract_latest_user_message(messages: List[ChatMessage]) -> str:
     if not messages:
         raise ValueError("messages must include at least one user turn")

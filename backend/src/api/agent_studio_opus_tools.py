@@ -217,7 +217,8 @@ SEARCH_CHAT_HISTORY_TOOL = {
     "description": (
         "Search the authenticated user's durable chat history by keyword across "
         "session titles and transcript content. Use this when the user refers to "
-        "a past conversation topic, phrase, gene, or session theme."
+        "a past conversation topic, phrase, gene, session theme, or content from "
+        "the current session that may have been compacted out of live context."
     ),
     "input_schema": {
         "type": "object",
@@ -250,7 +251,9 @@ GET_CHAT_CONVERSATION_TOOL = {
     "name": "get_chat_conversation",
     "description": (
         "Load the full durable transcript for one visible chat session by session_id. "
-        "Use this when the user asks to open a specific prior conversation."
+        "Use this when the user asks to open a specific prior conversation, or when "
+        "you need to rehydrate earlier context from the current session after "
+        "provider context editing compacted it."
     ),
     "input_schema": {
         "type": "object",
@@ -261,6 +264,30 @@ GET_CHAT_CONVERSATION_TOOL = {
             },
         },
         "required": ["session_id"],
+    },
+}
+
+GET_CHAT_TURN_TOOL = {
+    "name": "get_chat_turn",
+    "description": (
+        "Load durable transcript rows for one turn_id in a visible chat session. "
+        "Use this to rehydrate a specific earlier current-session turn after "
+        "provider context editing clears stale live context. Prefer this over "
+        "loading a whole conversation when you know the turn_id."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "session_id": {
+                "type": "string",
+                "description": "Durable chat session identifier. For the current Agent Studio session, use the session_id from compact tool-result recall hints.",
+            },
+            "turn_id": {
+                "type": "string",
+                "description": "Durable turn identifier, for example opus-turn-3-<digest>.",
+            },
+        },
+        "required": ["session_id", "turn_id"],
     },
 }
 
@@ -805,6 +832,7 @@ GET_EXPORT_SUBMISSION_READINESS_TOOL = {
 
 
 COMMON_TOOLS = {
+    "get_chat_turn",
     "get_chat_conversation",
     "list_recent_chats",
     "search_chat_history",
@@ -964,6 +992,7 @@ def get_all_opus_tools(
         LIST_RECENT_CHATS_TOOL,
         SEARCH_CHAT_HISTORY_TOOL,
         GET_CHAT_CONVERSATION_TOOL,
+        GET_CHAT_TURN_TOOL,
         SEARCH_TRACES_TOOL,
         GET_TRACE_SUMMARY_TOOL,
         GET_TOOL_CALLS_SUMMARY_TOOL,
