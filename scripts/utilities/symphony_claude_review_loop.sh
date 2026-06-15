@@ -15,7 +15,7 @@ set -euo pipefail
 #
 # Exit codes:
 #   0  — quiet, pending (awaiting re-review response), or maxed_out
-#  10  — detected (feedback found, report file written)
+#  10  — actionable_feedback (Claude feedback found, report file written)
 #   2  — error
 # =============================================================================
 
@@ -820,7 +820,7 @@ case "${LOOP_ACTION}" in
   report_current)
     report_file="$(mktemp /tmp/claude-review-report-XXXXXX.md)"
     generate_report "${report_file}"
-    echo "CLAUDE_LOOP_STATUS=detected"
+    echo "CLAUDE_LOOP_STATUS=actionable_feedback"
     echo "CLAUDE_LOOP_ACTION=${LOOP_ACTION}"
     echo "CLAUDE_LOOP_ROUND=${LOOP_ROUNDS_COMPLETED}"
     echo "CLAUDE_LOOP_MAX_ROUNDS=${LOOP_MAX_ROUNDS}"
@@ -853,7 +853,7 @@ case "${LOOP_ACTION}" in
       set -e
       eval "${updated_analysis}"
 
-      echo "CLAUDE_LOOP_STATUS=detected"
+      echo "CLAUDE_LOOP_STATUS=actionable_feedback"
       echo "CLAUDE_LOOP_ACTION=${LOOP_ACTION}"
       echo "CLAUDE_LOOP_ROUND=${LOOP_ROUNDS_COMPLETED}"
       echo "CLAUDE_LOOP_MAX_ROUNDS=${LOOP_MAX_ROUNDS}"

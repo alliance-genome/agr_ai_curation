@@ -314,7 +314,7 @@ EOF
   cat > "${loop_stub}" <<EOF
 #!/usr/bin/env bash
 cat <<'OUT'
-CLAUDE_LOOP_STATUS=detected
+CLAUDE_LOOP_STATUS=actionable_feedback
 CLAUDE_LOOP_REPORT_FILE=${report_file}
 CLAUDE_LOOP_ROUND=2
 CLAUDE_LOOP_MAX_ROUNDS=5
@@ -368,7 +368,7 @@ EOF
       --pr-view-json-file "${pr_view_json}"
   )"
 
-  assert_contains "READY_FOR_PR_CLAUDE_STATUS=detected" "${output}"
+  assert_contains "READY_FOR_PR_CLAUDE_STATUS=actionable_feedback" "${output}"
   assert_contains "READY_FOR_PR_CLAUDE_ACTION=bounced_to_in_progress" "${output}"
   assert_contains "READY_FOR_PR_NEXT_STATE=In Progress" "${output}"
   assert_contains "append-section --issue-identifier ALL-293 --section-title PR Handoff" "$(cat "${workpad_log}")"
@@ -406,7 +406,7 @@ if [[ " \$* " != *" --wait-seconds 0 "* ]]; then
   exit 98
 fi
 cat <<'OUT'
-CLAUDE_LOOP_STATUS=detected
+CLAUDE_LOOP_STATUS=actionable_feedback
 CLAUDE_LOOP_REPORT_FILE=${report_file}
 CLAUDE_LOOP_ROUND=1
 CLAUDE_LOOP_MAX_ROUNDS=5
@@ -451,7 +451,7 @@ EOF
       --pr-view-json-file "${pr_view_json}"
   )"
 
-  assert_contains "READY_FOR_PR_CLAUDE_STATUS=detected" "${output}"
+  assert_contains "READY_FOR_PR_CLAUDE_STATUS=actionable_feedback" "${output}"
   assert_contains "READY_FOR_PR_CLAUDE_ACTION=bounced_to_in_progress" "${output}"
 }
 
@@ -491,7 +491,7 @@ EOF
   cat > "${loop_stub}" <<EOF
 #!/usr/bin/env bash
 cat <<'OUT'
-CLAUDE_LOOP_STATUS=detected
+CLAUDE_LOOP_STATUS=actionable_feedback
 CLAUDE_LOOP_REPORT_FILE=${report_file}
 CLAUDE_LOOP_ROUND=3
 CLAUDE_LOOP_MAX_ROUNDS=5
@@ -538,7 +538,7 @@ EOF
       --pr-view-json-file "${pr_view_json}"
   )"
 
-  assert_contains "READY_FOR_PR_CLAUDE_STATUS=detected" "${output}"
+  assert_contains "READY_FOR_PR_CLAUDE_STATUS=actionable_feedback" "${output}"
   assert_contains "READY_FOR_PR_CLAUDE_ACTION=clean_review_no_bounce" "${output}"
   assert_contains "READY_FOR_PR_CHECK_STATUS=clean" "${output}"
   assert_contains "move to Human Review Prep" "${output}"
@@ -575,7 +575,7 @@ EOF
   cat > "${loop_stub}" <<EOF
 #!/usr/bin/env bash
 cat <<'OUT'
-CLAUDE_LOOP_STATUS=detected
+CLAUDE_LOOP_STATUS=actionable_feedback
 CLAUDE_LOOP_REPORT_FILE=${report_file}
 CLAUDE_LOOP_ROUND=1
 CLAUDE_LOOP_MAX_ROUNDS=5
@@ -659,7 +659,7 @@ EOF
   cat > "${loop_stub}" <<EOF
 #!/usr/bin/env bash
 cat <<'OUT'
-CLAUDE_LOOP_STATUS=detected
+CLAUDE_LOOP_STATUS=actionable_feedback
 CLAUDE_LOOP_REPORT_FILE=${report_file}
 CLAUDE_LOOP_ROUND=1
 CLAUDE_LOOP_MAX_ROUNDS=5
@@ -705,7 +705,7 @@ EOF
       --pr-view-json-file "${pr_view_json}"
   )"
 
-  assert_contains "READY_FOR_PR_CLAUDE_STATUS=detected" "${output}"
+  assert_contains "READY_FOR_PR_CLAUDE_STATUS=actionable_feedback" "${output}"
   assert_contains "READY_FOR_PR_CLAUDE_ACTION=bounced_to_in_progress" "${output}"
   assert_not_contains "READY_FOR_PR_CLAUDE_ACTION=clean_review_no_bounce" "${output}"
 }
@@ -734,7 +734,7 @@ EOF
   cat > "${loop_stub}" <<EOF
 #!/usr/bin/env bash
 cat <<'OUT'
-CLAUDE_LOOP_STATUS=detected
+CLAUDE_LOOP_STATUS=actionable_feedback
 CLAUDE_LOOP_REPORT_FILE=${report_file}
 CLAUDE_LOOP_ROUND=1
 CLAUDE_LOOP_MAX_ROUNDS=5

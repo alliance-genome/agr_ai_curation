@@ -95,7 +95,7 @@ EOF
   output="$(cat "${output_file}")"
 
   assert_exit_code "10" "${rc}"
-  assert_contains "CLAUDE_LOOP_STATUS=detected" "${output}"
+  assert_contains "CLAUDE_LOOP_STATUS=actionable_feedback" "${output}"
   assert_contains "CLAUDE_LOOP_ROUND=1" "${output}"
   assert_contains "CLAUDE_LOOP_REPORT_FILE=" "${output}"
 
@@ -395,7 +395,7 @@ EOF
   output="$(cat "${output_file}")"
 
   assert_exit_code "10" "${rc}"
-  assert_contains "CLAUDE_LOOP_STATUS=detected" "${output}"
+  assert_contains "CLAUDE_LOOP_STATUS=actionable_feedback" "${output}"
   assert_contains "CLAUDE_LOOP_REPORT_FILE=" "${output}"
 
   # Clean up report file
@@ -553,7 +553,7 @@ EOF
   output="$(cat "${output_file}")"
 
   assert_exit_code "10" "${rc}"
-  assert_contains "CLAUDE_LOOP_STATUS=detected" "${output}"
+  assert_contains "CLAUDE_LOOP_STATUS=actionable_feedback" "${output}"
 
   # Clean up report file
   local report_file
@@ -598,7 +598,7 @@ EOF
   output="$(cat "${output_file}")"
 
   assert_exit_code "10" "${rc}"
-  assert_contains "CLAUDE_LOOP_STATUS=detected" "${output}"
+  assert_contains "CLAUDE_LOOP_STATUS=actionable_feedback" "${output}"
 
   # Clean up report file
   local report_file
@@ -642,7 +642,7 @@ EOF
   output="$(cat "${output_file}")"
 
   assert_exit_code "10" "${rc}"
-  assert_contains "CLAUDE_LOOP_STATUS=detected" "${output}"
+  assert_contains "CLAUDE_LOOP_STATUS=actionable_feedback" "${output}"
 
   # Clean up report file
   local report_file
