@@ -74,6 +74,48 @@ The local evidence bundle also included:
 - `trace_review/exact_payload_f597_validator_preflight_event.json` - exact payload lookup for one validator preflight event.
 - `trace_review/exact_payload_f597_largest_event_chunk0.json` - first chunk from a large event payload, demonstrating bounded retrieval.
 
+## 2026-06-15 Cross-Surface Compaction Validation
+
+ALL-561 added deterministic unit coverage for the two model-live compaction
+surfaces after the standard chat and Agent Studio implementations landed.
+These tests are intentionally CI-friendly substitutes for provider smoke until
+a coordinator requests a fresh Incus run:
+
+- Standard chat long-session replay:
+  `backend/tests/unit/lib/openai_agents/test_chat_compaction_session.py::test_standard_chat_long_session_replay_stays_under_budget_and_keeps_flow_refs`
+  seeds an existing compacted projection plus a later flow transcript. It
+  proves the replayed model-live items stay below the configured compaction
+  threshold, keep `flow_run_id` / lookup-reference text, omit the current
+  already-persisted prompt, and never replay the bulky flow `payload_json`.
+- Standard chat recall after compaction:
+  `backend/tests/unit/lib/openai_agents/test_supervisor_context_recall.py::test_recall_chat_history_search_finds_early_turn_trimmed_from_live_context`
+  keeps an early exact phrase out of the compacted/recent live context and
+  confirms the supervisor-callable `recall_chat_history` search path retrieves
+  that durable text verbatim.
+- Agent Studio repeated tool-loop continuation:
+  `backend/tests/unit/api/test_agent_studio_context_compaction.py::test_repeated_tool_loop_continuations_stay_compact_and_keep_exact_results`
+  drives two consecutive Opus tool-use continuations. The frontend
+  `TOOL_RESULT` events retain the full TraceReview inventory and exact payload,
+  while each provider continuation receives only a compact
+  `compacted_tool_result` with recall handles.
+- Agent Studio recall after provider context editing:
+  `backend/tests/unit/api/test_agent_studio_context_compaction.py::test_compact_tool_result_recall_hints_fetch_exact_turn_and_trace_payload`
+  follows the compact payload's `get_chat_turn` and `get_trace_payload` hints,
+  proving both the early durable turn and exact TraceReview payload remain
+  retrievable while the compact provider message excludes the raw payload body.
+- Observability/model-live boundary:
+  existing chat context and runtime preflight tests continue to assert
+  `payload_json_model_live=false`, summary-only
+  `runtime.provider_context_preflight` trace events, and explicit payload lookup
+  instead of default raw-value replay.
+
+Residual risk: these tests prove deterministic compaction and recall contracts,
+but they do not replace a live Incus/provider smoke with fresh Langfuse and
+TraceReview artifacts. Run the full stack evidence preflight before any future
+live token-budget evidence capture, and keep raw smoke JSON, TraceReview
+payloads, and logs in local evidence bundles unless a curated artifact is
+explicitly approved for review.
+
 ## Operational Findings
 
 - Initial extraction trace writes failed because the sandbox `extraction_trace_events/` directory was not writable by the backend container. The local run was unblocked with `chmod 777` in the sandbox. This should become an operational follow-up if it recurs.
