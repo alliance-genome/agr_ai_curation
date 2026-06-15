@@ -1026,6 +1026,7 @@ async def _run_agent_with_tracing(
             model=str(getattr(agent, "model", "") or ""),
             client=openai_client,
         )
+        await sdk_session.run_compaction({"compaction_mode": "input"})
     llm_run_start = time.monotonic()
     result = Runner.run_streamed(
         agent,

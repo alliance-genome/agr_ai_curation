@@ -928,9 +928,11 @@ async def test_chat_endpoint_success(monkeypatch):
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
-    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
-    async def _stream(**_kwargs):
+    captured_run_kwargs = []
+
+    async def _stream(**kwargs):
+        captured_run_kwargs.append(kwargs)
         assert [(call["role"], call["content"]) for call in repository.append_calls] == [
             ("user", "hello")
         ]
@@ -961,6 +963,42 @@ async def test_chat_endpoint_success(monkeypatch):
     assert repository.append_calls[0]["turn_id"] == "turn-1"
     assert repository.append_calls[1]["turn_id"] == "turn-1"
     assert repository.append_calls[1]["trace_id"] == "trace-1"
+    assert captured_run_kwargs[0]["context_messages"] == [{"role": "user", "content": "hello"}]
+    assert captured_run_kwargs[0]["turn_id"] == "turn-1"
+
+
+@pytest.mark.asyncio
+async def test_chat_endpoint_generates_turn_id_for_non_stream_compaction(monkeypatch):
+    commits: list[str] = []
+    repository = FakeChatHistoryRepository()
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _sid: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    captured_run_kwargs = []
+
+    async def _stream(**kwargs):
+        captured_run_kwargs.append(kwargs)
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-generated"}}
+        yield {"type": "RUN_FINISHED", "data": {"response": "generated turn answer"}}
+
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _stream)
+
+    result = await chat.chat_endpoint(
+        chat.ChatMessage(message="hello", session_id="session-generated"),
+        {"sub": "user-1", "cognito:groups": []},
+        db=_db_stub(commits=commits),
+    )
+
+    generated_turn_id = repository.append_calls[0]["turn_id"]
+    assert result.response == "generated turn answer"
+    assert isinstance(generated_turn_id, str)
+    UUID(generated_turn_id)
+    assert repository.append_calls[1]["turn_id"] == generated_turn_id
+    assert captured_run_kwargs[0]["turn_id"] == generated_turn_id
+    assert captured_run_kwargs[0]["context_messages"] == [{"role": "user", "content": "hello"}]
 
 
 @pytest.mark.asyncio
@@ -973,7 +1011,11 @@ async def test_chat_endpoint_uses_last_run_finished_response(monkeypatch):
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
     _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
-    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
+    _patch_chat_impl(
+        monkeypatch,
+        "_build_context_messages_from_durable_messages",
+        lambda *_args, **_kwargs: pytest.fail("non-stream chat should use SDK session replay"),
+    )
 
     async def _stream(**_kwargs):
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
@@ -1216,11 +1258,7 @@ async def test_chat_endpoint_omits_unfinished_prior_user_turn_from_context_messa
 
     assert result.response == "fresh answer"
     assert captured_context_messages == [
-        [
-            {"role": "user", "content": "first question"},
-            {"role": "assistant", "content": "first answer"},
-            {"role": "user", "content": "current question"},
-        ]
+        [{"role": "user", "content": "current question"}]
     ]
     assert [call["role"] for call in repository.append_calls] == ["user", "assistant"]
     assert commits == ["commit", "commit"]
@@ -1399,13 +1437,7 @@ async def test_chat_endpoint_replay_reseeds_prompt_history_for_the_next_turn(mon
 
     assert result.response == "next answer"
     assert captured_context_messages == [
-        [
-            {"role": "user", "content": "first question"},
-            {"role": "assistant", "content": "first answer"},
-            {"role": "user", "content": "replayed question"},
-            {"role": "assistant", "content": "stored answer"},
-            {"role": "user", "content": "follow-up question"},
-        ]
+        [{"role": "user", "content": "follow-up question"}]
     ]
     assert commits == ["commit", "commit", "commit"]
 
@@ -1472,13 +1504,7 @@ async def test_chat_endpoint_follow_up_turn_rehydrates_replayed_exchange_on_stal
 
     assert result.response == "next answer"
     assert captured_context_messages == [
-        [
-            {"role": "user", "content": "first question"},
-            {"role": "assistant", "content": "first answer"},
-            {"role": "user", "content": "replayed question"},
-            {"role": "assistant", "content": "stored answer"},
-            {"role": "user", "content": "follow-up question"},
-        ]
+        [{"role": "user", "content": "follow-up question"}]
     ]
     assert chat._build_context_messages_from_durable_messages(
         repository,
@@ -2096,6 +2122,58 @@ async def test_get_session_history_returns_durable_detail_with_active_document(m
     assert payload.active_document.filename == "paper.pdf"
     assert payload.messages[0].message_id == str(message_id)
     assert payload.messages[0].payload_json == {"step": "answer"}
+
+
+@pytest.mark.asyncio
+async def test_get_session_history_hides_context_compaction_projection_rows(monkeypatch):
+    repository = FakeChatHistoryRepository(
+        sessions=[_session_record(session_id="session-detail")],
+        detail_messages={
+            ("user-1", "session-detail"): [
+                _message_record(
+                    session_id="session-detail",
+                    role="user",
+                    content="Original question",
+                    turn_id="turn-1",
+                    created_at=_ts(9, 1),
+                ),
+                _message_record(
+                    session_id="session-detail",
+                    role="assistant",
+                    content="Compacted standard-chat model-live context projection (2 item(s))",
+                    message_type="context_compaction",
+                    payload_json={
+                        "schema": "standard_chat_context_projection.v1",
+                        "items": [{"role": "user", "content": "Original question"}],
+                    },
+                    created_at=_ts(9, 2),
+                ),
+                _message_record(
+                    session_id="session-detail",
+                    role="assistant",
+                    content="Visible answer",
+                    turn_id="turn-1",
+                    created_at=_ts(9, 3),
+                ),
+            ]
+        },
+    )
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "_load_session_active_document", lambda **_kwargs: _async_value(None))
+
+    payload = await chat.get_session_history(
+        "session-detail",
+        message_limit=50,
+        message_cursor=None,
+        db=object(),
+        user={"sub": "user-1"},
+    )
+
+    assert [message.content for message in payload.messages] == [
+        "Original question",
+        "Visible answer",
+    ]
+    assert all(message.message_type != "context_compaction" for message in payload.messages)
 
 
 @pytest.mark.asyncio

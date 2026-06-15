@@ -210,6 +210,71 @@ async def test_run_agent_streamed_without_langfuse(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_agent_with_tracing_compacts_standard_chat_session_before_provider_call(monkeypatch):
+    captured = {}
+    order = []
+
+    class _FakeCompactionSession:
+        async def run_compaction(self, args):
+            order.append("compact")
+            captured["compaction_args"] = args
+
+    class _FakeProvider:
+        async def aclose(self):
+            captured["provider_closed"] = True
+
+    _patch_common_runtime(monkeypatch, captured)
+    monkeypatch.setattr(runner, "get_max_turns", lambda: 4)
+    monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "_build_request_openai_provider", lambda _client: _FakeProvider())
+    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "get_collected_events", lambda: [])
+    monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
+    monkeypatch.setattr(runner, "ResponseTextDeltaEvent", _FakeTextDelta)
+    monkeypatch.setattr(runner, "provider_context_preflight", lambda **_kwargs: None)
+    monkeypatch.setattr(runner, "write_extraction_trace_event", lambda **event: event)
+    monkeypatch.setattr(runner, "write_stream_event", lambda *args, **kwargs: None)
+
+    def _build_session(**kwargs):
+        captured["session_kwargs"] = kwargs
+        return _FakeCompactionSession()
+
+    monkeypatch.setattr(runner, "build_standard_chat_compaction_session", _build_session)
+
+    def _run_streamed(*args, **kwargs):
+        order.append("run")
+        captured["runner_kwargs"] = kwargs
+        return _FakeRunResult(
+            [_raw_response_stream_event(_FakeTextDelta("precall compacted"))],
+            final_output="precall compacted",
+        )
+
+    monkeypatch.setattr(runner.Runner, "run_streamed", _run_streamed)
+
+    events = await _collect_events(
+        runner._run_agent_with_tracing(
+            agent=SimpleNamespace(name="Supervisor", model="gpt-5.5", tools=[]),
+            input_items=[{"role": "user", "content": "current"}],
+            user_id="user-1",
+            document_id=None,
+            document_name=None,
+            user_message="current",
+            trace_id="trace-compact",
+            chat_session_id="session-1",
+            chat_turn_id="turn-1",
+        )
+    )
+
+    assert order == ["compact", "run"]
+    assert captured["compaction_args"] == {"compaction_mode": "input"}
+    assert captured["session_kwargs"]["session_id"] == "session-1"
+    assert captured["session_kwargs"]["current_turn_id"] == "turn-1"
+    assert captured["runner_kwargs"]["session"].__class__.__name__ == "_FakeCompactionSession"
+    assert events[-1]["type"] == "RUN_FINISHED"
+    assert events[-1]["data"]["response"] == "precall compacted"
+
+
+@pytest.mark.asyncio
 async def test_run_agent_streamed_preserves_bound_prompt_runs_for_provided_agent(monkeypatch):
     captured = {}
     agent = SimpleNamespace(name="Flow Supervisor", model="gpt-5", tools=[])

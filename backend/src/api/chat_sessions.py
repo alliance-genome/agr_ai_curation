@@ -3,6 +3,7 @@
 
 from .chat_common import *
 from ..lib.chat_context_report import build_chat_context_report
+from ..lib.openai_agents.chat_compaction_session import CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE
 
 
 @router.post("/chat/session", response_model=SessionResponse)
@@ -199,7 +200,11 @@ async def get_session_history(
     return ChatSessionDetailResponse(
         session=_serialize_session(detail.session, title_override=generated_title),
         active_document=active_document,
-        messages=[_serialize_message(message) for message in detail.messages],
+        messages=[
+            _serialize_message(message)
+            for message in detail.messages
+            if message.message_type != CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE
+        ],
         message_limit=message_limit,
         next_message_cursor=_encode_message_cursor(detail.next_message_cursor),
     )

@@ -17,6 +17,8 @@ async def chat_endpoint(
     session_id = chat_message.session_id or str(uuid.uuid4())
     user_id = _require_user_sub(user)
     repository = _get_chat_history_repository(db)
+    requested_turn_id = chat_message.turn_id
+    turn_id = requested_turn_id or str(uuid.uuid4())
 
     # Set context variables for file output tools
     set_current_session_id(session_id)
@@ -56,8 +58,8 @@ async def chat_endpoint(
         )
 
     try:
-        if chat_message.turn_id:
-            turn_claim_key = f"non-stream-turn:{session_id}:{chat_message.turn_id}"
+        if requested_turn_id:
+            turn_claim_key = f"non-stream-turn:{session_id}:{requested_turn_id}"
             # Use a per-request claim token so same-turn retries stay exclusive across workers.
             turn_claim_token = uuid.uuid4().hex
 
@@ -89,7 +91,7 @@ async def chat_endpoint(
             chat_kind=ASSISTANT_CHAT_KIND,
             role="user",
             content=chat_message.message,
-            turn_id=chat_message.turn_id,
+            turn_id=turn_id,
         )
         db.commit()
     except HTTPException:
@@ -110,7 +112,7 @@ async def chat_endpoint(
         logger.error(
             "Failed to persist durable non-stream user turn for session %s",
             session_id,
-            extra={"session_id": session_id, "user_id": user_id, "turn_id": chat_message.turn_id},
+            extra={"session_id": session_id, "user_id": user_id, "turn_id": turn_id},
             exc_info=True,
         )
         _rollback_and_raise(
@@ -120,13 +122,13 @@ async def chat_endpoint(
             exc=exc,
         )
 
-    if chat_message.turn_id and not user_turn.created:
+    if requested_turn_id and not user_turn.created:
         effective_user_message = user_turn.message.content
         try:
             assistant_turn = repository.get_message_by_turn_id(
                 session_id=session_id,
                 user_auth_sub=user_id,
-                turn_id=chat_message.turn_id,
+                turn_id=requested_turn_id,
                 role="assistant",
             )
         except ValueError as exc:
@@ -152,22 +154,22 @@ async def chat_endpoint(
             )
             logger.info(
                 "Returning durable replay for non-stream chat turn %s",
-                chat_message.turn_id,
-                extra={"session_id": session_id, "user_id": user_id, "turn_id": chat_message.turn_id},
+                requested_turn_id,
+                extra={"session_id": session_id, "user_id": user_id, "turn_id": requested_turn_id},
             )
             await _release_non_stream_turn_claim()
             return ChatResponse(response=assistant_turn.content, session_id=session_id)
 
         logger.info(
             "Retrying incomplete non-stream chat turn %s after prior request ended",
-            chat_message.turn_id,
-            extra={"session_id": session_id, "user_id": user_id, "turn_id": chat_message.turn_id},
+            requested_turn_id,
+            extra={"session_id": session_id, "user_id": user_id, "turn_id": requested_turn_id},
         )
         if effective_user_message != chat_message.message:
             logger.info(
                 "Reusing stored user content for retried non-stream turn %s",
-                chat_message.turn_id,
-                extra={"session_id": session_id, "user_id": user_id, "turn_id": chat_message.turn_id},
+                requested_turn_id,
+                extra={"session_id": session_id, "user_id": user_id, "turn_id": requested_turn_id},
             )
 
     try:
@@ -185,19 +187,7 @@ async def chat_endpoint(
         ) from exc
 
     try:
-        context_messages = _build_context_messages_from_durable_messages(
-            repository,
-            user_id=user_id,
-            session_id=session_id,
-            user_message=effective_user_message,
-        )
-        if context_messages:
-            logger.info(
-                "Including %s durable context messages for session %s",
-                len(context_messages),
-                session_id,
-                extra={"session_id": session_id, "user_id": user_id},
-            )
+        context_messages = [{"role": "user", "content": effective_user_message}]
 
         # Collect full response from streaming generator
         full_response = ""
@@ -211,6 +201,7 @@ async def chat_endpoint(
             context_messages=context_messages,
             user_id=user_id,
             session_id=session_id,
+            turn_id=turn_id,
             document_id=document_id,
             document_name=document_name,
             active_groups=active_groups,
@@ -278,15 +269,15 @@ async def chat_endpoint(
                     chat_kind=ASSISTANT_CHAT_KIND,
                     role="assistant",
                     content=full_response,
-                    turn_id=chat_message.turn_id,
+                    turn_id=turn_id,
                     trace_id=trace_id,
                 )
-                if chat_message.turn_id and not assistant_turn.created:
+                if requested_turn_id and not assistant_turn.created:
                     db.rollback()
                     _link_persisted_extraction_results_to_chat_turn(
                         refs=persisted_extraction_refs,
                         session_id=session_id,
-                        turn_id=chat_message.turn_id,
+                        turn_id=requested_turn_id,
                         trace_id=trace_id,
                         assistant_message_id=str(assistant_turn.message.message_id),
                         db=db,
@@ -294,8 +285,8 @@ async def chat_endpoint(
                     db.commit()
                     logger.info(
                         "Discarding duplicate non-stream completion for replayed turn %s",
-                        chat_message.turn_id,
-                        extra={"session_id": session_id, "user_id": user_id, "turn_id": chat_message.turn_id},
+                        requested_turn_id,
+                        extra={"session_id": session_id, "user_id": user_id, "turn_id": requested_turn_id},
                     )
                     _queue_chat_title_backfill(
                         background_tasks,
@@ -310,7 +301,7 @@ async def chat_endpoint(
                 _link_persisted_extraction_results_to_chat_turn(
                     refs=persisted_extraction_refs,
                     session_id=session_id,
-                    turn_id=assistant_turn.message.turn_id or chat_message.turn_id or "",
+                    turn_id=assistant_turn.message.turn_id or turn_id,
                     trace_id=trace_id,
                     assistant_message_id=str(assistant_turn.message.message_id),
                     db=db,
@@ -338,7 +329,7 @@ async def chat_endpoint(
                 logger.error(
                     "Failed to persist durable non-stream assistant turn for session %s",
                     session_id,
-                    extra={"session_id": session_id, "user_id": user_id, "turn_id": chat_message.turn_id},
+                    extra={"session_id": session_id, "user_id": user_id, "turn_id": turn_id},
                     exc_info=True,
                 )
                 _rollback_and_raise(
