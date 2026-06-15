@@ -108,6 +108,12 @@ a coordinator requests a fresh Incus run:
   `payload_json_model_live=false`, summary-only
   `runtime.provider_context_preflight` trace events, and explicit payload lookup
   instead of default raw-value replay.
+- PR validation confirmation:
+  PR #474 GitHub checks passed on 2026-06-15, including Agent PR Gate,
+  Backend Unit Tests, backend contract/persistence tests, frontend build/tests,
+  CodeQL, GitGuardian, and shell regression suites. A focused local Docker run
+  of the compaction, recall, runtime payload-budget, and project-agnostic
+  guardrail unit tests also passed with 22 tests.
 
 Residual risk: these tests prove deterministic compaction and recall contracts,
 but they do not replace a live Incus/provider smoke with fresh Langfuse and
