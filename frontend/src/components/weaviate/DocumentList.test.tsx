@@ -73,12 +73,14 @@ vi.mock('@mui/x-data-grid', async () => {
     checkboxSelection = false,
     rowSelectionModel,
     onRowSelectionModelChange,
+    sx,
   }: {
     rows?: any[];
     columns?: any[];
     checkboxSelection?: boolean;
     rowSelectionModel?: string[];
     onRowSelectionModelChange?: (ids: string[]) => void;
+    sx?: Record<string, unknown>;
   }) => {
     const [internalSelection, setInternalSelection] = React.useState<string[]>([]);
     const selectedIds =
@@ -92,7 +94,14 @@ vi.mock('@mui/x-data-grid', async () => {
     };
 
     return (
-      <div className="MuiDataGrid-root" role="grid">
+      <div
+        className="MuiDataGrid-root"
+        role="grid"
+        style={{
+          height: typeof sx?.height === 'string' ? sx.height : undefined,
+          minHeight: typeof sx?.minHeight === 'number' ? `${sx.minHeight}px` : undefined,
+        }}
+      >
         <table>
           <thead>
             <tr>
