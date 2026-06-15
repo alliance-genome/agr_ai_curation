@@ -827,6 +827,33 @@ class ChatHistoryRepository:
         ).all()
         return [_message_record(message) for message in messages]
 
+    def get_message_by_id(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        chat_kind: str,
+        message_id: UUID,
+    ) -> ChatMessageRecord | None:
+        """Return one visible transcript row by durable message id."""
+
+        session = self._require_active_session_for_kind(
+            session_id=session_id,
+            user_auth_sub=user_auth_sub,
+            chat_kind=chat_kind,
+        )
+        message = self._db.scalar(
+            select(ChatMessageModel).where(
+                ChatMessageModel.session_id == session.session_id,
+                ChatMessageModel.chat_kind == session.chat_kind,
+                ChatMessageModel.message_id == message_id,
+            )
+        )
+        if message is None:
+            return None
+
+        return _message_record(message)
+
     def search_session_messages_ranked(
         self,
         *,

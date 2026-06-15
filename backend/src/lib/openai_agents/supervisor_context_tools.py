@@ -206,6 +206,66 @@ def _resolve_recall_turn_messages(
     return []
 
 
+def _exclude_compaction_messages(
+    messages: Sequence[ChatMessageRecord],
+) -> list[ChatMessageRecord]:
+    return [
+        message
+        for message in messages
+        if message.message_type != CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE
+    ]
+
+
+def _uuid_ref(value: str) -> UUID | None:
+    try:
+        return UUID(value)
+    except ValueError:
+        return None
+
+
+def _direct_recall_turn_messages(
+    *,
+    session_id: str,
+    user_id: str,
+    turn_ref: str,
+) -> list[ChatMessageRecord]:
+    db = SessionLocal()
+    try:
+        repository = ChatHistoryRepository(db)
+        message_id = _uuid_ref(turn_ref)
+        if message_id is not None:
+            message = repository.get_message_by_id(
+                session_id=session_id,
+                user_auth_sub=user_id,
+                chat_kind=ASSISTANT_CHAT_KIND,
+                message_id=message_id,
+            )
+            if message is not None and message.message_type != CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE:
+                if message.turn_id:
+                    return _exclude_compaction_messages(
+                        repository.list_messages_for_turn(
+                            session_id=session_id,
+                            user_auth_sub=user_id,
+                            chat_kind=ASSISTANT_CHAT_KIND,
+                            turn_id=message.turn_id,
+                        )
+                    )
+                return [message]
+
+        return _exclude_compaction_messages(
+            repository.list_messages_for_turn(
+                session_id=session_id,
+                user_auth_sub=user_id,
+                chat_kind=ASSISTANT_CHAT_KIND,
+                turn_id=turn_ref,
+            )
+        )
+    except ChatHistorySessionNotFoundError:
+        return []
+    finally:
+        db.close()
+
+
 async def recall_chat_history(
     *,
     detail: str = "recent",
@@ -249,8 +309,19 @@ async def recall_chat_history(
         )
 
     if normalized_detail == "turn":
-        messages = _recall_visible_messages(session_id=session_id, user_id=user_id)
-        selected = _resolve_recall_turn_messages(messages, turn_ref=turn_ref)
+        normalized_turn_ref = str(turn_ref or "latest").strip() or "latest"
+        if normalized_turn_ref.lower() == "latest" or normalized_turn_ref.isdigit():
+            messages = _recall_visible_messages(session_id=session_id, user_id=user_id)
+            selected = _resolve_recall_turn_messages(
+                messages,
+                turn_ref=normalized_turn_ref,
+            )
+        else:
+            selected = _direct_recall_turn_messages(
+                session_id=session_id,
+                user_id=user_id,
+                turn_ref=normalized_turn_ref,
+            )
         return _recall_response(
             "ok" if selected else "not_found",
             "Returned exact transcript rows for the requested turn."
@@ -258,7 +329,7 @@ async def recall_chat_history(
             else "No transcript turn matched that reference in this chat.",
             detail="turn",
             session_id=session_id,
-            turn_ref=turn_ref or "latest",
+            turn_ref=normalized_turn_ref,
             messages=[
                 _recall_message_payload(message, ordinal=index + 1)
                 for index, message in enumerate(selected)
