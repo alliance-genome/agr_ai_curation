@@ -103,6 +103,74 @@ def test_recall_chat_history_fetches_exact_turn_after_projection_row(monkeypatch
     ]
 
 
+def test_recall_chat_history_search_finds_early_turn_trimmed_from_live_context(
+    monkeypatch,
+):
+    _patch_active_chat(monkeypatch)
+    exact_early_phrase = "The curator checkpoint phrase is alpha-ced-3-zygote."
+    compacted_projection = _message(
+        role="assistant",
+        content="Compacted standard-chat model-live context projection.",
+        turn_id=None,
+        message_type=module.CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE,
+        minute=10,
+    )
+    recent_visible_message = _message(
+        role="assistant",
+        content="Recent live context mentions only the latest extraction summary.",
+        turn_id="turn-recent",
+        minute=11,
+    )
+    early_message = _message(
+        role="user",
+        content=exact_early_phrase,
+        turn_id="turn-early",
+        minute=1,
+    )
+    list_session_calls = []
+
+    class _FakeRepo:
+        def __init__(self, _db):
+            pass
+
+        def search_session_messages_ranked(self, **kwargs):
+            assert kwargs["session_id"] == "session-recall"
+            assert kwargs["user_auth_sub"] == "user-recall"
+            assert kwargs["chat_kind"] == ASSISTANT_CHAT_KIND
+            assert kwargs["query"] == "alpha-ced-3-zygote"
+            assert kwargs["excluded_message_types"] == {
+                module.CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE
+            }
+            return [early_message]
+
+    db = SimpleNamespace(close=lambda: None)
+    monkeypatch.setattr(module, "SessionLocal", lambda: db)
+    monkeypatch.setattr(module, "ChatHistoryRepository", _FakeRepo)
+    monkeypatch.setattr(
+        module,
+        "_list_session_messages",
+        lambda **kwargs: list_session_calls.append(kwargs)
+        or [compacted_projection, recent_visible_message],
+    )
+
+    payload = json.loads(
+        asyncio.run(
+            module.recall_chat_history(
+                detail="search",
+                query="alpha-ced-3-zygote",
+            )
+        )
+    )
+
+    live_context_text = "\n".join(
+        message.content for message in [compacted_projection, recent_visible_message]
+    )
+    assert exact_early_phrase not in live_context_text
+    assert list_session_calls == []
+    assert payload["status"] == "ok"
+    assert payload["messages"][0]["content"] == exact_early_phrase
+
+
 def test_recall_chat_history_fetches_message_id_ref_from_durable_store(monkeypatch):
     _patch_active_chat(monkeypatch)
     earlier_user = _message(

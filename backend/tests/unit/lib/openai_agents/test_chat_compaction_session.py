@@ -205,6 +205,85 @@ def test_durable_session_get_items_fetches_only_rows_after_projection(monkeypatc
     ]
 
 
+def test_standard_chat_long_session_replay_stays_under_budget_and_keeps_flow_refs(
+    monkeypatch,
+):
+    monkeypatch.setenv("STANDARD_CHAT_CONTEXT_TOKEN_BUDGET", "2000")
+    monkeypatch.setenv("STANDARD_CHAT_COMPACTION_THRESHOLD_PERCENT", "70")
+
+    projection_created_at = datetime(2026, 6, 15, 12, 20, tzinfo=timezone.utc)
+    projection = SimpleNamespace(
+        created_at=projection_created_at,
+        payload_json={
+            "schema": module._PROJECTION_SCHEMA,
+            "items": [
+                {
+                    "role": "user",
+                    "content": f"Compacted historical user turn {index}.",
+                }
+                for index in range(8)
+            ]
+            + [
+                {
+                    "role": "assistant",
+                    "content": f"Compacted historical assistant turn {index}.",
+                }
+                for index in range(8)
+            ],
+            "covered_turn_ids": [f"turn-{index}" for index in range(8)],
+        },
+    )
+    messages = [
+        _message(role="user", content="Run the extraction flow again.", turn_id="turn-flow", minute=21),
+        _message(
+            role="flow",
+            content="visible flow transcript row with bulky details",
+            turn_id="turn-flow",
+            message_type="flow_summary",
+            payload_json={
+                FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY: (
+                    "Flow refs only: flow_run_id=flow-2026 "
+                    "lookup_ref=extraction-result:abc123"
+                ),
+                "raw_trace_payload": "raw observability payload " * 500,
+            },
+            minute=22,
+        ),
+        _message(
+            role="user",
+            content="Current prompt that is already persisted.",
+            turn_id="turn-current",
+            minute=23,
+        ),
+    ]
+    db = _FakeDb(projection=projection)
+    appended = []
+    monkeypatch.setattr(module, "SessionLocal", lambda: db)
+    monkeypatch.setattr(
+        module,
+        "ChatHistoryRepository",
+        lambda fake_db: _FakeRepository(fake_db, messages, appended),
+    )
+
+    session = module.DurableChatHistorySession(
+        session_id="session-1",
+        user_id="user-1",
+        current_turn_id="turn-current",
+    )
+
+    replay_items = asyncio.run(session.get_items())
+    replay_text = "\n".join(item["content"] for item in replay_items)
+
+    assert "flow_run_id=flow-2026" in replay_text
+    assert "lookup_ref=extraction-result:abc123" in replay_text
+    assert "raw observability payload" not in replay_text
+    assert "Current prompt that is already persisted." not in replay_text
+    assert (
+        module.estimate_standard_chat_context_tokens(replay_items)
+        < module.get_standard_chat_compaction_token_threshold()
+    )
+
+
 def test_durable_session_recreates_projection_so_replay_cutoff_advances(monkeypatch):
     initial_projection_created_at = datetime(2026, 6, 15, 12, 3, tzinfo=timezone.utc)
     initial_projection = SimpleNamespace(
