@@ -2,7 +2,7 @@
 
 This checklist tracks the current hotfix contract for
 `packages/alliance/agents/tsv_formatter/prompt.yaml` (canonical agent id
-`tsv_output_formatter`). The active Phase C harness inventories are derived
+`tsv_formatter`). The active Phase C harness inventories are derived
 from the prompt and must stay aligned with this source-backed projection
 workflow.
 

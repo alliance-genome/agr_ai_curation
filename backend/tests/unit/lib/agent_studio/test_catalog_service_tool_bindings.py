@@ -197,7 +197,7 @@ def test_runtime_formatter_tool_resolution_uses_projection_suite():
         catalog_service.ToolExecutionContext(
             formatter_bundle=_formatter_bundle(),
             formatter_output_format="csv",
-            formatter_agent_id="csv_output_formatter",
+            formatter_agent_id="csv_formatter",
         ),
     )
 

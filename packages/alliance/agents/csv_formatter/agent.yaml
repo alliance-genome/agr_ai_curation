@@ -8,7 +8,7 @@
 # -----------------------------------------------------------------------------
 # BASIC INFORMATION
 # -----------------------------------------------------------------------------
-agent_id: csv_output_formatter
+agent_id: csv_formatter
 
 name: "CSV File Formatter"
 

@@ -945,7 +945,7 @@ MOCK_REGISTRY = {
             "launchable": True,
         },
     },
-    "csv_output_formatter": {
+    "csv_formatter": {
         "name": "CSV Output Formatter",
         "description": "Format the final CSV file",
         "category": "Output",
@@ -957,7 +957,7 @@ MOCK_REGISTRY = {
             "launchable": True,
         },
     },
-    "json_output_formatter": {
+    "json_formatter": {
         "name": "JSON Output Formatter",
         "description": "Format the final JSON file",
         "category": "Output",
@@ -1423,26 +1423,6 @@ class TestGetAllAgentToolsDuplicateAgents:
 class TestGetAllAgentToolsStepOrderRuntime:
     """Tests strict step order against real FunctionTool invocation shape."""
 
-    def test_terminal_file_formatter_aliases_use_synced_system_agent_keys(self):
-        """Flow formatter aliases should execute the DB-synced folder agent keys."""
-        executor = _executor_module()
-
-        assert (
-            executor._flow_file_formatter_execution_agent_id("csv_output_formatter")
-            == "csv_formatter"
-        )
-        assert (
-            executor._flow_file_formatter_execution_agent_id("tsv_output_formatter")
-            == "tsv_formatter"
-        )
-        assert (
-            executor._flow_file_formatter_execution_agent_id("json_output_formatter")
-            == "json_formatter"
-        )
-        assert executor._flow_file_formatter_execution_agent_id("csv_formatter") == "csv_formatter"
-        assert executor._flow_file_formatter_execution_agent_id("tsv_formatter") == "tsv_formatter"
-        assert executor._flow_file_formatter_execution_agent_id("json_formatter") == "json_formatter"
-
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
     def test_repeated_first_tool_is_blocked_after_success(self, mock_get_agent, mock_streaming):
@@ -1883,7 +1863,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             agent = MagicMock(spec=Agent, instructions="Base")
             agent.name = {
                 "gene": "Gene Specialist",
-                "csv_output_formatter": "CSV File Formatter",
+                "csv_formatter": "CSV File Formatter",
             }.get(agent_id, agent_id)
             agent.agent_id = agent_id
             agent.runtime_kwargs = kwargs
@@ -1895,7 +1875,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
-                if tool_name == "ask_csv_output_formatter_specialist":
+                if tool_name == "ask_csv_formatter_specialist":
                     formatter_invocations.append(
                         {
                             "query": query,
@@ -1921,7 +1901,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             _agent_node("n1", "gene", output_key="gene_output"),
             _agent_node(
                 "n2",
-                "csv_output_formatter",
+                "csv_formatter",
                 custom_instructions="Use object rows and keep a compact CSV export.",
             ),
         ])
@@ -1951,12 +1931,12 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert len(formatter_invocations) == 1
         formatter_kwargs = formatter_invocations[0]["agent_kwargs"]
         assert formatter_kwargs["formatter_output_format"] == "csv"
-        assert formatter_kwargs["formatter_agent_id"] == "csv_output_formatter"
+        assert formatter_kwargs["formatter_agent_id"] == "csv_formatter"
         assert len(formatter_kwargs["formatter_bundle"].artifacts) == 1
         runtime_context = "\n".join(formatter_kwargs["additional_runtime_context"])
         assert "FLOW FORMATTER SOURCE BUNDLE" in runtime_context
         assert "compact CSV export" in runtime_context
-        assert execution_state["completed_steps"][-1]["agent_id"] == "csv_output_formatter"
+        assert execution_state["completed_steps"][-1]["agent_id"] == "csv_formatter"
         assert execution_state["completed_steps"][-1]["output"] == result_text
         assert "extraction_handoff_audit" not in execution_state["completed_steps"][-1]
         formatter_audit_events = [
@@ -1964,7 +1944,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             for event in collected_events
             if event.get("type") == executor.FLOW_EXTRACTION_HANDOFF_AUDIT_EVENT
             and event.get("data", {}).get("toolName")
-            == "ask_csv_output_formatter_specialist"
+            == "ask_csv_formatter_specialist"
         ]
         assert formatter_audit_events == []
 
@@ -2112,8 +2092,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
         mock_streaming.side_effect = _make_streaming_tool
 
         for agent_id in (
-            "csv_output_formatter",
-            "json_output_formatter",
+            "csv_formatter",
+            "json_formatter",
             "chat_output_formatter",
         ):
             flow = _make_flow([_agent_node("n1", agent_id)])
@@ -3199,7 +3179,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             agent = MagicMock(spec=Agent, instructions="Base")
             agent.name = {
                 "gene": "Gene Specialist",
-                "csv_output_formatter": "CSV File Formatter",
+                "csv_formatter": "CSV File Formatter",
             }.get(agent_id, agent_id)
             agent.agent_id = agent_id
             agent.runtime_kwargs = kwargs
@@ -3210,7 +3190,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
-                if tool_name == "ask_csv_output_formatter_specialist":
+                if tool_name == "ask_csv_formatter_specialist":
                     from src.lib.context import get_current_output_filename_stem
                     from src.lib.openai_agents.tools.output_formatter_tools import (
                         build_output_formatter_tools,
@@ -3275,7 +3255,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             _agent_node("n1", "gene", output_key="gene_output"),
             _agent_node(
                 "n2",
-                "csv_output_formatter",
+                "csv_formatter",
                 output_filename_template="{{input_filename_stem}}.csv",
             ),
         ])
@@ -3290,7 +3270,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert observed["during_save"] == "Smith_et_al_2024"
         assert observed["filename_hint"] == "Test Flow_csv_export"
         assert observed["format"] == "csv"
-        assert observed["formatter_agent_id"] == "csv_output_formatter"
+        assert observed["formatter_agent_id"] == "csv_formatter"
         assert observed["rows"][0]["object_payload_symbol"] == "BRCA1"
         assert get_current_output_filename_stem() is None
 

@@ -85,9 +85,9 @@ _SUPERVISOR_BUILTIN_TOOL_NAMES = frozenset(
     }
 )
 _FORMATTER_OUTPUT_FORMAT_BY_AGENT_KEY = {
-    "csv_output_formatter": "csv",
-    "tsv_output_formatter": "tsv",
-    "json_output_formatter": "json",
+    "csv_formatter": "csv",
+    "tsv_formatter": "tsv",
+    "json_formatter": "json",
 }
 _EXPLICIT_PREP_CONFIRMATION_RE = re.compile(
     r"\b(?:yes|confirm(?:ed)?|i confirm|go ahead|proceed|ready|prepare (?:these|them|it)|please do|do it)\b",

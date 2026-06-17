@@ -134,23 +134,15 @@ _FLOW_STEP_EVIDENCE_PREVIEW_LIMIT = get_flow_step_evidence_preview_limit()
 _FLOW_TEMPLATE_VARIABLE_PATTERN = re.compile(r"{{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*}}")
 _FLOW_TEMPLATE_DEFAULT_INPUT_FILENAME = "input"
 _FLOW_TEMPLATE_DEFAULT_TRACE_ID = "trace"
-_FLOW_TSV_FORMATTER_AGENT_IDS = {"tsv_formatter", "tsv_output_formatter"}
-_FLOW_CSV_FORMATTER_AGENT_IDS = {"csv_formatter", "csv_output_formatter"}
-_FLOW_JSON_FORMATTER_AGENT_IDS = {"json_formatter", "json_output_formatter"}
+_FLOW_TSV_FORMATTER_AGENT_IDS = {"tsv_formatter"}
+_FLOW_CSV_FORMATTER_AGENT_IDS = {"csv_formatter"}
+_FLOW_JSON_FORMATTER_AGENT_IDS = {"json_formatter"}
 _FLOW_CHAT_FORMATTER_AGENT_IDS = {"chat_output", "chat_output_formatter"}
 _FLOW_OUTPUT_FORMATTER_AGENT_IDS_BY_FORMAT = {
     "csv": _FLOW_CSV_FORMATTER_AGENT_IDS,
     "tsv": _FLOW_TSV_FORMATTER_AGENT_IDS,
     "json": _FLOW_JSON_FORMATTER_AGENT_IDS,
     "chat": _FLOW_CHAT_FORMATTER_AGENT_IDS,
-}
-_FLOW_FILE_FORMATTER_EXECUTION_AGENT_ID_BY_ALIAS = {
-    "csv_output_formatter": "csv_formatter",
-    "csv_formatter": "csv_formatter",
-    "tsv_output_formatter": "tsv_formatter",
-    "tsv_formatter": "tsv_formatter",
-    "json_output_formatter": "json_formatter",
-    "json_formatter": "json_formatter",
 }
 CURATION_HANDOFF_AGENT_ID = "curation_handoff"
 CURATION_HANDOFF_READY_EVENT = "CURATION_HANDOFF_READY"
@@ -191,12 +183,6 @@ def _tool_safe_agent_id(agent_id: str) -> str:
     """Normalize agent_id into a valid Python identifier segment for tool names."""
     normalized = re.sub(r"[^a-zA-Z0-9_]+", "_", str(agent_id or "")).strip("_")
     return normalized or "agent"
-
-
-def _flow_file_formatter_execution_agent_id(agent_id: str) -> str:
-    """Return the DB/system agent key used to run a terminal file formatter."""
-
-    return _FLOW_FILE_FORMATTER_EXECUTION_AGENT_ID_BY_ALIAS.get(agent_id, agent_id)
 
 
 def _normalize_metadata_value(value: Any) -> str:
@@ -761,8 +747,7 @@ def _make_flow_runtime_formatter_tool(
                 "additional_runtime_context": runtime_contexts,
             }
         )
-        execution_agent_id = _flow_file_formatter_execution_agent_id(agent_id)
-        agent = get_agent_by_id(execution_agent_id, **agent_kwargs)
+        agent = get_agent_by_id(agent_id, **agent_kwargs)
         streaming_tool = cast(
             Any,
             _create_streaming_tool(

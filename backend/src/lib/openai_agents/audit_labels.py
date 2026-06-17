@@ -23,9 +23,9 @@ BUILTIN_SPECIALIST_DISPLAY_NAMES: Dict[str, str] = {
     "ask_orthologs_specialist": "Orthologs Agent",
     "ask_ontology_term_validation_specialist": "Ontology Term Resolver Agent",
     "ask_chat_output_specialist": "Chat Output Agent",
-    "ask_csv_output_formatter_specialist": "CSV File Formatter",
-    "ask_tsv_output_formatter_specialist": "TSV File Formatter",
-    "ask_json_output_formatter_specialist": "JSON File Formatter",
+    "ask_csv_formatter_specialist": "CSV File Formatter",
+    "ask_tsv_formatter_specialist": "TSV File Formatter",
+    "ask_json_formatter_specialist": "JSON File Formatter",
 }
 
 INTERNAL_TOOL_DISPLAY_NAMES: Dict[str, str] = {

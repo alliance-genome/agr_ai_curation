@@ -168,12 +168,9 @@ _AGENT_ID_EQUIVALENTS: Dict[str, tuple[str, ...]] = {
     "gene_ontology_lookup": ("gene_ontology", "gene_ontology_lookup"),
     "chat_output": ("chat_output", "chat_output_formatter"),
     "chat_output_formatter": ("chat_output", "chat_output_formatter"),
-    "csv_formatter": ("csv_formatter", "csv_output_formatter"),
-    "csv_output_formatter": ("csv_formatter", "csv_output_formatter"),
-    "tsv_formatter": ("tsv_formatter", "tsv_output_formatter"),
-    "tsv_output_formatter": ("tsv_formatter", "tsv_output_formatter"),
-    "json_formatter": ("json_formatter", "json_output_formatter"),
-    "json_output_formatter": ("json_formatter", "json_output_formatter"),
+    "csv_formatter": ("csv_formatter",),
+    "tsv_formatter": ("tsv_formatter",),
+    "json_formatter": ("json_formatter",),
 }
 
 _OUTPUT_AGENT_PREFERENCES = (

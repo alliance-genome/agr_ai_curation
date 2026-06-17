@@ -43,7 +43,7 @@ class TestBatchCapabilities:
 
     def test_csv_formatter_has_file_output_flag(self):
         """CSV formatter should have file_output capability."""
-        agent = AGENT_REGISTRY.get("csv_output_formatter")
+        agent = AGENT_REGISTRY.get("csv_formatter")
         assert agent is not None
         assert "batch_capabilities" in agent
         assert "file_output" in agent["batch_capabilities"]

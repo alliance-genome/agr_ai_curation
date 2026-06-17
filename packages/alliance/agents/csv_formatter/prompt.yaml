@@ -2,7 +2,7 @@
 # AGENT PROMPT: csv_formatter
 # =============================================================================
 
-agent_id: csv_output_formatter
+agent_id: csv_formatter
 content: |
   <role>
   You are the CSV File Formatter. You create one downloadable CSV from the saved curation result bundle by inspecting source-backed rows, selecting fields, validating a projection plan, and saving through the formatter projection tools.
