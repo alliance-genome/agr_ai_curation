@@ -52,7 +52,7 @@ def domain_envelope_from_extraction_result(
         "source_extraction_result_id": extraction_result.extraction_result_id,
         "source_agent_key": extraction_result.agent_key,
         "source_adapter_key": adapter_key,
-        "source_kind": _source_kind_value(extraction_result.source_kind),
+        "source_kind": extraction_result.source_kind.value,
         "extraction_summary": source.summary,
         "extraction_metadata": source.metadata.model_dump(mode="json"),
         "run_summary": source.run_summary.model_dump(mode="json"),
@@ -124,10 +124,6 @@ def _has_canonical_objects(payload: Mapping[str, Any]) -> bool:
 
 def _has_extractor_curatable_objects(payload: Mapping[str, Any]) -> bool:
     return isinstance(payload.get("curatable_objects"), list)
-
-
-def _source_kind_value(source_kind: Any) -> str:
-    return str(getattr(source_kind, "value", source_kind) or "").strip()
 
 
 __all__ = [

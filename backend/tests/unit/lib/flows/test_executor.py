@@ -445,6 +445,7 @@ def test_flow_candidate_persistence_materializes_domain_envelope_records(monkeyp
         "ensure_domain_envelope_materialization",
         lambda record, *, persist: materialized.append((record, persist)),
     )
+    monkeypatch.setattr(executor, "list_extraction_results", lambda **_kwargs: [])
 
     candidate = executor.ExtractionEnvelopeCandidate(
         agent_key="gene_extractor",

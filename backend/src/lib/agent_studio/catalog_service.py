@@ -1753,9 +1753,6 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
     uses_runtime_formatter_tools = bool(
         canonical_tool_id_set & _OUTPUT_FORMATTER_RUNTIME_TOOL_ID_SET
     )
-    uses_removed_raw_file_save_tools = bool(
-        canonical_tool_id_set & _REMOVED_RAW_FILE_SAVE_TOOL_IDS
-    )
 
     # Resolve output schema override when present.
     output_schema_key = getattr(db_agent, "output_schema_key", None)
@@ -1777,6 +1774,7 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
             tool_tracker = ToolCallTracker()
 
         if has_document_tools:
+            assert tool_tracker is not None
             output_guardrails.append(
                 create_tool_required_output_guardrail(
                     tracker=tool_tracker,
@@ -1788,6 +1786,7 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
                 )
             )
         elif required_package_specs:
+            assert tool_tracker is not None
             required_spec = required_package_specs[0]
             guardrail_message = str(required_spec.get("guardrail_message") or "").strip()
             if not guardrail_message:
@@ -1832,9 +1831,6 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
             db_agent.agent_key,
         )
 
-    if uses_removed_raw_file_save_tools:
-        reasoning_effort = None
-
     model_provider = resolve_model_provider(effective_model_id)
 
     model_settings = build_model_settings(
@@ -1842,9 +1838,7 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
         temperature=effective_temperature,
         reasoning_effort=reasoning_effort,
         tool_choice="auto" if tools else None,
-        parallel_tool_calls=not (
-            uses_runtime_formatter_tools or uses_removed_raw_file_save_tools
-        ),
+        parallel_tool_calls=not uses_runtime_formatter_tools,
         verbosity="low"
         if (output_schema is None and bool(canonical_tool_id_set & _DOCUMENT_TOOL_IDS))
         else None,

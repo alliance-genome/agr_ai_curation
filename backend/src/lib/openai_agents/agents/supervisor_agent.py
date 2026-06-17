@@ -85,11 +85,8 @@ _SUPERVISOR_BUILTIN_TOOL_NAMES = frozenset(
     }
 )
 _FORMATTER_OUTPUT_FORMAT_BY_AGENT_KEY = {
-    "csv_formatter": "csv",
     "csv_output_formatter": "csv",
-    "tsv_formatter": "tsv",
     "tsv_output_formatter": "tsv",
-    "json_formatter": "json",
     "json_output_formatter": "json",
 }
 _EXPLICIT_PREP_CONFIRMATION_RE = re.compile(
@@ -247,8 +244,7 @@ def _record_result_ref(record: Any) -> str:
 
 
 def _source_kind_value(record: Any) -> str:
-    source_kind = getattr(record, "source_kind", "")
-    return str(getattr(source_kind, "value", source_kind) or "")
+    return getattr(record, "source_kind").value
 
 
 def _current_chat_extraction_results(
