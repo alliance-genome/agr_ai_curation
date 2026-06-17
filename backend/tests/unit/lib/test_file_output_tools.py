@@ -53,7 +53,8 @@ class _ProjectedFileOutputStore:
         self,
         _db: Any,
         *,
-        trace_id: str,
+        session_id: str,
+        curator_id: str,
         file_type: str,
         descriptor: str,
         file_path: str,
@@ -67,7 +68,8 @@ class _ProjectedFileOutputStore:
             if not isinstance(metadata, dict):
                 continue
             if (
-                row.trace_id == trace_id
+                row.session_id == session_id
+                and row.curator_id == curator_id
                 and row.file_type == file_type
                 and metadata.get("structured_projection") is True
                 and str(metadata.get("descriptor") or "") == descriptor
@@ -353,6 +355,80 @@ class TestSaveProjectedFileOutput:
         assert str(saved.id) == stale_id
         assert Path(saved.file_path).parent == tmp_path / "outputs" / "structured" / trace_id
         assert saved.file_hash == result["hash_sha256"]
+        assert Path(saved.file_path).read_text(encoding="utf-8").replace("\r\n", "\n") == (
+            "symbol\nDeltaGene\n"
+        )
+
+    @pytest.mark.asyncio
+    async def test_projected_save_reuses_session_descriptor_across_traces(
+        self, tmp_path, monkeypatch
+    ):
+        """A repeat export in the same chat session should update one file row."""
+        from src.lib.file_outputs import FileOutputStorageService
+        from src.lib.flows.output_projection import (
+            FlowOutputColumnSpec,
+            FlowOutputProjectionResult,
+        )
+        from src.lib.openai_agents.tools import file_output_tools
+        from src.lib.openai_agents.tools.file_output_tools import save_projected_file_output
+
+        first_trace_id = uuid4().hex
+        second_trace_id = uuid4().hex
+        session_id = f"session-{uuid4().hex[:12]}"
+        curator_id = "curator-projected-save"
+        set_current_trace_id(first_trace_id)
+        set_current_session_id(session_id)
+        set_current_user_id(curator_id)
+
+        storage = FileOutputStorageService(base_path=tmp_path)
+        monkeypatch.setattr(
+            file_output_tools,
+            "FileOutputStorageService",
+            lambda: storage,
+        )
+        store = _install_projected_file_output_store(monkeypatch, file_output_tools)
+
+        def projection(symbol: str) -> FlowOutputProjectionResult:
+            return FlowOutputProjectionResult(
+                format="csv",
+                row_source="object",
+                columns=[
+                    FlowOutputColumnSpec(
+                        key="symbol",
+                        header="Symbol",
+                        field_ref="object.payload.symbol",
+                    )
+                ],
+                rows=[{"symbol": symbol}],
+                total_count=1,
+            )
+
+        first = await save_projected_file_output(
+            "csv",
+            projection("Notch"),
+            "gene_results",
+            "csv_formatter",
+        )
+        first_path = Path(store.rows[0].file_path)
+        assert first_path.exists()
+        set_current_trace_id(second_trace_id)
+        second = await save_projected_file_output(
+            "csv",
+            projection("DeltaGene"),
+            "gene_results",
+            "csv_formatter",
+        )
+
+        assert first["file_id"] == second["file_id"]
+        assert second["trace_id"] == second_trace_id
+        assert second["filename"] == f"{second_trace_id}_gene_results.csv"
+        assert len(store.rows) == 1
+        saved = store.rows[0]
+        assert saved.trace_id == second_trace_id
+        assert saved.session_id == session_id
+        assert saved.curator_id == curator_id
+        assert saved.file_metadata["descriptor"] == "gene_results"
+        assert not first_path.exists()
         assert Path(saved.file_path).read_text(encoding="utf-8").replace("\r\n", "\n") == (
             "symbol\nDeltaGene\n"
         )

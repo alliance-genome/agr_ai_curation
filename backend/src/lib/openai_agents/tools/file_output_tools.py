@@ -3,7 +3,7 @@
 Formatter agents never provide raw file bytes or row arrays. They produce a
 validated projection plan through runtime-bound formatter tools; this module
 serializes the resulting ``FlowOutputProjectionResult`` and registers exactly
-one downloadable file for the run/descriptor/format identity.
+one downloadable file for the session/descriptor/format identity.
 """
 
 import csv
@@ -77,12 +77,13 @@ def _require_projected_file_context(
 def _find_existing_projected_file_output(
     db,
     *,
-    trace_id: str,
+    session_id: str,
+    curator_id: str,
     file_type: str,
     descriptor: str,
     file_path: str,
 ) -> FileOutput | None:
-    """Find one structured formatter row by canonical run/descriptor/format identity."""
+    """Find one structured formatter row by canonical session/descriptor/format identity."""
 
     file_output = (
         db.query(FileOutput)
@@ -95,9 +96,11 @@ def _find_existing_projected_file_output(
     candidates = (
         db.query(FileOutput)
         .filter(
-            FileOutput.trace_id == trace_id,
+            FileOutput.session_id == session_id,
+            FileOutput.curator_id == curator_id,
             FileOutput.file_type == file_type,
         )
+        .order_by(FileOutput.created_at.desc())
         .all()
     )
     for candidate in candidates:
@@ -202,7 +205,8 @@ async def save_projected_file_output(
     try:
         file_output = _find_existing_projected_file_output(
             db,
-            trace_id=effective_trace_id,
+            session_id=effective_session_id,
+            curator_id=effective_curator_id,
             file_type=normalized_format,
             descriptor=descriptor,
             file_path=str(file_path),
@@ -225,6 +229,7 @@ async def save_projected_file_output(
             )
             db.add(file_output)
         else:
+            previous_file_path = str(file_output.file_path or "")
             file_output.filename = full_filename
             file_output.file_path = str(file_path)
             file_output.file_type = normalized_format
@@ -242,6 +247,14 @@ async def save_projected_file_output(
                 }
             )
             file_output.file_metadata = metadata
+            if previous_file_path and previous_file_path != str(file_path):
+                removed_previous_file = storage.delete_output(previous_file_path)
+                if not removed_previous_file:
+                    logger.warning(
+                        "[%s Tool] Previous structured projected file was not removed: %s",
+                        normalized_format.upper(),
+                        previous_file_path,
+                    )
         db.commit()
         db.refresh(file_output)
         file_id = str(file_output.id)
