@@ -95,7 +95,9 @@ def _configure_stream_mocks(
 
 
 def _canonical_gene_envelope(*, object_count: int = 1) -> dict:
-    objects = [
+    # Canonical persisted envelopes expose post-validation objects here; staged
+    # extractor drafts live in curatable_objects before validation.
+    extracted_objects = [
         {
             "object_type": "gene_mention_evidence",
             "object_role": "curatable_unit",
@@ -115,7 +117,7 @@ def _canonical_gene_envelope(*, object_count: int = 1) -> dict:
         "domain_pack_id": "gene",
         "domain_pack_version": "0.1.0",
         "status": "extracted",
-        "objects": objects,
+        "extracted_objects": extracted_objects,
         "validation_findings": [],
         "history": [],
         "metadata": {},
