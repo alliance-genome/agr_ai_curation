@@ -42,10 +42,7 @@ from uuid import uuid4
 DEFAULT_CHAT_MESSAGE = (
     "What genes are the focus of the publication?"
 )
-DEFAULT_STREAM_CHAT_MESSAGE = (
-    "Briefly summarize the loaded publication in one sentence for a curator. "
-    "Mention the main biological topic, but do not extract, normalize, or curate entities."
-)
+DEFAULT_STREAM_CHAT_MESSAGE = DEFAULT_CHAT_MESSAGE
 DEFAULT_WORKSPACE_PREP_CHAT_MESSAGE = (
     "Extract exactly one curation-ready gene candidate from the loaded paper: crb/Crumbs. "
     "Use the gene extraction path, include Drosophila melanogaster when possible, call "
@@ -2236,7 +2233,7 @@ def require_batch_plumbing_payload(payloads: Dict[str, Any], *, output_format: s
         ),
     )
     filename_pattern = re.compile(
-        rf"^\d{{3}}_.+_{re.escape(output_format)}_export_\d{{8}}T\d{{6}}Z\.{re.escape(output_format)}$",
+        rf"^\d{{3}}_[0-9a-f]+_.+_{re.escape(output_format)}\.{re.escape(output_format)}$",
         re.IGNORECASE,
     )
     require(
