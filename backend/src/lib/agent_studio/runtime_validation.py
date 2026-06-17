@@ -163,6 +163,15 @@ def _disable_agents_with_missing_tools(report: Dict[str, Any]) -> None:
         db.close()
 
 
+def _should_warn_for_user_agent_contract_violation(
+    *,
+    strict: bool,
+    visibility: str,
+) -> bool:
+    """Whether user-owned agent contract drift should be advisory at startup."""
+    return not strict and visibility in {"private", "project"}
+
+
 def build_agent_runtime_report(
     *,
     strict_mode: Optional[bool] = None,
@@ -316,6 +325,10 @@ def build_agent_runtime_report(
             if normalize_reasoning_effort(reasoning) is None:
                 row_warnings.append(f"Invalid model_reasoning '{reasoning}'")
 
+        visibility = str(getattr(row, "visibility", "") or "").strip()
+        user_id = getattr(row, "user_id", None)
+        project_id = getattr(row, "project_id", None)
+
         output_schema_key = str(getattr(row, "output_schema_key", "") or "").strip()
         if output_schema_key and _resolve_output_schema(output_schema_key) is None:
             row_errors.append(f"Unknown output_schema_key '{output_schema_key}'")
@@ -325,11 +338,13 @@ def build_agent_runtime_report(
             output_schema_key=output_schema_key,
             tool_ids=canonical_tool_ids,
         ):
-            row_errors.append(violation.detail)
-
-        visibility = str(getattr(row, "visibility", "") or "").strip()
-        user_id = getattr(row, "user_id", None)
-        project_id = getattr(row, "project_id", None)
+            if _should_warn_for_user_agent_contract_violation(
+                strict=strict,
+                visibility=visibility,
+            ):
+                row_warnings.append(violation.detail)
+            else:
+                row_errors.append(violation.detail)
 
         if visibility == "project" and project_id is None:
             row_errors.append("project visibility requires project_id")
