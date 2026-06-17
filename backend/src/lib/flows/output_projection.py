@@ -208,6 +208,9 @@ _STRUCTURED_ROW_PAYLOAD_KEYS = (
     "row_fields",
 )
 _OBJECT_ROW_FIELD_PREFIX = "object.row."
+_NO_CANONICAL_OBJECT_LIST_WARNING = (
+    "No canonical curation object list was found for this artifact."
+)
 
 
 class FlowOutputTransformSpec(BaseModel):
@@ -284,6 +287,7 @@ class FlowOutputArtifact(BaseModel):
     artifact_preview: str = ""
     artifact_shape: Literal[
         "domain_envelope",
+        "domain_envelope_extraction",
         "non_structured",
     ] = "non_structured"
     warnings: list[str] = Field(default_factory=list)
@@ -1100,8 +1104,30 @@ def _payload_object_items(
         value = None
     if isinstance(value, list):
         return [item for item in value if isinstance(item, Mapping)], warnings
-    warnings.append("No canonical curation object list was found for this artifact.")
+    warnings.append(_NO_CANONICAL_OBJECT_LIST_WARNING)
     return [], warnings
+
+
+def _candidate_payload_object_items(
+    payload: Mapping[str, Any],
+) -> tuple[
+    list[Mapping[str, Any]],
+    list[str],
+    Literal["domain_envelope_extraction"] | None,
+]:
+    """Return trusted candidate object rows for extractor-shaped payloads."""
+    if isinstance(payload.get("objects"), list):
+        return [], [], None
+
+    value = payload.get("curatable_objects")
+    if not isinstance(value, list):
+        return [], [], None
+
+    return (
+        [item for item in value if isinstance(item, Mapping)],
+        [],
+        "domain_envelope_extraction",
+    )
 
 
 def _payload_from_step_output(step: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -1203,7 +1229,11 @@ def _build_artifact_from_step(step: Mapping[str, Any]) -> FlowOutputArtifact | N
     )
     preview = _compact_text(_step_attr(step, "output_preview") or _step_attr(step, "output"))
 
-    shape = _payload_shape(payload)
+    shape: Literal[
+        "domain_envelope",
+        "domain_envelope_extraction",
+        "non_structured",
+    ] = _payload_shape(payload)
     domain_pack_id = ""
     envelope_id = ""
     object_items: list[Mapping[str, Any]] = []
@@ -1211,9 +1241,18 @@ def _build_artifact_from_step(step: Mapping[str, Any]) -> FlowOutputArtifact | N
     if isinstance(payload, Mapping):
         domain_pack_id = _string_value(payload.get("domain_pack_id") or payload.get("adapter_key"))
         envelope_id = _string_value(payload.get("envelope_id"))
-        object_items, object_warnings = _payload_object_items(payload, shape=shape)
+        if shape == "non_structured" and payload_from_candidate:
+            object_items, object_warnings, trusted_candidate_shape = (
+                _candidate_payload_object_items(payload)
+            )
+            if trusted_candidate_shape is not None:
+                shape = trusted_candidate_shape
+        else:
+            object_items, object_warnings = _payload_object_items(payload, shape=shape)
         if shape == "non_structured":
             object_items = []
+            if not object_warnings:
+                object_warnings = [_NO_CANONICAL_OBJECT_LIST_WARNING]
         warnings.extend(object_warnings)
     elif shape == "non_structured":
         warnings.append("Artifact payload is not a supported structured mapping.")
