@@ -74,7 +74,8 @@ def test_parse_args_keeps_rerank_provider_smoke_opt_in_by_default():
     assert args.rerank_provider_smoke_script == "scripts/testing/rerank_provider_smoke_local.sh"
     assert args.chat_message == smoke.DEFAULT_CHAT_MESSAGE
     assert args.stream_chat_message == smoke.DEFAULT_STREAM_CHAT_MESSAGE
-    assert "do not extract" in args.stream_chat_message
+    assert args.stream_chat_message == smoke.DEFAULT_CHAT_MESSAGE
+    assert "focus of the publication" in args.stream_chat_message
 
 
 def test_parse_args_allows_stream_chat_message_override():
@@ -195,12 +196,23 @@ def test_require_batch_plumbing_payload_requires_canonical_object_rows():
     # Canonical object rows carrying an evidence-record reference pass.
     smoke.require_batch_plumbing_payload(
         {
-            "001_batch_release_smoke_result_json_export_20260607T123456Z.json": [
+            "001_a29946ec6eff91abc3a648349be64860_batch_release_smoke_result_json.json": [
                 {"item": "crb", "evidence_record_ids": ["evidence-abc123"]}
             ]
         },
         output_format="json",
     )
+
+    # Legacy timestamped names are no longer the runtime export shape.
+    with pytest.raises(smoke.SmokeFailure, match="runtime export naming shape"):
+        smoke.require_batch_plumbing_payload(
+            {
+                "001_batch_release_smoke_result_json_export_20260607T123456Z.json": [
+                    {"item": "crb", "evidence_record_ids": ["evidence-abc123"]}
+                ]
+            },
+            output_format="json",
+        )
 
     # Unparsed (string) artifact fails.
     with pytest.raises(smoke.SmokeFailure, match="parsed JSON"):
@@ -213,7 +225,7 @@ def test_require_batch_plumbing_payload_requires_canonical_object_rows():
     with pytest.raises(smoke.SmokeFailure, match="evidence-record reference"):
         smoke.require_batch_plumbing_payload(
             {
-                "001_batch_release_smoke_result_json_export_20260607T123456Z.json": [
+                "001_a29946ec6eff91abc3a648349be64860_batch_release_smoke_result_json.json": [
                     {"item": "crb", "evidence_record_ids": []}
                 ]
             },
