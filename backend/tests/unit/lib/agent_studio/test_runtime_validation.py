@@ -272,6 +272,8 @@ def test_build_agent_runtime_report_rejects_extractor_output_schema_without_fina
     monkeypatch.setattr(module, "_fetch_active_agents", lambda: [
         _agent(
             agent_key="doug_shape",
+            visibility="system",
+            user_id=None,
             category="Extraction",
             output_schema_key="GeneExpressionEnvelope",
             tool_ids=["stage_gene_expression_observation"],
@@ -306,12 +308,95 @@ def test_build_agent_runtime_report_rejects_extractor_output_schema_without_fina
     )
 
 
+def test_build_agent_runtime_report_warns_for_custom_extractor_finalize_drift_non_strict(monkeypatch):
+    import src.lib.agent_studio.runtime_validation as module
+
+    monkeypatch.setattr(module, "_fetch_active_agents", lambda: [
+        _agent(
+            agent_key="ca_custom_shape",
+            visibility="private",
+            user_id=7,
+            category="Extraction",
+            output_schema_key="GeneExpressionEnvelope",
+            tool_ids=["stage_gene_expression_observation"],
+        )
+    ])
+    monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: (set(), None))
+    monkeypatch.setattr(module, "_resolve_output_schema", lambda schema_key: object())
+    monkeypatch.setattr(module, "load_models", lambda: None)
+    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5.4-mini")])
+    monkeypatch.setattr(
+        module,
+        "_load_runtime_policy",
+        lambda: {
+            "tool_bindings": {"stage_gene_expression_observation": {"required_context": []}},
+            "canonicalize_tool_id": lambda tool_id: tool_id,
+            "document_tool_ids": set(),
+            "package_required_tool_ids": set(),
+        },
+    )
+
+    report = module.build_agent_runtime_report(strict_mode=False)
+
+    assert report["status"] == "degraded"
+    assert report["errors"] == []
+    assert any(
+        "ca_custom_shape: builder/extractor agent declares output_schema "
+        "'GeneExpressionEnvelope'" in msg
+        for msg in report["warnings"]
+    )
+    assert any(
+        "ca_custom_shape: extractor agent is missing a builder finalize tool" in msg
+        for msg in report["warnings"]
+    )
+
+
+def test_build_agent_runtime_report_rejects_custom_extractor_finalize_drift_strict(monkeypatch):
+    import src.lib.agent_studio.runtime_validation as module
+
+    monkeypatch.setattr(module, "_fetch_active_agents", lambda: [
+        _agent(
+            agent_key="ca_custom_shape",
+            visibility="private",
+            user_id=7,
+            category="Extraction",
+            output_schema_key="GeneExpressionEnvelope",
+            tool_ids=["stage_gene_expression_observation"],
+        )
+    ])
+    monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: (set(), None))
+    monkeypatch.setattr(module, "_resolve_output_schema", lambda schema_key: object())
+    monkeypatch.setattr(module, "load_models", lambda: None)
+    monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5.4-mini")])
+    monkeypatch.setattr(
+        module,
+        "_load_runtime_policy",
+        lambda: {
+            "tool_bindings": {"stage_gene_expression_observation": {"required_context": []}},
+            "canonicalize_tool_id": lambda tool_id: tool_id,
+            "document_tool_ids": set(),
+            "package_required_tool_ids": set(),
+        },
+    )
+
+    report = module.build_agent_runtime_report(strict_mode=True)
+
+    assert report["status"] == "unhealthy"
+    assert any(
+        "ca_custom_shape: builder/extractor agent declares output_schema "
+        "'GeneExpressionEnvelope'" in msg
+        for msg in report["errors"]
+    )
+
+
 def test_build_agent_runtime_report_rejects_output_schema_with_finalize_tool(monkeypatch):
     import src.lib.agent_studio.runtime_validation as module
 
     monkeypatch.setattr(module, "_fetch_active_agents", lambda: [
         _agent(
             agent_key="hybrid_validator",
+            visibility="system",
+            user_id=None,
             category="Validation",
             output_schema_key="GeneResultEnvelope",
             tool_ids=["search_genes", "finalize_gene_extraction"],
@@ -351,6 +436,8 @@ def test_validate_and_cache_agent_runtime_contracts_raises_for_finalize_invarian
     monkeypatch.setattr(module, "_fetch_active_agents", lambda: [
         _agent(
             agent_key="extractor_without_finalizer",
+            visibility="system",
+            user_id=None,
             category="Extraction",
             output_schema_key=None,
             tool_ids=["search_document", "read_section"],
