@@ -853,10 +853,10 @@ def test_dynamic_formatter_specialist_receives_bound_bundle_context(monkeypatch)
     tools = supervisor_agent._create_dynamic_specialist_tools(
         tool_specs=[
             {
-                "agent_key": "csv_output_formatter",
+                "agent_key": "csv_formatter",
                 "name": "CSV File Formatter",
                 "description": "Create a CSV file",
-                "tool_name": "ask_csv_output_formatter_specialist",
+                "tool_name": "ask_csv_formatter_specialist",
                 "requires_document": False,
                 "group_rules_enabled": False,
             }
@@ -866,16 +866,16 @@ def test_dynamic_formatter_specialist_receives_bound_bundle_context(monkeypatch)
     )
 
     assert [getattr(tool, "name", "") for tool in tools] == [
-        "ask_csv_output_formatter_specialist"
+        "ask_csv_formatter_specialist"
     ]
-    assert captured_agent["agent_key"] == "csv_output_formatter"
+    assert captured_agent["agent_key"] == "csv_formatter"
     assert captured_agent["kwargs"]["formatter_bundle"] is fake_bundle
     assert captured_agent["kwargs"]["formatter_output_format"] == "csv"
-    assert captured_agent["kwargs"]["formatter_agent_id"] == "csv_output_formatter"
+    assert captured_agent["kwargs"]["formatter_agent_id"] == "csv_formatter"
     assert captured_agent["kwargs"]["additional_runtime_context"] == [
         "FORMATTER SOURCE BUNDLE:\nlatest"
     ]
-    assert captured_tool["tool_name"] == "ask_csv_output_formatter_specialist"
+    assert captured_tool["tool_name"] == "ask_csv_formatter_specialist"
 
 
 def test_dynamic_formatter_specialist_is_skipped_without_bundle(monkeypatch):
@@ -890,10 +890,10 @@ def test_dynamic_formatter_specialist_is_skipped_without_bundle(monkeypatch):
     tools = supervisor_agent._create_dynamic_specialist_tools(
         tool_specs=[
             {
-                "agent_key": "csv_output_formatter",
+                "agent_key": "csv_formatter",
                 "name": "CSV File Formatter",
                 "description": "Create a CSV file",
-                "tool_name": "ask_csv_output_formatter_specialist",
+                "tool_name": "ask_csv_formatter_specialist",
                 "requires_document": False,
                 "group_rules_enabled": False,
             }
@@ -936,10 +936,10 @@ def test_create_supervisor_agent_exposes_formatter_only_with_saved_chat_bundle(m
         "_get_supervisor_specialist_specs",
         lambda: [
             {
-                "agent_key": "csv_output_formatter",
+                "agent_key": "csv_formatter",
                 "name": "CSV File Formatter",
                 "description": "Create a CSV file",
-                "tool_name": "ask_csv_output_formatter_specialist",
+                "tool_name": "ask_csv_formatter_specialist",
                 "requires_document": False,
                 "group_rules_enabled": False,
             }
@@ -997,12 +997,12 @@ def test_create_supervisor_agent_exposes_formatter_only_with_saved_chat_bundle(m
     created = supervisor_agent.create_supervisor_agent(user_id="user-1", document_id="doc-1")
 
     tool_names = [getattr(tool, "name", "") for tool in created.tools]
-    assert "ask_csv_output_formatter_specialist" in tool_names
+    assert "ask_csv_formatter_specialist" in tool_names
     assert "export_to_file" not in tool_names
-    assert captured_agent["agent_key"] == "csv_output_formatter"
+    assert captured_agent["agent_key"] == "csv_formatter"
     assert captured_agent["kwargs"]["formatter_bundle"] is fake_bundle
     assert captured_agent["kwargs"]["formatter_output_format"] == "csv"
-    assert captured_agent["kwargs"]["formatter_agent_id"] == "csv_output_formatter"
+    assert captured_agent["kwargs"]["formatter_agent_id"] == "csv_formatter"
     formatter_context = captured_agent["kwargs"]["additional_runtime_context"][0]
     assert "FORMATTER SOURCE BUNDLE" in formatter_context
     assert 'source_ref="extraction-result:00000000-0000-4000-8000-000000000123"' in formatter_context

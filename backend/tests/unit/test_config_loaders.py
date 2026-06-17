@@ -225,9 +225,9 @@ class TestAgentLoader:
         ]
         removed_tools = {"save_csv_file", "save_tsv_file", "save_json_file"}
 
-        csv_formatter = get_agent_definition("csv_output_formatter")
-        tsv_formatter = get_agent_definition("tsv_output_formatter")
-        json_formatter = get_agent_definition("json_output_formatter")
+        csv_formatter = get_agent_definition("csv_formatter")
+        tsv_formatter = get_agent_definition("tsv_formatter")
+        json_formatter = get_agent_definition("json_formatter")
 
         for formatter in (csv_formatter, tsv_formatter, json_formatter):
             assert formatter is not None

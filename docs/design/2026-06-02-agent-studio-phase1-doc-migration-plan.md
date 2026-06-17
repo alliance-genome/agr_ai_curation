@@ -518,9 +518,9 @@ git commit -m "refactor(agent-studio): port gene documentation to docs.yaml (fai
 | `packages/alliance/agents/disease_extractor/docs.yaml` | `disease_extractor` | 607-655 |
 | `packages/alliance/agents/phenotype_extractor/docs.yaml` | `phenotype_extractor` | 656-705 |
 | `packages/alliance/agents/chat_output/docs.yaml` | `chat_output_formatter` | 706-719 |
-| `packages/alliance/agents/csv_formatter/docs.yaml` | `csv_output_formatter` | 755-768 |
-| `packages/alliance/agents/json_formatter/docs.yaml` | `json_output_formatter` | 769-782 |
-| `packages/alliance/agents/tsv_formatter/docs.yaml` | `tsv_output_formatter` | 783-810 |
+| `packages/alliance/agents/csv_formatter/docs.yaml` | `csv_formatter` | 755-768 |
+| `packages/alliance/agents/json_formatter/docs.yaml` | `json_formatter` | 769-782 |
+| `packages/alliance/agents/tsv_formatter/docs.yaml` | `tsv_formatter` | 783-810 |
 
 - [ ] **Step 1: Create each file by porting its dict entry verbatim**
 

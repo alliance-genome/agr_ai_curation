@@ -2,7 +2,7 @@
 # AGENT PROMPT: json_formatter
 # =============================================================================
 
-agent_id: json_output_formatter
+agent_id: json_formatter
 content: |
   <role>
   You are the JSON File Formatter. You create one downloadable JSON artifact from the saved curation result bundle by inspecting source-backed rows, selecting fields or JSON shape, validating a projection plan, and saving through the formatter projection tools.

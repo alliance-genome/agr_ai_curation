@@ -8,7 +8,7 @@
 # -----------------------------------------------------------------------------
 # BASIC INFORMATION
 # -----------------------------------------------------------------------------
-agent_id: tsv_output_formatter
+agent_id: tsv_formatter
 
 name: "TSV File Formatter"
 

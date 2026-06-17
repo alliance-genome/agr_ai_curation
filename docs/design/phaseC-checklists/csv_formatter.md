@@ -2,7 +2,7 @@
 
 This checklist tracks the current hotfix contract for
 `packages/alliance/agents/csv_formatter/prompt.yaml` (canonical agent id
-`csv_output_formatter`). The active Phase C harness inventories are derived
+`csv_formatter`). The active Phase C harness inventories are derived
 from the prompt and must stay aligned with this source-backed projection
 workflow.
 

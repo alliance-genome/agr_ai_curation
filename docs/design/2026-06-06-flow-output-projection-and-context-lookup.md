@@ -409,7 +409,7 @@ The terminal agent should not have `save_csv_file`, `save_tsv_file`, or `save_js
 For each terminal output step:
 
 1. Build `FlowOutputArtifactBundle` from completed structured artifacts.
-2. Resolve terminal format from agent id, output capability, and tool id metadata rather than brittle display names. Include the real package ids: `csv_output_formatter`, `tsv_output_formatter`, `json_output_formatter`, and `chat_output_formatter`, plus folder aliases like `csv_formatter`/`tsv_formatter` where the executor already accepts them.
+2. Resolve terminal format from agent id, output capability, and tool id metadata rather than brittle display names. Include the formatter package ids: `csv_formatter`, `tsv_formatter`, `json_formatter`, and `chat_output_formatter`.
 3. Build a default projection plan.
 4. If step goal/custom instructions include customization or the default row source is ambiguous, invoke the terminal planner with the projection tools.
 5. Validate/apply the final plan in runtime.
@@ -474,7 +474,7 @@ Agent YAML/prompt changes should be flow-specific where possible:
 - Keep ordinary formatter agents usable for non-flow/package contexts.
 - In flow terminal execution, override or wrap the formatter's tool bundle with projection tools and runtime save/render behavior.
 - Do not hardcode model names in executor code; use existing agent definition resolution and provider defaults.
-- Tests should cover both canonical package agent ids (`csv_output_formatter`, `tsv_output_formatter`, `json_output_formatter`, `chat_output_formatter`) and local folder aliases that appear in flow nodes.
+- Tests should cover the canonical formatter package agent ids (`csv_formatter`, `tsv_formatter`, `json_formatter`, `chat_output_formatter`) as they appear in flow nodes.
 
 ## Implementation Sequence
 

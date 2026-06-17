@@ -227,25 +227,25 @@ class TestSaveProjectedFileOutput:
             "csv",
             projection("Notch"),
             "gene_results",
-            "csv_output_formatter",
+            "csv_formatter",
         )
         second = await save_projected_file_output(
             "csv",
             projection("DeltaGene"),
             "gene_results",
-            "csv_output_formatter",
+            "csv_formatter",
         )
         third = await save_projected_file_output(
             "csv",
             projection("Wingless"),
             "other_gene_results",
-            "csv_output_formatter",
+            "csv_formatter",
         )
         fourth = await save_projected_file_output(
             "tsv",
             projection("DeltaGene", output_format="tsv"),
             "gene_results",
-            "tsv_output_formatter",
+            "tsv_formatter",
         )
 
         assert first["file_id"] == second["file_id"]
@@ -260,7 +260,7 @@ class TestSaveProjectedFileOutput:
         assert len(rows) == 3
         saved = next(row for row in rows if row.filename == first["filename"])
         saved_tsv = next(row for row in rows if row.filename == fourth["filename"])
-        assert saved.agent_name == "csv_output_formatter"
+        assert saved.agent_name == "csv_formatter"
         assert saved.curator_id == curator_id
         assert saved.session_id == session_id
         assert saved.file_metadata["structured_projection"] is True
@@ -270,7 +270,7 @@ class TestSaveProjectedFileOutput:
         assert Path(saved.file_path).read_text(encoding="utf-8").replace("\r\n", "\n") == (
             "symbol\nDeltaGene\n"
         )
-        assert saved_tsv.agent_name == "tsv_output_formatter"
+        assert saved_tsv.agent_name == "tsv_formatter"
         assert saved_tsv.file_type == "tsv"
         assert Path(saved_tsv.file_path).read_text(encoding="utf-8").replace("\r\n", "\n") == (
             "symbol\nDeltaGene\n"
@@ -308,7 +308,7 @@ class TestSaveProjectedFileOutput:
             curator_id="curator-projected-save",
             session_id=session_id,
             trace_id=trace_id,
-            agent_name="csv_output_formatter",
+            agent_name="csv_formatter",
             file_metadata={
                 "structured_projection": True,
                 "descriptor": "gene_results",
@@ -343,7 +343,7 @@ class TestSaveProjectedFileOutput:
             "csv",
             projection,
             "gene_results",
-            "csv_output_formatter",
+            "csv_formatter",
         )
 
         assert result["file_id"] == stale_id
@@ -384,7 +384,7 @@ class TestSaveProjectedFileOutput:
                 "csv",
                 projection,
                 "gene_results",
-                "csv_output_formatter",
+                "csv_formatter",
             )
 
     @pytest.mark.asyncio
@@ -429,14 +429,14 @@ class TestSaveProjectedFileOutput:
             "json",
             projection,
             "grouped_gene_results",
-            "json_output_formatter",
+            "json_formatter",
         )
         assert result["filename"] == f"{trace_id}_grouped_gene_results.json"
         assert result["format"] == "json"
 
         assert len(store.rows) == 1
         saved = store.rows[0]
-        assert saved.agent_name == "json_output_formatter"
+        assert saved.agent_name == "json_formatter"
         assert json.loads(Path(saved.file_path).read_text(encoding="utf-8")) == {
             "grouped": [{"rows": [{"symbol": "Notch"}]}]
         }

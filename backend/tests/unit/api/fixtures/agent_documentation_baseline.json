@@ -520,21 +520,6 @@
     ],
     "summary": "Formats structured extraction results as a downloadable CSV file for spreadsheet workflows."
   },
-  "csv_output_formatter": {
-    "capabilities": [
-      {
-        "description": "Converts normalized extraction output into comma-separated tabular rows",
-        "example_query": "Export extracted genes and evidence as CSV",
-        "example_result": "Returns a downloadable CSV with one record per row",
-        "name": "CSV export"
-      }
-    ],
-    "data_sources": [],
-    "limitations": [
-      "Nested structures may be flattened for tabular compatibility"
-    ],
-    "summary": "Formats structured extraction results as a downloadable CSV file for spreadsheet workflows."
-  },
   "curation_handoff": {
     "capabilities": [
       {
@@ -1477,21 +1462,6 @@
     ],
     "summary": "Formats structured extraction results as downloadable JSON while preserving nested data."
   },
-  "json_output_formatter": {
-    "capabilities": [
-      {
-        "description": "Preserves nested objects and arrays for downstream programmatic use",
-        "example_query": "Export extraction results as JSON",
-        "example_result": "Returns hierarchical JSON matching extracted structure",
-        "name": "Structured JSON export"
-      }
-    ],
-    "data_sources": [],
-    "limitations": [
-      "File is optimized for machine consumption over spreadsheet readability"
-    ],
-    "summary": "Formats structured extraction results as downloadable JSON while preserving nested data."
-  },
   "ontology_term_validation": {
     "capabilities": [
       {
@@ -2009,21 +1979,6 @@
     "summary": "The starting point for curation workflows - defines what task the AI should perform."
   },
   "tsv_formatter": {
-    "capabilities": [
-      {
-        "description": "Generates tab-delimited output for pipelines that expect TSV input",
-        "example_query": "Export curated rows as TSV",
-        "example_result": "Returns a downloadable TSV with stable tab-delimited columns",
-        "name": "TSV export"
-      }
-    ],
-    "data_sources": [],
-    "limitations": [
-      "Like CSV, complex nested fields may be flattened"
-    ],
-    "summary": "Formats structured extraction results as a downloadable TSV file for tab-delimited pipelines."
-  },
-  "tsv_output_formatter": {
     "capabilities": [
       {
         "description": "Generates tab-delimited output for pipelines that expect TSV input",

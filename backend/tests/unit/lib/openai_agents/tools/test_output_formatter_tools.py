@@ -108,7 +108,7 @@ async def test_formatter_tool_suite_is_plan_only_and_structure_bound():
     tools = build_output_formatter_tools(
         bundle=_bundle(),
         output_format="csv",
-        formatter_agent_id="csv_output_formatter",
+        formatter_agent_id="csv_formatter",
         save_projected_output=lambda *_args: None,  # type: ignore[arg-type]
     )
 
@@ -152,7 +152,7 @@ async def test_inspection_tools_read_bounded_saved_bundle_rows_and_values():
     tools = build_output_formatter_tools(
         bundle=_bundle(),
         output_format="csv",
-        formatter_agent_id="csv_output_formatter",
+        formatter_agent_id="csv_formatter",
         save_projected_output=lambda *_args: None,  # type: ignore[arg-type]
     )
 
@@ -229,7 +229,7 @@ async def test_default_plan_and_finalize_save_projected_rows_only():
     tools = build_output_formatter_tools(
         bundle=_bundle(),
         output_format="csv",
-        formatter_agent_id="csv_output_formatter",
+        formatter_agent_id="csv_formatter",
         save_projected_output=_fake_save,
     )
 
@@ -257,7 +257,7 @@ async def test_default_plan_and_finalize_save_projected_rows_only():
     assert result["file_id"] == "file-1"
     assert result["projection_summary"]["total_count"] == 3
     assert len(saved) == 1
-    assert saved[0]["formatter_agent_id"] == "csv_output_formatter"
+    assert saved[0]["formatter_agent_id"] == "csv_formatter"
     assert saved[0]["filename_hint"] == "gene-export"
     assert saved[0]["projection"].rows
 
@@ -279,7 +279,7 @@ async def test_validate_preview_and_finalize_support_full_csv_shaping_surface():
     tools = build_output_formatter_tools(
         bundle=_bundle(),
         output_format="csv",
-        formatter_agent_id="csv_output_formatter",
+        formatter_agent_id="csv_formatter",
         save_projected_output=_fake_save,
     )
     plan = {
@@ -440,7 +440,7 @@ async def test_json_formatter_supports_grouped_and_bundle_shapes():
     tools = build_output_formatter_tools(
         bundle=_bundle(),
         output_format="json",
-        formatter_agent_id="json_output_formatter",
+        formatter_agent_id="json_formatter",
         save_projected_output=_fake_save,
     )
     grouped_plan = {
@@ -498,7 +498,7 @@ async def test_invalid_raw_content_plans_and_impossible_requests_do_not_save():
     tools = build_output_formatter_tools(
         bundle=_bundle(),
         output_format="csv",
-        formatter_agent_id="csv_output_formatter",
+        formatter_agent_id="csv_formatter",
         save_projected_output=_fake_save,
     )
 
@@ -547,7 +547,7 @@ async def test_invalid_raw_content_plans_and_impossible_requests_do_not_save():
     )
     assert cannot_complete == {
         "format": "csv",
-        "formatter_agent_id": "csv_output_formatter",
+        "formatter_agent_id": "csv_formatter",
         "missing_data": "validated disease rows",
         "reason": "The saved bundle has no validated disease rows.",
         "saved_file": False,
@@ -574,7 +574,7 @@ async def test_literal_only_plans_are_rejected_even_with_saved_rows():
     tools = build_output_formatter_tools(
         bundle=_bundle(),
         output_format="csv",
-        formatter_agent_id="csv_output_formatter",
+        formatter_agent_id="csv_formatter",
         save_projected_output=_fake_save,
     )
     literal_only_plan = {
@@ -634,7 +634,7 @@ async def test_transform_literals_cannot_smuggle_structured_replacement_content(
     tools = build_output_formatter_tools(
         bundle=_bundle(),
         output_format="csv",
-        formatter_agent_id="csv_output_formatter",
+        formatter_agent_id="csv_formatter",
         save_projected_output=_fake_save,
     )
     structured_literal_plan = {
@@ -705,7 +705,7 @@ async def test_output_labels_separators_and_missing_values_cannot_smuggle_file_c
     tools = build_output_formatter_tools(
         bundle=_bundle(),
         output_format="csv",
-        formatter_agent_id="csv_output_formatter",
+        formatter_agent_id="csv_formatter",
         save_projected_output=_fake_save,
     )
     newline_header_plan = {
@@ -796,7 +796,7 @@ async def test_finalize_rejects_literal_only_files_without_saved_rows():
     tools = build_output_formatter_tools(
         bundle=empty_bundle,
         output_format="csv",
-        formatter_agent_id="csv_output_formatter",
+        formatter_agent_id="csv_formatter",
         save_projected_output=_fake_save,
     )
     literal_plan = {

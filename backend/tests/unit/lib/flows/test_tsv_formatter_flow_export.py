@@ -49,7 +49,7 @@ def test_terminal_formatter_bundle_requires_completed_artifacts():
         match="no completed structured artifacts",
     ):
         executor._build_terminal_flow_artifact_bundle(
-            agent_id="csv_output_formatter",
+            agent_id="csv_formatter",
             output_format="csv",
             completed_steps=[],
             flow_name="No Artifacts",
@@ -104,10 +104,10 @@ async def test_runtime_file_formatter_tool_binds_visible_agent_to_completed_bund
     monkeypatch.setattr(executor, "_create_streaming_tool", _fake_create_streaming_tool)
 
     tool = executor._make_flow_runtime_formatter_tool(
-        agent_id="csv_output_formatter",
+        agent_id="csv_formatter",
         agent_name="CSV File Formatter",
         output_format="csv",
-        tool_name="ask_csv_output_formatter_specialist",
+        tool_name="ask_csv_formatter_specialist",
         tool_description="Ask CSV formatter",
         specialist_name="CSV File Formatter",
         base_context={"active_groups": ["demo_group"]},
@@ -145,7 +145,7 @@ async def test_runtime_file_formatter_tool_binds_visible_agent_to_completed_bund
     assert captured["agent_id"] == "csv_formatter"
     kwargs = captured["kwargs"]
     assert kwargs["formatter_output_format"] == "csv"
-    assert kwargs["formatter_agent_id"] == "csv_output_formatter"
+    assert kwargs["formatter_agent_id"] == "csv_formatter"
     bundle = kwargs["formatter_bundle"]
     assert bundle.flow_name == "Formatter Flow"
     assert len(bundle.rows_for_source("object")) == 2

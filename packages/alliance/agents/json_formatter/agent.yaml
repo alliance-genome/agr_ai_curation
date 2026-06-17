@@ -8,7 +8,7 @@
 # -----------------------------------------------------------------------------
 # BASIC INFORMATION
 # -----------------------------------------------------------------------------
-agent_id: json_output_formatter
+agent_id: json_formatter
 
 name: "JSON File Formatter"
 
