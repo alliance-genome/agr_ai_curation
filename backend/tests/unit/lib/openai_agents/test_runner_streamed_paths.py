@@ -648,7 +648,7 @@ async def test_run_agent_streamed_core_only_round_trip_does_not_require_speciali
         lambda **_kwargs: SimpleNamespace(
             name="Query Supervisor",
             model="gpt-4o",
-            tools=[SimpleNamespace(name="export_to_file", description="Export data")],
+            tools=[SimpleNamespace(name="inspect_results", description="Inspect results")],
         ),
     )
     monkeypatch.setattr(

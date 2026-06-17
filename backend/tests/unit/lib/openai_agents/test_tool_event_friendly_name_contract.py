@@ -1799,7 +1799,7 @@ async def test_specialist_matches_concurrent_record_evidence_outputs_by_identity
 @pytest.mark.asyncio
 async def test_specialist_emits_file_ready_for_fileinfo_output(monkeypatch):
     fake_events = [
-        _tool_call_stream_event("save_csv_file"),
+        _tool_call_stream_event("finalize_and_save"),
         _tool_output_stream_event(
             '{"file_id":"f1","download_url":"/api/files/f1/download","filename":"out.csv","format":"csv"}'
         ),

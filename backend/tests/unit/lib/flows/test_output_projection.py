@@ -1,8 +1,11 @@
+import inspect
 import json
+from datetime import datetime, timezone
 
 import pytest
 from types import SimpleNamespace
 
+import src.lib.flows.output_projection as output_projection_module
 from src.lib.flows.output_projection import (
     FlowOutputColumnSpec,
     FlowOutputFilterSpec,
@@ -10,10 +13,15 @@ from src.lib.flows.output_projection import (
     FlowOutputSortSpec,
     FlowOutputTransformSpec,
     apply_projection_plan,
+    build_extraction_result_artifact_bundle,
     build_flow_output_artifact_bundle,
     default_projection_plan,
     inspect_output_artifacts,
     preview_output_projection,
+)
+from src.schemas.curation_workspace import (
+    CurationExtractionResultRecord,
+    CurationExtractionSourceKind,
 )
 
 
@@ -85,8 +93,11 @@ def _completed_generic_pdf_step():
             candidate_count=2,
             conversation_summary="Extracted two generic reagents.",
             payload_json={
-                "summary": "Two genetic reagent candidates were retained.",
-                "curatable_objects": [
+                "envelope_id": "env-generic-1",
+                "domain_pack_id": "generic",
+                "domain_pack_version": "0.1.0",
+                "status": "extracted",
+                "objects": [
                     {
                         "object_type": "generic_reagent_candidate",
                         "pending_ref_id": "generic-obj-1",
@@ -112,7 +123,10 @@ def _completed_generic_pdf_step():
                         "evidence_record_ids": ["ev-2"],
                     },
                 ],
+                "history": [],
+                "validation_findings": [],
                 "metadata": {
+                    "summary": "Two genetic reagent candidates were retained.",
                     "evidence_records": [
                         {
                             "evidence_record_id": "ev-1",
@@ -124,10 +138,149 @@ def _completed_generic_pdf_step():
                         },
                     ]
                 },
-                "run_summary": {"candidate_count": 2, "kept_count": 2},
             },
         ),
     }
+
+
+_DEBBIE_TUMOR_COLUMNS = [
+    "Organ/Cell Type of origin",
+    "Tumor classification term",
+    "Species",
+    "Tumor type",
+    "Section",
+    "Extracted phrase",
+]
+
+
+_DEBBIE_TUMOR_ROWS = [
+    {
+        "Organ/Cell Type of origin": "B cell",
+        "Tumor classification term": "lymphoma",
+        "Species": "Mus musculus",
+        "Tumor type": "Endogenous tumor",
+        "Section": "Results",
+        "Extracted phrase": "lymphoma incidence; B-cell lymphomas",
+    },
+    {
+        "Organ/Cell Type of origin": "B cell",
+        "Tumor classification term": "diffuse large B-cell lymphoma",
+        "Species": "Mus musculus",
+        "Tumor type": "Endogenous tumor",
+        "Section": "Results",
+        "Extracted phrase": "1 DLBCL",
+    },
+    {
+        "Organ/Cell Type of origin": "B cell",
+        "Tumor classification term": "splenic marginal zone lymphoma",
+        "Species": "Mus musculus",
+        "Tumor type": "Endogenous tumor",
+        "Section": "Results",
+        "Extracted phrase": "1 SMZL",
+    },
+    {
+        "Organ/Cell Type of origin": "B cell",
+        "Tumor classification term": "follicular lymphoma",
+        "Species": "Mus musculus",
+        "Tumor type": "Endogenous tumor",
+        "Section": "Results",
+        "Extracted phrase": "1 FL",
+    },
+    {
+        "Organ/Cell Type of origin": "B cell",
+        "Tumor classification term": "chronic lymphocytic leukemia",
+        "Species": "Mus musculus",
+        "Tumor type": "Endogenous tumor",
+        "Section": "Results",
+        "Extracted phrase": "1 CLL/SLL-like",
+    },
+    {
+        "Organ/Cell Type of origin": "B cell",
+        "Tumor classification term": "plasmacytoma",
+        "Species": "Mus musculus",
+        "Tumor type": "Endogenous tumor",
+        "Section": "Results",
+        "Extracted phrase": "2 plasmacytomas",
+    },
+    {
+        "Organ/Cell Type of origin": "lymphocyte",
+        "Tumor classification term": "lymphoma",
+        "Species": "Mus musculus",
+        "Tumor type": "Endogenous tumor",
+        "Section": "Results",
+        "Extracted phrase": "13 lymphomas",
+    },
+    {
+        "Organ/Cell Type of origin": "T cell",
+        "Tumor classification term": "T-cell lymphoma",
+        "Species": "Mus musculus",
+        "Tumor type": "Endogenous tumor",
+        "Section": "Results",
+        "Extracted phrase": "5 T-cell lymphomas",
+    },
+    {
+        "Organ/Cell Type of origin": "histiocyte",
+        "Tumor classification term": "histiocytic sarcoma",
+        "Species": "Mus musculus",
+        "Tumor type": "Endogenous tumor",
+        "Section": "Results",
+        "Extracted phrase": "2 histiocytic sarcomas",
+    },
+]
+
+
+def _debbie_claim_text(values: dict[str, str]) -> str:
+    return "; ".join(f"{column}={values[column]}" for column in _DEBBIE_TUMOR_COLUMNS)
+
+
+def _debbie_tumor_extraction_result() -> CurationExtractionResultRecord:
+    return CurationExtractionResultRecord(
+        extraction_result_id="4170023b-8ba3-44e2-ad7c-dacaa3a3a221",
+        document_id="debbie-tumor-paper",
+        adapter_key="generic",
+        agent_key="pdf_extraction",
+        source_kind=CurationExtractionSourceKind.CHAT,
+        origin_session_id="d2d3cf18-04f0-44e3-a965-09381b0f2bca",
+        trace_id="360762fa9fa0f7383115e86bb9bc88d6",
+        flow_run_id=None,
+        user_id="debbie",
+        candidate_count=len(_DEBBIE_TUMOR_ROWS),
+        conversation_summary="Extracted tumor term rows.",
+        payload_json={
+            "summary": "Nine tumor term rows were extracted.",
+            "curatable_objects": [
+                {
+                    "object_type": "generic_claim",
+                    "pending_ref_id": f"generic-claim-{index}",
+                    "payload": {
+                        "label": row["Tumor classification term"],
+                        "class_key": "generic:generic_claim",
+                        "claim_text": _debbie_claim_text(row),
+                        "claim_type": "tumor term row",
+                        "confidence": "high",
+                        "classification_notes": [
+                            "The prompt requested a row-like tumor term claim.",
+                        ],
+                    },
+                    "evidence_record_ids": [f"evidence-{index}"],
+                }
+                for index, row in enumerate(_DEBBIE_TUMOR_ROWS, start=1)
+            ],
+            "metadata": {
+                "evidence_records": [
+                    {
+                        "evidence_record_id": f"evidence-{index}",
+                        "verified_quote": row["Extracted phrase"],
+                        "section": row["Section"],
+                    }
+                    for index, row in enumerate(_DEBBIE_TUMOR_ROWS, start=1)
+                ],
+            },
+            "run_summary": {"candidate_count": len(_DEBBIE_TUMOR_ROWS)},
+        },
+        created_at=datetime(2026, 6, 16, 22, 7, tzinfo=timezone.utc),
+        metadata={},
+    )
 
 
 def _completed_domain_source_step(
@@ -338,9 +491,64 @@ def test_raw_step_output_curatable_objects_cannot_become_curation_tsv_rows():
         output_format="tsv",
     )
 
-    assert bundle.rows_for_source("object")
-    assert bundle.rows_for_source("object")[0]["artifact.is_canonical_curation_data"] is False
-    with pytest.raises(ValueError, match="model-written step output cannot be used"):
+    assert bundle.rows_for_source("object") == []
+    with pytest.raises(ValueError, match="Row source 'object' is not available"):
+        apply_projection_plan(
+            bundle,
+            default_projection_plan(bundle, output_format="tsv"),
+        )
+
+
+def test_output_projection_payload_shape_has_no_extractor_envelope_path():
+    payload_shape_source = inspect.getsource(output_projection_module._payload_shape)
+    object_items_source = inspect.getsource(output_projection_module._payload_object_items)
+    old_shape_name = "domain_" + "extraction_result"
+
+    assert old_shape_name not in payload_shape_source
+    assert "curatable_objects" not in payload_shape_source
+    assert "curatable_objects" not in object_items_source
+
+
+def test_mixed_domain_and_extractor_payload_cannot_become_object_rows():
+    payload = {
+        "envelope_id": "env-mixed-1",
+        "domain_pack_id": "generic",
+        "objects": [
+            {
+                "object_type": "generic_reagent_candidate",
+                "pending_ref_id": "object-row-1",
+                "payload": {"label": "Ck:GFP"},
+            }
+        ],
+        "curatable_objects": [
+            {
+                "object_type": "generic_reagent_candidate",
+                "pending_ref_id": "stale-row-1",
+                "payload": {"label": "stale"},
+            }
+        ],
+    }
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[
+            {
+                "step": 1,
+                "agent_id": "pdf_extraction",
+                "agent_name": "General PDF Extraction Agent",
+                "candidate": SimpleNamespace(
+                    agent_key="pdf_extraction",
+                    adapter_key="generic",
+                    candidate_count=1,
+                    payload_json=payload,
+                ),
+            }
+        ],
+        flow_name="Mixed Shape Projection Flow",
+        output_format="tsv",
+    )
+
+    assert bundle.artifacts[0].artifact_shape == "non_structured"
+    assert bundle.rows_for_source("object") == []
+    with pytest.raises(ValueError, match="Row source 'object' is not available"):
         apply_projection_plan(
             bundle,
             default_projection_plan(bundle, output_format="tsv"),
@@ -382,7 +590,7 @@ def test_nested_raw_step_output_objects_cannot_become_curation_tsv_rows():
         )
 
 
-def test_canonical_curatable_objects_default_tsv_exports_one_row_per_object():
+def test_canonical_domain_envelope_default_tsv_exports_one_row_per_object():
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[_completed_generic_pdf_step()],
         flow_name="PDF Projection Flow",
@@ -392,7 +600,7 @@ def test_canonical_curatable_objects_default_tsv_exports_one_row_per_object():
     plan = default_projection_plan(bundle, output_format="tsv")
     result = apply_projection_plan(bundle, plan)
 
-    assert bundle.artifacts[0].artifact_shape == "domain_extraction_result"
+    assert bundle.artifacts[0].artifact_shape == "domain_envelope"
     assert result.row_source == "object"
     assert plan.row_strategy == "wide_union"
     assert result.total_count == 2
@@ -405,6 +613,99 @@ def test_canonical_curatable_objects_default_tsv_exports_one_row_per_object():
     assert result.rows[0]["object_payload_source_identifier"] == "New in paper"
     assert result.rows[0]["object_payload_count"] == 4
     assert bundle.rows_for_source("evidence")[0]["evidence.evidence_record_id"] == "ev-1"
+
+
+def test_extraction_result_bundle_recovers_debbie_generic_claim_rows():
+    extraction_result = _debbie_tumor_extraction_result()
+    payload_json = extraction_result.payload_json
+    assert isinstance(payload_json, dict)
+    assert all(
+        "row" not in curatable_object["payload"]
+        for curatable_object in payload_json["curatable_objects"]
+    )
+
+    bundle = build_extraction_result_artifact_bundle(
+        extraction_results=[extraction_result],
+        bundle_name="Debbie Tumor Terms",
+        output_format="csv",
+    )
+    plan = default_projection_plan(bundle, output_format="csv")
+    result = apply_projection_plan(bundle, plan)
+
+    assert bundle.artifacts[0].artifact_shape == "domain_envelope"
+    assert bundle.artifacts[0].extraction_result_id == (
+        "4170023b-8ba3-44e2-ad7c-dacaa3a3a221"
+    )
+    assert result.total_count == 9
+    assert [column.key for column in result.columns] == _DEBBIE_TUMOR_COLUMNS
+    assert [column.header for column in result.columns] == _DEBBIE_TUMOR_COLUMNS
+    assert result.rows == _DEBBIE_TUMOR_ROWS
+    assert all("object_payload_claim_text" not in row for row in result.rows)
+
+
+def test_generic_claim_table_recovery_rejects_arbitrary_assignments():
+    steps = [
+        _completed_domain_source_step(
+            step=index,
+            agent_id="pdf_extraction",
+            adapter_key="generic",
+            object_type="generic_claim",
+            object_id=f"generic-claim-{index}",
+            payload={
+                "class_key": "generic:generic_claim",
+                "label": f"Narrative claim {index}",
+                "claim_text": f"p=0.0{index}; n={index + 10}",
+            },
+        )
+        for index in range(1, 3)
+    ]
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=steps,
+        flow_name="Narrative Claim Flow",
+        output_format="csv",
+    )
+
+    assert all(
+        not any(field_ref.startswith("object.row.") for field_ref in row)
+        for row in bundle.rows_for_source("object")
+    )
+
+
+def test_explicit_structured_row_fields_take_priority_over_claim_text_recovery():
+    step = _completed_domain_source_step(
+        step=1,
+        agent_id="pdf_extraction",
+        adapter_key="generic",
+        object_type="generic_claim",
+        object_id="generic-claim-1",
+        payload={
+            "class_key": "generic:generic_claim",
+            "label": "Structured row claim",
+            "claim_text": "Wrong=claim text; Row=claim text",
+            "attributes": {
+                "structured_row": {
+                    "Organ/Cell Type of origin": "B cell",
+                    "Tumor classification term": "lymphoma",
+                }
+            },
+        },
+    )
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[step],
+        flow_name="Structured Claim Flow",
+        output_format="csv",
+    )
+    result = apply_projection_plan(
+        bundle,
+        default_projection_plan(bundle, output_format="csv"),
+    )
+
+    assert result.rows == [
+        {
+            "Organ/Cell Type of origin": "B cell",
+            "Tumor classification term": "lymphoma",
+        }
+    ]
 
 
 def test_persisted_extraction_ids_define_tsv_source_identity_before_source_keys():

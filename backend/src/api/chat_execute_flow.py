@@ -84,6 +84,41 @@ def _dedupe_preserve_order(values: List[str]) -> List[str]:
     return ordered
 
 
+def _file_output_identity(file_output: Dict[str, Any]) -> tuple[str, str] | None:
+    """Return a stable identity for one surfaced file output, when available."""
+
+    file_id = str(file_output.get("file_id") or "").strip()
+    if file_id:
+        return ("file_id", file_id)
+    filename = str(file_output.get("filename") or "").strip()
+    file_format = str(file_output.get("format") or file_output.get("file_type") or "").strip()
+    if filename and file_format:
+        return ("filename_format", f"{file_format}:{filename}")
+    return None
+
+
+def _append_deduped_file_output(
+    file_outputs: List[Dict[str, Any]],
+    file_output: Dict[str, Any],
+) -> bool:
+    """Append or replace a file output by identity, keeping the latest details.
+
+    Returns True when the file output is new and should be surfaced, False when
+    it replaced a previously surfaced identity.
+    """
+
+    identity = _file_output_identity(file_output)
+    if identity is None:
+        file_outputs.append(file_output)
+        return True
+    for index, existing in enumerate(file_outputs):
+        if _file_output_identity(existing) == identity:
+            file_outputs[index] = file_output
+            return False
+    file_outputs.append(file_output)
+    return True
+
+
 def _flow_ref_lines(
     label: str,
     values: List[Any],
@@ -868,7 +903,8 @@ async def execute_flow_endpoint(
                 elif event_type == "DOMAIN_WARNING":
                     domain_warning_count += 1
                 elif event_type == "FILE_READY":
-                    file_outputs.append(dict(event_details))
+                    if not _append_deduped_file_output(file_outputs, dict(event_details)):
+                        continue
                 elif event_type == "FLOW_FINISHED":
                     flow_status = event_data.get("status")
                     flow_failure_reason = event_data.get("failure_reason")

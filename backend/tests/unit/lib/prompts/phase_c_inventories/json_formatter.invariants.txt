@@ -1,24 +1,11 @@
-# Phase C workflow invariants: json_formatter (Wave 4 — ordered file-production path).
+# Phase C workflow invariants: json_formatter ordered projection-tool path.
 #
-# Invariants are STRONGER than plain phrase retention: each line is an ordered step of the
-# formatter's file-production path. The framework (1) reuses the retention assertion --
-# every line must appear in the assembled render -- and (2) asserts the lines appear in
-# this order by first occurrence, so the rewrite cannot scramble the
-# read-data -> build-data_json -> call-save -> confirm sequence.
-#
-# AUTHORING RULE (enforced by the harness): each phrase must occur EXACTLY ONCE in the
-# assembled render and be listed in workflow order. These are verbatim from the rewritten
-# <workflow> numbered block (steps 1-4), where each occurs exactly once and in order.
-# (JSON-12..JSON-16 in docs/design/phaseC-checklists/json_formatter.md.)
+# Each phrase below must occur exactly once in the assembled prompt and in this
+# order. These guard against drifting back to the removed raw JSON-writer path.
 
-# Step 1 -- read the caller-supplied structured data.
-Read the caller-supplied structured data from the request and conversation context.
-
-# Step 2 -- build data_json as valid JSON (default pretty=true).
-Build `data_json` as valid JSON that preserves the supplied values and structure, defaulting to `pretty=true` unless compact output is requested.
-
-# Step 3 -- call save_json_file to generate the file.
-Call `save_json_file` to generate the file with these arguments:
-
-# Step 4 -- after the tool succeeds, confirm the file is ready.
-After the tool succeeds, confirm the file is ready.
+Call `explain_formatter_capabilities` or `inspect_output_artifacts` when you need to understand available row sources, field refs, default columns, JSON shapes, source refs, or limitations.
+Use `inspect_output_rows` and `inspect_field_values` as needed to choose source-backed fields, filters, sort order, row strategy, source restrictions, and shape.
+Use `build_default_projection_plan` for a safe starting point. When runtime context names a latest `extraction-result:<uuid>` and the curator did not ask for all results, pass that ref as `source_ref`; export multiple sources only when explicitly requested. Then adjust the plan only with source-backed `field_ref`, transform, filter, sort, row-source, row-strategy, JSON-shape, and filename intent.
+Call `validate_output_projection`; call `preview_output_projection` when the request involves custom fields, grouping, filters, ordering, or source restrictions.
+Call `finalize_and_save` exactly once after validation succeeds. Pass `plan_json` for the validated plan and `filename_hint` when a clear filename is available.
+If required rows, fields, or structure are missing, ambiguous, or unsupported, call `formatter_cannot_complete` with a precise reason and do not save a file.

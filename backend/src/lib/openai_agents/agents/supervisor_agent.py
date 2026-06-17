@@ -78,13 +78,17 @@ _INSPECT_CHAT_TRACES_TOOL_NAME = "inspect_chat_traces"
 _RECALL_CHAT_HISTORY_TOOL_NAME = "recall_chat_history"
 _SUPERVISOR_BUILTIN_TOOL_NAMES = frozenset(
     {
-        "export_to_file",
         _CURATION_PREP_TOOL_NAME,
         _INSPECT_RESULTS_TOOL_NAME,
         _INSPECT_CHAT_TRACES_TOOL_NAME,
         _RECALL_CHAT_HISTORY_TOOL_NAME,
     }
 )
+_FORMATTER_OUTPUT_FORMAT_BY_AGENT_KEY = {
+    "csv_output_formatter": "csv",
+    "tsv_output_formatter": "tsv",
+    "json_output_formatter": "json",
+}
 _EXPLICIT_PREP_CONFIRMATION_RE = re.compile(
     r"\b(?:yes|confirm(?:ed)?|i confirm|go ahead|proceed|ready|prepare (?:these|them|it)|please do|do it)\b",
     re.IGNORECASE,
@@ -217,6 +221,161 @@ def _filter_extraction_results_for_scope(
         return scoped_results, []
 
     return [], []
+
+
+def _dedupe_extraction_results(records: Sequence[Any]) -> list[Any]:
+    """Return extraction records once, preserving first-seen order."""
+
+    seen_ids: set[str] = set()
+    deduped: list[Any] = []
+    for record in records:
+        record_id = str(getattr(record, "extraction_result_id", "") or "").strip()
+        if not record_id or record_id in seen_ids:
+            continue
+        seen_ids.add(record_id)
+        deduped.append(record)
+    return deduped
+
+
+def _record_result_ref(record: Any) -> str:
+    """Return the stable supervisor-visible result ref for a persisted record."""
+
+    return f"extraction-result:{getattr(record, 'extraction_result_id', '')}"
+
+
+def _source_kind_value(record: Any) -> str:
+    return getattr(record, "source_kind").value
+
+
+def _current_chat_extraction_results(
+    *,
+    session_id: str,
+    user_id: str,
+) -> list[Any]:
+    """Load current-chat extraction results using the same scope as inspect_results."""
+
+    return _dedupe_extraction_results(
+        [
+            *list_extraction_results(
+                origin_session_id=session_id,
+                user_id=user_id,
+                source_kind=CurationExtractionSourceKind.CHAT,
+            ),
+            *list_extraction_results(
+                origin_session_id=session_id,
+                user_id=user_id,
+                source_kind=CurationExtractionSourceKind.FLOW,
+            ),
+        ]
+    )
+
+
+def _latest_extraction_result(records: Sequence[Any]) -> Any | None:
+    if not records:
+        return None
+    return max(
+        records,
+        key=lambda record: (
+            getattr(record, "created_at", None),
+            str(getattr(record, "extraction_result_id", "") or ""),
+        ),
+    )
+
+
+def _formatter_runtime_context_for_records(records: Sequence[Any]) -> str:
+    """Build formatter-only runtime guidance for the bound chat result bundle."""
+
+    latest = _latest_extraction_result(records)
+    latest_ref = _record_result_ref(latest) if latest is not None else ""
+    lines = [
+        "FORMATTER SOURCE BUNDLE:",
+        "You are bound to saved extraction results from this chat. Use only the formatter projection tools to inspect, plan, validate, preview, finalize, or report that the requested file cannot be produced.",
+    ]
+    if latest_ref:
+        lines.append(
+            f'For an ordinary export request with no explicit result choice, use source_ref="{latest_ref}" when building the default projection plan. Export multiple/all saved results only when the curator explicitly asks for that scope.'
+        )
+    lines.append("Available extraction result refs:")
+    for record in sorted(
+        records,
+        key=lambda item: (
+            getattr(item, "created_at", None),
+            str(getattr(item, "extraction_result_id", "") or ""),
+        ),
+        reverse=True,
+    ):
+        created_at = getattr(record, "created_at", None)
+        created_text = (
+            created_at.isoformat()
+            if created_at is not None and hasattr(created_at, "isoformat")
+            else ""
+        )
+        parts = [
+            f"- {_record_result_ref(record)}",
+            f"agent={getattr(record, 'agent_key', '')}",
+            f"adapter={getattr(record, 'adapter_key', '') or 'unknown'}",
+            f"source={_source_kind_value(record) or 'unknown'}",
+            f"objects={getattr(record, 'candidate_count', 0)}",
+        ]
+        if created_text:
+            parts.append(f"created_at={created_text}")
+        lines.append(", ".join(parts))
+    return "\n".join(lines)
+
+
+def _build_chat_formatter_bundle(
+    *,
+    user_id: Optional[str],
+    document_id: Optional[str],
+) -> tuple[Any | None, str, str]:
+    """Build the bound formatter bundle for the active chat, or an explicit note."""
+
+    session_id = str(get_current_session_id() or "").strip()
+    resolved_user_id = str(user_id or get_current_user_id() or "").strip()
+    if not session_id or not resolved_user_id:
+        return (
+            None,
+            "",
+            "CSV/TSV/JSON formatter tools are unavailable because this turn has no active chat session/user context. If the curator asks for a download, explain that an extraction result must exist in the active chat first.",
+        )
+
+    try:
+        records = _current_chat_extraction_results(
+            session_id=session_id,
+            user_id=resolved_user_id,
+        )
+    except Exception:
+        logger.exception("Failed to load chat extraction results for formatter dispatch")
+        return (
+            None,
+            "",
+            "CSV/TSV/JSON formatter tools are unavailable because saved extraction results could not be loaded for this chat. Do not use any raw export fallback; explain that export is blocked and ask the curator to retry after the saved results are available.",
+        )
+
+    if not records:
+        return (
+            None,
+            "",
+            "CSV/TSV/JSON formatter tools are unavailable because this chat has no saved extraction results yet. If the curator asks for a download, explain that extraction must run first.",
+        )
+
+    try:
+        from src.lib.flows.output_projection import build_extraction_result_artifact_bundle
+
+        bundle = build_extraction_result_artifact_bundle(
+            extraction_results=records,
+            bundle_name="Chat Extraction Results",
+            document_id=document_id,
+        )
+    except Exception:
+        logger.exception("Failed to build chat formatter artifact bundle")
+        return (
+            None,
+            "",
+            "CSV/TSV/JSON formatter tools are unavailable because the saved extraction results could not be materialized into a formatter bundle. Do not use any raw export fallback; report the export blocker.",
+        )
+
+    return bundle, _formatter_runtime_context_for_records(records), ""
 
 
 def _resolved_scope_values(
@@ -871,6 +1030,7 @@ def _build_runtime_tool_availability_note(
     tool_specs: List[Dict[str, Any]],
     available_specialist_tools: List[Callable],
     document_loaded: bool,
+    formatter_unavailable_note: str = "",
 ) -> str:
     """Describe the specialist/tool runtime state for the current chat."""
     available_tool_names = [
@@ -935,10 +1095,28 @@ def _build_runtime_tool_availability_note(
         "confirms the scope. Never auto-trigger curation prep."
     )
 
-    notes.append(
-        "Use export_to_file only when the user explicitly asks to export or "
-        "download results."
+    formatter_tool_names = sorted(
+        {
+            str(spec.get("tool_name", "") or "").strip()
+            for spec in tool_specs
+            if str(spec.get("agent_key", "") or "").strip()
+            in _FORMATTER_OUTPUT_FORMAT_BY_AGENT_KEY
+            and spec.get("tool_name")
+        }
     )
+    available_formatter_tools = [
+        tool_name for tool_name in available_tool_names if tool_name in formatter_tool_names
+    ]
+    if available_formatter_tools:
+        notes.append(
+            "EXPORT/DOWNLOAD ROUTING: For explicit CSV, TSV, or JSON export/download requests, "
+            "call the matching formatter specialist tool from this list: "
+            f"{', '.join(available_formatter_tools)}. These tools are bound to saved "
+            "extraction results and are the only supported export path."
+        )
+    elif formatter_unavailable_note:
+        notes.append(formatter_unavailable_note)
+
     notes.append(
         "EXTRACTION RESULT COMPLETION: A non-empty extractor manifest is "
         "normally enough to answer the curator's current request unless the "
@@ -947,9 +1125,9 @@ def _build_runtime_tool_availability_note(
         "inspect_results to browse existing persisted results, more manifest "
         "objects, evidence, validation findings, or exact YAML-declared field "
         "slices. Do not call extractors again only to summarize existing "
-        "results or gain confidence. Use export_to_file only for explicit "
-        "export/download requests and prepare_for_curation only after explicit "
-        "confirmation. Use inspect_chat_traces for behavior/debug questions "
+        "results or gain confidence. Use formatter specialist tools only for "
+        "explicit export/download requests, and use prepare_for_curation only "
+        "after explicit confirmation. Use inspect_chat_traces for behavior/debug questions "
         "about why a previous answer behaved a certain way or what tools ran. "
         "Use recall_chat_history for exact prior user/assistant transcript text "
         "when earlier chat turns may have been compacted out of live context."
@@ -971,6 +1149,8 @@ def _create_dynamic_specialist_tools(
     specialist_temperature_override: Optional[float] = None,
     specialist_reasoning_override: Optional[str] = None,
     ledger: Optional[SupervisorCallLedger] = None,
+    formatter_bundle: Any | None = None,
+    formatter_runtime_context: str = "",
 ) -> List[Callable]:
     """
     Dynamically create specialist tools based on unified agent records.
@@ -998,10 +1178,17 @@ def _create_dynamic_specialist_tools(
         description = tool_meta["description"]
         requires_document = tool_meta.get("requires_document", False)
         group_rules_enabled = tool_meta.get("group_rules_enabled", False)
+        formatter_output_format = _FORMATTER_OUTPUT_FORMAT_BY_AGENT_KEY.get(str(agent_key))
 
         # Skip document-dependent agents if no document is loaded
         if requires_document and (not document_id or not user_id):
             logger.debug("Skipping %s - requires document but none loaded", tool_name)
+            continue
+        if formatter_output_format and formatter_bundle is None:
+            logger.debug(
+                "Skipping %s - requires saved extraction-result bundle but none is available",
+                tool_name,
+            )
             continue
 
         # Build runtime kwargs for unified agent builder
@@ -1015,6 +1202,16 @@ def _create_dynamic_specialist_tools(
                 "hierarchy": hierarchy,
                 "abstract": abstract,
             })
+        if formatter_output_format:
+            agent_kwargs.update(
+                {
+                    "formatter_bundle": formatter_bundle,
+                    "formatter_output_format": formatter_output_format,
+                    "formatter_agent_id": agent_key,
+                }
+            )
+            if formatter_runtime_context:
+                agent_kwargs["additional_runtime_context"] = [formatter_runtime_context]
 
         # Group-aware agents (MODs, institutions, teams, etc.)
         if group_rules_enabled and active_groups:
@@ -1088,9 +1285,6 @@ def create_supervisor_agent(
 
     All agent settings (model, temperature, reasoning) are configured via environment
     variables. See config.py for available settings.
-
-    Built-in Tools (always available):
-    - export_to_file: Export data to CSV, TSV, or JSON files
 
     Args:
         document_id: The UUID of the PDF document (for document-dependent specialists)
@@ -1186,6 +1380,9 @@ def create_supervisor_agent(
     )
 
     tool_specs = _get_supervisor_specialist_specs()
+    formatter_bundle, formatter_runtime_context, formatter_unavailable_note = (
+        _build_chat_formatter_bundle(user_id=user_id, document_id=document_id)
+    )
     specialist_tools = _create_dynamic_specialist_tools(
         document_id=document_id,
         user_id=user_id,
@@ -1199,6 +1396,8 @@ def create_supervisor_agent(
         specialist_temperature_override=specialist_temperature_override,
         specialist_reasoning_override=specialist_reasoning_override,
         ledger=call_ledger,
+        formatter_bundle=formatter_bundle,
+        formatter_runtime_context=formatter_runtime_context,
     )
 
     routing_duration_ms = (time.monotonic() - route_start) * 1000
@@ -1219,7 +1418,7 @@ def create_supervisor_agent(
             f'Use only after you already asked "{CURATION_PREP_CONFIRMATION_QUESTION}" and the curator '
             "explicitly confirmed in a later turn. Pass the curator's confirmation text verbatim in "
             "`user_confirmation`. Include confirmed adapter_keys when they are clear from the "
-            "conversation. This is separate from inspect_results browsing and export_to_file output. "
+            "conversation. This is separate from inspect_results browsing and formatter export output. "
             "Do not call this tool to ask for confirmation."
         ),
     )
@@ -1353,72 +1552,6 @@ def create_supervisor_agent(
 
     specialist_tools.append(recall_chat_history_tool)
 
-    # Export to File tool (always available - supervisor built-in, not a specialist agent)
-    # Allows supervisor to export data as downloadable CSV, TSV, or JSON files
-    @function_tool(
-        name_override="export_to_file",
-        description_override="""Export data to a downloadable file. Use only when the user explicitly asks to:
-- Export, download, or save data as CSV, TSV, or JSON
-- Get a spreadsheet or file version of results
-- "Give me this as CSV", "TSV format please", "Download as JSON"
-
-For existing extraction results, use inspect_results first to select the bounded objects/fields to export. Do not use this tool for ordinary result browsing, summarization, curation prep, or trace debugging.
-
-Supported formats: csv, tsv, json
-
-The tool returns file information including a download URL that will render as a download button in the chat."""
-    )
-    async def export_to_file_tool(
-        format_type: str,
-        data: str,
-        filename_hint: str = "export"
-    ) -> str:
-        """
-        Export data to a downloadable file.
-
-        Args:
-            format_type: "csv", "tsv", or "json"
-            data: The data to export as JSON string.
-                  For CSV/TSV: JSON array of objects (e.g., '[{"gene": "BRCA1", "id": "123"}]')
-                  For JSON: Any valid JSON structure
-            filename_hint: Suggested filename without extension (e.g., "gene_results")
-
-        Returns:
-            JSON string with file information including download_url
-        """
-        import json as json_module
-        from ..tools.file_output_tools import (
-            _save_csv_impl,
-            _save_tsv_impl,
-            _save_json_impl,
-        )
-
-        format_type_lower = format_type.lower().strip()
-
-        try:
-            if format_type_lower == "csv":
-                result = await _save_csv_impl(data, filename_hint)
-            elif format_type_lower == "tsv":
-                result = await _save_tsv_impl(data, filename_hint)
-            elif format_type_lower == "json":
-                result = await _save_json_impl(data, filename_hint)
-            else:
-                return json_module.dumps({
-                    "error": f"Unsupported format: {format_type}. Supported formats: csv, tsv, json"
-                })
-
-            # Return the file info as JSON string
-            return json_module.dumps(result)
-
-        except ValueError as e:
-            logger.error("export_to_file validation error: %s", e)
-            return json_module.dumps({"error": str(e)})
-        except Exception as e:
-            logger.error("export_to_file error generating file: %s", e)
-            return json_module.dumps({"error": f"Failed to generate file: {str(e)}"})
-
-    specialist_tools.append(export_to_file_tool)
-
     runtime_prompt_parts = [
         "CURATION PREP RULES:\n"
         f'- If the curator wants to move findings into curation prep, first ask exactly "{CURATION_PREP_CONFIRMATION_QUESTION}"\n'
@@ -1432,6 +1565,7 @@ The tool returns file information including a download URL that will render as a
             tool_specs=tool_specs,
             available_specialist_tools=specialist_tools,
             document_loaded=bool(document_id and user_id),
+            formatter_unavailable_note=formatter_unavailable_note,
         )
     )
     prompt_bundle = build_agent_prompt_layers(

@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -821,14 +822,103 @@ def test_create_supervisor_agent_without_document_adds_unavailable_note(monkeypa
     assert "ask_pdf_extraction_specialist" in created.instructions
     assert supervisor_agent.CURATION_PREP_CONFIRMATION_QUESTION in created.instructions
     assert any(getattr(tool, "name", "") == "prepare_for_curation" for tool in created.tools)
-    assert any(getattr(tool, "name", "") == "export_to_file" for tool in created.tools)
+    assert not any(getattr(tool, "name", "") == "export_to_file" for tool in created.tools)
     assert captured_pending["name"] == "Query Supervisor"
     assert captured_langfuse["metadata"]["specialist_count"] == len(created.tools)
 
 
-@pytest.mark.asyncio
-async def test_ordinary_non_flow_export_to_file_uses_standard_csv_save_tool(monkeypatch):
-    captured_save = {}
+def test_dynamic_formatter_specialist_receives_bound_bundle_context(monkeypatch):
+    captured_agent = {}
+    captured_tool = {}
+    fake_bundle = SimpleNamespace(flow_name="Chat Extraction Results")
+
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        lambda agent_key, **kwargs: captured_agent.update(
+            {"agent_key": agent_key, "kwargs": kwargs}
+        )
+        or SimpleNamespace(name="CSV File Formatter"),
+    )
+
+    def _fake_streaming_tool(**kwargs):
+        captured_tool.update(kwargs)
+        return SimpleNamespace(name=kwargs["tool_name"])
+
+    monkeypatch.setattr(
+        supervisor_agent,
+        "_create_streaming_tool",
+        _fake_streaming_tool,
+    )
+
+    tools = supervisor_agent._create_dynamic_specialist_tools(
+        tool_specs=[
+            {
+                "agent_key": "csv_output_formatter",
+                "name": "CSV File Formatter",
+                "description": "Create a CSV file",
+                "tool_name": "ask_csv_output_formatter_specialist",
+                "requires_document": False,
+                "group_rules_enabled": False,
+            }
+        ],
+        formatter_bundle=fake_bundle,
+        formatter_runtime_context="FORMATTER SOURCE BUNDLE:\nlatest",
+    )
+
+    assert [getattr(tool, "name", "") for tool in tools] == [
+        "ask_csv_output_formatter_specialist"
+    ]
+    assert captured_agent["agent_key"] == "csv_output_formatter"
+    assert captured_agent["kwargs"]["formatter_bundle"] is fake_bundle
+    assert captured_agent["kwargs"]["formatter_output_format"] == "csv"
+    assert captured_agent["kwargs"]["formatter_agent_id"] == "csv_output_formatter"
+    assert captured_agent["kwargs"]["additional_runtime_context"] == [
+        "FORMATTER SOURCE BUNDLE:\nlatest"
+    ]
+    assert captured_tool["tool_name"] == "ask_csv_output_formatter_specialist"
+
+
+def test_dynamic_formatter_specialist_is_skipped_without_bundle(monkeypatch):
+    def _unexpected_get_agent(*_args, **_kwargs):
+        raise AssertionError("formatter agent must not be constructed without a bundle")
+
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        _unexpected_get_agent,
+    )
+
+    tools = supervisor_agent._create_dynamic_specialist_tools(
+        tool_specs=[
+            {
+                "agent_key": "csv_output_formatter",
+                "name": "CSV File Formatter",
+                "description": "Create a CSV file",
+                "tool_name": "ask_csv_output_formatter_specialist",
+                "requires_document": False,
+                "group_rules_enabled": False,
+            }
+        ],
+        formatter_bundle=None,
+    )
+
+    assert tools == []
+
+
+def test_create_supervisor_agent_exposes_formatter_only_with_saved_chat_bundle(monkeypatch):
+    captured_agent: dict[str, Any] = {}
+    captured_bundle: dict[str, Any] = {}
+    captured_langfuse: dict[str, Any] = {}
+    fake_bundle = SimpleNamespace(flow_name="Chat Extraction Results")
+    fake_record = SimpleNamespace(
+        extraction_result_id="00000000-0000-4000-8000-000000000123",
+        created_at=datetime(2026, 6, 17, tzinfo=timezone.utc),
+        agent_key="generic_extractor",
+        adapter_key="generic",
+        source_kind=SimpleNamespace(value="chat"),
+        candidate_count=9,
+        document_id="doc-1",
+        flow_run_id=None,
+    )
 
     monkeypatch.setattr(
         "src.lib.openai_agents.config.get_agent_config",
@@ -841,12 +931,55 @@ async def test_ordinary_non_flow_export_to_file_uses_standard_csv_save_tool(monk
         lambda model, provider_override=None: model,
     )
     monkeypatch.setattr(supervisor_agent, "_build_model_settings", lambda **_kwargs: None)
-    monkeypatch.setattr(supervisor_agent, "_get_supervisor_specialist_specs", lambda: [])
-    _patch_supervisor_prompt_bundle(monkeypatch, version=17)
+    monkeypatch.setattr(
+        supervisor_agent,
+        "_get_supervisor_specialist_specs",
+        lambda: [
+            {
+                "agent_key": "csv_output_formatter",
+                "name": "CSV File Formatter",
+                "description": "Create a CSV file",
+                "tool_name": "ask_csv_output_formatter_specialist",
+                "requires_document": False,
+                "group_rules_enabled": False,
+            }
+        ],
+    )
+    monkeypatch.setattr(supervisor_agent, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(
+        supervisor_agent,
+        "list_extraction_results",
+        lambda **kwargs: [fake_record]
+        if str(kwargs.get("source_kind")) == "CurationExtractionSourceKind.CHAT"
+        or getattr(kwargs.get("source_kind"), "value", None) == "chat"
+        else [],
+    )
+
+    def _fake_build_bundle(**kwargs):
+        captured_bundle.update(kwargs)
+        return fake_bundle
+
+    monkeypatch.setattr(
+        "src.lib.flows.output_projection.build_extraction_result_artifact_bundle",
+        _fake_build_bundle,
+    )
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        lambda agent_key, **kwargs: captured_agent.update(
+            {"agent_key": agent_key, "kwargs": kwargs}
+        )
+        or SimpleNamespace(name="CSV File Formatter"),
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "_create_streaming_tool",
+        lambda **kwargs: SimpleNamespace(name=kwargs["tool_name"]),
+    )
+    _patch_supervisor_prompt_bundle(monkeypatch, version=18)
     monkeypatch.setattr(supervisor_agent, "set_pending_prompts", lambda *_a, **_k: None)
     monkeypatch.setattr(
         "src.lib.openai_agents.langfuse_client.log_agent_config",
-        lambda **_kwargs: None,
+        lambda **kwargs: captured_langfuse.update(kwargs),
     )
     monkeypatch.setattr(
         supervisor_agent,
@@ -861,47 +994,21 @@ async def test_ordinary_non_flow_export_to_file_uses_standard_csv_save_tool(monk
     )
     monkeypatch.setattr(supervisor_agent, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
 
-    async def _fake_save_csv_impl(data_json, filename, columns=None):
-        captured_save.update(
-            {
-                "data_json": data_json,
-                "filename": filename,
-                "columns": columns,
-            }
-        )
-        return {
-            "file_id": "file-chat-csv",
-            "filename": "chat_export.csv",
-            "format": "csv",
-            "download_url": "/api/files/file-chat-csv/download",
-        }
+    created = supervisor_agent.create_supervisor_agent(user_id="user-1", document_id="doc-1")
 
-    monkeypatch.setattr(
-        "src.lib.openai_agents.tools.file_output_tools._save_csv_impl",
-        _fake_save_csv_impl,
-    )
-
-    created = supervisor_agent.create_supervisor_agent(document_id=None, user_id=None)
-    export_tool = next(
-        tool
-        for tool in created.tools
-        if getattr(tool, "name", "") == "export_to_file"
-    )
-
-    response = await export_tool(
-        format_type="csv",
-        data='[{"gene":"BRCA1","status":"validated"}]',
-        filename_hint="chat_export",
-    )
-
-    payload = json.loads(response)
-    assert captured_save == {
-        "data_json": '[{"gene":"BRCA1","status":"validated"}]',
-        "filename": "chat_export",
-        "columns": None,
-    }
-    assert payload["file_id"] == "file-chat-csv"
-    assert payload["download_url"].endswith("/download")
+    tool_names = [getattr(tool, "name", "") for tool in created.tools]
+    assert "ask_csv_output_formatter_specialist" in tool_names
+    assert "export_to_file" not in tool_names
+    assert captured_agent["agent_key"] == "csv_output_formatter"
+    assert captured_agent["kwargs"]["formatter_bundle"] is fake_bundle
+    assert captured_agent["kwargs"]["formatter_output_format"] == "csv"
+    assert captured_agent["kwargs"]["formatter_agent_id"] == "csv_output_formatter"
+    formatter_context = captured_agent["kwargs"]["additional_runtime_context"][0]
+    assert "FORMATTER SOURCE BUNDLE" in formatter_context
+    assert 'source_ref="extraction-result:00000000-0000-4000-8000-000000000123"' in formatter_context
+    assert "EXPORT/DOWNLOAD ROUTING" in created.instructions
+    assert captured_bundle["extraction_results"] == [fake_record]
+    assert captured_langfuse["metadata"]["specialist_count"] == len(created.tools)
 
 
 def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(monkeypatch):
@@ -951,7 +1058,6 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
         "inspect_results",
         "inspect_chat_traces",
         "recall_chat_history",
-        "export_to_file",
     ]
     inspect_tool = next(
         tool
@@ -973,11 +1079,8 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
         "use inspect_results for persisted extraction objects"
         in tools_by_name["inspect_chat_traces"].description
     )
-    assert (
-        "Use only when the user explicitly asks"
-        in tools_by_name["export_to_file"].description
-    )
-    assert captured_langfuse["metadata"]["specialist_count"] == 5
+    assert "export_to_file" not in tools_by_name
+    assert captured_langfuse["metadata"]["specialist_count"] == 4
 
 
 def test_create_supervisor_agent_with_document_extracts_sections_and_enables_guardrails(monkeypatch):

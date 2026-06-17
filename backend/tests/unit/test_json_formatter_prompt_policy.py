@@ -26,9 +26,29 @@ def _load_prompt_content(relative_path: str) -> str:
 def test_json_formatter_prompt_uses_runtime_tool_contract(relative_path: str):
     content = _load_prompt_content(relative_path)
 
-    assert "`data_json` (required)" in content
-    assert "`filename` (required)" in content
-    assert "`pretty` (optional)" in content
-    assert "Do not paste JSON into the assistant response" in content
-    assert "filename_hint" not in content
+    for required in (
+        "inspect_output_artifacts",
+        "inspect_output_rows",
+        "inspect_field_values",
+        "build_default_projection_plan",
+        "validate_output_projection",
+        "preview_output_projection",
+        "finalize_and_save",
+        "formatter_cannot_complete",
+        "source-backed",
+        "JSON-shape",
+        "filename_hint",
+        "source_ref",
+        "latest `extraction-result:<uuid>`",
+        "Do not build replacement JSON payloads",
+    ):
+        assert required in content
+
+    for forbidden in (
+        "save_json_file",
+        "data_json",
+    ):
+        assert forbidden not in content
+
+    assert "Do not paste JSON content" in content
     assert "\nFormatted JSON output:\n" not in content

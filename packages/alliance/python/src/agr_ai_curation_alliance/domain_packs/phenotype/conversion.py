@@ -3,7 +3,7 @@
 Mirrors ``gene_expression``'s ``materialize_gene_expression_builder_state``: read finalized
 builder-workspace candidates and emit the shared extraction-output payload
 (``curatable_objects[]`` + ``metadata`` with RELATIVE ``metadata_refs``). The generic converter
-(``_domain_envelope_from_extraction_result``) turns that payload into a DomainEnvelope, nesting
+``domain_envelope_from_extraction_result`` turns that payload into a DomainEnvelope, nesting
 ``metadata`` under ``metadata.extraction_metadata``.
 
 POSTURE (preserve the existing pack — runbook §3): the migration changes the EXTRACTION

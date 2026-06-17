@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 import src.lib.curation_workspace.adapter_registry as adapter_registry_module
 from src.lib.curation_workspace import curation_prep_service as module
+from src.lib.curation_workspace.domain_envelope_normalization import (
+    domain_envelope_from_extraction_result,
+    normalized_optional_string,
+)
 from src.schemas.curation_prep import CurationPrepEnvelopeRef, CurationPrepScopeConfirmation
 from src.schemas.curation_workspace import (
     CurationExtractionResultRecord,
@@ -240,10 +246,54 @@ def _make_allele_domain_payload(
     }
 
 
+def test_domain_envelope_normalizer_promotes_extraction_result_to_objects_payload():
+    extraction_result = _make_domain_envelope_extraction_result()
+
+    envelope = domain_envelope_from_extraction_result(extraction_result)
+    dumped = envelope.model_dump(mode="json")
+
+    assert envelope.envelope_id == "extraction-result:extract-domain-1"
+    assert envelope.domain_pack_id == "gene"
+    assert dumped["objects"][0]["object_id"] == "gene-row-1"
+    assert "curatable_objects" not in dumped
+    assert envelope.metadata["semantic_source"] == "domain_envelope.objects"
+    assert envelope.metadata["source_extraction_result_id"] == "extract-domain-1"
+    assert envelope.metadata["source_adapter_key"] == "gene"
+
+
+def test_domain_envelope_normalizer_rejects_mixed_canonical_and_extractor_shapes():
+    extraction_result = _make_domain_envelope_extraction_result()
+    payload_json = extraction_result.payload_json
+    assert isinstance(payload_json, dict)
+    curatable_objects = list(payload_json["curatable_objects"])
+    mixed_payload = {
+        "envelope_id": "env-mixed-1",
+        "domain_pack_id": "gene",
+        "domain_pack_version": "0.1.0",
+        "status": "extracted",
+        "objects": curatable_objects,
+        "curatable_objects": curatable_objects,
+        "history": [],
+        "validation_findings": [],
+        "metadata": {},
+    }
+    mixed_result = extraction_result.model_copy(
+        update={"payload_json": mixed_payload},
+    )
+
+    with pytest.raises(ValueError, match="mixes DomainEnvelope.objects"):
+        domain_envelope_from_extraction_result(mixed_result)
+
+
+def test_normalized_optional_string_preserves_string_only_behavior():
+    assert normalized_optional_string(" gene ") == "gene"
+    assert normalized_optional_string(123) is None
+
+
 @pytest.mark.asyncio
 async def test_run_curation_prep_selects_envelope_refs_and_persists_output(monkeypatch):
     extraction_result = _make_domain_envelope_extraction_result()
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def _fake_ensure_domain_envelope_materialization(record, *, persist, db=None):
         assert record is extraction_result
@@ -441,7 +491,7 @@ async def test_run_curation_prep_allele_scope_uses_envelope_refs_not_prep_candid
             review_row_count=2,
         )
 
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def _fake_persist(request, *, db=None):
         captured["request"] = request

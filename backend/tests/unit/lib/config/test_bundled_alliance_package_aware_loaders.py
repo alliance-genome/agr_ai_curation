@@ -255,6 +255,32 @@ def test_bundled_alliance_owns_agr_curation_tool_policy(monkeypatch):
     assert "package default 'agr.alliance'" in policy.source_label
 
 
+def test_bundled_core_tool_policy_omits_raw_file_savers_and_registers_formatter_tools(monkeypatch):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+
+    policies = load_tool_policy_defaults(packages_dir=REPO_PACKAGES_DIR)
+
+    for tool_id in ("save_csv_file", "save_tsv_file", "save_json_file"):
+        assert tool_id not in policies
+
+    for tool_id in (
+        "explain_formatter_capabilities",
+        "inspect_output_artifacts",
+        "inspect_output_rows",
+        "inspect_field_values",
+        "build_default_projection_plan",
+        "validate_output_projection",
+        "preview_output_projection",
+        "finalize_and_save",
+        "formatter_cannot_complete",
+    ):
+        policy = policies[tool_id]
+        assert policy.category == "Output"
+        assert policy.curator_visible is False
+        assert policy.allow_attach is False
+        assert policy.allow_execute is True
+
+
 def test_bundled_alliance_gene_extractor_prompt_teaches_verified_evidence_flow(monkeypatch):
     monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
 

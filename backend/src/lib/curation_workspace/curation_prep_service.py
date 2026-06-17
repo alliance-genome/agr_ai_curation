@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Sequence
 
 from sqlalchemy.orm import Session
 
 from src.lib.curation_workspace.adapter_registry import load_curation_adapter_registry
 from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
+from src.lib.curation_workspace.domain_envelope_normalization import (
+    domain_envelope_from_extraction_result,
+    normalized_optional_string,
+    resolve_extraction_adapter_key,
+)
 from src.lib.curation_workspace.extraction_results import persist_extraction_result
 from src.lib.curation_workspace.models import DomainEnvelopeModel
 from src.lib.domain_envelopes.persistence import (
@@ -31,12 +36,7 @@ from src.schemas.curation_workspace import (
 )
 from src.schemas.domain_envelope import (
     DomainEnvelope,
-    DomainEnvelopeStatus,
-    HistoryActorType,
-    HistoryEvent,
-    HistoryEventKind,
 )
-from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
 
 _DETERMINISTIC_PREP_MODEL_NAME = "deterministic_programmatic_mapper_v1"
@@ -250,19 +250,13 @@ def _materialize_extraction_results_to_envelope_refs(
         selected_extraction_results=list(extraction_results),
     )
 
-def _resolve_extraction_adapter_key(
-    extraction_result: CurationExtractionResultRecord,
-) -> str | None:
-    return normalized_optional_string(extraction_result.adapter_key)
-
-
 def ensure_domain_envelope_materialization(
     extraction_result: CurationExtractionResultRecord,
     *,
     persist: bool,
     db: Session | None = None,
 ) -> CurationPrepEnvelopeRef:
-    envelope = _domain_envelope_from_extraction_result(extraction_result)
+    envelope = domain_envelope_from_extraction_result(extraction_result)
     materializer = _review_row_materializer_for_extraction_result(
         extraction_result,
         domain_pack_id=envelope.domain_pack_id,
@@ -315,69 +309,13 @@ def ensure_domain_envelope_materialization(
             session.close()
 
 
-def _domain_envelope_from_extraction_result(
-    extraction_result: CurationExtractionResultRecord,
-) -> DomainEnvelope:
-    payload = extraction_result.payload_json
-    if not isinstance(payload, Mapping):
-        raise ValueError("extraction payload is not a JSON object")
-
-    if {"envelope_id", "domain_pack_id", "objects"}.issubset(payload):
-        return DomainEnvelope.model_validate(payload)
-
-    source = DomainEnvelopeExtractionResult.model_validate(payload)
-    adapter_key = _resolve_extraction_adapter_key(extraction_result)
-    if adapter_key is None:
-        raise ValueError("extraction result does not declare adapter ownership")
-
-    registry = load_curation_adapter_registry()
-    domain_pack = registry.get_domain_pack(adapter_key)
-    if domain_pack is None:
-        raise ValueError(
-            f"adapter_key={adapter_key!r} does not declare a domain pack for envelope prep"
-        )
-
-    envelope_id = _extraction_envelope_id(extraction_result)
-    metadata = {
-        "semantic_source": "domain_envelope.objects",
-        "source_extraction_result_id": extraction_result.extraction_result_id,
-        "source_agent_key": extraction_result.agent_key,
-        "source_adapter_key": adapter_key,
-        "source_kind": extraction_result.source_kind.value,
-        "extraction_summary": source.summary,
-        "extraction_metadata": source.metadata.model_dump(mode="json"),
-        "run_summary": source.run_summary.model_dump(mode="json"),
-    }
-
-    return DomainEnvelope(
-        envelope_id=envelope_id,
-        domain_pack_id=domain_pack.pack_id,
-        domain_pack_version=domain_pack.version,
-        status=DomainEnvelopeStatus.EXTRACTED,
-        schema_ref=source.schema_ref,
-        objects=list(source.curatable_objects),
-        history=[
-            HistoryEvent(
-                event_type=HistoryEventKind.CREATED,
-                actor_type=HistoryActorType.SYSTEM,
-                actor_id=CURATION_PREP_AGENT_ID,
-                message=(
-                    "Created persisted domain envelope from structured extraction result "
-                    f"{extraction_result.extraction_result_id}."
-                ),
-            )
-        ],
-        metadata=metadata,
-    )
-
-
 def _review_row_materializer_for_extraction_result(
     extraction_result: CurationExtractionResultRecord,
     *,
     domain_pack_id: str,
 ) -> Any:
     registry = load_curation_adapter_registry()
-    adapter_key = _resolve_extraction_adapter_key(extraction_result)
+    adapter_key = resolve_extraction_adapter_key(extraction_result)
     materializer = (
         registry.get_review_row_materializer(adapter_key)
         if adapter_key is not None
@@ -392,14 +330,6 @@ def _review_row_materializer_for_extraction_result(
     return materializer
 
 
-def _extraction_envelope_id(extraction_result: CurationExtractionResultRecord) -> str:
-    metadata = dict(extraction_result.metadata or {})
-    envelope_id = normalized_optional_string(metadata.get("envelope_id"))
-    if envelope_id is not None:
-        return envelope_id
-    return f"extraction-result:{extraction_result.extraction_result_id}"
-
-
 def _checkpoint_project_key(
     extraction_result: CurationExtractionResultRecord,
     envelope: DomainEnvelope,
@@ -411,7 +341,7 @@ def _checkpoint_project_key(
     domain_prefix = envelope.domain_pack_id.split(".", 1)[0]
     if domain_prefix:
         return domain_prefix
-    adapter_key = _resolve_extraction_adapter_key(extraction_result)
+    adapter_key = resolve_extraction_adapter_key(extraction_result)
     if adapter_key is not None:
         return adapter_key
     raise ValueError("Unable to resolve project_key for domain envelope checkpoint")
@@ -584,13 +514,6 @@ def build_flow_scope_confirmation(
         adapter_keys=adapter_keys,
         notes=[f"Confirmed from flow '{flow_name}' execution context."],
     )
-
-
-def normalized_optional_string(value: Any) -> str | None:
-    if value is None or not isinstance(value, str):
-        return None
-    normalized = value.strip()
-    return normalized or None
 
 
 def _unique_non_empty(values: Iterable[str | None]) -> list[str]:

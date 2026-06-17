@@ -72,9 +72,6 @@ _LAZY_EXPORTS = {
     ),
     "go_api_call": (".rest", "go_api_call"),
     "quickgo_api_call": (".rest", "quickgo_api_call"),
-    "save_csv_file": (".file_output", "save_csv_file"),
-    "save_json_file": (".file_output", "save_json_file"),
-    "save_tsv_file": (".file_output", "save_tsv_file"),
 }
 
 __all__ = list(_LAZY_EXPORTS)

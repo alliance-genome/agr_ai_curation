@@ -22,22 +22,22 @@ import asyncio
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 import re
 from types import SimpleNamespace
-from typing import Any, AsyncGenerator, Dict, List, Mapping, Optional, Set
+from typing import Any, AsyncGenerator, Dict, List, Mapping, Optional, Set, cast
 from uuid import uuid4
 
-from agents import Agent, Runner, RunContextWrapper, function_tool
-from pydantic import ValidationError
-
+from agents import Agent, RunContextWrapper, function_tool
 from src.lib.context import (
     get_current_run_config,
     get_current_trace_id,
     reset_current_output_filename_stem,
     set_current_output_filename_stem,
+    set_current_session_id,
+    set_current_user_id,
 )
 from src.lib.curation_workspace import (
     CurationPrepPersistenceContext,
@@ -50,6 +50,10 @@ from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_
 from src.lib.curation_workspace.curation_prep_service import (
     build_flow_scope_confirmation as _build_flow_scope_confirmation,
     ensure_domain_envelope_materialization,
+)
+from src.lib.curation_workspace.domain_envelope_normalization import (
+    domain_envelope_from_extraction_result,
+    is_canonical_domain_envelope_payload,
 )
 from src.lib.curation_workspace.bootstrap_service import run_flow_curation_handoff
 from src.lib.curation_workspace.extraction_results import list_extraction_results
@@ -88,13 +92,9 @@ from src.lib.agent_studio.flow_agent_policy import (
 from src.lib.flows.output_projection import (
     FlowOutputArtifactBundle,
     FlowOutputProjectionPlan,
-    FlowOutputProjectionResult,
     build_flow_output_artifact_bundle,
     default_projection_plan,
     finalize_output_projection,
-    inspect_output_artifacts,
-    projection_plan_allows_empty_bundle,
-    preview_output_projection,
 )
 from src.lib.flows.validation_attachments import validation_schedule_from_node_data
 from src.models.sql.curation_flow import CurationFlow
@@ -107,10 +107,8 @@ from src.lib.openai_agents.config import (
     get_agent_config,
     get_model_for_agent,
     build_model_settings,
-    get_flow_output_projection_planner_preview_limit,
     get_flow_step_evidence_preview_limit,
     get_flow_step_output_preview_chars,
-    get_max_turns,
     resolve_model_provider,
 )
 from src.lib.runtime_payload_budget import provider_context_preflight
@@ -146,35 +144,14 @@ _FLOW_OUTPUT_FORMATTER_AGENT_IDS_BY_FORMAT = {
     "json": _FLOW_JSON_FORMATTER_AGENT_IDS,
     "chat": _FLOW_CHAT_FORMATTER_AGENT_IDS,
 }
-_FLOW_OUTPUT_PROJECTION_PLANNER_TOOL_NAMES = frozenset(
-    {
-        "inspect_output_artifacts",
-        "preview_output_projection",
-        "finalize_output_projection",
-    }
-)
-_FLOW_OUTPUT_PROJECTION_CUSTOMIZATION_HINT_PATTERN = re.compile(
-    r"\b("
-    r"artifact|object|objects|evidence|validation|finding|findings|row|rows|"
-    r"column|columns|header|headers|rename|omit|exclude|include|filter|"
-    r"sort|order|group|grouped|bundle|json|table|section|sections|bullet|"
-    r"derived|derive|combine|concat|join|count|map|label|limit|max"
-    r")\b",
-    re.IGNORECASE,
-)
-_FLOW_OUTPUT_PROJECTION_CURATOR_REQUEST_HINT_PATTERN = re.compile(
-    r"\b("
-    r"artifact rows?|object rows?|evidence rows?|validation findings?|"
-    r"row source|rows?|columns?|headers?|rename|call .* column|omit|exclude|"
-    r"skip|filter|only include|include only|validated rows?|sort|order by|"
-    r"before|after|first|last|precede|follows?|group|grouped|bundle|table|sections?|bullets?|derived|derive|"
-    r"combine|concat|join|count|map|limit|max"
-    r")\b",
-    re.IGNORECASE,
-)
-# Env-configurable via FLOW_OUTPUT_PROJECTION_PLANNER_PREVIEW_LIMIT (default 5);
-# see config.py.
-_FLOW_OUTPUT_PROJECTION_PLANNER_PREVIEW_LIMIT = get_flow_output_projection_planner_preview_limit()
+_FLOW_FILE_FORMATTER_EXECUTION_AGENT_ID_BY_ALIAS = {
+    "csv_output_formatter": "csv_formatter",
+    "csv_formatter": "csv_formatter",
+    "tsv_output_formatter": "tsv_formatter",
+    "tsv_formatter": "tsv_formatter",
+    "json_output_formatter": "json_formatter",
+    "json_formatter": "json_formatter",
+}
 CURATION_HANDOFF_AGENT_ID = "curation_handoff"
 CURATION_HANDOFF_READY_EVENT = "CURATION_HANDOFF_READY"
 FLOW_EXTRACTION_HANDOFF_AUDIT_EVENT = "FLOW_EXTRACTION_HANDOFF_AUDIT"
@@ -214,6 +191,12 @@ def _tool_safe_agent_id(agent_id: str) -> str:
     """Normalize agent_id into a valid Python identifier segment for tool names."""
     normalized = re.sub(r"[^a-zA-Z0-9_]+", "_", str(agent_id or "")).strip("_")
     return normalized or "agent"
+
+
+def _flow_file_formatter_execution_agent_id(agent_id: str) -> str:
+    """Return the DB/system agent key used to run a terminal file formatter."""
+
+    return _FLOW_FILE_FORMATTER_EXECUTION_AGENT_ID_BY_ALIAS.get(agent_id, agent_id)
 
 
 def _normalize_metadata_value(value: Any) -> str:
@@ -394,448 +377,6 @@ def _truncate_tool_output(value: Any, max_chars: int = _FLOW_STEP_OUTPUT_PREVIEW
         return text
     overflow = len(text) - max_chars
     return f"{text[:max_chars]}... [truncated {overflow} chars]"
-
-
-@dataclass
-class _FlowOutputProjectionPlannerState:
-    final_plan: FlowOutputProjectionPlan | None = None
-    final_result: FlowOutputProjectionResult | None = None
-    final_summary: dict[str, Any] | None = None
-    errors: list[str] | None = None
-    finalize_attempt_count: int = 0
-
-    def record_error(self, message: str) -> None:
-        if self.errors is None:
-            self.errors = []
-        self.errors.append(message)
-
-
-def _projection_tool_json(payload: Mapping[str, Any]) -> str:
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
-
-
-def _projection_plan_from_tool_payload(
-    plan_json: str | Mapping[str, Any],
-    *,
-    output_format: str,
-) -> FlowOutputProjectionPlan:
-    raw_plan: Any
-    if isinstance(plan_json, str):
-        raw_text = plan_json.strip()
-        if not raw_text:
-            raise ValueError("Projection plan JSON is empty.")
-        try:
-            raw_plan = json.loads(raw_text)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Projection plan is not valid JSON: {exc.msg}") from exc
-    elif isinstance(plan_json, Mapping):
-        raw_plan = dict(plan_json)
-    else:
-        raise ValueError("Projection plan must be a JSON object or encoded JSON object.")
-
-    if isinstance(raw_plan, Mapping) and isinstance(raw_plan.get("plan"), Mapping):
-        raw_plan = raw_plan["plan"]
-    if not isinstance(raw_plan, Mapping):
-        raise ValueError("Projection plan must decode to a JSON object.")
-
-    try:
-        plan = FlowOutputProjectionPlan.model_validate(raw_plan)
-    except ValidationError as exc:
-        raise ValueError(f"Projection plan schema is invalid: {exc}") from exc
-    return plan.model_copy(update={"format": output_format})
-
-
-def _projection_result_summary(
-    result: FlowOutputProjectionResult,
-) -> dict[str, Any]:
-    warnings = [
-        _truncate_tool_output(warning, 240)
-        for warning in result.warnings[:20]
-    ]
-    if len(result.warnings) > 20:
-        warnings.append(f"... [truncated {len(result.warnings) - 20} warnings]")
-    return {
-        "status": "ok",
-        "format": result.format,
-        "row_source": result.row_source,
-        "columns": [
-            column.model_dump(mode="json")
-            for column in result.columns
-        ],
-        "total_count": result.total_count,
-        "row_count": len(result.rows),
-        "truncated": result.truncated,
-        "group_by": result.group_by,
-        "warnings": warnings,
-    }
-
-
-def _build_output_projection_planner_tools(
-    *,
-    bundle: FlowOutputArtifactBundle,
-    output_format: str,
-    state: _FlowOutputProjectionPlannerState,
-) -> list[Any]:
-    """Build bounded projection-planning tools for a terminal flow formatter."""
-
-    @function_tool(
-        name_override="inspect_output_artifacts",
-        description_override=(
-            "Inspect bounded row-source counts, default columns, field refs, "
-            "and compact examples for the completed flow artifacts."
-        ),
-        strict_mode=False,
-    )
-    async def _inspect_output_artifacts() -> str:
-        return _projection_tool_json(
-            {
-                "status": "ok",
-                "inventory": inspect_output_artifacts(bundle),
-            }
-        )
-
-    @function_tool(
-        name_override="preview_output_projection",
-        description_override=(
-            "Validate a proposed projection plan and return a bounded preview. "
-            "Pass the plan as encoded JSON in plan_json."
-        ),
-        strict_mode=False,
-    )
-    async def _preview_output_projection(plan_json: str) -> str:
-        try:
-            plan = _projection_plan_from_tool_payload(
-                plan_json,
-                output_format=output_format,
-            )
-            preview = preview_output_projection(
-                bundle,
-                plan,
-                limit=_FLOW_OUTPUT_PROJECTION_PLANNER_PREVIEW_LIMIT,
-            )
-            return _projection_tool_json(
-                {
-                    "status": preview.status,
-                    "preview": preview.model_dump(mode="json"),
-                }
-            )
-        except Exception as exc:
-            message = str(exc)
-            state.record_error(message)
-            return _projection_tool_json(
-                {
-                    "status": "invalid",
-                    "errors": [message],
-                }
-            )
-
-    @function_tool(
-        name_override="finalize_output_projection",
-        description_override=(
-            "Finalize the validated projection plan. This records only the plan "
-            "and a summary; the runtime saves or renders the output."
-        ),
-        strict_mode=False,
-    )
-    async def _finalize_output_projection(plan_json: str) -> str:
-        state.finalize_attempt_count += 1
-        try:
-            plan = _projection_plan_from_tool_payload(
-                plan_json,
-                output_format=output_format,
-            )
-            result = finalize_output_projection(bundle, plan)
-        except Exception as exc:
-            message = str(exc)
-            state.record_error(message)
-            return _projection_tool_json(
-                {
-                    "status": "invalid",
-                    "errors": [message],
-                    "attempt": state.finalize_attempt_count,
-                }
-            )
-
-        state.final_plan = plan
-        state.final_result = result
-        state.final_summary = _projection_result_summary(result)
-        return _projection_tool_json(state.final_summary)
-
-    return [
-        _inspect_output_artifacts,
-        _preview_output_projection,
-        _finalize_output_projection,
-    ]
-
-
-def _projection_planner_inventory_summary(
-    bundle: FlowOutputArtifactBundle,
-) -> dict[str, Any]:
-    row_sources = {
-        row_source: len(bundle.rows_for_source(row_source))  # type: ignore[arg-type]
-        for row_source in ("artifact", "object", "evidence", "validation_finding")
-    }
-    fields = [
-        {
-            "ref": field.ref,
-            "label": field.label,
-            "row_source": field.row_source,
-            "value_type": field.value_type,
-            "non_empty_count": field.non_empty_count,
-            "examples": field.examples[:2],
-        }
-        for field in bundle.field_catalog[:80]
-    ]
-    warnings = [
-        _truncate_tool_output(warning, 240)
-        for warning in bundle.warnings[:20]
-    ]
-    if len(bundle.warnings) > 20:
-        warnings.append(f"... [truncated {len(bundle.warnings) - 20} warnings]")
-    return {
-        "flow_name": bundle.flow_name,
-        "flow_run_id": bundle.flow_run_id,
-        "document_id": bundle.document_id,
-        "artifact_count": len(bundle.artifacts),
-        "default_row_source": bundle.default_row_source,
-        "row_sources": row_sources,
-        "fields": fields,
-        "warnings": warnings,
-    }
-
-
-def _build_output_projection_planner_instructions(
-    *,
-    output_format: str,
-    agent_name: str,
-) -> str:
-    return (
-        f"You are the flow-output projection planner for {agent_name}. "
-        f"The terminal output format is {output_format}.\n\n"
-        "Your job is to choose a small FlowOutputProjectionPlan that satisfies "
-        "the curator's output-shaping request using only the fields exposed by "
-        "the projection tools. You must not write CSV, TSV, JSON, markdown, or "
-        "file contents yourself. You must not call or request save-file tools. "
-        "The runtime will save or render the final output after your plan is "
-        "validated.\n\n"
-        "Use inspect_output_artifacts when you need row-source counts, fields, "
-        "or examples. Use preview_output_projection to check columns, filters, "
-        "sorting, grouping, and transforms. Always call finalize_output_projection "
-        "with the final valid plan. If a tool returns validation errors, correct "
-        "the plan once using the available field refs and finalize again."
-    )
-
-
-def _build_output_projection_planner_input(
-    *,
-    bundle: FlowOutputArtifactBundle,
-    output_format: str,
-    default_plan: FlowOutputProjectionPlan,
-    agent_id: str,
-    agent_name: str,
-    node_data: Mapping[str, Any] | None,
-    resolved_query: str | None,
-) -> str:
-    node_data = node_data or {}
-    payload = {
-        "terminal_format": output_format,
-        "agent_id": agent_id,
-        "agent_name": agent_name,
-        "default_plan": default_plan.model_dump(mode="json"),
-        "artifact_inventory_summary": _projection_planner_inventory_summary(bundle),
-        "curator_output_request": {
-            "step_goal": _truncate_tool_output(node_data.get("step_goal"), 1200),
-            "custom_instructions": _truncate_tool_output(
-                node_data.get("custom_instructions"),
-                1200,
-            ),
-            "flow_step_query": _truncate_tool_output(resolved_query, 1600),
-        },
-    }
-    return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
-
-
-def _build_output_projection_planner_retry_input(
-    *,
-    previous_input: str,
-    state: _FlowOutputProjectionPlannerState,
-) -> str:
-    errors = state.errors or []
-    payload = {
-        "retry_reason": (
-            "No valid projection was finalized. Correct the projection plan and "
-            "call finalize_output_projection exactly once with a valid plan."
-        ),
-        "previous_errors": errors[-5:],
-        "previous_request": previous_input,
-    }
-    return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
-
-
-def _flow_output_default_row_source_is_ambiguous(
-    *,
-    bundle: FlowOutputArtifactBundle,
-    output_format: str,
-) -> bool:
-    if output_format == "tsv":
-        return False
-    richer_sources = [
-        row_source
-        for row_source in ("object", "evidence", "validation_finding")
-        if bundle.rows_for_source(row_source)  # type: ignore[arg-type]
-    ]
-    return bundle.default_row_source == "artifact" and len(richer_sources) > 1
-
-
-def _flow_query_section_text(resolved_query: str | None, heading: str) -> str:
-    text = str(resolved_query or "")
-    marker = f"{heading}:\n"
-    start = text.find(marker)
-    if start < 0:
-        return ""
-    start += len(marker)
-    end = text.find("\n\n", start)
-    if end < 0:
-        end = len(text)
-    return text[start:end].strip()
-
-
-def _has_projection_customization_hint(
-    text: str | None,
-    *,
-    curator_request: bool = False,
-) -> bool:
-    pattern = (
-        _FLOW_OUTPUT_PROJECTION_CURATOR_REQUEST_HINT_PATTERN
-        if curator_request
-        else _FLOW_OUTPUT_PROJECTION_CUSTOMIZATION_HINT_PATTERN
-    )
-    return bool(
-        text
-        and pattern.search(str(text))
-    )
-
-
-def _flow_output_should_run_projection_planner(
-    *,
-    bundle: FlowOutputArtifactBundle,
-    output_format: str,
-    node_data: Mapping[str, Any] | None,
-    resolved_query: str | None = None,
-) -> bool:
-    node_data = node_data or {}
-    custom_instructions = str(node_data.get("custom_instructions") or "").strip()
-    if custom_instructions:
-        return True
-
-    step_goal = str(node_data.get("step_goal") or "").strip()
-    if _has_projection_customization_hint(step_goal):
-        return True
-
-    curator_run_request = _flow_query_section_text(
-        resolved_query,
-        "Curator run request",
-    )
-    if _has_projection_customization_hint(curator_run_request, curator_request=True):
-        return True
-
-    return _flow_output_default_row_source_is_ambiguous(
-        bundle=bundle,
-        output_format=output_format,
-    )
-
-
-def _projection_planner_failure_message(
-    state: _FlowOutputProjectionPlannerState,
-) -> str:
-    errors = state.errors or []
-    if errors:
-        return "; ".join(errors[-5:])
-    return "planner did not call finalize_output_projection with a valid plan"
-
-
-async def _run_output_projection_planner(
-    *,
-    bundle: FlowOutputArtifactBundle,
-    output_format: str,
-    default_plan: FlowOutputProjectionPlan,
-    agent_id: str,
-    agent_name: str,
-    node_data: Mapping[str, Any] | None,
-    resolved_query: str | None,
-) -> FlowOutputProjectionResult:
-    """Ask a dedicated planner to finalize a projection plan for custom output."""
-
-    state = _FlowOutputProjectionPlannerState()
-    tools = _build_output_projection_planner_tools(
-        bundle=bundle,
-        output_format=output_format,
-        state=state,
-    )
-
-    config = get_agent_config(agent_id)
-    provider = resolve_model_provider(config.model)
-    model = get_model_for_agent(config.model, provider_override=provider)
-    model_settings = build_model_settings(
-        model=config.model,
-        temperature=config.temperature,
-        reasoning_effort=config.reasoning,
-        tool_choice=config.tool_choice,
-        parallel_tool_calls=False,
-        provider_override=provider,
-    )
-    planner_agent = Agent(
-        name=f"{agent_name} Projection Planner",
-        instructions=_build_output_projection_planner_instructions(
-            output_format=output_format,
-            agent_name=agent_name,
-        ),
-        model=model,
-        model_settings=model_settings,
-        tools=tools,
-    )
-
-    planner_input = _build_output_projection_planner_input(
-        bundle=bundle,
-        output_format=output_format,
-        default_plan=default_plan,
-        agent_id=agent_id,
-        agent_name=agent_name,
-        node_data=node_data,
-        resolved_query=resolved_query,
-    )
-    # Use the standard agent turn budget (default 60), not a tight clamp. The
-    # planner inspects row sources/fields, previews, corrects, and finalizes a
-    # multi-column plan; an 8-turn clamp exhausted before finalizing on richer
-    # bundles (e.g. multi-column allele TSV worklists), failing the whole flow.
-    max_turns = get_max_turns()
-
-    for attempt in range(2):
-        run_input = (
-            planner_input
-            if attempt == 0
-            else _build_output_projection_planner_retry_input(
-                previous_input=planner_input,
-                state=state,
-            )
-        )
-        await Runner.run(planner_agent, run_input, max_turns=max_turns)
-        if state.final_result is not None:
-            logger.info(
-                "[Flow Executor] Projection planner finalized %s output for '%s' "
-                "(row_source=%s, rows=%s, attempts=%s)",
-                output_format.upper(),
-                agent_id,
-                state.final_result.row_source,
-                state.final_result.total_count,
-                attempt + 1,
-            )
-            return state.final_result
-
-    raise RuntimeError(
-        "Flow output projection planner did not finalize a valid plan: "
-        f"{_projection_planner_failure_message(state)}"
-    )
 
 
 def _build_flow_step_instruction_prefix(
@@ -1057,85 +598,29 @@ def _resolve_flow_terminal_output_format(agent_id: str) -> Optional[str]:
 def _flow_terminal_projection_error(agent_id: str, reason: str) -> FlowTerminalOutputProjectionError:
     return FlowTerminalOutputProjectionError(
         "Flow terminal formatter "
-        f"'{agent_id}' could not project runtime-owned output: {reason}. "
-        "Flow terminal formatter steps cannot fall back to ordinary formatter "
-        "models or model-written file contents."
+        f"'{agent_id}' could not prepare runtime-owned output: {reason}. "
+        "Flow terminal formatter steps cannot fall back to raw serializers "
+        "or model-written file contents."
     )
 
 
-async def _save_projected_file_output(
-    *,
-    output_format: str,
-    projection: FlowOutputProjectionResult,
-    descriptor: str,
-) -> dict[str, Any]:
-    data_rows = projection.rows
-    if output_format == "csv":
-        from src.lib.openai_agents.tools.file_output_tools import _save_csv_impl
-
-        return await _save_csv_impl(
-            data_json=json.dumps(data_rows, ensure_ascii=False),
-            filename=descriptor,
-            columns=json.dumps(
-                [column.key for column in projection.columns],
-                ensure_ascii=False,
-            ),
-        )
-    if output_format == "tsv":
-        from src.lib.openai_agents.tools.file_output_tools import _save_tsv_impl
-
-        data_rows = [
-            {
-                key: str(value or "").strip()
-                for key, value in row.items()
-            }
-            for row in projection.rows
-        ]
-        return await _save_tsv_impl(
-            data_json=json.dumps(data_rows, ensure_ascii=False),
-            filename=descriptor,
-            columns=json.dumps(
-                [column.key for column in projection.columns],
-                ensure_ascii=False,
-            ),
-        )
-    if output_format == "json":
-        from src.lib.openai_agents.tools.file_output_tools import _save_json_impl
-
-        json_data = projection.json_data if projection.json_data is not None else projection.rows
-        return await _save_json_impl(
-            data_json=json.dumps(json_data, ensure_ascii=False),
-            filename=descriptor,
-            pretty=True,
-        )
-    raise ValueError(f"Unsupported projected file output format: {output_format}")
+def _flow_file_output_format(agent_id: str) -> str | None:
+    output_format = _resolve_flow_terminal_output_format(agent_id)
+    if output_format in {"csv", "tsv", "json"}:
+        return output_format
+    return None
 
 
-async def _try_project_terminal_flow_output(
+def _build_terminal_flow_artifact_bundle(
     *,
     agent_id: str,
+    output_format: str,
     completed_steps: list[dict[str, Any]],
     flow_name: str,
-    agent_name: str | None = None,
     flow_run_id: str | None = None,
     document_id: str | None = None,
-    projection_plan: Mapping[str, Any] | None = None,
-    node_data: Mapping[str, Any] | None = None,
-    resolved_query: str | None = None,
-    output_filename_descriptor: str | None = None,
-) -> Optional[str]:
-    """Deterministically project terminal flow output from completed artifacts."""
-
-    output_format = _resolve_flow_terminal_output_format(agent_id)
-    if output_format is None:
-        return None
-
+) -> FlowOutputArtifactBundle:
     try:
-        plan_for_empty_check: FlowOutputProjectionPlan | None = None
-        if projection_plan is not None:
-            plan_for_empty_check = FlowOutputProjectionPlan.model_validate(projection_plan).model_copy(
-                update={"format": output_format}
-            )
         bundle = build_flow_output_artifact_bundle(
             completed_steps=completed_steps,
             flow_name=flow_name,
@@ -1143,77 +628,207 @@ async def _try_project_terminal_flow_output(
             document_id=document_id,
             output_format=output_format,  # type: ignore[arg-type]
         )
-        if not bundle.artifacts and not (
-            plan_for_empty_check is not None
-            and projection_plan_allows_empty_bundle(plan_for_empty_check)
-        ):
+        if not bundle.artifacts:
             raise _flow_terminal_projection_error(
                 agent_id,
                 "no completed structured artifacts were available before the terminal formatter",
             )
-
-        default_plan = default_projection_plan(bundle, output_format=output_format)  # type: ignore[arg-type]
-        if plan_for_empty_check is not None:
-            plan = plan_for_empty_check
-            projection = finalize_output_projection(bundle, plan)
-        elif _flow_output_should_run_projection_planner(
-            bundle=bundle,
-            output_format=output_format,
-            node_data=node_data,
-            resolved_query=resolved_query,
-        ):
-            projection = await _run_output_projection_planner(
-                bundle=bundle,
-                output_format=output_format,
-                default_plan=default_plan,
-                agent_id=agent_id,
-                agent_name=agent_name or agent_id,
-                node_data=node_data,
-                resolved_query=resolved_query,
-            )
-        else:
-            projection = finalize_output_projection(bundle, default_plan)
+        return bundle
     except FlowTerminalOutputProjectionError as exc:
-        # Already a specific projection error -- log the reason in plain logs
-        # (backend logs otherwise only record the tool-result length) and re-raise
-        # as-is rather than re-wrapping (which doubled the message).
         logger.warning(
-            "[Flow Executor] Terminal formatter '%s' could not project output: %s",
+            "[Flow Executor] Terminal formatter '%s' could not prepare output: %s",
             agent_id,
             exc,
         )
         raise
     except Exception as exc:
         logger.warning(
-            "[Flow Executor] Terminal formatter '%s' could not project output: %s",
+            "[Flow Executor] Terminal formatter '%s' could not prepare output: %s",
             agent_id,
             exc,
         )
         raise _flow_terminal_projection_error(agent_id, str(exc)) from exc
 
-    if output_format == "chat":
+
+def _flow_formatter_source_counts(bundle: FlowOutputArtifactBundle) -> dict[str, int]:
+    return {
+        row_source: len(bundle.rows_for_source(row_source))  # type: ignore[arg-type]
+        for row_source in ("artifact", "object", "evidence", "validation_finding")
+    }
+
+
+def _build_flow_formatter_runtime_context(
+    *,
+    agent_id: str,
+    agent_name: str,
+    output_format: str,
+    bundle: FlowOutputArtifactBundle,
+    node_data: Mapping[str, Any],
+    resolved_query: str,
+    output_filename_descriptor: str | None,
+) -> str:
+    raw_projection_plan = node_data.get("projection_plan")
+    projection_plan = dict(raw_projection_plan) if isinstance(raw_projection_plan, Mapping) else None
+    payload = {
+        "agent_id": agent_id,
+        "agent_name": agent_name,
+        "terminal_format": output_format,
+        "flow_name": bundle.flow_name,
+        "flow_run_id": bundle.flow_run_id,
+        "document_id": bundle.document_id,
+        "artifact_count": len(bundle.artifacts),
+        "default_row_source": bundle.default_row_source,
+        "row_sources": _flow_formatter_source_counts(bundle),
+        "filename_hint": output_filename_descriptor,
+        "configured_projection_plan": projection_plan,
+        "curator_output_request": {
+            "step_goal": _truncate_tool_output(node_data.get("step_goal"), 1200),
+            "custom_instructions": _truncate_tool_output(
+                node_data.get("custom_instructions"),
+                1200,
+            ),
+            "flow_step_query": _truncate_tool_output(resolved_query, 1600),
+        },
+    }
+    return (
+        "FLOW FORMATTER SOURCE BUNDLE\n"
+        "Your runtime tools are bound to the completed saved flow artifacts summarized below. "
+        "Use the formatter tools to inspect, validate, preview, and call finalize_and_save exactly once. "
+        "Do not ask for previous-step prose as input and do not compose file rows yourself. "
+        "If configured_projection_plan is present, treat it as the flow owner's requested starting plan: "
+        "validate/preview it with the runtime tools, adjust only through saved field refs if needed, then finalize. "
+        "If the saved bundle cannot support the requested output, call formatter_cannot_complete.\n"
+        + json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+    )
+
+
+def _make_flow_runtime_formatter_tool(
+    *,
+    agent_id: str,
+    agent_name: str,
+    output_format: str,
+    tool_name: str,
+    tool_description: str,
+    specialist_name: str,
+    base_context: Mapping[str, Any],
+    step_instruction_prefix: str,
+    completed_steps: list[dict[str, Any]],
+    flow_name: str,
+    flow_run_id: str | None,
+    document_id: str | None,
+    node_data: Mapping[str, Any],
+):
+    @function_tool(
+        name_override=tool_name,
+        description_override=tool_description,
+        strict_mode=False,
+    )
+    async def _runtime_formatter_tool(
+        ctx: RunContextWrapper[Any],
+        query: str,
+        output_filename_descriptor: str = "",
+    ) -> str:
+        bundle = _build_terminal_flow_artifact_bundle(
+            agent_id=agent_id,
+            output_format=output_format,
+            completed_steps=completed_steps,
+            flow_name=flow_name,
+            flow_run_id=flow_run_id,
+            document_id=document_id,
+        )
+        runtime_contexts = [
+            context
+            for context in [
+                step_instruction_prefix,
+                _build_flow_formatter_runtime_context(
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    output_format=output_format,
+                    bundle=bundle,
+                    node_data=node_data,
+                    resolved_query=query,
+                    output_filename_descriptor=output_filename_descriptor or None,
+                ),
+            ]
+            if context
+        ]
+        agent_kwargs = dict(base_context)
+        agent_kwargs.update(
+            {
+                "formatter_bundle": bundle,
+                "formatter_output_format": output_format,
+                "formatter_agent_id": agent_id,
+                "additional_runtime_context": runtime_contexts,
+            }
+        )
+        execution_agent_id = _flow_file_formatter_execution_agent_id(agent_id)
+        agent = get_agent_by_id(execution_agent_id, **agent_kwargs)
+        streaming_tool = cast(
+            Any,
+            _create_streaming_tool(
+                agent=agent,
+                tool_name=tool_name,
+                tool_description=tool_description,
+                specialist_name=specialist_name,
+                inline_chat_persistence=False,
+                isolate_run_config=True,
+            ),
+        )
+        tool_ctx = SimpleNamespace(
+            tool_name=tool_name,
+            run_config=getattr(ctx, "run_config", None),
+        )
+        return await streaming_tool.on_invoke_tool(
+            tool_ctx,
+            json.dumps({"query": query}),
+        )
+
+    return _runtime_formatter_tool
+
+
+def _make_flow_chat_output_tool(
+    *,
+    agent_id: str,
+    output_format: str,
+    tool_name: str,
+    tool_description: str,
+    completed_steps: list[dict[str, Any]],
+    flow_name: str,
+    flow_run_id: str | None,
+    document_id: str | None,
+    node_data: Mapping[str, Any],
+):
+    @function_tool(
+        name_override=tool_name,
+        description_override=tool_description,
+        strict_mode=False,
+    )
+    async def _chat_output_tool(query: str) -> str:
+        _ = query
+        bundle = _build_terminal_flow_artifact_bundle(
+            agent_id=agent_id,
+            output_format=output_format,
+            completed_steps=completed_steps,
+            flow_name=flow_name,
+            flow_run_id=flow_run_id,
+            document_id=document_id,
+        )
+        raw_plan = node_data.get("projection_plan")
+        if isinstance(raw_plan, Mapping):
+            plan = FlowOutputProjectionPlan.model_validate(raw_plan).model_copy(
+                update={"format": output_format}
+            )
+        else:
+            plan = default_projection_plan(bundle, output_format=output_format)  # type: ignore[arg-type]
+        projection = finalize_output_projection(bundle, plan)
         logger.info(
-            "[Flow Executor] Rendered chat formatter flow artifact output directly for '%s' (%s rows)",
+            "[Flow Executor] Rendered chat formatter flow artifact output for '%s' (%s rows)",
             agent_id,
             projection.total_count,
         )
         return projection.chat_output or "No rows matched the requested output projection."
 
-    descriptor = sanitize_output_descriptor(
-        output_filename_descriptor or f"{flow_name}_{output_format}_export"
-    )
-    result = await _save_projected_file_output(
-        output_format=output_format,
-        projection=projection,
-        descriptor=descriptor,
-    )
-    logger.info(
-        "[Flow Executor] Saved %s formatter flow artifact output directly for '%s' (%s rows)",
-        output_format.upper(),
-        agent_id,
-        projection.total_count,
-    )
-    return json.dumps(result)
+    return _chat_output_tool
 
 
 def _resolve_flow_candidate_adapter_key(candidate: ExtractionEnvelopeCandidate) -> Optional[str]:
@@ -1234,6 +849,104 @@ def _flow_candidate_persistence_key(candidate: ExtractionEnvelopeCandidate) -> s
         str(candidate.agent_key or "").strip(),
     ]
     return ":".join(part for part in key_parts if part)
+
+
+def _flow_candidate_envelope_id(
+    candidate: ExtractionEnvelopeCandidate,
+    *,
+    session_id: str,
+    flow_run_id: Optional[str],
+) -> str:
+    """Return the stable DomainEnvelope id for one flow extraction step."""
+
+    metadata = candidate.metadata or {}
+    explicit_id = str(metadata.get("envelope_id") or "").strip()
+    if explicit_id:
+        return explicit_id
+
+    run_scope = str(flow_run_id or session_id or "").strip() or "flow-run"
+    candidate_scope = (
+        _flow_candidate_persistence_key(candidate)
+        or str(candidate.agent_key or "").strip()
+        or "candidate"
+    )
+    return f"flow:{run_scope}:{candidate_scope}"
+
+
+def _flow_candidate_record_id(
+    candidate: ExtractionEnvelopeCandidate,
+    *,
+    session_id: str,
+    flow_run_id: Optional[str],
+) -> str:
+    """Return a stable temporary extraction-result id for normalization."""
+
+    return f"{_flow_candidate_envelope_id(candidate, session_id=session_id, flow_run_id=flow_run_id)}:extraction"
+
+
+def _canonicalize_flow_extraction_candidate(
+    candidate: ExtractionEnvelopeCandidate,
+    *,
+    document_id: Optional[str],
+    user_id: Optional[str],
+    session_id: Optional[str],
+    trace_id: Optional[str],
+    flow_run_id: Optional[str],
+) -> ExtractionEnvelopeCandidate:
+    """Normalize extractor output payloads to canonical DomainEnvelope payloads."""
+
+    payload = candidate.payload_json
+    if not isinstance(payload, Mapping):
+        return candidate
+    if is_canonical_domain_envelope_payload(payload):
+        return candidate
+    if not _is_flow_domain_envelope_source_payload(payload):
+        return candidate
+
+    normalized_document_id = str(document_id or "").strip()
+    normalized_session_id = str(session_id or "").strip()
+    if not normalized_document_id or not normalized_session_id:
+        return candidate
+
+    metadata = dict(candidate.metadata or {})
+    metadata.setdefault(
+        "envelope_id",
+        _flow_candidate_envelope_id(
+            candidate,
+            session_id=normalized_session_id,
+            flow_run_id=flow_run_id,
+        ),
+    )
+    extraction_record = CurationExtractionResultRecord.model_validate(
+        {
+            "extraction_result_id": _flow_candidate_record_id(
+                candidate,
+                session_id=normalized_session_id,
+                flow_run_id=flow_run_id,
+            ),
+            "document_id": normalized_document_id,
+            "adapter_key": candidate.adapter_key,
+            "agent_key": candidate.agent_key,
+            "source_kind": CurationExtractionSourceKind.FLOW,
+            "origin_session_id": normalized_session_id,
+            "trace_id": trace_id,
+            "flow_run_id": flow_run_id,
+            "user_id": user_id,
+            "candidate_count": candidate.candidate_count,
+            "conversation_summary": candidate.conversation_summary,
+            "payload_json": dict(payload),
+            "created_at": datetime.now(timezone.utc),
+            "metadata": metadata,
+        }
+    )
+    envelope = domain_envelope_from_extraction_result(extraction_record)
+    envelope_payload = envelope.model_dump(mode="json")
+    return replace(
+        candidate,
+        payload_json=envelope_payload,
+        candidate_count=len(envelope_payload.get("objects") or []),
+        metadata=metadata,
+    )
 
 
 def _flow_record_persistence_key(record: CurationExtractionResultRecord) -> str:
@@ -2742,27 +2455,7 @@ def get_all_agent_tools(
             specialist_started_at = time.monotonic()
             projected_chat_output: str | None = None
             try:
-                direct_formatter_result = await _try_project_terminal_flow_output(
-                    agent_id=agent_id,
-                    completed_steps=execution_state["completed_steps"],
-                    flow_name=flow.name,
-                    agent_name=agent_name,
-                    flow_run_id=flow_run_id,
-                    document_id=document_id,
-                    projection_plan=(
-                        node_data.get("projection_plan")
-                        if isinstance(node_data.get("projection_plan"), Mapping)
-                        else None
-                    ),
-                    node_data=node_data,
-                    resolved_query=resolved_query,
-                    output_filename_descriptor=output_filename_descriptor,
-                )
-                if direct_formatter_result is not None:
-                    result = direct_formatter_result
-                    if agent_id in _FLOW_CHAT_FORMATTER_AGENT_IDS:
-                        projected_chat_output = direct_formatter_result
-                elif hasattr(tool_callable, "on_invoke_tool"):
+                if hasattr(tool_callable, "on_invoke_tool"):
                     # Newer openai-agents tool invokers dereference ctx.tool_name and,
                     # on handled tool errors, ctx.run_config (0.17+). Pass the parent
                     # RunConfig as a trace/template source; the flow tool wrapper clones
@@ -2772,10 +2465,17 @@ def get_all_agent_tools(
                         tool_name=tool_name,
                         run_config=getattr(ctx, "run_config", None),
                     )
+                    tool_input = {"query": resolved_query}
+                    if _flow_file_output_format(agent_id) is not None:
+                        tool_input["output_filename_descriptor"] = (
+                            output_filename_descriptor or ""
+                        )
                     result = await tool_callable.on_invoke_tool(
                         tool_ctx,
-                        json.dumps({"query": resolved_query}),
+                        json.dumps(tool_input),
                     )
+                    if agent_id in _FLOW_CHAT_FORMATTER_AGENT_IDS:
+                        projected_chat_output = _stringify_tool_output(result)
                 else:
                     result = await tool_callable(query=resolved_query)
             finally:
@@ -2880,6 +2580,15 @@ def get_all_agent_tools(
             phase_timings_ms["validation_groups_ms"] = _elapsed_ms(
                 validation_started_at
             )
+            if candidate is not None:
+                candidate = _canonicalize_flow_extraction_candidate(
+                    candidate,
+                    document_id=document_id,
+                    user_id=user_id,
+                    session_id=session_id,
+                    trace_id=get_current_trace_id(),
+                    flow_run_id=flow_run_id,
+                )
             state_update_started_at = time.monotonic()
             total_step_duration_ms = _elapsed_ms(step_started_at)
             step_timing = {
@@ -3173,42 +2882,73 @@ def get_all_agent_tools(
             agent_kwargs = dict(context)
             if step_instruction_prefix:
                 agent_kwargs["additional_runtime_context"] = [step_instruction_prefix]
-            try:
-                agent = get_agent_by_id(agent_id, **agent_kwargs)
-            except Exception as e:
-                logger.warning("[Flow Executor] Failed to create agent '%s': %s", agent_id, e)
-                unavailable_steps.append({
-                    "step": step_num,
-                    "agent_id": agent_id,
-                    "agent_name": entry.get("name", agent_id),
-                    "reason": str(e),
-                })
-                continue
-
-            if step_instruction_prefix:
-                applied_overrides: List[str] = []
-                if custom_instr and custom_instr.strip():
-                    applied_overrides.append("custom_instructions")
-                if include_evidence is not None:
-                    applied_overrides.append("include_evidence")
-                logger.info(
-                    "[Flow Executor] Prepended step-local instructions to agent '%s' step %s (%s)",
-                    agent_id,
-                    step_num,
-                    ", ".join(applied_overrides),
+            output_format = _resolve_flow_terminal_output_format(agent_id)
+            file_output_format = _flow_file_output_format(agent_id)
+            if file_output_format is not None:
+                raw_streaming_tool = _make_flow_runtime_formatter_tool(
+                    agent_id=agent_id,
+                    agent_name=entry.get("name", agent_id),
+                    output_format=file_output_format,
+                    tool_name=tool_name,
+                    tool_description=tool_description,
+                    specialist_name=specialist_name,
+                    base_context=agent_kwargs,
+                    step_instruction_prefix=step_instruction_prefix,
+                    completed_steps=execution_state["completed_steps"],
+                    flow_name=flow.name,
+                    flow_run_id=flow_run_id,
+                    document_id=document_id,
+                    node_data=data,
                 )
+            elif output_format == "chat":
+                raw_streaming_tool = _make_flow_chat_output_tool(
+                    agent_id=agent_id,
+                    output_format=output_format,
+                    tool_name=tool_name,
+                    tool_description=tool_description,
+                    completed_steps=execution_state["completed_steps"],
+                    flow_name=flow.name,
+                    flow_run_id=flow_run_id,
+                    document_id=document_id,
+                    node_data=data,
+                )
+            else:
+                try:
+                    agent = get_agent_by_id(agent_id, **agent_kwargs)
+                except Exception as e:
+                    logger.warning("[Flow Executor] Failed to create agent '%s': %s", agent_id, e)
+                    unavailable_steps.append({
+                        "step": step_num,
+                        "agent_id": agent_id,
+                        "agent_name": entry.get("name", agent_id),
+                        "reason": str(e),
+                    })
+                    continue
 
-            raw_streaming_tool = _create_streaming_tool(
-                agent=agent,
-                tool_name=tool_name,
-                tool_description=tool_description,
-                specialist_name=specialist_name,
-                # Flow execution: flows persist their own FLOW-source extraction rows;
-                # inline CHAT persistence must not fire here (would write a shadow
-                # CHAT-source row in addition to the FLOW-source row).
-                inline_chat_persistence=False,
-                isolate_run_config=True,
-            )
+                if step_instruction_prefix:
+                    applied_overrides: List[str] = []
+                    if custom_instr and custom_instr.strip():
+                        applied_overrides.append("custom_instructions")
+                    if include_evidence is not None:
+                        applied_overrides.append("include_evidence")
+                    logger.info(
+                        "[Flow Executor] Prepended step-local instructions to agent '%s' step %s (%s)",
+                        agent_id,
+                        step_num,
+                        ", ".join(applied_overrides),
+                    )
+
+                raw_streaming_tool = _create_streaming_tool(
+                    agent=agent,
+                    tool_name=tool_name,
+                    tool_description=tool_description,
+                    specialist_name=specialist_name,
+                    # Flow execution: flows persist their own FLOW-source extraction rows;
+                    # inline CHAT persistence must not fire here (would write a shadow
+                    # CHAT-source row in addition to the FLOW-source row).
+                    inline_chat_persistence=False,
+                    isolate_run_config=True,
+                )
 
         curation = entry.get("curation")
         curation_adapter_key = (
@@ -3579,16 +3319,32 @@ def _persist_flow_extraction_candidates(
             user_id=user_id,
             source_kind=CurationExtractionSourceKind.FLOW,
         )
-        existing_by_key = {
-            key: result
-            for result in existing_results
-            if (key := _flow_record_persistence_key(result))
-        }
+        for result in existing_results:
+            key = _flow_record_persistence_key(result)
+            if not key:
+                continue
+            if _is_noncanonical_flow_domain_envelope_source_payload(
+                result.payload_json
+            ):
+                raise ValueError(
+                    "Existing flow extraction result "
+                    f"{result.extraction_result_id} for key {key!r} uses "
+                    "curatable_objects[] instead of canonical DomainEnvelope.objects[]."
+                )
+            existing_by_key[key] = result
 
     ordered_records: list[CurationExtractionResultRecord] = []
     requests: list[CurationExtractionPersistenceRequest] = []
     request_keys: list[str] = []
     for candidate in candidates:
+        candidate = _canonicalize_flow_extraction_candidate(
+            candidate,
+            document_id=document_id,
+            user_id=user_id,
+            session_id=session_id,
+            trace_id=trace_id,
+            flow_run_id=flow_run_id,
+        )
         flow_step_key = _flow_candidate_persistence_key(candidate)
         if flow_step_key in existing_by_key:
             ordered_records.append(existing_by_key[flow_step_key])
@@ -3650,9 +3406,24 @@ def _materialize_flow_domain_envelope_records(
 def _is_flow_domain_envelope_payload(payload: Any) -> bool:
     if not isinstance(payload, Mapping):
         return False
-    if {"envelope_id", "domain_pack_id", "objects"}.issubset(payload):
-        return isinstance(payload.get("objects"), list)
+    return is_canonical_domain_envelope_payload(payload)
+
+
+def _is_flow_domain_envelope_source_payload(payload: Any) -> bool:
+    if not isinstance(payload, Mapping):
+        return False
+    if is_canonical_domain_envelope_payload(payload):
+        return True
     return isinstance(payload.get("curatable_objects"), list)
+
+
+def _is_noncanonical_flow_domain_envelope_source_payload(payload: Any) -> bool:
+    if not isinstance(payload, Mapping):
+        return False
+    return (
+        _is_flow_domain_envelope_source_payload(payload)
+        and not is_canonical_domain_envelope_payload(payload)
+    )
 
 
 def _flow_extraction_result_ref(
@@ -3944,6 +3715,8 @@ async def execute_flow(
         f"user_id={user_id}, session_id={session_id}"
     )
     flow_run_id = flow_run_id or str(uuid4())
+    set_current_session_id(session_id)
+    set_current_user_id(str(user_id))
 
     # Pre-fetch document context BEFORE creating supervisor (optimization)
     # This matches how chat pre-fetches and passes through to avoid redundant Weaviate queries

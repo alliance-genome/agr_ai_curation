@@ -1,0 +1,825 @@
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from src.lib.flows.output_projection import (
+    FlowOutputArtifactBundle,
+    build_flow_output_artifact_bundle,
+)
+from src.lib.openai_agents.tools.output_formatter_tools import (
+    build_output_formatter_tools,
+)
+
+
+def _completed_gene_step() -> dict:
+    return {
+        "step": 1,
+        "extraction_result_id": "extract-gene-1",
+        "agent_id": "gene_extractor",
+        "agent_name": "Gene Extractor",
+        "output_preview": "Extracted gene rows.",
+        "candidate": SimpleNamespace(
+            agent_key="gene_extractor",
+            adapter_key="gene",
+            candidate_count=3,
+            conversation_summary="Extracted three genes.",
+            payload_json={
+                "domain_pack_id": "gene",
+                "envelope_id": "env-gene-1",
+                "objects": [
+                    {
+                        "object_type": "Gene",
+                        "object_id": "gene-1",
+                        "status": "validated",
+                        "payload": {
+                            "symbol": "BRCA1",
+                            "primary_external_id": "TEST:GENE001",
+                            "score": 2,
+                            "aliases": ["breast cancer 1", "brca-1"],
+                            "approved": True,
+                        },
+                        "evidence_record_ids": ["ev-1", "ev-2"],
+                    },
+                    {
+                        "object_type": "Gene",
+                        "object_id": "gene-2",
+                        "status": "needs_review",
+                        "payload": {
+                            "symbol": "TP53",
+                            "primary_external_id": "TEST:GENE002",
+                            "score": 5,
+                            "aliases": [],
+                            "approved": False,
+                        },
+                    },
+                    {
+                        "object_type": "Gene",
+                        "object_id": "gene-3",
+                        "status": "validated",
+                        "payload": {
+                            "symbol": "MAPK",
+                            "primary_external_id": "TEST:GENE003",
+                            "score": 3,
+                            "aliases": ["erk"],
+                            "approved": True,
+                        },
+                        "evidence_record_ids": ["ev-3"],
+                    },
+                ],
+            },
+        ),
+    }
+
+
+def _bundle() -> FlowOutputArtifactBundle:
+    return build_flow_output_artifact_bundle(
+        completed_steps=[_completed_gene_step()],
+        flow_name="Formatter Tool Flow",
+        flow_run_id="flow-run-1",
+        document_id="doc-1",
+        output_format="csv",
+    )
+
+
+def _tool_by_name(tools, name: str):
+    return next(tool for tool in tools if getattr(tool, "name", "") == name)
+
+
+async def _invoke(tool, payload: dict | None = None) -> dict:
+    tool_ctx = SimpleNamespace(tool_name=getattr(tool, "name", "tool"))
+    raw = await tool.on_invoke_tool(tool_ctx, json.dumps(payload or {}))
+    if isinstance(raw, str):
+        return json.loads(raw)
+    return raw
+
+
+def _tool_param_names(tool) -> set[str]:
+    schema = getattr(tool, "params_json_schema", None)
+    if schema is None:
+        schema = getattr(tool, "parameters_json_schema", None)
+    if not isinstance(schema, dict):
+        return set()
+    return set((schema.get("properties") or {}).keys())
+
+
+@pytest.mark.asyncio
+async def test_formatter_tool_suite_is_plan_only_and_structure_bound():
+    tools = build_output_formatter_tools(
+        bundle=_bundle(),
+        output_format="csv",
+        formatter_agent_id="csv_output_formatter",
+        save_projected_output=lambda *_args: None,  # type: ignore[arg-type]
+    )
+
+    names = {getattr(tool, "name", "") for tool in tools}
+    assert names == {
+        "explain_formatter_capabilities",
+        "inspect_output_artifacts",
+        "inspect_output_rows",
+        "inspect_field_values",
+        "build_default_projection_plan",
+        "validate_output_projection",
+        "preview_output_projection",
+        "finalize_and_save",
+        "formatter_cannot_complete",
+    }
+    assert not {"save_csv_file", "save_tsv_file", "save_json_file"} & names
+
+    forbidden_params = {
+        "content",
+        "csv",
+        "data",
+        "data_json",
+        "file_content",
+        "json",
+        "raw_rows",
+        "records",
+        "rows",
+        "tsv",
+    }
+    for tool in tools:
+        assert not (forbidden_params & _tool_param_names(tool))
+
+    capabilities = await _invoke(_tool_by_name(tools, "explain_formatter_capabilities"))
+    assert capabilities["status"] == "ok"
+    assert "raw row arrays" in capabilities["invariant"]
+    assert capabilities["format"] == "csv"
+
+
+@pytest.mark.asyncio
+async def test_inspection_tools_read_bounded_saved_bundle_rows_and_values():
+    tools = build_output_formatter_tools(
+        bundle=_bundle(),
+        output_format="csv",
+        formatter_agent_id="csv_output_formatter",
+        save_projected_output=lambda *_args: None,  # type: ignore[arg-type]
+    )
+
+    inventory = await _invoke(
+        _tool_by_name(tools, "inspect_output_artifacts"),
+        {"example_limit": 2},
+    )
+    assert inventory["status"] == "ok"
+    assert inventory["inventory"]["row_sources"]["object"]["row_count"] == 3
+    assert inventory["inventory"]["source_refs"]["source_extraction_result_ids"] == [
+        "extract-gene-1"
+    ]
+
+    row_page = await _invoke(
+        _tool_by_name(tools, "inspect_output_rows"),
+        {
+            "row_source": "object",
+            "field_refs_json": json.dumps(
+                ["object.payload.symbol", "object.payload.score", "object.status"]
+            ),
+            "filters_json": json.dumps(
+                [{"field_ref": "object.status", "op": "eq", "value": "validated"}]
+            ),
+            "sort_json": json.dumps(
+                [{"field_ref": "object.payload.score", "direction": "desc"}]
+            ),
+            "limit": 1,
+        },
+    )
+    assert row_page["status"] == "ok"
+    assert row_page["total_count"] == 2
+    assert row_page["rows"] == [
+        {
+            "object_payload_symbol": "MAPK",
+            "object_payload_score": 3,
+            "object_status": "validated",
+        }
+    ]
+    assert row_page["next_cursor"] == "1"
+
+    field_values = await _invoke(
+        _tool_by_name(tools, "inspect_field_values"),
+        {
+            "row_source": "object",
+            "field_ref": "object.status",
+        },
+    )
+    assert field_values["status"] == "ok"
+    assert field_values["distinct_count"] == 2
+    assert {"value": "validated", "count": 2} in field_values["values"]
+
+
+@pytest.mark.asyncio
+async def test_default_plan_and_finalize_save_projected_rows_only():
+    saved = []
+
+    async def _fake_save(output_format, projection, filename_hint, formatter_agent_id):
+        saved.append(
+            {
+                "output_format": output_format,
+                "projection": projection,
+                "filename_hint": filename_hint,
+                "formatter_agent_id": formatter_agent_id,
+            }
+        )
+        return {
+            "file_id": "file-1",
+            "filename": f"{filename_hint}.{output_format}",
+            "format": output_format,
+            "size_bytes": 123,
+            "download_url": "/download/file-1",
+        }
+
+    tools = build_output_formatter_tools(
+        bundle=_bundle(),
+        output_format="csv",
+        formatter_agent_id="csv_output_formatter",
+        save_projected_output=_fake_save,
+    )
+
+    default_plan = await _invoke(
+        _tool_by_name(tools, "build_default_projection_plan"),
+        {
+            "row_source": "object",
+            "row_strategy": "object_ledger",
+            "source_ref": "extract-gene-1",
+        },
+    )
+    assert default_plan["status"] == "ok"
+    assert default_plan["plan"]["format"] == "csv"
+    assert default_plan["plan"]["row_strategy"] == "object_ledger"
+    assert default_plan["plan"]["source_extraction_result_ids"] == ["extract-gene-1"]
+
+    result = await _invoke(
+        _tool_by_name(tools, "finalize_and_save"),
+        {
+            "plan_json": "",
+            "filename_hint": "gene-export",
+        },
+    )
+    assert result["status"] == "ok"
+    assert result["file_id"] == "file-1"
+    assert result["projection_summary"]["total_count"] == 3
+    assert len(saved) == 1
+    assert saved[0]["formatter_agent_id"] == "csv_output_formatter"
+    assert saved[0]["filename_hint"] == "gene-export"
+    assert saved[0]["projection"].rows
+
+
+@pytest.mark.asyncio
+async def test_validate_preview_and_finalize_support_full_csv_shaping_surface():
+    saved = []
+
+    async def _fake_save(output_format, projection, filename_hint, formatter_agent_id):
+        saved.append(projection)
+        return {
+            "file_id": "file-shaped",
+            "filename": f"{filename_hint}.{output_format}",
+            "format": output_format,
+            "size_bytes": 456,
+            "download_url": "/download/file-shaped",
+        }
+
+    tools = build_output_formatter_tools(
+        bundle=_bundle(),
+        output_format="csv",
+        formatter_agent_id="csv_output_formatter",
+        save_projected_output=_fake_save,
+    )
+    plan = {
+        "format": "csv",
+        "row_source": "object",
+        "source_extraction_result_ids": ["extract-gene-1"],
+        "columns": [
+            {
+                "key": "symbol",
+                "header": "Gene Symbol",
+                "field_ref": "object.payload.symbol",
+            },
+            {
+                "key": "score",
+                "header": "Score",
+                "field_ref": "object.payload.score",
+            },
+            {
+                "key": "species",
+                "header": "Species",
+                "transform": {"type": "literal", "value": "Drosophila melanogaster"},
+            },
+            {
+                "key": "best_label",
+                "transform": {
+                    "type": "first_non_empty",
+                    "field_refs": ["object.label", "object.payload.symbol"],
+                },
+            },
+            {
+                "key": "display",
+                "transform": {
+                    "type": "concat",
+                    "values": [
+                        {"field_ref": "object.payload.symbol"},
+                        " (",
+                        {"field_ref": "object.payload.primary_external_id"},
+                        ")",
+                    ],
+                    "separator": "",
+                },
+            },
+            {
+                "key": "evidence_ids",
+                "transform": {
+                    "type": "join_list",
+                    "field_ref": "object.evidence_record_ids",
+                    "separator": "; ",
+                },
+            },
+            {
+                "key": "evidence_count",
+                "transform": {
+                    "type": "count",
+                    "field_ref": "object.evidence_record_ids",
+                },
+            },
+            {
+                "key": "status_label",
+                "transform": {
+                    "type": "map_value",
+                    "field_ref": "object.status",
+                    "mapping": {
+                        "validated": "Ready",
+                        "needs_review": "Review",
+                    },
+                },
+            },
+            {
+                "key": "approval",
+                "transform": {
+                    "type": "boolean_label",
+                    "field_ref": "object.payload.approved",
+                    "true_label": "Approved",
+                    "false_label": "Not approved",
+                },
+            },
+        ],
+        "filters": [{"field_ref": "object.payload.score", "op": "gte", "value": 3}],
+        "sort": [{"field_ref": "object.payload.symbol", "direction": "asc"}],
+        "missing_value": "",
+        "max_rows": 2,
+    }
+
+    validation = await _invoke(
+        _tool_by_name(tools, "validate_output_projection"),
+        {"plan_json": json.dumps(plan)},
+    )
+    assert validation["status"] == "ok"
+    assert [column["key"] for column in validation["columns"]] == [
+        "symbol",
+        "score",
+        "species",
+        "best_label",
+        "display",
+        "evidence_ids",
+        "evidence_count",
+        "status_label",
+        "approval",
+    ]
+
+    preview = await _invoke(
+        _tool_by_name(tools, "preview_output_projection"),
+        {"plan_json": json.dumps(plan), "limit": 2},
+    )
+    assert preview["status"] == "ok"
+    assert [row["symbol"] for row in preview["preview"]["preview_rows"]] == [
+        "MAPK",
+        "TP53",
+    ]
+
+    result = await _invoke(
+        _tool_by_name(tools, "finalize_and_save"),
+        {"plan_json": json.dumps(plan), "filename_hint": "gene-shaped"},
+    )
+    assert result["status"] == "ok"
+    assert len(saved) == 1
+    assert saved[0].rows == [
+        {
+            "symbol": "MAPK",
+            "score": 3,
+            "species": "Drosophila melanogaster",
+            "best_label": "MAPK",
+            "display": "MAPK (TEST:GENE003)",
+            "evidence_ids": "ev-3",
+            "evidence_count": 1,
+            "status_label": "Ready",
+            "approval": "Approved",
+        },
+        {
+            "symbol": "TP53",
+            "score": 5,
+            "species": "Drosophila melanogaster",
+            "best_label": "TP53",
+            "display": "TP53 (TEST:GENE002)",
+            "evidence_ids": "",
+            "evidence_count": 0,
+            "status_label": "Review",
+            "approval": "Not approved",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_json_formatter_supports_grouped_and_bundle_shapes():
+    saved = []
+
+    async def _fake_save(output_format, projection, filename_hint, formatter_agent_id):
+        saved.append(projection)
+        return {
+            "file_id": "file-json",
+            "filename": f"{filename_hint}.{output_format}",
+            "format": output_format,
+            "size_bytes": 789,
+            "download_url": "/download/file-json",
+        }
+
+    tools = build_output_formatter_tools(
+        bundle=_bundle(),
+        output_format="json",
+        formatter_agent_id="json_output_formatter",
+        save_projected_output=_fake_save,
+    )
+    grouped_plan = {
+        "format": "json",
+        "row_source": "object",
+        "columns": [
+            {"key": "symbol", "field_ref": "object.payload.symbol"},
+            {"key": "status", "field_ref": "object.status"},
+        ],
+        "group_by": ["object.status"],
+        "json_shape": "grouped",
+    }
+
+    grouped = await _invoke(
+        _tool_by_name(tools, "finalize_and_save"),
+        {"plan_json": json.dumps(grouped_plan), "filename_hint": "gene-grouped"},
+    )
+    assert grouped["status"] == "ok"
+    assert saved[0].json_data is not None
+    assert {
+        tuple(group["group"].items())[0]
+        for group in saved[0].json_data
+    } == {
+        ("object.status", "validated"),
+        ("object.status", "needs_review"),
+    }
+
+    bundle_plan = {
+        "format": "json",
+        "row_source": "object",
+        "columns": [{"key": "symbol", "field_ref": "object.payload.symbol"}],
+        "json_shape": "bundle",
+    }
+    bundle_result = await _invoke(
+        _tool_by_name(tools, "preview_output_projection"),
+        {"plan_json": json.dumps(bundle_plan), "limit": 2},
+    )
+    assert bundle_result["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_invalid_raw_content_plans_and_impossible_requests_do_not_save():
+    saved = []
+
+    async def _fake_save(output_format, projection, filename_hint, formatter_agent_id):
+        saved.append(projection)
+        return {
+            "file_id": "unexpected",
+            "filename": f"{filename_hint}.{output_format}",
+            "format": output_format,
+            "size_bytes": 1,
+            "download_url": "/download/unexpected",
+        }
+
+    tools = build_output_formatter_tools(
+        bundle=_bundle(),
+        output_format="csv",
+        formatter_agent_id="csv_output_formatter",
+        save_projected_output=_fake_save,
+    )
+
+    raw_rows_plan = {
+        "format": "csv",
+        "row_source": "object",
+        "columns": [{"key": "symbol", "field_ref": "object.payload.symbol"}],
+        "rows": [{"symbol": "model-authored"}],
+    }
+    invalid = await _invoke(
+        _tool_by_name(tools, "validate_output_projection"),
+        {"plan_json": json.dumps(raw_rows_plan)},
+    )
+    assert invalid["status"] == "invalid"
+    assert "model-authored content key 'rows'" in invalid["errors"][0]
+
+    grouped_csv_plan = {
+        "format": "csv",
+        "row_source": "object",
+        "columns": [{"key": "symbol", "field_ref": "object.payload.symbol"}],
+        "group_by": ["object.status"],
+    }
+    grouped_csv = await _invoke(
+        _tool_by_name(tools, "validate_output_projection"),
+        {"plan_json": json.dumps(grouped_csv_plan)},
+    )
+    assert grouped_csv["status"] == "invalid"
+    assert "group_by is not supported for CSV projections" in grouped_csv["errors"][0]
+
+    missing_field = await _invoke(
+        _tool_by_name(tools, "inspect_field_values"),
+        {
+            "row_source": "object",
+            "field_ref": "object.payload.not_real",
+        },
+    )
+    assert missing_field["status"] == "invalid"
+
+    cannot_complete = await _invoke(
+        _tool_by_name(tools, "formatter_cannot_complete"),
+        {
+            "reason": "The saved bundle has no validated disease rows.",
+            "missing_data": "validated disease rows",
+            "suggested_next_step": "Run a disease extraction first.",
+        },
+    )
+    assert cannot_complete == {
+        "format": "csv",
+        "formatter_agent_id": "csv_output_formatter",
+        "missing_data": "validated disease rows",
+        "reason": "The saved bundle has no validated disease rows.",
+        "saved_file": False,
+        "status": "cannot_complete",
+        "suggested_next_step": "Run a disease extraction first.",
+    }
+    assert saved == []
+
+
+@pytest.mark.asyncio
+async def test_literal_only_plans_are_rejected_even_with_saved_rows():
+    saved = []
+
+    async def _fake_save(output_format, projection, filename_hint, formatter_agent_id):
+        saved.append(projection)
+        return {
+            "file_id": "unexpected",
+            "filename": f"{filename_hint}.{output_format}",
+            "format": output_format,
+            "size_bytes": 1,
+            "download_url": "/download/unexpected",
+        }
+
+    tools = build_output_formatter_tools(
+        bundle=_bundle(),
+        output_format="csv",
+        formatter_agent_id="csv_output_formatter",
+        save_projected_output=_fake_save,
+    )
+    literal_only_plan = {
+        "format": "csv",
+        "row_source": "object",
+        "columns": [
+            {
+                "key": "species",
+                "transform": {
+                    "type": "literal",
+                    "value": "Drosophila melanogaster",
+                },
+            },
+            {
+                "key": "note",
+                "transform": {
+                    "type": "literal",
+                    "value": "constant note",
+                },
+            },
+        ],
+    }
+
+    validation = await _invoke(
+        _tool_by_name(tools, "validate_output_projection"),
+        {"plan_json": json.dumps(literal_only_plan)},
+    )
+    assert validation["status"] == "invalid"
+    assert "literal-only files are not allowed" in validation["errors"][0]
+
+    result = await _invoke(
+        _tool_by_name(tools, "finalize_and_save"),
+        {
+            "plan_json": json.dumps(literal_only_plan),
+            "filename_hint": "literal-only",
+        },
+    )
+    assert result["status"] == "invalid"
+    assert "literal-only files are not allowed" in result["errors"][0]
+    assert saved == []
+
+
+@pytest.mark.asyncio
+async def test_transform_literals_cannot_smuggle_structured_replacement_content():
+    saved = []
+
+    async def _fake_save(output_format, projection, filename_hint, formatter_agent_id):
+        saved.append(projection)
+        return {
+            "file_id": "unexpected",
+            "filename": f"{filename_hint}.{output_format}",
+            "format": output_format,
+            "size_bytes": 1,
+            "download_url": "/download/unexpected",
+        }
+
+    tools = build_output_formatter_tools(
+        bundle=_bundle(),
+        output_format="csv",
+        formatter_agent_id="csv_output_formatter",
+        save_projected_output=_fake_save,
+    )
+    structured_literal_plan = {
+        "format": "csv",
+        "row_source": "object",
+        "columns": [
+            {"key": "symbol", "field_ref": "object.payload.symbol"},
+            {
+                "key": "replacement",
+                "transform": {
+                    "type": "literal",
+                    "value": {"rows": [{"symbol": "model-authored"}]},
+                },
+            },
+        ],
+    }
+    encoded_json_literal_plan = {
+        "format": "csv",
+        "row_source": "object",
+        "columns": [
+            {"key": "symbol", "field_ref": "object.payload.symbol"},
+            {
+                "key": "replacement",
+                "transform": {
+                    "type": "concat",
+                    "values": [
+                        {"field_ref": "object.payload.symbol"},
+                        "[{\"symbol\":\"model-authored\"}]",
+                    ],
+                },
+            },
+        ],
+    }
+
+    structured = await _invoke(
+        _tool_by_name(tools, "validate_output_projection"),
+        {"plan_json": json.dumps(structured_literal_plan)},
+    )
+    assert structured["status"] == "invalid"
+    assert "structured replacement data" in structured["errors"][0]
+
+    encoded = await _invoke(
+        _tool_by_name(tools, "finalize_and_save"),
+        {
+            "plan_json": json.dumps(encoded_json_literal_plan),
+            "filename_hint": "encoded",
+        },
+    )
+    assert encoded["status"] == "invalid"
+    assert "encoded JSON objects or arrays" in encoded["errors"][0]
+    assert saved == []
+
+
+@pytest.mark.asyncio
+async def test_output_labels_separators_and_missing_values_cannot_smuggle_file_content():
+    saved = []
+
+    async def _fake_save(output_format, projection, filename_hint, formatter_agent_id):
+        saved.append(projection)
+        return {
+            "file_id": "unexpected",
+            "filename": f"{filename_hint}.{output_format}",
+            "format": output_format,
+            "size_bytes": 1,
+            "download_url": "/download/unexpected",
+        }
+
+    tools = build_output_formatter_tools(
+        bundle=_bundle(),
+        output_format="csv",
+        formatter_agent_id="csv_output_formatter",
+        save_projected_output=_fake_save,
+    )
+    newline_header_plan = {
+        "format": "csv",
+        "row_source": "object",
+        "columns": [
+            {
+                "key": "symbol",
+                "header": "Symbol\nforged_header,forged_value",
+                "field_ref": "object.payload.symbol",
+            }
+        ],
+    }
+    encoded_separator_plan = {
+        "format": "csv",
+        "row_source": "object",
+        "columns": [
+            {
+                "key": "symbol",
+                "field_ref": "object.payload.symbol",
+            },
+            {
+                "key": "display",
+                "transform": {
+                    "type": "concat",
+                    "values": [
+                        {"field_ref": "object.payload.symbol"},
+                        {"field_ref": "object.payload.primary_external_id"},
+                    ],
+                    "separator": "[{\"symbol\":\"model-authored\"}]",
+                },
+            },
+        ],
+    }
+    missing_value_plan = {
+        "format": "csv",
+        "row_source": "object",
+        "columns": [
+            {
+                "key": "symbol",
+                "field_ref": "object.payload.symbol",
+            },
+        ],
+        "missing_value": "{\"rows\":[{\"symbol\":\"model-authored\"}]}",
+    }
+
+    newline_header = await _invoke(
+        _tool_by_name(tools, "validate_output_projection"),
+        {"plan_json": json.dumps(newline_header_plan)},
+    )
+    assert newline_header["status"] == "invalid"
+    assert "newline-delimited file content" in newline_header["errors"][0]
+
+    encoded_separator = await _invoke(
+        _tool_by_name(tools, "validate_output_projection"),
+        {"plan_json": json.dumps(encoded_separator_plan)},
+    )
+    assert encoded_separator["status"] == "invalid"
+    assert "encoded JSON objects or arrays" in encoded_separator["errors"][0]
+
+    missing_value = await _invoke(
+        _tool_by_name(tools, "finalize_and_save"),
+        {
+            "plan_json": json.dumps(missing_value_plan),
+            "filename_hint": "missing-value",
+        },
+    )
+    assert missing_value["status"] == "invalid"
+    assert "encoded JSON objects or arrays" in missing_value["errors"][0]
+    assert saved == []
+
+
+@pytest.mark.asyncio
+async def test_finalize_rejects_literal_only_files_without_saved_rows():
+    saved = []
+
+    async def _fake_save(output_format, projection, filename_hint, formatter_agent_id):
+        saved.append(projection)
+        return {
+            "file_id": "unexpected",
+            "filename": f"{filename_hint}.{output_format}",
+            "format": output_format,
+            "size_bytes": 1,
+            "download_url": "/download/unexpected",
+        }
+
+    empty_bundle = FlowOutputArtifactBundle(flow_name="Empty Export")
+    tools = build_output_formatter_tools(
+        bundle=empty_bundle,
+        output_format="csv",
+        formatter_agent_id="csv_output_formatter",
+        save_projected_output=_fake_save,
+    )
+    literal_plan = {
+        "format": "csv",
+        "row_source": "artifact",
+        "columns": [
+            {
+                "key": "note",
+                "transform": {
+                    "type": "literal",
+                    "value": "model-authored standalone row",
+                },
+            }
+        ],
+    }
+
+    result = await _invoke(
+        _tool_by_name(tools, "finalize_and_save"),
+        {
+            "plan_json": json.dumps(literal_plan),
+            "filename_hint": "standalone",
+        },
+    )
+    assert result["status"] == "invalid"
+    assert "literal-only files" in result["errors"][0]
+    assert saved == []

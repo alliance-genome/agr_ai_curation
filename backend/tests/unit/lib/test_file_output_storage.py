@@ -353,6 +353,83 @@ class TestSaveOutput:
         assert len(warnings) > 0
         assert "formula injection" in warnings[0]
 
+    def test_stable_filename_replaces_existing_file(
+        self, storage_service, valid_trace_id, valid_session_id
+    ):
+        """Stable structured-output saves should overwrite the same run file."""
+        first_content = "gene_id,symbol\nFBgn0001,Notch\n"
+        second_content = "gene_id,symbol\nFBgn0002,DeltaGene\n"
+
+        first_path, first_hash, first_size, _ = storage_service.save_output(
+            trace_id=valid_trace_id,
+            session_id=valid_session_id,
+            content=first_content,
+            file_type="csv",
+            descriptor="gene_results",
+            stable_filename=True,
+        )
+        second_path, second_hash, second_size, _ = storage_service.save_output(
+            trace_id=valid_trace_id,
+            session_id=valid_session_id,
+            content=second_content,
+            file_type="csv",
+            descriptor="gene_results",
+            stable_filename=True,
+        )
+
+        assert first_path == second_path
+        assert first_path.name == f"{valid_trace_id}_gene_results.csv"
+        assert first_hash != second_hash
+        assert first_size != second_size
+        assert second_path.read_text(encoding="utf-8") == second_content
+        assert list(second_path.parent.glob(f"{valid_trace_id}_gene_results*.csv")) == [
+            second_path
+        ]
+
+    def test_stable_filename_uses_run_stable_directory_across_dates(
+        self, storage_service, valid_trace_id, valid_session_id, monkeypatch
+    ):
+        """Structured-output saves should not rotate paths at a UTC date boundary."""
+        from datetime import datetime as real_datetime, timezone
+        import importlib
+
+        storage_module = importlib.import_module("src.lib.file_outputs.storage")
+
+        class FirstDateTime:
+            @classmethod
+            def now(cls, tz=None):
+                return real_datetime(2026, 6, 17, 23, 59, tzinfo=tz or timezone.utc)
+
+        class SecondDateTime:
+            @classmethod
+            def now(cls, tz=None):
+                return real_datetime(2026, 6, 18, 0, 1, tzinfo=tz or timezone.utc)
+
+        monkeypatch.setattr(storage_module, "datetime", FirstDateTime)
+        first_path, _, _, _ = storage_service.save_output(
+            trace_id=valid_trace_id,
+            session_id=valid_session_id,
+            content="gene_id,symbol\nFBgn0001,Notch\n",
+            file_type="csv",
+            descriptor="gene_results",
+            stable_filename=True,
+        )
+
+        monkeypatch.setattr(storage_module, "datetime", SecondDateTime)
+        second_path, _, _, _ = storage_service.save_output(
+            trace_id=valid_trace_id,
+            session_id=valid_session_id,
+            content="gene_id,symbol\nFBgn0002,DeltaGene\n",
+            file_type="csv",
+            descriptor="gene_results",
+            stable_filename=True,
+        )
+
+        assert first_path == second_path
+        assert first_path.parent == storage_service.outputs_path / "structured" / valid_trace_id
+        assert "2026-06-17" not in first_path.parts
+        assert "2026-06-18" not in first_path.parts
+
     def test_save_invalid_trace_id_fails(
         self, storage_service, valid_session_id
     ):

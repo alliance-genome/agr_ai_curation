@@ -143,29 +143,83 @@ tool_policies:
     allow_execute: true
     config: {}
 
-  save_csv_file:
-    display_name: Save CSV File
-    description: Persist structured output as CSV.
+  explain_formatter_capabilities:
+    display_name: Explain Formatter Capabilities
+    description: Explain the bound formatter workflow and available saved row sources.
     category: Output
-    curator_visible: true
-    allow_attach: true
+    curator_visible: false
+    allow_attach: false
     allow_execute: true
     config: {}
 
-  save_tsv_file:
-    display_name: Save TSV File
-    description: Persist structured output as TSV.
+  inspect_output_artifacts:
+    display_name: Inspect Output Artifacts
+    description: Inspect saved source rows, fields, source refs, examples, and warnings.
     category: Output
-    curator_visible: true
-    allow_attach: true
+    curator_visible: false
+    allow_attach: false
     allow_execute: true
     config: {}
 
-  save_json_file:
-    display_name: Save JSON File
-    description: Persist structured output as JSON.
+  inspect_output_rows:
+    display_name: Inspect Output Rows
+    description: Inspect bounded source-backed rows after projection filters and sorts.
     category: Output
-    curator_visible: true
-    allow_attach: true
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config: {}
+
+  inspect_field_values:
+    display_name: Inspect Field Values
+    description: Inspect distinct values and counts for a source-backed field ref.
+    category: Output
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config: {}
+
+  build_default_projection_plan:
+    display_name: Build Default Projection Plan
+    description: Build and validate a default source-backed export projection plan.
+    category: Output
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config: {}
+
+  validate_output_projection:
+    display_name: Validate Output Projection
+    description: Validate a formatter projection plan against the saved source bundle.
+    category: Output
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config: {}
+
+  preview_output_projection:
+    display_name: Preview Output Projection
+    description: Preview a formatter projection plan without saving a file.
+    category: Output
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config: {}
+
+  finalize_and_save:
+    display_name: Finalize And Save
+    description: Finalize a validated source-backed projection and save one output file.
+    category: Output
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config: {}
+
+  formatter_cannot_complete:
+    display_name: Formatter Cannot Complete
+    description: Return a structured cannot-complete result without saving a file.
+    category: Output
+    curator_visible: false
+    allow_attach: false
     allow_execute: true
     config: {}

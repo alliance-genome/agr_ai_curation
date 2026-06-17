@@ -1443,8 +1443,8 @@ async def _run_agent_with_tracing(
                             write_stream_event(chat_ready_event, trace_id=trace_id)
                             yield chat_ready_event
 
-                        # Check if tool output contains FileInfo (file download)
-                        # export_to_file and file formatter tools return FileInfo as JSON
+                        # Check if tool output contains FileInfo (file download).
+                        # Runtime formatter projection tools return FileInfo as JSON.
                         if output:
                             try:
                                 output_data = json.loads(str(output)) if isinstance(output, str) else output

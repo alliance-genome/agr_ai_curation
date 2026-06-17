@@ -30,9 +30,6 @@ SHIPPED_TOOLS_PACKAGE_EXPORTS = (
     "stage_gene_expression_observation",
     "go_api_call",
     "quickgo_api_call",
-    "save_csv_file",
-    "save_json_file",
-    "save_tsv_file",
 )
 
 

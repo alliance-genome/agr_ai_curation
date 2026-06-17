@@ -3,7 +3,7 @@
 Mirrors ``materialize_phenotype_builder_state`` / ``materialize_gene_expression_builder_state``:
 read finalized builder-workspace candidates and emit the shared extraction-output payload
 (``curatable_objects[]`` + ``metadata`` with RELATIVE ``metadata_refs``). The generic converter
-(``_domain_envelope_from_extraction_result``) turns that payload into a DomainEnvelope, nesting
+``domain_envelope_from_extraction_result`` turns that payload into a DomainEnvelope, nesting
 ``metadata`` under ``metadata.extraction_metadata``.
 
 POSTURE — FULL LinkML ALIGNMENT (unlike phenotype/allele's preserve-existing-posture migration).
@@ -62,10 +62,8 @@ from .constants import (
     DISEASE_ANNOTATION_OBJECT_ROLE,
     DISEASE_ANNOTATION_TYPE_CONSTANT,
     DISEASE_CORE_SCHEMA_SOURCE_FILE,
-    DISEASE_DATA_PROVIDER_VALIDATOR_BINDING_ID,
     DISEASE_DOMAIN_PACK_ID,
     DISEASE_DOMAIN_PACK_VERSION,
-    DISEASE_EVIDENCE_CODE_VALIDATOR_BINDING_ID,
     DISEASE_EVIDENCE_QUOTE_OBJECT_TYPE,
     DISEASE_LINKML_SCHEMA_ID,
     DISEASE_LINKML_SCHEMA_SOURCE_FILE,
@@ -78,8 +76,6 @@ from .constants import (
     DISEASE_REFERENCE_OBJECT_TYPE,
     DISEASE_REFERENCE_SCHEMA_SOURCE_FILE,
     DISEASE_REFERENCE_VALIDATOR_BINDING_ID,
-    DISEASE_RELATION_SUBSETS,
-    DISEASE_RELATION_VALIDATOR_BINDING_ID,
     DISEASE_SUBJECT_LINKML_SCHEMA_ID,
     DISEASE_SUBJECT_OBJECT_TYPE,
     DISEASE_SUBJECT_SUBTYPES,

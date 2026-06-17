@@ -1075,6 +1075,45 @@
     ],
     "source_file": "python/src/agr_ai_curation_alliance/tools/documents.py"
   },
+  "build_default_projection_plan": {
+    "agent_methods": null,
+    "binding_kind": "runtime_context_factory",
+    "category": "Output",
+    "description": "Build and validate the default source-backed projection plan for the bound formatter format.",
+    "documentation": {
+      "parameters": [
+        {
+          "description": "Optional saved row source to project.",
+          "name": "row_source",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Optional object-row strategy for object exports.",
+          "name": "row_strategy",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Optional source id or source key to restrict rows.",
+          "name": "source_ref",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "summary": "Build and validate the default source-backed projection plan for the bound formatter format."
+    },
+    "methods": null,
+    "name": "Build Default Projection Plan",
+    "package_backed": false,
+    "required_context": [
+      "formatter_bundle",
+      "formatter_output_format",
+      "formatter_agent_id"
+    ],
+    "runtime_bound": true,
+    "source_file": "src.lib.openai_agents.tools.output_formatter_tools"
+  },
   "chebi_api_call": {
     "agent_methods": null,
     "binding_kind": "static",
@@ -1449,6 +1488,26 @@
     ],
     "source_file": "python/src/agr_ai_curation_alliance/tools/documents.py"
   },
+  "explain_formatter_capabilities": {
+    "agent_methods": null,
+    "binding_kind": "runtime_context_factory",
+    "category": "Output",
+    "description": "Explain the bound CSV/TSV/JSON formatter workflow, available saved row sources, supported plan operations, and completion rules.",
+    "documentation": {
+      "parameters": [],
+      "summary": "Explain the bound CSV/TSV/JSON formatter workflow, available saved row sources, supported plan operations, and completion rules."
+    },
+    "methods": null,
+    "name": "Explain Formatter Capabilities",
+    "package_backed": false,
+    "required_context": [
+      "formatter_bundle",
+      "formatter_output_format",
+      "formatter_agent_id"
+    ],
+    "runtime_bound": true,
+    "source_file": "src.lib.openai_agents.tools.output_formatter_tools"
+  },
   "finalize_allele_extraction": {
     "agent_methods": null,
     "audit": {
@@ -1479,6 +1538,39 @@
     "package_version": "1.0.0",
     "required_context": [],
     "source_file": "python/src/agr_ai_curation_alliance/tools/allele_builder_tools.py"
+  },
+  "finalize_and_save": {
+    "agent_methods": null,
+    "binding_kind": "runtime_context_factory",
+    "category": "Output",
+    "description": "Finalize a source-backed projection and save exactly one CSV, TSV, or JSON file for the bound formatter.",
+    "documentation": {
+      "parameters": [
+        {
+          "description": "Projection plan JSON. Empty input uses the validated default projection.",
+          "name": "plan_json",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Clean base filename hint without extension or timestamp.",
+          "name": "filename_hint",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "summary": "Finalize a source-backed projection and save exactly one CSV, TSV, or JSON file for the bound formatter."
+    },
+    "methods": null,
+    "name": "Finalize And Save",
+    "package_backed": false,
+    "required_context": [
+      "formatter_bundle",
+      "formatter_output_format",
+      "formatter_agent_id"
+    ],
+    "runtime_bound": true,
+    "source_file": "src.lib.openai_agents.tools.output_formatter_tools"
   },
   "finalize_disease_extraction": {
     "agent_methods": null,
@@ -2067,6 +2159,45 @@
     "required_context": [],
     "source_file": "python/src/agr_ai_curation_alliance/tools/phenotype_builder_tools.py"
   },
+  "formatter_cannot_complete": {
+    "agent_methods": null,
+    "binding_kind": "runtime_context_factory",
+    "category": "Output",
+    "description": "Return a structured cannot-complete result when the saved bundle cannot support the requested file.",
+    "documentation": {
+      "parameters": [
+        {
+          "description": "Why the formatter cannot create a reliable file.",
+          "name": "reason",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "Specific missing source data or field refs, if known.",
+          "name": "missing_data",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Concrete next step for the caller.",
+          "name": "suggested_next_step",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "summary": "Return a structured cannot-complete result when the saved bundle cannot support the requested file."
+    },
+    "methods": null,
+    "name": "Formatter Cannot Complete",
+    "package_backed": false,
+    "required_context": [
+      "formatter_bundle",
+      "formatter_output_format",
+      "formatter_agent_id"
+    ],
+    "runtime_bound": true,
+    "source_file": "src.lib.openai_agents.tools.output_formatter_tools"
+  },
   "get_agent_contract": {
     "agent_methods": null,
     "audit": {
@@ -2540,6 +2671,51 @@
     "required_context": [],
     "source_file": "python/src/agr_ai_curation_alliance/tools/rest.py"
   },
+  "inspect_field_values": {
+    "agent_methods": null,
+    "binding_kind": "runtime_context_factory",
+    "category": "Output",
+    "description": "Inspect distinct saved values and counts for one source field ref after optional projection filters.",
+    "documentation": {
+      "parameters": [
+        {
+          "description": "Saved row source that owns the field ref.",
+          "name": "row_source",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "Source field ref to summarize.",
+          "name": "field_ref",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "Optional JSON array of projection filter specs.",
+          "name": "filters_json",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Maximum distinct values to return.",
+          "name": "limit",
+          "required": false,
+          "type": "integer"
+        }
+      ],
+      "summary": "Inspect distinct saved values and counts for one source field ref after optional projection filters."
+    },
+    "methods": null,
+    "name": "Inspect Field Values",
+    "package_backed": false,
+    "required_context": [
+      "formatter_bundle",
+      "formatter_output_format",
+      "formatter_agent_id"
+    ],
+    "runtime_bound": true,
+    "source_file": "src.lib.openai_agents.tools.output_formatter_tools"
+  },
   "inspect_ontology_term": {
     "agent_methods": null,
     "audit": {
@@ -2622,6 +2798,90 @@
     "package_version": "1.0.0",
     "required_context": [],
     "source_file": "python/src/agr_ai_curation_alliance/tools/agr_curation.py"
+  },
+  "inspect_output_artifacts": {
+    "agent_methods": null,
+    "binding_kind": "runtime_context_factory",
+    "category": "Output",
+    "description": "Inspect saved row-source counts, default columns, field refs, source ids/keys, bounded examples, and warnings for the bound export bundle.",
+    "documentation": {
+      "parameters": [
+        {
+          "description": "Maximum bounded examples to include per source.",
+          "name": "example_limit",
+          "required": false,
+          "type": "integer"
+        }
+      ],
+      "summary": "Inspect saved row-source counts, default columns, field refs, source ids/keys, bounded examples, and warnings for the bound export bundle."
+    },
+    "methods": null,
+    "name": "Inspect Output Artifacts",
+    "package_backed": false,
+    "required_context": [
+      "formatter_bundle",
+      "formatter_output_format",
+      "formatter_agent_id"
+    ],
+    "runtime_bound": true,
+    "source_file": "src.lib.openai_agents.tools.output_formatter_tools"
+  },
+  "inspect_output_rows": {
+    "agent_methods": null,
+    "binding_kind": "runtime_context_factory",
+    "category": "Output",
+    "description": "Inspect bounded source-backed rows or selected field refs after optional projection filters and sorts.",
+    "documentation": {
+      "parameters": [
+        {
+          "description": "Saved row source to inspect, such as object or section.",
+          "name": "row_source",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Optional JSON array of source field refs to include.",
+          "name": "field_refs_json",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Optional JSON array of projection filter specs.",
+          "name": "filters_json",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Optional JSON array of projection sort specs.",
+          "name": "sort_json",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Maximum rows to return in this bounded inspection page.",
+          "name": "limit",
+          "required": false,
+          "type": "integer"
+        },
+        {
+          "description": "Cursor returned by a prior row inspection page.",
+          "name": "cursor",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "summary": "Inspect bounded source-backed rows or selected field refs after optional projection filters and sorts."
+    },
+    "methods": null,
+    "name": "Inspect Output Rows",
+    "package_backed": false,
+    "required_context": [
+      "formatter_bundle",
+      "formatter_output_format",
+      "formatter_agent_id"
+    ],
+    "runtime_bound": true,
+    "source_file": "src.lib.openai_agents.tools.output_formatter_tools"
   },
   "list_generic_object_classes": {
     "agent_methods": null,
@@ -3321,6 +3581,39 @@
     "required_context": [],
     "source_file": "python/src/agr_ai_curation_alliance/tools/phenotype_builder_tools.py"
   },
+  "preview_output_projection": {
+    "agent_methods": null,
+    "binding_kind": "runtime_context_factory",
+    "category": "Output",
+    "description": "Validate and preview a source-backed projection plan without saving a file.",
+    "documentation": {
+      "parameters": [
+        {
+          "description": "Projection plan JSON using field refs and plan metadata.",
+          "name": "plan_json",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "Maximum preview rows to return.",
+          "name": "limit",
+          "required": false,
+          "type": "integer"
+        }
+      ],
+      "summary": "Validate and preview a source-backed projection plan without saving a file."
+    },
+    "methods": null,
+    "name": "Preview Output Projection",
+    "package_backed": false,
+    "required_context": [
+      "formatter_bundle",
+      "formatter_output_format",
+      "formatter_agent_id"
+    ],
+    "runtime_bound": true,
+    "source_file": "src.lib.openai_agents.tools.output_formatter_tools"
+  },
   "quickgo_api_call": {
     "agent_methods": null,
     "binding_kind": "static",
@@ -3618,120 +3911,6 @@
     "package_version": "1.0.0",
     "required_context": [],
     "source_file": "python/src/agr_ai_curation_alliance/tools/agr_curation.py"
-  },
-  "save_csv_file": {
-    "agent_methods": null,
-    "binding_kind": "static",
-    "category": "Output",
-    "description": "Save data as a downloadable CSV file.",
-    "documentation": {
-      "parameters": [
-        {
-          "description": "JSON array string of row objects to convert to CSV.",
-          "name": "data_json",
-          "required": true,
-          "type": "string"
-        },
-        {
-          "description": "Output filename (without extension).",
-          "name": "filename",
-          "required": true,
-          "type": "string"
-        },
-        {
-          "description": "Optional JSON array string listing column names in output order.",
-          "name": "columns",
-          "required": false,
-          "type": "string"
-        }
-      ],
-      "summary": "Creates a CSV file from structured row data and returns a download link."
-    },
-    "methods": null,
-    "name": "Save CSV File",
-    "package_backed": true,
-    "package_display_name": "Alliance Defaults",
-    "package_export_name": "default",
-    "package_id": "agr.alliance",
-    "package_version": "1.0.0",
-    "required_context": [],
-    "source_file": "python/src/agr_ai_curation_alliance/tools/file_output.py"
-  },
-  "save_json_file": {
-    "agent_methods": null,
-    "binding_kind": "static",
-    "category": "Output",
-    "description": "Save data as a downloadable JSON file.",
-    "documentation": {
-      "parameters": [
-        {
-          "description": "JSON string containing the data to serialize to JSON.",
-          "name": "data_json",
-          "required": true,
-          "type": "string"
-        },
-        {
-          "description": "Output filename (without extension).",
-          "name": "filename",
-          "required": true,
-          "type": "string"
-        },
-        {
-          "description": "Whether to pretty-print the JSON output with indentation.",
-          "name": "pretty",
-          "required": false,
-          "type": "boolean"
-        }
-      ],
-      "summary": "Creates a JSON file from structured data and returns a download link."
-    },
-    "methods": null,
-    "name": "Save JSON File",
-    "package_backed": true,
-    "package_display_name": "Alliance Defaults",
-    "package_export_name": "default",
-    "package_id": "agr.alliance",
-    "package_version": "1.0.0",
-    "required_context": [],
-    "source_file": "python/src/agr_ai_curation_alliance/tools/file_output.py"
-  },
-  "save_tsv_file": {
-    "agent_methods": null,
-    "binding_kind": "static",
-    "category": "Output",
-    "description": "Save data as a downloadable TSV file.",
-    "documentation": {
-      "parameters": [
-        {
-          "description": "JSON array string of row objects to convert to TSV.",
-          "name": "data_json",
-          "required": true,
-          "type": "string"
-        },
-        {
-          "description": "Output filename (without extension).",
-          "name": "filename",
-          "required": true,
-          "type": "string"
-        },
-        {
-          "description": "Optional JSON array string listing column names in output order.",
-          "name": "columns",
-          "required": false,
-          "type": "string"
-        }
-      ],
-      "summary": "Creates a TSV file from structured data and returns a download link."
-    },
-    "methods": null,
-    "name": "Save TSV File",
-    "package_backed": true,
-    "package_display_name": "Alliance Defaults",
-    "package_export_name": "default",
-    "package_id": "agr.alliance",
-    "package_version": "1.0.0",
-    "required_context": [],
-    "source_file": "python/src/agr_ai_curation_alliance/tools/file_output.py"
   },
   "search_alleles": {
     "agent_methods": null,
@@ -5016,5 +5195,32 @@
       "user_id"
     ],
     "source_file": "python/src/agr_ai_curation_alliance/tools/documents.py"
+  },
+  "validate_output_projection": {
+    "agent_methods": null,
+    "binding_kind": "runtime_context_factory",
+    "category": "Output",
+    "description": "Validate a projection plan over saved bundle fields. The file format is forced to the bound formatter type.",
+    "documentation": {
+      "parameters": [
+        {
+          "description": "Projection plan JSON using field refs and plan metadata.",
+          "name": "plan_json",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "summary": "Validate a projection plan over saved bundle fields. The file format is forced to the bound formatter type."
+    },
+    "methods": null,
+    "name": "Validate Output Projection",
+    "package_backed": false,
+    "required_context": [
+      "formatter_bundle",
+      "formatter_output_format",
+      "formatter_agent_id"
+    ],
+    "runtime_bound": true,
+    "source_file": "src.lib.openai_agents.tools.output_formatter_tools"
   }
 }

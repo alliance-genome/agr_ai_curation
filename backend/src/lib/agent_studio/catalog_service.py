@@ -92,6 +92,243 @@ _INLINE_PACKAGE_TOOL_IDS = frozenset({
     "read_subsection",
     "update_recorded_evidence_metadata",
 })
+_OUTPUT_FORMATTER_REQUIRED_CONTEXT = (
+    "formatter_bundle",
+    "formatter_output_format",
+    "formatter_agent_id",
+)
+_OUTPUT_FORMATTER_RUNTIME_TOOL_IDS = (
+    "explain_formatter_capabilities",
+    "inspect_output_artifacts",
+    "inspect_output_rows",
+    "inspect_field_values",
+    "build_default_projection_plan",
+    "validate_output_projection",
+    "preview_output_projection",
+    "finalize_and_save",
+    "formatter_cannot_complete",
+)
+_OUTPUT_FORMATTER_RUNTIME_TOOL_ID_SET = frozenset(_OUTPUT_FORMATTER_RUNTIME_TOOL_IDS)
+_REMOVED_RAW_FILE_SAVE_TOOL_IDS = frozenset(
+    {"save_csv_file", "save_tsv_file", "save_json_file"}
+)
+_OUTPUT_FORMATTER_TOOL_CATALOG: Dict[str, Dict[str, Any]] = {
+    "explain_formatter_capabilities": {
+        "name": "Explain Formatter Capabilities",
+        "description": (
+            "Explain the bound CSV/TSV/JSON formatter workflow, available saved "
+            "row sources, supported plan operations, and completion rules."
+        ),
+        "parameters": [],
+    },
+    "inspect_output_artifacts": {
+        "name": "Inspect Output Artifacts",
+        "description": (
+            "Inspect saved row-source counts, default columns, field refs, source "
+            "ids/keys, bounded examples, and warnings for the bound export bundle."
+        ),
+        "parameters": [
+            {
+                "name": "example_limit",
+                "type": "integer",
+                "required": False,
+                "description": "Maximum bounded examples to include per source.",
+            }
+        ],
+    },
+    "inspect_output_rows": {
+        "name": "Inspect Output Rows",
+        "description": (
+            "Inspect bounded source-backed rows or selected field refs after "
+            "optional projection filters and sorts."
+        ),
+        "parameters": [
+            {
+                "name": "row_source",
+                "type": "string",
+                "required": False,
+                "description": "Saved row source to inspect, such as object or section.",
+            },
+            {
+                "name": "field_refs_json",
+                "type": "string",
+                "required": False,
+                "description": "Optional JSON array of source field refs to include.",
+            },
+            {
+                "name": "filters_json",
+                "type": "string",
+                "required": False,
+                "description": "Optional JSON array of projection filter specs.",
+            },
+            {
+                "name": "sort_json",
+                "type": "string",
+                "required": False,
+                "description": "Optional JSON array of projection sort specs.",
+            },
+            {
+                "name": "limit",
+                "type": "integer",
+                "required": False,
+                "description": "Maximum rows to return in this bounded inspection page.",
+            },
+            {
+                "name": "cursor",
+                "type": "string",
+                "required": False,
+                "description": "Cursor returned by a prior row inspection page.",
+            },
+        ],
+    },
+    "inspect_field_values": {
+        "name": "Inspect Field Values",
+        "description": (
+            "Inspect distinct saved values and counts for one source field ref "
+            "after optional projection filters."
+        ),
+        "parameters": [
+            {
+                "name": "row_source",
+                "type": "string",
+                "required": True,
+                "description": "Saved row source that owns the field ref.",
+            },
+            {
+                "name": "field_ref",
+                "type": "string",
+                "required": True,
+                "description": "Source field ref to summarize.",
+            },
+            {
+                "name": "filters_json",
+                "type": "string",
+                "required": False,
+                "description": "Optional JSON array of projection filter specs.",
+            },
+            {
+                "name": "limit",
+                "type": "integer",
+                "required": False,
+                "description": "Maximum distinct values to return.",
+            },
+        ],
+    },
+    "build_default_projection_plan": {
+        "name": "Build Default Projection Plan",
+        "description": (
+            "Build and validate the default source-backed projection plan for "
+            "the bound formatter format."
+        ),
+        "parameters": [
+            {
+                "name": "row_source",
+                "type": "string",
+                "required": False,
+                "description": "Optional saved row source to project.",
+            },
+            {
+                "name": "row_strategy",
+                "type": "string",
+                "required": False,
+                "description": "Optional object-row strategy for object exports.",
+            },
+            {
+                "name": "source_ref",
+                "type": "string",
+                "required": False,
+                "description": "Optional source id or source key to restrict rows.",
+            },
+        ],
+    },
+    "validate_output_projection": {
+        "name": "Validate Output Projection",
+        "description": (
+            "Validate a projection plan over saved bundle fields. The file "
+            "format is forced to the bound formatter type."
+        ),
+        "parameters": [
+            {
+                "name": "plan_json",
+                "type": "string",
+                "required": True,
+                "description": "Projection plan JSON using field refs and plan metadata.",
+            }
+        ],
+    },
+    "preview_output_projection": {
+        "name": "Preview Output Projection",
+        "description": (
+            "Validate and preview a source-backed projection plan without saving "
+            "a file."
+        ),
+        "parameters": [
+            {
+                "name": "plan_json",
+                "type": "string",
+                "required": True,
+                "description": "Projection plan JSON using field refs and plan metadata.",
+            },
+            {
+                "name": "limit",
+                "type": "integer",
+                "required": False,
+                "description": "Maximum preview rows to return.",
+            },
+        ],
+    },
+    "finalize_and_save": {
+        "name": "Finalize And Save",
+        "description": (
+            "Finalize a source-backed projection and save exactly one CSV, TSV, "
+            "or JSON file for the bound formatter."
+        ),
+        "parameters": [
+            {
+                "name": "plan_json",
+                "type": "string",
+                "required": False,
+                "description": (
+                    "Projection plan JSON. Empty input uses the validated default "
+                    "projection."
+                ),
+            },
+            {
+                "name": "filename_hint",
+                "type": "string",
+                "required": False,
+                "description": "Clean base filename hint without extension or timestamp.",
+            },
+        ],
+    },
+    "formatter_cannot_complete": {
+        "name": "Formatter Cannot Complete",
+        "description": (
+            "Return a structured cannot-complete result when the saved bundle "
+            "cannot support the requested file."
+        ),
+        "parameters": [
+            {
+                "name": "reason",
+                "type": "string",
+                "required": True,
+                "description": "Why the formatter cannot create a reliable file.",
+            },
+            {
+                "name": "missing_data",
+                "type": "string",
+                "required": False,
+                "description": "Specific missing source data or field refs, if known.",
+            },
+            {
+                "name": "suggested_next_step",
+                "type": "string",
+                "required": False,
+                "description": "Concrete next step for the caller.",
+            },
+        ],
+    },
+}
 
 
 def layer_projection(bundle: Optional[PromptLayerBundle]) -> tuple[List[Dict[str, Any]], Optional[str], Dict[str, Any]]:
@@ -426,6 +663,11 @@ def _decode_tool_input(tool_id: str, input_str: str) -> Dict[str, Any]:
 
 def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext") -> Any:
     """Wrap one package-backed tool in a runtime-compatible SDK tool object."""
+    if tool_id in _REMOVED_RAW_FILE_SAVE_TOOL_IDS:
+        raise ValueError(
+            f"Tool '{tool_id}' has been removed. Use runtime formatter projection tools instead."
+        )
+
     binding = _get_package_tool_binding(tool_id)
     if binding is None:
         raise ValueError(f"Unknown tool binding '{tool_id}'")
@@ -539,6 +781,31 @@ def _merge_tool_metadata(base: Dict[str, Any], override: Dict[str, Any]) -> Dict
     return merged
 
 
+def _build_runtime_formatter_tool_registry_entries() -> Dict[str, Dict[str, Any]]:
+    """Build catalog entries for runtime-bound structured formatter tools."""
+
+    entries: Dict[str, Dict[str, Any]] = {}
+    for tool_id, spec in _OUTPUT_FORMATTER_TOOL_CATALOG.items():
+        description = str(spec["description"])
+        entries[tool_id] = {
+            "name": spec["name"],
+            "description": description,
+            "category": "Output",
+            "source_file": "src.lib.openai_agents.tools.output_formatter_tools",
+            "documentation": {
+                "summary": description,
+                "parameters": list(spec["parameters"]),
+            },
+            "methods": None,
+            "agent_methods": None,
+            "binding_kind": "runtime_context_factory",
+            "required_context": list(_OUTPUT_FORMATTER_REQUIRED_CONTEXT),
+            "package_backed": False,
+            "runtime_bound": True,
+        }
+    return entries
+
+
 def _build_tool_registry() -> Dict[str, Dict[str, Any]]:
     """
     Build the Agent Studio tool catalog from package bindings plus curated metadata.
@@ -580,6 +847,8 @@ def _build_tool_registry() -> Dict[str, Dict[str, Any]]:
                 registry[binding.tool_id],
                 dict(binding.metadata),
             )
+
+    registry.update(_build_runtime_formatter_tool_registry_entries())
 
     return registry
 
@@ -654,6 +923,18 @@ def _build_tool_bindings() -> Dict[str, Dict[str, Any]]:
             "package_version": binding.source.package_version,
             "package_export_name": binding.source.export_name,
         }
+    for tool_id in _OUTPUT_FORMATTER_RUNTIME_TOOL_IDS:
+        bindings[tool_id] = {
+            "binding": "runtime_context_factory",
+            "required_context": list(_OUTPUT_FORMATTER_REQUIRED_CONTEXT),
+            "resolver": (
+                lambda context, resolved_tool_id=tool_id: _resolve_runtime_formatter_tool(
+                    resolved_tool_id,
+                    context,
+                )
+            ),
+            "runtime_bound": True,
+        }
     return bindings
 
 
@@ -695,6 +976,39 @@ class ToolExecutionContext:
     user_id: Optional[str] = None
     database_url: Optional[str] = None
     tool_tracker: Optional[Any] = None
+    formatter_bundle: Optional[Any] = None
+    formatter_output_format: Optional[str] = None
+    formatter_agent_id: Optional[str] = None
+
+
+def _resolve_runtime_formatter_tool(
+    tool_id: str,
+    execution_context: ToolExecutionContext,
+) -> Any:
+    """Resolve one runtime-bound formatter tool from the current export bundle."""
+
+    from src.lib.openai_agents.tools.file_output_tools import save_projected_file_output
+    from src.lib.openai_agents.tools.output_formatter_tools import build_output_formatter_tools
+
+    bundle = execution_context.formatter_bundle
+    output_format = str(execution_context.formatter_output_format or "").strip()
+    formatter_agent_id = str(execution_context.formatter_agent_id or "").strip()
+    if bundle is None or not output_format or not formatter_agent_id:
+        raise ValueError(
+            "Runtime formatter tools require formatter_bundle, "
+            "formatter_output_format, and formatter_agent_id."
+        )
+
+    tools = build_output_formatter_tools(
+        bundle=bundle,
+        output_format=output_format,
+        formatter_agent_id=formatter_agent_id,
+        save_projected_output=save_projected_file_output,
+    )
+    for tool in tools:
+        if getattr(tool, "name", None) == tool_id:
+            return tool
+    raise ValueError(f"Runtime formatter tool '{tool_id}' was not produced")
 
 def _canonicalize_tool_id(tool_id: str) -> str:
     """Map method-level tool aliases back to concrete runtime tool IDs."""
@@ -715,6 +1029,11 @@ def resolve_tools(tool_ids: List[str], execution_context: ToolExecutionContext) 
         if tool_id in seen_tool_ids:
             continue
         seen_tool_ids.add(tool_id)
+
+        if tool_id in _REMOVED_RAW_FILE_SAVE_TOOL_IDS:
+            raise ValueError(
+                f"Tool '{tool_id}' has been removed. Use runtime formatter projection tools instead."
+            )
 
         binding = TOOL_BINDINGS.get(tool_id)
         if binding is None:
@@ -744,7 +1063,6 @@ def resolve_tools(tool_ids: List[str], execution_context: ToolExecutionContext) 
 
 
 _DOCUMENT_TOOL_IDS = {"search_document", "read_chunk", "read_section", "read_subsection"}
-_FORMATTER_TOOL_IDS = {"save_csv_file", "save_tsv_file", "save_json_file"}
 
 
 def _canonical_tool_ids(tool_ids: List[str]) -> List[str]:
@@ -1205,11 +1523,27 @@ def _build_tool_execution_context(
         env_database_url = os.getenv("CURATION_DB_URL", "").strip()
         database_url = env_database_url or None
 
+    raw_formatter_output_format = kwargs.get("formatter_output_format")
+    formatter_output_format = (
+        str(raw_formatter_output_format).strip().lower()
+        if raw_formatter_output_format not in (None, "")
+        else None
+    )
+    raw_formatter_agent_id = kwargs.get("formatter_agent_id")
+    formatter_agent_id = (
+        str(raw_formatter_agent_id).strip()
+        if raw_formatter_agent_id not in (None, "")
+        else None
+    )
+
     return ToolExecutionContext(
         document_id=document_id,
         user_id=user_id,
         database_url=database_url,
         tool_tracker=tool_tracker,
+        formatter_bundle=kwargs.get("formatter_bundle"),
+        formatter_output_format=formatter_output_format,
+        formatter_agent_id=formatter_agent_id,
     )
 
 
@@ -1316,13 +1650,13 @@ def _build_runtime_context(
             preamble_lines.append(
                 f'You are helping the user with the document: "{document_name}"'
             )
-        if tool_id_set & _FORMATTER_TOOL_IDS:
+        if tool_id_set & _OUTPUT_FORMATTER_RUNTIME_TOOL_ID_SET:
             try:
                 sanitized_stem = sanitize_output_descriptor(document_name)
             except FileValidationError:
                 sanitized_stem = "output"
             preamble_lines.append(
-                f'Use "{sanitized_stem}" as the base output filename when calling save_*_file tools unless the user explicitly requests a different filename.'
+                f'Use "{sanitized_stem}" as the filename_hint when calling finalize_and_save unless the user explicitly requests a different filename.'
             )
 
     if preamble_lines:
@@ -1415,6 +1749,10 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
     runtime_kwargs = dict(kwargs)
     requested_tool_ids = list(getattr(db_agent, "tool_ids", []) or [])
     canonical_tool_ids = _canonical_tool_ids(requested_tool_ids)
+    canonical_tool_id_set = set(canonical_tool_ids)
+    uses_runtime_formatter_tools = bool(
+        canonical_tool_id_set & _OUTPUT_FORMATTER_RUNTIME_TOOL_ID_SET
+    )
 
     # Resolve output schema override when present.
     output_schema_key = getattr(db_agent, "output_schema_key", None)
@@ -1436,6 +1774,7 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
             tool_tracker = ToolCallTracker()
 
         if has_document_tools:
+            assert tool_tracker is not None
             output_guardrails.append(
                 create_tool_required_output_guardrail(
                     tracker=tool_tracker,
@@ -1447,6 +1786,7 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
                 )
             )
         elif required_package_specs:
+            assert tool_tracker is not None
             required_spec = required_package_specs[0]
             guardrail_message = str(required_spec.get("guardrail_message") or "").strip()
             if not guardrail_message:
@@ -1491,9 +1831,6 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
             db_agent.agent_key,
         )
 
-    if bool(set(canonical_tool_ids) & _FORMATTER_TOOL_IDS):
-        reasoning_effort = None
-
     model_provider = resolve_model_provider(effective_model_id)
 
     model_settings = build_model_settings(
@@ -1501,9 +1838,9 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
         temperature=effective_temperature,
         reasoning_effort=reasoning_effort,
         tool_choice="auto" if tools else None,
-        parallel_tool_calls=not bool(set(canonical_tool_ids) & _FORMATTER_TOOL_IDS),
+        parallel_tool_calls=not uses_runtime_formatter_tools,
         verbosity="low"
-        if (output_schema is None and bool(set(canonical_tool_ids) & _DOCUMENT_TOOL_IDS))
+        if (output_schema is None and bool(canonical_tool_id_set & _DOCUMENT_TOOL_IDS))
         else None,
         provider_override=model_provider,
     )
