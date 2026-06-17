@@ -8,7 +8,21 @@ import sys
 
 import pytest
 
+from src.lib.flows.output_projection import build_flow_output_artifact_bundle
 from src.lib.agent_studio import catalog_service
+
+
+FORMATTER_RUNTIME_TOOLS = [
+    "explain_formatter_capabilities",
+    "inspect_output_artifacts",
+    "inspect_output_rows",
+    "inspect_field_values",
+    "build_default_projection_plan",
+    "validate_output_projection",
+    "preview_output_projection",
+    "finalize_and_save",
+    "formatter_cannot_complete",
+]
 
 
 class _FakeTool:
@@ -53,6 +67,43 @@ class _FakePromptBundle:
 
     def to_manifest(self):
         return {"agent_id": "fake", "layers": [], "hash": self.hash}
+
+
+def _formatter_bundle():
+    return build_flow_output_artifact_bundle(
+        completed_steps=[
+            {
+                "step": 1,
+                "extraction_result_id": "extract-1",
+                "agent_id": "gene_extractor",
+                "agent_name": "Gene Extractor",
+                "candidate": SimpleNamespace(
+                    agent_key="gene_extractor",
+                    adapter_key="gene",
+                    candidate_count=1,
+                    payload_json={
+                        "domain_pack_id": "gene",
+                        "envelope_id": "env-1",
+                        "objects": [
+                            {
+                                "object_type": "Gene",
+                                "object_id": "gene-1",
+                                "status": "validated",
+                                "payload": {
+                                    "symbol": "BRCA1",
+                                    "primary_external_id": "TEST:1",
+                                },
+                            }
+                        ],
+                    },
+                ),
+            }
+        ],
+        flow_name="Formatter Catalog Flow",
+        flow_run_id="flow-run-1",
+        document_id="doc-1",
+        output_format="csv",
+    )
 
 
 def test_resolve_tools_rejects_unknown_binding(monkeypatch):
@@ -110,6 +161,61 @@ def test_resolve_tools_canonicalizes_method_aliases(monkeypatch):
 
     assert len(tools) == 1
     assert tools[0].name == "agr_curation_query"
+
+
+def test_runtime_formatter_tools_are_catalog_registered():
+    registry = catalog_service.get_tool_registry()
+    bindings = dict(catalog_service.TOOL_BINDINGS)
+
+    for tool_id in FORMATTER_RUNTIME_TOOLS:
+        tool = registry[tool_id]
+        binding = bindings[tool_id]
+
+        assert tool["category"] == "Output"
+        assert tool["runtime_bound"] is True
+        assert tool["package_backed"] is False
+        assert tool["required_context"] == [
+            "formatter_bundle",
+            "formatter_output_format",
+            "formatter_agent_id",
+        ]
+        assert binding["binding"] == "runtime_context_factory"
+        assert binding["required_context"] == tool["required_context"]
+
+
+def test_runtime_formatter_tool_resolution_requires_bound_bundle_context():
+    with pytest.raises(ValueError, match="formatter_bundle, formatter_output_format, formatter_agent_id"):
+        catalog_service.resolve_tools(
+            ["finalize_and_save"],
+            catalog_service.ToolExecutionContext(),
+        )
+
+
+def test_runtime_formatter_tool_resolution_uses_projection_suite():
+    tools = catalog_service.resolve_tools(
+        ["inspect_output_artifacts", "finalize_and_save"],
+        catalog_service.ToolExecutionContext(
+            formatter_bundle=_formatter_bundle(),
+            formatter_output_format="csv",
+            formatter_agent_id="csv_output_formatter",
+        ),
+    )
+
+    assert [tool.name for tool in tools] == [
+        "inspect_output_artifacts",
+        "finalize_and_save",
+    ]
+
+
+def test_runtime_formatter_filename_context_names_finalize_tool():
+    context = catalog_service._build_runtime_context(
+        runtime_kwargs={"document_name": "Tumor Terms.csv"},
+        canonical_tool_ids=["finalize_and_save"],
+    )
+
+    assert "filename_hint" in context
+    assert "finalize_and_save" in context
+    assert "save_*_file" not in context
 
 
 def test_build_tool_execution_context_uses_env_database_url(monkeypatch):
@@ -570,11 +676,11 @@ async def test_resolve_package_tool_executes_through_package_runner(monkeypatch)
 @pytest.mark.asyncio
 async def test_resolve_package_tool_forwards_runtime_request_context(monkeypatch):
     fake_tool = _FakeFunctionTool(
-        name="save_json_file",
+        name="agr_curation_query",
         on_invoke_tool=None,
     )
     binding = SimpleNamespace(
-        tool_id="save_json_file",
+        tool_id="agr_curation_query",
         required_context=(),
     )
     runner = SimpleNamespace(
@@ -603,13 +709,13 @@ async def test_resolve_package_tool_forwards_runtime_request_context(monkeypatch
     )
 
     resolved = catalog_service._resolve_package_tool(
-        "save_json_file",
+        "agr_curation_query",
         catalog_service.ToolExecutionContext(user_id="catalog-user"),
     )
 
     result = await resolved.on_invoke_tool(
         None,
-        '{"data_json":"{\\"genes\\":[\\"crb\\"]}","filename":"ignored-by-flow"}',
+        '{"method":"search_genes","symbol":"crb"}',
     )
 
     assert result == {
@@ -618,6 +724,28 @@ async def test_resolve_package_tool_forwards_runtime_request_context(monkeypatch
         "user_id": "runtime-user",
         "output_filename_stem": "focus_genes_publication",
     }
+
+
+def test_resolve_tools_rejects_removed_raw_file_save_tools():
+    with pytest.raises(ValueError, match="removed"):
+        catalog_service.resolve_tools(
+            ["save_csv_file"],
+            catalog_service.ToolExecutionContext(),
+        )
+
+
+def test_resolve_package_tool_rejects_removed_raw_file_save_tools(monkeypatch):
+    monkeypatch.setattr(
+        catalog_service,
+        "_get_package_tool_binding",
+        lambda _tool_id: (_ for _ in ()).throw(AssertionError("should not load binding")),
+    )
+
+    with pytest.raises(ValueError, match="removed"):
+        catalog_service._resolve_package_tool(
+            "save_json_file",
+            catalog_service.ToolExecutionContext(),
+        )
 
 
 @pytest.mark.asyncio

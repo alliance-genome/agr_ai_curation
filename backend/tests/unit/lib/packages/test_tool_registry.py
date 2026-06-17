@@ -468,9 +468,6 @@ def test_repo_shipped_tool_bindings_are_loaded_from_alliance_package():
         "quickgo_api_call": ("static", (), "agr.alliance"),
         "go_api_call": ("static", (), "agr.alliance"),
         "alliance_api_call": ("static", (), "agr.alliance"),
-        "save_csv_file": ("static", (), "agr.alliance"),
-        "save_tsv_file": ("static", (), "agr.alliance"),
-        "save_json_file": ("static", (), "agr.alliance"),
     }
 
     assert set(expected_bindings).issubset(registry.bindings_by_tool_id)
@@ -548,7 +545,7 @@ def test_repo_alliance_package_copies_tool_implementations_locally():
     assert "LOOKUP_STATUS_BLOCKED = " not in agr_source
 
 
-def test_repo_alliance_package_runtime_requirements_include_file_output_driver():
+def test_repo_alliance_package_runtime_requirements_include_shared_runtime_dependencies():
     requirements = ALLIANCE_RUNTIME_REQUIREMENTS_PATH.read_text(encoding="utf-8").splitlines()
     normalized = {
         line.strip()

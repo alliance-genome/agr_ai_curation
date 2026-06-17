@@ -23,9 +23,9 @@ BUILTIN_SPECIALIST_DISPLAY_NAMES: Dict[str, str] = {
     "ask_orthologs_specialist": "Orthologs Agent",
     "ask_ontology_term_validation_specialist": "Ontology Term Resolver Agent",
     "ask_chat_output_specialist": "Chat Output Agent",
-    "ask_csv_formatter_specialist": "CSV File Formatter",
-    "ask_tsv_formatter_specialist": "TSV File Formatter",
-    "ask_json_formatter_specialist": "JSON File Formatter",
+    "ask_csv_output_formatter_specialist": "CSV File Formatter",
+    "ask_tsv_output_formatter_specialist": "TSV File Formatter",
+    "ask_json_output_formatter_specialist": "JSON File Formatter",
 }
 
 INTERNAL_TOOL_DISPLAY_NAMES: Dict[str, str] = {
@@ -45,10 +45,15 @@ INTERNAL_TOOL_DISPLAY_NAMES: Dict[str, str] = {
     "rest_api_call": "REST API",
     "quickgo_api_call": "QuickGO API",
     "go_api_call": "GO Annotations API",
-    "save_csv_file": "Save CSV File",
-    "save_tsv_file": "Save TSV File",
-    "save_json_file": "Save JSON File",
-    "export_to_file": "Export to File",
+    "explain_formatter_capabilities": "Explain Formatter Capabilities",
+    "inspect_output_artifacts": "Inspect Output Artifacts",
+    "inspect_output_rows": "Inspect Output Rows",
+    "inspect_field_values": "Inspect Field Values",
+    "build_default_projection_plan": "Build Default Projection Plan",
+    "validate_output_projection": "Validate Output Projection",
+    "preview_output_projection": "Preview Output Projection",
+    "finalize_and_save": "Finalize And Save",
+    "formatter_cannot_complete": "Formatter Cannot Complete",
     "prepare_for_curation": "Curation Prep",
 }
 

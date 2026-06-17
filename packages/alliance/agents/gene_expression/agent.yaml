@@ -30,7 +30,7 @@ supervisor_routing:
     Extract gene expression data from the paper through the builder workflow.
     Records evidence, resolves selectors, stages observations, finalizes the
     backend-owned GeneExpressionEnvelope, and returns a compact status.
-    Use export_to_file to save results as CSV, TSV, or JSON.
+    Use the CSV/TSV/JSON formatter specialists to save results as files.
   batchable: false  # Document-based agent, processes one document at a time
 
 # -----------------------------------------------------------------------------

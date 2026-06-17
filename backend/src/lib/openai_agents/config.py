@@ -320,7 +320,7 @@ ReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh"]
 # can carry values the model's Reasoning schema rejects (notably "disabled"/"none"
 # emitted by the AI flow builder). Treat anything else as "no reasoning" and
 # normalize to None rather than letting it crash Reasoning(effort=...) downstream
-# (e.g. in the flow terminal-formatter projection planner). KANBAN-1346 / 0.7.2.
+# (e.g. in flow terminal formatter agents). KANBAN-1346 / 0.7.2.
 _VALID_REASONING_EFFORTS: frozenset = frozenset(
     {"minimal", "low", "medium", "high", "xhigh"}
 )
@@ -1057,14 +1057,14 @@ def get_flow_step_evidence_preview_limit() -> int:
     return max(1, _get_env_int_with_fallback("FLOW_STEP_EVIDENCE_PREVIEW_LIMIT", 10))
 
 
-def get_flow_output_projection_planner_preview_limit() -> int:
-    """Rows previewed for the flow output projection planner (FLOW_OUTPUT_PROJECTION_PLANNER_PREVIEW_LIMIT).
+def get_flow_output_projection_preview_limit() -> int:
+    """Rows previewed by flow/formatter projection tools (FLOW_OUTPUT_PROJECTION_PREVIEW_LIMIT).
 
-    Bounds the preview row count the projection planner inspects. Default 5.
+    Bounds the preview row count visible formatter tools inspect. Default 5.
     """
     return max(
         1,
-        _get_env_int_with_fallback("FLOW_OUTPUT_PROJECTION_PLANNER_PREVIEW_LIMIT", 5),
+        _get_env_int_with_fallback("FLOW_OUTPUT_PROJECTION_PREVIEW_LIMIT", 5),
     )
 
 
@@ -1437,22 +1437,22 @@ def get_flow_list_page_size_default() -> int:
     return max(1, _get_env_int_with_fallback("FLOW_LIST_PAGE_SIZE_DEFAULT", 50))
 
 
-# --- Flow output projection planner ---
+# --- Flow output projection tooling ---
 
-def get_flow_planner_max_text_chars() -> int:
-    """Char cap on planner text fields in flow output projection (FLOW_PLANNER_MAX_TEXT_CHARS).
+def get_flow_projection_max_text_chars() -> int:
+    """Char cap on text fields in flow output projection (FLOW_PROJECTION_MAX_TEXT_CHARS).
 
-    Truncates per-field text the projection planner inspects. Default 180.
+    Truncates per-field text visible formatter/projection tools inspect. Default 180.
     """
-    return max(1, _get_env_int_with_fallback("FLOW_PLANNER_MAX_TEXT_CHARS", 180))
+    return max(1, _get_env_int_with_fallback("FLOW_PROJECTION_MAX_TEXT_CHARS", 180))
 
 
-def get_flow_planner_max_row_chars() -> int:
-    """Char cap on planner row previews in flow output projection (FLOW_PLANNER_MAX_ROW_CHARS).
+def get_flow_projection_max_row_chars() -> int:
+    """Char cap on row previews in flow output projection (FLOW_PROJECTION_MAX_ROW_CHARS).
 
-    Truncates per-row preview text the projection planner inspects. Default 2000.
+    Truncates per-row preview text visible formatter/projection tools inspect. Default 2000.
     """
-    return max(1, _get_env_int_with_fallback("FLOW_PLANNER_MAX_ROW_CHARS", 2_000))
+    return max(1, _get_env_int_with_fallback("FLOW_PROJECTION_MAX_ROW_CHARS", 2_000))
 
 
 def get_flow_projection_max_rows() -> int:
@@ -1472,28 +1472,36 @@ def get_flow_chat_max_rows() -> int:
     return max(1, _get_env_int_with_fallback("FLOW_CHAT_MAX_ROWS", 50))
 
 
-def get_flow_planner_max_field_examples() -> int:
-    """Example values shown per field to the projection planner (FLOW_PLANNER_MAX_FIELD_EXAMPLES).
+def get_flow_projection_max_field_examples() -> int:
+    """Example values shown per field to projection tools (FLOW_PROJECTION_MAX_FIELD_EXAMPLES).
 
     Default 3.
     """
-    return max(1, _get_env_int_with_fallback("FLOW_PLANNER_MAX_FIELD_EXAMPLES", 3))
+    return max(1, _get_env_int_with_fallback("FLOW_PROJECTION_MAX_FIELD_EXAMPLES", 3))
 
 
-def get_flow_planner_max_list_items() -> int:
-    """List items previewed per field to the projection planner (FLOW_PLANNER_MAX_LIST_ITEMS).
+def get_flow_projection_max_list_items() -> int:
+    """List items previewed per field by projection tools (FLOW_PROJECTION_MAX_LIST_ITEMS).
 
     Default 5.
     """
-    return max(1, _get_env_int_with_fallback("FLOW_PLANNER_MAX_LIST_ITEMS", 5))
+    return max(1, _get_env_int_with_fallback("FLOW_PROJECTION_MAX_LIST_ITEMS", 5))
 
 
-def get_flow_planner_max_object_items() -> int:
-    """Object keys previewed per field to the projection planner (FLOW_PLANNER_MAX_OBJECT_ITEMS).
+def get_flow_projection_max_object_items() -> int:
+    """Object keys previewed per field by projection tools (FLOW_PROJECTION_MAX_OBJECT_ITEMS).
 
     Default 12.
     """
-    return max(1, _get_env_int_with_fallback("FLOW_PLANNER_MAX_OBJECT_ITEMS", 12))
+    return max(1, _get_env_int_with_fallback("FLOW_PROJECTION_MAX_OBJECT_ITEMS", 12))
+
+
+def get_formatter_preview_max_depth() -> int:
+    """Max nested depth shown in formatter preview values (FORMATTER_PREVIEW_MAX_DEPTH).
+
+    Bounds nested JSON/list previews returned to formatter agents. Default 4.
+    """
+    return max(1, _get_env_int_with_fallback("FORMATTER_PREVIEW_MAX_DEPTH", 4))
 
 
 # --- Curation / pipeline ---

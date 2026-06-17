@@ -235,6 +235,13 @@ class FileOutputStorageService:
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         return f"{trace_id}_{descriptor}_{timestamp}.{file_type}"
 
+    def _generate_stable_filename(
+        self, trace_id: str, descriptor: str, file_type: str
+    ) -> str:
+        """Generate a deterministic per-run output filename."""
+
+        return f"{trace_id}_{descriptor}.{file_type}"
+
     def _get_output_directory(self, session_id: str) -> Path:
         """Get output directory for a session, organized by date.
 
@@ -242,6 +249,11 @@ class FileOutputStorageService:
         """
         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         return self.outputs_path / date_str / session_id
+
+    def _get_stable_output_directory(self, trace_id: str) -> Path:
+        """Get deterministic output directory for one structured formatter run."""
+
+        return self.outputs_path / "structured" / trace_id
 
     def _compute_file_hash(self, content: bytes) -> str:
         """Compute SHA-256 hash of file content."""
@@ -271,6 +283,7 @@ class FileOutputStorageService:
         content: str | bytes,
         file_type: Literal["csv", "tsv", "json"],
         descriptor: str,
+        stable_filename: bool = False,
     ) -> tuple[Path, str, int, list[str]]:
         """Save file output to storage.
 
@@ -286,6 +299,10 @@ class FileOutputStorageService:
             content: File content (string or bytes)
             file_type: One of 'csv', 'tsv', 'json'
             descriptor: Human-readable descriptor (e.g., 'gene_results')
+            stable_filename: When true, use a deterministic
+                outputs/structured/{trace_id}/{trace_id}_{descriptor}.{ext} path
+                and replace any existing file at that path. Intended for
+                idempotent per-run structured exports.
 
         Returns:
             Tuple of (final_path, file_hash, file_size, warnings)
@@ -303,7 +320,14 @@ class FileOutputStorageService:
         self._validate_descriptor(normalized_descriptor)
 
         # Generate filename
-        filename = self._generate_filename(trace_id, normalized_descriptor, file_type)
+        if stable_filename:
+            filename = self._generate_stable_filename(
+                trace_id,
+                normalized_descriptor,
+                file_type,
+            )
+        else:
+            filename = self._generate_filename(trace_id, normalized_descriptor, file_type)
 
         # Prepare content as bytes
         if isinstance(content, str):
@@ -327,12 +351,18 @@ class FileOutputStorageService:
             file_size = len(content_bytes)
 
             # Create final output directory
-            output_dir = self._get_output_directory(session_id)
+            output_dir = (
+                self._get_stable_output_directory(trace_id)
+                if stable_filename
+                else self._get_output_directory(session_id)
+            )
             output_dir.mkdir(parents=True, exist_ok=True)
 
             # Move to final location
             final_path = output_dir / filename
             self._verify_path_within_base(final_path)
+            if stable_filename:
+                final_path.unlink(missing_ok=True)
 
             shutil.move(str(temp_file), str(final_path))
             logger.info(

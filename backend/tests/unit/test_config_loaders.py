@@ -206,15 +206,36 @@ class TestAgentLoader:
         assert chemical_tool["batchable"] is True
         assert chemical_tool["agent_id"] == "chemical_validation"
 
-    def test_formatters_not_enabled(self):
-        """Test that formatter agents are not supervisor-enabled."""
+    def test_formatters_use_projection_tool_suite(self):
+        """Formatter agents must use source-backed projection tools, not raw savers."""
         from src.lib.config.agent_loader import load_agent_definitions, get_agent_definition
 
         load_agent_definitions(ALLIANCE_AGENTS_PATH)
 
+        expected_tools = [
+            "explain_formatter_capabilities",
+            "inspect_output_artifacts",
+            "inspect_output_rows",
+            "inspect_field_values",
+            "build_default_projection_plan",
+            "validate_output_projection",
+            "preview_output_projection",
+            "finalize_and_save",
+            "formatter_cannot_complete",
+        ]
+        removed_tools = {"save_csv_file", "save_tsv_file", "save_json_file"}
+
         csv_formatter = get_agent_definition("csv_output_formatter")
-        if csv_formatter:
-            assert csv_formatter.supervisor_routing.enabled is False
+        tsv_formatter = get_agent_definition("tsv_output_formatter")
+        json_formatter = get_agent_definition("json_output_formatter")
+
+        for formatter in (csv_formatter, tsv_formatter, json_formatter):
+            assert formatter is not None
+            assert formatter.tools == expected_tools
+            assert not removed_tools & set(formatter.tools)
+            assert formatter.model_config is not None
+            assert formatter.model_config.reasoning == "medium"
+            assert formatter.supervisor_routing.enabled is True
 
     def test_get_agent_by_folder(self):
         """Test getting agent by folder name."""

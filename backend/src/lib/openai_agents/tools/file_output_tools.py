@@ -1,49 +1,19 @@
-"""Tools for CSV/TSV/JSON file output formatters.
+"""Structured CSV/TSV/JSON file output persistence for formatter agents.
 
-These tools are used by file formatter agents to save structured data
-as downloadable files. Context (trace_id, session_id, curator_id) is
-captured at INVOCATION time from context variables.
-
-Why Invocation Time?
-    The trace_id isn't available until after the Langfuse trace is created,
-    which happens AFTER agents (and their tools) are created. Therefore,
-    context must be captured when the tool is invoked, not when it's created.
-
-Why JSON String Parameters?
-    The OpenAI Agents SDK's function_tool decorator requires strict JSON schema.
-    Dynamic types like List[dict] don't satisfy strict mode requirements.
-    Instead, we accept data as JSON strings and parse them internally.
-    This allows arbitrary tabular data with varying columns.
-
-Usage:
-    # Tools are created (context not captured yet)
-    csv_tool = create_csv_tool()
-    tsv_tool = create_tsv_tool()
-    json_tool = create_json_tool()
-
-    # Agent uses these tools to save files
-    # Data is passed as JSON strings
-    file_info = await csv_tool(
-        data_json='[{"gene_id": "FBgn0001", "symbol": "Notch"}]',
-        filename="genes"
-    )
-
-Integration with File API:
-    After saving, tools return FileInfo which includes a file_id.
-    The file is also registered with the database via the storage service,
-    enabling download via /api/files/{file_id}/download endpoint.
+Formatter agents never provide raw file bytes or row arrays. They produce a
+validated projection plan through runtime-bound formatter tools; this module
+serializes the resulting ``FlowOutputProjectionResult`` and registers exactly
+one downloadable file for the run/descriptor/format identity.
 """
 
 import csv
 import io
 import json
 import logging
-import uuid
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Optional
 
-from agents import function_tool
-
+from src.lib.flows.output_projection import FlowOutputProjectionResult
 from src.lib.file_outputs.storage import FileOutputStorageService
 from src.models.sql.database import SessionLocal
 from src.models.sql.file_output import FileOutput
@@ -88,107 +58,203 @@ def _build_download_url(file_id: str) -> str:
     return f"/api/files/{file_id}/download"
 
 
-async def _save_csv_impl(
-    data_json: str,
-    filename: str,
-    columns: Optional[str] = None,
-) -> dict:
-    """Internal implementation for CSV save (testable without SDK wrapper).
+def _require_projected_file_context(
+    trace_id: Optional[str],
+    session_id: Optional[str],
+    curator_id: Optional[str],
+) -> tuple[str, str, str]:
+    """Return required context for structured formatter saves, or fail loudly."""
 
-    Args:
-        data_json: JSON string containing a list of objects to convert to CSV rows.
-        filename: Desired filename (without extension).
-        columns: Optional JSON array string of column names.
+    if not trace_id:
+        raise ValueError("Structured projected file output requires trace_id context")
+    if not session_id:
+        raise ValueError("Structured projected file output requires session_id context")
+    if not curator_id:
+        raise ValueError("Structured projected file output requires curator_id context")
+    return trace_id, session_id, curator_id
 
-    Returns:
-        Dictionary with file information including download URL
-    """
-    # Get context at invocation time (trace_id is set after agent creation)
-    trace_id, session_id, curator_id = _get_context_from_contextvars()
 
-    # Parse JSON input
-    try:
-        data = json.loads(data_json)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON in data_json: {e}")
+def _find_existing_projected_file_output(
+    db,
+    *,
+    trace_id: str,
+    file_type: str,
+    descriptor: str,
+    file_path: str,
+) -> FileOutput | None:
+    """Find one structured formatter row by canonical run/descriptor/format identity."""
 
-    if not isinstance(data, list):
-        raise ValueError("data_json must be a JSON array")
+    file_output = (
+        db.query(FileOutput)
+        .filter(FileOutput.file_path == file_path)
+        .one_or_none()
+    )
+    if file_output is not None:
+        return file_output
 
-    if not data:
-        raise ValueError("No data to export - data list is empty")
-
-    # Validate first row is a dict
-    if not isinstance(data[0], dict):
-        raise ValueError(
-            f"data_json array items must be objects, got {type(data[0]).__name__}"
+    candidates = (
+        db.query(FileOutput)
+        .filter(
+            FileOutput.trace_id == trace_id,
+            FileOutput.file_type == file_type,
         )
+        .all()
+    )
+    for candidate in candidates:
+        metadata = candidate.file_metadata or {}
+        if not isinstance(metadata, dict):
+            continue
+        if (
+            metadata.get("structured_projection") is True
+            and str(metadata.get("descriptor") or "") == descriptor
+        ):
+            return candidate
+    return None
 
-    # Parse columns if provided as JSON string
-    column_list: List[str]
-    if columns is not None:
-        try:
-            column_list = json.loads(columns)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON in columns: {e}")
-    else:
-        column_list = list(data[0].keys())
 
-    # Generate CSV content
-    output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=column_list, extrasaction="ignore")
-    writer.writeheader()
-    writer.writerows(data)
-    content = output.getvalue()
+def _mime_type_for_file_type(file_type: str) -> str:
+    if file_type == "csv":
+        return "text/csv"
+    if file_type == "tsv":
+        return "text/tab-separated-values"
+    if file_type == "json":
+        return "application/json"
+    raise ValueError(f"Unsupported file type: {file_type}")
 
-    # Generate a fallback trace_id if not available (32-char hex)
-    fallback_id = str(uuid.uuid4()).replace("-", "")
-    effective_trace_id = trace_id or fallback_id[:32]
-    effective_session_id = session_id or fallback_id[:8]
-    effective_curator_id = curator_id or "unknown"
 
-    # Use the storage service to save with validation
+def _projection_content_for_file_type(
+    *,
+    output_format: str,
+    projection: FlowOutputProjectionResult,
+) -> str:
+    if output_format == "csv":
+        output = io.StringIO()
+        column_keys = [column.key for column in projection.columns]
+        writer = csv.DictWriter(output, fieldnames=column_keys, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(projection.rows)
+        return output.getvalue()
+    if output_format == "tsv":
+        output = io.StringIO()
+        column_keys = [column.key for column in projection.columns]
+        writer = csv.DictWriter(
+            output,
+            fieldnames=column_keys,
+            delimiter="\t",
+            extrasaction="ignore",
+        )
+        writer.writeheader()
+        writer.writerows(
+            [
+                {
+                    key: str(value or "").strip()
+                    for key, value in row.items()
+                }
+                for row in projection.rows
+            ]
+        )
+        return output.getvalue()
+    if output_format == "json":
+        json_data = projection.json_data if projection.json_data is not None else projection.rows
+        return json.dumps(json_data, indent=2, ensure_ascii=False)
+    raise ValueError(f"Unsupported projected file output format: {output_format}")
+
+
+async def save_projected_file_output(
+    output_format: str,
+    projection: FlowOutputProjectionResult,
+    filename_hint: str,
+    formatter_agent_id: str,
+) -> dict:
+    """Persist a validated projection result as one idempotent formatter file."""
+
+    normalized_format = str(output_format or "").strip().lower()
+    if normalized_format not in {"csv", "tsv", "json"}:
+        raise ValueError(f"Unsupported projected file output format: {output_format}")
+
+    trace_id, session_id, curator_id = _get_context_from_contextvars()
+    effective_trace_id, effective_session_id, effective_curator_id = _require_projected_file_context(
+        trace_id,
+        session_id,
+        curator_id,
+    )
+    descriptor = _resolve_output_descriptor(filename_hint)
+    content = _projection_content_for_file_type(
+        output_format=normalized_format,
+        projection=projection,
+    )
+
     storage = FileOutputStorageService()
     file_path, file_hash, file_size, warnings = storage.save_output(
         trace_id=effective_trace_id,
         session_id=effective_session_id,
         content=content,
-        file_type="csv",
-        descriptor=_resolve_output_descriptor(filename),
+        file_type=normalized_format,  # type: ignore[arg-type]
+        descriptor=descriptor,
+        stable_filename=True,
     )
 
-    # Log any warnings from validation
     for warning in warnings:
-        logger.warning('[CSV Tool] Validation warning: %s', warning)
+        logger.warning('[%s Tool] Validation warning: %s', normalized_format.upper(), warning)
 
-    # Extract just the filename from the path
     full_filename = file_path.name
-
-    # Register file in database for download API
     db = SessionLocal()
     try:
-        file_output = FileOutput(
-            filename=full_filename,
-            file_path=str(file_path),
-            file_type="csv",
-            file_size=file_size,
-            file_hash=file_hash,
-            curator_id=effective_curator_id,
-            session_id=effective_session_id,
+        file_output = _find_existing_projected_file_output(
+            db,
             trace_id=effective_trace_id,
-            agent_name="csv_formatter",
+            file_type=normalized_format,
+            descriptor=descriptor,
+            file_path=str(file_path),
         )
-        db.add(file_output)
+        if file_output is None:
+            file_output = FileOutput(
+                filename=full_filename,
+                file_path=str(file_path),
+                file_type=normalized_format,
+                file_size=file_size,
+                file_hash=file_hash,
+                curator_id=effective_curator_id,
+                session_id=effective_session_id,
+                trace_id=effective_trace_id,
+                agent_name=formatter_agent_id,
+                file_metadata={
+                    "structured_projection": True,
+                    "descriptor": descriptor,
+                },
+            )
+            db.add(file_output)
+        else:
+            file_output.filename = full_filename
+            file_output.file_path = str(file_path)
+            file_output.file_type = normalized_format
+            file_output.file_size = file_size
+            file_output.file_hash = file_hash
+            file_output.curator_id = effective_curator_id
+            file_output.session_id = effective_session_id
+            file_output.trace_id = effective_trace_id
+            file_output.agent_name = formatter_agent_id
+            metadata = dict(file_output.file_metadata or {})
+            metadata.update(
+                {
+                    "structured_projection": True,
+                    "descriptor": descriptor,
+                }
+            )
+            file_output.file_metadata = metadata
         db.commit()
         db.refresh(file_output)
         file_id = str(file_output.id)
         logger.info(
-            f"[CSV Tool] Registered file in database: {file_id}, "
-            f"filename={full_filename}, size={file_size} bytes"
+            "[%s Tool] Registered structured projected file: %s, filename=%s, size=%s bytes",
+            normalized_format.upper(),
+            file_id,
+            full_filename,
+            file_size,
         )
-    except Exception as e:
+    except Exception as exc:
         db.rollback()
-        logger.error('[CSV Tool] Failed to register file in database: %s', e)
+        logger.error('[%s Tool] Failed to register projected file: %s', normalized_format.upper(), exc)
         raise
     finally:
         db.close()
@@ -196,335 +262,14 @@ async def _save_csv_impl(
     file_info = FileInfo(
         file_id=file_id,
         filename=full_filename,
-        format="csv",
+        format=normalized_format,
         size_bytes=file_size,
         hash_sha256=file_hash,
-        mime_type="text/csv",
+        mime_type=_mime_type_for_file_type(normalized_format),
         download_url=_build_download_url(file_id),
         created_at=datetime.now(timezone.utc),
-        trace_id=trace_id,
-        session_id=session_id,
-        curator_id=curator_id,
-    )
-
-    # Return as dict for JSON serialization in tool response
-    return file_info.model_dump(mode="json")
-
-
-def create_csv_tool():
-    """Create a CSV save tool for use with OpenAI Agents SDK.
-
-    Returns:
-        A FunctionTool for saving CSV files
-    """
-
-    @function_tool
-    async def save_csv_file(
-        data_json: str,
-        filename: str,
-        columns: Optional[str] = None,
-    ) -> dict:
-        """
-        Save data as CSV file and return download information.
-
-        Args:
-            data_json: JSON string containing a list of objects to convert to CSV rows.
-                       Each object represents a row with keys as column names.
-                       Example: '[{"gene_id": "FBgn0001", "symbol": "Notch"}]'
-            filename: Desired filename (without extension or timestamp).
-                      Example: "gene_results" will produce "gene_results_20250107T123456Z.csv"
-            columns: Optional JSON array string of column names to include (in order).
-                     Example: '["gene_id", "symbol", "name"]'
-                     If not provided, uses keys from first data row.
-
-        Returns:
-            Dictionary with file information including download URL
-        """
-        return await _save_csv_impl(data_json, filename, columns)
-
-    return save_csv_file
-
-
-async def _save_tsv_impl(
-    data_json: str,
-    filename: str,
-    columns: Optional[str] = None,
-) -> dict:
-    """Internal implementation for TSV save (testable without SDK wrapper).
-
-    Args:
-        data_json: JSON string containing a list of objects to convert to TSV rows.
-        filename: Desired filename (without extension).
-        columns: Optional JSON array string of column names.
-
-    Returns:
-        Dictionary with file information including download URL
-    """
-    # Get context at invocation time
-    trace_id, session_id, curator_id = _get_context_from_contextvars()
-
-    # Parse JSON input
-    try:
-        data = json.loads(data_json)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON in data_json: {e}")
-
-    if not isinstance(data, list):
-        raise ValueError("data_json must be a JSON array")
-
-    if not data:
-        raise ValueError("No data to export - data list is empty")
-
-    # Validate first row is a dict
-    if not isinstance(data[0], dict):
-        raise ValueError(
-            f"data_json array items must be objects, got {type(data[0]).__name__}"
-        )
-
-    # Parse columns if provided as JSON string
-    column_list: List[str]
-    if columns is not None:
-        try:
-            column_list = json.loads(columns)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON in columns: {e}")
-    else:
-        column_list = list(data[0].keys())
-
-    # Generate TSV content
-    output = io.StringIO()
-    writer = csv.DictWriter(
-        output,
-        fieldnames=column_list,
-        delimiter="\t",
-        extrasaction="ignore",
-    )
-    writer.writeheader()
-    writer.writerows(data)
-    content = output.getvalue()
-
-    # Generate a fallback trace_id if not available (32-char hex)
-    fallback_id = str(uuid.uuid4()).replace("-", "")
-    effective_trace_id = trace_id or fallback_id[:32]
-    effective_session_id = session_id or fallback_id[:8]
-    effective_curator_id = curator_id or "unknown"
-
-    storage = FileOutputStorageService()
-    file_path, file_hash, file_size, warnings = storage.save_output(
         trace_id=effective_trace_id,
         session_id=effective_session_id,
-        content=content,
-        file_type="tsv",
-        descriptor=_resolve_output_descriptor(filename),
+        curator_id=effective_curator_id,
     )
-
-    for warning in warnings:
-        logger.warning('[TSV Tool] Validation warning: %s', warning)
-
-    full_filename = file_path.name
-
-    # Register file in database for download API
-    db = SessionLocal()
-    try:
-        file_output = FileOutput(
-            filename=full_filename,
-            file_path=str(file_path),
-            file_type="tsv",
-            file_size=file_size,
-            file_hash=file_hash,
-            curator_id=effective_curator_id,
-            session_id=effective_session_id,
-            trace_id=effective_trace_id,
-            agent_name="tsv_formatter",
-        )
-        db.add(file_output)
-        db.commit()
-        db.refresh(file_output)
-        file_id = str(file_output.id)
-        logger.info(
-            f"[TSV Tool] Registered file in database: {file_id}, "
-            f"filename={full_filename}, size={file_size} bytes"
-        )
-    except Exception as e:
-        db.rollback()
-        logger.error('[TSV Tool] Failed to register file in database: %s', e)
-        raise
-    finally:
-        db.close()
-
-    file_info = FileInfo(
-        file_id=file_id,
-        filename=full_filename,
-        format="tsv",
-        size_bytes=file_size,
-        hash_sha256=file_hash,
-        mime_type="text/tab-separated-values",
-        download_url=_build_download_url(file_id),
-        created_at=datetime.now(timezone.utc),
-        trace_id=trace_id,
-        session_id=session_id,
-        curator_id=curator_id,
-    )
-
     return file_info.model_dump(mode="json")
-
-
-def create_tsv_tool():
-    """Create a TSV save tool for use with OpenAI Agents SDK.
-
-    Returns:
-        A FunctionTool for saving TSV files
-    """
-
-    @function_tool
-    async def save_tsv_file(
-        data_json: str,
-        filename: str,
-        columns: Optional[str] = None,
-    ) -> dict:
-        """
-        Save data as TSV file (tab-separated values).
-
-        Args:
-            data_json: JSON string containing a list of objects to convert to TSV rows.
-                       Each object represents a row with keys as column names.
-                       Example: '[{"allele_id": "FBal0001", "symbol": "N[1]"}]'
-            filename: Desired filename (without extension or timestamp).
-                      Example: "alleles" will produce "alleles_20250107T123456Z.tsv"
-            columns: Optional JSON array string of column names to include (in order).
-                     Example: '["allele_id", "symbol", "gene"]'
-                     If not provided, uses keys from first data row.
-
-        Returns:
-            Dictionary with file information including download URL
-        """
-        return await _save_tsv_impl(data_json, filename, columns)
-
-    return save_tsv_file
-
-
-async def _save_json_impl(
-    data_json: str,
-    filename: str,
-    pretty: bool = True,
-) -> dict:
-    """Internal implementation for JSON save (testable without SDK wrapper).
-
-    Args:
-        data_json: JSON string containing the data to save.
-        filename: Desired filename (without extension).
-        pretty: If True, format with indentation for readability.
-
-    Returns:
-        Dictionary with file information including download URL
-    """
-    # Get context at invocation time
-    trace_id, session_id, curator_id = _get_context_from_contextvars()
-
-    # Parse and re-serialize JSON (validates input and applies formatting)
-    try:
-        data = json.loads(data_json)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON in data_json: {e}")
-
-    # Serialize JSON with optional formatting
-    indent = 2 if pretty else None
-    content = json.dumps(data, indent=indent, ensure_ascii=False)
-
-    # Generate a fallback trace_id if not available (32-char hex)
-    fallback_id = str(uuid.uuid4()).replace("-", "")
-    effective_trace_id = trace_id or fallback_id[:32]
-    effective_session_id = session_id or fallback_id[:8]
-    effective_curator_id = curator_id or "unknown"
-
-    storage = FileOutputStorageService()
-    file_path, file_hash, file_size, warnings = storage.save_output(
-        trace_id=effective_trace_id,
-        session_id=effective_session_id,
-        content=content,
-        file_type="json",
-        descriptor=_resolve_output_descriptor(filename),
-    )
-
-    for warning in warnings:
-        logger.warning('[JSON Tool] Validation warning: %s', warning)
-
-    full_filename = file_path.name
-
-    # Register file in database for download API
-    db = SessionLocal()
-    try:
-        file_output = FileOutput(
-            filename=full_filename,
-            file_path=str(file_path),
-            file_type="json",
-            file_size=file_size,
-            file_hash=file_hash,
-            curator_id=effective_curator_id,
-            session_id=effective_session_id,
-            trace_id=effective_trace_id,
-            agent_name="json_formatter",
-        )
-        db.add(file_output)
-        db.commit()
-        db.refresh(file_output)
-        file_id = str(file_output.id)
-        logger.info(
-            f"[JSON Tool] Registered file in database: {file_id}, "
-            f"filename={full_filename}, size={file_size} bytes"
-        )
-    except Exception as e:
-        db.rollback()
-        logger.error('[JSON Tool] Failed to register file in database: %s', e)
-        raise
-    finally:
-        db.close()
-
-    file_info = FileInfo(
-        file_id=file_id,
-        filename=full_filename,
-        format="json",
-        size_bytes=file_size,
-        hash_sha256=file_hash,
-        mime_type="application/json",
-        download_url=_build_download_url(file_id),
-        created_at=datetime.now(timezone.utc),
-        trace_id=trace_id,
-        session_id=session_id,
-        curator_id=curator_id,
-    )
-
-    return file_info.model_dump(mode="json")
-
-
-def create_json_tool():
-    """Create a JSON save tool for use with OpenAI Agents SDK.
-
-    Returns:
-        A FunctionTool for saving JSON files
-    """
-
-    @function_tool
-    async def save_json_file(
-        data_json: str,
-        filename: str,
-        pretty: bool = True,
-    ) -> dict:
-        """
-        Save data as JSON file.
-
-        Args:
-            data_json: JSON string containing the data to save.
-                       Can be any valid JSON (object, array, string, number, etc.).
-                       Example: '{"genes": ["FBgn0001", "FBgn0002"], "count": 2}'
-            filename: Desired filename (without extension or timestamp).
-                      Example: "results" will produce "results_20250107T123456Z.json"
-            pretty: If True (default), format with indentation for readability.
-                    If False, output compact single-line JSON.
-
-        Returns:
-            Dictionary with file information including download URL
-        """
-        return await _save_json_impl(data_json, filename, pretty)
-
-    return save_json_file

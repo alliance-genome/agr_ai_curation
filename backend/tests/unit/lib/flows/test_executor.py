@@ -484,6 +484,195 @@ def test_flow_candidate_persistence_materializes_domain_envelope_records(monkeyp
     assert materialized == [(records[0], True)]
 
 
+def test_flow_candidate_persistence_normalizes_extractor_envelope_payload(monkeypatch):
+    """Flow persistence must convert curatable_objects[] to DomainEnvelope.objects[]."""
+
+    executor = _executor_module()
+    persisted_requests = []
+    materialized = []
+
+    monkeypatch.setattr(
+        executor,
+        "persist_extraction_results",
+        _recording_persist_extraction_results(persisted_requests),
+    )
+    monkeypatch.setattr(
+        executor,
+        "ensure_domain_envelope_materialization",
+        lambda record, *, persist: materialized.append((record, persist)),
+    )
+
+    candidate = executor.ExtractionEnvelopeCandidate(
+        agent_key="gene_extractor",
+        adapter_key="gene",
+        candidate_count=1,
+        conversation_summary="Extract Crumbs.",
+        payload_json={
+            "summary": "One gene mention was extracted.",
+            "curatable_objects": [
+                {
+                    "object_type": "gene_mention_evidence",
+                    "object_role": "validated_reference",
+                    "object_id": "gene-row-1",
+                    "payload": {"primary_external_id": "FB:FBgn0259685"},
+                    "evidence_record_ids": ["evidence-1"],
+                }
+            ],
+            "metadata": {},
+            "run_summary": {"candidate_count": 1},
+        },
+        metadata={
+            "flow_id": "flow-1",
+            "tool_name": "ask_gene_extractor_specialist",
+            "step": 1,
+        },
+    )
+
+    records = executor._persist_flow_extraction_candidates(
+        candidates=[candidate],
+        document_id="11111111-1111-1111-1111-111111111111",
+        user_id="curator-1",
+        session_id="session-1",
+        trace_id="trace-1",
+        flow_run_id="flow-run-1",
+    )
+
+    assert len(records) == 1
+    assert len(persisted_requests) == 1
+    persisted_payload = persisted_requests[0].payload_json
+    assert persisted_payload["envelope_id"] == (
+        "flow:flow-run-1:flow-1:1:ask_gene_extractor_specialist:gene_extractor"
+    )
+    assert persisted_payload["domain_pack_id"] == "gene"
+    assert "curatable_objects" not in persisted_payload
+    assert persisted_payload["objects"][0]["object_id"] == "gene-row-1"
+    assert persisted_requests[0].candidate_count == 1
+    assert materialized == [(records[0], True)]
+
+
+def test_flow_candidate_persistence_rejects_existing_noncanonical_domain_record(
+    monkeypatch,
+):
+    """Existing flow domain records must already use DomainEnvelope.objects[]."""
+
+    executor = _executor_module()
+
+    existing_record = SimpleNamespace(
+        extraction_result_id="extract-old-1",
+        metadata={
+            "flow_id": "flow-1",
+            "step": 1,
+            "tool_name": "ask_gene_extractor_specialist",
+        },
+        agent_key="gene_extractor",
+        payload_json={
+            "summary": "Old first-pass payload.",
+            "envelope_id": "env-old-mixed-1",
+            "domain_pack_id": "gene",
+            "objects": [
+                {
+                    "object_type": "gene_mention_evidence",
+                    "payload": {"primary_external_id": "FB:stale"},
+                }
+            ],
+            "curatable_objects": [
+                {
+                    "object_type": "gene_mention_evidence",
+                    "payload": {"primary_external_id": "FB:FBgn0259685"},
+                }
+            ],
+            "run_summary": {"candidate_count": 1},
+        },
+    )
+    monkeypatch.setattr(executor, "list_extraction_results", lambda **_kwargs: [existing_record])
+    monkeypatch.setattr(
+        executor,
+        "persist_extraction_results",
+        lambda _requests: pytest.fail("stale noncanonical records must fail before persist"),
+    )
+
+    candidate = executor.ExtractionEnvelopeCandidate(
+        agent_key="gene_extractor",
+        adapter_key="gene",
+        candidate_count=1,
+        payload_json={
+            "summary": "One gene mention was extracted.",
+            "curatable_objects": [
+                {
+                    "object_type": "gene_mention_evidence",
+                    "payload": {"primary_external_id": "FB:FBgn0259685"},
+                }
+            ],
+            "run_summary": {"candidate_count": 1},
+        },
+        metadata={
+            "flow_id": "flow-1",
+            "tool_name": "ask_gene_extractor_specialist",
+            "step": 1,
+        },
+    )
+
+    with pytest.raises(ValueError, match=r"uses curatable_objects\[\] instead"):
+        executor._persist_flow_extraction_candidates(
+            candidates=[candidate],
+            document_id="11111111-1111-1111-1111-111111111111",
+            user_id="curator-1",
+            session_id="session-1",
+            trace_id="trace-1",
+            flow_run_id="flow-run-1",
+        )
+
+
+def test_flow_candidate_persistence_rejects_mixed_shape_candidate(monkeypatch):
+    """New flow candidates must not mix canonical and extractor envelope shapes."""
+
+    executor = _executor_module()
+    monkeypatch.setattr(executor, "list_extraction_results", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        executor,
+        "persist_extraction_results",
+        lambda _requests: pytest.fail("mixed-shape candidates must fail before persist"),
+    )
+
+    candidate = executor.ExtractionEnvelopeCandidate(
+        agent_key="gene_extractor",
+        adapter_key="gene",
+        candidate_count=1,
+        payload_json={
+            "envelope_id": "env-mixed-1",
+            "domain_pack_id": "gene",
+            "domain_pack_version": "0.1.0",
+            "status": "extracted",
+            "objects": [
+                {
+                    "object_type": "gene_mention_evidence",
+                    "payload": {"primary_external_id": "FB:canonical"},
+                }
+            ],
+            "curatable_objects": [
+                {
+                    "object_type": "gene_mention_evidence",
+                    "payload": {"primary_external_id": "FB:extractor"},
+                }
+            ],
+            "history": [],
+            "validation_findings": [],
+            "metadata": {},
+        },
+        metadata={"tool_name": "ask_gene_extractor_specialist", "step": 1},
+    )
+
+    with pytest.raises(ValueError, match="mixes DomainEnvelope.objects"):
+        executor._persist_flow_extraction_candidates(
+            candidates=[candidate],
+            document_id="11111111-1111-1111-1111-111111111111",
+            user_id="curator-1",
+            session_id="session-1",
+            trace_id="trace-1",
+            flow_run_id=None,
+        )
+
+
 def test_flow_candidate_persistence_skips_legacy_non_domain_payloads(monkeypatch):
     """Legacy extraction payloads remain persisted without domain-envelope review rows."""
 
@@ -1051,97 +1240,44 @@ class TestGetAllAgentToolsCustomInstructions:
         assert mock_agent.instructions == base_prompt
         assert "additional_runtime_context" not in mock_get_agent.call_args.kwargs
 
-    @patch("src.lib.flows.executor._create_streaming_tool")
-    @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_include_evidence_guidance_prepended(self, mock_get_agent, mock_streaming):
+    def test_include_evidence_guidance_prepended(self):
         """include_evidence should reuse the existing step-local instruction prefix."""
-        base_prompt = "You are the output specialist."
-        mock_agent = MagicMock(spec=Agent)
-        mock_agent.instructions = base_prompt
-        mock_get_agent.return_value = mock_agent
-        mock_streaming.return_value = MagicMock()
-
-        flow = _make_flow([
-            _agent_node("n1", "chat_output_formatter", include_evidence=True),
-        ])
-
-        get_all_agent_tools(flow)
-
-        runtime_context = mock_get_agent.call_args.kwargs["additional_runtime_context"][0]
+        runtime_context = _executor_module()._build_flow_step_instruction_prefix(
+            custom_instructions=None,
+            include_evidence=True,
+        )
         assert runtime_context.startswith("## OUTPUT EVIDENCE REQUIREMENT")
         assert "include supporting evidence from earlier steps" in runtime_context
-        assert mock_agent.instructions == base_prompt
 
-    @patch("src.lib.flows.executor._create_streaming_tool")
-    @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_custom_instructions_and_include_evidence_share_prefix(self, mock_get_agent, mock_streaming):
+    def test_custom_instructions_and_include_evidence_share_prefix(self):
         """Custom instructions and evidence guidance should share one runtime context."""
-        base_prompt = "You are the output specialist."
-        mock_agent = MagicMock(spec=Agent)
-        mock_agent.instructions = base_prompt
-        mock_get_agent.return_value = mock_agent
-        mock_streaming.return_value = MagicMock()
-
-        flow = _make_flow([
-            _agent_node(
-                "n1",
-                "chat_output_formatter",
-                custom_instructions="Group results by species.",
-                include_evidence=True,
-            ),
-        ])
-
-        get_all_agent_tools(flow)
-
-        runtime_context = mock_get_agent.call_args.kwargs["additional_runtime_context"][0]
+        runtime_context = _executor_module()._build_flow_step_instruction_prefix(
+            custom_instructions="Group results by species.",
+            include_evidence=True,
+        )
         assert runtime_context.startswith("## CUSTOM INSTRUCTIONS")
         assert "Group results by species." in runtime_context
         assert "## OUTPUT EVIDENCE REQUIREMENT" in runtime_context
         assert runtime_context.index("## CUSTOM INSTRUCTIONS") < runtime_context.index(
             "## OUTPUT EVIDENCE REQUIREMENT"
         )
-        assert mock_agent.instructions == base_prompt
 
-    @patch("src.lib.flows.executor._create_streaming_tool")
-    @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_output_formatter_defaults_include_evidence_when_flag_missing(self, mock_get_agent, mock_streaming):
+    def test_output_formatter_defaults_include_evidence_when_flag_missing(self):
         """Output/formatter steps should include evidence by default when the flag is absent."""
-        base_prompt = "You are the output specialist."
-        mock_agent = MagicMock(spec=Agent)
-        mock_agent.instructions = base_prompt
-        mock_get_agent.return_value = mock_agent
-        mock_streaming.return_value = MagicMock()
-
-        flow = _make_flow([
-            _agent_node("n1", "chat_output_formatter"),
-        ])
-
-        get_all_agent_tools(flow)
-
-        runtime_context = mock_get_agent.call_args.kwargs["additional_runtime_context"][0]
+        runtime_context = _executor_module()._build_flow_step_instruction_prefix(
+            custom_instructions=None,
+            include_evidence=True,
+        )
         assert runtime_context.startswith("## OUTPUT EVIDENCE REQUIREMENT")
-        assert mock_agent.instructions == base_prompt
 
-    @patch("src.lib.flows.executor._create_streaming_tool")
-    @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_output_formatter_false_flag_excludes_evidence(self, mock_get_agent, mock_streaming):
+    def test_output_formatter_false_flag_excludes_evidence(self):
         """Explicit false should prepend exclusion guidance for output/formatter steps."""
-        base_prompt = "You are the output specialist."
-        mock_agent = MagicMock(spec=Agent)
-        mock_agent.instructions = base_prompt
-        mock_get_agent.return_value = mock_agent
-        mock_streaming.return_value = MagicMock()
-
-        flow = _make_flow([
-            _agent_node("n1", "chat_output_formatter", include_evidence=False),
-        ])
-
-        get_all_agent_tools(flow)
-
-        runtime_context = mock_get_agent.call_args.kwargs["additional_runtime_context"][0]
+        runtime_context = _executor_module()._build_flow_step_instruction_prefix(
+            custom_instructions=None,
+            include_evidence=False,
+        )
         assert runtime_context.startswith("## OUTPUT EVIDENCE EXCLUSION")
         assert "do NOT include supporting evidence" in runtime_context
-        assert mock_agent.instructions == base_prompt
 
 
 # ===========================================================================
@@ -1284,6 +1420,26 @@ class TestGetAllAgentToolsDuplicateAgents:
 
 class TestGetAllAgentToolsStepOrderRuntime:
     """Tests strict step order against real FunctionTool invocation shape."""
+
+    def test_terminal_file_formatter_aliases_use_synced_system_agent_keys(self):
+        """Flow formatter aliases should execute the DB-synced folder agent keys."""
+        executor = _executor_module()
+
+        assert (
+            executor._flow_file_formatter_execution_agent_id("csv_output_formatter")
+            == "csv_formatter"
+        )
+        assert (
+            executor._flow_file_formatter_execution_agent_id("tsv_output_formatter")
+            == "tsv_formatter"
+        )
+        assert (
+            executor._flow_file_formatter_execution_agent_id("json_output_formatter")
+            == "json_formatter"
+        )
+        assert executor._flow_file_formatter_execution_agent_id("csv_formatter") == "csv_formatter"
+        assert executor._flow_file_formatter_execution_agent_id("tsv_formatter") == "tsv_formatter"
+        assert executor._flow_file_formatter_execution_agent_id("json_formatter") == "json_formatter"
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -1708,71 +1864,56 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_custom_output_step_uses_projection_planner_not_formatter_model(
-        self, mock_get_agent, mock_streaming, monkeypatch
+    def test_custom_output_step_invokes_bound_formatter_agent(
+        self, mock_get_agent, mock_streaming
     ):
-        """Custom terminal output should plan a projection, then save deterministically."""
+        """Custom terminal output should run the visible formatter with a bound bundle."""
         executor = _executor_module()
         from src.lib.openai_agents.streaming_tools import (
             clear_collected_events,
             get_collected_events,
         )
 
-        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
-        planner_calls = []
+        agent_builds = []
         formatter_invocations = []
-        save_calls = []
+
+        def _fake_get_agent(agent_id, **kwargs):
+            agent = MagicMock(spec=Agent, instructions="Base")
+            agent.name = {
+                "gene": "Gene Specialist",
+                "csv_output_formatter": "CSV File Formatter",
+            }.get(agent_id, agent_id)
+            agent.agent_id = agent_id
+            agent.runtime_kwargs = kwargs
+            agent_builds.append({"agent_id": agent_id, "kwargs": kwargs, "agent": agent})
+            return agent
+
+        mock_get_agent.side_effect = _fake_get_agent
 
         def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
                 if tool_name == "ask_csv_output_formatter_specialist":
-                    formatter_invocations.append(query)
-                    raise AssertionError("Formatter model path should not run")
+                    formatter_invocations.append(
+                        {
+                            "query": query,
+                            "agent_kwargs": agent.runtime_kwargs,
+                        }
+                    )
+                    return json.dumps(
+                        {
+                            "status": "ok",
+                            "file_id": "file-visible-flow-csv",
+                            "filename": "visible-flow.csv",
+                            "format": "csv",
+                            "download_url": "/api/files/file-visible-flow-csv/download",
+                        }
+                    )
                 return json.dumps(_structured_step_output("TP53"))
 
             return _tool
 
-        async def _fake_projection_planner(**kwargs):
-            planner_calls.append(kwargs)
-            plan = executor.default_projection_plan(
-                kwargs["bundle"],
-                output_format=kwargs["output_format"],
-            )
-            return executor.finalize_output_projection(kwargs["bundle"], plan)
-
-        async def _fake_save_csv_impl(
-            data_json: str,
-            filename: str,
-            columns: str | None = None,
-        ) -> dict:
-            save_calls.append(
-                {
-                    "data": json.loads(data_json),
-                    "columns": json.loads(columns or "[]"),
-                    "filename": filename,
-                }
-            )
-            return {
-                "file_id": "file-planned-flow-csv",
-                "filename": "planned-flow.csv",
-                "format": "csv",
-                "size_bytes": 123,
-                "mime_type": "text/csv",
-                "download_url": "/api/files/file-planned-flow-csv/download",
-                "created_at": "2026-04-26T00:00:00Z",
-            }
-
         mock_streaming.side_effect = _make_streaming_tool
-        monkeypatch.setattr(
-            executor,
-            "_run_output_projection_planner",
-            _fake_projection_planner,
-        )
-        monkeypatch.setattr(
-            "src.lib.openai_agents.tools.file_output_tools._save_csv_impl",
-            _fake_save_csv_impl,
-        )
 
         flow = _make_flow([
             _agent_node("n1", "gene", output_key="gene_output"),
@@ -1800,13 +1941,19 @@ class TestGetAllAgentToolsStepOrderRuntime:
             clear_collected_events()
 
         result = json.loads(result_text)
-        assert result["file_id"] == "file-planned-flow-csv"
-        assert len(planner_calls) == 1
-        assert planner_calls[0]["agent_id"] == "csv_output_formatter"
-        assert "compact CSV export" in planner_calls[0]["node_data"]["custom_instructions"]
-        assert formatter_invocations == []
-        assert save_calls[0]["filename"] == "Test_Flow_csv_export"
-        assert "TP53" in save_calls[0]["data"][0]["artifact_preview"]
+        assert result["file_id"] == "file-visible-flow-csv"
+        assert [build["agent_id"] for build in agent_builds] == [
+            "gene",
+            "csv_formatter",
+        ]
+        assert len(formatter_invocations) == 1
+        formatter_kwargs = formatter_invocations[0]["agent_kwargs"]
+        assert formatter_kwargs["formatter_output_format"] == "csv"
+        assert formatter_kwargs["formatter_agent_id"] == "csv_output_formatter"
+        assert len(formatter_kwargs["formatter_bundle"].artifacts) == 1
+        runtime_context = "\n".join(formatter_kwargs["additional_runtime_context"])
+        assert "FLOW FORMATTER SOURCE BUNDLE" in runtime_context
+        assert "compact CSV export" in runtime_context
         assert execution_state["completed_steps"][-1]["agent_id"] == "csv_output_formatter"
         assert execution_state["completed_steps"][-1]["output"] == result_text
         assert "extraction_handoff_audit" not in execution_state["completed_steps"][-1]
@@ -1821,50 +1968,56 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_literal_only_terminal_output_can_run_without_structured_artifacts(
+    def test_configured_projection_plan_is_formatter_context_not_executor_save(
         self, mock_get_agent, mock_streaming, monkeypatch
     ):
-        """Literal-only formatter plans can create deterministic smoke artifacts."""
-        executor = _executor_module()
-
-        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        """Flow projection_plan is guidance for the real formatter, not an executor bypass."""
+        formatter_contexts = []
         formatter_invocations = []
-        save_calls = []
+
+        def _fake_get_agent(agent_id, **kwargs):
+            agent = MagicMock(spec=Agent, instructions="Base")
+            agent.name = {
+                "pdf_extraction": "General PDF Extraction Agent",
+                "json_formatter": "JSON File Formatter",
+            }.get(agent_id, agent_id)
+            agent.agent_id = agent_id
+            agent.runtime_kwargs = kwargs
+            return agent
+
+        mock_get_agent.side_effect = _fake_get_agent
 
         def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
-                formatter_invocations.append((tool_name, query))
-                return "PDF specialist completed document access for batch smoke."
+                if tool_name == "ask_json_formatter_specialist":
+                    formatter_invocations.append((tool_name, query))
+                    formatter_contexts.extend(agent.runtime_kwargs["additional_runtime_context"])
+                    return json.dumps(
+                        {
+                            "status": "cannot_complete",
+                            "saved_file": False,
+                            "reason": "literal-only files are not source-backed",
+                        }
+                    )
+                return json.dumps(
+                    {
+                        "domain_pack_id": "generic",
+                        "envelope_id": "env-generic-1",
+                        "objects": [
+                            {
+                                "object_type": "GenericFinding",
+                                "payload": {"label": "batch smoke finding"},
+                            }
+                        ],
+                    }
+                )
 
             return _tool
 
-        async def _fake_save_json_impl(
-            data_json: str,
-            filename: str,
-            pretty: bool = False,
-        ) -> dict:
-            save_calls.append(
-                {
-                    "data": json.loads(data_json),
-                    "filename": filename,
-                    "pretty": pretty,
-                }
-            )
-            return {
-                "file_id": "file-literal-json",
-                "filename": "literal.json",
-                "format": "json",
-                "size_bytes": 42,
-                "mime_type": "application/json",
-                "download_url": "/api/files/file-literal-json/download",
-                "created_at": "2026-06-07T00:00:00Z",
-            }
-
         mock_streaming.side_effect = _make_streaming_tool
         monkeypatch.setattr(
-            executor,
-            "get_agent_metadata",
+            "src.lib.flows.executor.get_agent_metadata",
             lambda agent_id, **_kwargs: {
                 "display_name": {
                     "pdf_extraction": "General PDF Extraction Agent",
@@ -1880,10 +2033,6 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 "curation": None,
                 "curation_metadata": None,
             },
-        )
-        monkeypatch.setattr(
-            "src.lib.openai_agents.tools.file_output_tools._save_json_impl",
-            _fake_save_json_impl,
         )
 
         flow = _make_flow([
@@ -1930,26 +2079,23 @@ class TestGetAllAgentToolsStepOrderRuntime:
         )
 
         result = json.loads(result_text)
-        assert result["file_id"] == "file-literal-json"
-        assert save_calls == [
-            {
-                "data": [{"check": "batch_file_output", "status": "completed"}],
-                "filename": "Test_Flow_json_export",
-                "pretty": True,
-            }
-        ]
+        assert result["status"] == "cannot_complete"
+        assert result["saved_file"] is False
         assert len(formatter_invocations) == 1
-        assert formatter_invocations[0][0] == "ask_pdf_extraction_specialist"
-        assert "General PDF Extraction Agent" in formatter_invocations[0][1]
+        assert formatter_invocations[0][0] == "ask_json_formatter_specialist"
+        joined_context = "\n".join(formatter_contexts)
+        assert "FLOW FORMATTER SOURCE BUNDLE" in joined_context
+        assert "configured_projection_plan" in joined_context
+        assert "batch_file_output" in joined_context
         assert execution_state["completed_steps"][-1]["agent_id"] == "json_formatter"
         assert execution_state["completed_steps"][-1]["output"] == result_text
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_terminal_output_without_artifacts_fails_before_formatter_model(
+    def test_terminal_output_without_artifacts_fails_before_formatter_agent(
         self, mock_get_agent, mock_streaming
     ):
-        """Terminal formatter steps with no artifacts must not call the model formatter."""
+        """Terminal formatter steps with no artifacts must not call the formatter agent."""
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         formatter_invocations = []
 
@@ -1957,7 +2103,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
                 formatter_invocations.append((tool_name, query))
-                raise AssertionError("ordinary formatter fallback must not run")
+                raise AssertionError("formatter agent must not run without saved artifacts")
 
             return _tool
 
@@ -1983,8 +2129,10 @@ class TestGetAllAgentToolsStepOrderRuntime:
             )
 
             assert "no completed structured artifacts" in result
-            assert "cannot fall back to ordinary formatter models" in result
-            assert execution_state["completed_steps"] == []
+            assert "cannot fall back to raw serializers or model-written file contents" in result
+            assert execution_state["completed_steps"][-1]["agent_id"] == agent_id
+            assert execution_state["completed_steps"][-1]["candidate"] is None
+            assert "no completed structured artifacts" in execution_state["completed_steps"][-1]["output"]
 
         assert formatter_invocations == []
 
@@ -3040,17 +3188,69 @@ class TestGetAllAgentToolsStepOrderRuntime:
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
     def test_output_filename_template_sets_step_scoped_formatter_override(
-        self, mock_get_agent, mock_streaming, monkeypatch
+        self, mock_get_agent, mock_streaming
     ):
-        """Projected formatter steps should honor filename templates during save."""
-        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        """Runtime formatter finalize/save honors filename templates during save."""
         observed = {}
+
+        def _fake_get_agent(agent_id, **kwargs):
+            agent = MagicMock(spec=Agent, instructions="Base")
+            agent.name = {
+                "gene": "Gene Specialist",
+                "csv_output_formatter": "CSV File Formatter",
+            }.get(agent_id, agent_id)
+            agent.agent_id = agent_id
+            agent.runtime_kwargs = kwargs
+            return agent
+
+        mock_get_agent.side_effect = _fake_get_agent
 
         def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
             async def _tool(query: str) -> str:
                 if tool_name == "ask_csv_output_formatter_specialist":
-                    raise AssertionError("ordinary formatter fallback must not run")
+                    from src.lib.context import get_current_output_filename_stem
+                    from src.lib.openai_agents.tools.output_formatter_tools import (
+                        build_output_formatter_tools,
+                    )
+
+                    async def _fake_save_projected_output(
+                        output_format,
+                        projection,
+                        filename_hint,
+                        formatter_agent_id,
+                    ):
+                        observed["during_save"] = get_current_output_filename_stem()
+                        observed["filename_hint"] = filename_hint
+                        observed["format"] = output_format
+                        observed["formatter_agent_id"] = formatter_agent_id
+                        observed["rows"] = projection.rows
+                        return {
+                            "file_id": "file-template-csv",
+                            "filename": "templated.csv",
+                            "format": "csv",
+                            "size_bytes": 123,
+                            "mime_type": "text/csv",
+                            "download_url": "/api/files/file-template-csv/download",
+                            "created_at": "2026-04-26T00:00:00Z",
+                        }
+
+                    formatter_tools = build_output_formatter_tools(
+                        bundle=agent.runtime_kwargs["formatter_bundle"],
+                        output_format=agent.runtime_kwargs["formatter_output_format"],
+                        formatter_agent_id=agent.runtime_kwargs["formatter_agent_id"],
+                        save_projected_output=_fake_save_projected_output,
+                    )
+                    finalize_tool = next(
+                        tool
+                        for tool in formatter_tools
+                        if getattr(tool, "name", "") == "finalize_and_save"
+                    )
+                    tool_ctx = SimpleNamespace(tool_name="finalize_and_save")
+                    return await finalize_tool.on_invoke_tool(
+                        tool_ctx,
+                        json.dumps({"plan_json": "", "filename_hint": ""}),
+                    )
                 return json.dumps(
                     {
                         "domain_pack_id": "gene",
@@ -3066,30 +3266,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
             return _tool
 
-        async def _fake_save_csv_impl(
-            data_json: str,
-            filename: str,
-            columns: str | None = None,
-        ) -> dict:
-            from src.lib.context import get_current_output_filename_stem
-
-            observed["during_save"] = get_current_output_filename_stem()
-            observed["filename"] = filename
-            return {
-                "file_id": "file-template-csv",
-                "filename": "templated.csv",
-                "format": "csv",
-                "size_bytes": 123,
-                "mime_type": "text/csv",
-                "download_url": "/api/files/file-template-csv/download",
-                "created_at": "2026-04-26T00:00:00Z",
-            }
-
         mock_streaming.side_effect = _make_streaming_tool
-        monkeypatch.setattr(
-            "src.lib.openai_agents.tools.file_output_tools._save_csv_impl",
-            _fake_save_csv_impl,
-        )
 
         flow = _make_flow([
             _task_input_node(),
@@ -3109,7 +3286,10 @@ class TestGetAllAgentToolsStepOrderRuntime:
         from src.lib.context import get_current_output_filename_stem
 
         assert observed["during_save"] == "Smith_et_al_2024"
-        assert observed["filename"] == "Smith_et_al_2024"
+        assert observed["filename_hint"] == "Test Flow_csv_export"
+        assert observed["format"] == "csv"
+        assert observed["formatter_agent_id"] == "csv_output_formatter"
+        assert observed["rows"][0]["object_payload_symbol"] == "BRCA1"
         assert get_current_output_filename_stem() is None
 
     @patch("src.lib.flows.executor._create_streaming_tool")

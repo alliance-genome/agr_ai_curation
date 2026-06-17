@@ -1,8 +1,8 @@
 # =============================================================================
 # AGENT DEFINITION: json_formatter
 # =============================================================================
-# Formats data as downloadable JSON files.
-# Flow terminal agent - not routable by supervisor.
+# Formats saved curation results as downloadable JSON files.
+# Context-bound output terminal with source-backed projection tools.
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -13,8 +13,8 @@ agent_id: json_output_formatter
 name: "JSON File Formatter"
 
 description: >
-  Formats data as downloadable JSON files. Preserves nested data structures
-  and relationships. Ideal for feeding into scripts or pipelines.
+  Builds source-backed JSON downloads from saved curation results using
+  validated projection plans. Preserves nested structures when requested.
 
 category: "Output"
 subcategory: "Output"
@@ -22,15 +22,28 @@ subcategory: "Output"
 # -----------------------------------------------------------------------------
 # SUPERVISOR ROUTING
 # -----------------------------------------------------------------------------
-# Formatters are flow terminals, not supervisor tools
 supervisor_routing:
-  enabled: false
+  enabled: true
+  description: >
+    Use for creating downloadable JSON files from saved curation results when
+    the caller needs source-backed arrays, grouped objects, nested bundle
+    shape, filtering, ordering, field selection, or a clear cannot-complete
+    response.
+  batchable: false
 
 # -----------------------------------------------------------------------------
 # TOOLS
 # -----------------------------------------------------------------------------
 tools:
-  - save_json_file
+  - explain_formatter_capabilities
+  - inspect_output_artifacts
+  - inspect_output_rows
+  - inspect_field_values
+  - build_default_projection_plan
+  - validate_output_projection
+  - preview_output_projection
+  - finalize_and_save
+  - formatter_cannot_complete
 
 # -----------------------------------------------------------------------------
 # OUTPUT SCHEMA
@@ -43,7 +56,7 @@ output_schema: null
 model_config:
   model: "${AGENT_JSON_FORMATTER_MODEL:-gpt-5.5}"
   temperature: 0.1
-  reasoning: "disabled"
+  reasoning: "medium"
 
 # -----------------------------------------------------------------------------
 # EXECUTION REQUIREMENTS

@@ -71,9 +71,9 @@ def test_resolve_tool_display_name_uses_builtin_specialist_labels():
         ("ask_orthologs_specialist", "Orthologs Agent"),
         ("ask_ontology_term_validation_specialist", "Ontology Term Resolver Agent"),
         ("ask_chat_output_specialist", "Chat Output Agent"),
-        ("ask_csv_formatter_specialist", "CSV File Formatter"),
-        ("ask_tsv_formatter_specialist", "TSV File Formatter"),
-        ("ask_json_formatter_specialist", "JSON File Formatter"),
+        ("ask_csv_output_formatter_specialist", "CSV File Formatter"),
+        ("ask_tsv_output_formatter_specialist", "TSV File Formatter"),
+        ("ask_json_output_formatter_specialist", "JSON File Formatter"),
     ],
 )
 def test_resolve_tool_display_name_uses_canonical_builtin_names(tool_name, expected_label):
@@ -101,3 +101,24 @@ def test_build_tool_complete_friendly_name_formats_specialist_label():
 def test_build_tool_start_friendly_name_humanizes_internal_tool_labels():
     label = _build_tool_start_friendly_name("search_document", {})
     assert label == "Calling Search Document..."
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "expected_label"),
+    [
+        ("explain_formatter_capabilities", "Explain Formatter Capabilities"),
+        ("inspect_output_artifacts", "Inspect Output Artifacts"),
+        ("inspect_output_rows", "Inspect Output Rows"),
+        ("inspect_field_values", "Inspect Field Values"),
+        ("build_default_projection_plan", "Build Default Projection Plan"),
+        ("validate_output_projection", "Validate Output Projection"),
+        ("preview_output_projection", "Preview Output Projection"),
+        ("finalize_and_save", "Finalize And Save"),
+        ("formatter_cannot_complete", "Formatter Cannot Complete"),
+    ],
+)
+def test_resolve_tool_display_name_uses_formatter_projection_tool_labels(
+    tool_name,
+    expected_label,
+):
+    assert _resolve_tool_display_name(tool_name, {}) == expected_label

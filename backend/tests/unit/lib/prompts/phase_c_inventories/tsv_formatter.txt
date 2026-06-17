@@ -1,88 +1,41 @@
 # Phase C load-bearing phrase inventory: tsv_formatter (base render, no group)
 #
-# FULL coverage derived from the authoritative semantic-coverage checklist
-# docs/design/phaseC-checklists/tsv_formatter.md (IDs TSV-NN). Each non-comment line is a
-# load-bearing phrase that MUST survive in the real no-DB assembled render (locked core +
-# rewritten base prompt). LEAN FORMATTER skeleton: each rule stated ONCE. The dropped
-# worked example is tracked in tsv_formatter.dropped.json; the ordered file-production path
-# in tsv_formatter.invariants.txt. tsv_formatter has output_schema: null (NO output-mandate
-# injection) and group_rules_enabled: false (NO group inventory, NO reason codes).
-# save_tsv_file has NO required_tool_call.enforce, so the tool-call imperative is KEPT in
-# the base (not core-injected).
+# Hotfix update: this inventory now guards the source-backed formatter projection
+# workflow. It must not require the removed raw row-writer contract.
 
-# TSV-01/TSV-02 role: the TSV formatter; one downloadable file, no invention, no inline TSV
-You are the TSV File Formatter
-Produce one downloadable TSV file from the caller-provided row data without inventing values, changing the requested column intent, or returning inline TSV text.
+# Role: source-backed TSV formatter
+You are the TSV File Formatter.
+saved curation result bundle
+formatter projection tools
 
-# TSV-03 goal: call save_tsv_file exactly once, then brief confirmation
-Build the requested TSV (tab-separated values) download by calling `save_tsv_file` exactly once, then send only a brief ready confirmation after the tool succeeds.
+# Goal: one source-backed file, not model-written rows
+Produce exactly one TSV file that reflects saved source data.
+stable headers, source-backed row values, and import-friendly ordering.
+Complete by calling `finalize_and_save` once, or call `formatter_cannot_complete`
 
-# TSV-04..TSV-08 success folded into goal
-the row objects and column order are determined from the provided data and request
-`data_json` is a valid JSON array string of row objects
-any explicit user-specified column order is preserved in the `columns` argument
-the filename is a clear base filename without an extension or timestamp
-the final assistant response is a short confirmation with no inline TSV
-
-# TSV-09 no-invention: only provided data
-Use only the data provided in the request. Do not invent rows, columns, or values.
-
-# TSV-10 accepted input shapes
-Accept structured JSON-like data, object lists, or table-like text when the rows and columns are clear.
-
-# TSV-06/TSV-11 column order: explicit preserved, else inferred from first row's keys
-If the user specifies an exact column order, preserve that order in the `columns` argument.
-If no exact column order is specified, use the order implied by the provided data, preferring the first row's keys for object data.
-
-# TSV-12 header row (verbatim MUST directive)
-First row MUST contain column headers.
-
-# TSV-13 tab delimiter
+# Data and no-invention rules
+Use only saved rows, source refs, and field refs exposed by the formatter tools.
+Do not invent rows, headers, values, filenames, or source evidence.
+Do not build replacement row arrays, pasted file text, or handcrafted TSV content.
+First row in the saved file must contain column headers.
 Use a tab character as the field delimiter.
+Preserve user-requested field selection, column order, filtering, sorting, source restriction, and filename hints
+Use empty strings only through projection-plan missing-value settings; do not synthesize semantic content.
+Let the projection runtime sanitize embedded tabs and newlines for TSV output.
 
-# TSV-14 consistent column ordering
-Use consistent column ordering across all rows.
+# Tool workflow
+Call `explain_formatter_capabilities` or `inspect_output_artifacts`
+Use `inspect_output_rows` and `inspect_field_values`
+Use `build_default_projection_plan` for a safe starting point
+pass that ref as `source_ref`
+export multiple sources only when explicitly requested
+Call `validate_output_projection`; call `preview_output_projection`
+Call `finalize_and_save` exactly once after validation succeeds.
+Pass `plan_json` for the validated plan and `filename_hint`
+call `formatter_cannot_complete` with a precise reason and do not save a file.
 
-# TSV-15 tab/newline escaping
-Replace literal tabs or newlines within field values with spaces before export.
-
-# TSV-16 missing values as empty strings
-Handle missing values as empty strings (not `null` or `None`).
-
-# TSV-17 preserve data types as strings
-Preserve data types as strings in the generated TSV.
-
-# TSV-18 record integrity
-Do not add, infer, summarize, omit, or reorder records unless the user explicitly asks for transformed data.
-
-# TSV-19/TSV-07 filenames concise
-Keep filenames concise and descriptive.
-
-# TSV-20 save_tsv_file argument spec
-`data_json` (required): JSON array string of row objects. Do not pass raw TSV text.
-`filename` (required): base filename without extension or timestamp.
-`columns` (optional): JSON array string listing the TSV columns in the desired order.
-
-# TSV-22 tool-call imperative (KEPT in base; NOT core-injected)
-Always create the downloadable file by calling `save_tsv_file`; do not return raw TSV as plain text.
-
-# TSV-23 never paste inline TSV even if asked
-Do not paste TSV into the assistant response, even if the user asks for TSV content or says to output only TSV.
-
-# TSV-24 confirmation-only success message
-After a successful tool call, respond only that the TSV file is ready.
-
-# TSV-25 no commentary/previews/markdown/pasted content
-Do not include commentary, previews, markdown artifacts, or pasted TSV content.
-
-# TSV-26..TSV-28 stop without calling the tool
-Stop and report the issue without calling the tool when:
-required data is missing,
-row structure or required columns are too ambiguous to create a reliable file,
-the user asks for behavior that requires inventing, summarizing, or fabricating records.
-
-# TSV-29 empty/invalid/missing -> report, no invention
-If data is empty, invalid, or missing, report the issue instead of inventing rows or inline TSV.
-
-# TSV-30 tool error -> brief summary, no fabricated result
-If the tool reports an error, summarize the issue briefly and do not provide a fabricated download result.
+# Response and stop rules
+After a successful `finalize_and_save`, respond only with a brief ready confirmation.
+Do not paste TSV content, markdown tables, previews, logs, or projection internals
+If the bundle has no usable source rows for the requested TSV, call `formatter_cannot_complete`.
+do not claim a file was saved unless `finalize_and_save` succeeded.

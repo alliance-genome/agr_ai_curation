@@ -362,10 +362,10 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
             "active_groups": ["WB"],
             "document_name": "Smith et al. (2024).pdf",
         },
-        canonical_tool_ids=["save_tsv_file"],
+        canonical_tool_ids=["finalize_and_save"],
     ).render()
     assert formatter_runtime_text.startswith(
-        'Use "Smith_et_al_2024" as the base output filename when calling save_*_file tools unless the user explicitly requests a different filename.'
+        'Use "Smith_et_al_2024" as the filename_hint when calling finalize_and_save unless the user explicitly requests a different filename.'
     )
     assert 'You are helping the user with the document: "Smith et al. (2024).pdf"' not in formatter_runtime_text
 
@@ -375,10 +375,10 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
             "active_groups": ["WB"],
             "document_name": "().pdf",
         },
-        canonical_tool_ids=["save_tsv_file"],
+        canonical_tool_ids=["finalize_and_save"],
     ).render()
     assert formatter_runtime_text_with_invalid_filename.startswith(
-        'Use "output" as the base output filename when calling save_*_file tools unless the user explicitly requests a different filename.'
+        'Use "output" as the filename_hint when calling finalize_and_save unless the user explicitly requests a different filename.'
     )
     with pytest.raises(TypeError, match="list items must be strings"):
         catalog_service._additional_runtime_contexts({"additional_runtime_context": ["ok", 7]})
@@ -450,7 +450,7 @@ def test_create_db_agent_output_schema_and_reasoning_paths(monkeypatch):
         catalog_service._create_db_agent(fake_row)
 
     fake_row.output_schema_key = None
-    fake_row.tool_ids = ["save_csv_file"]
+    fake_row.tool_ids = ["finalize_and_save"]
     fake_row.model_reasoning = "high"
 
     from src.lib.openai_agents import config as agent_config
@@ -473,7 +473,7 @@ def test_create_db_agent_output_schema_and_reasoning_paths(monkeypatch):
 
     built = catalog_service._create_db_agent(fake_row)
     assert built.tools == ["csv-tool"]
-    assert captured["settings"]["reasoning_effort"] is None
+    assert captured["settings"]["reasoning_effort"] == "high"
     assert captured["settings"]["parallel_tool_calls"] is False
 
 

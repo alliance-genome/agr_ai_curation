@@ -11,6 +11,7 @@ from agents import AgentOutputSchema
 from pydantic import BaseModel
 
 from src.lib.curation_workspace import adapter_registry
+import src.lib.curation_workspace.domain_envelope_normalization as domain_envelope_normalization
 from src.lib.config import schema_discovery
 from src.lib.openai_agents import streaming_tools
 from src.lib.openai_agents.models import (
@@ -2303,7 +2304,7 @@ async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(mo
     monkeypatch.setattr(streaming_tools, "add_specialist_event", emitted.append)
 
     from src.lib.curation_workspace import adapter_registry
-    from src.lib.curation_workspace import curation_prep_service, extraction_results
+    from src.lib.curation_workspace import extraction_results
     from src.lib.domain_packs import validator_dispatch
 
     monkeypatch.setattr(
@@ -2318,15 +2319,15 @@ async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(mo
     )
     observed_record = {}
 
-    def _fake_domain_envelope_from_extraction_result(record):
+    def fake_envelope_normalizer(record):
         observed_record["agent_key"] = record.agent_key
         observed_record["adapter_key"] = record.adapter_key
         return source_envelope
 
     monkeypatch.setattr(
-        curation_prep_service,
-        "_domain_envelope_from_extraction_result",
-        _fake_domain_envelope_from_extraction_result,
+        domain_envelope_normalization,
+        "domain_envelope_from_extraction_result",
+        fake_envelope_normalizer,
     )
     monkeypatch.setattr(
         adapter_registry,
@@ -2406,7 +2407,7 @@ async def test_chat_domain_envelope_dispatch_uses_runtime_adapter_for_custom_age
     monkeypatch.setattr(streaming_tools, "add_specialist_event", emitted.append)
 
     from src.lib.curation_workspace import adapter_registry
-    from src.lib.curation_workspace import curation_prep_service, extraction_results
+    from src.lib.curation_workspace import extraction_results
     from src.lib.domain_packs import validator_dispatch
 
     monkeypatch.setattr(
@@ -2421,15 +2422,15 @@ async def test_chat_domain_envelope_dispatch_uses_runtime_adapter_for_custom_age
     )
     observed_record = {}
 
-    def _fake_domain_envelope_from_extraction_result(record):
+    def fake_envelope_normalizer(record):
         observed_record["agent_key"] = record.agent_key
         observed_record["adapter_key"] = record.adapter_key
         return source_envelope
 
     monkeypatch.setattr(
-        curation_prep_service,
-        "_domain_envelope_from_extraction_result",
-        _fake_domain_envelope_from_extraction_result,
+        domain_envelope_normalization,
+        "domain_envelope_from_extraction_result",
+        fake_envelope_normalizer,
     )
     monkeypatch.setattr(
         adapter_registry,
@@ -2570,10 +2571,7 @@ async def test_chat_domain_envelope_dispatch_covers_launchable_active_validator_
     emitted = []
     monkeypatch.setattr(streaming_tools, "add_specialist_event", emitted.append)
 
-    from src.lib.curation_workspace import (
-        curation_prep_service,
-        extraction_results,
-    )
+    from src.lib.curation_workspace import extraction_results
     from src.lib.domain_packs import validator_dispatch
 
     monkeypatch.setattr(
@@ -2588,8 +2586,8 @@ async def test_chat_domain_envelope_dispatch_covers_launchable_active_validator_
         else None,
     )
     monkeypatch.setattr(
-        curation_prep_service,
-        "_domain_envelope_from_extraction_result",
+        domain_envelope_normalization,
+        "domain_envelope_from_extraction_result",
         lambda _record: envelope,
     )
 

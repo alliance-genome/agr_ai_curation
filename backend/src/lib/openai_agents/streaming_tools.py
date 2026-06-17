@@ -3553,8 +3553,8 @@ async def _dispatch_domain_envelope_validators_for_chat(
     dispatch_phase_timings_ms: Dict[str, int] = {}
 
     try:
-        from src.lib.curation_workspace.curation_prep_service import (
-            _domain_envelope_from_extraction_result,
+        from src.lib.curation_workspace.domain_envelope_normalization import (
+            domain_envelope_from_extraction_result,
         )
         from src.lib.curation_workspace.extraction_results import (
             build_extraction_envelope_candidate,
@@ -3615,7 +3615,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
             created_at=datetime.now(timezone.utc),
             metadata=dict(candidate.metadata),
         )
-        envelope = _domain_envelope_from_extraction_result(extraction_record)
+        envelope = domain_envelope_from_extraction_result(extraction_record)
         domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
         dispatch_phase_timings_ms["envelope_materialization_ms"] = _elapsed_ms(
             envelope_started_at
@@ -4998,8 +4998,8 @@ async def run_specialist_with_events(
                             },
                         })
 
-                        # Check if tool output contains FileInfo (file download)
-                        # File formatter tools (save_csv_file, etc.) return FileInfo as JSON
+                        # Check if tool output contains FileInfo (file download).
+                        # Runtime formatter projection tools return FileInfo as JSON.
                         if output:
                             try:
                                 output_data = json.loads(str(output)) if isinstance(output, str) else output

@@ -2,7 +2,7 @@
   {
     "phrase": "save_tsv_file(\n    data_json='[{\"symbol\":\"BRCA1\"",
     "category": "deleted",
-    "reason": "TSV-EX worked-example deletion. The pre-rewrite prompt closed with an <example> block (gene-result input plus a worked save_tsv_file(...) call). It is a redundant illustration of the save_tsv_file argument spec that is already stated load-bearing in the rewritten <workflow> (TSV-20: data_json JSON array string, filename base name, columns order). The lean FORMATTER skeleton states each tool-argument rule ONCE without a separate worked example; the argument shape survives in <workflow>, so the example carries no rule that is lost. No home (deleted, not relocated).",
+    "reason": "TSV-EX worked-example deletion. The pre-rewrite prompt closed with an <example> block that showed a free-form raw file writer call. That contract is intentionally removed: formatter agents now inspect saved source-backed artifacts, build/validate/preview a projection plan, and call finalize_and_save exactly once. The old example would teach model-authored rows/file bytes, so it has no home and is deleted rather than relocated.",
     "old_source": "packages/alliance/agents/tsv_formatter/prompt.yaml:<example>",
     "new_home": ""
   }

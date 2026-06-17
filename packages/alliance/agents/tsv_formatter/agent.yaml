@@ -1,8 +1,8 @@
 # =============================================================================
 # AGENT DEFINITION: tsv_formatter
 # =============================================================================
-# Formats data as downloadable TSV files.
-# Flow terminal agent - not routable by supervisor.
+# Formats saved curation results as downloadable TSV files.
+# Context-bound output terminal with source-backed projection tools.
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -13,8 +13,8 @@ agent_id: tsv_output_formatter
 name: "TSV File Formatter"
 
 description: >
-  Formats data as downloadable TSV (tab-separated values) files.
-  Format is ideal for importing into databases and bioinformatics tools.
+  Builds source-backed TSV (tab-separated values) downloads from saved
+  curation results using validated projection plans.
 
 category: "Output"
 subcategory: "Output"
@@ -22,15 +22,27 @@ subcategory: "Output"
 # -----------------------------------------------------------------------------
 # SUPERVISOR ROUTING
 # -----------------------------------------------------------------------------
-# Formatters are flow terminals, not supervisor tools
 supervisor_routing:
-  enabled: false
+  enabled: true
+  description: >
+    Use for creating downloadable TSV files from saved curation results when
+    the caller needs import-friendly tabular rows, headers, filters, ordering,
+    field selection, or a clear cannot-complete response.
+  batchable: false
 
 # -----------------------------------------------------------------------------
 # TOOLS
 # -----------------------------------------------------------------------------
 tools:
-  - save_tsv_file
+  - explain_formatter_capabilities
+  - inspect_output_artifacts
+  - inspect_output_rows
+  - inspect_field_values
+  - build_default_projection_plan
+  - validate_output_projection
+  - preview_output_projection
+  - finalize_and_save
+  - formatter_cannot_complete
 
 # -----------------------------------------------------------------------------
 # OUTPUT SCHEMA
@@ -43,7 +55,7 @@ output_schema: null
 model_config:
   model: "${AGENT_TSV_FORMATTER_MODEL:-gpt-5.5}"
   temperature: 0.1
-  reasoning: "disabled"
+  reasoning: "medium"
 
 # -----------------------------------------------------------------------------
 # EXECUTION REQUIREMENTS

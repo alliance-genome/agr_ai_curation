@@ -32,6 +32,90 @@ def _reset_stream_state():
     chat._LOCAL_SESSION_OWNERS.clear()
 
 
+def test_append_deduped_file_output_replaces_existing_file_id():
+    file_outputs = [
+        {
+            "file_id": "file-1",
+            "filename": "trace_genes.csv",
+            "format": "csv",
+            "size_bytes": 10,
+        }
+    ]
+
+    surfaced = chat._append_deduped_file_output(
+        file_outputs,
+        {
+            "file_id": "file-1",
+            "filename": "trace_genes.csv",
+            "format": "csv",
+            "size_bytes": 20,
+        },
+    )
+
+    assert surfaced is False
+    assert file_outputs == [
+        {
+            "file_id": "file-1",
+            "filename": "trace_genes.csv",
+            "format": "csv",
+            "size_bytes": 20,
+        }
+    ]
+
+
+def test_append_deduped_file_output_keeps_distinct_descriptor_or_format():
+    file_outputs = [
+        {
+            "filename": "trace_genes.csv",
+            "format": "csv",
+            "size_bytes": 10,
+        }
+    ]
+
+    surfaced = chat._append_deduped_file_output(
+        file_outputs,
+        {
+            "filename": "trace_genes.tsv",
+            "format": "tsv",
+            "size_bytes": 20,
+        },
+    )
+
+    assert surfaced is True
+    assert [item["filename"] for item in file_outputs] == [
+        "trace_genes.csv",
+        "trace_genes.tsv",
+    ]
+
+
+def test_append_deduped_file_output_replaces_existing_filename_format_without_id():
+    file_outputs = [
+        {
+            "filename": "trace_genes.csv",
+            "format": "csv",
+            "size_bytes": 10,
+        }
+    ]
+
+    surfaced = chat._append_deduped_file_output(
+        file_outputs,
+        {
+            "filename": "trace_genes.csv",
+            "format": "csv",
+            "size_bytes": 30,
+        },
+    )
+
+    assert surfaced is False
+    assert file_outputs == [
+        {
+            "filename": "trace_genes.csv",
+            "format": "csv",
+            "size_bytes": 30,
+        }
+    ]
+
+
 class _DummyFlowQuery:
     def __init__(self, flow):
         self._flow = flow
@@ -398,6 +482,85 @@ def test_execute_flow_endpoint_streams_flattened_events(monkeypatch):
     assert calls["register"] == [("session-flow-1", "auth-sub", ANY)]
     assert calls["unregister"] == [("session-flow-1", "auth-sub", ANY)]
     assert calls["clear"] == ["session-flow-1"]
+
+
+def test_execute_flow_endpoint_suppresses_duplicate_file_ready_stream_and_transcript(monkeypatch):
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-flow-file-dedupe")
+    flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Flow File Dedupe",
+        execution_count=0,
+        last_executed_at=None,
+    )
+    db = _DummyDB(flow=flow)
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+
+    async def _fake_execute_flow(**_kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-file-dedupe"}}
+        yield {
+            "type": "FILE_READY",
+            "details": {
+                "file_id": "file-1",
+                "filename": "trace_gene_results.csv",
+                "format": "csv",
+                "size_bytes": 10,
+            },
+        }
+        yield {
+            "type": "FILE_READY",
+            "details": {
+                "file_id": "file-1",
+                "filename": "trace_gene_results.csv",
+                "format": "csv",
+                "size_bytes": 20,
+            },
+        }
+        yield {
+            "type": "FLOW_FINISHED",
+            "data": {
+                "status": "completed",
+                "failure_reason": None,
+                "flow_run_id": "flow-run-file-dedupe",
+            },
+        }
+
+    _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
+
+    response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+    asyncio.run(response.background())
+
+    streamed_file_events = [event for event in events if event["type"] == "FILE_READY"]
+    assert len(streamed_file_events) == 1
+    assert streamed_file_events[0]["details"]["size_bytes"] == 10
+
+    repository = calls["repository"]
+    assert isinstance(repository, _FakeChatHistoryRepository)
+    stored_messages = repository.messages[("auth-sub", "session-flow-file-dedupe")]
+    transcript_file_rows = [
+        message
+        for message in stored_messages
+        if message.message_type == "file_download"
+    ]
+    assert len(transcript_file_rows) == 1
+    assert transcript_file_rows[0].payload_json["details"]["size_bytes"] == 10
+    summary_message = next(
+        message
+        for message in stored_messages
+        if message.message_type == chat.FLOW_SUMMARY_MESSAGE_TYPE
+    )
+    assert "trace_gene_results.csv" in summary_message.payload_json[
+        chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
+    ]
 
 
 def test_execute_flow_endpoint_maps_real_mgi_cognito_groups_to_active_groups(monkeypatch):
