@@ -1154,7 +1154,7 @@ def _finding_curator_override_allowed(finding: ValidationFinding) -> bool:
 
 def _object_id_by_ref(envelope: DomainEnvelope) -> dict[tuple[str, str], str]:
     object_ids: dict[tuple[str, str], str] = {}
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         stable_object_id = _stable_envelope_object_id(domain_object)
         if domain_object.object_id is not None:
             object_ids[("object_id", domain_object.object_id)] = stable_object_id
@@ -1390,7 +1390,7 @@ def _envelope_object_by_stable_id(
     envelope: DomainEnvelope,
     object_id: str,
 ) -> CuratableObjectEnvelope | None:
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         if object_id in {
             value
             for value in (domain_object.object_id, domain_object.pending_ref_id)
@@ -1584,7 +1584,7 @@ def _replace_envelope_object_payload_value(
 ) -> DomainEnvelope:
     object_index = None
     domain_object = None
-    for index, candidate_object in enumerate(envelope.objects):
+    for index, candidate_object in enumerate(envelope.extracted_objects):
         if object_id in {
             value
             for value in (candidate_object.object_id, candidate_object.pending_ref_id)
@@ -1608,11 +1608,11 @@ def _replace_envelope_object_payload_value(
             detail=str(exc),
         ) from exc
 
-    updated_objects = list(envelope.objects)
+    updated_objects = list(envelope.extracted_objects)
     updated_objects[object_index] = domain_object.model_copy(
         update={"payload": payload}
     )
-    return envelope.model_copy(update={"objects": updated_objects})
+    return envelope.model_copy(update={"extracted_objects": updated_objects})
 
 
 def _set_payload_value(payload: dict[str, Any], field_path: str, value: Any) -> None:

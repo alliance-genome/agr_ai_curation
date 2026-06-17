@@ -84,7 +84,7 @@ def _formatter_bundle():
                     payload_json={
                         "domain_pack_id": "gene",
                         "envelope_id": "env-1",
-                        "objects": [
+                        "extracted_objects": [
                             {
                                 "object_type": "Gene",
                                 "object_id": "gene-1",

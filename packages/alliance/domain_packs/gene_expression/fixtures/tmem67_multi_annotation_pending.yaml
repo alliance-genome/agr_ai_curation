@@ -17,7 +17,7 @@ fixtures:
         name: GeneExpressionAnnotation
         version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
         uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/expression.yaml
-      objects:
+      extracted_objects:
         - object_type: GeneExpressionAnnotation
           object_role: curatable_unit
           pending_ref_id: gene-expression-annotation-tmem67-metanephros
@@ -155,7 +155,7 @@ fixtures:
           actor_type: system
           message: Loaded focused multi-annotation GeneExpressionAnnotation fixture.
       metadata:
-        semantic_source: domain_envelope.objects
+        semantic_source: domain_envelope.extracted_objects
         legacy_semantic_lists: []
         extraction_summary: Retained two same-gene Tmem67 expression annotations and preserved rescue/construct context as metadata only.
         extraction_metadata:

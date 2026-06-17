@@ -132,7 +132,7 @@ def _envelope() -> DomainEnvelope:
     return DomainEnvelope(
         envelope_id="env-1",
         domain_pack_id="fixture-pack",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneAssertion",
                 object_id="gene-1",
@@ -232,7 +232,7 @@ def test_evidence_anchor_projection_reads_nested_extraction_metadata_records():
     envelope = DomainEnvelope(
         envelope_id="env-nested",
         domain_pack_id="fixture-pack",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneExpressionAnnotation",
                 object_id="gene-expression-1",
@@ -286,7 +286,7 @@ def test_evidence_anchor_projection_uses_target_specific_field_paths():
     envelope = DomainEnvelope(
         envelope_id="env-targeted-evidence",
         domain_pack_id="fixture-pack",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneAssertion",
                 object_id="gene-1",
@@ -336,7 +336,7 @@ def test_evidence_anchor_projection_resolves_object_metadata_refs():
     envelope = DomainEnvelope(
         envelope_id="env-metadata-ref",
         domain_pack_id="fixture-pack",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneAssertion",
                 object_id="gene-1",
@@ -385,7 +385,7 @@ def test_evidence_anchor_projection_rejects_invalid_structured_anchor():
     envelope = DomainEnvelope(
         envelope_id="env-invalid-anchor",
         domain_pack_id="fixture-pack",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneAssertion",
                 object_id="gene-1",
@@ -441,7 +441,7 @@ def test_validation_summary_projection_keeps_active_blocker_findings_unresolved(
     envelope = DomainEnvelope(
         envelope_id="env-active-blocker",
         domain_pack_id="fixture-pack",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneAssertion",
                 object_id="gene-1",
@@ -477,7 +477,7 @@ def test_field_validation_maps_partial_lookup_success_to_conflict():
     envelope = DomainEnvelope(
         envelope_id="env-partial-lookup",
         domain_pack_id="fixture-pack",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneAssertion",
                 object_id="gene-1",
@@ -519,7 +519,7 @@ def test_field_validation_matches_selector_leaf_aliases():
     envelope = DomainEnvelope(
         envelope_id="env-selector-alias",
         domain_pack_id="fixture-pack",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneAssertion",
                 object_id="gene-1",

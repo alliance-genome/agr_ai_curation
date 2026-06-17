@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Mapping
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +13,6 @@ import pytest
 import yaml
 
 from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
-from src.lib.curation_workspace.extraction_results import ExtractionEnvelopeCandidate
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
@@ -21,7 +21,7 @@ from src.lib.domain_packs.validation_registry import (
 )
 from src.lib.flows.output_projection import (
     apply_projection_plan,
-    build_flow_output_artifact_bundle,
+    build_extraction_result_artifact_bundle,
     default_projection_plan,
 )
 from src.lib.openai_agents.extraction_builder_workspace import (
@@ -29,6 +29,10 @@ from src.lib.openai_agents.extraction_builder_workspace import (
     ExtractionBuilderWorkspace,
 )
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
+from src.schemas.curation_workspace import (
+    CurationExtractionResultRecord,
+    CurationExtractionSourceKind,
+)
 from src.schemas.domain_pack_metadata import (
     DomainPackFieldDefinition,
     DomainPackFieldType,
@@ -268,7 +272,7 @@ def test_generated_generic_validator_dispatch_builds_source_validator_request():
     envelope = DomainEnvelope(
         envelope_id="generic-gene-validator-fixture",
         domain_pack_id=GENERIC_DOMAIN_PACK_ID,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type=proxy_type,
                 pending_ref_id="generic-gene-1",
@@ -373,6 +377,32 @@ def test_explicit_generic_object_class_materializes_without_fallback():
     assert result.payload["metadata"]["provenance"]["source"] == GENERIC_MATERIALIZER_ID
     assert "items" not in result.payload
     assert "raw_mentions" not in result.payload
+
+
+def test_generic_materializer_rejects_invalid_semantic_attributes():
+    workspace = _generic_workspace(
+        {
+            "class_key": "generic:generic_object",
+            "label": "B cell lymphoma",
+            "classification_notes": ["The paper reports this tumor classification."],
+            "attributes": {
+                "Cell Type": "B cell",
+                "cell-type": "duplicate",
+            },
+        }
+    )
+    result = materialize_generic_builder_state(
+        workspace=workspace,
+        candidate_ids=["generic-candidate-1"],
+        evidence_records=_evidence_records(),
+        resolver_entry_lookup=None,
+    )
+
+    assert not result.ok
+    assert any(
+        issue["reason"] == "duplicate_normalized_attribute_key"
+        for issue in result.issues
+    )
 
 
 def test_generic_materializer_enforces_required_class_payload_fields():
@@ -504,28 +534,26 @@ def test_generic_builder_finalization_projects_to_object_tsv_rows():
 
     assert outcome.ok, outcome.issues
     assert outcome.finalization is not None
-    completed_step = {
-        "step": 1,
-        "agent_id": "pdf_extraction",
-        "agent_name": "General PDF Extraction Agent",
-        "tool_name": "ask_pdf_specialist",
-        "output_preview": "Builder finalized generic reagents.",
-        "candidate": ExtractionEnvelopeCandidate(
-            agent_key="pdf_extraction",
-            adapter_key="generic",
-            candidate_count=2,
-            payload_json=outcome.finalization.payload,
-            conversation_summary="Extracted two generic reagents.",
-            metadata={
-                "flow_id": "flow-gillian-regression",
-                "step": 1,
-                "tool_name": "ask_pdf_specialist",
-            },
-        ),
-    }
-    bundle = build_flow_output_artifact_bundle(
-        completed_steps=[completed_step],
-        flow_name="Gillian Regression Flow",
+    extraction_record = CurationExtractionResultRecord(
+        extraction_result_id="generic-reagent-result-1",
+        document_id="generic-reagent-document",
+        adapter_key="generic",
+        agent_key="pdf_extraction",
+        source_kind=CurationExtractionSourceKind.FLOW,
+        flow_run_id="flow-gillian-regression",
+        candidate_count=2,
+        conversation_summary="Extracted two generic reagents.",
+        payload_json=outcome.finalization.payload,
+        created_at=datetime.now(timezone.utc),
+        metadata={
+            "flow_id": "flow-gillian-regression",
+            "step": 1,
+            "tool_name": "ask_pdf_specialist",
+        },
+    )
+    bundle = build_extraction_result_artifact_bundle(
+        extraction_results=[extraction_record],
+        bundle_name="Gillian Regression Flow",
         output_format="tsv",
     )
     result = apply_projection_plan(

@@ -437,10 +437,10 @@ def test_gene_domain_pack_fixture_converts_to_pending_gene_mention_envelope():
     converted = tool_verified_gene_output_to_pending_envelope(raw_fixture)
 
     assert converted.domain_pack_id == GENE_DOMAIN_PACK_ID
-    assert converted.objects[0].object_type == GENE_MENTION_EVIDENCE_OBJECT_TYPE
-    assert converted.objects[0].payload["primary_external_id"] == "WB:WBGene00000912"
+    assert converted.extracted_objects[0].object_type == GENE_MENTION_EVIDENCE_OBJECT_TYPE
+    assert converted.extracted_objects[0].payload["primary_external_id"] == "WB:WBGene00000912"
     assert LEGACY_SEMANTIC_LIST_FIELDS.isdisjoint(converted.metadata)
-    assert all(LEGACY_SEMANTIC_LIST_FIELDS.isdisjoint(obj.payload) for obj in converted.objects)
+    assert all(LEGACY_SEMANTIC_LIST_FIELDS.isdisjoint(obj.payload) for obj in converted.extracted_objects)
 
 
 def test_gene_extractor_schema_synthesizes_missing_raw_mentions_for_retained_objects():

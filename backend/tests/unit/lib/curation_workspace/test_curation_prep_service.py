@@ -254,9 +254,9 @@ def test_domain_envelope_normalizer_promotes_extraction_result_to_objects_payloa
 
     assert envelope.envelope_id == "extraction-result:extract-domain-1"
     assert envelope.domain_pack_id == "gene"
-    assert dumped["objects"][0]["object_id"] == "gene-row-1"
+    assert dumped["extracted_objects"][0]["object_id"] == "gene-row-1"
     assert "curatable_objects" not in dumped
-    assert envelope.metadata["semantic_source"] == "domain_envelope.objects"
+    assert envelope.metadata["semantic_source"] == "domain_envelope.extracted_objects"
     assert envelope.metadata["source_extraction_result_id"] == "extract-domain-1"
     assert envelope.metadata["source_adapter_key"] == "gene"
 
@@ -271,7 +271,7 @@ def test_domain_envelope_normalizer_rejects_mixed_canonical_and_extractor_shapes
         "domain_pack_id": "gene",
         "domain_pack_version": "0.1.0",
         "status": "extracted",
-        "objects": curatable_objects,
+        "extracted_objects": curatable_objects,
         "curatable_objects": curatable_objects,
         "history": [],
         "validation_findings": [],
@@ -281,7 +281,7 @@ def test_domain_envelope_normalizer_rejects_mixed_canonical_and_extractor_shapes
         update={"payload_json": mixed_payload},
     )
 
-    with pytest.raises(ValueError, match="mixes DomainEnvelope.objects"):
+    with pytest.raises(ValueError, match="mixes DomainEnvelope.extracted_objects"):
         domain_envelope_from_extraction_result(mixed_result)
 
 

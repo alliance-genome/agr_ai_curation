@@ -417,7 +417,7 @@ async def test_active_validator_dispatch_receives_span_evidence_candidate_object
     envelope = DomainEnvelope(
         envelope_id="span-gene-expression-regression",
         domain_pack_id="agr.alliance.gene_expression",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(**canonical["curatable_objects"][0])
         ],
         metadata={"evidence_records": retained_records},

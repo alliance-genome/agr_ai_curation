@@ -387,8 +387,8 @@ def test_migrates_legacy_workspace_rows_to_envelopes_projection_refs_and_history
     assert envelope.envelope_json["metadata"]["legacy_extraction_results"][0][
         "payload_json"
     ]["raw_mentions"] == [{"text": "abc-1"}]
-    assert envelope.envelope_json["objects"][0]["object_type"] == LEGACY_CANDIDATE_OBJECT_TYPE
-    assert envelope.envelope_json["objects"][0]["payload"]["draft"]["fields"][0][
+    assert envelope.envelope_json["extracted_objects"][0]["object_type"] == LEGACY_CANDIDATE_OBJECT_TYPE
+    assert envelope.envelope_json["extracted_objects"][0]["payload"]["draft"]["fields"][0][
         "metadata"
     ]["normalization_notes"] == ["manual curator note"]
 
@@ -657,8 +657,8 @@ def test_orphan_extraction_result_migrates_as_standalone_envelope(db_session):
     envelope = db_session.scalar(select(DomainEnvelopeModel))
     assert envelope is not None
     assert envelope.document_id == document.id
-    assert envelope.envelope_json["objects"][0]["object_type"] == LEGACY_EXTRACTION_OBJECT_TYPE
-    assert envelope.envelope_json["objects"][0]["payload"]["extraction_result_id"] == str(
+    assert envelope.envelope_json["extracted_objects"][0]["object_type"] == LEGACY_EXTRACTION_OBJECT_TYPE
+    assert envelope.envelope_json["extracted_objects"][0]["payload"]["extraction_result_id"] == str(
         extraction_result.id
     )
 

@@ -103,7 +103,7 @@ def test_stage_and_finalize_extraction_payload_backfills_scope_metadata_from_pay
     builder.stage_extraction_payload(
         {
             "domain_pack_id": "agr.test",
-            "objects": [
+            "extracted_objects": [
                 {
                     "object_type": "gene_expression_annotation",
                     "pending_ref_id": "annotation-1",

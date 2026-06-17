@@ -381,12 +381,12 @@ def test_disease_extractor_fixture_converts_to_pending_domain_envelope():
     converted = _valid_pending_disease_envelope()
 
     assert converted.domain_pack_id == DISEASE_DOMAIN_PACK_ID
-    assert converted.objects[0].object_type == DISEASE_OBJECT_TYPE
-    assert converted.objects[0].status.value == "pending"
-    assert converted.objects[0].payload["disease_annotation_object"]["curie"] == (
+    assert converted.extracted_objects[0].object_type == DISEASE_OBJECT_TYPE
+    assert converted.extracted_objects[0].status.value == "pending"
+    assert converted.extracted_objects[0].payload["disease_annotation_object"]["curie"] == (
         "DOID:0050434"
     )
-    assert converted.metadata["semantic_source"] == "domain_envelope.objects"
+    assert converted.metadata["semantic_source"] == "domain_envelope.extracted_objects"
     assert converted.metadata["legacy_semantic_lists"] == []
     assert validate_pending_disease_envelope(converted) == ()
 
@@ -403,7 +403,7 @@ def test_pending_disease_validator_rejects_blank_required_payload_values(
     field_path: str,
 ):
     converted = _valid_pending_disease_envelope()
-    payload = converted.objects[0].payload
+    payload = converted.extracted_objects[0].payload
     current = payload
     for part in field_path.split(".")[:-1]:
         current = current[part]
@@ -429,7 +429,7 @@ def test_pending_disease_validator_rejects_unsupported_payload_enum_values(
     value: str,
 ):
     converted = _valid_pending_disease_envelope()
-    converted.objects[0].payload[field_path] = value
+    converted.extracted_objects[0].payload[field_path] = value
 
     findings = validate_pending_disease_envelope(converted)
 
@@ -442,7 +442,7 @@ def test_pending_disease_validator_rejects_unsupported_payload_enum_values(
 
 def test_pending_disease_validator_rejects_incomplete_evidence_snapshot():
     converted = _valid_pending_disease_envelope()
-    converted.objects[0].payload["evidence_records"][0]["chunk_id"] = ""
+    converted.extracted_objects[0].payload["evidence_records"][0]["chunk_id"] = ""
 
     findings = validate_pending_disease_envelope(converted)
 

@@ -259,7 +259,7 @@ def _value_missing_or_blank(value: Any) -> bool:
 
 def _object_id_by_ref(envelope: DomainEnvelope) -> dict[tuple[str, str], str]:
     object_id_by_ref: dict[tuple[str, str], str] = {}
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         stable_object_id = _stable_object_id(domain_object)
         if domain_object.object_id is not None:
             object_id_by_ref[("object_id", domain_object.object_id)] = stable_object_id
@@ -843,7 +843,7 @@ def _domain_object_for_id(
     envelope: DomainEnvelope,
     object_id: str,
 ) -> CuratableObjectEnvelope | None:
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         if object_id in {
             value
             for value in (domain_object.object_id, domain_object.pending_ref_id)
@@ -1135,7 +1135,7 @@ def _domain_envelope_snapshot(
     )
     selected_objects = [
         domain_object.model_dump(mode="json")
-        for domain_object in envelope.objects
+        for domain_object in envelope.extracted_objects
         if _stable_object_id(domain_object) in included_object_ids
     ]
     return {
@@ -1149,7 +1149,7 @@ def _domain_envelope_snapshot(
         "object_model_ref": dict(envelope_row.object_model_ref_json or {}),
         "model_field_ref": dict(envelope_row.model_field_ref_json or {}),
         "selected_object_ids": sorted(selected),
-        "objects": selected_objects,
+        "extracted_objects": selected_objects,
         "validation_findings": [
             finding.model_dump(mode="json")
             for finding in envelope.validation_findings
@@ -1166,7 +1166,7 @@ def _selected_object_ids_with_references(
 ) -> set[str]:
     objects_by_id = {
         _stable_object_id(domain_object): domain_object
-        for domain_object in envelope.objects
+        for domain_object in envelope.extracted_objects
     }
     included = {
         object_id for object_id in selected_object_ids if object_id in objects_by_id
@@ -1320,7 +1320,7 @@ def _domain_envelope_candidate_payload(
         "adapter_key": candidate.adapter_key,
         "display_label": candidate.display_label,
         "secondary_label": candidate.secondary_label,
-        "semantic_source": "domain_envelope.objects",
+        "semantic_source": "domain_envelope.extracted_objects",
         "projection_ref": {
             "envelope_id": context.envelope.envelope_id,
             "object_id": object_id,
@@ -1354,7 +1354,7 @@ def _domain_envelope_candidate_payload(
         "projection_refs": list(context.projection_refs),
         "provider_refs": _metadata_provider_refs(domain_object.metadata),
         "metadata": {
-            "semantic_source": "domain_envelope.objects",
+            "semantic_source": "domain_envelope.extracted_objects",
             "candidate_metadata": dict(candidate.candidate_metadata or {}),
         },
     }

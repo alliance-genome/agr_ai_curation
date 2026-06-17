@@ -1376,7 +1376,7 @@ def test_domain_envelope_reduction_prioritizes_materialized_fields_for_superviso
             "envelope_id": "env-test-gene",
             "domain_pack_id": "gene",
             "domain_pack_version": "0.1.0",
-            "objects": [
+            "extracted_objects": [
                 {
                     "object_type": "gene_mention_evidence",
                     "object_role": "validated_reference",
@@ -1428,7 +1428,7 @@ def test_domain_envelope_reduction_includes_materialized_validator_values_from_y
             "envelope_id": "env-test-allele",
             "domain_pack_id": "agr.alliance.allele",
             "domain_pack_version": "0.1.0",
-            "objects": [
+            "extracted_objects": [
                 {
                     "object_type": "AllelePaperEvidenceAssociation",
                     "object_role": "curatable_unit",
@@ -1484,7 +1484,7 @@ def test_builder_domain_envelope_reduction_without_output_type_stays_compact():
             "envelope_id": "env-test-builder",
             "domain_pack_id": "agr.alliance.gene_expression",
             "domain_pack_version": "0.1.0",
-            "objects": [
+            "extracted_objects": [
                 {
                     "object_type": "GeneExpressionAnnotation",
                     "object_role": "curatable_unit",
@@ -1522,7 +1522,7 @@ def test_builder_domain_envelope_reduction_counts_curatable_objects():
             "envelope_id": "env-test-builder-curatable",
             "domain_pack_id": "agr.alliance.gene_expression",
             "domain_pack_version": "0.1.0",
-            "objects": [
+            "extracted_objects": [
                 {
                     "object_type": "GeneExpressionAnnotation",
                     "object_role": "curatable_unit",
@@ -1557,7 +1557,7 @@ def test_domain_envelope_reduction_missing_policy_does_not_guess_payload_scalars
         {
             "envelope_id": "env-test-unusual",
             "domain_pack_id": "agr.alliance.unusual",
-            "objects": [
+            "extracted_objects": [
                 {
                     "object_type": "UnusualObject",
                     "pending_ref_id": "unusual-1",
@@ -1591,7 +1591,7 @@ def test_domain_envelope_reduction_empty_objects_never_returns_raw_json():
         {
             "envelope_id": "env-test-empty",
             "domain_pack_id": "gene",
-            "objects": [],
+            "extracted_objects": [],
             "validation_findings": [],
         }
     )
@@ -1640,7 +1640,7 @@ def test_domain_envelope_shape_without_contract_does_not_fallback_to_validated_s
         {
             "envelope_id": "env-test-unaccepted",
             "domain_pack_id": "agr.alliance.gene_expression",
-            "objects": [
+            "extracted_objects": [
                 {
                     "object_type": "GeneExpressionAnnotation",
                     "pending_ref_id": "gene-expression-1",
@@ -2163,7 +2163,7 @@ def _chat_dispatch_domain_cases():
             DomainEnvelope(
                 envelope_id="chat-allele-env",
                 domain_pack_id="agr.alliance.allele",
-                objects=[
+                extracted_objects=[
                     CuratableObjectEnvelope(
                         object_type="AlleleMention",
                         pending_ref_id="allele-mention-1",
@@ -2199,7 +2199,7 @@ def _chat_dispatch_domain_cases():
             DomainEnvelope(
                 envelope_id="chat-disease-env",
                 domain_pack_id="agr.alliance.disease",
-                objects=[
+                extracted_objects=[
                     CuratableObjectEnvelope(
                         object_type="DiseaseAnnotation",
                         pending_ref_id="disease-annotation-1",
@@ -2241,7 +2241,7 @@ def _chat_dispatch_domain_cases():
             DomainEnvelope(
                 envelope_id="chat-phenotype-env",
                 domain_pack_id="agr.alliance.phenotype",
-                objects=[
+                extracted_objects=[
                     CuratableObjectEnvelope(
                         object_type="PhenotypeTerm",
                         object_role="validated_reference",
@@ -2269,7 +2269,7 @@ def _chat_dispatch_domain_cases():
             DomainEnvelope(
                 envelope_id="chat-gene-expression-env",
                 domain_pack_id="agr.alliance.gene_expression",
-                objects=[
+                extracted_objects=[
                     CuratableObjectEnvelope(
                         object_type="GeneExpressionAnnotation",
                         pending_ref_id="gene-expression-annotation-1",
@@ -2315,7 +2315,7 @@ async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(mo
 
     source_envelope = SimpleNamespace(
         domain_pack_id="gene",
-        objects=[SimpleNamespace()],
+        extracted_objects=[SimpleNamespace()],
     )
     observed_record = {}
 
@@ -2342,7 +2342,7 @@ async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(mo
         model_dump=lambda mode="json": {
             "envelope_id": "chat-runtime",
             "domain_pack_id": "gene",
-            "objects": [
+            "extracted_objects": [
                 {
                     "object_type": "gene_mention_evidence",
                     "payload": {
@@ -2393,7 +2393,10 @@ async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(mo
 
     payload = json.loads(result)
     assert payload["metadata"]["validated"] is True
-    assert payload["objects"][0]["payload"]["primary_external_id"] == "FB:FBgn0259685"
+    assert (
+        payload["extracted_objects"][0]["payload"]["primary_external_id"]
+        == "FB:FBgn0259685"
+    )
     assert dispatched["envelope"] is source_envelope
     assert dispatched["domain_pack"].pack_id == "gene"
     assert dispatched["kwargs"]["source_envelope_revision"] == 1
@@ -2418,7 +2421,7 @@ async def test_chat_domain_envelope_dispatch_uses_runtime_adapter_for_custom_age
 
     source_envelope = SimpleNamespace(
         domain_pack_id="gene",
-        objects=[SimpleNamespace()],
+        extracted_objects=[SimpleNamespace()],
     )
     observed_record = {}
 
@@ -2443,7 +2446,7 @@ async def test_chat_domain_envelope_dispatch_uses_runtime_adapter_for_custom_age
         model_dump=lambda mode="json": {
             "envelope_id": "chat-runtime",
             "domain_pack_id": "gene",
-            "objects": [{"object_type": "gene_mention_evidence", "payload": {}}],
+            "extracted_objects": [{"object_type": "gene_mention_evidence", "payload": {}}],
             "validation_findings": [],
             "metadata": {},
         },
@@ -2530,9 +2533,12 @@ async def test_chat_domain_envelope_dispatch_uses_real_gene_binding(
     assert request.selected_inputs["data_provider_hint"] == "FB"
     assert request.selected_inputs["taxon_hint"] == "NCBITaxon:7227"
     assert request.selected_inputs["evidence_quote"].startswith("Crumbs protein")
-    assert payload["objects"][0]["payload"]["primary_external_id"] == "FB:FBgn0259685"
-    assert payload["objects"][0]["payload"]["gene_symbol"] == "crb"
-    assert payload["objects"][0]["payload"]["taxon"] == "NCBITaxon:7227"
+    assert (
+        payload["extracted_objects"][0]["payload"]["primary_external_id"]
+        == "FB:FBgn0259685"
+    )
+    assert payload["extracted_objects"][0]["payload"]["gene_symbol"] == "crb"
+    assert payload["extracted_objects"][0]["payload"]["taxon"] == "NCBITaxon:7227"
     assert payload["validation_findings"]
     assert emitted[0]["details"]["toolArgs"]["domain_pack_id"] == "gene"
     lookup_events = [

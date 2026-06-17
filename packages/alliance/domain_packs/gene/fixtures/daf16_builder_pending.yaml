@@ -17,7 +17,7 @@ fixtures:
         name: Gene
         version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
         uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/gene.yaml
-      objects:
+      extracted_objects:
         - object_type: gene_mention_evidence
           object_role: validated_reference
           pending_ref_id: gene-mention-evidence-1
@@ -88,7 +88,7 @@ fixtures:
             pending_ref_id: gene-mention-evidence-1
             object_type: gene_mention_evidence
       metadata:
-        semantic_source: domain_envelope.objects
+        semantic_source: domain_envelope.extracted_objects
         legacy_semantic_lists: []
         extraction_summary: Retained one daf-16 gene mention with verified source evidence.
         extraction_metadata:

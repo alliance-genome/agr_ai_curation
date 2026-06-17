@@ -143,7 +143,7 @@ def build_phenotype_annotation_export_payload(
             "schema_version": PHENOTYPE_EXPORT_SCHEMA_VERSION,
             "payload_type": "alliance_phenotype_annotation_export",
             "payload_status": payload_status,
-            "semantic_source": "domain_envelope.objects",
+            "semantic_source": "domain_envelope.extracted_objects",
             "grounding": {
                 "linkml": {
                     "commit": ALLIANCE_LINKML_COMMIT,

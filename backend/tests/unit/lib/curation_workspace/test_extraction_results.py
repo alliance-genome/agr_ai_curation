@@ -89,7 +89,7 @@ def _sample_persisted_domain_envelope_payload() -> dict:
         "domain_pack_id": "gene",
         "domain_pack_version": "0.1.0",
         "status": "extracted",
-        "objects": [
+        "extracted_objects": [
             {
                 "object_type": "gene_mention_evidence",
                 "pending_ref_id": "gene-notch",
@@ -623,7 +623,7 @@ def test_build_extraction_envelope_candidate_accepts_persisted_domain_envelope_s
     assert candidate.adapter_key == "gene"
     assert candidate.candidate_count == 1
     assert candidate.payload_json["envelope_id"] == "envelope-gene-notch"
-    assert candidate.payload_json["objects"][0]["payload"]["primary_external_id"] == (
+    assert candidate.payload_json["extracted_objects"][0]["payload"]["primary_external_id"] == (
         "FB:FBgn0004647"
     )
 

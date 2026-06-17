@@ -216,7 +216,7 @@ def _validator_envelope() -> DomainEnvelope:
     return DomainEnvelope(
         envelope_id="validator-env",
         domain_pack_id="fixture.validator",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="AlleleMention",
                 object_id="allele-mention-1",
@@ -308,7 +308,7 @@ def test_metadata_materializer_regenerates_review_rows_from_envelope_objects():
         domain_pack_id="fixture.pack",
         domain_pack_version="0.1.0",
         status=DomainEnvelopeStatus.EXTRACTED,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneAssertion",
                 object_id="gene-1",
@@ -372,7 +372,7 @@ def test_metadata_materializer_regenerates_review_rows_from_envelope_objects():
             "object_type": "GeneAssertion",
         }
     ]
-    assert row.metadata["semantic_source"] == "domain_envelope.objects"
+    assert row.metadata["semantic_source"] == "domain_envelope.extracted_objects"
     assert row.metadata["payload_path"] == "objects[0].payload"
     assert row.metadata["evidence_record_ids"] == []
     assert row.metadata["metadata_refs"] == []
@@ -460,7 +460,7 @@ def test_workspace_display_group_requires_explicit_label():
     envelope = DomainEnvelope(
         envelope_id="env-review-1",
         domain_pack_id="fixture.pack",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneAssertion",
                 pending_ref_id="object-1",
@@ -508,7 +508,7 @@ def test_workspace_display_group_requires_object_entry():
     envelope = DomainEnvelope(
         envelope_id="env-review-1",
         domain_pack_id="fixture.pack",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneAssertion",
                 pending_ref_id="object-1",
@@ -556,7 +556,7 @@ def test_workspace_field_without_definition_and_missing_value_uses_any_field_typ
     envelope = DomainEnvelope(
         envelope_id="env-review-1",
         domain_pack_id="fixture.pack",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneAssertion",
                 pending_ref_id="object-1",
@@ -609,7 +609,7 @@ def test_validator_result_materialization_creates_reference_object_and_finding()
         "canonical_id": "DEMO:Allele0001817",
         "source_envelope_revision": 7,
     }
-    assert result.envelope.objects[0].object_refs == [reference.to_object_ref()]
+    assert result.envelope.extracted_objects[0].object_refs == [reference.to_object_ref()]
 
     finding = result.appended_findings[0]
     assert finding.status is ValidationFindingStatus.RESOLVED
@@ -648,7 +648,7 @@ def test_validator_result_materialization_compacts_finding_audit_payloads():
     huge_quote = "crb 11A22 supporting evidence. " * 4000
     envelope = _validator_envelope().model_copy(
         update={
-            "objects": [
+            "extracted_objects": [
                 CuratableObjectEnvelope(
                     object_type="AlleleMention",
                     object_id="allele-mention-1",
@@ -762,7 +762,7 @@ def test_validator_result_materialization_patches_target_payload_from_resolved_v
     envelope = DomainEnvelope(
         envelope_id="target-patch-env",
         domain_pack_id="fixture.target_patch",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneMention",
                 pending_ref_id="gene-mention-1",
@@ -793,7 +793,7 @@ def test_validator_result_materialization_patches_target_payload_from_resolved_v
     result = materialize_validator_results_into_envelope(envelope, metadata, [item])
 
     assert result.materialized_objects == ()
-    patched = result.envelope.objects[0]
+    patched = result.envelope.extracted_objects[0]
     assert patched.status is CuratableObjectStatus.VALIDATED
     assert patched.payload == {
         "mention": "crumbs",
@@ -883,7 +883,7 @@ def test_validator_result_materialization_projects_expected_result_fields_to_tar
     envelope = DomainEnvelope(
         envelope_id="target-patch-env",
         domain_pack_id="fixture.target_patch",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneMention",
                 pending_ref_id="gene-mention-1",
@@ -1007,7 +1007,7 @@ def test_validator_result_materialization_warns_for_unmapped_expected_result_fie
     envelope = DomainEnvelope(
         envelope_id="target-patch-env",
         domain_pack_id="fixture.target_patch",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneMention",
                 pending_ref_id="gene-mention-1",
@@ -1029,7 +1029,7 @@ def test_validator_result_materialization_warns_for_unmapped_expected_result_fie
 
     result = materialize_validator_results_into_envelope(envelope, metadata, [item])
 
-    assert result.envelope.objects[0].payload == {
+    assert result.envelope.extracted_objects[0].payload == {
         "mention": "crumbs",
         "primary_external_id": "FB:FBgn0259685",
         "gene_symbol": "crb",
@@ -1136,7 +1136,7 @@ def test_validator_result_materialization_propagates_materializes_to_field_paths
     envelope = DomainEnvelope(
         envelope_id="mirror-patch-env",
         domain_pack_id="fixture.mirror_patch",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="Annotation",
                 pending_ref_id="annotation-1",
@@ -1170,7 +1170,7 @@ def test_validator_result_materialization_propagates_materializes_to_field_paths
 
     result = materialize_validator_results_into_envelope(envelope, metadata, [item])
 
-    patched = result.envelope.objects[0]
+    patched = result.envelope.extracted_objects[0]
     assert patched.payload["subject"]["primary_external_id"] == "WB:WBGene00003969"
     assert patched.payload["subject"]["gene_symbol"] == "pef-1"
     # The declared materializes_to mirrors must receive the same resolved values so the
@@ -1261,7 +1261,7 @@ def test_validator_result_materialization_merges_multiple_target_payload_patches
     envelope = DomainEnvelope(
         envelope_id="target-patch-env",
         domain_pack_id="fixture.target_patch",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneMention",
                 pending_ref_id="gene-mention-1",
@@ -1289,14 +1289,14 @@ def test_validator_result_materialization_merges_multiple_target_payload_patches
         [first_item, second_item],
     )
 
-    assert result.envelope.objects[0].payload == {
+    assert result.envelope.extracted_objects[0].payload == {
         "mention": "crumbs",
         "primary_external_id": "FB:FBgn0259685",
         "gene_symbol": "crb",
         "taxon": "NCBITaxon:7227",
     }
     assert len(
-        result.envelope.objects[0].metadata["validator_resolved_value_materialization"]
+        result.envelope.extracted_objects[0].metadata["validator_resolved_value_materialization"]
     ) == 2
 
 
@@ -1322,7 +1322,7 @@ def test_validator_result_materialization_is_deterministic_for_existing_referenc
     assert second_result.materialized_objects == ()
     assert [
         domain_object.object_id
-        for domain_object in second_result.envelope.objects
+        for domain_object in second_result.envelope.extracted_objects
         if domain_object.object_type == "Allele"
     ] == [first_reference.object_id]
     assert second_result.appended_findings == ()
@@ -1432,7 +1432,7 @@ def test_invalid_resolved_object_materializes_open_finding_without_reference():
     result = materialize_validator_results_into_envelope(envelope, metadata, [item])
 
     assert result.materialized_objects == ()
-    assert len(result.envelope.objects) == 1
+    assert len(result.envelope.extracted_objects) == 1
     finding = result.appended_findings[0]
     assert finding.status is ValidationFindingStatus.OPEN
     assert finding.code == "domain_pack.validator_materialization_invalid"

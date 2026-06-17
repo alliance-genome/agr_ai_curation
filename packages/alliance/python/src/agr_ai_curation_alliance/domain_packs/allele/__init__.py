@@ -106,7 +106,7 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
     paper = _required_mapping(fixture.get("paper"), "paper")
     case_lookup = _tool_cases_by_id(fixture)
 
-    objects: list[CuratableObjectEnvelope] = []
+    extracted_objects: list[CuratableObjectEnvelope] = []
     validation_findings: list[ValidationFinding] = []
 
     reference_ref_id = "paper-reference-1"
@@ -125,7 +125,7 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
             "validation_state": "pending_reference_resolution",
         },
     )
-    objects.append(reference_object)
+    extracted_objects.append(reference_object)
 
     retained_count = 0
     skipped_without_evidence = 0
@@ -214,8 +214,8 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
             evidence_record_ids=evidence_record_ids,
             metadata={"object_role": "metadata_only"},
         )
-        objects.append(mention_object)
-        objects.extend(evidence_objects)
+        extracted_objects.append(mention_object)
+        extracted_objects.extend(evidence_objects)
 
         association_refs = [
             ObjectRef(pending_ref_id=reference_ref_id, object_type="Reference"),
@@ -267,7 +267,7 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
                 },
             },
         )
-        objects.append(association_object)
+        extracted_objects.append(association_object)
         validation_findings.append(
             ValidationFinding(
                 severity=ValidationFindingSeverity.BLOCKER,
@@ -326,7 +326,7 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
             version=ALLELE_DOMAIN_PACK_VERSION,
             definition_state=DefinitionState.IN_DEVELOPMENT,
         ),
-        objects=objects,
+        extracted_objects=extracted_objects,
         validation_findings=validation_findings,
         history=[
             HistoryEvent(
@@ -384,7 +384,7 @@ def validate_pending_allele_envelope(
 
     associations = [
         obj
-        for obj in envelope.objects
+        for obj in envelope.extracted_objects
         if obj.object_type == "AllelePaperEvidenceAssociation"
     ]
     if not associations:

@@ -561,7 +561,7 @@ def _looks_like_curation_shaped_payload(payload: Any) -> bool:
     if isinstance(payload.get("curatable_objects"), list):
         return True
     return isinstance(payload.get("domain_pack_id"), str) and isinstance(
-        payload.get("objects"),
+        payload.get("extracted_objects"),
         list,
     )
 
@@ -1715,7 +1715,7 @@ async def _run_agent_with_tracing(
                     "keys": sorted(structured_result.keys()),
                     "object_count": len(
                         structured_result.get("curatable_objects")
-                        or structured_result.get("objects")
+                        or structured_result.get("extracted_objects")
                         or []
                     ),
                 },

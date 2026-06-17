@@ -540,12 +540,12 @@ def test_phenotype_domain_pack_loads_tool_verified_pending_fixture():
     envelope = fixture_pack.fixtures[0].envelope
 
     assert validate_pending_phenotype_envelope(envelope) == ()
-    assert envelope.metadata["semantic_source"] == "domain_envelope.objects"
+    assert envelope.metadata["semantic_source"] == "domain_envelope.extracted_objects"
     assert LEGACY_SEMANTIC_LIST_FIELDS.isdisjoint(envelope.metadata)
     assert envelope.metadata["raw_mentions"][0]["mention"] == "reduced brood size"
     assert envelope.metadata["exclusions"][0]["reason_code"] == "previously_reported"
     assert envelope.metadata["ambiguities"][0]["mention"] == "daf-2(e1370)"
-    annotation = next(obj for obj in envelope.objects if obj.object_type == PHENOTYPE_OBJECT_TYPE)
+    annotation = next(obj for obj in envelope.extracted_objects if obj.object_type == PHENOTYPE_OBJECT_TYPE)
     assert annotation.object_role == "curatable_unit"
     assert annotation.payload["phenotype_terms"][0]["curie"] == "WBPhenotype:0000886"
     assert annotation.metadata["write_behavior"]["status"] == "blocked"

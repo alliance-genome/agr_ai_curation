@@ -540,7 +540,7 @@ def _prepared_candidate_input_from_review_row(
             "review_row.metadata.unavailable_validator_capabilities must be a list"
         )
     metadata = {
-        "semantic_source": "domain_envelope.objects",
+        "semantic_source": "domain_envelope.extracted_objects",
         "projection_type": review_row.projection_type,
         "projection_key": review_row.projection_key,
         "domain_pack_id": review_row.domain_pack_id,
@@ -591,7 +591,7 @@ def _prepared_candidate_input_from_review_row(
         draft_title=review_row.display_label,
         draft_summary=review_row.secondary_label,
         draft_metadata={
-            "semantic_source": "domain_envelope.objects",
+            "semantic_source": "domain_envelope.extracted_objects",
             "prep_run_metadata": prep_output.run_metadata.model_dump(mode="json"),
             "projection_ref": {
                 "envelope_id": review_row.envelope_id,
@@ -660,7 +660,7 @@ def _prepared_draft_field_from_review_row_field(
     order: int,
 ) -> PreparedDraftFieldInput:
     metadata = {
-        "semantic_source": "domain_envelope.objects",
+        "semantic_source": "domain_envelope.extracted_objects",
         "source_field_path": field.field_path,
         "projection_type": review_row.projection_type,
         "projection_key": review_row.projection_key,

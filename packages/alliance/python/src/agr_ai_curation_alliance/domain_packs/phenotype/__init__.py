@@ -110,7 +110,7 @@ def build_pending_phenotype_envelope_from_tool_verified_fixture(
             "validator_binding_id": "phenotype_reference_validator",
         },
     )
-    objects: list[CuratableObjectEnvelope] = [reference_object]
+    extracted_objects: list[CuratableObjectEnvelope] = [reference_object]
     validation_findings: list[ValidationFinding] = []
     evidence_records_by_id: dict[str, Mapping[str, Any]] = {}
 
@@ -150,7 +150,7 @@ def build_pending_phenotype_envelope_from_tool_verified_fixture(
         evidence_record_ids: list[str] = []
         evidence_payload_refs: list[dict[str, str]] = []
 
-        objects.append(
+        extracted_objects.append(
             CuratableObjectEnvelope(
                 object_type=PHENOTYPE_SUBJECT_OBJECT_TYPE,
                 pending_ref_id=subject_ref_id,
@@ -168,7 +168,7 @@ def build_pending_phenotype_envelope_from_tool_verified_fixture(
                 },
             )
         )
-        objects.append(
+        extracted_objects.append(
             CuratableObjectEnvelope(
                 object_type=PHENOTYPE_TERM_OBJECT_TYPE,
                 pending_ref_id=phenotype_term_ref_id,
@@ -207,7 +207,7 @@ def build_pending_phenotype_envelope_from_tool_verified_fixture(
                 ObjectRef(pending_ref_id=evidence_ref_id, object_type="EvidenceQuote")
             )
             evidence_payload_refs.append({"evidence_record_id": evidence_record_id})
-            objects.append(
+            extracted_objects.append(
                 CuratableObjectEnvelope(
                     object_type="EvidenceQuote",
                     pending_ref_id=evidence_ref_id,
@@ -274,7 +274,7 @@ def build_pending_phenotype_envelope_from_tool_verified_fixture(
                 "write_behavior": _blocked_write_behavior(),
             },
         )
-        objects.append(annotation_object)
+        extracted_objects.append(annotation_object)
         validation_findings.extend(
             _blocker_findings_for_annotation(
                 annotation_ref=annotation_ref,
@@ -312,7 +312,7 @@ def build_pending_phenotype_envelope_from_tool_verified_fixture(
             version=PHENOTYPE_DOMAIN_PACK_VERSION,
             definition_state=DefinitionState.IN_DEVELOPMENT,
         ),
-        objects=objects,
+        extracted_objects=extracted_objects,
         validation_findings=validation_findings,
         history=[
             HistoryEvent(
@@ -333,7 +333,7 @@ def build_pending_phenotype_envelope_from_tool_verified_fixture(
                 fixture.get("fixture_id"),
                 "fixture_id",
             ),
-            "semantic_source": "domain_envelope.objects",
+            "semantic_source": "domain_envelope.extracted_objects",
             "export_behavior": {"status": "blocked"},
             "write_behavior": {"status": "blocked"},
             "evidence_records": [
@@ -377,7 +377,7 @@ def validate_pending_phenotype_envelope(
         )
 
     annotations = [
-        obj for obj in envelope.objects if obj.object_type == PHENOTYPE_OBJECT_TYPE
+        obj for obj in envelope.extracted_objects if obj.object_type == PHENOTYPE_OBJECT_TYPE
     ]
     if not annotations:
         findings.append(
@@ -498,7 +498,7 @@ def validate_pending_phenotype_envelope(
             )
 
     phenotype_terms = [
-        obj for obj in envelope.objects if obj.object_type == PHENOTYPE_TERM_OBJECT_TYPE
+        obj for obj in envelope.extracted_objects if obj.object_type == PHENOTYPE_TERM_OBJECT_TYPE
     ]
     for phenotype_term in phenotype_terms:
         term_ref = ObjectRef(

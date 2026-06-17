@@ -36,7 +36,9 @@ _EXTRACTION_TOOL_NAME_PATTERN = re.compile(
 _ENVELOPE_EXTRACTION_KEYS = frozenset(
     {"curatable_objects", "items", "raw_mentions", "exclusions", "ambiguities"}
 )
-_DOMAIN_ENVELOPE_KEYS = frozenset({"envelope_id", "domain_pack_id", "objects"})
+_DOMAIN_ENVELOPE_KEYS = frozenset(
+    {"envelope_id", "domain_pack_id", "extracted_objects"}
+)
 _NUL_CHARACTER = "\x00"
 _ZFIN_TAXON_CURIE = "NCBITaxon:7955"
 _PHENOTYPE_ADAPTER_KEY = "phenotype"
@@ -115,8 +117,12 @@ def build_extraction_envelope_candidate(
 
     envelope_metadata = dict(metadata or {})
     if _is_domain_envelope_payload(payload):
-        objects = payload.get("objects", []) if isinstance(payload, dict) else []
-        candidate_count = len(objects) if isinstance(objects, list) else 0
+        extracted_objects = (
+            payload.get("extracted_objects", []) if isinstance(payload, dict) else []
+        )
+        candidate_count = (
+            len(extracted_objects) if isinstance(extracted_objects, list) else 0
+        )
     else:
         run_summary = payload.get("run_summary", {}) if isinstance(payload, dict) else {}
         candidate_count_raw = run_summary.get("candidate_count", 0)
@@ -615,15 +621,15 @@ def persist_inline_validated_extraction_result(
 ) -> InlineExtractionPersistenceResult:
     """Persist a validated canonical domain envelope and return its stable ref.
 
-    This helper is intentionally stricter than the legacy candidate builder:
-    builder-backed chat extractions must persist canonical ``objects`` envelopes
+    This helper is intentionally stricter than the candidate builder:
+    builder-backed chat extractions must persist canonical ``extracted_objects`` envelopes
     only, never old row sources or prose-derived artifacts.
     """
 
     if not _is_strict_canonical_domain_envelope_payload(payload_json):
         raise ValueError(
             "Inline extraction persistence requires a strict canonical domain envelope "
-            "with envelope_id, domain_pack_id, and objects."
+            "with envelope_id, domain_pack_id, and extracted_objects."
         )
 
     canonical_payload = _sanitize_persisted_json_value(dict(payload_json))
@@ -640,7 +646,7 @@ def persist_inline_validated_extraction_result(
         builder_invocation_id=builder_summary.get("builder_invocation_id"),
         canonical_payload_hash=payload_hash,
     )
-    candidate_count = len(canonical_payload.get("objects", []))
+    candidate_count = len(canonical_payload.get("extracted_objects", []))
 
     owns_session = db is None
     session = db or SessionLocal()
@@ -867,7 +873,7 @@ def _is_domain_envelope_payload(payload: Any) -> bool:
         return False
     if not _DOMAIN_ENVELOPE_KEYS.issubset(payload):
         return False
-    return isinstance(payload.get("objects"), list)
+    return isinstance(payload.get("extracted_objects"), list)
 
 
 def _is_strict_canonical_domain_envelope_payload(payload: Any) -> bool:

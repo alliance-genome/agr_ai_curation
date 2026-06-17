@@ -217,7 +217,7 @@ def get_domain_envelope_state(
 
         return {
             "success": True,
-            "semantic_source": "domain_envelope.objects",
+            "semantic_source": "domain_envelope.extracted_objects",
             "envelope": _envelope_row_summary(row),
             "objects": [
                 _object_row_payload(
@@ -285,7 +285,7 @@ def get_domain_envelope_review_rows(
         ]
         return {
             "success": True,
-            "semantic_source": "domain_envelope.objects",
+            "semantic_source": "domain_envelope.extracted_objects",
             "envelope_id": response.envelope_id,
             "envelope_revision": response.envelope_revision,
             "row_count": len(rows),
@@ -578,7 +578,7 @@ def current_flow_domain_envelope_analysis(
         )
 
     return {
-        "semantic_source": "domain_envelope.objects",
+        "semantic_source": "domain_envelope.extracted_objects",
         "envelope_node_count": len(analyses),
         "nodes": analyses,
     }
@@ -1099,7 +1099,7 @@ def _stable_object_id(domain_object: CuratableObjectEnvelope) -> str:
 
 def _object_id_by_ref(envelope: DomainEnvelope) -> dict[tuple[str, str], str]:
     object_id_by_ref: dict[tuple[str, str], str] = {}
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         stable_object_id = _stable_object_id(domain_object)
         if domain_object.object_id is not None:
             object_id_by_ref[("object_id", domain_object.object_id)] = stable_object_id

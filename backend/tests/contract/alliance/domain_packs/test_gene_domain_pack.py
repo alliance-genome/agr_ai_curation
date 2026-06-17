@@ -190,7 +190,7 @@ def test_gene_validator_resolution_projects_materialized_fields():
     envelope = DomainEnvelope(
         envelope_id="gene-validation-projection-fixture",
         domain_pack_id=GENE_DOMAIN_PACK_ID,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type=GENE_MENTION_EVIDENCE_OBJECT_TYPE,
                 pending_ref_id="gene-mention-evidence-1",
@@ -267,11 +267,11 @@ def test_gene_validator_resolution_projects_materialized_fields():
     )
 
     assert result.materialized_objects == ()
-    assert result.envelope.objects[0].payload["primary_external_id"] == (
+    assert result.envelope.extracted_objects[0].payload["primary_external_id"] == (
         "WB:WBGene00000912"
     )
-    assert result.envelope.objects[0].payload["gene_symbol"] == "daf-16"
-    assert result.envelope.objects[0].payload["taxon"] == "NCBITaxon:6239"
+    assert result.envelope.extracted_objects[0].payload["gene_symbol"] == "daf-16"
+    assert result.envelope.extracted_objects[0].payload["taxon"] == "NCBITaxon:6239"
     summaries = project_validation_summary_projections(
         result.envelope,
         envelope_revision=1,
@@ -318,12 +318,12 @@ def test_gene_builder_golden_fixture_loads_with_relative_refs():
     fixture_pack = load_domain_fixture_pack(BUILDER_FIXTURE_PATH)
     envelope = fixture_pack.fixtures[0].envelope
     assert envelope.domain_pack_id == GENE_DOMAIN_PACK_ID
-    assert envelope.objects[0].object_type == GENE_MENTION_EVIDENCE_OBJECT_TYPE
-    assert envelope.objects[0].pending_ref_id == "gene-mention-evidence-1"
+    assert envelope.extracted_objects[0].object_type == GENE_MENTION_EVIDENCE_OBJECT_TYPE
+    assert envelope.extracted_objects[0].pending_ref_id == "gene-mention-evidence-1"
 
     extraction_metadata = envelope.metadata.get("extraction_metadata")
     assert isinstance(extraction_metadata, Mapping)
-    for obj in envelope.objects:
+    for obj in envelope.extracted_objects:
         for ref in obj.metadata_refs:
             assert not ref.metadata_path.startswith("extraction_metadata")
             assert field_path_exists(extraction_metadata, ref.metadata_path)

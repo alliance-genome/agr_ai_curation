@@ -66,7 +66,7 @@ function reviewRow(objectId: string, objectType: string): DomainEnvelopeReviewRo
     object_model_ref: {},
     model_field_ref: {},
     metadata: {
-      semantic_source: 'domain_envelope.objects',
+      semantic_source: 'domain_envelope.extracted_objects',
     },
   }
 }
@@ -113,7 +113,7 @@ describe('workspace envelope object review rows', () => {
       'Chemical',
       'Phenotype',
     ])
-    expect(rows.every((row) => row.reviewRow?.metadata.semantic_source === 'domain_envelope.objects')).toBe(true)
+    expect(rows.every((row) => row.reviewRow?.metadata.semantic_source === 'domain_envelope.extracted_objects')).toBe(true)
   })
 
   it('keeps missing review rows explicit instead of reading candidate draft semantics', () => {

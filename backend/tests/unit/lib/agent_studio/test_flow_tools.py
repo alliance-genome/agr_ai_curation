@@ -600,7 +600,7 @@ def test_get_current_flow_handler_includes_domain_envelope_analysis(monkeypatch)
         flow_tools,
         "current_flow_domain_envelope_analysis",
         lambda **_kwargs: {
-            "semantic_source": "domain_envelope.objects",
+            "semantic_source": "domain_envelope.extracted_objects",
             "envelope_node_count": 1,
             "nodes": [
                 {
@@ -686,7 +686,7 @@ def test_get_current_flow_handler_includes_domain_envelope_analysis(monkeypatch)
     result = handler()
 
     assert result["success"] is True
-    assert result["domain_envelope_analysis"]["semantic_source"] == "domain_envelope.objects"
+    assert result["domain_envelope_analysis"]["semantic_source"] == "domain_envelope.extracted_objects"
     assert result["domain_envelope_analysis"]["envelope_node_count"] == 1
     assert (
         result["domain_envelope_analysis"]["nodes"][0]["validation_schedule"][

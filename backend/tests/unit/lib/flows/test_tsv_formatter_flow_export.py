@@ -16,7 +16,7 @@ def _completed_artifact_step():
     payload = {
         "domain_pack_id": "gene",
         "envelope_id": "env-gene-1",
-        "objects": [
+        "extracted_objects": [
             {"object_type": "Gene", "payload": {"symbol": "TP53"}},
             {"object_type": "Gene", "payload": {"symbol": "BRCA1"}},
         ],

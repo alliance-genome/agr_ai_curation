@@ -249,7 +249,7 @@ def _create_session_with_envelope_projection(db_session) -> tuple[CurationReview
         envelope_id="env-1",
         domain_pack_id="fixture.curator_patch",
         status=DomainEnvelopeStatus.EXTRACTED,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneAssertion",
                 object_id="gene-1",
@@ -444,7 +444,7 @@ def test_patch_envelope_field_refreshes_projection_without_legacy_payload(
 
     envelope_row = db_session.get(DomainEnvelopeModel, "env-1")
     assert envelope_row.revision == 2
-    assert envelope_row.envelope_json["objects"][0]["payload"]["gene"]["symbol"] == "abc-2"
+    assert envelope_row.envelope_json["extracted_objects"][0]["payload"]["gene"]["symbol"] == "abc-2"
 
     updated_candidate = db_session.get(CurationCandidate, candidate.id)
     assert updated_candidate.envelope_revision == 2
@@ -496,9 +496,9 @@ def test_update_candidate_draft_materializes_envelope_backed_payload(
 
     envelope_row = db_session.get(DomainEnvelopeModel, "env-1")
     assert envelope_row.revision == 2
-    assert envelope_row.envelope_json["objects"][0]["payload"]["gene"]["symbol"] == "abc-3"
+    assert envelope_row.envelope_json["extracted_objects"][0]["payload"]["gene"]["symbol"] == "abc-3"
     assert (
-        envelope_row.envelope_json["objects"][0]["payload"]["experiment"][
+        envelope_row.envelope_json["extracted_objects"][0]["payload"]["experiment"][
             "entity_assayed"
         ]["symbol"]
         == "abc-3"
@@ -541,7 +541,7 @@ def test_update_candidate_draft_coerces_integer_and_materializes_projection(
     assert response.draft.fields[2].seed_value == 202
 
     envelope_row = db_session.get(DomainEnvelopeModel, "env-1")
-    payload = envelope_row.envelope_json["objects"][0]["payload"]
+    payload = envelope_row.envelope_json["extracted_objects"][0]["payload"]
     assert payload["reference"]["reference_id"] == 202
     assert payload["experiment"]["single_reference"]["reference_id"] == 202
 
@@ -646,7 +646,7 @@ def test_patch_envelope_field_rejects_before_mismatch_and_records_history(
     assert exc.value.status_code == 409
     envelope_row = db_session.get(DomainEnvelopeModel, "env-1")
     assert envelope_row.revision == 2
-    assert envelope_row.envelope_json["objects"][0]["payload"]["gene"]["symbol"] == "abc-1"
+    assert envelope_row.envelope_json["extracted_objects"][0]["payload"]["gene"]["symbol"] == "abc-1"
     history_events = db_session.scalars(select(DomainEnvelopeHistory)).all()
     assert [event.event_type for event in history_events] == [
         HistoryEventKind.CURATOR_FIELD_PATCH_REJECTED

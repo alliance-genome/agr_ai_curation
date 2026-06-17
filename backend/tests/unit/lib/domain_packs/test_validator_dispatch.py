@@ -275,7 +275,7 @@ def _envelope(
     return DomainEnvelope(
         envelope_id="dispatch-env",
         domain_pack_id="fixture.dispatch",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneAssertion",
                 pending_ref_id="object-1",
@@ -325,7 +325,7 @@ def _multi_object_envelope(
     return DomainEnvelope(
         envelope_id="dispatch-env",
         domain_pack_id="fixture.dispatch",
-        objects=objects,
+        extracted_objects=objects,
     )
 
 
@@ -334,7 +334,7 @@ def _gene_expression_envelope() -> DomainEnvelope:
         envelope_id="gene-expression-env",
         domain_pack_id="agr.alliance.gene_expression",
         metadata={"document_id": "paper-tmem67"},
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneExpressionAnnotation",
                 pending_ref_id="gene-expression-1",
@@ -369,7 +369,7 @@ def _gene_mentions_envelope(mentions: list[str]) -> DomainEnvelope:
     return DomainEnvelope(
         envelope_id="gene-env",
         domain_pack_id="gene",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="gene_mention_evidence",
                 pending_ref_id=f"gene-mention-{index}",
@@ -750,7 +750,7 @@ def test_apply_validator_evidence_updates_replaces_matching_envelope_records():
         cast(Any, [SimpleNamespace(request=request)]),
     )
 
-    evidence_record = updated.objects[0].payload["evidence_records"][0]
+    evidence_record = updated.extracted_objects[0].payload["evidence_records"][0]
     assert evidence_record["verified_quote"] == "Updated quote."
     assert evidence_record["chunk_id"] == "chunk-2"
     assert evidence_record["evidence_revision_history"][0]["previous_source"] == {
@@ -839,7 +839,7 @@ def test_dispatch_active_binding_sends_typed_request_and_appends_resolved_result
     assert finding.details["validation_result"]["resolved_objects"][0]["object_type"] == "Gene"
     materialized_gene = next(
         domain_object
-        for domain_object in result.envelope.objects
+        for domain_object in result.envelope.extracted_objects
         if domain_object.object_type == "Gene"
     )
     assert materialized_gene.status.value == "validated"
@@ -847,7 +847,7 @@ def test_dispatch_active_binding_sends_typed_request_and_appends_resolved_result
         "identifier": "AGR:0001",
         "symbol": "ABC-1",
     }
-    assert result.envelope.objects[0].object_refs == [
+    assert result.envelope.extracted_objects[0].object_refs == [
         materialized_gene.to_object_ref()
     ]
     assert result.validator_results[0].status == "resolved"
@@ -895,7 +895,7 @@ def test_dispatch_skips_active_binding_without_inputs_or_expected_results(
     envelope = DomainEnvelope(
         envelope_id="empty-dispatch-env",
         domain_pack_id="fixture.empty_dispatch",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="Thing",
                 pending_ref_id="thing-1",
@@ -979,12 +979,12 @@ def test_dispatch_deduplicates_equivalent_identity_requests_before_validation(
     ]
     materialized_gene = next(
         domain_object
-        for domain_object in result.envelope.objects
+        for domain_object in result.envelope.extracted_objects
         if domain_object.object_type == "Gene"
     )
     assert all(
         materialized_gene.to_object_ref() in domain_object.object_refs
-        for domain_object in result.envelope.objects
+        for domain_object in result.envelope.extracted_objects
         if domain_object.object_type == "GeneAssertion"
     )
 
@@ -1294,7 +1294,7 @@ def test_alliance_gene_pack_uses_singleton_gene_validation_with_handoff_context(
         "unresolved",
     ]
     assert result.validator_results[0].lookup_attempts[0].method == "search_genes"
-    assert [item.payload.get("gene_symbol") for item in result.envelope.objects] == [
+    assert [item.payload.get("gene_symbol") for item in result.envelope.extracted_objects] == [
         "crb",
         "crb",
         "ninaE",
@@ -1450,7 +1450,7 @@ def test_alliance_gene_expression_materializes_subject_gene_and_reference_fields
         "source_reference_validation",
         "subject_gene_validation",
     }
-    annotation = result.envelope.objects[0]
+    annotation = result.envelope.extracted_objects[0]
     assert annotation.payload["expression_annotation_subject"] == {
         "primary_external_id": "MGI:1923928",
         "gene_symbol": "Tmem67",
@@ -1625,7 +1625,7 @@ def test_alliance_gene_expression_unresolved_gene_and_reference_remain_visible()
         max_parallel_validators=1,
     )
 
-    annotation = result.envelope.objects[0]
+    annotation = result.envelope.extracted_objects[0]
     assert annotation.payload["expression_annotation_subject"] == {
         "primary_external_id": "Tmem67",
         "gene_symbol": "Tmem67",
@@ -1818,7 +1818,7 @@ def test_dispatch_rejects_identity_mismatch_without_materializing(tmp_path: Path
     assert "different request" in result.validator_results[0].explanation
     assert not any(
         domain_object.object_type == "Gene"
-        for domain_object in result.envelope.objects
+        for domain_object in result.envelope.extracted_objects
     )
 
 
@@ -1867,7 +1867,7 @@ def test_resolved_validator_without_lookup_evidence_becomes_invalid_schema_resul
     assert "successful lookup_attempt" in result.validator_results[0].explanation
     assert not any(
         domain_object.object_type == "Gene"
-        for domain_object in result.envelope.objects
+        for domain_object in result.envelope.extracted_objects
     )
 
 
@@ -3120,7 +3120,7 @@ def test_dispatch_validates_and_materializes_every_multivalued_element(tmp_path:
     envelope = DomainEnvelope(
         envelope_id="multivalued-dispatch-env",
         domain_pack_id="fixture.multivalued_dispatch",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="Annotation",
                 pending_ref_id="annotation-1",
@@ -3150,7 +3150,7 @@ def test_dispatch_validates_and_materializes_every_multivalued_element(tmp_path:
     assert sorted(dispatched_curies) == ["eco:0000315", "eco:0000316"]
 
     # Both elements were written back per-element at field[0] and field[1].
-    annotation = result.envelope.objects[0]
+    annotation = result.envelope.extracted_objects[0]
     assert annotation.payload["evidence_code_curies"] == [
         "ECO:0000315",
         "ECO:0000316",

@@ -16,7 +16,7 @@ forced-tool-choice loop dynamics across the live agents cannot be unit-tested.
 import json
 from types import SimpleNamespace
 
-from agents import Agent, ModelSettings
+from agents import ModelSettings
 
 from src.lib.openai_agents import streaming_tools
 
@@ -46,7 +46,7 @@ def _runtime_agent(model_settings=None):
 
 
 def test_tool_use_behavior_returns_final_output_when_accepted():
-    payload = {"objects": [{"id": "X"}], "domain_pack_id": "pdf"}
+    payload = {"extracted_objects": [{"id": "X"}], "domain_pack_id": "pdf"}
     state = _finalization_state(accepted_payload=payload)
 
     behavior = streaming_tools._build_structured_finalization_tool_use_behavior(state)
@@ -131,7 +131,7 @@ def test_apply_layer2_callback_ends_run_on_acceptance_via_shared_state():
     assert behavior(SimpleNamespace(), []).is_final_output is False
 
     # After acceptance: end the run with the accepted canonical payload.
-    payload = {"objects": [], "domain_pack_id": "pdf"}
+    payload = {"extracted_objects": [], "domain_pack_id": "pdf"}
     state.accepted_payload = payload
     result = behavior(SimpleNamespace(), [])
     assert result.is_final_output is True

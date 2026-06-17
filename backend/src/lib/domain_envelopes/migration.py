@@ -731,7 +731,7 @@ def _session_envelope(
         domain_pack_id=options.domain_pack_id,
         domain_pack_version=options.domain_pack_version,
         status=_envelope_status_for_session(session_row),
-        objects=objects,
+        extracted_objects=objects,
         validation_findings=validation_findings,
         history=history,
         metadata={
@@ -774,7 +774,7 @@ def _extraction_result_envelope(
         domain_pack_id=options.domain_pack_id,
         domain_pack_version=options.domain_pack_version,
         status=DomainEnvelopeStatus.EXTRACTED,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type=LEGACY_EXTRACTION_OBJECT_TYPE,
                 object_id=object_id,

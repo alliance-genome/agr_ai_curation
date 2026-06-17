@@ -457,7 +457,7 @@ def test_flow_candidate_persistence_materializes_domain_envelope_records(monkeyp
             "domain_pack_id": "gene",
             "domain_pack_version": "0.1.0",
             "status": "validated",
-            "objects": [
+            "extracted_objects": [
                 {
                     "object_type": "gene_mention_evidence",
                     "object_role": "validated_reference",
@@ -486,7 +486,7 @@ def test_flow_candidate_persistence_materializes_domain_envelope_records(monkeyp
 
 
 def test_flow_candidate_persistence_normalizes_extractor_envelope_payload(monkeypatch):
-    """Flow persistence must convert curatable_objects[] to DomainEnvelope.objects[]."""
+    """Flow persistence must convert curatable_objects[] to DomainEnvelope.extracted_objects[]."""
 
     executor = _executor_module()
     persisted_requests = []
@@ -547,7 +547,7 @@ def test_flow_candidate_persistence_normalizes_extractor_envelope_payload(monkey
     )
     assert persisted_payload["domain_pack_id"] == "gene"
     assert "curatable_objects" not in persisted_payload
-    assert persisted_payload["objects"][0]["object_id"] == "gene-row-1"
+    assert persisted_payload["extracted_objects"][0]["object_id"] == "gene-row-1"
     assert persisted_requests[0].candidate_count == 1
     assert materialized == [(records[0], True)]
 
@@ -555,7 +555,7 @@ def test_flow_candidate_persistence_normalizes_extractor_envelope_payload(monkey
 def test_flow_candidate_persistence_rejects_existing_noncanonical_domain_record(
     monkeypatch,
 ):
-    """Existing flow domain records must already use DomainEnvelope.objects[]."""
+    """Existing flow domain records must already use DomainEnvelope.extracted_objects[]."""
 
     executor = _executor_module()
 
@@ -571,7 +571,7 @@ def test_flow_candidate_persistence_rejects_existing_noncanonical_domain_record(
             "summary": "Old first-pass payload.",
             "envelope_id": "env-old-mixed-1",
             "domain_pack_id": "gene",
-            "objects": [
+            "extracted_objects": [
                 {
                     "object_type": "gene_mention_evidence",
                     "payload": {"primary_external_id": "FB:stale"},
@@ -645,7 +645,7 @@ def test_flow_candidate_persistence_rejects_mixed_shape_candidate(monkeypatch):
             "domain_pack_id": "gene",
             "domain_pack_version": "0.1.0",
             "status": "extracted",
-            "objects": [
+            "extracted_objects": [
                 {
                     "object_type": "gene_mention_evidence",
                     "payload": {"primary_external_id": "FB:canonical"},
@@ -664,7 +664,7 @@ def test_flow_candidate_persistence_rejects_mixed_shape_candidate(monkeypatch):
         metadata={"tool_name": "ask_gene_extractor_specialist", "step": 1},
     )
 
-    with pytest.raises(ValueError, match="mixes DomainEnvelope.objects"):
+    with pytest.raises(ValueError, match="mixes DomainEnvelope.extracted_objects"):
         executor._persist_flow_extraction_candidates(
             candidates=[candidate],
             document_id="11111111-1111-1111-1111-111111111111",
@@ -1986,7 +1986,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                     {
                         "domain_pack_id": "generic",
                         "envelope_id": "env-generic-1",
-                        "objects": [
+                        "extracted_objects": [
                             {
                                 "object_type": "GenericFinding",
                                 "payload": {"label": "batch smoke finding"},
@@ -2226,7 +2226,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         envelope = DomainEnvelope(
             envelope_id="env-automatic",
             domain_pack_id="fixture.validation",
-            objects=[
+            extracted_objects=[
                 CuratableObjectEnvelope(
                     object_type="GeneAssertion",
                     pending_ref_id="object-1",
@@ -2257,7 +2257,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         match = ValidatorBindingMatch(
             binding=binding,
             envelope=envelope,
-            object_envelope=envelope.objects[0],
+            object_envelope=envelope.extracted_objects[0],
         )
 
         class _Registry:
@@ -2375,7 +2375,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         envelope = DomainEnvelope(
             envelope_id="env-unsupported-phenotype",
             domain_pack_id="agr.alliance.phenotype",
-            objects=[
+            extracted_objects=[
                 CuratableObjectEnvelope(
                     object_type="PhenotypeTerm",
                     pending_ref_id="phenotype-term-1",
@@ -2445,7 +2445,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         match = ValidatorBindingMatch(
             binding=binding,
             envelope=envelope,
-            object_envelope=envelope.objects[0],
+            object_envelope=envelope.extracted_objects[0],
         )
 
         class _Registry:
@@ -2525,7 +2525,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         envelope = DomainEnvelope(
             envelope_id="env-non-dispatch",
             domain_pack_id="fixture.validation",
-            objects=[
+            extracted_objects=[
                 CuratableObjectEnvelope(
                     object_type="GeneAssertion",
                     pending_ref_id="object-1",
@@ -2549,7 +2549,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         match = ValidatorBindingMatch(
             binding=binding,
             envelope=envelope,
-            object_envelope=envelope.objects[0],
+            object_envelope=envelope.extracted_objects[0],
         )
 
         class _Registry:
@@ -2617,7 +2617,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         envelope = DomainEnvelope(
             envelope_id="env-already-validated",
             domain_pack_id="fixture.validation",
-            objects=[
+            extracted_objects=[
                 CuratableObjectEnvelope(
                     object_type="GeneAssertion",
                     pending_ref_id="object-1",
@@ -2648,7 +2648,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         match = ValidatorBindingMatch(
             binding=binding,
             envelope=envelope,
-            object_envelope=envelope.objects[0],
+            object_envelope=envelope.extracted_objects[0],
         )
         envelope = envelope.model_copy(
             update={
@@ -2734,7 +2734,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         envelope = DomainEnvelope(
             envelope_id="env-already-attempted",
             domain_pack_id="fixture.validation",
-            objects=[
+            extracted_objects=[
                 CuratableObjectEnvelope(
                     object_type="GeneAssertion",
                     pending_ref_id="object-1",
@@ -2765,7 +2765,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         match = ValidatorBindingMatch(
             binding=binding,
             envelope=envelope,
-            object_envelope=envelope.objects[0],
+            object_envelope=envelope.extracted_objects[0],
         )
         envelope = envelope.model_copy(
             update={
@@ -2843,7 +2843,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         envelope = DomainEnvelope(
             envelope_id="env-supplemental",
             domain_pack_id="fixture.validation",
-            objects=[
+            extracted_objects=[
                 CuratableObjectEnvelope(
                     object_type="GeneAssertion",
                     pending_ref_id="object-1",
@@ -2874,7 +2874,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         match = ValidatorBindingMatch(
             binding=binding,
             envelope=envelope,
-            object_envelope=envelope.objects[0],
+            object_envelope=envelope.extracted_objects[0],
         )
 
         class _Registry:
@@ -3237,7 +3237,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                     {
                         "domain_pack_id": "gene",
                         "envelope_id": "env-gene-1",
-                        "objects": [
+                        "extracted_objects": [
                             {
                                 "object_type": "Gene",
                                 "payload": {"symbol": "BRCA1"},

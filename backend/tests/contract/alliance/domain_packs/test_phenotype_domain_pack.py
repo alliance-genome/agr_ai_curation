@@ -351,7 +351,7 @@ def test_phenotype_pack_declares_roles_and_validator_bindings():
 
 def test_phenotype_pack_records_grounding_and_export_blocker_policy():
     metadata = _phenotype_pack().metadata
-    assert metadata.metadata["semantic_source"] == "domain_envelope.objects"
+    assert metadata.metadata["semantic_source"] == "domain_envelope.extracted_objects"
     assert metadata.metadata["legacy_semantic_lists"] == []
 
     curation_db_grounding = metadata.metadata["curation_db_grounding"]
@@ -482,9 +482,9 @@ def test_tool_verified_phenotype_fixture_converts_to_pending_envelope():
 
     assert validate_pending_phenotype_envelope(envelope) == ()
     assert envelope.domain_pack_id == PHENOTYPE_DOMAIN_PACK_ID
-    assert {obj.status for obj in envelope.objects} == {CuratableObjectStatus.PENDING}
+    assert {obj.status for obj in envelope.extracted_objects} == {CuratableObjectStatus.PENDING}
 
-    counts = Counter(obj.object_type for obj in envelope.objects)
+    counts = Counter(obj.object_type for obj in envelope.extracted_objects)
     assert counts == {
         "Reference": 1,
         PHENOTYPE_SUBJECT_OBJECT_TYPE: 1,
@@ -494,7 +494,7 @@ def test_tool_verified_phenotype_fixture_converts_to_pending_envelope():
     }
 
     annotation = next(
-        obj for obj in envelope.objects if obj.object_type == PHENOTYPE_OBJECT_TYPE
+        obj for obj in envelope.extracted_objects if obj.object_type == PHENOTYPE_OBJECT_TYPE
     )
     assert annotation.payload["phenotype_annotation_object"] == "reduced brood size"
     assert annotation.payload["phenotype_terms"] == [
@@ -545,11 +545,11 @@ def test_tool_verified_phenotype_fixture_preserves_subject_taxon_context():
     assert validate_pending_phenotype_envelope(envelope) == ()
     subject = next(
         obj
-        for obj in envelope.objects
+        for obj in envelope.extracted_objects
         if obj.object_type == PHENOTYPE_SUBJECT_OBJECT_TYPE
     )
     annotation = next(
-        obj for obj in envelope.objects if obj.object_type == PHENOTYPE_OBJECT_TYPE
+        obj for obj in envelope.extracted_objects if obj.object_type == PHENOTYPE_OBJECT_TYPE
     )
     assert subject.payload["taxon"] == "NCBITaxon:6239"
     assert (
@@ -573,7 +573,7 @@ def test_pending_phenotype_term_without_curie_dispatches_with_context():
 
     assert validate_pending_phenotype_envelope(envelope) == ()
     phenotype_term = next(
-        obj for obj in envelope.objects if obj.object_type == PHENOTYPE_TERM_OBJECT_TYPE
+        obj for obj in envelope.extracted_objects if obj.object_type == PHENOTYPE_TERM_OBJECT_TYPE
     )
     assert phenotype_term.payload["curie"] is None
     assert phenotype_term.payload["resolution_state"] == "pending_ontology_resolution"
@@ -630,7 +630,7 @@ def test_unsupported_phenotype_provider_taxon_label_lookup_is_blocked_preflight(
     envelope = DomainEnvelope(
         envelope_id="phenotype-zfin-env",
         domain_pack_id=PHENOTYPE_DOMAIN_PACK_ID,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type=PHENOTYPE_TERM_OBJECT_TYPE,
                 object_role="validated_reference",
@@ -772,7 +772,7 @@ def test_phenotype_term_materializes_only_after_validator_resolution():
     assert unresolved_result.materialized_objects == ()
     assert all(
         obj.status is CuratableObjectStatus.PENDING
-        for obj in unresolved_result.envelope.objects
+        for obj in unresolved_result.envelope.extracted_objects
     )
     assert unresolved_result.appended_findings[0].code == (
         "domain_pack.validator_unresolved"
@@ -868,7 +868,7 @@ def test_pending_phenotype_validator_requires_explicit_blockers():
     without_export_behavior = copy.deepcopy(envelope)
     annotation = next(
         obj
-        for obj in without_export_behavior.objects
+        for obj in without_export_behavior.extracted_objects
         if obj.object_type == PHENOTYPE_OBJECT_TYPE
     )
     annotation.metadata["export_behavior"] = {"status": "ready"}
@@ -1149,7 +1149,7 @@ def test_phenotype_condition_binding_fans_out_one_composite_per_condition():
     envelope = DomainEnvelope(
         envelope_id="phenotype-conditions-env",
         domain_pack_id=PHENOTYPE_DOMAIN_PACK_ID,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type=PHENOTYPE_OBJECT_TYPE,
                 pending_ref_id="phenotype-conditions-1",

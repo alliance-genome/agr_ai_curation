@@ -345,4 +345,4 @@ def test_cancel_after_inline_persistence_leaves_inspectable_row(
     ).all()
     assert len(rows) == 1
     assert str(rows[0].id) == persisted_ref.extraction_result_id
-    assert len(rows[0].payload_json["objects"]) == 2
+    assert len(rows[0].payload_json["extracted_objects"]) == 2

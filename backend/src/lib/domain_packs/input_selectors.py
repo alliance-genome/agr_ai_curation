@@ -595,7 +595,7 @@ def _object_for_ref(
     object_ref: ObjectRef,
 ) -> CuratableObjectEnvelope | None:
     ref_key = object_ref.ref_key()
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         if ref_key in domain_object.ref_keys():
             return domain_object
     return None

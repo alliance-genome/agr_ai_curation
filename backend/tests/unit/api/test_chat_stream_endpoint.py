@@ -777,7 +777,7 @@ def test_chat_stream_endpoint_does_not_repersist_inline_extraction_result(monkey
                 "canonical_payload": {
                     "envelope_id": "env-1",
                     "domain_pack_id": "gene",
-                    "objects": [],
+                    "extracted_objects": [],
                 }
             },
         }

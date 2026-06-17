@@ -330,9 +330,9 @@ def test_tool_verified_gene_fixture_converts_to_pending_envelope():
     )
     assert converted_envelope.domain_pack_id == GENE_DOMAIN_PACK_ID
     assert converted_envelope.schema_ref.schema_id == GENE_LINKML_SCHEMA_ID
-    assert converted_envelope.objects[0].pending_ref_id == "gene-mention-evidence-1"
-    assert converted_envelope.objects[0].definition_state.value == "stable"
-    assert converted_envelope.objects[0].metadata[OBJECT_ROLE_METADATA_KEY] == (
+    assert converted_envelope.extracted_objects[0].pending_ref_id == "gene-mention-evidence-1"
+    assert converted_envelope.extracted_objects[0].definition_state.value == "stable"
+    assert converted_envelope.extracted_objects[0].metadata[OBJECT_ROLE_METADATA_KEY] == (
         "validated_reference"
     )
     assert converted_envelope.validation_findings[0].severity.value == "info"
@@ -344,7 +344,7 @@ def test_converted_gene_envelope_omits_legacy_semantic_stores():
     converted_envelope = tool_verified_gene_output_to_pending_envelope(raw_fixture)
 
     assert LEGACY_SEMANTIC_KEYS.isdisjoint(converted_envelope.metadata)
-    for obj in converted_envelope.objects:
+    for obj in converted_envelope.extracted_objects:
         assert LEGACY_SEMANTIC_KEYS.isdisjoint(obj.payload)
         assert LEGACY_SEMANTIC_KEYS.isdisjoint(obj.metadata)
 
@@ -402,7 +402,7 @@ def test_gene_mention_evidence_exports_validated_reference_evidence_payload():
 def test_gene_export_adapter_rehydrates_selected_domain_envelope_snapshot():
     raw_fixture = _load_raw_gene_fixture()
     envelope = tool_verified_gene_output_to_pending_envelope(raw_fixture)
-    selected_object_id = envelope.objects[0].pending_ref_id
+    selected_object_id = envelope.extracted_objects[0].pending_ref_id
     assert selected_object_id is not None
     snapshot = envelope.model_dump(mode="json")
     snapshot["selected_object_ids"] = [selected_object_id]

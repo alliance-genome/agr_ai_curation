@@ -1635,7 +1635,7 @@ async def test_specialist_accepts_schema_defined_retained_collection_without_ite
                 {
                     "envelope_id": "allele-act5c-envelope",
                     "domain_pack_id": "agr.alliance.allele",
-                    "objects": [
+                    "extracted_objects": [
                         {
                             "object_type": "AllelePaperEvidenceAssociation",
                             "pending_ref_id": "allele-act5c",
