@@ -26,9 +26,11 @@ def domain_envelope_from_extraction_result(
     if not isinstance(payload, Mapping):
         raise ValueError("extraction payload is not a JSON object")
 
-    if _has_extractor_curatable_objects(payload) and _has_canonical_objects(payload):
+    if _has_extractor_curatable_objects(payload) and _has_canonical_extracted_objects(
+        payload
+    ):
         raise ValueError(
-            "extraction payload mixes DomainEnvelope.objects[] with "
+            "extraction payload mixes DomainEnvelope.extracted_objects[] with "
             "DomainEnvelopeExtractionResult.curatable_objects[]"
         )
 
@@ -48,7 +50,7 @@ def domain_envelope_from_extraction_result(
         )
 
     metadata = {
-        "semantic_source": "domain_envelope.objects",
+        "semantic_source": "domain_envelope.extracted_objects",
         "source_extraction_result_id": extraction_result.extraction_result_id,
         "source_agent_key": extraction_result.agent_key,
         "source_adapter_key": adapter_key,
@@ -58,13 +60,15 @@ def domain_envelope_from_extraction_result(
         "run_summary": source.run_summary.model_dump(mode="json"),
     }
 
+    # curatable_objects[] is extractor output; extracted_objects[] is the
+    # canonical, post-conversion envelope list used by review and export code.
     return DomainEnvelope(
         envelope_id=extraction_envelope_id(extraction_result),
         domain_pack_id=domain_pack.pack_id,
         domain_pack_version=domain_pack.version,
         status=DomainEnvelopeStatus.EXTRACTED,
         schema_ref=source.schema_ref,
-        objects=list(source.curatable_objects),
+        extracted_objects=list(source.curatable_objects),
         history=[
             HistoryEvent(
                 event_type=HistoryEventKind.CREATED,
@@ -86,7 +90,7 @@ def is_canonical_domain_envelope_payload(payload: Mapping[str, Any]) -> bool:
     return (
         bool(payload.get("envelope_id"))
         and bool(payload.get("domain_pack_id"))
-        and _has_canonical_objects(payload)
+        and _has_canonical_extracted_objects(payload)
         and not _has_extractor_curatable_objects(payload)
     )
 
@@ -118,8 +122,8 @@ def normalized_optional_string(value: Any) -> str | None:
     return normalized or None
 
 
-def _has_canonical_objects(payload: Mapping[str, Any]) -> bool:
-    return isinstance(payload.get("objects"), list)
+def _has_canonical_extracted_objects(payload: Mapping[str, Any]) -> bool:
+    return isinstance(payload.get("extracted_objects"), list)
 
 
 def _has_extractor_curatable_objects(payload: Mapping[str, Any]) -> bool:

@@ -49,7 +49,7 @@ def _draft_paths(
         domain_pack_id=metadata.pack_id,
         domain_pack_version=metadata.version,
         status=DomainEnvelopeStatus.EXTRACTED,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type=object_type,
                 object_id="o1",
@@ -80,7 +80,7 @@ def _workspace_fields(
         domain_pack_id=metadata.pack_id,
         domain_pack_version=metadata.version,
         status=DomainEnvelopeStatus.EXTRACTED,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type=object_type,
                 object_id="o1",

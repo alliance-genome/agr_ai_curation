@@ -89,7 +89,7 @@ def _gene_expression_schema_ref() -> dict[str, str]:
 def _candidate_from_fixture() -> dict:
     fixture_pack = load_domain_fixture_pack(TMEM67_FIXTURE_PATH)
     envelope = fixture_pack.fixtures[0].envelope
-    annotation = envelope.objects[0]
+    annotation = envelope.extracted_objects[0]
     object_id = annotation.pending_ref_id or annotation.object_id
     assert object_id is not None
     assert annotation.schema_ref is not None
@@ -98,7 +98,7 @@ def _candidate_from_fixture() -> dict:
         "adapter_key": GENE_EXPRESSION_ADAPTER_KEY,
         "display_label": "Tmem67 expression",
         "secondary_label": "metanephros",
-        "semantic_source": "domain_envelope.objects",
+        "semantic_source": "domain_envelope.extracted_objects",
         "projection_ref": {
             "envelope_id": envelope.envelope_id,
             "object_id": object_id,
@@ -120,7 +120,7 @@ def _candidate_from_fixture() -> dict:
         "model_field_ref": {},
         "projection_refs": [],
         "provider_refs": {},
-        "metadata": {"semantic_source": "domain_envelope.objects"},
+        "metadata": {"semantic_source": "domain_envelope.extracted_objects"},
     }
 
 
@@ -128,7 +128,7 @@ def _candidate_from_curator_guidance_fixture(object_index: int = 0) -> dict:
     fixture_pack = load_domain_fixture_pack(CURATOR_GUIDANCE_FIXTURE_PATH)
     assert fixture_pack.fixture_pack_id == GENE_EXPRESSION_CURATOR_GUIDANCE_FIXTURE_PACK_ID
     envelope = fixture_pack.fixtures[0].envelope
-    annotation = envelope.objects[object_index]
+    annotation = envelope.extracted_objects[object_index]
     object_id = annotation.pending_ref_id or annotation.object_id
     assert object_id is not None
     assert annotation.schema_ref is not None
@@ -139,7 +139,7 @@ def _candidate_from_curator_guidance_fixture(object_index: int = 0) -> dict:
             "gene_symbol"
         ],
         "secondary_label": annotation.payload["where_expressed_statement"],
-        "semantic_source": "domain_envelope.objects",
+        "semantic_source": "domain_envelope.extracted_objects",
         "projection_ref": {
             "envelope_id": envelope.envelope_id,
             "object_id": object_id,
@@ -161,7 +161,7 @@ def _candidate_from_curator_guidance_fixture(object_index: int = 0) -> dict:
         "model_field_ref": {},
         "projection_refs": [],
         "provider_refs": {},
-        "metadata": {"semantic_source": "domain_envelope.objects"},
+        "metadata": {"semantic_source": "domain_envelope.extracted_objects"},
     }
 
 
@@ -209,7 +209,7 @@ def _lta_candidate() -> dict:
         "adapter_key": GENE_EXPRESSION_ADAPTER_KEY,
         "display_label": "Lta expression",
         "secondary_label": "extracellular space",
-        "semantic_source": "domain_envelope.objects",
+        "semantic_source": "domain_envelope.extracted_objects",
         "projection_ref": {
             "envelope_id": "gene-expression-lta-rgd-205864243",
             "object_id": "gene-expression-annotation-205864243",
@@ -231,7 +231,7 @@ def _lta_candidate() -> dict:
         "model_field_ref": {},
         "projection_refs": [],
         "provider_refs": {},
-        "metadata": {"semantic_source": "domain_envelope.objects"},
+        "metadata": {"semantic_source": "domain_envelope.extracted_objects"},
     }
 
 

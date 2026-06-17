@@ -432,7 +432,7 @@ fixture_packs:
       - EvidenceQuote
     definition_state: in_development
 metadata:
-  semantic_source: domain_envelope.objects
+  semantic_source: domain_envelope.extracted_objects
   object_role_key: object_role
   supported_object_roles:
     - curatable_unit

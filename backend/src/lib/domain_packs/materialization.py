@@ -166,7 +166,7 @@ class DomainPackMetadataReviewRowMaterializer:
         )
         rows: list[DomainEnvelopeReviewRow] = []
 
-        for object_index, domain_object in enumerate(envelope.objects):
+        for object_index, domain_object in enumerate(envelope.extracted_objects):
             object_definition = object_definitions.get(domain_object.object_type)
             object_id = stable_object_id(domain_object)
             object_role = _object_role(
@@ -206,7 +206,7 @@ class DomainPackMetadataReviewRowMaterializer:
             )
 
             metadata = {
-                "semantic_source": "domain_envelope.objects",
+                "semantic_source": "domain_envelope.extracted_objects",
                 "materializer": type(self).__name__,
                 "object_index": object_index,
                 "payload_path": f"objects[{object_index}].payload",
@@ -538,9 +538,9 @@ def _patch_target_object_from_resolved_values(
     )
     objects = [
         patched_target if _same_object_identity(candidate, target) else candidate
-        for candidate in envelope.objects
+        for candidate in envelope.extracted_objects
     ]
-    return envelope.model_copy(update={"objects": objects}), None
+    return envelope.model_copy(update={"extracted_objects": objects}), None
 
 
 def _original_materialized_values(
@@ -573,7 +573,7 @@ def _current_object_for_match(
 ) -> CuratableObjectEnvelope | None:
     """Return the current envelope object corresponding to a match target."""
 
-    for candidate in envelope.objects:
+    for candidate in envelope.extracted_objects:
         if _same_object_identity(candidate, target):
             return candidate
     return None
@@ -884,10 +884,10 @@ def _append_materialized_objects(
 
     existing_object_ids = {
         domain_object.object_id
-        for domain_object in envelope.objects
+        for domain_object in envelope.extracted_objects
         if domain_object.object_id is not None
     }
-    objects = list(envelope.objects)
+    objects = list(envelope.extracted_objects)
     appended: list[CuratableObjectEnvelope] = []
     for new_object in new_objects:
         if (
@@ -905,7 +905,7 @@ def _append_materialized_objects(
             referenced_objects=new_objects,
         )
 
-    return envelope.model_copy(update={"objects": objects}), tuple(appended)
+    return envelope.model_copy(update={"extracted_objects": objects}), tuple(appended)
 
 
 def _objects_with_target_refs(
@@ -1565,7 +1565,7 @@ def _find_existing_object(
     *,
     object_id: str,
 ) -> CuratableObjectEnvelope | None:
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         if domain_object.object_id == object_id:
             return domain_object
     return None
@@ -1671,7 +1671,7 @@ def project_evidence_anchor_projections(
     )
     projections: list[DomainEnvelopeEvidenceAnchorProjection] = []
 
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         domain_object_id = stable_object_id(domain_object)
         if object_id is not None and domain_object_id != object_id:
             continue
@@ -1724,7 +1724,7 @@ def project_validation_summary_projections(
     object_id_by_ref = _object_id_by_ref(envelope)
     object_type_by_id = {
         stable_object_id(domain_object): domain_object.object_type
-        for domain_object in envelope.objects
+        for domain_object in envelope.extracted_objects
     }
     grouped: dict[
         tuple[str | None, str | None],
@@ -2295,7 +2295,7 @@ def _validation_state_by_object(envelope: DomainEnvelope) -> dict[str, str]:
     object_id_by_ref = _object_id_by_ref(envelope)
     state_by_object = {
         stable_object_id(domain_object): OBJECT_VALIDATION_STATE_CLEAR
-        for domain_object in envelope.objects
+        for domain_object in envelope.extracted_objects
     }
     for finding in envelope.validation_findings:
         if finding.status is not ValidationFindingStatus.OPEN:
@@ -2710,7 +2710,7 @@ def _chunk_ids(evidence_record: Mapping[str, Any]) -> list[str]:
 
 def _object_id_by_ref(envelope: DomainEnvelope) -> dict[tuple[str, str], str]:
     object_id_by_ref: dict[tuple[str, str], str] = {}
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         object_id = stable_object_id(domain_object)
         if domain_object.object_id is not None:
             object_id_by_ref[("object_id", domain_object.object_id)] = object_id

@@ -412,7 +412,7 @@ def _apply_validator_evidence_updates_to_envelope(
     )
     changed = metadata_changed
     objects: list[CuratableObjectEnvelope] = []
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         payload, payload_changed = _replace_evidence_records_in_mapping(
             domain_object.payload,
             updated_records,
@@ -437,7 +437,7 @@ def _apply_validator_evidence_updates_to_envelope(
             len(updated_records),
         )
         return envelope
-    return envelope.model_copy(update={"metadata": metadata, "objects": objects})
+    return envelope.model_copy(update={"metadata": metadata, "extracted_objects": objects})
 
 
 def _validator_updated_evidence_records_by_id(

@@ -158,7 +158,7 @@ def _assert_metadata_refs_resolve(envelope: Any) -> None:
     )
     unresolved = [
         metadata_ref.metadata_path
-        for annotation in envelope.objects
+        for annotation in envelope.extracted_objects
         for metadata_ref in annotation.metadata_refs
         if not field_path_exists(metadata_root, metadata_ref.metadata_path)
     ]
@@ -206,8 +206,8 @@ def _converted_tmem67_envelope_with_raw_assay(assay: Mapping[str, Any]):
 
 
 def _with_payload(envelope: Any, payload: Mapping[str, Any]):
-    annotation = envelope.objects[0].model_copy(update={"payload": dict(payload)})
-    return envelope.model_copy(update={"objects": [annotation]})
+    annotation = envelope.extracted_objects[0].model_copy(update={"payload": dict(payload)})
+    return envelope.model_copy(update={"extracted_objects": [annotation]})
 
 
 def _finding_by_code(findings: tuple[Any, ...], code: str):
@@ -733,7 +733,7 @@ def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
 
 def test_gene_expression_context_ontology_requests_are_field_scoped():
     envelope = _converted_tmem67_envelope()
-    payload = copy.deepcopy(envelope.objects[0].payload)
+    payload = copy.deepcopy(envelope.extracted_objects[0].payload)
     payload["expression_pattern"].setdefault("when_expressed", {})[
         "stage_uberon_slim_terms"
     ] = [{"curie": "UBERON:0000068", "name": "embryonic stage"}]
@@ -874,7 +874,7 @@ def test_gene_expression_field_scoped_evidence_quote_bundle_selected_from_nested
 
 def test_gene_expression_assay_materializes_from_validator_result():
     envelope = _converted_tmem67_envelope()
-    payload = copy.deepcopy(envelope.objects[0].payload)
+    payload = copy.deepcopy(envelope.extracted_objects[0].payload)
     payload["expression_experiment"]["expression_assay_used"] = {
         "name": "whole-mount in situ hybridization",
     }
@@ -912,14 +912,14 @@ def test_gene_expression_assay_materializes_from_validator_result():
         ],
     )
 
-    assay = result.envelope.objects[0].payload["expression_experiment"][
+    assay = result.envelope.extracted_objects[0].payload["expression_experiment"][
         "expression_assay_used"
     ]
     assert assay == {
         "curie": "MMO:0000658",
         "name": "whole mount in situ hybridization assay",
     }
-    patch_event = result.envelope.objects[0].metadata[
+    patch_event = result.envelope.extracted_objects[0].metadata[
         "validator_resolved_value_materialization"
     ][0]
     assert patch_event["original_values"] == {
@@ -933,7 +933,7 @@ def test_gene_expression_assay_materializes_from_validator_result():
     summaries = project_validation_summary_projections(
         result.envelope,
         envelope_revision=1,
-        object_id=result.envelope.objects[0].pending_ref_id,
+        object_id=result.envelope.extracted_objects[0].pending_ref_id,
     )
     assert {
         summary.field_path: summary.status.value
@@ -981,7 +981,7 @@ def test_gene_expression_relation_identity_materializes_from_validator_result():
         ],
     )
 
-    relation = result.envelope.objects[0].payload["relation"]
+    relation = result.envelope.extracted_objects[0].payload["relation"]
     assert relation == {
         "name": "is_expressed_in",
         "vocabulary": "Expression Relation",
@@ -998,7 +998,7 @@ def test_gene_expression_conversion_preserves_no_match_assay_label_for_validatio
         {"name": "paper-only colorimetric staining assay"}
     )
 
-    assay = envelope.objects[0].payload["expression_experiment"][
+    assay = envelope.extracted_objects[0].payload["expression_experiment"][
         "expression_assay_used"
     ]
     assert assay == {"name": "paper-only colorimetric staining assay"}
@@ -1027,7 +1027,7 @@ def test_gene_expression_conversion_preserves_ambiguous_assay_candidates_for_val
         }
     )
 
-    assay = envelope.objects[0].payload["expression_experiment"][
+    assay = envelope.extracted_objects[0].payload["expression_experiment"][
         "expression_assay_used"
     ]
     assert assay == {
@@ -1095,7 +1095,7 @@ def test_gene_expression_assay_unresolved_outcomes_stay_field_addressed(
     )
 
     assert result.materialized_objects == ()
-    assert result.envelope.objects[0].payload == envelope.objects[0].payload
+    assert result.envelope.extracted_objects[0].payload == envelope.extracted_objects[0].payload
     finding = result.appended_findings[0]
     assert finding.code == "domain_pack.validator_unresolved"
     assert finding.field_ref is not None
@@ -1106,7 +1106,7 @@ def test_gene_expression_assay_unresolved_outcomes_stay_field_addressed(
     summaries = project_validation_summary_projections(
         result.envelope,
         envelope_revision=1,
-        object_id=result.envelope.objects[0].pending_ref_id,
+        object_id=result.envelope.extracted_objects[0].pending_ref_id,
     )
     assert {
         summary.field_path: summary.status.value
@@ -1145,7 +1145,7 @@ def test_gene_expression_uberon_slim_metadata_carries_linkml_allowlists():
 
 def test_gene_expression_cellular_component_only_site_remains_validatable():
     envelope = _converted_tmem67_envelope()
-    payload = copy.deepcopy(envelope.objects[0].payload)
+    payload = copy.deepcopy(envelope.extracted_objects[0].payload)
     payload["expression_pattern"]["where_expressed"] = {
         "cellular_component": {"name": "nucleus"}
     }
@@ -1187,7 +1187,7 @@ def test_gene_expression_cellular_component_only_site_remains_validatable():
         ],
     )
 
-    where_expressed = result.envelope.objects[0].payload["expression_pattern"][
+    where_expressed = result.envelope.extracted_objects[0].payload["expression_pattern"][
         "where_expressed"
     ]
     assert where_expressed == {
@@ -1196,7 +1196,7 @@ def test_gene_expression_cellular_component_only_site_remains_validatable():
             "name": "nucleus",
         }
     }
-    patch_event = result.envelope.objects[0].metadata[
+    patch_event = result.envelope.extracted_objects[0].metadata[
         "validator_resolved_value_materialization"
     ][0]
     assert patch_event["original_values"] == {
@@ -1256,7 +1256,7 @@ def test_gene_expression_stage_and_site_terms_materialize_from_validator_results
         ],
     )
 
-    payload = result.envelope.objects[0].payload
+    payload = result.envelope.extracted_objects[0].payload
     assert payload["when_expressed_stage_name"] == "Theiler stage 26"
     assert payload["expression_pattern"]["when_expressed"][
         "developmental_stage_start"
@@ -1270,7 +1270,7 @@ def test_gene_expression_stage_and_site_terms_materialize_from_validator_results
         "curie": "EMAPA:17373",
         "name": "metanephros",
     }
-    stage_patch = result.envelope.objects[0].metadata[
+    stage_patch = result.envelope.extracted_objects[0].metadata[
         "validator_resolved_value_materialization"
     ][0]
     assert stage_patch["original_values"] == {
@@ -1301,7 +1301,7 @@ def test_gene_expression_stage_and_site_terms_materialize_from_validator_results
 
 def test_gene_expression_slim_and_qualifier_arrays_materialize_from_validator_results():
     envelope = _converted_tmem67_envelope()
-    payload = copy.deepcopy(envelope.objects[0].payload)
+    payload = copy.deepcopy(envelope.extracted_objects[0].payload)
     payload["expression_pattern"]["when_expressed"] = {
         "stage_uberon_slim_terms": [{"name": "embryonic stage"}]
     }
@@ -1384,7 +1384,7 @@ def test_gene_expression_slim_and_qualifier_arrays_materialize_from_validator_re
         ],
     )
 
-    payload = result.envelope.objects[0].payload
+    payload = result.envelope.extracted_objects[0].payload
     assert payload["expression_pattern"]["when_expressed"][
         "stage_uberon_slim_terms"
     ] == [{"curie": "UBERON:0000068", "name": "embryonic stage"}]
@@ -1398,7 +1398,7 @@ def test_gene_expression_slim_and_qualifier_arrays_materialize_from_validator_re
 
 def test_gene_expression_stage_uberon_slim_rejects_out_of_slim_materialization():
     envelope = _converted_tmem67_envelope()
-    payload = copy.deepcopy(envelope.objects[0].payload)
+    payload = copy.deepcopy(envelope.extracted_objects[0].payload)
     payload["expression_pattern"]["when_expressed"] = {
         "stage_uberon_slim_terms": [{"name": "adult"}]
     }
@@ -1433,7 +1433,7 @@ def test_gene_expression_stage_uberon_slim_rejects_out_of_slim_materialization()
         ],
     )
 
-    assert result.envelope.objects[0].payload["expression_pattern"]["when_expressed"][
+    assert result.envelope.extracted_objects[0].payload["expression_pattern"]["when_expressed"][
         "stage_uberon_slim_terms"
     ] == [
         {
@@ -1467,7 +1467,7 @@ def test_gene_expression_stage_uberon_slim_rejects_out_of_slim_materialization()
         ],
     )
 
-    assert bad_result.envelope.objects[0].payload == envelope.objects[0].payload
+    assert bad_result.envelope.extracted_objects[0].payload == envelope.extracted_objects[0].payload
     bad_finding = bad_result.appended_findings[0]
     assert bad_finding.code == "domain_pack.validator_materialization_invalid"
     assert "UBERON:0000105" in bad_finding.details["materialization_error"]
@@ -1475,7 +1475,7 @@ def test_gene_expression_stage_uberon_slim_rejects_out_of_slim_materialization()
 
 def test_gene_expression_anatomical_uberon_slim_rejects_out_of_slim_materialization():
     envelope = _converted_tmem67_envelope()
-    payload = copy.deepcopy(envelope.objects[0].payload)
+    payload = copy.deepcopy(envelope.extracted_objects[0].payload)
     payload["expression_pattern"]["where_expressed"][
         "anatomical_structure_uberon_terms"
     ] = [{"name": "kidney"}]
@@ -1510,7 +1510,7 @@ def test_gene_expression_anatomical_uberon_slim_rejects_out_of_slim_materializat
         ],
     )
 
-    assert result.envelope.objects[0].payload == envelope.objects[0].payload
+    assert result.envelope.extracted_objects[0].payload == envelope.extracted_objects[0].payload
     finding = result.appended_findings[0]
     assert finding.code == "domain_pack.validator_materialization_invalid"
     assert "UBERON:0002113" in finding.details["materialization_error"]
@@ -1518,7 +1518,7 @@ def test_gene_expression_anatomical_uberon_slim_rejects_out_of_slim_materializat
 
 def test_gene_expression_stage_uberon_slim_schema_allowed_non_uberon_stays_unresolved():
     envelope = _converted_tmem67_envelope()
-    payload = copy.deepcopy(envelope.objects[0].payload)
+    payload = copy.deepcopy(envelope.extracted_objects[0].payload)
     payload["expression_pattern"]["when_expressed"] = {
         "stage_uberon_slim_terms": [{"name": "post embryonic, pre-adult"}]
     }
@@ -1548,7 +1548,7 @@ def test_gene_expression_stage_uberon_slim_schema_allowed_non_uberon_stays_unres
         ],
     )
 
-    assert result.envelope.objects[0].payload == envelope.objects[0].payload
+    assert result.envelope.extracted_objects[0].payload == envelope.extracted_objects[0].payload
     finding = result.appended_findings[0]
     assert finding.code == "domain_pack.validator_materialization_invalid"
     assert "post embryonic, pre-adult" in finding.details["materialization_error"]
@@ -1602,7 +1602,7 @@ def test_gene_expression_context_ontology_unresolved_outcomes_stay_field_address
     )
 
     assert result.materialized_objects == ()
-    assert result.envelope.objects[0].payload == envelope.objects[0].payload
+    assert result.envelope.extracted_objects[0].payload == envelope.extracted_objects[0].payload
     finding = result.appended_findings[0]
     assert finding.code == "domain_pack.validator_unresolved"
     assert finding.field_ref is not None
@@ -1630,9 +1630,9 @@ def test_tmem67_fixture_validates_as_pending_gene_expression_annotation():
     envelope = fixture.envelope
 
     assert envelope.domain_pack_id == GENE_EXPRESSION_DOMAIN_PACK_ID
-    assert len(envelope.objects) == 1
+    assert len(envelope.extracted_objects) == 1
 
-    annotation = envelope.objects[0]
+    annotation = envelope.extracted_objects[0]
     assert annotation.object_type == GENE_EXPRESSION_OBJECT_TYPE
     assert annotation.status is CuratableObjectStatus.PENDING
     assert annotation.object_role == "curatable_unit"
@@ -1647,7 +1647,7 @@ def test_tmem67_fixture_validates_as_pending_gene_expression_annotation():
         "primary_external_id": "MGI:1923928",
         "gene_symbol": "Tmem67",
     }
-    assert envelope.metadata["semantic_source"] == "domain_envelope.objects"
+    assert envelope.metadata["semantic_source"] == "domain_envelope.extracted_objects"
     assert envelope.metadata["legacy_semantic_lists"] == []
     assert envelope.metadata["extraction_metadata"]["raw_mentions"]
     assert envelope.metadata["extraction_metadata"]["evidence_records"][0][
@@ -1681,7 +1681,7 @@ def test_multi_annotation_fixture_projects_one_review_row_per_expression_stateme
     envelope = fixture_pack.fixtures[0].envelope
 
     annotations = [
-        obj for obj in envelope.objects if obj.object_type == GENE_EXPRESSION_OBJECT_TYPE
+        obj for obj in envelope.extracted_objects if obj.object_type == GENE_EXPRESSION_OBJECT_TYPE
     ]
     assert [annotation.pending_ref_id for annotation in annotations] == [
         "gene-expression-annotation-tmem67-metanephros",
@@ -1836,11 +1836,11 @@ def test_curator_guidance_fixture_covers_site_routing_and_context_preservation()
     assert fixture_pack.fixture_pack_id == (
         GENE_EXPRESSION_CURATOR_GUIDANCE_FIXTURE_PACK_ID
     )
-    assert len(envelope.objects) == 3
+    assert len(envelope.extracted_objects) == 3
     assert validate_pending_gene_expression_envelope(envelope) == ()
     _assert_metadata_refs_resolve(envelope)
 
-    payloads = {obj.pending_ref_id: obj.payload for obj in envelope.objects}
+    payloads = {obj.pending_ref_id: obj.payload for obj in envelope.extracted_objects}
     anatomy_only = payloads["gene-expression-annotation-flcn-pronephric-duct"][
         "expression_pattern"
     ]["where_expressed"]
@@ -1925,14 +1925,14 @@ def test_gene_expression_validator_warns_when_expected_optional_context_is_dropp
         GENE_EXPRESSION_CURATOR_GUIDANCE_FIXTURE_PACK_ID
     )
     envelope = fixture_pack.fixtures[0].envelope
-    annotation = envelope.objects[0]
+    annotation = envelope.extracted_objects[0]
     payload = copy.deepcopy(annotation.payload)
     del payload["expression_experiment"]["detection_reagents"]
     del payload["expression_experiment"]["specimen_genomic_model"]
     del payload["condition_relations"]
     changed_annotation = annotation.model_copy(update={"payload": payload})
     changed_envelope = envelope.model_copy(
-        update={"objects": [changed_annotation, *envelope.objects[1:]]}
+        update={"extracted_objects": [changed_annotation, *envelope.extracted_objects[1:]]}
     )
 
     findings = validate_pending_gene_expression_envelope(changed_envelope)
@@ -1968,7 +1968,7 @@ def test_tmem67_fixture_carries_anatomical_site_for_linkml_postcondition():
     assert fixture_ref is not None
     fixture_path = get_gene_expression_domain_pack_metadata_path().parent / fixture_ref.path
     fixture_pack = load_domain_fixture_pack(fixture_path)
-    annotation = fixture_pack.fixtures[0].envelope.objects[0]
+    annotation = fixture_pack.fixtures[0].envelope.extracted_objects[0]
     where_expressed = annotation.payload["expression_pattern"]["where_expressed"]
 
     assert (
@@ -1985,8 +1985,8 @@ def test_tmem67_extractor_output_converts_to_pending_gene_expression_envelope():
 
     assert converted.envelope_id == "gene-expression-tmem67-mgi-206552169"
     assert converted.domain_pack_id == GENE_EXPRESSION_DOMAIN_PACK_ID
-    assert len(converted.objects) == 1
-    annotation = converted.objects[0]
+    assert len(converted.extracted_objects) == 1
+    annotation = converted.extracted_objects[0]
     assert annotation.object_type == GENE_EXPRESSION_OBJECT_TYPE
     assert annotation.status is CuratableObjectStatus.PENDING
     assert annotation.evidence_record_ids == ["evidence-tmem67-metanephros-1"]
@@ -2002,7 +2002,7 @@ def test_tmem67_extractor_output_converts_to_pending_gene_expression_envelope():
 
 def test_gene_expression_linkml_validator_reports_missing_gene_selector_field():
     envelope = _converted_tmem67_envelope()
-    payload = copy.deepcopy(envelope.objects[0].payload)
+    payload = copy.deepcopy(envelope.extracted_objects[0].payload)
     payload["expression_annotation_subject"]["primary_external_id"] = " "
 
     findings = validate_pending_gene_expression_envelope(_with_payload(envelope, payload))
@@ -2021,7 +2021,7 @@ def test_gene_expression_linkml_validator_reports_missing_gene_selector_field():
 
 def test_gene_expression_linkml_validator_reports_missing_reference_field():
     envelope = _converted_tmem67_envelope()
-    payload = copy.deepcopy(envelope.objects[0].payload)
+    payload = copy.deepcopy(envelope.extracted_objects[0].payload)
     payload["single_reference"]["reference_id"] = None
 
     findings = validate_pending_gene_expression_envelope(_with_payload(envelope, payload))
@@ -2035,8 +2035,8 @@ def test_gene_expression_linkml_validator_reports_missing_reference_field():
 
 def test_gene_expression_linkml_validator_reports_missing_and_unknown_evidence():
     envelope = _converted_tmem67_envelope()
-    annotation = envelope.objects[0].model_copy(update={"evidence_record_ids": []})
-    missing_envelope = envelope.model_copy(update={"objects": [annotation]})
+    annotation = envelope.extracted_objects[0].model_copy(update={"evidence_record_ids": []})
+    missing_envelope = envelope.model_copy(update={"extracted_objects": [annotation]})
 
     missing_finding = _finding_by_code(
         validate_pending_gene_expression_envelope(missing_envelope),
@@ -2048,10 +2048,10 @@ def test_gene_expression_linkml_validator_reports_missing_and_unknown_evidence()
         == "non_repairable_extraction_error"
     )
 
-    unknown_annotation = envelope.objects[0].model_copy(
+    unknown_annotation = envelope.extracted_objects[0].model_copy(
         update={"evidence_record_ids": ["evidence-not-in-metadata"]}
     )
-    unknown_envelope = envelope.model_copy(update={"objects": [unknown_annotation]})
+    unknown_envelope = envelope.model_copy(update={"extracted_objects": [unknown_annotation]})
     unknown_finding = _finding_by_code(
         validate_pending_gene_expression_envelope(unknown_envelope),
         "alliance.gene_expression.evidence_records_missing",
@@ -2064,7 +2064,7 @@ def test_gene_expression_linkml_validator_reports_missing_and_unknown_evidence()
 
 def test_gene_expression_linkml_validator_reports_relation_missing_and_invalid():
     envelope = _converted_tmem67_envelope()
-    missing_payload = copy.deepcopy(envelope.objects[0].payload)
+    missing_payload = copy.deepcopy(envelope.extracted_objects[0].payload)
     missing_payload["relation"]["name"] = " "
 
     missing_finding = _finding_by_code(
@@ -2077,7 +2077,7 @@ def test_gene_expression_linkml_validator_reports_relation_missing_and_invalid()
     assert missing_finding.details["expected_vocabulary"] == "Expression Relation"
     assert missing_finding.details["expected_values"] == ["is_expressed_in"]
 
-    invalid_payload = copy.deepcopy(envelope.objects[0].payload)
+    invalid_payload = copy.deepcopy(envelope.extracted_objects[0].payload)
     invalid_payload["relation"]["name"] = "expressed_in"
 
     invalid_finding = _finding_by_code(
@@ -2093,7 +2093,7 @@ def test_gene_expression_linkml_validator_reports_relation_missing_and_invalid()
 
 def test_gene_expression_linkml_validator_reports_invalid_and_ambiguous_assay():
     envelope = _converted_tmem67_envelope()
-    invalid_payload = copy.deepcopy(envelope.objects[0].payload)
+    invalid_payload = copy.deepcopy(envelope.extracted_objects[0].payload)
     invalid_payload["expression_experiment"]["expression_assay_used"][
         "curie"
     ] = "not-a-curie"
@@ -2108,7 +2108,7 @@ def test_gene_expression_linkml_validator_reports_invalid_and_ambiguous_assay():
         "expression_experiment.expression_assay_used.curie"
     )
 
-    ambiguous_payload = copy.deepcopy(envelope.objects[0].payload)
+    ambiguous_payload = copy.deepcopy(envelope.extracted_objects[0].payload)
     ambiguous_payload["expression_experiment"]["expression_assay_used"] = {
         "candidates": [
             {"curie": "MMO:0000655", "name": "RT-PCR"},
@@ -2130,7 +2130,7 @@ def test_gene_expression_linkml_validator_reports_invalid_and_ambiguous_assay():
 
 def test_gene_expression_linkml_validator_reports_experiment_projection_mismatch():
     envelope = _converted_tmem67_envelope()
-    payload = copy.deepcopy(envelope.objects[0].payload)
+    payload = copy.deepcopy(envelope.extracted_objects[0].payload)
     payload["expression_experiment"]["single_reference"]["reference_id"] = 999999
     payload["expression_experiment"]["entity_assayed"][
         "primary_external_id"
@@ -2158,7 +2158,7 @@ def test_gene_expression_linkml_validator_reports_experiment_projection_mismatch
 
 def test_gene_expression_linkml_validator_reports_missing_expression_context():
     envelope = _converted_tmem67_envelope()
-    payload = copy.deepcopy(envelope.objects[0].payload)
+    payload = copy.deepcopy(envelope.extracted_objects[0].payload)
     payload["when_expressed_stage_name"] = ""
     payload["expression_pattern"]["where_expressed"] = {}
 
@@ -2181,7 +2181,7 @@ def test_gene_expression_linkml_validator_reports_missing_expression_context():
 
 def test_gene_expression_linkml_validator_accepts_negated_and_mixed_site_context():
     envelope = _converted_tmem67_envelope()
-    payload = copy.deepcopy(envelope.objects[0].payload)
+    payload = copy.deepcopy(envelope.extracted_objects[0].payload)
     payload["negated"] = True
     payload["where_expressed_statement"] = "metanephros nucleus"
     payload["expression_pattern"]["where_expressed"]["cellular_component"] = {
@@ -2228,7 +2228,7 @@ def test_gene_expression_conversion_accepts_cellular_component_only_site():
         envelope_id="gene-expression-cellular-component-only",
     )
 
-    where_expressed = converted.objects[0].payload["expression_pattern"][
+    where_expressed = converted.extracted_objects[0].payload["expression_pattern"][
         "where_expressed"
     ]
     assert where_expressed == {"cellular_component": {"name": "nucleus"}}
@@ -2473,7 +2473,7 @@ def test_gene_expression_condition_binding_fans_out_one_composite_per_condition(
     envelope = DomainEnvelope(
         envelope_id="gene-expression-conditions-env",
         domain_pack_id=GENE_EXPRESSION_DOMAIN_PACK_ID,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type=GENE_EXPRESSION_OBJECT_TYPE,
                 pending_ref_id="gene-expression-conditions-1",

@@ -60,7 +60,7 @@ def test_handle_tool_call_dispatches_domain_envelope_state_with_user_scope(monke
         captured.update(kwargs)
         return {
             "success": True,
-            "semantic_source": "domain_envelope.objects",
+            "semantic_source": "domain_envelope.extracted_objects",
             "envelope_id": kwargs["envelope_id"],
         }
 

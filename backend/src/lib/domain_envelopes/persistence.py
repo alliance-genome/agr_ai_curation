@@ -282,7 +282,7 @@ def _regenerate_indexes_for_row(
     db.flush()
 
     object_count = 0
-    for object_index, domain_object in enumerate(envelope.objects):
+    for object_index, domain_object in enumerate(envelope.extracted_objects):
         object_id = _stable_object_id(domain_object)
         schema_ref_json = _schema_ref_json(domain_object.schema_ref)
         object_metadata = dict(domain_object.metadata)
@@ -407,7 +407,7 @@ def _projection_rows(
 ) -> list[DomainEnvelopeProjectionIndex]:
     rows: list[DomainEnvelopeProjectionIndex] = []
 
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         object_id = _stable_object_id(domain_object)
         object_metadata = dict(domain_object.metadata)
         rows.append(
@@ -590,7 +590,7 @@ def _projection_json(entry: Mapping[str, Any]) -> dict[str, Any] | list[Any]:
 
 def _object_id_by_ref(envelope: DomainEnvelope) -> dict[tuple[str, str], str]:
     object_id_by_ref: dict[tuple[str, str], str] = {}
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         stable_object_id = _stable_object_id(domain_object)
         if domain_object.object_id is not None:
             object_id_by_ref[("object_id", domain_object.object_id)] = stable_object_id
@@ -615,7 +615,7 @@ def _validation_state_by_object(
 ) -> dict[str, str]:
     validation_state_by_object = {
         _stable_object_id(domain_object): OBJECT_VALIDATION_STATE_CLEAR
-        for domain_object in envelope.objects
+        for domain_object in envelope.extracted_objects
     }
 
     for finding in envelope.validation_findings:

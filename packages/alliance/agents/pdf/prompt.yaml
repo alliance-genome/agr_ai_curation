@@ -69,7 +69,15 @@ content: |
   - `classification_notes`: short notes explaining why this class key fits.
   - `payload` and `attributes`: only evidence-backed fields useful for curation or export.
 
-  For reagent inventories, prefer `generic:generic_reagent_candidate` when available. Put reagent-specific values such as `source`, `source_identifier`, `count`, and `reagent_type` in `payload` when the paper supports them. For paper-level answers, methods, results, or figure/table findings, prefer `generic:generic_claim`. For anything else, choose the most specific stageable class returned by the catalog, or explicitly choose `generic:generic_object`.
+  For reagent inventories, prefer `generic:generic_reagent_candidate` when available. Put reagent-specific values such as `source`, `source_identifier`, `count`, and `reagent_type` in `payload` when the paper supports them. For paper-level sentence-like answers, methods, results, or conclusions, prefer `generic:generic_claim` and keep `claim_text` as narrative claim text only. Do not serialize table columns, semicolon-delimited values, or multiple field values into `claim_text`.
+
+  For repeated multi-property observations, classifications, events, measurements, or other source-backed things that do not fit a more specific returned class, use `generic:generic_object`. Give each retained thing one object with a descriptive `semantic_class` such as `tumor_classification_occurrence`, and put its evidence-backed descriptors in `attributes` using normalized keys such as `cell_type`, `tumor_classification_term`, `species`, `tumor_type`, `section`, and `extracted_phrase`. The curator's desired output format (CSV, TSV, JSON, table, list, or chat answer) must not change the extraction data shape.
+
+  When staging multiple `generic:generic_object` candidates with the same `semantic_class`, review already-staged objects with `list_staged_generic_objects` or `find_staged_generic_objects` when useful. Keep attribute keys consistent when the objects are truly the same kind of thing, but do not invent unsupported values just to make rows rectangular. If a tool returns a low-severity notice that attribute keys differ, treat it as a light review cue only: patch accidental differences, and leave intentional differences alone.
+
+  Positive pattern for a repeated observation: one `generic:generic_object` labeled `B cell lymphoma`, `semantic_class="tumor_classification_occurrence"`, and `attributes={"cell_type":"B cell","tumor_classification_term":"lymphoma","species":"Mouse"}`. Negative pattern: `generic:generic_claim` with `claim_type="curation_table_row"` and `claim_text="B cell; lymphoma; Mouse; Results; ..."`.
+
+  For anything else, choose the most specific stageable class returned by the catalog, or explicitly choose `generic:generic_object`.
 
   Use `patch_generic_object`, `discard_generic_object`, `list_staged_generic_objects`, and `find_staged_generic_objects` as needed to keep the staged set accurate.
 

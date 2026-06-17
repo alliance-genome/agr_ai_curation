@@ -392,7 +392,7 @@ def tool_verified_gene_output_to_pending_envelope(
         for evidence in source.evidence_records
     }
 
-    objects: list[CuratableObjectEnvelope] = []
+    extracted_objects: list[CuratableObjectEnvelope] = []
     validation_findings: list[ValidationFinding] = []
     history: list[HistoryEvent] = [
         HistoryEvent(
@@ -413,7 +413,7 @@ def tool_verified_gene_output_to_pending_envelope(
                 pending_ref_id=pending_ref_id,
                 object_type=GENE_MENTION_EVIDENCE_OBJECT_TYPE,
             )
-            objects.append(
+            extracted_objects.append(
                 CuratableObjectEnvelope(
                     object_type=GENE_MENTION_EVIDENCE_OBJECT_TYPE,
                     pending_ref_id=pending_ref_id,
@@ -450,7 +450,7 @@ def tool_verified_gene_output_to_pending_envelope(
         domain_pack_id=GENE_DOMAIN_PACK_ID,
         domain_pack_version=GENE_DOMAIN_PACK_VERSION,
         schema_ref=_gene_schema_ref(),
-        objects=objects,
+        extracted_objects=extracted_objects,
         validation_findings=validation_findings,
         history=history,
         metadata={

@@ -66,7 +66,7 @@ def _envelope() -> DomainEnvelope:
     return DomainEnvelope(
         envelope_id="env-1",
         domain_pack_id="fixture.curator_patch",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneAssertion",
                 object_id="gene-1",
@@ -106,7 +106,7 @@ def test_apply_curator_field_patch_accepts_editable_field_and_records_history(tm
     assert result.status is EnvelopeFieldPatchStatus.ACCEPTED
     assert result.before == "abc-1"
     assert result.after == "abc-2"
-    assert result.envelope.objects[0].payload["gene"]["symbol"] == "abc-2"
+    assert result.envelope.extracted_objects[0].payload["gene"]["symbol"] == "abc-2"
     assert [event.event_type for event in result.envelope.history] == [
         HistoryEventKind.FIELD_UPDATED,
         HistoryEventKind.CURATOR_FIELD_PATCH_ACCEPTED,
@@ -124,7 +124,7 @@ def test_apply_curator_field_patch_allows_editable_field_fill(tmp_path: Path):
     )
 
     assert result.accepted is True
-    assert result.envelope.objects[0].payload["gene"]["identifier"] == "AGR:0000001"
+    assert result.envelope.extracted_objects[0].payload["gene"]["identifier"] == "AGR:0000001"
 
 
 def test_apply_curator_field_patch_rejects_stale_revision_without_history(tmp_path: Path):
@@ -153,7 +153,7 @@ def test_apply_curator_field_patch_rejects_before_mismatch_and_records_rejection
     )
 
     assert result.status is EnvelopeFieldPatchStatus.REJECTED
-    assert result.envelope.objects[0].payload["gene"]["symbol"] == "abc-1"
+    assert result.envelope.extracted_objects[0].payload["gene"]["symbol"] == "abc-1"
     assert result.envelope.history[-1].event_type is (
         HistoryEventKind.CURATOR_FIELD_PATCH_REJECTED
     )

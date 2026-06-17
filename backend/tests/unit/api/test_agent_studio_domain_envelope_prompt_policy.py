@@ -253,7 +253,7 @@ def test_chat_output_prompts_match_and_preserve_domain_envelope_refs():
     assert package_prompt_paths
     for package_prompt_path in package_prompt_paths:
         assert config_prompt == _read_repo_text(package_prompt_path)
-    assert "domain_envelope.objects" in config_prompt
+    assert "domain_envelope.extracted_objects" in config_prompt
     assert "review rows" in config_prompt
     assert "lookup attempts" in config_prompt
     assert "export/submission blockers" in config_prompt

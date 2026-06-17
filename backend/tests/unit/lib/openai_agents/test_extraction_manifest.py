@@ -132,7 +132,7 @@ def _payload(object_count: int) -> dict:
         "envelope_id": "env-manifest",
         "domain_pack_id": "fixture.manifest",
         "status": "validated",
-        "objects": objects,
+        "extracted_objects": objects,
         "validation_findings": validation_findings,
         "metadata": {
             "evidence_records": [

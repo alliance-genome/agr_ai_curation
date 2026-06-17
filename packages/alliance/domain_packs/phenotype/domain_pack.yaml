@@ -180,7 +180,7 @@ object_definitions:
     metadata:
       object_role: curatable_unit
       association_kind: phenotype_assertion
-      semantic_source: domain_envelope.objects
+      semantic_source: domain_envelope.extracted_objects
       supervisor_manifest:
         primary_label_field: phenotype_terms[0].label
         secondary_label_field: phenotype_annotation_object
@@ -923,7 +923,7 @@ metadata:
   base_pack_id: agr.alliance.base
   object_role_key: object_role
   curatable_unit_object_type: PhenotypeAnnotation
-  semantic_source: domain_envelope.objects
+  semantic_source: domain_envelope.extracted_objects
   legacy_semantic_lists: []
   supported_object_roles:
     - curatable_unit

@@ -529,7 +529,7 @@ def test_execute_post_curation_pipeline_creates_session_candidates_and_validatio
     assert candidate_row.object_id == "object-1"
     assert candidate_row.envelope_revision == 4
     assert candidate_row.normalized_payload == {}
-    assert candidate_row.candidate_metadata["semantic_source"] == "domain_envelope.objects"
+    assert candidate_row.candidate_metadata["semantic_source"] == "domain_envelope.extracted_objects"
     assert candidate_row.candidate_metadata["projection_key"] == "object-1"
 
     evidence_rows = db_session.scalars(
@@ -545,7 +545,7 @@ def test_execute_post_curation_pipeline_creates_session_candidates_and_validatio
     assert draft_row.fields[0]["validation_result"]["status"] == FieldValidationStatus.SKIPPED.value
     assert draft_row.fields[0]["evidence_anchor_ids"] == []
     assert "normalized_payload" not in draft_row.draft_metadata
-    assert draft_row.draft_metadata["semantic_source"] == "domain_envelope.objects"
+    assert draft_row.draft_metadata["semantic_source"] == "domain_envelope.extracted_objects"
 
     session_snapshots = db_session.scalars(
         select(ValidationSnapshotModel).where(
@@ -722,7 +722,7 @@ metadata:
     envelope = DomainEnvelope(
         envelope_id="env-validation-1",
         domain_pack_id="fixture.pack",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneAssertion",
                 pending_ref_id="object-1",
@@ -1019,7 +1019,7 @@ def test_execute_post_curation_pipeline_materializes_envelope_rows_without_norma
     assert candidate_row.object_id == "object-1"
     assert candidate_row.envelope_revision == 4
     assert candidate_row.normalized_payload == {}
-    assert candidate_row.candidate_metadata["semantic_source"] == "domain_envelope.objects"
+    assert candidate_row.candidate_metadata["semantic_source"] == "domain_envelope.extracted_objects"
     assert candidate_row.candidate_metadata["object_type"] == "GeneAssertion"
     assert candidate_row.candidate_metadata["schema_provider"] == "json-schema"
     assert candidate_row.candidate_metadata["schema_ref"] == {

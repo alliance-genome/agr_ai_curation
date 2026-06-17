@@ -209,7 +209,7 @@ def apply_curator_field_patch(
             history_event_ids=(rejected.history[-1].event_id or "",),
         )
 
-    updated_objects = list(envelope.objects)
+    updated_objects = list(envelope.extracted_objects)
     updated_object = domain_object.model_copy(update={"payload": staged_payload})
     updated_objects[object_index] = updated_object
 
@@ -249,7 +249,7 @@ def apply_curator_field_patch(
     updated_envelope = _validated_envelope(
         envelope.model_copy(
             update={
-                "objects": updated_objects,
+                "extracted_objects": updated_objects,
                 "history": [*envelope.history, field_event, accepted_event],
             }
         )
@@ -377,7 +377,7 @@ def _object_index_for_stable_id(
     envelope: DomainEnvelope,
     object_id: str,
 ) -> tuple[int | None, CuratableObjectEnvelope | None]:
-    for index, domain_object in enumerate(envelope.objects):
+    for index, domain_object in enumerate(envelope.extracted_objects):
         if object_id in {
             value
             for value in (domain_object.object_id, domain_object.pending_ref_id)

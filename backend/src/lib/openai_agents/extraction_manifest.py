@@ -52,7 +52,7 @@ def build_extraction_manifest_page(
     }
     manifest_objects = [
         domain_object
-        for domain_object in envelope.objects
+        for domain_object in envelope.extracted_objects
         if _include_object_in_manifest(domain_object, object_definitions)
     ]
 
@@ -118,7 +118,7 @@ def build_extraction_manifest_object(
     if not normalized_ref:
         raise ExtractionManifestError("object_ref is required")
 
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         if _object_ref(domain_object) != normalized_ref:
             continue
         if not _include_object_in_manifest(domain_object, object_definitions):

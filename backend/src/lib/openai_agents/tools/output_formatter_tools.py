@@ -68,6 +68,7 @@ _FORBIDDEN_CONTENT_KEYS = {
     "tsv",
 }
 _FIELD_REF_KEY_PATTERN = re.compile(r"[^0-9a-zA-Z_]+")
+_OBJECT_ATTRIBUTE_FIELD_PREFIX = "object.attribute."
 _MAX_PROJECTION_ROWS = get_flow_projection_max_rows()
 _MAX_CHAT_ROWS = get_flow_chat_max_rows()
 _MAX_FIELD_EXAMPLES = get_flow_projection_max_field_examples()
@@ -552,21 +553,196 @@ def _available_source_refs(bundle: FlowOutputArtifactBundle) -> dict[str, list[s
     }
 
 
-def _apply_source_ref(
-    plan: FlowOutputProjectionPlan,
-    *,
+def _first_seen(values: Sequence[Any]) -> list[str]:
+    items: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if text and text not in seen:
+            seen.add(text)
+            items.append(text)
+    return items
+
+
+def _source_ref_for_row(row: Mapping[str, Any]) -> str:
+    extraction_result_id = str(row.get("artifact.extraction_result_id") or "").strip()
+    if extraction_result_id:
+        return extraction_result_id
+    source_key = str(row.get("artifact.source_key") or "").strip()
+    if source_key:
+        return source_key
+    return "object_rows"
+
+
+def _is_generic_object_row(row: Mapping[str, Any]) -> bool:
+    adapter_key = str(row.get("artifact.adapter_key") or "").strip().lower()
+    domain_pack_id = str(row.get("envelope.domain_pack_id") or "").strip().lower()
+    object_type = str(row.get("object.object_type") or "").strip().lower()
+    class_key = str(row.get("object.payload.class_key") or "").strip().lower()
+    return (
+        adapter_key == "generic"
+        or domain_pack_id == "generic"
+        or object_type.startswith("generic_")
+        or class_key.startswith("generic:")
+    )
+
+
+def _attribute_keys_for_row(row: Mapping[str, Any]) -> set[str]:
+    return {
+        str(field_ref).removeprefix(_OBJECT_ATTRIBUTE_FIELD_PREFIX)
+        for field_ref, value in row.items()
+        if str(field_ref).startswith(_OBJECT_ATTRIBUTE_FIELD_PREFIX)
+        and value not in (None, "", [])
+    }
+
+
+def _attribute_inventory_for_rows(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    row_key_sets = [_attribute_keys_for_row(row) for row in rows]
+    all_attribute_keys = _first_seen(
+        [
+            field_ref.removeprefix(_OBJECT_ATTRIBUTE_FIELD_PREFIX)
+            for row in rows
+            for field_ref in row
+            if str(field_ref).startswith(_OBJECT_ATTRIBUTE_FIELD_PREFIX)
+        ]
+    )
+    shared_attribute_keys = [
+        key
+        for key in all_attribute_keys
+        if row_key_sets and all(key in key_set for key_set in row_key_sets)
+    ]
+    keys_missing_from_some_objects = [
+        key
+        for key in all_attribute_keys
+        if row_key_sets and any(key not in key_set for key_set in row_key_sets)
+    ]
+    return {
+        "all_attribute_keys": all_attribute_keys,
+        "shared_attribute_keys": shared_attribute_keys,
+        "keys_missing_from_some_objects": keys_missing_from_some_objects,
+    }
+
+
+def _semantic_class_attribute_groups(
+    rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    semantic_classes = _first_seen(
+        [row.get("object.payload.semantic_class") or "" for row in rows]
+    )
+    groups: list[dict[str, Any]] = []
+    for semantic_class in semantic_classes or [""]:
+        group_rows = [
+            row
+            for row in rows
+            if str(row.get("object.payload.semantic_class") or "").strip()
+            == semantic_class
+        ]
+        inventory = _attribute_inventory_for_rows(group_rows)
+        groups.append(
+            {
+                "semantic_class": semantic_class,
+                "row_count": len(group_rows),
+                **inventory,
+            }
+        )
+    return groups
+
+
+def _generic_source_summary(bundle: FlowOutputArtifactBundle) -> dict[str, Any]:
+    rows_by_source: dict[str, list[Mapping[str, Any]]] = {}
+    for row in bundle.rows_for_source("object"):
+        if not _is_generic_object_row(row):
+            continue
+        rows_by_source.setdefault(_source_ref_for_row(row), []).append(row)
+
+    sources: list[dict[str, Any]] = []
+    for source_ref, rows in sorted(rows_by_source.items()):
+        inventory = _attribute_inventory_for_rows(rows)
+        all_attribute_keys = inventory["all_attribute_keys"]
+        semantic_groups = _semantic_class_attribute_groups(rows)
+        notices: list[dict[str, Any]] = []
+        for group in semantic_groups:
+            keys_missing_from_some_objects = group["keys_missing_from_some_objects"]
+            if not keys_missing_from_some_objects:
+                continue
+            notices.append(
+                {
+                    "code": "generic_attribute_key_drift",
+                    "severity": "info",
+                    "semantic_class": group["semantic_class"],
+                    "message": (
+                        "Generic object attribute keys differ across some rows. "
+                        "This may be intentional for mixed object shapes; inspect "
+                        "the attributes before choosing export columns."
+                    ),
+                    "keys_missing_from_some_objects": keys_missing_from_some_objects,
+                }
+            )
+        if not all_attribute_keys and any(
+            str(row.get("object.payload.claim_text") or "").strip()
+            for row in rows
+        ):
+            notices.append(
+                {
+                    "code": "generic_claim_text_only_unstructured",
+                    "severity": "info",
+                    "message": (
+                        "Generic rows contain claim_text but no exportable generic "
+                        "attributes. Do not split claim_text into columns."
+                    ),
+                }
+            )
+        sources.append(
+            {
+                "source_ref": source_ref,
+                "row_count": len(rows),
+                "adapter_keys": _first_seen(
+                    [row.get("artifact.adapter_key") for row in rows]
+                ),
+                "domain_pack_ids": _first_seen(
+                    [row.get("envelope.domain_pack_id") for row in rows]
+                ),
+                "object_types": _first_seen(
+                    [row.get("object.object_type") for row in rows]
+                ),
+                "semantic_classes": _first_seen(
+                    [row.get("object.payload.semantic_class") for row in rows]
+                ),
+                **inventory,
+                "semantic_class_attribute_groups": semantic_groups,
+                "notices": notices,
+            }
+        )
+    return {
+        "generic_source_count": len(sources),
+        "sources": sources,
+    }
+
+
+def _rows_for_source_ref(
     bundle: FlowOutputArtifactBundle,
+    *,
+    row_source: FlowOutputRowSource,
     source_ref: str | None,
-) -> FlowOutputProjectionPlan:
+) -> tuple[list[Mapping[str, Any]], dict[str, list[str]]]:
     normalized = str(source_ref or "").strip()
+    rows = list(bundle.rows_for_source(row_source))
     if not normalized:
-        return plan
+        return rows, {}
     source_refs = _available_source_refs(bundle)
     source_id = normalized.removeprefix("extraction-result:")
     if source_id in source_refs["source_extraction_result_ids"]:
-        return plan.model_copy(update={"source_extraction_result_ids": [source_id]})
+        return [
+            row
+            for row in rows
+            if str(row.get("artifact.extraction_result_id") or "").strip() == source_id
+        ], {"source_extraction_result_ids": [source_id]}
     if normalized in source_refs["source_keys"]:
-        return plan.model_copy(update={"source_keys": [normalized]})
+        return [
+            row
+            for row in rows
+            if str(row.get("artifact.source_key") or "").strip() == normalized
+        ], {"source_keys": [normalized]}
     available = [
         *source_refs["source_extraction_result_ids"],
         *source_refs["source_keys"],
@@ -575,6 +751,93 @@ def _apply_source_ref(
     raise ValueError(
         f"source_ref '{normalized}' is not available for object rows. "
         f"Available source refs: {available_text}."
+    )
+
+
+def _source_identities_for_formatter_rows(rows: Sequence[Mapping[str, Any]]) -> set[str]:
+    identities: set[str] = set()
+    for row in rows:
+        extraction_result_id = str(row.get("artifact.extraction_result_id") or "").strip()
+        if extraction_result_id:
+            identities.add(f"extraction-result:{extraction_result_id}")
+            continue
+        source_key = str(row.get("artifact.source_key") or "").strip()
+        if source_key:
+            identities.add(f"source-key:{source_key}")
+    return identities
+
+
+def _default_row_strategy_for_formatter_rows(
+    *,
+    rows: Sequence[Mapping[str, Any]],
+    row_source: FlowOutputRowSource,
+    output_format: FlowOutputFormat,
+) -> FlowOutputRowStrategy:
+    if row_source != "object":
+        return "object"
+    has_attribute_fields = any(
+        str(field_ref).startswith(_OBJECT_ATTRIBUTE_FIELD_PREFIX)
+        for row in rows
+        for field_ref in row
+    )
+    if len(_source_identities_for_formatter_rows(rows)) == 1 and (
+        output_format == "tsv"
+        or (output_format == "csv" and has_attribute_fields)
+    ):
+        return "wide_union"
+    return "object"
+
+
+def _default_projection_plan_for_formatter(
+    bundle: FlowOutputArtifactBundle,
+    *,
+    output_format: FlowOutputFormat,
+    row_source: FlowOutputRowSource,
+    row_strategy: FlowOutputRowStrategy | None,
+    source_ref: str | None,
+) -> FlowOutputProjectionPlan:
+    if not str(source_ref or "").strip():
+        plan = default_projection_plan(
+            bundle,
+            output_format=output_format,
+            row_source=row_source,
+        )
+        if row_strategy is None:
+            return plan
+        return plan.model_copy(
+            update={
+                "row_strategy": row_strategy,
+                "columns": default_columns_for_row_source(
+                    bundle,
+                    row_source,
+                    row_strategy=row_strategy,
+                ),
+            }
+        )
+
+    rows, source_update = _rows_for_source_ref(
+        bundle,
+        row_source=row_source,
+        source_ref=source_ref,
+    )
+    selected_strategy = row_strategy or _default_row_strategy_for_formatter_rows(
+        rows=rows,
+        row_source=row_source,
+        output_format=output_format,
+    )
+    available_refs = {str(field_ref) for row in rows for field_ref in row}
+    return FlowOutputProjectionPlan(
+        format=output_format,
+        row_source=row_source,
+        row_strategy=selected_strategy,
+        columns=default_columns_for_row_source(
+            bundle,
+            row_source,
+            row_strategy=selected_strategy,
+            available_refs=available_refs,
+            rows=rows,
+        ),
+        **source_update,
     )
 
 
@@ -719,6 +982,7 @@ def build_output_formatter_tools(
         )
         inventory = inspect_projection_artifacts(bundle, example_limit=limit)
         inventory["source_refs"] = _available_source_refs(bundle)
+        inventory["generic_source_summary"] = _generic_source_summary(bundle)
         return _tool_json({"status": "ok", "inventory": inventory})
 
     @function_tool(
@@ -861,24 +1125,13 @@ def build_output_formatter_tools(
         try:
             selected_row_source = _coerce_row_source(row_source, bundle.default_row_source)
             selected_row_strategy = _coerce_row_strategy(row_strategy)
-            plan = default_projection_plan(
+            plan = _default_projection_plan_for_formatter(
                 bundle,
                 output_format=resolved_output_format,
                 row_source=selected_row_source,
+                row_strategy=selected_row_strategy,
+                source_ref=source_ref,
             )
-            if selected_row_strategy is not None:
-                columns = default_columns_for_row_source(
-                    bundle,
-                    selected_row_source,
-                    row_strategy=selected_row_strategy,
-                )
-                plan = plan.model_copy(
-                    update={
-                        "row_strategy": selected_row_strategy,
-                        "columns": columns,
-                    }
-                )
-            plan = _apply_source_ref(plan, bundle=bundle, source_ref=source_ref)
             return _tool_json(_validate_plan_payload(bundle, plan))
         except Exception as exc:
             return _tool_json({"status": "invalid", "errors": [str(exc)]})

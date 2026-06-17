@@ -74,7 +74,7 @@ def _materialize(payload: dict):
         domain_pack_id="fixture.hints",
         domain_pack_version="0.1.0",
         status=DomainEnvelopeStatus.EXTRACTED,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="Thing",
                 object_id="thing-1",

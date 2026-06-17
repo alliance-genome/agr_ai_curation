@@ -398,7 +398,7 @@ def _looks_like_domain_envelope_payload(payload: Any) -> bool:
     if isinstance(payload.get("curatable_objects"), list):
         return True
     return isinstance(payload.get("domain_pack_id"), str) and isinstance(
-        payload.get("objects"),
+        payload.get("extracted_objects"),
         list,
     )
 
@@ -2735,8 +2735,8 @@ def _domain_envelope_supervisor_minimal_summary(payload: Dict[str, Any]) -> str:
     """Return a compact non-JSON summary for unusual domain-envelope payloads."""
 
     domain_pack_id = str(payload.get("domain_pack_id") or "domain envelope")
-    objects = payload.get("objects")
-    object_count = len(objects) if isinstance(objects, list) else 0
+    extracted_objects = payload.get("extracted_objects")
+    object_count = len(extracted_objects) if isinstance(extracted_objects, list) else 0
     lines = [
         (
             f"Validated domain envelope result for {domain_pack_id}. "
@@ -3641,7 +3641,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
                 "agent": specialist_name,
                 "toolArgs": {
                     "domain_pack_id": envelope.domain_pack_id,
-                    "object_count": len(envelope.objects),
+                    "object_count": len(envelope.extracted_objects),
                 },
                 "phaseTimingsMs": dict(dispatch_phase_timings_ms),
                 "isSpecialistInternal": True,

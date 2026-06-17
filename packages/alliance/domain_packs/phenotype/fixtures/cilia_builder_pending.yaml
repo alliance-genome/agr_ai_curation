@@ -28,7 +28,7 @@ fixtures:
             commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
             source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
             class: PhenotypeAnnotation
-    objects:
+    extracted_objects:
     - object_type: PhenotypeSubject
       object_role: validated_reference
       pending_ref_id: phenotype-subject-1
@@ -230,7 +230,7 @@ fixtures:
         pending_ref_id: phenotype-annotation-1
         object_type: PhenotypeAnnotation
     metadata:
-      semantic_source: domain_envelope.objects
+      semantic_source: domain_envelope.extracted_objects
       legacy_semantic_lists: []
       extraction_summary: Finalized phenotype extraction from builder-staged assertions.
       extraction_metadata:

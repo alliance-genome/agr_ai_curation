@@ -177,7 +177,7 @@ def _sample_pdf_gene_envelope() -> dict:
     return {
         "envelope_id": "sample-fly-publication-gene-envelope",
         "domain_pack_id": "gene",
-        "objects": [
+        "extracted_objects": [
             {
                 "object_type": "Gene",
                 "pending_ref_id": "gene-crumb",
@@ -548,7 +548,7 @@ def test_execute_flow_projects_sample_pdf_artifact_to_runtime_json_file(
                 "agent_name": "Gene Extractor",
             },
         )
-        evidence_records = payload["objects"][0]["evidence_records"]
+        evidence_records = payload["extracted_objects"][0]["evidence_records"]
         execution_state["evidence_registry"].add_many(evidence_records)
         execution_state["completed_steps"].append(
             {

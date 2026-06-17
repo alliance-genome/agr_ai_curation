@@ -23,7 +23,7 @@ fixtures:
               commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
               source_file: model/schema/gene.yaml
               class: Gene
-      objects:
+      extracted_objects:
         - object_type: gene_mention_evidence
           pending_ref_id: gene-mention-evidence-1
           schema_ref:

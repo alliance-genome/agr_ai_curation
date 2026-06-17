@@ -40,7 +40,7 @@ def _completed_domain_step():
             payload_json={
                 "domain_pack_id": "gene",
                 "envelope_id": "env-gene-1",
-                "objects": [
+                "extracted_objects": [
                     {
                         "object_type": "Gene",
                         "object_id": "gene-1",
@@ -97,7 +97,7 @@ def _completed_generic_pdf_step():
                 "domain_pack_id": "generic",
                 "domain_pack_version": "0.1.0",
                 "status": "extracted",
-                "objects": [
+                "extracted_objects": [
                     {
                         "object_type": "generic_reagent_candidate",
                         "pending_ref_id": "generic-obj-1",
@@ -150,6 +150,16 @@ _DEBBIE_TUMOR_COLUMNS = [
     "Tumor type",
     "Section",
     "Extracted phrase",
+]
+
+
+_DEBBIE_ATTRIBUTE_FIELD_REFS = [
+    "object.attribute.organ_cell_type_of_origin",
+    "object.attribute.tumor_classification_term",
+    "object.attribute.species",
+    "object.attribute.tumor_type",
+    "object.attribute.section",
+    "object.attribute.extracted_phrase",
 ]
 
 
@@ -229,8 +239,15 @@ _DEBBIE_TUMOR_ROWS = [
 ]
 
 
-def _debbie_claim_text(values: dict[str, str]) -> str:
-    return "; ".join(f"{column}={values[column]}" for column in _DEBBIE_TUMOR_COLUMNS)
+def _debbie_attribute_payload(values: dict[str, str]) -> dict[str, str]:
+    return {
+        "Organ/Cell Type of origin": values["Organ/Cell Type of origin"],
+        "Tumor classification term": values["Tumor classification term"],
+        "Species": values["Species"],
+        "Tumor type": values["Tumor type"],
+        "Section": values["Section"],
+        "Extracted phrase": values["Extracted phrase"],
+    }
 
 
 def _debbie_tumor_extraction_result() -> CurationExtractionResultRecord:
@@ -245,21 +262,21 @@ def _debbie_tumor_extraction_result() -> CurationExtractionResultRecord:
         flow_run_id=None,
         user_id="debbie",
         candidate_count=len(_DEBBIE_TUMOR_ROWS),
-        conversation_summary="Extracted tumor term rows.",
+        conversation_summary="Extracted tumor observations.",
         payload_json={
-            "summary": "Nine tumor term rows were extracted.",
+            "summary": "Nine tumor observations were extracted.",
             "curatable_objects": [
                 {
-                    "object_type": "generic_claim",
-                    "pending_ref_id": f"generic-claim-{index}",
+                    "object_type": "generic_object",
+                    "pending_ref_id": f"generic-object-{index}",
                     "payload": {
                         "label": row["Tumor classification term"],
-                        "class_key": "generic:generic_claim",
-                        "claim_text": _debbie_claim_text(row),
-                        "claim_type": "tumor term row",
+                        "class_key": "generic:generic_object",
+                        "semantic_class": "tumor_classification_occurrence",
                         "confidence": "high",
+                        "attributes": _debbie_attribute_payload(row),
                         "classification_notes": [
-                            "The prompt requested a row-like tumor term claim.",
+                            "The object represents one evidence-backed tumor observation.",
                         ],
                     },
                     "evidence_record_ids": [f"evidence-{index}"],
@@ -308,7 +325,7 @@ def _completed_domain_source_step(
             payload_json={
                 "domain_pack_id": adapter_key,
                 "envelope_id": f"env-{source_id}",
-                "objects": [
+                "extracted_objects": [
                     {
                         "object_type": object_type,
                         "object_id": object_id,
@@ -583,7 +600,7 @@ def test_mixed_domain_and_extractor_payload_cannot_become_object_rows():
     payload = {
         "envelope_id": "env-mixed-1",
         "domain_pack_id": "generic",
-        "objects": [
+        "extracted_objects": [
             {
                 "object_type": "generic_reagent_candidate",
                 "pending_ref_id": "object-row-1",
@@ -630,7 +647,7 @@ def test_nested_raw_step_output_objects_cannot_become_curation_tsv_rows():
         "result": {
             "domain_pack_id": "gene",
             "envelope_id": "env-raw-gene",
-            "objects": [
+            "extracted_objects": [
                 {
                     "object_type": "Gene",
                     "object_id": "gene-raw-1",
@@ -685,12 +702,14 @@ def test_canonical_domain_envelope_default_tsv_exports_one_row_per_object():
     assert bundle.rows_for_source("evidence")[0]["evidence.evidence_record_id"] == "ev-1"
 
 
-def test_extraction_result_bundle_recovers_debbie_generic_claim_rows():
+def test_extraction_result_bundle_projects_debbie_generic_object_attributes():
     extraction_result = _debbie_tumor_extraction_result()
     payload_json = extraction_result.payload_json
     assert isinstance(payload_json, dict)
     assert all(
         "row" not in curatable_object["payload"]
+        and "claim_text" not in curatable_object["payload"]
+        and curatable_object["object_type"] == "generic_object"
         for curatable_object in payload_json["curatable_objects"]
     )
 
@@ -707,13 +726,19 @@ def test_extraction_result_bundle_recovers_debbie_generic_claim_rows():
         "4170023b-8ba3-44e2-ad7c-dacaa3a3a221"
     )
     assert result.total_count == 9
-    assert [column.key for column in result.columns] == _DEBBIE_TUMOR_COLUMNS
-    assert [column.header for column in result.columns] == _DEBBIE_TUMOR_COLUMNS
-    assert result.rows == _DEBBIE_TUMOR_ROWS
+    assert [column.field_ref for column in result.columns[:6]] == _DEBBIE_ATTRIBUTE_FIELD_REFS
+    assert [column.key for column in result.columns[:6]] == [
+        field_ref.removeprefix("object.attribute.")
+        for field_ref in _DEBBIE_ATTRIBUTE_FIELD_REFS
+    ]
+    assert result.rows[0]["organ_cell_type_of_origin"] == "B cell"
+    assert result.rows[0]["tumor_classification_term"] == "lymphoma"
+    assert result.rows[0]["extracted_phrase"] == "lymphoma incidence; B-cell lymphomas"
+    assert result.rows[-1]["tumor_classification_term"] == "histiocytic sarcoma"
     assert all("object_payload_claim_text" not in row for row in result.rows)
 
 
-def test_generic_claim_table_recovery_rejects_arbitrary_assignments():
+def test_generic_claim_text_is_not_reinterpreted_as_export_columns():
     steps = [
         _completed_domain_source_step(
             step=index,
@@ -724,7 +749,10 @@ def test_generic_claim_table_recovery_rejects_arbitrary_assignments():
             payload={
                 "class_key": "generic:generic_claim",
                 "label": f"Narrative claim {index}",
-                "claim_text": f"p=0.0{index}; n={index + 10}",
+                "claim_text": (
+                    f"cell_type=B cell; tumor_type=lymphoma; "
+                    f"species=Mouse; replicate={index}"
+                ),
             },
         )
         for index in range(1, 3)
@@ -735,28 +763,33 @@ def test_generic_claim_table_recovery_rejects_arbitrary_assignments():
         output_format="csv",
     )
 
+    object_rows = bundle.rows_for_source("object")
+    assert all("object.payload.claim_text" in row for row in object_rows)
     assert all(
-        not any(field_ref.startswith("object.row.") for field_ref in row)
-        for row in bundle.rows_for_source("object")
+        not any(field_ref.startswith("object.attribute.") for field_ref in row)
+        for row in object_rows
     )
+    plan = default_projection_plan(bundle, output_format="csv")
+    result = apply_projection_plan(bundle, plan)
+    exported_keys = {column.key for column in result.columns}
+    assert "cell_type" not in exported_keys
+    assert "tumor_type" not in exported_keys
+    assert "species" not in exported_keys
 
 
-def test_explicit_structured_row_fields_take_priority_over_claim_text_recovery():
+def test_explicit_structured_row_payload_is_not_projected_as_export_columns():
     step = _completed_domain_source_step(
         step=1,
         agent_id="pdf_extraction",
         adapter_key="generic",
-        object_type="generic_claim",
-        object_id="generic-claim-1",
+        object_type="generic_object",
+        object_id="generic-object-1",
         payload={
-            "class_key": "generic:generic_claim",
-            "label": "Structured row claim",
-            "claim_text": "Wrong=claim text; Row=claim text",
-            "attributes": {
-                "structured_row": {
-                    "Organ/Cell Type of origin": "B cell",
-                    "Tumor classification term": "lymphoma",
-                }
+            "class_key": "generic:generic_object",
+            "label": "Structured row object",
+            "structured_row": {
+                "Organ/Cell Type of origin": "B cell",
+                "Tumor classification term": "lymphoma",
             },
         },
     )
@@ -765,17 +798,49 @@ def test_explicit_structured_row_fields_take_priority_over_claim_text_recovery()
         flow_name="Structured Claim Flow",
         output_format="csv",
     )
+    object_rows = bundle.rows_for_source("object")
+
+    assert object_rows
+    assert not any(field_ref.startswith("object.row.") for field_ref in object_rows[0])
     result = apply_projection_plan(
         bundle,
         default_projection_plan(bundle, output_format="csv"),
     )
+    assert "Organ/Cell Type of origin" not in {column.header for column in result.columns}
+    assert "Tumor classification term" not in {column.header for column in result.columns}
 
-    assert result.rows == [
-        {
-            "Organ/Cell Type of origin": "B cell",
-            "Tumor classification term": "lymphoma",
-        }
-    ]
+
+def test_generic_attributes_structured_row_blob_is_not_projected_as_row_fields():
+    step = _completed_domain_source_step(
+        step=1,
+        agent_id="pdf_extraction",
+        adapter_key="generic",
+        object_type="generic_object",
+        object_id="generic-object-1",
+        payload={
+            "class_key": "generic:generic_object",
+            "label": "Structured row blob object",
+            "attributes": {
+                "structured_row": {
+                    "Organ/Cell Type of origin": "B cell",
+                    "Tumor classification term": "lymphoma",
+                },
+            },
+        },
+    )
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[step],
+        flow_name="Structured Attribute Blob Flow",
+        output_format="csv",
+    )
+
+    object_rows = bundle.rows_for_source("object")
+
+    assert object_rows
+    assert not any(
+        field_ref.startswith(("object.row.", "object.attribute."))
+        for field_ref in object_rows[0]
+    )
 
 
 def test_persisted_extraction_ids_define_tsv_source_identity_before_source_keys():
@@ -1060,13 +1125,13 @@ def test_object_projection_supports_rename_omit_reorder_filter_sort_and_concat()
 
 def test_projection_safe_derived_transforms_cover_supported_surface():
     step = _completed_domain_step()
-    step["candidate"].payload_json["objects"][0]["payload"].update(
+    step["candidate"].payload_json["extracted_objects"][0]["payload"].update(
         {
             "alias": "",
             "is_primary": True,
         }
     )
-    step["candidate"].payload_json["objects"][0]["evidence_record_ids"] = ["ev-1", "ev-2"]
+    step["candidate"].payload_json["extracted_objects"][0]["evidence_record_ids"] = ["ev-1", "ev-2"]
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[step],
         flow_name="Projection Flow",
@@ -1382,8 +1447,8 @@ def test_literal_only_projection_can_create_plumbing_row_without_artifacts():
 
 def test_ordered_numeric_filters_do_not_fall_back_to_lexicographic_comparison():
     step = _completed_domain_step()
-    step["candidate"].payload_json["objects"][0]["payload"]["score"] = "10"
-    step["candidate"].payload_json["objects"][1]["payload"]["score"] = "2"
+    step["candidate"].payload_json["extracted_objects"][0]["payload"]["score"] = "10"
+    step["candidate"].payload_json["extracted_objects"][1]["payload"]["score"] = "2"
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[step],
         flow_name="Projection Flow",
@@ -1489,7 +1554,7 @@ def test_chat_grouped_projection_renders_visible_sections():
 
 def test_step_level_evidence_and_validation_metadata_are_projectable_without_payload_records():
     step = _completed_domain_step()
-    for obj in step["candidate"].payload_json["objects"]:
+    for obj in step["candidate"].payload_json["extracted_objects"]:
         obj.pop("evidence", None)
         obj.pop("validation_findings", None)
     step["evidence_records"] = [
@@ -1566,7 +1631,7 @@ def test_step_level_evidence_and_validation_metadata_are_projectable_without_pay
 
 def test_step_level_metadata_uses_explicit_object_refs_without_guessing():
     step = _completed_domain_step()
-    for obj in step["candidate"].payload_json["objects"]:
+    for obj in step["candidate"].payload_json["extracted_objects"]:
         obj.pop("evidence", None)
         obj.pop("validation_findings", None)
     step["evidence_records"] = [
@@ -1709,8 +1774,8 @@ def test_step_level_evidence_deduplicates_embedded_records_by_id():
 def test_planner_inventory_and_preview_bound_long_values():
     long_text = "A" * 1000
     step = _completed_domain_step()
-    step["candidate"].payload_json["objects"][0]["payload"]["long_note"] = long_text
-    step["candidate"].payload_json["objects"][0]["evidence_record_ids"] = list(range(20))
+    step["candidate"].payload_json["extracted_objects"][0]["payload"]["long_note"] = long_text
+    step["candidate"].payload_json["extracted_objects"][0]["evidence_record_ids"] = list(range(20))
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[step],
         flow_name="Projection Flow",

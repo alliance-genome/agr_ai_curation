@@ -104,9 +104,9 @@ def _canonical_gene_envelope(*, object_count: int = 1) -> dict:
     the same row is later renderable by the manifest/inspect_results path.
     """
 
-    objects = []
+    extracted_objects = []
     for index in range(1, object_count + 1):
-        objects.append(
+        extracted_objects.append(
             {
                 "object_type": "gene_mention_evidence",
                 "object_role": "curatable_unit",
@@ -125,7 +125,7 @@ def _canonical_gene_envelope(*, object_count: int = 1) -> dict:
         "domain_pack_id": "gene",
         "domain_pack_version": "0.1.0",
         "status": "extracted",
-        "objects": objects,
+        "extracted_objects": extracted_objects,
         "validation_findings": [],
         "history": [],
         "metadata": {
@@ -269,7 +269,7 @@ def test_partial_unique_index_rejects_direct_duplicate_insert(db_session, docume
         trace_id="trace-inline-other",
         user_id="user-inline-other",
         candidate_count=1,
-        payload_json={"envelope_id": "x", "domain_pack_id": "gene", "objects": []},
+        payload_json={"envelope_id": "x", "domain_pack_id": "gene", "extracted_objects": []},
         idempotency_key=result.idempotency_key,
         payload_hash="some-other-hash",
         extraction_metadata={},

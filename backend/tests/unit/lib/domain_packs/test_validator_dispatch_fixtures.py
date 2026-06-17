@@ -100,7 +100,7 @@ def _result_payload(case: dict[str, Any], request) -> dict[str, Any]:
 
 def _readiness_blockers_for_result(result):
     envelope = result.envelope
-    target_object = envelope.objects[0]
+    target_object = envelope.extracted_objects[0]
     projection_ref = {
         "envelope_id": envelope.envelope_id,
         "object_id": target_object.object_id,
@@ -276,7 +276,7 @@ def test_validator_dispatch_end_to_end_fixture_cases(tmp_path, dispatch_fixture,
     if "materialized_object_type" in expected_projection:
         materialized = next(
             domain_object
-            for domain_object in result.envelope.objects
+            for domain_object in result.envelope.extracted_objects
             if domain_object.object_type
             == expected_projection["materialized_object_type"]
         )
@@ -284,7 +284,7 @@ def test_validator_dispatch_end_to_end_fixture_cases(tmp_path, dispatch_fixture,
             "materialized_object_status"
         ]
         assert materialized.payload == expected_projection["materialized_payload"]
-        assert result.envelope.objects[0].object_refs == [materialized.to_object_ref()]
+        assert result.envelope.extracted_objects[0].object_refs == [materialized.to_object_ref()]
 
     readiness_blockers = _readiness_blockers_for_result(result)
     expected_readiness = case["readiness_outcome"]

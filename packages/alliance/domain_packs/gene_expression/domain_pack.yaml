@@ -1897,7 +1897,7 @@ fixture_packs:
 metadata:
   object_role_key: object_role
   curatable_unit_object_type: GeneExpressionAnnotation
-  semantic_source: domain_envelope.objects
+  semantic_source: domain_envelope.extracted_objects
   legacy_semantic_lists: []
   validators:
     active:

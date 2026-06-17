@@ -27,7 +27,7 @@ def _completed_gene_step() -> dict:
             payload_json={
                 "domain_pack_id": "gene",
                 "envelope_id": "env-gene-1",
-                "objects": [
+                "extracted_objects": [
                     {
                         "object_type": "Gene",
                         "object_id": "gene-1",
@@ -70,6 +70,97 @@ def _completed_gene_step() -> dict:
             },
         ),
     }
+
+
+def _completed_generic_attribute_step() -> dict:
+    return {
+        "step": 1,
+        "extraction_result_id": "extract-generic-1",
+        "agent_id": "pdf_extraction",
+        "agent_name": "General PDF Extraction Agent",
+        "output_preview": "Extracted generic observations.",
+        "candidate": SimpleNamespace(
+            agent_key="pdf_extraction",
+            adapter_key="generic",
+            candidate_count=2,
+            conversation_summary="Extracted two observations.",
+            payload_json={
+                "domain_pack_id": "generic",
+                "envelope_id": "env-generic-1",
+                "extracted_objects": [
+                    {
+                        "object_type": "generic_object",
+                        "object_id": "generic-1",
+                        "payload": {
+                            "class_key": "generic:generic_object",
+                            "label": "B cell lymphoma",
+                            "semantic_class": "tumor_classification_occurrence",
+                            "attributes": {
+                                "Cell Type": "B cell",
+                                "Tumor Classification Term": "lymphoma",
+                                "Species": "Mouse",
+                            },
+                        },
+                    },
+                    {
+                        "object_type": "generic_object",
+                        "object_id": "generic-2",
+                        "payload": {
+                            "class_key": "generic:generic_object",
+                            "label": "T cell lymphoma",
+                            "semantic_class": "tumor_classification_occurrence",
+                            "attributes": {
+                                "Cell Type": "T cell",
+                                "Tumor Classification Term": "T-cell lymphoma",
+                                "Section": "Results",
+                            },
+                        },
+                    },
+                ],
+            },
+        ),
+    }
+
+
+def _completed_generic_claim_text_only_step() -> dict:
+    return {
+        "step": 1,
+        "extraction_result_id": "extract-generic-claim-1",
+        "agent_id": "pdf_extraction",
+        "agent_name": "General PDF Extraction Agent",
+        "output_preview": "Extracted generic claims.",
+        "candidate": SimpleNamespace(
+            agent_key="pdf_extraction",
+            adapter_key="generic",
+            candidate_count=1,
+            payload_json={
+                "domain_pack_id": "generic",
+                "envelope_id": "env-generic-claim-1",
+                "extracted_objects": [
+                    {
+                        "object_type": "generic_claim",
+                        "object_id": "claim-1",
+                        "payload": {
+                            "class_key": "generic:generic_claim",
+                            "label": "Narrative claim",
+                            "claim_text": "cell_type=B cell; tumor_type=lymphoma",
+                        },
+                    }
+                ],
+            },
+        ),
+    }
+
+
+def _completed_mixed_semantic_generic_attribute_step() -> dict:
+    step = _completed_generic_attribute_step()
+    objects = step["candidate"].payload_json["extracted_objects"]
+    objects[1]["payload"]["semantic_class"] = "experimental_condition"
+    objects[1]["payload"]["attributes"] = {
+        "Condition": "irradiated",
+        "Section": "Methods",
+    }
+    return step
 
 
 def _bundle() -> FlowOutputArtifactBundle:
@@ -145,6 +236,156 @@ async def test_formatter_tool_suite_is_plan_only_and_structure_bound():
     assert capabilities["status"] == "ok"
     assert "raw row arrays" in capabilities["invariant"]
     assert capabilities["format"] == "csv"
+
+
+@pytest.mark.asyncio
+async def test_inspection_reports_generic_attribute_inventory_and_claim_text_notice():
+    attribute_tools = build_output_formatter_tools(
+        bundle=build_flow_output_artifact_bundle(
+            completed_steps=[_completed_generic_attribute_step()],
+            flow_name="Generic Formatter Flow",
+            output_format="csv",
+        ),
+        output_format="csv",
+        formatter_agent_id="csv_formatter",
+        save_projected_output=lambda *_args: None,  # type: ignore[arg-type]
+    )
+
+    inventory = await _invoke(
+        _tool_by_name(attribute_tools, "inspect_output_artifacts"),
+        {"example_limit": 1},
+    )
+    summary = inventory["inventory"]["generic_source_summary"]
+    assert summary["generic_source_count"] == 1
+    source = summary["sources"][0]
+    assert source["source_ref"] == "extract-generic-1"
+    assert source["semantic_classes"] == ["tumor_classification_occurrence"]
+    assert source["all_attribute_keys"] == [
+        "cell_type",
+        "tumor_classification_term",
+        "species",
+        "section",
+    ]
+    assert source["shared_attribute_keys"] == [
+        "cell_type",
+        "tumor_classification_term",
+    ]
+    assert source["semantic_class_attribute_groups"] == [
+        {
+            "semantic_class": "tumor_classification_occurrence",
+            "row_count": 2,
+            "all_attribute_keys": [
+                "cell_type",
+                "tumor_classification_term",
+                "species",
+                "section",
+            ],
+            "shared_attribute_keys": [
+                "cell_type",
+                "tumor_classification_term",
+            ],
+            "keys_missing_from_some_objects": ["species", "section"],
+        }
+    ]
+    assert source["notices"][0]["code"] == "generic_attribute_key_drift"
+
+    mixed_tools = build_output_formatter_tools(
+        bundle=build_flow_output_artifact_bundle(
+            completed_steps=[_completed_mixed_semantic_generic_attribute_step()],
+            flow_name="Mixed Semantic Generic Formatter Flow",
+            output_format="csv",
+        ),
+        output_format="csv",
+        formatter_agent_id="csv_formatter",
+        save_projected_output=lambda *_args: None,  # type: ignore[arg-type]
+    )
+    mixed_inventory = await _invoke(
+        _tool_by_name(mixed_tools, "inspect_output_artifacts"),
+        {"example_limit": 1},
+    )
+    mixed_source = mixed_inventory["inventory"]["generic_source_summary"]["sources"][0]
+    assert mixed_source["semantic_classes"] == [
+        "tumor_classification_occurrence",
+        "experimental_condition",
+    ]
+    assert mixed_source["semantic_class_attribute_groups"] == [
+        {
+            "semantic_class": "tumor_classification_occurrence",
+            "row_count": 1,
+            "all_attribute_keys": [
+                "cell_type",
+                "tumor_classification_term",
+                "species",
+            ],
+            "shared_attribute_keys": [
+                "cell_type",
+                "tumor_classification_term",
+                "species",
+            ],
+            "keys_missing_from_some_objects": [],
+        },
+        {
+            "semantic_class": "experimental_condition",
+            "row_count": 1,
+            "all_attribute_keys": ["condition", "section"],
+            "shared_attribute_keys": ["condition", "section"],
+            "keys_missing_from_some_objects": [],
+        },
+    ]
+    assert mixed_source["notices"] == []
+
+    claim_tools = build_output_formatter_tools(
+        bundle=build_flow_output_artifact_bundle(
+            completed_steps=[_completed_generic_claim_text_only_step()],
+            flow_name="Generic Claim Formatter Flow",
+            output_format="csv",
+        ),
+        output_format="csv",
+        formatter_agent_id="csv_formatter",
+        save_projected_output=lambda *_args: None,  # type: ignore[arg-type]
+    )
+    claim_inventory = await _invoke(
+        _tool_by_name(claim_tools, "inspect_output_artifacts"),
+        {"example_limit": 1},
+    )
+    claim_source = claim_inventory["inventory"]["generic_source_summary"]["sources"][0]
+    assert claim_source["all_attribute_keys"] == []
+    assert claim_source["notices"][0]["code"] == "generic_claim_text_only_unstructured"
+
+
+@pytest.mark.asyncio
+async def test_default_plan_source_ref_prefers_selected_generic_attribute_columns():
+    tools = build_output_formatter_tools(
+        bundle=build_flow_output_artifact_bundle(
+            completed_steps=[_completed_gene_step(), _completed_generic_attribute_step()],
+            flow_name="Mixed Source Formatter Flow",
+            output_format="csv",
+        ),
+        output_format="csv",
+        formatter_agent_id="csv_formatter",
+        save_projected_output=lambda *_args: None,  # type: ignore[arg-type]
+    )
+
+    default_plan = await _invoke(
+        _tool_by_name(tools, "build_default_projection_plan"),
+        {
+            "row_source": "object",
+            "source_ref": "extract-generic-1",
+        },
+    )
+
+    assert default_plan["status"] == "ok"
+    assert default_plan["plan"]["source_extraction_result_ids"] == ["extract-generic-1"]
+    assert default_plan["plan"]["row_strategy"] == "wide_union"
+    assert [
+        column["field_ref"]
+        for column in default_plan["plan"]["columns"][:4]
+    ] == [
+        "object.attribute.cell_type",
+        "object.attribute.tumor_classification_term",
+        "object.attribute.species",
+        "object.attribute.section",
+    ]
 
 
 @pytest.mark.asyncio

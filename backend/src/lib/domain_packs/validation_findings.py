@@ -432,7 +432,7 @@ def _finding_field_ref_exists(
     field_ref: FieldRef,
 ) -> bool:
     ref_key = field_ref.object_ref.ref_key()
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         if ref_key in domain_object.ref_keys():
             return field_path_exists(domain_object.payload, field_ref.field_path)
     return False
@@ -468,7 +468,7 @@ def _finding_target(
 
 def _object_id_by_ref(envelope: DomainEnvelope) -> dict[tuple[str, str], str]:
     object_ids: dict[tuple[str, str], str] = {}
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         stable_id = (
             domain_object.object_id
             if domain_object.object_id is not None

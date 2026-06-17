@@ -17,7 +17,7 @@ fixtures:
         name: GeneExpressionAnnotation
         version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
         uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/expression.yaml
-      objects:
+      extracted_objects:
         - object_type: GeneExpressionAnnotation
           object_role: curatable_unit
           pending_ref_id: gene-expression-annotation-206552169
@@ -101,7 +101,7 @@ fixtures:
             pending_ref_id: gene-expression-annotation-206552169
             object_type: GeneExpressionAnnotation
       metadata:
-        semantic_source: domain_envelope.objects
+        semantic_source: domain_envelope.extracted_objects
         legacy_semantic_lists: []
         extraction_summary: Retained one tmem67 metanephros expression annotation with verified source evidence.
         extraction_metadata:

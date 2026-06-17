@@ -1936,7 +1936,7 @@ def _matching_objects(
     matches: list[tuple[CuratableObjectEnvelope, DomainPackObjectDefinition | None]] = (
         []
     )
-    for object_envelope in envelope.objects:
+    for object_envelope in envelope.extracted_objects:
         object_definition = object_definitions.get(object_envelope.object_type)
         if (
             binding.object_types

@@ -929,7 +929,7 @@ def _canonicalize_flow_extraction_candidate(
     return replace(
         candidate,
         payload_json=envelope_payload,
-        candidate_count=len(envelope_payload.get("objects") or []),
+        candidate_count=len(envelope_payload.get("extracted_objects") or []),
         metadata=metadata,
     )
 
@@ -3314,7 +3314,7 @@ def _persist_flow_extraction_candidates(
                 raise ValueError(
                     "Existing flow extraction result "
                     f"{result.extraction_result_id} for key {key!r} uses "
-                    "curatable_objects[] instead of canonical DomainEnvelope.objects[]."
+                    "curatable_objects[] instead of canonical DomainEnvelope.extracted_objects[]."
                 )
             existing_by_key[key] = result
 

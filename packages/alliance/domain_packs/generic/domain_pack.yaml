@@ -81,7 +81,7 @@ object_definitions:
       - field_path: attributes
         field_type: object
         display_name: Attributes
-        description: Additional evidence-backed scalar or structured attributes.
+        description: Additional evidence-backed semantic attributes. Keys must be normalized descriptive names; values must be JSON scalars or short scalar lists, not nested objects, table rows, or encoded CSV/TSV/JSON text.
   - object_type: generic_claim
     display_name: Generic claim
     description: Evidence-backed statement, result, method detail, conclusion, or comparable claim extracted from a document.

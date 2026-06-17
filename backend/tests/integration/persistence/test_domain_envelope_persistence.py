@@ -219,7 +219,7 @@ def _envelope(*, include_second_object: bool = True, symbol: str = "ABC-1") -> D
         domain_pack_version="0.7.0",
         status=DomainEnvelopeStatus.EXTRACTED,
         schema_ref=schema_ref,
-        objects=objects,
+        extracted_objects=objects,
         validation_findings=[
             ValidationFinding(
                 finding_id="finding-symbol-case",
@@ -377,7 +377,7 @@ def test_checkpoint_insert_update_stale_rejection_and_index_regeneration(db_sess
 
     unchanged = db_session.get(DomainEnvelopeModel, "env-persistence-test")
     assert unchanged.revision == 1
-    assert unchanged.envelope_json["objects"][0]["payload"]["gene"]["symbol"] == "ABC-1"
+    assert unchanged.envelope_json["extracted_objects"][0]["payload"]["gene"]["symbol"] == "ABC-1"
 
     update_result = write_domain_envelope_checkpoint(
         db_session,
@@ -394,13 +394,13 @@ def test_checkpoint_insert_update_stale_rejection_and_index_regeneration(db_sess
 
     refreshed = db_session.get(DomainEnvelopeModel, "env-persistence-test")
     assert refreshed.revision == 2
-    assert refreshed.envelope_json["objects"][0]["payload"]["gene"]["symbol"] == "XYZ-2"
+    assert refreshed.envelope_json["extracted_objects"][0]["payload"]["gene"]["symbol"] == "XYZ-2"
     assert _legacy_semantic_row_counts(db_session) == legacy_counts_before
     assert load_domain_envelope(
         db_session,
         "env-persistence-test",
         revision=2,
-    ).objects[0].payload["gene"]["symbol"] == "XYZ-2"
+    ).extracted_objects[0].payload["gene"]["symbol"] == "XYZ-2"
 
     assert db_session.scalar(
         select(DomainEnvelopeObject).where(DomainEnvelopeObject.object_id == "reference-1")
@@ -426,7 +426,7 @@ def test_checkpoint_insert_update_stale_rejection_and_index_regeneration(db_sess
 @pytest.mark.integration
 def test_projection_uniqueness_rolls_back_checkpoint(db_session):
     envelope = _envelope(include_second_object=False)
-    first_object = envelope.objects[0]
+    first_object = envelope.extracted_objects[0]
     duplicate_projection = {
         "projection_type": "workspace_row",
         "projection_key": "gene-1",
@@ -434,7 +434,7 @@ def test_projection_uniqueness_rolls_back_checkpoint(db_session):
     }
     envelope = envelope.model_copy(
         update={
-            "objects": [
+            "extracted_objects": [
                 first_object.model_copy(
                     update={
                         "metadata": {
@@ -462,10 +462,10 @@ def test_projection_uniqueness_rolls_back_checkpoint(db_session):
 @pytest.mark.integration
 def test_malformed_projection_metadata_rolls_back_checkpoint(db_session):
     envelope = _envelope(include_second_object=False)
-    first_object = envelope.objects[0]
+    first_object = envelope.extracted_objects[0]
     envelope = envelope.model_copy(
         update={
-            "objects": [
+            "extracted_objects": [
                 first_object.model_copy(
                     update={
                         "metadata": {
@@ -493,10 +493,10 @@ def test_malformed_projection_metadata_rolls_back_checkpoint(db_session):
 @pytest.mark.integration
 def test_projection_entries_require_projection_json(db_session):
     envelope = _envelope(include_second_object=False)
-    first_object = envelope.objects[0]
+    first_object = envelope.extracted_objects[0]
     envelope = envelope.model_copy(
         update={
-            "objects": [
+            "extracted_objects": [
                 first_object.model_copy(
                     update={
                         "metadata": {
@@ -529,7 +529,7 @@ def test_projection_entries_require_projection_json(db_session):
 
 def test_missing_stable_object_id_fails_loudly():
     envelope = _envelope(include_second_object=False)
-    first_object = envelope.objects[0]
+    first_object = envelope.extracted_objects[0]
     object_without_identity = first_object.model_copy(
         update={
             "object_id": None,

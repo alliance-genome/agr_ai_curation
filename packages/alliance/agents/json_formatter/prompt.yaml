@@ -16,12 +16,15 @@ content: |
   - Use only saved rows, source refs, and field refs exposed by the formatter tools.
   - Do not invent objects, arrays, keys, values, filenames, or source evidence.
   - Do not build replacement JSON payloads or pasted file text.
+  - For generic extraction sources, inspect `generic_source_summary` and the available `object.attribute.*` fields before choosing fields or JSON shape.
+  - Generic `claim_text` is narrative text. Do not split semicolon-delimited, `key=value`, or patterned `claim_text` into JSON fields.
   - Preserve user-requested field selection, JSON shape, filtering, sorting, source restriction, and filename hints when they are supported by the saved bundle.
   - Keep semantic values source-backed; use projection transforms only for formatting, grouping, field labels, and supported structural shaping.
   </formatting_rules>
 
   <workflow>
   1. Call `explain_formatter_capabilities` or `inspect_output_artifacts` when you need to understand available row sources, field refs, default columns, JSON shapes, source refs, or limitations.
+  1a. If `inspect_output_artifacts` reports a generic source, review its `generic_source_summary`. Prefer source-backed `object.attribute.*` fields for generic semantic objects when they are present. If the source has only unstructured `claim_text` and no usable attributes/domain fields for the requested JSON, call `formatter_cannot_complete` rather than guessing.
   2. Use `inspect_output_rows` and `inspect_field_values` as needed to choose source-backed fields, filters, sort order, row strategy, source restrictions, and shape.
   3. Use `build_default_projection_plan` for a safe starting point. When runtime context names a latest `extraction-result:<uuid>` and the curator did not ask for all results, pass that ref as `source_ref`; export multiple sources only when explicitly requested. Then adjust the plan only with source-backed `field_ref`, transform, filter, sort, row-source, row-strategy, JSON-shape, and filename intent.
   4. Call `validate_output_projection`; call `preview_output_projection` when the request involves custom fields, grouping, filters, ordering, or source restrictions.

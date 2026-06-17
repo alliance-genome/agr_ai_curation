@@ -86,7 +86,7 @@ def _payload_context(candidate: dict[str, Any]) -> dict[str, Any]:
 def _gene_expression_fixture_candidate() -> dict[str, Any]:
     fixture_pack = load_domain_fixture_pack(GENE_EXPRESSION_FIXTURE_PATH)
     envelope = fixture_pack.fixtures[0].envelope
-    annotation = envelope.objects[0]
+    annotation = envelope.extracted_objects[0]
     object_id = annotation.pending_ref_id or annotation.object_id
     assert object_id is not None
     return {
@@ -94,7 +94,7 @@ def _gene_expression_fixture_candidate() -> dict[str, Any]:
         "adapter_key": GENE_EXPRESSION_ADAPTER_KEY,
         "display_label": "Tmem67 expression",
         "secondary_label": "metanephros",
-        "semantic_source": "domain_envelope.objects",
+        "semantic_source": "domain_envelope.extracted_objects",
         "projection_ref": {
             "envelope_id": envelope.envelope_id,
             "object_id": object_id,
@@ -120,7 +120,7 @@ def _gene_expression_fixture_candidate() -> dict[str, Any]:
         "model_field_ref": {},
         "projection_refs": [],
         "provider_refs": {},
-        "metadata": {"semantic_source": "domain_envelope.objects"},
+        "metadata": {"semantic_source": "domain_envelope.extracted_objects"},
     }
 
 
@@ -210,7 +210,7 @@ def test_disease_export_adapter_projects_complete_envelope_to_target_payload():
     payload = submission_payload.payload_json
     assert payload is not None
     assert payload["payload_status"] == "ready"
-    assert payload["semantic_source"] == "domain_envelope.objects"
+    assert payload["semantic_source"] == "domain_envelope.extracted_objects"
     assert payload["adapter_blockers"] == []
     annotation = payload["disease_annotations"][0]
     assert annotation["target_class"] == "GeneDiseaseAnnotation"

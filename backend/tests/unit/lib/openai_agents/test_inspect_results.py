@@ -97,7 +97,7 @@ def _payload() -> dict:
         "envelope_id": "env-inspect",
         "domain_pack_id": "fixture.inspect",
         "status": "validated",
-        "objects": [
+        "extracted_objects": [
             {
                 "object_type": "Assertion",
                 "object_role": "curatable_unit",
@@ -142,7 +142,7 @@ def _payload() -> dict:
 
 def _payload_with_objects(object_count: int) -> dict:
     payload = _payload()
-    payload["objects"] = [
+    payload["extracted_objects"] = [
         {
             "object_type": "Assertion",
             "object_role": "curatable_unit",

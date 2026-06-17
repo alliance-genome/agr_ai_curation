@@ -712,7 +712,7 @@ def _create_domain_envelope_submission_session(
         envelope_id="museum-envelope-1",
         domain_pack_id="museum.catalog",
         status=DomainEnvelopeStatus.VALIDATED,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="MuseumArtifact",
                 object_id="artifact-1",
@@ -758,7 +758,7 @@ def _create_domain_envelope_submission_session(
             schema_ref_json={},
             object_model_ref_json={},
             model_field_ref_json={},
-            projection_json=envelope.objects[0].model_dump(mode="json"),
+            projection_json=envelope.extracted_objects[0].model_dump(mode="json"),
             created_at=now,
             updated_at=now,
         )
@@ -777,7 +777,7 @@ def _create_domain_envelope_submission_session(
         envelope_id=envelope.envelope_id,
         object_id="artifact-1",
         envelope_revision=envelope_revision,
-        candidate_metadata={"semantic_source": "domain_envelope.objects"},
+        candidate_metadata={"semantic_source": "domain_envelope.extracted_objects"},
         normalized_payload={"artifact": {"title": "POISONED LEGACY NORMALIZED PAYLOAD"}},
         created_at=now,
         updated_at=now,
@@ -1842,7 +1842,7 @@ def test_validate_candidate_uses_envelope_findings_instead_of_dirty_draft_state(
     envelope = DomainEnvelope(
         envelope_id="env-validation-on-demand",
         domain_pack_id="fixture.pack",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="GeneAssertion",
                 pending_ref_id="object-1",
@@ -1900,7 +1900,7 @@ def test_validate_candidate_uses_envelope_findings_instead_of_dirty_draft_state(
         object_id="object-1",
         envelope_revision=1,
         normalized_payload={},
-        candidate_metadata={"semantic_source": "domain_envelope.objects"},
+        candidate_metadata={"semantic_source": "domain_envelope.extracted_objects"},
         created_at=_now(),
         updated_at=_now(),
     )
@@ -1939,7 +1939,7 @@ def test_validate_candidate_uses_envelope_findings_instead_of_dirty_draft_state(
             ],
             created_at=_now(),
             updated_at=_now(),
-            draft_metadata={"semantic_source": "domain_envelope.objects"},
+            draft_metadata={"semantic_source": "domain_envelope.extracted_objects"},
         )
     )
     db_session.commit()
@@ -2049,7 +2049,7 @@ def _patch_workspace_validation_dispatch(
         assert domain_pack is loaded_pack
         assert kwargs["source_envelope_revision"] == expected_source_revision
         if expected_title is not None:
-            assert envelope.objects[0].payload["artifact"]["title"] == expected_title
+            assert envelope.extracted_objects[0].payload["artifact"]["title"] == expected_title
         if finding is None:
             return SimpleNamespace(envelope=envelope, appended_findings=())
         updated_envelope, appended_findings = append_validation_findings_to_envelope(
@@ -2941,7 +2941,7 @@ def test_submission_export_reads_domain_envelope_at_expected_revision(
     assert payload["candidates"] == []
     envelope_candidate = payload["domain_envelope_candidates"][0]
     assert envelope_candidate["candidate_id"] == seeded["candidate_id"]
-    assert envelope_candidate["semantic_source"] == "domain_envelope.objects"
+    assert envelope_candidate["semantic_source"] == "domain_envelope.extracted_objects"
     assert envelope_candidate["payload"]["artifact"]["title"] == "Bronze astrolabe"
     assert "POISONED" not in json.dumps(payload)
 
@@ -2951,7 +2951,7 @@ def test_domain_envelope_snapshot_includes_selected_object_reference_closure():
         envelope_id="museum-envelope-1",
         domain_pack_id="museum.catalog",
         status=DomainEnvelopeStatus.VALIDATED,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="MuseumSource",
                 object_id="source-1",
@@ -3017,7 +3017,7 @@ def test_domain_envelope_snapshot_includes_selected_object_reference_closure():
     )
 
     assert snapshot["selected_object_ids"] == ["artifact-1"]
-    assert [item["object_id"] for item in snapshot["objects"]] == [
+    assert [item["object_id"] for item in snapshot["extracted_objects"]] == [
         "source-1",
         "quote-1",
         "artifact-1",
@@ -3025,21 +3025,20 @@ def test_domain_envelope_snapshot_includes_selected_object_reference_closure():
     assert [finding["code"] for finding in snapshot["validation_findings"]] == [
         "museum.artifact.checked"
     ]
-    DomainEnvelope.model_validate(
-        {
-            key: snapshot[key]
-            for key in (
-                "envelope_id",
-                "domain_pack_id",
-                "domain_pack_version",
-                "status",
-                "schema_ref",
-                "objects",
-                "validation_findings",
-                "metadata",
-            )
-        }
-    )
+    validation_payload = {
+        key: snapshot[key]
+        for key in (
+            "envelope_id",
+            "domain_pack_id",
+            "domain_pack_version",
+            "status",
+            "schema_ref",
+            "extracted_objects",
+            "validation_findings",
+            "metadata",
+        )
+    }
+    DomainEnvelope.model_validate(validation_payload)
 
 
 def test_session_serializer_preserves_materialized_validator_findings_and_refs(
@@ -3099,8 +3098,8 @@ def test_session_serializer_preserves_materialized_validator_findings_and_refs(
     envelope = serializer_module._candidate_domain_envelope(candidate)
 
     assert envelope is not None
-    assert envelope.objects[0].object_refs == [reference_ref]
-    assert envelope.objects[1].metadata["validator_materialization"] == {
+    assert envelope.extracted_objects[0].object_refs == [reference_ref]
+    assert envelope.extracted_objects[1].metadata["validator_materialization"] == {
         "source": "domain_validator_result",
         "validator_binding_id": "fixture.gene_lookup",
     }
@@ -4108,7 +4107,7 @@ def test_waive_validation_finding_records_audit_action(
     assert response.envelope_revision == 2
     assert response.previous_status == "open"
     assert response.new_status == "waived"
-    assert stored_envelope.objects[0].payload == {
+    assert stored_envelope.extracted_objects[0].payload == {
         "artifact": {
             "accession_id": "A-1",
             "title": "Bronze astrolabe",
@@ -4355,7 +4354,7 @@ def test_validation_rerun_keeps_waiver_only_for_identical_finding_identity():
     envelope = DomainEnvelope(
         envelope_id="museum-envelope-1",
         domain_pack_id="museum.catalog",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="MuseumArtifact",
                 object_id="artifact-1",

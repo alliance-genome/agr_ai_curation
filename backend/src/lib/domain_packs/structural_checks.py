@@ -68,7 +68,7 @@ def _required_field_findings(
 ) -> list[ValidationFinding]:
     object_definitions = registry.object_definitions_by_type
     findings: list[ValidationFinding] = []
-    for domain_object in envelope.objects:
+    for domain_object in envelope.extracted_objects:
         object_definition = object_definitions.get(domain_object.object_type)
         if object_definition is None:
             continue

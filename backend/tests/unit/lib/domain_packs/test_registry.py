@@ -111,9 +111,9 @@ def test_registry_loads_provider_agnostic_fixture_pack_with_json_schema_refs():
     assert pack.metadata.object_definitions[0].model_ref == "ArtifactPayload"
     assert fixture_pack.domain_pack_id == "museum.catalog"
     assert fixture.envelope.schema_ref.provider == "json-schema"
-    assert fixture.envelope.objects[0].object_type == "MuseumArtifact"
-    assert fixture.envelope.objects[0].schema_ref.provider == "json-schema"
-    assert fixture.envelope.objects[1].object_refs[0].pending_ref_id == "artifact-1"
+    assert fixture.envelope.extracted_objects[0].object_type == "MuseumArtifact"
+    assert fixture.envelope.extracted_objects[0].schema_ref.provider == "json-schema"
+    assert fixture.envelope.extracted_objects[1].object_refs[0].pending_ref_id == "artifact-1"
 
 
 def test_metadata_loader_fails_on_invalid_enum_reference(tmp_path: Path):
@@ -219,7 +219,7 @@ fixtures:
     envelope:
       envelope_id: fixture-env-1
       domain_pack_id: fixture.core
-      objects:
+      extracted_objects:
         - object_type: GeneAssertion
           pending_ref_id: pending-gene-1
           payload:
@@ -244,7 +244,7 @@ fixtures:
     fixture_pack = load_domain_fixture_pack(pack_dir / fixture_ref.path)
 
     assert registry.get_pack("fixture.core").metadata.fixture_packs[0].fixture_pack_id == "smoke"
-    assert fixture_pack.fixtures[0].envelope.objects[0].pending_ref_id == "pending-gene-1"
+    assert fixture_pack.fixtures[0].envelope.extracted_objects[0].pending_ref_id == "pending-gene-1"
 
 
 def test_fixture_pack_loader_rejects_envelope_domain_pack_mismatch(tmp_path: Path):
@@ -260,7 +260,7 @@ fixtures:
     envelope:
       envelope_id: fixture-env-1
       domain_pack_id: other.pack
-      objects:
+      extracted_objects:
         - object_type: GeneAssertion
           pending_ref_id: pending-gene-1
           payload:

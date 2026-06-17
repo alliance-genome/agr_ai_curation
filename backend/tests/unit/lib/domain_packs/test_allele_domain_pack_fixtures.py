@@ -48,20 +48,20 @@ def test_allele_domain_pack_loads_tool_verified_pending_fixture():
     envelope = fixture.envelope
 
     assert validate_pending_allele_envelope(envelope) == ()
-    assert envelope.metadata["semantic_source"] == "domain_envelope.objects"
+    assert envelope.metadata["semantic_source"] == "domain_envelope.extracted_objects"
     assert LEGACY_SEMANTIC_KEYS.isdisjoint(envelope.metadata)
     assert envelope.metadata["raw_mentions"][0]["mention"] == "daf-2(m41)"
     assert envelope.metadata["exclusions"][0]["reason_code"] == "background_genotype_only"
     assert envelope.metadata["ambiguities"][0]["mention"] == "daf-2(mx)"
 
     association = next(
-        obj for obj in envelope.objects if obj.object_type == "AllelePaperEvidenceAssociation"
+        obj for obj in envelope.extracted_objects if obj.object_type == "AllelePaperEvidenceAssociation"
     )
     assert association.object_role == "curatable_unit"
     assert "allele_identifier" not in association.payload
     assert association.evidence_record_ids == ["daf-2-m41-evidence-1"]
     assert association.metadata["write_behavior"]["status"] == "blocked"
-    mention = next(obj for obj in envelope.objects if obj.object_type == "AlleleMention")
+    mention = next(obj for obj in envelope.extracted_objects if obj.object_type == "AlleleMention")
     assert mention.payload["taxon"] == {"curie": "NCBITaxon:6239"}
     assert mention.evidence_record_ids == ["daf-2-m41-evidence-1"]
 
@@ -127,7 +127,7 @@ def test_allele_domain_pack_validator_allows_nested_payload_keys_named_like_lega
     assert fixture_ref is not None
     fixture_pack = load_domain_fixture_pack(pack.pack_path / fixture_ref.path)
     envelope = fixture_pack.fixtures[0].envelope
-    objects = list(envelope.objects)
+    objects = list(envelope.extracted_objects)
     objects[0] = objects[0].model_copy(
         update={
             "payload": {
@@ -137,6 +137,6 @@ def test_allele_domain_pack_validator_allows_nested_payload_keys_named_like_lega
         }
     )
 
-    envelope_with_nested_payload_key = envelope.model_copy(update={"objects": objects})
+    envelope_with_nested_payload_key = envelope.model_copy(update={"extracted_objects": objects})
 
     assert validate_pending_allele_envelope(envelope_with_nested_payload_key) == ()

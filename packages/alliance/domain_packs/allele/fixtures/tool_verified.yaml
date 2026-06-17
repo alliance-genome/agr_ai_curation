@@ -17,7 +17,7 @@ fixtures:
         name: Alliance Allele Paper Evidence Domain Pack
         version: 0.1.0
         definition_state: in_development
-      objects:
+      extracted_objects:
         - object_type: Reference
           object_role: validated_reference
           pending_ref_id: paper-reference-1
@@ -158,12 +158,12 @@ fixtures:
           actor_id: allele_extractor
           message: Converted tool-verified allele extraction output to pending domain envelope.
           details:
-            semantic_source: domain_envelope.objects
+            semantic_source: domain_envelope.extracted_objects
             retained_allele_count: 1
             excluded_count: 1
             ambiguous_count: 1
       metadata:
-        semantic_source: domain_envelope.objects
+        semantic_source: domain_envelope.extracted_objects
         source_fixture_id: tool_verified_allele_paper
         source_agent: allele_extractor
         raw_mentions:

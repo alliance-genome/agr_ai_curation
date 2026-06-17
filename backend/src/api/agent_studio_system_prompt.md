@@ -64,7 +64,7 @@ Many agents have group-specific rule files (e.g., WormBase anatomy terms WBbt, F
 <domain_envelopes>
 ## Domain Envelope Architecture
 
-For current 0.7.x domain-pack curation runs, domain envelopes are the semantic source of truth. Treat `domain_envelope.objects` as the authoritative curation state and cite stable references back to curators:
+For current 0.7.x domain-pack curation runs, domain envelopes are the semantic source of truth. Treat `domain_envelope.extracted_objects` as the authoritative curation state and cite stable references back to curators:
 
 - `envelope_id` and `envelope_revision`
 - `object_id` or `pending_ref_id`

@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import datetime
 import json
 import math
+import re
 from typing import Any, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, Field
@@ -200,17 +201,11 @@ _VALIDATION_RECORD_KEYS = {
 }
 
 _ORDERED_FILTER_OPS = {"gt", "gte", "lt", "lte"}
-_STRUCTURED_ROW_PAYLOAD_KEYS = (
-    "structured_row",
-    "row_data",
-    "export_row",
-    "table_row",
-    "row_fields",
-)
-_OBJECT_ROW_FIELD_PREFIX = "object.row."
 _NO_CANONICAL_OBJECT_LIST_WARNING = (
     "No canonical curation object list was found for this artifact."
 )
+_OBJECT_ATTRIBUTE_FIELD_PREFIX = "object.attribute."
+_ATTRIBUTE_KEY_PATTERN = re.compile(r"[^0-9a-zA-Z]+")
 
 
 class FlowOutputTransformSpec(BaseModel):
@@ -457,9 +452,34 @@ def _scalar_payload_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _normalize_attribute_key(key: Any) -> str:
+    normalized = _ATTRIBUTE_KEY_PATTERN.sub("_", str(key or "").strip().lower())
+    return re.sub(r"_+", "_", normalized).strip("_")
+
+
+def _is_scalar_attribute_value(value: Any) -> bool:
+    return isinstance(value, (str, int, float, bool)) or value is None
+
+
+def _scalar_attribute_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
+    attributes = payload.get("attributes")
+    if not isinstance(attributes, Mapping):
+        return {}
+    fields: dict[str, Any] = {}
+    for key, value in attributes.items():
+        normalized_key = _normalize_attribute_key(key)
+        if not normalized_key:
+            continue
+        if _is_scalar_attribute_value(value) or (
+            isinstance(value, list) and all(_is_scalar_attribute_value(item) for item in value)
+        ):
+            fields.setdefault(normalized_key, value)
+    return fields
+
+
 def _field_label(field_ref: str) -> str:
-    if field_ref.startswith(_OBJECT_ROW_FIELD_PREFIX):
-        return field_ref.removeprefix(_OBJECT_ROW_FIELD_PREFIX)
+    if field_ref.startswith(_OBJECT_ATTRIBUTE_FIELD_PREFIX):
+        return field_ref.removeprefix(_OBJECT_ATTRIBUTE_FIELD_PREFIX).replace("_", " ").title()
     if field_ref in _FIELD_LABEL_OVERRIDES:
         return _FIELD_LABEL_OVERRIDES[field_ref]
     suffix = field_ref.split(".")[-1]
@@ -467,8 +487,8 @@ def _field_label(field_ref: str) -> str:
 
 
 def _column_key_from_ref(field_ref: str) -> str:
-    if field_ref.startswith(_OBJECT_ROW_FIELD_PREFIX):
-        return field_ref.removeprefix(_OBJECT_ROW_FIELD_PREFIX)
+    if field_ref.startswith(_OBJECT_ATTRIBUTE_FIELD_PREFIX):
+        return field_ref.removeprefix(_OBJECT_ATTRIBUTE_FIELD_PREFIX)
     if field_ref in _ARTIFACT_KEY_BY_REF:
         return _ARTIFACT_KEY_BY_REF[field_ref]
     return field_ref.replace(".", "_").replace("[", "_").replace("]", "")
@@ -569,121 +589,6 @@ def _object_payload(item: Mapping[str, Any]) -> Mapping[str, Any]:
     }
 
 
-def _scalar_row_fields(row: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        str(key).strip(): value
-        for key, value in row.items()
-        if str(key).strip()
-        and (
-            isinstance(value, (str, int, float, bool))
-            or value is None
-            or isinstance(value, list)
-        )
-    }
-
-
-def _explicit_structured_row_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
-    for key in _STRUCTURED_ROW_PAYLOAD_KEYS:
-        value = payload.get(key)
-        if isinstance(value, Mapping):
-            fields = _scalar_row_fields(value)
-            if fields:
-                return fields
-    attributes = payload.get("attributes")
-    if isinstance(attributes, Mapping):
-        for key in _STRUCTURED_ROW_PAYLOAD_KEYS:
-            value = attributes.get(key)
-            if isinstance(value, Mapping):
-                fields = _scalar_row_fields(value)
-                if fields:
-                    return fields
-    return {}
-
-
-def _parse_key_value_claim_text(value: Any) -> dict[str, str]:
-    claim_text = _string_value(value)
-    if not claim_text:
-        return {}
-    segments = [segment.strip() for segment in claim_text.split(";") if segment.strip()]
-    if len(segments) < 2:
-        return {}
-    key_value_count = sum(1 for segment in segments if "=" in segment)
-    if key_value_count < 2:
-        return {}
-
-    fields: dict[str, str] = {}
-    current_key: str | None = None
-    for segment in segments:
-        if "=" not in segment:
-            if current_key is None:
-                return {}
-            fields[current_key] = f"{fields[current_key]}; {segment}"
-            continue
-        key, raw_value = segment.split("=", 1)
-        key = key.strip()
-        parsed_value = raw_value.strip()
-        if not key or key in fields:
-            return {}
-        fields[key] = parsed_value
-        current_key = key
-    return fields
-
-
-def _is_generic_claim_object(item: Mapping[str, Any], payload: Mapping[str, Any]) -> bool:
-    object_type = _string_value(item.get("object_type") or item.get("type")).lower()
-    class_key = _string_value(payload.get("class_key")).lower()
-    return object_type == "generic_claim" or class_key == "generic:generic_claim"
-
-
-def _inferred_generic_claim_table_rows(
-    items: Sequence[Mapping[str, Any]],
-) -> dict[int, dict[str, str]]:
-    if len(items) < 2:
-        return {}
-
-    parsed_rows: dict[int, dict[str, str]] = {}
-    for index, item in enumerate(items):
-        payload = _object_payload(item)
-        if not _is_generic_claim_object(item, payload):
-            return {}
-        fields = _parse_key_value_claim_text(payload.get("claim_text"))
-        if not fields:
-            return {}
-        parsed_rows[index] = fields
-
-    first_fields = next(iter(parsed_rows.values()), {})
-    field_order = list(first_fields)
-    if len(field_order) < 3:
-        return {}
-    field_set = set(field_order)
-    if any(set(fields) != field_set for fields in parsed_rows.values()):
-        return {}
-    if any(
-        _is_empty(fields[field])
-        for fields in parsed_rows.values()
-        for field in field_order
-    ):
-        return {}
-
-    return {
-        index: {
-            field: fields[field]
-            for field in field_order
-        }
-        for index, fields in parsed_rows.items()
-    }
-
-
-def _object_row_fields(
-    payload: Mapping[str, Any],
-    inferred_table_fields: Mapping[str, Any] | None,
-) -> dict[str, Any]:
-    explicit_fields = _explicit_structured_row_fields(payload)
-    if explicit_fields:
-        return explicit_fields
-    return dict(inferred_table_fields or {})
-
-
 def _object_validation_status(item: Mapping[str, Any]) -> str:
     for key in ("validation_status", "status"):
         value = _string_value(item.get(key))
@@ -764,7 +669,6 @@ def _object_rows_from_items(
     items: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    inferred_claim_table_rows = _inferred_generic_claim_table_rows(items)
     for index, item in enumerate(items, start=1):
         payload = _object_payload(item)
         object_id = _object_id_from_item(item, index)
@@ -783,11 +687,8 @@ def _object_rows_from_items(
         )
         for key, value in _scalar_payload_fields(payload).items():
             row[f"object.payload.{key}"] = value
-        for key, value in _object_row_fields(
-            payload,
-            inferred_claim_table_rows.get(index - 1),
-        ).items():
-            row[f"{_OBJECT_ROW_FIELD_PREFIX}{key}"] = value
+        for key, value in _scalar_attribute_fields(payload).items():
+            row[f"{_OBJECT_ATTRIBUTE_FIELD_PREFIX}{key}"] = value
         rows.append(row)
     return rows
 
@@ -1082,11 +983,19 @@ def _validation_records_from_step_metadata(step: Mapping[str, Any]) -> list[Mapp
     return records
 
 
+def _has_mixed_canonical_and_extractor_objects(payload: Mapping[str, Any]) -> bool:
+    return isinstance(payload.get("extracted_objects"), list) and isinstance(
+        payload.get("curatable_objects"), list
+    )
+
+
 def _payload_shape(payload: Any) -> Literal[
     "domain_envelope",
     "non_structured",
 ]:
     if isinstance(payload, Mapping):
+        if _has_mixed_canonical_and_extractor_objects(payload):
+            return "non_structured"
         if is_canonical_domain_envelope_payload(payload):
             return "domain_envelope"
     return "non_structured"
@@ -1099,7 +1008,7 @@ def _payload_object_items(
 ) -> tuple[list[Mapping[str, Any]], list[str]]:
     warnings: list[str] = []
     if shape == "domain_envelope":
-        value = payload.get("objects")
+        value = payload.get("extracted_objects")
     else:
         value = None
     if isinstance(value, list):
@@ -1116,7 +1025,9 @@ def _candidate_payload_object_items(
     Literal["domain_envelope_extraction"] | None,
 ]:
     """Return trusted candidate object rows for extractor-shaped payloads."""
-    if isinstance(payload.get("objects"), list):
+    if isinstance(payload.get("objects"), list) or isinstance(
+        payload.get("extracted_objects"), list
+    ):
         return [], [], None
 
     value = payload.get("curatable_objects")
@@ -1599,14 +1510,14 @@ def default_projection_plan(
     if selected_row_source == "object":
         object_rows = bundle.rows_for_source("object")
         source_identities = _source_identities_for_rows(object_rows)
-        has_structured_row_fields = any(
-            field_ref.startswith(_OBJECT_ROW_FIELD_PREFIX)
+        has_attribute_fields = any(
+            field_ref.startswith(_OBJECT_ATTRIBUTE_FIELD_PREFIX)
             for row in object_rows
             for field_ref in row
         )
         if len(source_identities) == 1 and (
             output_format == "tsv"
-            or (output_format == "csv" and has_structured_row_fields)
+            or (output_format == "csv" and has_attribute_fields)
         ):
             row_strategy = "wide_union"
     columns = default_columns_for_row_source(
@@ -1628,29 +1539,54 @@ def default_columns_for_row_source(
     *,
     row_strategy: FlowOutputRowStrategy = "object",
     available_refs: set[str] | None = None,
+    rows: Sequence[Mapping[str, Any]] | None = None,
 ) -> list[FlowOutputColumnSpec]:
     available = available_refs if available_refs is not None else bundle.field_refs_for_source(row_source)
-    row_field_refs: list[str] = []
+    selected_rows = rows if rows is not None else bundle.rows_for_source(row_source)
+    attribute_field_refs: list[str] = []
     if row_source == "object" and row_strategy == "wide_union":
-        seen_row_field_refs: set[str] = set()
-        for row in bundle.rows_for_source(row_source):
-            for field_ref in row:
-                if (
-                    field_ref.startswith(_OBJECT_ROW_FIELD_PREFIX)
-                    and field_ref in available
-                    and field_ref not in seen_row_field_refs
-                ):
-                    seen_row_field_refs.add(field_ref)
-                    row_field_refs.append(field_ref)
-        if row_field_refs:
-            return [
-                FlowOutputColumnSpec(
-                    key=_column_key_from_ref(field_ref),
-                    header=_field_label(field_ref),
-                    field_ref=field_ref,
-                )
-                for field_ref in row_field_refs
+        all_attribute_refs = _first_seen_refs(selected_rows, prefix=_OBJECT_ATTRIBUTE_FIELD_PREFIX)
+        shared_attribute_refs = _shared_refs(selected_rows, refs=all_attribute_refs)
+        attribute_field_refs = [
+            *shared_attribute_refs,
+            *[
+                field_ref
+                for field_ref in all_attribute_refs
+                if field_ref not in shared_attribute_refs
+            ],
+        ]
+        attribute_field_refs = [
+            field_ref
+            for field_ref in attribute_field_refs
+            if field_ref in available
+        ]
+
+    if row_source == "object" and row_strategy == "wide_union" and attribute_field_refs:
+        selected_identity_refs = [
+            field_ref
+            for field_ref in (
+                "object.label",
+                "object.payload.semantic_class",
+                "object.object_id",
+                "object.evidence_record_ids",
+            )
+            if field_ref in available
+        ]
+        return [
+            FlowOutputColumnSpec(
+                key=_column_key_from_ref(field_ref),
+                header=_field_label(field_ref),
+                field_ref=field_ref,
+            )
+            for field_ref in [
+                *attribute_field_refs,
+                *[
+                    field_ref
+                    for field_ref in selected_identity_refs
+                    if field_ref not in attribute_field_refs
+                ],
             ]
+        ]
 
     if row_source == "artifact":
         priority = ARTIFACT_DEFAULT_FIELD_REFS
@@ -1674,8 +1610,8 @@ def default_columns_for_row_source(
                 for field in bundle.field_catalog
                 if field.row_source == row_source
                 and (
-                    field.ref.startswith("object.payload.")
-                    or field.ref.startswith(_OBJECT_ROW_FIELD_PREFIX)
+                    field.ref.startswith(_OBJECT_ATTRIBUTE_FIELD_PREFIX)
+                    or field.ref.startswith("object.payload.")
                 )
                 and field.ref not in selected
             ],
@@ -1788,6 +1724,36 @@ def _field_refs_for_rows(rows: Sequence[Mapping[str, Any]]) -> set[str]:
         for row in rows
         for key in row
     }
+
+
+def _first_seen_refs(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    prefix: str,
+) -> list[str]:
+    refs: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for field_ref in row:
+            field_ref = str(field_ref)
+            if field_ref.startswith(prefix) and field_ref not in seen:
+                seen.add(field_ref)
+                refs.append(field_ref)
+    return refs
+
+
+def _shared_refs(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    refs: Sequence[str],
+) -> list[str]:
+    if not rows:
+        return []
+    return [
+        field_ref
+        for field_ref in refs
+        if all(not _is_empty(row.get(field_ref)) for row in rows)
+    ]
 
 
 def _canonical_object_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:

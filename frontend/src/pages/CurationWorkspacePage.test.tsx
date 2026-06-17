@@ -443,7 +443,7 @@ function buildEnvelopeReviewRows(): DomainEnvelopeReviewRowsResponse {
         object_model_ref: {},
         model_field_ref: {},
         metadata: {
-          semantic_source: 'domain_envelope.objects',
+          semantic_source: 'domain_envelope.extracted_objects',
         },
       },
     ],

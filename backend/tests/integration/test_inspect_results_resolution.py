@@ -328,7 +328,7 @@ async def test_allele_trace_shaped_durability_empty_attempt_cannot_replace(
         ExtractionResultModel, UUID(good.extraction_result_id)
     )
     assert good_row is not None
-    assert len(good_row.payload_json["objects"]) == 16
+    assert len(good_row.payload_json["extracted_objects"]) == 16
 
 
 async def test_generic_source_canonical_row_is_durable_and_inspectable(

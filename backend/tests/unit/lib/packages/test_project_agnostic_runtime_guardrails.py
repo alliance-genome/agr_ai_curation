@@ -423,7 +423,7 @@ def test_org_custom_domain_pack_walkthrough_registers_runtime_surfaces(monkeypat
         "domain_pack_version": envelope.domain_pack_version,
         "object_id": "demo-record-1",
         "object_type": "DemoRecord",
-        "payload": envelope.objects[0].payload,
+        "payload": envelope.extracted_objects[0].payload,
     }
     payload = export_adapter.build_submission_payload(
         mode=SubmissionMode.EXPORT,

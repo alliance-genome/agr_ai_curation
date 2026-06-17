@@ -287,7 +287,7 @@ def _persist_domain_envelope(db, *, envelope_id: str, document_id, session_id=No
         envelope_id=envelope_id,
         domain_pack_id="fixture.pack",
         status=DomainEnvelopeStatus.EXTRACTED,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="gene",
                 object_id=f"{envelope_id}-object",
@@ -330,10 +330,10 @@ def _persist_candidate_for_envelope(db, *, session_id, envelope: DomainEnvelope)
             adapter_key="fixture",
             display_label=envelope.envelope_id,
             envelope_id=envelope.envelope_id,
-            object_id=envelope.objects[0].object_id,
+            object_id=envelope.extracted_objects[0].object_id,
             envelope_revision=1,
             normalized_payload={},
-            candidate_metadata={"semantic_source": "domain_envelope.objects"},
+            candidate_metadata={"semantic_source": "domain_envelope.extracted_objects"},
             created_at=now,
             updated_at=now,
         )
@@ -418,7 +418,7 @@ def test_current_flow_domain_envelope_analysis_summarizes_validation_schedule(mo
     )
 
     node = result["nodes"][0]
-    assert result["semantic_source"] == "domain_envelope.objects"
+    assert result["semantic_source"] == "domain_envelope.extracted_objects"
     assert result["envelope_node_count"] == 1
     assert node["domain_pack_id"] == "alliance_allele"
     assert node["domain_pack_version"] == "0.7.0"
@@ -537,7 +537,7 @@ def test_lookup_attempt_summary_preserves_transient_attempts_separate_from_final
         envelope_id="env-lookup",
         domain_pack_id="alliance_gene",
         status=DomainEnvelopeStatus.VALIDATED,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="gene",
                 object_id="obj-1",
@@ -594,7 +594,7 @@ def test_lookup_attempt_summary_accepts_validator_result_outcome_attempts():
         envelope_id="env-validator-outcome",
         domain_pack_id="alliance_gene",
         status=DomainEnvelopeStatus.VALIDATED,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="gene",
                 object_id="obj-1",
@@ -629,7 +629,7 @@ def test_lookup_attempt_summary_rejects_attempts_without_status():
         envelope_id="env-lookup-missing-status",
         domain_pack_id="alliance_gene",
         status=DomainEnvelopeStatus.VALIDATED,
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="gene",
                 object_id="obj-1",
@@ -646,7 +646,7 @@ def test_lookup_attempt_summary_rejects_attempts_without_status():
         ValueError,
         match=(
             "Lookup attempt at "
-            r"envelope.objects\[0\].payload.lookup_attempts\[0\] "
+            r"envelope.extracted_objects\[0\].payload.lookup_attempts\[0\] "
             "is missing lookup_status/status/outcome"
         ),
     ):

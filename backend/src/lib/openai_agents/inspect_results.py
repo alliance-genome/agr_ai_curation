@@ -775,7 +775,7 @@ def _record_summary(record: Any) -> dict[str, Any]:
     try:
         envelope = _canonical_envelope_for_record(record)
         canonical_status = "canonical_domain_envelope"
-        object_count: int | None = len(envelope.objects)
+        object_count: int | None = len(envelope.extracted_objects)
         warning_count, error_count = _validation_severity_counts(
             envelope.validation_findings
         )
@@ -865,7 +865,7 @@ def _resolve_object(
     object_ref: str,
 ) -> CuratableObjectEnvelope:
     normalized_ref = str(object_ref or "").strip()
-    for obj in envelope.objects:
+    for obj in envelope.extracted_objects:
         if _canonical_object_ref(obj) == normalized_ref:
             return obj
     raise ValueError(f"No object matched object_ref {normalized_ref!r}")

@@ -10,8 +10,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
@@ -91,7 +89,7 @@ def _envelope(payload: dict) -> DomainEnvelope:
     return DomainEnvelope(
         envelope_id="multivalued-env",
         domain_pack_id="fixture.multivalued",
-        objects=[
+        extracted_objects=[
             CuratableObjectEnvelope(
                 object_type="Annotation",
                 pending_ref_id="annotation-1",
