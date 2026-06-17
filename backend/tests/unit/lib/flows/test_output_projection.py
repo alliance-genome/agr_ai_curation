@@ -499,14 +499,84 @@ def test_raw_step_output_curatable_objects_cannot_become_curation_tsv_rows():
         )
 
 
-def test_output_projection_payload_shape_has_no_extractor_envelope_path():
+def test_trusted_candidate_curatable_objects_project_to_curation_tsv_rows():
+    payload = {
+        "summary": "Builder-finalized generic extraction.",
+        "curatable_objects": [
+            {
+                "object_type": "generic_reagent_candidate",
+                "pending_ref_id": "generic-object-1",
+                "payload": {
+                    "class_key": "generic:generic_reagent_candidate",
+                    "label": "Ck:GFP",
+                    "source": "This study",
+                    "count": 4,
+                },
+                "evidence_record_ids": ["evidence-generic-1"],
+            },
+            {
+                "object_type": "generic_reagent_candidate",
+                "pending_ref_id": "generic-object-2",
+                "payload": {
+                    "class_key": "generic:generic_reagent_candidate",
+                    "label": "Actn RNAi",
+                    "source": "Source not found",
+                    "count": 2,
+                },
+                "evidence_record_ids": ["evidence-generic-2"],
+            },
+        ],
+    }
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[
+            {
+                "step": 1,
+                "agent_id": "pdf_extraction",
+                "agent_name": "General PDF Extraction Agent",
+                "output_preview": "Builder finalized generic reagents.",
+                "candidate": SimpleNamespace(
+                    agent_key="pdf_extraction",
+                    adapter_key="generic",
+                    candidate_count=2,
+                    payload_json=payload,
+                ),
+            }
+        ],
+        flow_name="Trusted Candidate Projection Flow",
+        output_format="tsv",
+    )
+
+    assert bundle.artifacts[0].artifact_shape == "domain_envelope_extraction"
+    assert bundle.artifacts[0].object_count == 2
+    assert [row["object.label"] for row in bundle.rows_for_source("object")] == [
+        "Ck:GFP",
+        "Actn RNAi",
+    ]
+
+    result = apply_projection_plan(
+        bundle,
+        default_projection_plan(bundle, output_format="tsv"),
+    )
+
+    assert result.row_source == "object"
+    assert result.total_count == 2
+    assert [row["object_payload_label"] for row in result.rows] == ["Ck:GFP", "Actn RNAi"]
+
+
+def test_output_projection_extractor_envelope_path_is_candidate_gated():
     payload_shape_source = inspect.getsource(output_projection_module._payload_shape)
     object_items_source = inspect.getsource(output_projection_module._payload_object_items)
+    candidate_items_source = inspect.getsource(
+        output_projection_module._candidate_payload_object_items
+    )
+    build_artifact_source = inspect.getsource(output_projection_module._build_artifact_from_step)
     old_shape_name = "domain_" + "extraction_result"
 
     assert old_shape_name not in payload_shape_source
     assert "curatable_objects" not in payload_shape_source
     assert "curatable_objects" not in object_items_source
+    assert "curatable_objects" in candidate_items_source
+    assert "payload_from_candidate" in build_artifact_source
 
 
 def test_mixed_domain_and_extractor_payload_cannot_become_object_rows():
