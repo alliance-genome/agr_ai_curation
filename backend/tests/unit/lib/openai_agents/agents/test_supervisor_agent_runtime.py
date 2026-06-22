@@ -827,64 +827,49 @@ def test_create_supervisor_agent_without_document_adds_unavailable_note(monkeypa
     assert captured_langfuse["metadata"]["specialist_count"] == len(created.tools)
 
 
-def test_dynamic_formatter_specialist_receives_bound_bundle_context(monkeypatch):
+@pytest.mark.asyncio
+async def test_dynamic_formatter_specialist_binds_bundle_at_call_time(monkeypatch):
     captured_agent = {}
-    captured_tool = {}
+    captured_run = {}
     fake_bundle = SimpleNamespace(flow_name="Chat Extraction Results")
+    fake_agent = SimpleNamespace(name="CSV File Formatter")
 
     monkeypatch.setattr(
         "src.lib.agent_studio.catalog_service.get_agent_by_id",
         lambda agent_key, **kwargs: captured_agent.update(
             {"agent_key": agent_key, "kwargs": kwargs}
         )
-        or SimpleNamespace(name="CSV File Formatter"),
+        or fake_agent,
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "_build_chat_formatter_bundle",
+        lambda **_kwargs: (
+            fake_bundle,
+            "FORMATTER SOURCE BUNDLE:\nlatest",
+            "",
+        ),
     )
 
-    def _fake_streaming_tool(**kwargs):
-        captured_tool.update(kwargs)
-        return SimpleNamespace(name=kwargs["tool_name"])
+    async def _fake_run_streaming_specialist_tool(**kwargs):
+        captured_run.update(kwargs)
+        return "formatter finished"
 
     monkeypatch.setattr(
         supervisor_agent,
-        "_create_streaming_tool",
-        _fake_streaming_tool,
+        "_run_streaming_specialist_tool",
+        _fake_run_streaming_specialist_tool,
     )
-
-    tools = supervisor_agent._create_dynamic_specialist_tools(
-        tool_specs=[
-            {
-                "agent_key": "csv_formatter",
-                "name": "CSV File Formatter",
-                "description": "Create a CSV file",
-                "tool_name": "ask_csv_formatter_specialist",
-                "requires_document": False,
-                "group_rules_enabled": False,
-            }
-        ],
-        formatter_bundle=fake_bundle,
-        formatter_runtime_context="FORMATTER SOURCE BUNDLE:\nlatest",
-    )
-
-    assert [getattr(tool, "name", "") for tool in tools] == [
-        "ask_csv_formatter_specialist"
-    ]
-    assert captured_agent["agent_key"] == "csv_formatter"
-    assert captured_agent["kwargs"]["formatter_bundle"] is fake_bundle
-    assert captured_agent["kwargs"]["formatter_output_format"] == "csv"
-    assert captured_agent["kwargs"]["formatter_agent_id"] == "csv_formatter"
-    assert captured_agent["kwargs"]["additional_runtime_context"] == [
-        "FORMATTER SOURCE BUNDLE:\nlatest"
-    ]
-    assert captured_tool["tool_name"] == "ask_csv_formatter_specialist"
-
-
-def test_dynamic_formatter_specialist_is_skipped_without_bundle(monkeypatch):
-    def _unexpected_get_agent(*_args, **_kwargs):
-        raise AssertionError("formatter agent must not be constructed without a bundle")
-
     monkeypatch.setattr(
-        "src.lib.agent_studio.catalog_service.get_agent_by_id",
-        _unexpected_get_agent,
+        supervisor_agent,
+        "function_tool",
+        lambda **decorator_kwargs: (
+            lambda fn: (
+                setattr(fn, "name", decorator_kwargs.get("name_override", fn.__name__)),
+                setattr(fn, "description", decorator_kwargs.get("description_override", "")),
+                fn,
+            )[2]
+        ),
     )
 
     tools = supervisor_agent._create_dynamic_specialist_tools(
@@ -901,11 +886,77 @@ def test_dynamic_formatter_specialist_is_skipped_without_bundle(monkeypatch):
         formatter_bundle=None,
     )
 
-    assert tools == []
+    assert [getattr(tool, "name", "") for tool in tools] == [
+        "ask_csv_formatter_specialist"
+    ]
+    assert captured_agent == {}
+
+    result = await tools[0](SimpleNamespace(run_config="run-config"), "Create a CSV")
+
+    assert result == "formatter finished"
+    assert captured_agent["agent_key"] == "csv_formatter"
+    assert captured_agent["kwargs"]["formatter_bundle"] is fake_bundle
+    assert captured_agent["kwargs"]["formatter_output_format"] == "csv"
+    assert captured_agent["kwargs"]["formatter_agent_id"] == "csv_formatter"
+    assert captured_agent["kwargs"]["additional_runtime_context"] == [
+        "FORMATTER SOURCE BUNDLE:\nlatest"
+    ]
+    assert captured_run["agent"] is fake_agent
+    assert captured_run["tool_name"] == "ask_csv_formatter_specialist"
+    assert captured_run["specialist_name"] == "CSV File Formatter"
+    assert captured_run["query"] == "Create a CSV"
+    assert captured_run["ctx"].run_config == "run-config"
 
 
-def test_create_supervisor_agent_exposes_formatter_only_with_saved_chat_bundle(monkeypatch):
-    captured_agent: dict[str, Any] = {}
+@pytest.mark.asyncio
+async def test_dynamic_formatter_specialist_reports_unavailable_without_bundle(monkeypatch):
+    def _unexpected_get_agent(*_args, **_kwargs):
+        raise AssertionError("formatter agent must not be constructed before a bundle exists")
+
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        _unexpected_get_agent,
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "_build_chat_formatter_bundle",
+        lambda **_kwargs: (None, "", "No saved extraction results are available yet."),
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "function_tool",
+        lambda **decorator_kwargs: (
+            lambda fn: (
+                setattr(fn, "name", decorator_kwargs.get("name_override", fn.__name__)),
+                setattr(fn, "description", decorator_kwargs.get("description_override", "")),
+                fn,
+            )[2]
+        ),
+    )
+
+    tools = supervisor_agent._create_dynamic_specialist_tools(
+        tool_specs=[
+            {
+                "agent_key": "csv_formatter",
+                "name": "CSV File Formatter",
+                "description": "Create a CSV file",
+                "tool_name": "ask_csv_formatter_specialist",
+                "requires_document": False,
+                "group_rules_enabled": False,
+            }
+        ],
+        formatter_bundle=None,
+    )
+
+    assert [getattr(tool, "name", "") for tool in tools] == [
+        "ask_csv_formatter_specialist"
+    ]
+    response = json.loads(await tools[0](SimpleNamespace(run_config=None), "Create a CSV"))
+    assert response["status"] == "unavailable"
+    assert response["message"] == "No saved extraction results are available yet."
+
+
+def test_create_supervisor_agent_exposes_formatter_with_saved_chat_bundle(monkeypatch):
     captured_bundle: dict[str, Any] = {}
     captured_langfuse: dict[str, Any] = {}
     fake_bundle = SimpleNamespace(flow_name="Chat Extraction Results")
@@ -965,10 +1016,7 @@ def test_create_supervisor_agent_exposes_formatter_only_with_saved_chat_bundle(m
     )
     monkeypatch.setattr(
         "src.lib.agent_studio.catalog_service.get_agent_by_id",
-        lambda agent_key, **kwargs: captured_agent.update(
-            {"agent_key": agent_key, "kwargs": kwargs}
-        )
-        or SimpleNamespace(name="CSV File Formatter"),
+        lambda *_args, **_kwargs: SimpleNamespace(name="CSV File Formatter"),
     )
     monkeypatch.setattr(
         supervisor_agent,
@@ -999,14 +1047,9 @@ def test_create_supervisor_agent_exposes_formatter_only_with_saved_chat_bundle(m
     tool_names = [getattr(tool, "name", "") for tool in created.tools]
     assert "ask_csv_formatter_specialist" in tool_names
     assert "export_to_file" not in tool_names
-    assert captured_agent["agent_key"] == "csv_formatter"
-    assert captured_agent["kwargs"]["formatter_bundle"] is fake_bundle
-    assert captured_agent["kwargs"]["formatter_output_format"] == "csv"
-    assert captured_agent["kwargs"]["formatter_agent_id"] == "csv_formatter"
-    formatter_context = captured_agent["kwargs"]["additional_runtime_context"][0]
-    assert "FORMATTER SOURCE BUNDLE" in formatter_context
-    assert 'source_ref="extraction-result:00000000-0000-4000-8000-000000000123"' in formatter_context
     assert "EXPORT/DOWNLOAD ROUTING" in created.instructions
+    assert "including results saved earlier in this same supervisor turn" in created.instructions
+    assert "Formatter specialists are the only supported export path" in created.instructions
     assert captured_bundle["extraction_results"] == [fake_record]
     assert captured_langfuse["metadata"]["specialist_count"] == len(created.tools)
 

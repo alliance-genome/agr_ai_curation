@@ -809,6 +809,74 @@ def _ledger_extraction_replay_guidance(
     )
 
 
+async def _run_streaming_specialist_tool(
+    *,
+    agent: Agent,
+    tool_name: str,
+    specialist_name: str,
+    ctx: RunContextWrapper[Any],
+    query: str,
+    run_config: Optional[RunConfig] = None,
+    ledger: Optional[SupervisorCallLedger] = None,
+    inline_chat_persistence: bool = True,
+    isolate_run_config: bool = False,
+) -> str:
+    """Run a specialist through the streaming event wrapper."""
+
+    # Reuse the supervisor run's RunConfig (which carries the per-request warm
+    # websocket provider) so the nested specialist run shares the same authenticated
+    # WebSocket connection instead of opening a new one. The SDK threads the parent
+    # run's RunConfig via the tool context in openai-agents 0.17+.
+    effective_run_config = getattr(ctx, "run_config", None) or run_config
+
+    async def _runner_coro_factory() -> str:
+        run_config_for_specialist = effective_run_config
+        isolated_provider = None
+        close_isolated_provider = None
+        if isolate_run_config:
+            from src.lib.openai_agents.runner import (
+                build_isolated_openai_run_config as _build_isolated_openai_run_config,
+                close_isolated_openai_provider as _close_isolated_openai_provider,
+            )
+
+            run_config_for_specialist, isolated_provider = (
+                _build_isolated_openai_run_config(effective_run_config)
+            )
+            close_isolated_provider = _close_isolated_openai_provider
+
+        try:
+            result = await run_specialist_with_events(
+                agent=agent,
+                input_text=query,
+                specialist_name=specialist_name,
+                run_config=run_config_for_specialist,
+                tool_name=tool_name,  # Pass tool_name for batching nudge tracking
+                inline_chat_persistence=inline_chat_persistence,
+            )
+            handoff = pop_last_supervisor_extraction_handoff()
+            if ledger is not None and handoff is not None:
+                ledger.record_extraction_handoff(tool_name, query, handoff)
+            return result
+        finally:
+            if isolated_provider is not None and close_isolated_provider is not None:
+                await close_isolated_provider(
+                    isolated_provider,
+                    trace_id=get_current_trace_id(),
+                    user_id=get_current_user_id(),
+                )
+
+    # In standard chat the supervisor is built fresh per turn with a ledger
+    # closed over here (NOT a tool argument, so the model-visible schema stays
+    # (query)). It collapses identical concurrent calls, short-circuits
+    # sequential repeats, and enforces a per-turn invocation budget -- the
+    # no-progress brake that flows get from strict step order. Flow supervisors
+    # bypass create_supervisor_agent and so have no ledger here.
+    if ledger is not None:
+        return await ledger.run_or_replay(tool_name, query, _runner_coro_factory)
+
+    return await _runner_coro_factory()
+
+
 def _create_streaming_tool(
     agent: Agent,
     tool_name: str,
@@ -847,60 +915,97 @@ def _create_streaming_tool(
     @function_tool(name_override=tool_name, description_override=tool_description)
     async def streaming_tool_wrapper(ctx: RunContextWrapper[Any], query: str) -> str:
         """Ask the specialist a question and get a response."""
-        # Reuse the supervisor run's RunConfig (which carries the per-request warm
-        # websocket provider) so the nested specialist run shares the same authenticated
-        # WebSocket connection instead of opening a new one. The SDK threads the parent
-        # run's RunConfig via the tool context in openai-agents 0.17+.
-        effective_run_config = getattr(ctx, "run_config", None) or run_config
-
-        async def _runner_coro_factory() -> str:
-            run_config_for_specialist = effective_run_config
-            isolated_provider = None
-            close_isolated_provider = None
-            if isolate_run_config:
-                from src.lib.openai_agents.runner import (
-                    build_isolated_openai_run_config as _build_isolated_openai_run_config,
-                    close_isolated_openai_provider as _close_isolated_openai_provider,
-                )
-
-                run_config_for_specialist, isolated_provider = (
-                    _build_isolated_openai_run_config(effective_run_config)
-                )
-                close_isolated_provider = _close_isolated_openai_provider
-
-            try:
-                result = await run_specialist_with_events(
-                    agent=agent,
-                    input_text=query,
-                    specialist_name=specialist_name,
-                    run_config=run_config_for_specialist,
-                    tool_name=tool_name,  # Pass tool_name for batching nudge tracking
-                    inline_chat_persistence=inline_chat_persistence,
-                )
-                handoff = pop_last_supervisor_extraction_handoff()
-                if ledger is not None and handoff is not None:
-                    ledger.record_extraction_handoff(tool_name, query, handoff)
-                return result
-            finally:
-                if isolated_provider is not None and close_isolated_provider is not None:
-                    await close_isolated_provider(
-                        isolated_provider,
-                        trace_id=get_current_trace_id(),
-                        user_id=get_current_user_id(),
-                    )
-
-        # In standard chat the supervisor is built fresh per turn with a ledger
-        # closed over here (NOT a tool argument, so the model-visible schema stays
-        # (query)). It collapses identical concurrent calls, short-circuits
-        # sequential repeats, and enforces a per-turn invocation budget -- the
-        # no-progress brake that flows get from strict step order. Flow supervisors
-        # bypass create_supervisor_agent and so have no ledger here.
-        if ledger is not None:
-            return await ledger.run_or_replay(tool_name, query, _runner_coro_factory)
-
-        return await _runner_coro_factory()
+        return await _run_streaming_specialist_tool(
+            agent=agent,
+            tool_name=tool_name,
+            specialist_name=specialist_name,
+            ctx=ctx,
+            query=query,
+            run_config=run_config,
+            ledger=ledger,
+            inline_chat_persistence=inline_chat_persistence,
+            isolate_run_config=isolate_run_config,
+        )
 
     return streaming_tool_wrapper
+
+
+def _create_lazy_formatter_streaming_tool(
+    *,
+    tool_name: str,
+    tool_description: str,
+    specialist_name: str,
+    agent_key: str,
+    output_format: str,
+    user_id: Optional[str],
+    document_id: Optional[str],
+    specialist_model_override: Optional[str] = None,
+    specialist_temperature_override: Optional[float] = None,
+    specialist_reasoning_override: Optional[str] = None,
+    ledger: Optional[SupervisorCallLedger] = None,
+) -> Callable:
+    """Create a formatter tool that binds the latest chat result bundle at call time."""
+
+    @function_tool(name_override=tool_name, description_override=tool_description)
+    async def lazy_formatter_tool_wrapper(
+        ctx: RunContextWrapper[Any],
+        query: str,
+    ) -> str:
+        """Ask the formatter to export the latest saved chat extraction results."""
+
+        formatter_bundle, formatter_runtime_context, unavailable_note = (
+            _build_chat_formatter_bundle(user_id=user_id, document_id=document_id)
+        )
+        if formatter_bundle is None:
+            return _tool_response(
+                "unavailable",
+                unavailable_note
+                or "No saved extraction results are available for formatter export yet.",
+            )
+
+        agent_kwargs: Dict[str, Any] = {
+            "formatter_bundle": formatter_bundle,
+            "formatter_output_format": output_format,
+            "formatter_agent_id": agent_key,
+        }
+        if formatter_runtime_context:
+            agent_kwargs["additional_runtime_context"] = [formatter_runtime_context]
+        if specialist_model_override:
+            agent_kwargs["model_id_override"] = specialist_model_override
+        if specialist_temperature_override is not None:
+            agent_kwargs["model_temperature_override"] = specialist_temperature_override
+        if specialist_reasoning_override:
+            agent_kwargs["model_reasoning_override"] = specialist_reasoning_override
+
+        try:
+            from src.lib.agent_studio.catalog_service import get_agent_by_id
+
+            agent = get_agent_by_id(agent_key, **agent_kwargs)
+        except Exception:
+            logger.exception("Failed to create formatter tool %s for %s", tool_name, agent_key)
+            return _tool_response(
+                "error",
+                "The formatter specialist could not be prepared for the saved extraction results. Do not use a raw export fallback; report that export is blocked and ask the curator to retry.",
+                agent_key=agent_key,
+            )
+
+        runtime_specialist_name = (
+            str(getattr(agent, "name", None) or specialist_name or agent_key)
+            .replace(" Agent", "")
+            .replace(" Validation", "")
+        )
+
+        return await _run_streaming_specialist_tool(
+            agent=agent,
+            tool_name=tool_name,
+            specialist_name=runtime_specialist_name,
+            ctx=ctx,
+            query=query,
+            ledger=ledger,
+            inline_chat_persistence=True,
+        )
+
+    return lazy_formatter_tool_wrapper
 
 
 def _build_model_settings(
@@ -1111,8 +1216,12 @@ def _build_runtime_tool_availability_note(
         notes.append(
             "EXPORT/DOWNLOAD ROUTING: For explicit CSV, TSV, or JSON export/download requests, "
             "call the matching formatter specialist tool from this list: "
-            f"{', '.join(available_formatter_tools)}. These tools are bound to saved "
-            "extraction results and are the only supported export path."
+            f"{', '.join(available_formatter_tools)}. These tools bind to the latest "
+            "saved extraction results at call time, including results saved earlier "
+            "in this same supervisor turn. If the curator asked for an export/download "
+            "and an extractor returns a non-empty manifest or result reference, call "
+            "the matching formatter specialist before your final answer. Formatter "
+            "specialists are the only supported export path."
         )
     elif formatter_unavailable_note:
         notes.append(formatter_unavailable_note)
@@ -1184,11 +1293,23 @@ def _create_dynamic_specialist_tools(
         if requires_document and (not document_id or not user_id):
             logger.debug("Skipping %s - requires document but none loaded", tool_name)
             continue
-        if formatter_output_format and formatter_bundle is None:
-            logger.debug(
-                "Skipping %s - requires saved extraction-result bundle but none is available",
-                tool_name,
+        if formatter_output_format:
+            specialist_name = str(tool_meta.get("name") or agent_key)
+            streaming_tool = _create_lazy_formatter_streaming_tool(
+                tool_name=tool_name,
+                tool_description=description,
+                specialist_name=specialist_name,
+                agent_key=agent_key,
+                output_format=formatter_output_format,
+                user_id=user_id,
+                document_id=document_id,
+                specialist_model_override=specialist_model_override,
+                specialist_temperature_override=specialist_temperature_override,
+                specialist_reasoning_override=specialist_reasoning_override,
+                ledger=ledger,
             )
+            specialist_tools.append(streaming_tool)
+            logger.info("Created lazy dynamic formatter tool: %s", tool_name)
             continue
 
         # Build runtime kwargs for unified agent builder
@@ -1202,17 +1323,6 @@ def _create_dynamic_specialist_tools(
                 "hierarchy": hierarchy,
                 "abstract": abstract,
             })
-        if formatter_output_format:
-            agent_kwargs.update(
-                {
-                    "formatter_bundle": formatter_bundle,
-                    "formatter_output_format": formatter_output_format,
-                    "formatter_agent_id": agent_key,
-                }
-            )
-            if formatter_runtime_context:
-                agent_kwargs["additional_runtime_context"] = [formatter_runtime_context]
-
         # Group-aware agents (MODs, institutions, teams, etc.)
         if group_rules_enabled and active_groups:
             agent_kwargs["active_groups"] = active_groups
