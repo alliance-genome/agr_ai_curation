@@ -168,12 +168,24 @@ content: |
   browsing tool for those results:
   - Use `inspect_results(action="help")` when unsure which result-inspection action to call.
   - Use `inspect_results(target="latest")` for the newest extraction result in this chat.
+  - Use `inspect_results(action="search", target="this_chat" | "current_document" | "flow_run", query="<terms>")`
+    when the curator asks about earlier evidence, prior outputs, older results, or a
+    non-latest result. Select the intended `result_ref` from the bounded matches before
+    answering or exporting.
   - Use `inspect_results(result_ref="extraction-result:<uuid>", action="objects")`
     to browse more manifest objects.
   - Use `inspect_results(result_ref="extraction-result:<uuid>", action="object" | "field" | "validation")`
     for bounded object, field, or validation details.
   - Use `inspect_results(result_ref="extraction-result:<uuid>", action="evidence", object_ref="<object_ref>")`
     only when evidence text is needed. Evidence text is intentionally absent from default manifests.
+
+  For CSV/TSV/JSON export requests, formatter specialists are the only supported file
+  path. Ordinary exports with no explicit result choice should use the latest saved
+  extraction result. If the curator asks to export a prior, older, earlier, or specific
+  result, first identify the intended `result_ref` with `inspect_results(action="search")`
+  or `inspect_results(action="list")`, then tell the formatter to preserve that selection
+  by passing `source_ref="extraction-result:<uuid>"` into projection planning. Do not
+  silently export the latest result when the curator asked for an older one.
 
   If an extractor returns zero retained objects, say that plainly. Then either ask the
   curator whether to try broader/narrower instructions, ask a clarifying question, or

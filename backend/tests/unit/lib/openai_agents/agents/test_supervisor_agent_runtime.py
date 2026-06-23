@@ -162,7 +162,12 @@ def test_supervisor_prompt_explains_result_inspection_boundaries():
     normalized_prompt = " ".join(prompt_text.split())
 
     assert "inspect_results(action=\"help\")" in prompt_text
+    assert "inspect_results(action=\"search\"" in prompt_text
     assert "extraction-result:<uuid>" in prompt_text
+    assert (
+        "Do not silently export the latest result when the curator asked for an older one."
+        in normalized_prompt
+    )
     assert "do not call another extractor just to summarize" in normalized_prompt
     assert "Export and curation prep are separate explicit actions" in prompt_text
     assert "trace inspection only to debug behavior" in prompt_text
@@ -1049,6 +1054,8 @@ def test_create_supervisor_agent_exposes_formatter_with_saved_chat_bundle(monkey
     assert "export_to_file" not in tool_names
     assert "EXPORT/DOWNLOAD ROUTING" in created.instructions
     assert "including results saved earlier in this same supervisor turn" in created.instructions
+    assert "first use inspect_results action=\"search\"" in created.instructions
+    assert "pass that exact source_ref into projection planning" in created.instructions
     assert "Formatter specialists are the only supported export path" in created.instructions
     assert captured_bundle["extraction_results"] == [fake_record]
     assert captured_langfuse["metadata"]["specialist_count"] == len(created.tools)
@@ -1109,6 +1116,7 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
     )
     inspect_params = inspect.signature(inspect_tool).parameters
     assert "action" in inspect_params
+    assert "query" in inspect_params
     assert "result_ref" in inspect_params
     assert "object_ref" in inspect_params
     assert "review_session_id" not in inspect_params
@@ -1122,6 +1130,7 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
         "use inspect_results for persisted extraction objects"
         in tools_by_name["inspect_chat_traces"].description
     )
+    assert "action=\"search\"" in tools_by_name["inspect_results"].description
     assert "export_to_file" not in tools_by_name
     assert captured_langfuse["metadata"]["specialist_count"] == 4
 

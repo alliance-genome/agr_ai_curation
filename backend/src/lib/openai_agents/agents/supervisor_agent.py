@@ -295,6 +295,9 @@ def _formatter_runtime_context_for_records(records: Sequence[Any]) -> str:
         lines.append(
             f'For an ordinary export request with no explicit result choice, use source_ref="{latest_ref}" when building the default projection plan. Export multiple/all saved results only when the curator explicitly asks for that scope.'
         )
+        lines.append(
+            'For a prior, older, earlier, or otherwise specific export request, preserve the selected source by passing that exact source_ref="extraction-result:<uuid>" into build_default_projection_plan or the final projection plan.'
+        )
     lines.append("Available extraction result refs:")
     for record in sorted(
         records,
@@ -1218,7 +1221,11 @@ def _build_runtime_tool_availability_note(
             "call the matching formatter specialist tool from this list: "
             f"{', '.join(available_formatter_tools)}. These tools bind to the latest "
             "saved extraction results at call time, including results saved earlier "
-            "in this same supervisor turn. If the curator asked for an export/download "
+            "in this same supervisor turn. If the curator asks to export a prior, older, "
+            "earlier, or specific result, first use inspect_results action=\"search\" "
+            "or action=\"list\" to identify the intended result_ref, then tell the "
+            "formatter specialist to pass that exact source_ref into projection planning. "
+            "If the curator asked for an export/download "
             "and an extractor returns a non-empty manifest or result reference, call "
             "the matching formatter specialist before your final answer. Formatter "
             "specialists are the only supported export path."
@@ -1231,9 +1238,11 @@ def _build_runtime_tool_availability_note(
         "normally enough to answer the curator's current request unless the "
         "curator asks to broaden/narrow/rerun or the manifest says the "
         "requested scope was not handled. Answer from the manifest; use "
-        "inspect_results to browse existing persisted results, more manifest "
+        "inspect_results to search or browse existing persisted results, more manifest "
         "objects, evidence, validation findings, or exact YAML-declared field "
-        "slices. Do not call extractors again only to summarize existing "
+        "slices. When the curator asks about earlier evidence, prior outputs, "
+        "or a non-latest result, search/list existing results before rerunning "
+        "an extractor. Do not call extractors again only to summarize existing "
         "results or gain confidence. Use formatter specialist tools only for "
         "explicit export/download requests, and use prepare_for_curation only "
         "after explicit confirmation. Use inspect_chat_traces for behavior/debug questions "
@@ -1551,8 +1560,10 @@ def create_supervisor_agent(
         name_override=_INSPECT_RESULTS_TOOL_NAME,
         description_override=(
             "Inspect persisted canonical extraction results for this chat. Use "
-            "action=\"help\" for the contract; action=\"list\" or \"summary\" "
-            "for available results; action=\"objects\" or \"object\" for "
+            "action=\"help\" for the contract; action=\"list\" for available "
+            "results; action=\"search\" with query/target to find prior evidence "
+            "or manifest-field previews and select a stable result_ref; "
+            "action=\"summary\" for one result; action=\"objects\" or \"object\" for "
             "YAML-declared manifest fields; action=\"field\" for one "
             "YAML-declared scalar field; action=\"evidence\" for bounded "
             "evidence text; and action=\"validation\" for validation findings. "
@@ -1564,6 +1575,7 @@ def create_supervisor_agent(
     )
     async def inspect_results_tool(
         action: str = "help",
+        query: str | None = None,
         result_ref: str | None = None,
         target: str = "latest",
         object_ref: str | None = None,
@@ -1577,6 +1589,7 @@ def create_supervisor_agent(
 
         return await inspect_results(
             action=action,
+            query=query,
             result_ref=result_ref,
             target=target,
             object_ref=object_ref,

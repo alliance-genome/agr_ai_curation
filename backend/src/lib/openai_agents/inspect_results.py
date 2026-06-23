@@ -47,7 +47,17 @@ from src.schemas.domain_pack_metadata import DomainPackMetadata
 
 _RESULT_REF_PREFIX = "extraction-result:"
 _ACTIONS = frozenset(
-    {"help", "list", "summary", "objects", "object", "field", "evidence", "validation"}
+    {
+        "help",
+        "list",
+        "search",
+        "summary",
+        "objects",
+        "object",
+        "field",
+        "evidence",
+        "validation",
+    }
 )
 _TARGETS = frozenset(
     {"latest", "this_chat", "current_document", "flow_run", "all_authorized"}
@@ -105,6 +115,7 @@ _EVIDENCE_CONTEXT_KEYS = (
 async def inspect_results(
     *,
     action: str = "help",
+    query: str | None = None,
     result_ref: str | None = None,
     target: str = "latest",
     object_ref: str | None = None,
@@ -174,6 +185,19 @@ async def inspect_results(
             records,
             action=normalized_action,
             target=normalized_target,
+            cursor=cursor,
+            limit=limit,
+        )
+    if normalized_action == "search":
+        search_records = (
+            records[:1]
+            if normalized_target == "latest" and parsed_ref is None
+            else records
+        )
+        return _search_response(
+            search_records,
+            target=normalized_target,
+            query=query,
             cursor=cursor,
             limit=limit,
         )
@@ -248,12 +272,14 @@ def _help_response() -> str:
         boundaries=[
             "Default summary/object manifests use only domain-pack YAML supervisor_manifest fields.",
             "Evidence text is excluded from summary and objects; use action=\"evidence\" with object_ref.",
+            "Search returns bounded evidence snippets and YAML manifest-field previews only.",
             "Raw UUIDs and transient lookup refs are rejected as result_ref values.",
             "Export and curation prep are separate explicit supervisor actions.",
             "Trace tools are for debugging behavior, not browsing extraction payloads.",
         ],
         examples=[
             'inspect_results(action="list", target="latest")',
+            'inspect_results(action="search", target="current_document", query="endogenous tumor")',
             'inspect_results(action="objects", result_ref="extraction-result:<uuid>")',
             'inspect_results(action="evidence", result_ref="extraction-result:<uuid>", object_ref="<object_ref>")',
             'inspect_results(action="field", result_ref="extraction-result:<uuid>", object_ref="<object_ref>", field_path="<yaml_field>")',
@@ -289,6 +315,61 @@ def _list_response(
         next_actions=[
             'Use inspect_results(action="summary", result_ref="<result_ref>") for one result.',
             'Use inspect_results(action="objects", result_ref="<result_ref>") to browse manifest rows.',
+        ],
+    )
+
+
+def _search_response(
+    records: Sequence[Any],
+    *,
+    target: str,
+    query: str | None,
+    cursor: str | None,
+    limit: int | None,
+) -> str:
+    normalized_query = _optional_text(query)
+    bounded_limit = normalize_page_limit(
+        limit,
+        default=_RESULT_LIST_PAGE_SIZE,
+        maximum=_MAX_LIST_LIMIT,
+    )
+    matches: list[dict[str, Any]] = []
+    unsupported_count = 0
+    for record in records:
+        try:
+            envelope = _canonical_envelope_for_record(record)
+        except (TypeError, ValueError, ValidationError):
+            unsupported_count += 1
+            continue
+        matches.extend(
+            _search_matches_for_record(
+                record,
+                envelope=envelope,
+                query=normalized_query,
+            )
+        )
+    page, truncated, next_cursor = offset_page(
+        matches,
+        limit=bounded_limit,
+        cursor=cursor,
+    )
+    return _tool_response(
+        "ok",
+        f"{len(page)} bounded extraction result search match(es) returned.",
+        action="search",
+        target=target,
+        query=normalized_query,
+        matches=page,
+        total_count=len(matches),
+        unsupported_result_count=unsupported_count,
+        cursor=cursor,
+        next_cursor=next_cursor,
+        limit=bounded_limit,
+        truncated=truncated,
+        next_actions=[
+            'Use inspect_results(action="objects", result_ref="<result_ref>") to browse the selected result.',
+            'Use inspect_results(action="evidence", result_ref="<result_ref>", object_ref="<object_ref>") for more evidence text.',
+            'When exporting a selected result, pass source_ref="<result_ref>" to the formatter projection plan.',
         ],
     )
 
@@ -808,6 +889,198 @@ def _record_summary(record: Any) -> dict[str, Any]:
         "validation_warning_count": validation_warning_count,
         "validation_error_count": validation_error_count,
     }
+
+
+def _search_matches_for_record(
+    record: Any,
+    *,
+    envelope: DomainEnvelope,
+    query: str | None,
+) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    query_terms = _query_terms(query)
+    for obj in envelope.extracted_objects:
+        object_ref = _canonical_object_ref(obj)
+        if not query_terms:
+            matches.append(
+                _search_match_base(
+                    record,
+                    obj,
+                    object_ref=object_ref,
+                    match_type="object_preview",
+                    snippet=_object_preview_snippet(envelope, obj),
+                )
+            )
+            continue
+        matches.extend(
+            _field_search_matches(
+                record,
+                envelope=envelope,
+                obj=obj,
+                object_ref=object_ref,
+                query_terms=query_terms,
+            )
+        )
+        matches.extend(
+            _evidence_search_matches(
+                record,
+                envelope=envelope,
+                obj=obj,
+                object_ref=object_ref,
+                query_terms=query_terms,
+            )
+        )
+    return matches
+
+
+def _field_search_matches(
+    record: Any,
+    *,
+    envelope: DomainEnvelope,
+    obj: CuratableObjectEnvelope,
+    object_ref: str,
+    query_terms: Sequence[str],
+) -> list[dict[str, Any]]:
+    try:
+        visible_paths = _supervisor_visible_field_paths(
+            envelope.domain_pack_id,
+            obj.object_type,
+        )
+    except ValueError:
+        visible_paths = set()
+    matches: list[dict[str, Any]] = []
+    for field_path in sorted(visible_paths):
+        if _is_evidence_path(field_path):
+            continue
+        value = _payload_path_value(obj.payload, field_path)
+        if not _is_scalar(value):
+            continue
+        snippet = _manifest_field_snippet(field_path, value)
+        if _query_matches(snippet, query_terms):
+            matches.append(
+                _search_match_base(
+                    record,
+                    obj,
+                    object_ref=object_ref,
+                    match_type="manifest_field",
+                    snippet=snippet,
+                    field_path=field_path,
+                )
+            )
+    return matches
+
+
+def _evidence_search_matches(
+    record: Any,
+    *,
+    envelope: DomainEnvelope,
+    obj: CuratableObjectEnvelope,
+    object_ref: str,
+    query_terms: Sequence[str],
+) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    for evidence_record in _object_evidence_records(envelope, obj):
+        haystack = " ".join(
+            str(value)
+            for value in evidence_record.values()
+            if value is not None
+        )
+        if not _query_matches(haystack, query_terms):
+            continue
+        match = _search_match_base(
+            record,
+            obj,
+            object_ref=object_ref,
+            match_type="evidence_text",
+            snippet=_evidence_snippet(evidence_record),
+        )
+        evidence_id = evidence_record.get("evidence_record_id") or evidence_record.get("id")
+        if evidence_id is not None:
+            match["evidence_record_id"] = _preview_text(
+                evidence_id,
+                limit=_TEXT_PREVIEW_LIMIT,
+            )
+        matches.append(match)
+    return matches
+
+
+def _search_match_base(
+    record: Any,
+    obj: CuratableObjectEnvelope,
+    *,
+    object_ref: str,
+    match_type: str,
+    snippet: str,
+    field_path: str | None = None,
+) -> dict[str, Any]:
+    match = {
+        "result_ref": _record_result_ref(record),
+        "extraction_result_id": _record_id(record),
+        "object_ref": object_ref,
+        "object_type": obj.object_type,
+        "adapter_key": _record_attr(record, "adapter_key"),
+        "agent_key": _record_attr(record, "agent_key"),
+        "document_id": _record_attr(record, "document_id"),
+        "source_kind": _record_source_kind(record),
+        "origin_session_id": _record_attr(record, "origin_session_id"),
+        "flow_run_id": _record_attr(record, "flow_run_id"),
+        "created_at": _record_created_at_text(record),
+        "snippet": _preview_text(snippet, limit=_EVIDENCE_TEXT_LIMIT),
+        "match_type": match_type,
+    }
+    if field_path:
+        match["field_path"] = field_path
+    return match
+
+
+def _object_preview_snippet(
+    envelope: DomainEnvelope,
+    obj: CuratableObjectEnvelope,
+) -> str:
+    try:
+        visible_paths = _supervisor_visible_field_paths(
+            envelope.domain_pack_id,
+            obj.object_type,
+        )
+    except ValueError:
+        visible_paths = set()
+    snippets = [
+        _manifest_field_snippet(field_path, _payload_path_value(obj.payload, field_path))
+        for field_path in sorted(visible_paths)
+        if not _is_evidence_path(field_path)
+        and _is_scalar(_payload_path_value(obj.payload, field_path))
+    ]
+    if snippets:
+        return "; ".join(snippets)
+    return obj.object_type
+
+
+def _manifest_field_snippet(field_path: str, value: Any) -> str:
+    return f"{field_path}: {_preview_text(value, limit=_TEXT_PREVIEW_LIMIT)}"
+
+
+def _evidence_snippet(record: Mapping[str, Any]) -> str:
+    for key in _EVIDENCE_TEXT_KEYS:
+        value = record.get(key)
+        if value is not None:
+            return _preview_text(value, limit=_EVIDENCE_TEXT_LIMIT)
+    compact = _compact_evidence_record(record)
+    return "; ".join(
+        f"{key}: {value}"
+        for key, value in compact.items()
+        if value is not None
+    )
+
+
+def _query_terms(query: str | None) -> list[str]:
+    return [term for term in str(query or "").lower().split() if term]
+
+
+def _query_matches(value: Any, query_terms: Sequence[str]) -> bool:
+    if not query_terms:
+        return True
+    haystack = " ".join(str(value or "").lower().split())
+    return all(term in haystack for term in query_terms)
 
 
 def _validation_severity_counts(
