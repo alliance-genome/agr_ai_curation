@@ -44,6 +44,8 @@ import { submitFeedback } from '../services/feedbackService';
 import { useAuth } from '../contexts/AuthContext';
 import PreparedReviewAndCurateButton from '@/features/curation/components/PreparedReviewAndCurateButton';
 import { listFlows, type FlowSummaryResponse } from '@/services/agentStudioService';
+import { buildBatchAuditStorageKey } from '@/lib/aiCurationLocalCache';
+import { safeGetJson, safeRemoveItem, safeSetJson } from '@/lib/browserStorage';
 
 // Valid audit event types that should be shown in the batch audit panel
 // NOTE: Excludes AGENT_THINKING because it emits per-token events that
@@ -158,7 +160,10 @@ const BatchPage: React.FC = () => {
   // Helper to save audit events to localStorage
   const saveAuditEventsToStorage = (batchId: string, events: AuditEvent[]) => {
     try {
-      localStorage.setItem(`batch_audit_${batchId}`, JSON.stringify(events));
+      safeSetJson(() => window.localStorage, buildBatchAuditStorageKey(batchId), events, {
+        owner: 'batch',
+        workflowCritical: true,
+      });
     } catch (e) {
       console.error('Failed to save audit events to localStorage:', e);
     }
@@ -167,11 +172,17 @@ const BatchPage: React.FC = () => {
   // Helper to load audit events from localStorage
   const loadAuditEventsFromStorage = (batchId: string): AuditEvent[] => {
     try {
-      const stored = localStorage.getItem(`batch_audit_${batchId}`);
-      if (stored) {
-        const events = JSON.parse(stored);
+      const stored = safeGetJson<Array<AuditEvent & { timestamp: string }>>(
+        localStorage,
+        buildBatchAuditStorageKey(batchId),
+        {
+          owner: 'batch',
+          workflowCritical: true,
+        },
+      );
+      if (stored.ok && stored.value) {
         // Restore Date objects
-        return events.map((e: any) => ({
+        return stored.value.map((e) => ({
           ...e,
           timestamp: new Date(e.timestamp),
         }));
@@ -185,7 +196,10 @@ const BatchPage: React.FC = () => {
   // Helper to clear audit events from localStorage
   const clearAuditEventsFromStorage = (batchId: string) => {
     try {
-      localStorage.removeItem(`batch_audit_${batchId}`);
+      safeRemoveItem(() => window.localStorage, buildBatchAuditStorageKey(batchId), {
+        owner: 'batch',
+        workflowCritical: true,
+      });
     } catch (e) {
       console.error('Failed to clear audit events from localStorage:', e);
     }

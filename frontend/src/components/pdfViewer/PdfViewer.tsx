@@ -29,6 +29,7 @@ import {
   completeDocumentLoad,
   failDocumentLoad,
 } from '@/features/documents/documentLoadEvents'
+import { safeRemoveItem } from '@/lib/browserStorage'
 import { getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
 import { PdfViewerChrome } from './PdfViewerChrome'
 import {
@@ -231,7 +232,10 @@ export function PdfViewer({
     })
     commitNavigationResult(null)
     if (viewerSessionStorageKey) {
-      localStorage.removeItem(viewerSessionStorageKey)
+      safeRemoveItem(() => window.localStorage, viewerSessionStorageKey, {
+        owner: 'pdf-viewer',
+        workflowCritical: true,
+      })
     }
   }, [commitNavigationResult, viewerSessionStorageKey])
 
@@ -1468,7 +1472,10 @@ export function PdfViewer({
       handledNavigationKeyRef.current = null
       navigationRequestIdRef.current += 1
       if (viewerSessionStorageKey && viewerSessionStorageUserIdRef.current === storageUserId) {
-        localStorage.removeItem(viewerSessionStorageKey)
+        safeRemoveItem(() => window.localStorage, viewerSessionStorageKey, {
+          owner: 'pdf-viewer',
+          workflowCritical: true,
+        })
       }
       const nextIdleError = idleResetErrorRef.current
       idleResetErrorRef.current = null

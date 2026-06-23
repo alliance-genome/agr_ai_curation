@@ -20,6 +20,7 @@ import {
   clearChatRenderCacheForSession,
   getChatRenderCacheKeys,
 } from '../lib/chatCacheKeys'
+import { safeGetJson, safeSetJson } from '../lib/browserStorage'
 import { getStreamEventSessionId } from '../lib/streamEventSession'
 
 /**
@@ -123,7 +124,10 @@ const saveAuditEventsToStorage = (
     }
 
     const { auditEvents } = getChatRenderCacheKeys(userId, sessionId)
-    localStorage.setItem(auditEvents, JSON.stringify(events))
+    safeSetJson(() => window.localStorage, auditEvents, events, {
+      owner: 'audit',
+      workflowCritical: true,
+    })
   } catch (e) {
     console.error('Failed to save audit events to localStorage:', e)
   }
@@ -140,11 +144,17 @@ const loadAuditEventsFromStorage = (
     }
 
     const { auditEvents } = getChatRenderCacheKeys(userId, sessionId)
-    const stored = localStorage.getItem(auditEvents)
-    if (stored) {
-      const events = JSON.parse(stored) as Array<Omit<AuditEvent, 'timestamp'> & { timestamp: string }>
+    const stored = safeGetJson<Array<Omit<AuditEvent, 'timestamp'> & { timestamp: string }>>(
+      localStorage,
+      auditEvents,
+      {
+        owner: 'audit',
+        workflowCritical: true,
+      },
+    )
+    if (stored.ok && stored.value) {
       // Restore Date objects
-      return events.map((event) => ({
+      return stored.value.map((event) => ({
         ...event,
         timestamp: new Date(event.timestamp),
       }))

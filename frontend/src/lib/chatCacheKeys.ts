@@ -1,4 +1,5 @@
 import { normalizeChatHistoryValue } from './chatHistoryNormalization'
+import { safeListStorageKeys, safeRemoveItem, type BrowserStorageAccessor } from './browserStorage'
 
 const CHAT_STORAGE_PREFIX = 'chat-cache:v1'
 const CHAT_QUERY_KEY_PREFIX = ['chat'] as const
@@ -105,34 +106,50 @@ export function getChatRenderCacheKeys(userId: string, sessionId: string): ChatR
 export function clearChatRenderCacheForSession(
   userId: string,
   sessionId: string,
-  storage: Storage = window.localStorage,
+  storage: BrowserStorageAccessor = () => window.localStorage,
 ): void {
   const scopedKeys = getChatRenderCacheKeys(userId, sessionId)
-  Object.values(scopedKeys).forEach((key) => storage.removeItem(key))
+  Object.values(scopedKeys).forEach((key) => safeRemoveItem(storage, key, {
+    owner: 'audit',
+    quiet: true,
+  }))
 }
 
-function listNamespacedChatLocalStorageKeys(storage: Storage = window.localStorage): string[] {
-  const scopedKeys: string[] = []
-
-  for (let index = 0; index < storage.length; index += 1) {
-    const key = storage.key(index)
-    if (key?.startsWith(`${CHAT_STORAGE_PREFIX}:`)) {
-      scopedKeys.push(key)
-    }
-  }
-
-  return scopedKeys
+function listNamespacedChatLocalStorageKeys(storage: BrowserStorageAccessor = () => window.localStorage): string[] {
+  const keys = safeListStorageKeys(storage, {
+    owner: 'chat',
+    quiet: true,
+  })
+  return keys.ok ? keys.value.filter(isNamespacedChatLocalStorageKey) : []
 }
 
-export function clearChatLocalStorageForUser(userId: string, storage: Storage = window.localStorage): void {
+export function isNamespacedChatLocalStorageKey(key: string): boolean {
+  return key.startsWith(`${CHAT_STORAGE_PREFIX}:`)
+}
+
+export function clearChatLocalStorageForUser(
+  userId: string,
+  storage: BrowserStorageAccessor = () => window.localStorage,
+): void {
   const scopedKeys = getChatLocalStorageKeys(userId)
-  Object.values(scopedKeys).forEach((key) => storage.removeItem(key))
+  Object.values(scopedKeys).forEach((key) => safeRemoveItem(storage, key, {
+    owner: 'chat',
+    quiet: true,
+  }))
 }
 
-export function clearAllNamespacedChatLocalStorage(storage: Storage = window.localStorage): void {
-  listNamespacedChatLocalStorageKeys(storage).forEach((key) => storage.removeItem(key))
+export function clearAllNamespacedChatLocalStorage(
+  storage: BrowserStorageAccessor = () => window.localStorage,
+): void {
+  listNamespacedChatLocalStorageKeys(storage).forEach((key) => safeRemoveItem(storage, key, {
+    owner: 'chat',
+    quiet: true,
+  }))
 }
 
-export function clearLegacyChatLocalStorage(storage: Storage = window.localStorage): void {
-  LEGACY_CHAT_STORAGE_KEYS.forEach((key) => storage.removeItem(key))
+export function clearLegacyChatLocalStorage(storage: BrowserStorageAccessor = () => window.localStorage): void {
+  LEGACY_CHAT_STORAGE_KEYS.forEach((key) => safeRemoveItem(storage, key, {
+    owner: 'chat',
+    quiet: true,
+  }))
 }

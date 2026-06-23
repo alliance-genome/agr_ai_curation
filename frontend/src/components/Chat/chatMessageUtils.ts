@@ -2,6 +2,7 @@ import { debug } from '@/utils/env'
 import type { CurationWorkspaceLaunchTarget } from '@/features/curation/navigation/openCurationWorkspace'
 import type { EvidenceRecord } from '@/features/curation/types'
 import type { SSEEvent } from '@/hooks/useChatStream'
+import { safeGetItem, safeGetJson } from '@/lib/browserStorage'
 import { normalizeOptionalText } from '@/lib/normalizeOptionalText'
 import type { ChatLocalStorageKeys } from '@/lib/chatCacheKeys'
 import type { FlowStepEvidenceDetails } from '@/types/AuditEvent'
@@ -565,16 +566,33 @@ export function loadMessagesFromStorage(
       return []
     }
 
-    const stored = localStorage.getItem(storageKeys.messages)
-    const currentSessionId = sessionId ?? localStorage.getItem(storageKeys.sessionId)
+    const stored = safeGetItem(() => window.localStorage, storageKeys.messages, {
+      owner: 'chat',
+      key: storageKeys.messages,
+      workflowCritical: true,
+    })
+    const storedSessionId = safeGetItem(() => window.localStorage, storageKeys.sessionId, {
+      owner: 'chat',
+      key: storageKeys.sessionId,
+      workflowCritical: true,
+    })
+    const currentSessionId = sessionId ?? (storedSessionId.ok ? storedSessionId.value : null)
     debug.log('[Chat] loadMessagesFromStorage called:', {
-      hasStoredMessages: !!stored,
-      storedLength: stored?.length || 0,
+      hasStoredMessages: stored.ok && !!stored.value,
+      storedLength: stored.ok ? stored.value?.length || 0 : 0,
       currentSessionId: currentSessionId || 'none',
     })
 
-    if (stored) {
-      const data = JSON.parse(stored) as unknown
+    if (stored.ok && stored.value) {
+      const parsed = safeGetJson<unknown>(localStorage, storageKeys.messages, {
+        owner: 'chat',
+        key: storageKeys.messages,
+        workflowCritical: true,
+      })
+      if (!parsed.ok) {
+        return []
+      }
+      const data = parsed.value
 
       if (isStoredChatData(data)) {
         debug.log('[Chat] Found session-scoped stored messages:', {

@@ -21,6 +21,7 @@ import {
   PDF_VIEWER_SETTINGS_STORAGE_KEY,
   type HighlightSettings,
 } from '@/components/pdfViewer/highlightSettings'
+import { safeSetJson } from '@/lib/browserStorage'
 
 function dispatchViewerSettings(settings: HighlightSettings) {
   dispatchHighlightSettingsChanged({
@@ -48,7 +49,10 @@ export default function ViewerSettings() {
   }, [applySettings, defaultSettings])
 
   useEffect(() => {
-    localStorage.setItem(PDF_VIEWER_SETTINGS_STORAGE_KEY, JSON.stringify(settings))
+    safeSetJson(() => window.localStorage, PDF_VIEWER_SETTINGS_STORAGE_KEY, settings, {
+      owner: 'preferences',
+      key: PDF_VIEWER_SETTINGS_STORAGE_KEY,
+    })
   }, [settings])
 
   const opacityLabel = useMemo(() => `${Math.round(settings.highlightOpacity * 100)}%`, [settings.highlightOpacity])
