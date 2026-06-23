@@ -550,11 +550,15 @@ function lookupAttemptLine(details: Record<string, unknown>): string | null {
   return parts.length > 0 ? `Lookup: ${parts.join(' · ')}` : null
 }
 
+function normalizedExplanationText(explanation: string): string {
+  return explanation.replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
 function validationExplanationDetails(
   summary: DomainEnvelopeValidationSummaryProjection,
 ): string[] {
   const details: string[] = []
-  const explanationLabelsAdded = new Set<string>()
+  const explanationTextsAdded = new Set<string>()
   for (const finding of summary.findings) {
     const findingDetails = finding.details
     const validationResult = recordValue(findingDetails.validation_result)
@@ -573,11 +577,13 @@ function validationExplanationDetails(
     const explanationLabel = materializedField && generatedFromExpectedField
       ? 'Shared explanation'
       : 'Explanation'
-    const explanationLine = explanation && !explanationLabelsAdded.has(explanationLabel)
-      ? `${explanationLabel}: ${explanation}`
-      : null
-    if (explanationLine) {
-      explanationLabelsAdded.add(explanationLabel)
+    let explanationLine: string | null = null
+    if (explanation) {
+      const normalizedExplanation = normalizedExplanationText(explanation)
+      if (!explanationTextsAdded.has(normalizedExplanation)) {
+        explanationTextsAdded.add(normalizedExplanation)
+        explanationLine = `${explanationLabel}: ${explanation}`
+      }
     }
 
     for (const line of [

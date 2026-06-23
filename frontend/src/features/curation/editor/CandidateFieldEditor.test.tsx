@@ -545,6 +545,33 @@ describe('CandidateFieldEditor', () => {
             },
           },
           {
+            finding_id: 'finding-gene-symbol-resolved-duplicate',
+            envelope_id: 'envelope-1',
+            object_id: 'object-1',
+            object_type: 'gene',
+            field_path: 'gene.symbol',
+            envelope_revision: 4,
+            severity: 'info',
+            finding_status: 'resolved',
+            summary_status: 'resolved',
+            code: 'domain_pack.validator_resolved',
+            message: 'Resolved gene symbol.',
+            details: {
+              validation_metadata: {
+                parent_request_id: 'request-gene-1',
+                generated_from_expected_result_field: false,
+              },
+              validation_result: {
+                request_id: 'request-gene-1',
+                validator_agent: {
+                  package_id: 'agr.alliance',
+                  agent_id: 'gene_validation',
+                },
+                explanation: 'The lookup matched the current accepted gene symbol.',
+              },
+            },
+          },
+          {
             finding_id: 'finding-gene-symbol-resolved-retry',
             envelope_id: 'envelope-1',
             object_id: 'object-1',
@@ -568,7 +595,7 @@ describe('CandidateFieldEditor', () => {
                   package_id: 'agr.alliance',
                   agent_id: 'gene_validation',
                 },
-                explanation: 'A retry produced redundant shared reasoning.',
+                explanation: 'A retry produced distinct shared reasoning.',
                 resolved_values: {
                   symbol: 'abc',
                 },
@@ -595,7 +622,16 @@ describe('CandidateFieldEditor', () => {
     expect(validationState).toHaveTextContent(
       'Shared explanation: The lookup matched the current accepted gene symbol.',
     )
-    expect(validationState).not.toHaveTextContent('A retry produced redundant shared reasoning.')
+    expect(validationState).not.toHaveTextContent(
+      'Explanation: The lookup matched the current accepted gene symbol.',
+    )
+    expect(
+      validationState.textContent?.match(/The lookup matched the current accepted gene symbol\./g)
+        ?? [],
+    ).toHaveLength(1)
+    expect(validationState).toHaveTextContent(
+      'Shared explanation: A retry produced distinct shared reasoning.',
+    )
   })
 
   it('floats needs-review fields and counts them from envelope summaries', () => {
