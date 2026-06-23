@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import queue
+import re
 import shutil
 import subprocess
 import threading
@@ -25,15 +26,13 @@ from typing import Any
 DEFAULT_CACHE_ROOT = Path.home() / ".cache" / "agr-ai-curation" / "agent-lsp"
 SOURCE_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx"}
 # Symphony runs this helper from lightweight issue workspaces that often do not
-# have the backend virtualenv installed. Treat missing-import/module-source
-# Pyright rules as environment baseline noise so third-party dependency gaps do
-# not hide actionable diagnostics in changed files. If diagnostics later run in
-# a fully provisioned Python env, narrow this before relying on it for import
-# contract coverage.
+# have the backend virtualenv installed. Missing third-party imports are allowed
+# to remain dependency noise, but repo-local missing imports must still fail.
 PYRIGHT_DEPENDENCY_RESOLUTION_RULES = {
     "reportMissingImports",
     "reportMissingModuleSource",
 }
+PYRIGHT_MISSING_IMPORT_PATTERN = re.compile(r'Import "([^"]+)" could not be resolved')
 
 
 def run_command(
@@ -464,13 +463,112 @@ def zero_based_position(line: int, character: int, zero_based: bool) -> dict[str
     return {"line": max(0, line - 1), "character": max(0, character - 1)}
 
 
+def pyright_missing_import_name(diagnostic: dict[str, Any]) -> str | None:
+    message = diagnostic.get("message")
+    if not isinstance(message, str):
+        return None
+    match = PYRIGHT_MISSING_IMPORT_PATTERN.search(message)
+    if not match:
+        return None
+    imported = match.group(1).strip()
+    return imported or None
+
+
+def python_source_roots(root: Path, diagnostics: list[dict[str, Any]]) -> list[Path]:
+    candidates = [
+        root,
+        root / "backend",
+        root / "backend" / "src",
+        root / "backend" / "tests",
+        root / "scripts",
+        root / "trace_review" / "backend",
+        root / "trace_review" / "backend" / "src",
+        root / "trace_review" / "backend" / "tests",
+    ]
+    packages_dir = root / "packages"
+    if packages_dir.is_dir():
+        candidates.extend(packages_dir.glob("*/python/src"))
+
+    for diagnostic in diagnostics:
+        file_name = diagnostic.get("file")
+        if not isinstance(file_name, str) or not file_name:
+            continue
+        path = Path(file_name)
+        if not path.is_absolute():
+            path = root / path
+        try:
+            resolved = path.resolve()
+            resolved.relative_to(root.resolve())
+        except ValueError:
+            continue
+        for parent in resolved.parents:
+            candidates.append(parent)
+            if parent == root:
+                break
+
+    result: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if resolved in seen or not resolved.is_dir():
+            continue
+        seen.add(resolved)
+        result.append(resolved)
+    return result
+
+
+def path_contains_python_sources(path: Path) -> bool:
+    if (path / "__init__.py").is_file():
+        return True
+    try:
+        next(path.rglob("*.py"))
+    except StopIteration:
+        return False
+    return True
+
+
+def is_repo_local_python_import(imported: str, source_roots: list[Path]) -> bool:
+    top_level = imported.split(".", 1)[0]
+    if not top_level.isidentifier():
+        return False
+
+    for source_root in source_roots:
+        if (source_root / f"{top_level}.py").is_file():
+            return True
+        package_dir = source_root / top_level
+        if package_dir.is_dir() and path_contains_python_sources(package_dir):
+            return True
+    return False
+
+
+def is_pyright_dependency_resolution_noise(
+    diagnostic: dict[str, Any],
+    source_roots: list[Path],
+) -> bool:
+    if diagnostic.get("rule") not in PYRIGHT_DEPENDENCY_RESOLUTION_RULES:
+        return False
+
+    imported = pyright_missing_import_name(diagnostic)
+    if imported is None:
+        return False
+
+    # Blanket missing-import suppression hides broken repo-local imports; only
+    # unresolved imports proven external to this repo stay classified as noise.
+    return not is_repo_local_python_import(imported, source_roots)
+
+
 def classify_pyright_diagnostics(
+    root: Path,
     diagnostics: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     dependency_resolution: list[dict[str, Any]] = []
     actionable: list[dict[str, Any]] = []
+    source_roots = python_source_roots(root, diagnostics)
     for diagnostic in diagnostics:
-        if diagnostic.get("rule") in PYRIGHT_DEPENDENCY_RESOLUTION_RULES:
+        if is_pyright_dependency_resolution_noise(diagnostic, source_roots):
             dependency_resolution.append(diagnostic)
         else:
             actionable.append(diagnostic)
@@ -552,6 +650,7 @@ def run_pyright_diagnostics(root: Path, py_files: list[str], timeout: float) -> 
         return command
 
     dependency_resolution, actionable = classify_pyright_diagnostics(
+        root,
         [diagnostic for diagnostic in diagnostics if isinstance(diagnostic, dict)]
     )
     actionable_error_count = sum(
