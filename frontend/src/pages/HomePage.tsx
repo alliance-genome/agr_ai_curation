@@ -12,7 +12,15 @@ import { useChatStream } from '@/hooks/useChatStream'
 import {
   DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
   getChatLocalStorageKeys,
+  pruneChatMessageCacheMessages,
 } from '@/lib/chatCacheKeys'
+import {
+  safeGetItem,
+  safeGetJson,
+  safeRemoveItem,
+  safeSetItem,
+  safeSetJson,
+} from '@/lib/browserStorage'
 import { normalizeChatHistoryValue } from '@/lib/chatHistoryNormalization'
 import {
   HOME_PDF_VIEWER_OWNER,
@@ -152,14 +160,24 @@ function HomePage() {
 
   // Right panel tab state (persisted)
   const [rightPanelTab, setRightPanelTab] = useState<number>(() => {
-    const stored = localStorage.getItem(RIGHT_PANEL_TAB_KEY)
-    return stored ? parseInt(stored, 10) : 0
+    const stored = safeGetItem(() => window.localStorage, RIGHT_PANEL_TAB_KEY, {
+      owner: 'preferences',
+      key: RIGHT_PANEL_TAB_KEY,
+      quiet: true,
+    })
+    if (!stored.ok) {
+      return 0
+    }
+    return stored.value ? parseInt(stored.value, 10) : 0
   })
 
   // Persist tab changes
   const handleRightPanelTabChange = useCallback((tabIndex: number) => {
     setRightPanelTab(tabIndex)
-    localStorage.setItem(RIGHT_PANEL_TAB_KEY, String(tabIndex))
+    safeSetItem(() => window.localStorage, RIGHT_PANEL_TAB_KEY, String(tabIndex), {
+      owner: 'preferences',
+      key: RIGHT_PANEL_TAB_KEY,
+    })
   }, [])
 
   // Single shared SSE stream for both Chat and AuditPanel
@@ -184,9 +202,15 @@ function HomePage() {
 
     if (chatStorageKeys) {
       if (nextSessionId) {
-        localStorage.setItem(chatStorageKeys.sessionId, nextSessionId)
+        safeSetItem(() => window.localStorage, chatStorageKeys.sessionId, nextSessionId, {
+          owner: 'chat',
+          workflowCritical: true,
+        })
       } else {
-        localStorage.removeItem(chatStorageKeys.sessionId)
+        safeRemoveItem(() => window.localStorage, chatStorageKeys.sessionId, {
+          owner: 'chat',
+          workflowCritical: true,
+        })
       }
     }
 
@@ -198,7 +222,10 @@ function HomePage() {
       return
     }
 
-    localStorage.removeItem(chatStorageKeys.messages)
+    safeRemoveItem(() => window.localStorage, chatStorageKeys.messages, {
+      owner: 'chat',
+      workflowCritical: true,
+    })
   }, [chatStorageKeys])
 
   const persistSessionMessages = useCallback((
@@ -210,24 +237,40 @@ function HomePage() {
     }
 
     const storedMessages = buildRestorableChatMessages(detail.messages)
-    if (storedMessages.length === 0) {
-      localStorage.removeItem(chatStorageKeys.messages)
+    const prunedMessages = pruneChatMessageCacheMessages(storedMessages)
+    if (prunedMessages.length === 0) {
+      safeRemoveItem(() => window.localStorage, chatStorageKeys.messages, {
+        owner: 'chat',
+        workflowCritical: true,
+      })
       return
     }
 
-    localStorage.setItem(chatStorageKeys.messages, JSON.stringify({
+    safeSetJson(() => window.localStorage, chatStorageKeys.messages, {
       session_id: activeSessionId,
-      messages: storedMessages,
-    }))
+      messages: prunedMessages,
+    }, {
+      owner: 'chat',
+      workflowCritical: true,
+    })
   }, [chatStorageKeys])
 
   const clearDocumentContext = useCallback(async () => {
-    sessionStorage.removeItem(DOCUMENT_LOADING_STORAGE_KEY)
+    safeRemoveItem(() => window.sessionStorage, DOCUMENT_LOADING_STORAGE_KEY, {
+      owner: 'workflow',
+      workflowCritical: true,
+    })
     setLoadingDocument(false)
 
     if (chatStorageKeys) {
-      localStorage.removeItem(chatStorageKeys.activeDocument)
-      localStorage.removeItem(chatStorageKeys.pdfViewerSession)
+      safeRemoveItem(() => window.localStorage, chatStorageKeys.activeDocument, {
+        owner: 'chat',
+        workflowCritical: true,
+      })
+      safeRemoveItem(() => window.localStorage, chatStorageKeys.pdfViewerSession, {
+        owner: 'pdf-viewer',
+        workflowCritical: true,
+      })
     }
 
     try {
@@ -331,8 +374,14 @@ function HomePage() {
     }
 
     // Check localStorage (persisted from previous navigation)
-    const storedSessionId = chatStorageKeys
-      ? normalizeChatHistoryValue(localStorage.getItem(chatStorageKeys.sessionId))
+    const storedSession = chatStorageKeys
+      ? safeGetItem(() => window.localStorage, chatStorageKeys.sessionId, {
+          owner: 'chat',
+          workflowCritical: true,
+        })
+      : null
+    const storedSessionId = storedSession?.ok
+      ? normalizeChatHistoryValue(storedSession.value)
       : null
     if (storedSessionId) {
       persistSessionId(storedSessionId)
@@ -358,18 +407,21 @@ function HomePage() {
    * Get current document ID from PDF viewer localStorage session
    */
   const getCurrentDocumentId = useCallback((): string | undefined => {
-    try {
-      if (!chatStorageKeys) {
-        return undefined
-      }
-
-      const raw = localStorage.getItem(chatStorageKeys.pdfViewerSession)
-      if (!raw) return undefined
-      const session = JSON.parse(raw)
-      return session?.documentId || undefined
-    } catch {
+    if (!chatStorageKeys) {
       return undefined
     }
+
+    const session = safeGetJson<{ documentId?: unknown }>(
+      () => window.localStorage,
+      chatStorageKeys.pdfViewerSession,
+      {
+        owner: 'pdf-viewer',
+        workflowCritical: true,
+      },
+    )
+    return session.ok && typeof session.value?.documentId === 'string'
+      ? session.value.documentId
+      : undefined
   }, [chatStorageKeys])
 
   /**
@@ -422,8 +474,14 @@ function HomePage() {
           return
         }
 
-        const storedSessionId = chatStorageKeys
-          ? normalizeChatHistoryValue(localStorage.getItem(chatStorageKeys.sessionId))
+        const storedSession = chatStorageKeys
+          ? safeGetItem(() => window.localStorage, chatStorageKeys.sessionId, {
+              owner: 'chat',
+              workflowCritical: true,
+            })
+          : null
+        const storedSessionId = storedSession?.ok
+          ? normalizeChatHistoryValue(storedSession.value)
           : null
         if (storedSessionId) {
           persistSessionId(storedSessionId)
@@ -573,7 +631,11 @@ function HomePage() {
   // Handle document loading overlay with timeout safety net
   useEffect(() => {
     // Check if we're in the middle of loading a document (e.g., after navigation)
-    if (sessionStorage.getItem(DOCUMENT_LOADING_STORAGE_KEY) === 'true') {
+    const loadingMarker = safeGetItem(() => window.sessionStorage, DOCUMENT_LOADING_STORAGE_KEY, {
+      owner: 'workflow',
+      workflowCritical: true,
+    })
+    if (loadingMarker.ok && loadingMarker.value === 'true') {
       setLoadingDocument(true)
     }
 
@@ -637,7 +699,10 @@ function HomePage() {
     clearDocumentLoadingTimeout()
     setLoadingDocument(false)
     setLoadingError(null)
-    sessionStorage.removeItem(DOCUMENT_LOADING_STORAGE_KEY)
+    safeRemoveItem(() => window.sessionStorage, DOCUMENT_LOADING_STORAGE_KEY, {
+      owner: 'workflow',
+      workflowCritical: true,
+    })
   }, [clearDocumentLoadingTimeout])
 
   const handleStartNewChat = useCallback(async () => {
@@ -672,7 +737,10 @@ function HomePage() {
     debug.log('🔄 [HomePage] Session ID changed:', newSessionId)
     persistSessionId(newSessionId)
     if (chatStorageKeys) {
-      localStorage.removeItem(chatStorageKeys.messages)
+      safeRemoveItem(() => window.localStorage, chatStorageKeys.messages, {
+        owner: 'chat',
+        workflowCritical: true,
+      })
     }
   }, [chatStorageKeys, persistSessionId])
 

@@ -25,6 +25,14 @@ import ForceScrollFix from './components/ForceScrollFix'
 import MaintenanceBanner from './components/MaintenanceBanner'
 import ConnectionsHealthBanner from './components/ConnectionsHealthBanner'
 import { GLOBAL_TOAST_EVENT, GlobalToastEventDetail } from './lib/globalNotifications'
+import { clearAiCurationLocalCache } from './lib/aiCurationLocalCache'
+import {
+  BROWSER_STORAGE_PRESSURE_EVENT,
+  safeGetItem,
+  safeRemoveItem,
+  safeSetItem,
+  type BrowserStoragePressureEventDetail,
+} from './lib/browserStorage'
 import { POPUP_CHANGELOG_ENTRY } from './content/changelog'
 import ChangelogDialog from './components/ChangelogDialog'
 import { buildPdfTerminalNotification } from './features/documents/pdfTerminalNotifications'
@@ -208,9 +216,18 @@ export function ProtectedRoutes({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     // Latch logout suppression in a ref so it survives the auth-state render sequence.
-    if (sessionStorage.getItem('justLoggedOut') === 'true') {
+    const justLoggedOut = safeGetItem(() => window.sessionStorage, 'justLoggedOut', {
+      owner: 'auth',
+      key: 'justLoggedOut',
+      workflowCritical: true,
+    });
+    if (justLoggedOut.ok && justLoggedOut.value === 'true') {
       pendingLogoutSuppressionRef.current = true;
-      sessionStorage.removeItem('justLoggedOut');
+      safeRemoveItem(() => window.sessionStorage, 'justLoggedOut', {
+        owner: 'auth',
+        key: 'justLoggedOut',
+        workflowCritical: true,
+      });
     }
 
     if (isAuthenticated) {
@@ -228,7 +245,11 @@ export function ProtectedRoutes({ children }: { children: React.ReactNode }) {
     }
 
     // Save intended destination for redirect after login (future enhancement)
-    sessionStorage.setItem('intendedPath', location.pathname + location.search);
+    safeSetItem(() => window.sessionStorage, 'intendedPath', location.pathname + location.search, {
+      owner: 'auth',
+      key: 'intendedPath',
+      workflowCritical: true,
+    });
     login();
   }, [isLoading, isAuthenticated, login, location.pathname, location.search]);
 
@@ -268,11 +289,12 @@ export function AppContent() {
     open: boolean;
     message: string;
     severity: 'success' | 'error' | 'warning' | 'info';
-    autoHideDurationMs?: number;
+    autoHideDurationMs?: number | null;
     anchorOrigin?: {
       vertical: 'top' | 'bottom';
       horizontal: 'left' | 'center' | 'right';
     };
+    showStorageRecoveryAction?: boolean;
   }>({ open: false, message: '', severity: 'info' });
   const seededPdfJobsRef = React.useRef(false);
   const seededBatchesRef = React.useRef(false);
@@ -293,7 +315,10 @@ export function AppContent() {
     if (!changelogStorageKey || !POPUP_CHANGELOG_ENTRY) {
       return;
     }
-    localStorage.setItem(changelogStorageKey, POPUP_CHANGELOG_ENTRY.id);
+    safeSetItem(() => window.localStorage, changelogStorageKey, POPUP_CHANGELOG_ENTRY.id, {
+      owner: 'preferences',
+      key: changelogStorageKey,
+    });
   }, [changelogStorageKey]);
 
   const handleChangelogDialogClose = React.useCallback(() => {
@@ -314,8 +339,11 @@ export function AppContent() {
     }
 
     const key = `changelog:last-seen:${user.uid}`;
-    const lastSeenId = localStorage.getItem(key);
-    if (lastSeenId !== POPUP_CHANGELOG_ENTRY.id) {
+    const lastSeenId = safeGetItem(() => window.localStorage, key, {
+      owner: 'preferences',
+      key,
+    });
+    if (!lastSeenId.ok || lastSeenId.value !== POPUP_CHANGELOG_ENTRY.id) {
       setChangelogDialogOpen(true);
     }
   }, [isAuthenticated, user?.uid]);
@@ -333,6 +361,7 @@ export function AppContent() {
         severity: detail.severity ?? 'info',
         autoHideDurationMs: detail.autoHideDurationMs,
         anchorOrigin: detail.anchorOrigin,
+        showStorageRecoveryAction: false,
       });
     };
 
@@ -340,6 +369,39 @@ export function AppContent() {
     return () => {
       window.removeEventListener(GLOBAL_TOAST_EVENT, onGlobalToast as EventListener);
     };
+  }, []);
+
+  useEffect(() => {
+    const onStoragePressure = (event: Event) => {
+      const detail = (event as CustomEvent<BrowserStoragePressureEventDetail>).detail;
+      if (!detail?.workflowCritical) {
+        return;
+      }
+
+      setGlobalSnackbar({
+        open: true,
+        message: 'Browser storage is full or unavailable. Local AI Curation cache was not saved, but server-side documents and chat history are unchanged.',
+        severity: 'warning',
+        autoHideDurationMs: null,
+        anchorOrigin: DEFAULT_GLOBAL_SNACKBAR_ANCHOR,
+        showStorageRecoveryAction: true,
+      });
+    };
+
+    window.addEventListener(BROWSER_STORAGE_PRESSURE_EVENT, onStoragePressure as EventListener);
+    return () => {
+      window.removeEventListener(BROWSER_STORAGE_PRESSURE_EVENT, onStoragePressure as EventListener);
+    };
+  }, []);
+
+  const handleClearLocalCache = React.useCallback(() => {
+    clearAiCurationLocalCache();
+    setGlobalSnackbar({
+      open: true,
+      message: 'AI Curation local cache was cleared. Uploaded PDFs and server-side chat history were not deleted.',
+      severity: 'success',
+      showStorageRecoveryAction: false,
+    });
   }, []);
 
   useEffect(() => {
@@ -737,13 +799,26 @@ export function AppContent() {
 
       <Snackbar
         open={globalSnackbar.open}
-        autoHideDuration={globalSnackbar.autoHideDurationMs ?? DEFAULT_GLOBAL_SNACKBAR_AUTO_HIDE_MS}
+        autoHideDuration={
+          globalSnackbar.autoHideDurationMs === null
+            ? null
+            : globalSnackbar.autoHideDurationMs ?? DEFAULT_GLOBAL_SNACKBAR_AUTO_HIDE_MS
+        }
         onClose={() => setGlobalSnackbar((prev) => ({ ...prev, open: false }))}
         anchorOrigin={globalSnackbar.anchorOrigin ?? DEFAULT_GLOBAL_SNACKBAR_ANCHOR}
       >
         <Alert
           severity={globalSnackbar.severity}
           onClose={() => setGlobalSnackbar((prev) => ({ ...prev, open: false }))}
+          action={globalSnackbar.showStorageRecoveryAction ? (
+            <Button
+              color="inherit"
+              size="small"
+              onClick={handleClearLocalCache}
+            >
+              Clear local cache
+            </Button>
+          ) : undefined}
           sx={{ width: '100%' }}
         >
           {globalSnackbar.message}

@@ -23,6 +23,7 @@ describe('chatMessageUtils', () => {
   beforeEach(() => {
     localStorage.clear()
     vi.restoreAllMocks()
+    vi.unstubAllEnvs()
   })
 
   it('builds a usable turn ID when crypto.randomUUID is unavailable', () => {
@@ -88,6 +89,34 @@ describe('chatMessageUtils', () => {
     ] satisfies SerializedMessage[]))
 
     expect(loadMessagesFromStorage(storageKeys, 'session-1')).toEqual([])
+  })
+
+  it('restores only the newest messages allowed by the local message cache limit', () => {
+    vi.stubEnv('VITE_AI_CURATION_CHAT_MESSAGE_CACHE_MAX_ENTRIES', '2')
+    const storageKeys = getChatLocalStorageKeys('user-1')
+    localStorage.setItem(storageKeys.messages, JSON.stringify({
+      session_id: 'session-1',
+      messages: [
+        {
+          role: 'user',
+          content: 'oldest',
+          timestamp: '2026-02-03T04:05:06.000Z',
+        },
+        {
+          role: 'assistant',
+          content: 'middle',
+          timestamp: '2026-02-03T04:06:06.000Z',
+        },
+        {
+          role: 'user',
+          content: 'newest',
+          timestamp: '2026-02-03T04:07:06.000Z',
+        },
+      ],
+    } satisfies StoredChatData))
+
+    expect(loadMessagesFromStorage(storageKeys, 'session-1').map((message) => message.content))
+      .toEqual(['middle', 'newest'])
   })
 
   it('backfills missing Review & Curate targets for supported evidence messages', () => {

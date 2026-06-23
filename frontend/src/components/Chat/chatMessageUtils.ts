@@ -2,8 +2,12 @@ import { debug } from '@/utils/env'
 import type { CurationWorkspaceLaunchTarget } from '@/features/curation/navigation/openCurationWorkspace'
 import type { EvidenceRecord } from '@/features/curation/types'
 import type { SSEEvent } from '@/hooks/useChatStream'
+import { safeGetItem, safeGetJson } from '@/lib/browserStorage'
 import { normalizeOptionalText } from '@/lib/normalizeOptionalText'
-import type { ChatLocalStorageKeys } from '@/lib/chatCacheKeys'
+import {
+  pruneChatMessageCacheMessages,
+  type ChatLocalStorageKeys,
+} from '@/lib/chatCacheKeys'
 import type { FlowStepEvidenceDetails } from '@/types/AuditEvent'
 
 import type {
@@ -560,42 +564,52 @@ export function loadMessagesFromStorage(
   storageKeys: ChatLocalStorageKeys | null,
   sessionId?: string | null,
 ): Message[] {
-  try {
-    if (!storageKeys) {
-      return []
-    }
+  if (!storageKeys) {
+    return []
+  }
 
-    const stored = localStorage.getItem(storageKeys.messages)
-    const currentSessionId = sessionId ?? localStorage.getItem(storageKeys.sessionId)
-    debug.log('[Chat] loadMessagesFromStorage called:', {
-      hasStoredMessages: !!stored,
-      storedLength: stored?.length || 0,
-      currentSessionId: currentSessionId || 'none',
+  const parsed = safeGetJson<unknown>(() => window.localStorage, storageKeys.messages, {
+    owner: 'chat',
+    key: storageKeys.messages,
+    workflowCritical: true,
+  })
+  const storedSessionId = safeGetItem(() => window.localStorage, storageKeys.sessionId, {
+    owner: 'chat',
+    key: storageKeys.sessionId,
+    workflowCritical: true,
+  })
+  const currentSessionId = sessionId ?? (storedSessionId.ok ? storedSessionId.value : null)
+  const data = parsed.ok ? parsed.value : null
+  const storedData = isStoredChatData(data) ? data : null
+
+  debug.log('[Chat] loadMessagesFromStorage called:', {
+    hasStoredMessages: parsed.ok && !!parsed.value,
+    storedLength: storedData?.messages.length ?? 0,
+    currentSessionId: currentSessionId || 'none',
+  })
+
+  if (!parsed.ok) {
+    return []
+  }
+
+  if (storedData) {
+    debug.log('[Chat] Found session-scoped stored messages:', {
+      storedSessionId: storedData.session_id,
+      currentSessionId,
+      match: storedData.session_id === currentSessionId,
+      messageCount: storedData.messages.length,
     })
-
-    if (stored) {
-      const data = JSON.parse(stored) as unknown
-
-      if (isStoredChatData(data)) {
-        debug.log('[Chat] Found session-scoped stored messages:', {
-          storedSessionId: data.session_id,
-          currentSessionId,
-          match: data.session_id === currentSessionId,
-          messageCount: data.messages.length,
-        })
-        if (data.session_id === currentSessionId) {
-          debug.log('[Chat] Session match - restoring messages')
-          return data.messages.map(sanitizeStoredMessage)
-        }
-
-        debug.log('[Chat] Session mismatch - skipping restore for current session')
-        return []
-      }
-
-      debug.log('[Chat] Stored messages are missing session scope - skipping restore')
+    if (storedData.session_id === currentSessionId) {
+      debug.log('[Chat] Session match - restoring messages')
+      return pruneChatMessageCacheMessages(storedData.messages).map(sanitizeStoredMessage)
     }
-  } catch (error) {
-    console.warn('Failed to load messages from localStorage:', error)
+
+    debug.log('[Chat] Session mismatch - skipping restore for current session')
+    return []
+  }
+
+  if (data) {
+    debug.log('[Chat] Stored messages are missing session scope - skipping restore')
   }
   debug.log('[Chat] No messages to restore')
   return []

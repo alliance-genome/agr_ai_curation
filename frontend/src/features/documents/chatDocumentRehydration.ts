@@ -5,6 +5,7 @@ import {
 } from '@/components/pdfViewer/pdfEvents'
 import { loadDocumentForChat } from '@/features/documents/pdfUploadFlow'
 import type { ChatLocalStorageKeys } from '@/lib/chatCacheKeys'
+import { safeSetJson } from '@/lib/browserStorage'
 import { normalizeChatHistoryValue } from '@/lib/chatHistoryNormalization'
 
 export interface RehydratableChatDocument {
@@ -78,7 +79,10 @@ export async function rehydrateChatDocument(
   } = options
 
   if (chatStorageKeys) {
-    localStorage.setItem(chatStorageKeys.activeDocument, JSON.stringify(document))
+    safeSetJson(() => window.localStorage, chatStorageKeys.activeDocument, document, {
+      owner: 'chat',
+      workflowCritical: true,
+    })
   }
 
   if (ensureLoadedForChat) {
@@ -102,7 +106,8 @@ export async function rehydrateChatDocument(
     throw new Error('Document viewer URL unavailable')
   }
 
-  const filename = normalizeChatHistoryValue(detail.filename)
+  const metadataFilename = typeof detail.filename === 'string' ? detail.filename : null
+  const filename = normalizeChatHistoryValue(metadataFilename)
     ?? normalizeChatHistoryValue(document.filename)
   if (!filename) {
     throw new Error('Document filename unavailable')
@@ -127,7 +132,7 @@ export async function rehydrateChatDocument(
   }
 
   if (chatStorageKeys) {
-    localStorage.setItem(chatStorageKeys.pdfViewerSession, JSON.stringify({
+    safeSetJson(() => window.localStorage, chatStorageKeys.pdfViewerSession, {
       documentId: document.id,
       viewerUrl,
       filename,
@@ -137,7 +142,10 @@ export async function rehydrateChatDocument(
       zoomLevel: 1,
       scrollPosition: viewerState?.scrollPosition ?? 0,
       lastInteraction: loadedAt,
-    }))
+    }, {
+      owner: 'pdf-viewer',
+      workflowCritical: true,
+    })
   }
 
   dispatchPDFDocumentChanged(

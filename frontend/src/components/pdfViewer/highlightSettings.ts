@@ -1,4 +1,5 @@
 import type { Theme } from '@mui/material/styles'
+import { safeGetJson } from '@/lib/browserStorage'
 
 export interface HighlightSettings {
   highlightColor: string
@@ -39,12 +40,14 @@ export function normalizeHighlightSettings(
 }
 
 export function loadStoredHighlightSettings(defaults: HighlightSettings): HighlightSettings {
-  try {
-    const raw = localStorage.getItem(PDF_VIEWER_SETTINGS_STORAGE_KEY)
-    if (!raw) return defaults
-    return normalizeHighlightSettings(JSON.parse(raw) as Partial<HighlightSettings>, defaults)
-  } catch (error) {
-    console.warn('Failed to load viewer settings', error)
-    return defaults
-  }
+  const stored = safeGetJson<Partial<HighlightSettings>>(
+    () => window.localStorage,
+    PDF_VIEWER_SETTINGS_STORAGE_KEY,
+    {
+      owner: 'preferences',
+      key: PDF_VIEWER_SETTINGS_STORAGE_KEY,
+    },
+  )
+  if (!stored.ok || !stored.value) return defaults
+  return normalizeHighlightSettings(stored.value, defaults)
 }

@@ -20,6 +20,7 @@ import {
   clearChatRenderCacheForSession,
   getChatRenderCacheKeys,
 } from '../lib/chatCacheKeys'
+import { safeGetJson, safeSetJson } from '../lib/browserStorage'
 import { getStreamEventSessionId } from '../lib/streamEventSession'
 
 /**
@@ -117,16 +118,15 @@ const saveAuditEventsToStorage = (
   sessionId: string,
   events: AuditEvent[],
 ) => {
-  try {
-    if (!userId) {
-      return
-    }
-
-    const { auditEvents } = getChatRenderCacheKeys(userId, sessionId)
-    localStorage.setItem(auditEvents, JSON.stringify(events))
-  } catch (e) {
-    console.error('Failed to save audit events to localStorage:', e)
+  if (!userId) {
+    return
   }
+
+  const { auditEvents } = getChatRenderCacheKeys(userId, sessionId)
+  safeSetJson(() => window.localStorage, auditEvents, events, {
+    owner: 'audit',
+    workflowCritical: true,
+  })
 }
 
 // Helper to load audit events from localStorage
@@ -134,23 +134,24 @@ const loadAuditEventsFromStorage = (
   userId: string | null | undefined,
   sessionId: string,
 ): AuditEvent[] => {
-  try {
-    if (!userId) {
-      return []
-    }
+  if (!userId) {
+    return []
+  }
 
-    const { auditEvents } = getChatRenderCacheKeys(userId, sessionId)
-    const stored = localStorage.getItem(auditEvents)
-    if (stored) {
-      const events = JSON.parse(stored) as Array<Omit<AuditEvent, 'timestamp'> & { timestamp: string }>
-      // Restore Date objects
-      return events.map((event) => ({
-        ...event,
-        timestamp: new Date(event.timestamp),
-      }))
-    }
-  } catch (e) {
-    console.error('Failed to load audit events from localStorage:', e)
+  const { auditEvents } = getChatRenderCacheKeys(userId, sessionId)
+  const stored = safeGetJson<Array<Omit<AuditEvent, 'timestamp'> & { timestamp: string }>>(
+    () => window.localStorage,
+    auditEvents,
+    {
+      owner: 'audit',
+      workflowCritical: true,
+    },
+  )
+  if (stored.ok && stored.value) {
+    return stored.value.map((event) => ({
+      ...event,
+      timestamp: new Date(event.timestamp),
+    }))
   }
   return []
 }
@@ -160,15 +161,11 @@ const clearAuditEventsFromStorage = (
   userId: string | null | undefined,
   sessionId: string,
 ) => {
-  try {
-    if (!userId) {
-      return
-    }
-
-    clearChatRenderCacheForSession(userId, sessionId)
-  } catch (e) {
-    console.error('Failed to clear audit events from localStorage:', e)
+  if (!userId) {
+    return
   }
+
+  clearChatRenderCacheForSession(userId, sessionId)
 }
 
 const AuditPanel: React.FC<AuditPanelProps> = ({

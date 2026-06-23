@@ -3,6 +3,7 @@ import { ThemeProvider as MuiThemeProvider } from '@mui/material/styles';
 import type { Theme } from '@mui/material/styles';
 
 import { createAppTheme, DEFAULT_THEME_MODE, type ThemeMode } from '@/theme';
+import { safeGetItem, safeSetItem } from '@/lib/browserStorage';
 
 export const THEME_MODE_STORAGE_KEY = 'ai-curation:theme-mode';
 
@@ -24,8 +25,12 @@ function readStoredThemeMode(): ThemeMode {
     return DEFAULT_THEME_MODE;
   }
 
-  const storedMode = window.localStorage.getItem(THEME_MODE_STORAGE_KEY);
-  return isThemeMode(storedMode) ? storedMode : DEFAULT_THEME_MODE;
+  const storedMode = safeGetItem(() => window.localStorage, THEME_MODE_STORAGE_KEY, {
+    owner: 'preferences',
+    key: THEME_MODE_STORAGE_KEY,
+    quiet: true,
+  });
+  return storedMode.ok && isThemeMode(storedMode.value) ? storedMode.value : DEFAULT_THEME_MODE;
 }
 
 function persistThemeMode(mode: ThemeMode) {
@@ -33,7 +38,10 @@ function persistThemeMode(mode: ThemeMode) {
     return;
   }
 
-  window.localStorage.setItem(THEME_MODE_STORAGE_KEY, mode);
+  safeSetItem(() => window.localStorage, THEME_MODE_STORAGE_KEY, mode, {
+    owner: 'preferences',
+    key: THEME_MODE_STORAGE_KEY,
+  });
 }
 
 export function ThemeModeProvider({ children }: { children: React.ReactNode }) {

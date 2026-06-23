@@ -69,3 +69,13 @@ export const getEnvFlag = (keys: string[] | string, fallback = false): boolean =
       return fallback;
   }
 };
+
+export const getEnvInt = (keys: string[] | string, fallback: number): number => {
+  const value = getEnvVar(keys);
+  if (value === undefined) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(String(value), 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};

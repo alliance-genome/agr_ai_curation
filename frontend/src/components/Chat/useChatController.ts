@@ -27,9 +27,18 @@ import { submitFeedback } from '@/services/feedbackService'
 import { useAuth } from '@/contexts/AuthContext'
 import type { SSEEvent } from '@/hooks/useChatStream'
 import { emitGlobalToast } from '@/lib/globalNotifications'
+import {
+  safeGetItem,
+  safeRemoveItem,
+  safeSetJson,
+} from '@/lib/browserStorage'
 import { normalizeOptionalText } from '@/lib/normalizeOptionalText'
 import { getStreamEventSessionId } from '@/lib/streamEventSession'
-import { clearChatRenderCacheForSession, getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
+import {
+  clearChatRenderCacheForSession,
+  getChatLocalStorageKeys,
+  pruneChatMessageCacheMessages,
+} from '@/lib/chatCacheKeys'
 import { extractEvidenceCurationSupport } from '@/services/chatHistoryApi'
 
 import {
@@ -153,7 +162,10 @@ export function useChatController({
       if (!sessionId || !chatStorageKeys || messageStorageUserIdRef.current !== storageUserId) return
 
       if (nextMessages.length === 0) {
-        localStorage.removeItem(chatStorageKeys.messages)
+        safeRemoveItem(() => window.localStorage, chatStorageKeys.messages, {
+          owner: 'chat',
+          workflowCritical: true,
+        })
         return
       }
 
@@ -161,11 +173,23 @@ export function useChatController({
         ...msg,
         timestamp: msg.timestamp.toISOString()
       }))
+      const prunedMessages = pruneChatMessageCacheMessages(serialized)
+      if (prunedMessages.length === 0) {
+        safeRemoveItem(() => window.localStorage, chatStorageKeys.messages, {
+          owner: 'chat',
+          workflowCritical: true,
+        })
+        return
+      }
+
       const storageData: StoredChatData = {
         session_id: sessionId,
-        messages: serialized
+        messages: prunedMessages
       }
-      localStorage.setItem(chatStorageKeys.messages, JSON.stringify(storageData))
+      safeSetJson(() => window.localStorage, chatStorageKeys.messages, storageData, {
+        owner: 'chat',
+        workflowCritical: true,
+      })
     } catch (error) {
       console.warn('Failed to persist messages to localStorage:', error)
     }
@@ -175,21 +199,31 @@ export function useChatController({
     if (!chatStorageKeys) {
       return null
     }
-    return localStorage.getItem(chatStorageKeys.activeDocument)
+    const stored = safeGetItem(() => window.localStorage, chatStorageKeys.activeDocument, {
+      owner: 'chat',
+      workflowCritical: true,
+    })
+    return stored.ok ? stored.value : null
   }, [chatStorageKeys])
 
   const clearStoredActiveDocument = useCallback(() => {
     if (!chatStorageKeys) {
       return
     }
-    localStorage.removeItem(chatStorageKeys.activeDocument)
+    safeRemoveItem(() => window.localStorage, chatStorageKeys.activeDocument, {
+      owner: 'chat',
+      workflowCritical: true,
+    })
   }, [chatStorageKeys])
 
   const clearStoredMessages = useCallback(() => {
     if (!chatStorageKeys) {
       return
     }
-    localStorage.removeItem(chatStorageKeys.messages)
+    safeRemoveItem(() => window.localStorage, chatStorageKeys.messages, {
+      owner: 'chat',
+      workflowCritical: true,
+    })
   }, [chatStorageKeys])
 
   const restoreDocumentToPdfViewer = useCallback(async (

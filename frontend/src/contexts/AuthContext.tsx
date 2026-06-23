@@ -2,6 +2,13 @@ import React, { createContext, useContext, useState, useEffect, ReactNode } from
 import { logger } from '../services/logger';
 import { getEnvFlag } from '../utils/env';
 import {
+  cleanupAiCurationLocalCache,
+} from '../lib/aiCurationLocalCache';
+import {
+  safeGetItem,
+  safeSetItem,
+} from '../lib/browserStorage';
+import {
   clearAllNamespacedChatLocalStorage,
   clearChatLocalStorageForUser,
   clearLegacyChatLocalStorage,
@@ -76,7 +83,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   );
   const [isLoading, setIsLoading] = useState<boolean>(!devMode); // Skip loading in dev mode
   const setJustLoggedOutFlag = (): void => {
-    sessionStorage.setItem('justLoggedOut', 'true');
+    safeSetItem(() => window.sessionStorage, 'justLoggedOut', 'true', {
+      owner: 'auth',
+      key: 'justLoggedOut',
+      workflowCritical: true,
+    });
   };
 
   /**
@@ -127,8 +138,16 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         // Handles two scenarios:
         // 1. Backend restarted (no sessions) but localStorage has stale data -> clear localStorage
         // 2. localStorage cleared but backend has sessions (memory) -> reset backend for clean slate
-        const storedSessionId = localStorage.getItem(chatStorageKeys.sessionId);
-        const storedMessages = localStorage.getItem(chatStorageKeys.messages);
+        const storedSession = safeGetItem(() => window.localStorage, chatStorageKeys.sessionId, {
+          owner: 'chat',
+          workflowCritical: true,
+        });
+        const storedMessages = safeGetItem(() => window.localStorage, chatStorageKeys.messages, {
+          owner: 'chat',
+          workflowCritical: true,
+        });
+        const storedSessionId = storedSession.ok ? storedSession.value : null;
+        const storedMessagesRaw = storedMessages.ok ? storedMessages.value : null;
         try {
           const historyQuery = new URLSearchParams({
             chat_kind: ASSISTANT_CHAT_HISTORY_KIND,
@@ -140,7 +159,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           if (historyResponse.ok) {
             const historyData = await historyResponse.json();
 
-            if (storedSessionId && storedMessages) {
+            if (storedSessionId && storedMessagesRaw) {
               // Case 1: localStorage has data - check if backend still has matching sessions
               if (historyData.total_sessions === 0) {
                 logger.debug('Backend has no sessions, clearing stale localStorage chat data', {
@@ -171,6 +190,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
             action: 'checkAuthStatus',
           });
         }
+        cleanupAiCurationLocalCache();
       } else if (response.status === 401) {
         // Not authenticated - clear state
         setUser(null);
