@@ -17,6 +17,7 @@ from src.lib.curation_workspace.domain_envelope_normalization import (
 )
 from src.lib.openai_agents.config import (
     get_flow_chat_max_rows,
+    get_flow_output_projection_preview_max_depth,
     get_flow_projection_max_field_examples,
     get_flow_projection_max_list_items,
     get_flow_projection_max_object_items,
@@ -355,7 +356,14 @@ def _bounded_projection_text(value: Any, *, max_chars: int = MAX_PROJECTION_TEXT
     return f"{text[:max_chars].rstrip()}... [truncated {overflow} chars]"
 
 
-def _bounded_projection_value(value: Any, *, depth: int = 0) -> Any:
+def _bounded_projection_value(
+    value: Any,
+    *,
+    depth: int = 0,
+    max_depth: int | None = None,
+) -> Any:
+    if max_depth is None:
+        max_depth = get_flow_output_projection_preview_max_depth()
     if isinstance(value, str):
         return _bounded_projection_text(value)
     if isinstance(value, datetime):
@@ -364,12 +372,16 @@ def _bounded_projection_value(value: Any, *, depth: int = 0) -> Any:
         return value
     if hasattr(value, "model_dump"):
         value = value.model_dump(mode="json")
-    if depth >= 4:
+    if depth >= max_depth:
         return "[truncated:depth]"
     if isinstance(value, Mapping):
         items = list(value.items())
         bounded = {
-            str(key): _bounded_projection_value(item, depth=depth + 1)
+            str(key): _bounded_projection_value(
+                item,
+                depth=depth + 1,
+                max_depth=max_depth,
+            )
             for key, item in items[:MAX_PROJECTION_OBJECT_ITEMS]
         }
         if len(items) > MAX_PROJECTION_OBJECT_ITEMS:
@@ -378,7 +390,11 @@ def _bounded_projection_value(value: Any, *, depth: int = 0) -> Any:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         items = list(value)
         bounded_items = [
-            _bounded_projection_value(item, depth=depth + 1)
+            _bounded_projection_value(
+                item,
+                depth=depth + 1,
+                max_depth=max_depth,
+            )
             for item in items[:MAX_PROJECTION_LIST_ITEMS]
         ]
         if len(items) > MAX_PROJECTION_LIST_ITEMS:
@@ -389,8 +405,9 @@ def _bounded_projection_value(value: Any, *, depth: int = 0) -> Any:
 
 def _bounded_projection_row(row: Mapping[str, Any]) -> dict[str, Any]:
     bounded: dict[str, Any] = {}
+    max_depth = get_flow_output_projection_preview_max_depth()
     for key, value in row.items():
-        bounded[str(key)] = _bounded_projection_value(value)
+        bounded[str(key)] = _bounded_projection_value(value, max_depth=max_depth)
         encoded = json.dumps(bounded, ensure_ascii=False, default=str)
         if len(encoded) > MAX_PROJECTION_ROW_CHARS:
             bounded["_truncated_preview"] = True

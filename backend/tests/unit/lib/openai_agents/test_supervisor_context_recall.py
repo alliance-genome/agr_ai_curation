@@ -278,3 +278,78 @@ def test_recall_chat_history_search_returns_exact_current_session_results(monkey
             "content": "The exact phrase is alpha beta gamma.",
         }
     ]
+
+
+def test_recall_chat_history_recent_default_limit_uses_env(monkeypatch):
+    _patch_active_chat(monkeypatch)
+    messages = [
+        _message(
+            role="assistant",
+            content=f"message {index}",
+            turn_id=f"turn-{index}",
+            minute=index,
+        )
+        for index in range(6)
+    ]
+    monkeypatch.setattr(module, "_list_session_messages", lambda **_kwargs: messages)
+
+    monkeypatch.delenv("SUPERVISOR_RECALL_CHAT_HISTORY_DEFAULT_LIMIT", raising=False)
+    default_payload = json.loads(
+        asyncio.run(module.recall_chat_history(detail="recent"))
+    )
+
+    assert [message["content"] for message in default_payload["messages"]] == [
+        "message 1",
+        "message 2",
+        "message 3",
+        "message 4",
+        "message 5",
+    ]
+    assert default_payload["truncated"] is True
+    assert default_payload["next_cursor"] == "5"
+
+    monkeypatch.setenv("SUPERVISOR_RECALL_CHAT_HISTORY_DEFAULT_LIMIT", "3")
+    env_payload = json.loads(asyncio.run(module.recall_chat_history(detail="recent")))
+
+    assert [message["content"] for message in env_payload["messages"]] == [
+        "message 3",
+        "message 4",
+        "message 5",
+    ]
+    assert env_payload["truncated"] is True
+    assert env_payload["next_cursor"] == "3"
+
+
+def test_inspect_chat_traces_inventory_default_limit_uses_env(monkeypatch):
+    _patch_active_chat(monkeypatch)
+    traces = [
+        {
+            "trace_id": f"{index:032d}",
+            "turn_id": f"turn-{index}",
+            "source": "assistant_message",
+        }
+        for index in range(6)
+    ]
+    monkeypatch.setattr(module, "_trace_inventory_records", lambda **_kwargs: traces)
+
+    monkeypatch.delenv("SUPERVISOR_INSPECT_CHAT_TRACES_DEFAULT_LIMIT", raising=False)
+    default_payload = json.loads(
+        asyncio.run(module.inspect_chat_traces(detail="inventory"))
+    )
+
+    assert [trace["trace_id"] for trace in default_payload["traces"]] == [
+        f"{index:032d}" for index in range(1, 6)
+    ]
+    assert default_payload["truncated"] is True
+    assert default_payload["next_cursor"] == "5"
+
+    monkeypatch.setenv("SUPERVISOR_INSPECT_CHAT_TRACES_DEFAULT_LIMIT", "2")
+    env_payload = json.loads(
+        asyncio.run(module.inspect_chat_traces(detail="inventory"))
+    )
+
+    assert [trace["trace_id"] for trace in env_payload["traces"]] == [
+        f"{index:032d}" for index in range(4, 6)
+    ]
+    assert env_payload["truncated"] is True
+    assert env_payload["next_cursor"] == "2"
