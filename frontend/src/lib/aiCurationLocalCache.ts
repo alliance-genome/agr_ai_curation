@@ -4,12 +4,14 @@ import {
   safeGetJson,
   safeListStorageKeys,
   safeRemoveItem,
+  safeSetJson,
   type BrowserStorageAccessor,
   type BrowserStorageResult,
 } from './browserStorage'
 import {
   clearLegacyChatLocalStorage,
   isNamespacedChatLocalStorageKey,
+  pruneChatMessageCacheMessages,
 } from './chatCacheKeys'
 
 const DEFAULT_CHAT_RENDER_CACHE_MAX_ENTRIES = 40
@@ -199,7 +201,27 @@ export function cleanupAiCurationLocalCache(
         continue
       }
 
-      if (key.includes(':audit-events:')) {
+      if (key.includes(':messages')) {
+        const storedData = parsed.value as { messages: unknown[] }
+        const prunedMessages = pruneChatMessageCacheMessages(storedData.messages)
+        if (prunedMessages.length !== storedData.messages.length) {
+          if (prunedMessages.length === 0) {
+            removeKey(storage, key, result)
+          } else {
+            const writeResult = safeSetJson(storage, key, {
+              ...storedData,
+              messages: prunedMessages,
+            }, {
+              owner: 'chat',
+              key,
+              quiet: true,
+            })
+            if (!writeResult.ok) {
+              result.failedKeys.push(key)
+            }
+          }
+        }
+      } else if (key.includes(':audit-events:')) {
         chatAuditEntries.push({ key, lastSeenMs: newestTimestampMs(parsed.value) })
       } else if (isBatchAuditCache) {
         batchAuditEntries.push({ key, lastSeenMs: newestTimestampMs(parsed.value) })

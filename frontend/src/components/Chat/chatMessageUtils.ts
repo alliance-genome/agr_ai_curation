@@ -4,7 +4,10 @@ import type { EvidenceRecord } from '@/features/curation/types'
 import type { SSEEvent } from '@/hooks/useChatStream'
 import { safeGetItem, safeGetJson } from '@/lib/browserStorage'
 import { normalizeOptionalText } from '@/lib/normalizeOptionalText'
-import type { ChatLocalStorageKeys } from '@/lib/chatCacheKeys'
+import {
+  pruneChatMessageCacheMessages,
+  type ChatLocalStorageKeys,
+} from '@/lib/chatCacheKeys'
 import type { FlowStepEvidenceDetails } from '@/types/AuditEvent'
 
 import type {
@@ -598,7 +601,7 @@ export function loadMessagesFromStorage(
     })
     if (storedData.session_id === currentSessionId) {
       debug.log('[Chat] Session match - restoring messages')
-      return storedData.messages.map(sanitizeStoredMessage)
+      return pruneChatMessageCacheMessages(storedData.messages).map(sanitizeStoredMessage)
     }
 
     debug.log('[Chat] Session mismatch - skipping restore for current session')

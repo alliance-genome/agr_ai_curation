@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   DEFAULT_CHAT_HISTORY_LIST_LIMIT,
@@ -9,6 +9,7 @@ import {
   clearLegacyChatLocalStorage,
   getChatLocalStorageKeys,
   getChatRenderCacheKeys,
+  pruneChatMessageCacheMessages,
 } from './chatCacheKeys'
 
 const legacyChatStorageKeys = {
@@ -22,6 +23,7 @@ const legacyChatStorageKeys = {
 describe('chatCacheKeys', () => {
   beforeEach(() => {
     localStorage.clear()
+    vi.unstubAllEnvs()
   })
 
   it('clears legacy pre-namespaced chat state in one pass', () => {
@@ -76,6 +78,21 @@ describe('chatCacheKeys', () => {
     expect(getChatRenderCacheKeys(' user-1 ', ' session-42 ')).toEqual({
       auditEvents: 'chat-cache:v1:user-1:audit-events:session-42',
     })
+  })
+
+  it('bounds persisted chat message cache entries with the env-configured limit', () => {
+    vi.stubEnv('VITE_AI_CURATION_CHAT_MESSAGE_CACHE_MAX_ENTRIES', '2')
+
+    expect(pruneChatMessageCacheMessages(['oldest', 'middle', 'newest'])).toEqual([
+      'middle',
+      'newest',
+    ])
+  })
+
+  it('allows operators to disable the local chat message cache with a zero limit', () => {
+    vi.stubEnv('VITE_AI_CURATION_CHAT_MESSAGE_CACHE_MAX_ENTRIES', '0')
+
+    expect(pruneChatMessageCacheMessages(['message'])).toEqual([])
   })
 
   it('clears auth-scoped render cache entries for one session', () => {

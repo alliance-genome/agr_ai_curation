@@ -40,6 +40,41 @@ describe('aiCurationLocalCache', () => {
     expect(localStorage.getItem(newAuditKeys.auditEvents)).not.toBeNull()
   })
 
+  it('prunes oversized namespaced chat message caches during cleanup', () => {
+    vi.stubEnv('VITE_AI_CURATION_CHAT_MESSAGE_CACHE_MAX_ENTRIES', '2')
+    const scopedKeys = getChatLocalStorageKeys('user-1')
+    localStorage.setItem(scopedKeys.messages, JSON.stringify({
+      session_id: 's1',
+      messages: [
+        { role: 'user', content: 'oldest', timestamp: '2026-06-23T09:00:00.000Z' },
+        { role: 'assistant', content: 'middle', timestamp: '2026-06-23T09:01:00.000Z' },
+        { role: 'user', content: 'newest', timestamp: '2026-06-23T09:02:00.000Z' },
+      ],
+    }))
+
+    cleanupAiCurationLocalCache()
+
+    const stored = JSON.parse(localStorage.getItem(scopedKeys.messages) ?? '{}') as {
+      messages: Array<{ content: string }>
+    }
+    expect(stored.messages.map((message) => message.content)).toEqual(['middle', 'newest'])
+  })
+
+  it('removes namespaced chat message caches when the message cache limit is zero', () => {
+    vi.stubEnv('VITE_AI_CURATION_CHAT_MESSAGE_CACHE_MAX_ENTRIES', '0')
+    const scopedKeys = getChatLocalStorageKeys('user-1')
+    localStorage.setItem(scopedKeys.messages, JSON.stringify({
+      session_id: 's1',
+      messages: [
+        { role: 'user', content: 'not retained locally', timestamp: '2026-06-23T09:00:00.000Z' },
+      ],
+    }))
+
+    cleanupAiCurationLocalCache()
+
+    expect(localStorage.getItem(scopedKeys.messages)).toBeNull()
+  })
+
   it('prunes old batch audit caches and leaves unrelated localStorage alone', () => {
     vi.stubEnv('VITE_AI_CURATION_BATCH_AUDIT_CACHE_MAX_ENTRIES', '1')
     const oldBatchKey = buildBatchAuditStorageKey('batch-old')

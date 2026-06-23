@@ -12,6 +12,7 @@ import { useChatStream } from '@/hooks/useChatStream'
 import {
   DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
   getChatLocalStorageKeys,
+  pruneChatMessageCacheMessages,
 } from '@/lib/chatCacheKeys'
 import {
   safeGetItem,
@@ -236,7 +237,8 @@ function HomePage() {
     }
 
     const storedMessages = buildRestorableChatMessages(detail.messages)
-    if (storedMessages.length === 0) {
+    const prunedMessages = pruneChatMessageCacheMessages(storedMessages)
+    if (prunedMessages.length === 0) {
       safeRemoveItem(() => window.localStorage, chatStorageKeys.messages, {
         owner: 'chat',
         workflowCritical: true,
@@ -246,7 +248,7 @@ function HomePage() {
 
     safeSetJson(() => window.localStorage, chatStorageKeys.messages, {
       session_id: activeSessionId,
-      messages: storedMessages,
+      messages: prunedMessages,
     }, {
       owner: 'chat',
       workflowCritical: true,

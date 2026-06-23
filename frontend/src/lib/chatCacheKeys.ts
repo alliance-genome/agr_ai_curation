@@ -1,5 +1,7 @@
-import { normalizeChatHistoryValue } from './chatHistoryNormalization'
+import { getEnvInt } from '@/utils/env'
+
 import { safeListStorageKeys, safeRemoveItem, type BrowserStorageAccessor } from './browserStorage'
+import { normalizeChatHistoryValue } from './chatHistoryNormalization'
 
 const CHAT_STORAGE_PREFIX = 'chat-cache:v1'
 const CHAT_QUERY_KEY_PREFIX = ['chat'] as const
@@ -101,6 +103,24 @@ export function getChatRenderCacheKeys(userId: string, sessionId: string): ChatR
   return {
     auditEvents: buildChatStorageKey(normalizedUserId, `audit-events:${normalizedSessionId}`),
   }
+}
+
+export function getAiCurationChatMessageCacheMaxEntries(): number {
+  return Math.max(
+    0,
+    getEnvInt(
+      ['VITE_AI_CURATION_CHAT_MESSAGE_CACHE_MAX_ENTRIES', 'AI_CURATION_CHAT_MESSAGE_CACHE_MAX_ENTRIES'],
+      DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
+    ),
+  )
+}
+
+export function pruneChatMessageCacheMessages<T>(messages: T[]): T[] {
+  const maxEntries = getAiCurationChatMessageCacheMaxEntries()
+  if (messages.length <= maxEntries) {
+    return messages
+  }
+  return messages.slice(messages.length - maxEntries)
 }
 
 export function clearChatRenderCacheForSession(

@@ -34,7 +34,11 @@ import {
 } from '@/lib/browserStorage'
 import { normalizeOptionalText } from '@/lib/normalizeOptionalText'
 import { getStreamEventSessionId } from '@/lib/streamEventSession'
-import { clearChatRenderCacheForSession, getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
+import {
+  clearChatRenderCacheForSession,
+  getChatLocalStorageKeys,
+  pruneChatMessageCacheMessages,
+} from '@/lib/chatCacheKeys'
 import { extractEvidenceCurationSupport } from '@/services/chatHistoryApi'
 
 import {
@@ -169,9 +173,18 @@ export function useChatController({
         ...msg,
         timestamp: msg.timestamp.toISOString()
       }))
+      const prunedMessages = pruneChatMessageCacheMessages(serialized)
+      if (prunedMessages.length === 0) {
+        safeRemoveItem(() => window.localStorage, chatStorageKeys.messages, {
+          owner: 'chat',
+          workflowCritical: true,
+        })
+        return
+      }
+
       const storageData: StoredChatData = {
         session_id: sessionId,
-        messages: serialized
+        messages: prunedMessages
       }
       safeSetJson(() => window.localStorage, chatStorageKeys.messages, storageData, {
         owner: 'chat',
