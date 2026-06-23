@@ -36,6 +36,14 @@ elif scenario == "mixed":
     assert pyright["actionable_error_count"] == 1, pyright
     assert '"response" is possibly unbound' in pyright["stdout"]
     assert 'Import "sqlalchemy" could not be resolved' not in pyright["stdout"]
+elif scenario == "local_missing":
+    assert data["status"] == "failed", data
+    assert pyright["returncode"] == 1, pyright
+    assert pyright["raw_returncode"] == 1, pyright
+    assert pyright["dependency_resolution_noise_count"] == 0, pyright
+    assert pyright["actionable_diagnostic_count"] == 1, pyright
+    assert pyright["actionable_error_count"] == 1, pyright
+    assert 'Import "local_package.missing_module" could not be resolved' in pyright["stdout"]
 elif scenario == "actionable_warning":
     assert data["status"] == "ok", data
     assert pyright["returncode"] == 0, pyright
@@ -155,6 +163,55 @@ EOF
   rm -rf "${temp_dir}"
 }
 
+test_pyright_repo_local_missing_imports_fail() {
+  local temp_dir output
+  temp_dir="$(mktemp -d)"
+  mkdir -p "${temp_dir}/bin" "${temp_dir}/local_package"
+  printf '' > "${temp_dir}/local_package/__init__.py"
+  printf 'import local_package.missing_module\n' > "${temp_dir}/local_missing.py"
+
+  cat > "${temp_dir}/bin/ruff" <<'EOF'
+#!/usr/bin/env bash
+echo "All checks passed!"
+exit 0
+EOF
+  cat > "${temp_dir}/bin/pyright" <<'EOF'
+#!/usr/bin/env bash
+cat <<JSON
+{
+  "version": "1.1.409",
+  "generalDiagnostics": [
+    {
+      "file": "${PWD}/local_missing.py",
+      "severity": "error",
+      "message": "Import \"local_package.missing_module\" could not be resolved",
+      "range": {
+        "start": { "line": 0, "character": 7 },
+        "end": { "line": 0, "character": 35 }
+      },
+      "rule": "reportMissingImports"
+    }
+  ],
+  "summary": {
+    "filesAnalyzed": 1,
+    "errorCount": 1,
+    "warningCount": 0,
+    "informationCount": 0
+  }
+}
+JSON
+exit 1
+EOF
+  chmod +x "${temp_dir}/bin/ruff" "${temp_dir}/bin/pyright"
+
+  output="${temp_dir}/output.json"
+  PATH="${temp_dir}/bin:${PATH}" python3 "${SCRIPT_PATH}" --root "${temp_dir}" diagnostics local_missing.py > "${output}"
+  assert_json "${output}" "local_missing"
+
+  echo "  PASS: test_pyright_repo_local_missing_imports_fail"
+  rm -rf "${temp_dir}"
+}
+
 test_pyright_actionable_warnings_do_not_fail() {
   local temp_dir output
   temp_dir="$(mktemp -d)"
@@ -206,5 +263,6 @@ EOF
 echo "Running agent_lsp diagnostics tests..."
 test_pyright_dependency_noise_is_non_blocking
 test_pyright_actionable_diagnostics_still_fail
+test_pyright_repo_local_missing_imports_fail
 test_pyright_actionable_warnings_do_not_fail
-echo "agent_lsp diagnostics tests passed (3/3)"
+echo "agent_lsp diagnostics tests passed (4/4)"
