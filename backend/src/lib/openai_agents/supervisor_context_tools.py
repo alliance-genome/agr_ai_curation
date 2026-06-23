@@ -36,7 +36,9 @@ from src.lib.openai_agents.bounded_list import (
 )
 from src.lib.openai_agents.config import (
     get_supervisor_field_text_limit,
+    get_supervisor_inspect_chat_traces_default_limit,
     get_supervisor_max_list_limit,
+    get_supervisor_recall_chat_history_default_limit,
     get_supervisor_text_preview_limit,
 )
 from src.lib.openai_agents.chat_compaction_session import (
@@ -46,7 +48,8 @@ from src.models.sql.database import SessionLocal
 
 
 # Env-configurable (defaults unchanged); see config.py getters and .env.example:
-#   SUPERVISOR_TEXT_PREVIEW_LIMIT, SUPERVISOR_FIELD_TEXT_LIMIT, SUPERVISOR_MAX_LIST_LIMIT.
+#   SUPERVISOR_TEXT_PREVIEW_LIMIT, SUPERVISOR_FIELD_TEXT_LIMIT, SUPERVISOR_MAX_LIST_LIMIT,
+#   SUPERVISOR_RECALL_CHAT_HISTORY_DEFAULT_LIMIT, SUPERVISOR_INSPECT_CHAT_TRACES_DEFAULT_LIMIT.
 _TEXT_PREVIEW_LIMIT = get_supervisor_text_preview_limit()
 _FIELD_TEXT_LIMIT = get_supervisor_field_text_limit()
 _MAX_LIST_LIMIT = get_supervisor_max_list_limit()
@@ -285,7 +288,11 @@ async def recall_chat_history(
         )
 
     normalized_detail = str(detail or "recent").strip() or "recent"
-    bounded_limit = normalize_page_limit(limit, default=5, maximum=_MAX_LIST_LIMIT)
+    bounded_limit = normalize_page_limit(
+        limit,
+        default=get_supervisor_recall_chat_history_default_limit(),
+        maximum=_MAX_LIST_LIMIT,
+    )
     if normalized_detail == "recent":
         messages = _recall_visible_messages(session_id=session_id, user_id=user_id)
         page, truncated, next_cursor = recent_page(
@@ -555,7 +562,11 @@ async def inspect_chat_traces(
         )
 
     normalized_detail = str(detail or "inventory").strip() or "inventory"
-    bounded_limit = normalize_page_limit(limit, default=5, maximum=_MAX_LIST_LIMIT)
+    bounded_limit = normalize_page_limit(
+        limit,
+        default=get_supervisor_inspect_chat_traces_default_limit(),
+        maximum=_MAX_LIST_LIMIT,
+    )
     if normalized_detail == "inventory":
         if turn_ref and not query:
             inventory = _trace_inventory_records(

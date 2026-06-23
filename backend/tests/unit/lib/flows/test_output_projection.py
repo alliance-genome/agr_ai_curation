@@ -1814,6 +1814,36 @@ def test_planner_inventory_and_preview_bound_long_values():
     assert len(encoded_preview) < 2500
 
 
+def test_projection_preview_depth_uses_env_config(monkeypatch):
+    row = {
+        "nested": {
+            "level1": {
+                "level2": {
+                    "level3": {
+                        "level4": {
+                            "leaf": "deep value",
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+    monkeypatch.delenv("FLOW_OUTPUT_PROJECTION_PREVIEW_MAX_DEPTH", raising=False)
+    default_row = output_projection_module._bounded_projection_row(row)
+
+    assert default_row["nested"]["level1"]["level2"]["level3"] == {
+        "level4": "[truncated:depth]",
+    }
+
+    monkeypatch.setenv("FLOW_OUTPUT_PROJECTION_PREVIEW_MAX_DEPTH", "2")
+    env_row = output_projection_module._bounded_projection_row(row)
+
+    assert env_row["nested"]["level1"] == {
+        "level2": "[truncated:depth]",
+    }
+
+
 def test_overlarge_max_rows_is_rejected():
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[_completed_domain_step()],

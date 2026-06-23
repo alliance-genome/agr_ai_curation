@@ -1016,6 +1016,36 @@ def get_supervisor_max_list_limit() -> int:
     return max(1, _get_env_int_with_fallback("SUPERVISOR_MAX_LIST_LIMIT", 20))
 
 
+def get_supervisor_recall_chat_history_default_limit() -> int:
+    """Default page size for recall_chat_history (SUPERVISOR_RECALL_CHAT_HISTORY_DEFAULT_LIMIT).
+
+    Bounds how many exact transcript messages recall_chat_history returns when
+    no explicit limit is supplied. Default 5.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "SUPERVISOR_RECALL_CHAT_HISTORY_DEFAULT_LIMIT",
+            5,
+        ),
+    )
+
+
+def get_supervisor_inspect_chat_traces_default_limit() -> int:
+    """Default page size for inspect_chat_traces (SUPERVISOR_INSPECT_CHAT_TRACES_DEFAULT_LIMIT).
+
+    Bounds how many trace inventory rows inspect_chat_traces returns when no
+    explicit limit is supplied. Default 5.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "SUPERVISOR_INSPECT_CHAT_TRACES_DEFAULT_LIMIT",
+            5,
+        ),
+    )
+
+
 def get_validation_detail_string_limit() -> int:
     """Char limit per string when materializing validation detail (VALIDATION_DETAIL_STRING_LIMIT).
 
@@ -1494,6 +1524,18 @@ def get_flow_projection_max_object_items() -> int:
     Default 12.
     """
     return max(1, _get_env_int_with_fallback("FLOW_PROJECTION_MAX_OBJECT_ITEMS", 12))
+
+
+def get_flow_output_projection_preview_max_depth() -> int:
+    """Max nested depth shown in flow output projection previews (FLOW_OUTPUT_PROJECTION_PREVIEW_MAX_DEPTH).
+
+    Bounds nested JSON/list previews returned by deterministic flow projection
+    previews. Default 4.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback("FLOW_OUTPUT_PROJECTION_PREVIEW_MAX_DEPTH", 4),
+    )
 
 
 def get_formatter_preview_max_depth() -> int:
