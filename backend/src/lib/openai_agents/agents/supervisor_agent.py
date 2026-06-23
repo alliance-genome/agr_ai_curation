@@ -270,6 +270,30 @@ def _current_chat_extraction_results(
     )
 
 
+def _formatter_source_extraction_results(
+    *,
+    session_id: str,
+    user_id: str,
+    document_id: Optional[str],
+) -> tuple[list[Any], list[Any]]:
+    """Load extraction results available to formatter export routing."""
+
+    current_chat_records = _current_chat_extraction_results(
+        session_id=session_id,
+        user_id=user_id,
+    )
+    records: list[Any] = list(current_chat_records)
+    resolved_document_id = str(document_id or "").strip()
+    if resolved_document_id:
+        records.extend(
+            list_extraction_results(
+                document_id=resolved_document_id,
+                user_id=user_id,
+            )
+        )
+    return _dedupe_extraction_results(records), current_chat_records
+
+
 def _latest_extraction_result(records: Sequence[Any]) -> Any | None:
     if not records:
         return None
@@ -282,18 +306,23 @@ def _latest_extraction_result(records: Sequence[Any]) -> Any | None:
     )
 
 
-def _formatter_runtime_context_for_records(records: Sequence[Any]) -> str:
-    """Build formatter-only runtime guidance for the bound chat result bundle."""
+def _formatter_runtime_context_for_records(
+    records: Sequence[Any],
+    *,
+    default_records: Sequence[Any] | None = None,
+) -> str:
+    """Build formatter-only runtime guidance for the bound result bundle."""
 
-    latest = _latest_extraction_result(records)
+    default_candidates = default_records if default_records else records
+    latest = _latest_extraction_result(default_candidates)
     latest_ref = _record_result_ref(latest) if latest is not None else ""
     lines = [
         "FORMATTER SOURCE BUNDLE:",
-        "You are bound to saved extraction results from this chat. Use only the formatter projection tools to inspect, plan, validate, preview, finalize, or report that the requested file cannot be produced.",
+        "You are bound to saved extraction results from this chat and the active document. Use only the formatter projection tools to inspect, plan, validate, preview, finalize, or report that the requested file cannot be produced.",
     ]
     if latest_ref:
         lines.append(
-            f'For an ordinary export request with no explicit result choice, use source_ref="{latest_ref}" when building the default projection plan. Export multiple/all saved results only when the curator explicitly asks for that scope.'
+            f'For an ordinary export request with no explicit result choice, use source_ref="{latest_ref}" when building the default projection plan. Prefer the latest current-chat saved result when one is available. Export multiple/all saved results only when the curator explicitly asks for that scope.'
         )
         lines.append(
             'For a prior, older, earlier, or otherwise specific export request, preserve the selected source by passing that exact source_ref="extraction-result:<uuid>" into build_default_projection_plan or the final projection plan.'
@@ -343,16 +372,17 @@ def _build_chat_formatter_bundle(
         )
 
     try:
-        records = _current_chat_extraction_results(
+        records, current_chat_records = _formatter_source_extraction_results(
             session_id=session_id,
             user_id=resolved_user_id,
+            document_id=document_id,
         )
     except Exception:
-        logger.exception("Failed to load chat extraction results for formatter dispatch")
+        logger.exception("Failed to load extraction results for formatter dispatch")
         return (
             None,
             "",
-            "CSV/TSV/JSON formatter tools are unavailable because saved extraction results could not be loaded for this chat. Do not use any raw export fallback; explain that export is blocked and ask the curator to retry after the saved results are available.",
+            "CSV/TSV/JSON formatter tools are unavailable because saved extraction results could not be loaded for this chat or active document. Do not use any raw export fallback; explain that export is blocked and ask the curator to retry after the saved results are available.",
         )
 
     if not records:
@@ -378,7 +408,14 @@ def _build_chat_formatter_bundle(
             "CSV/TSV/JSON formatter tools are unavailable because the saved extraction results could not be materialized into a formatter bundle. Do not use any raw export fallback; report the export blocker.",
         )
 
-    return bundle, _formatter_runtime_context_for_records(records), ""
+    return (
+        bundle,
+        _formatter_runtime_context_for_records(
+            records,
+            default_records=current_chat_records,
+        ),
+        "",
+    )
 
 
 def _resolved_scope_values(
