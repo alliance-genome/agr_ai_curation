@@ -127,6 +127,86 @@ test_missing_pr_reports_nonzero() {
   assert_contains "READY_FOR_PR_STATUS=missing_pr" "${output}"
 }
 
+test_create_pr_blocks_when_branch_has_no_tracked_commits() {
+  local temp_dir pr_json output_file rc output
+  temp_dir="$(mktemp -d)"
+  pr_json="${temp_dir}/prs.json"
+  output_file="${temp_dir}/out.txt"
+
+  git -C "${temp_dir}" init -q -b main
+  git -C "${temp_dir}" config user.name "Symphony Test"
+  git -C "${temp_dir}" config user.email "symphony@example.com"
+  printf 'seed\n' > "${temp_dir}/README.md"
+  git -C "${temp_dir}" add README.md
+  git -C "${temp_dir}" commit -q -m "seed"
+  git -C "${temp_dir}" switch -q -c all-625
+  mkdir -p "${temp_dir}/.symphony/elixir"
+  printf 'ignored runtime note\n' > "${temp_dir}/.symphony/elixir/runtime.txt"
+  echo '[]' > "${pr_json}"
+
+  set +e
+  (
+    cd "${temp_dir}"
+    bash "${SCRIPT_PATH}" \
+      --delivery-mode pr \
+      --issue-identifier ALL-625 \
+      --branch all-625 \
+      --repo alliance-genome/agr_ai_curation \
+      --create-if-missing \
+      --pr-json-file "${pr_json}"
+  ) > "${output_file}"
+  rc=$?
+  set -e
+
+  output="$(cat "${output_file}")"
+
+  [[ "${rc}" == "22" ]] || {
+    echo "Expected exit code 22, got ${rc}" >&2
+    exit 1
+  }
+
+  assert_contains "READY_FOR_PR_STATUS=no_pr_eligible_commits" "${output}"
+  assert_contains "READY_FOR_PR_NEXT_STATE=Blocked" "${output}"
+  assert_contains "READY_FOR_PR_BASE_REF=main" "${output}"
+  assert_contains "READY_FOR_PR_TRACKED_COMMIT_COUNT=0" "${output}"
+  assert_contains "READY_FOR_PR_RUNTIME_OVERLAY_HINT=ignored_symphony_tree_present" "${output}"
+  assert_contains "No PR can be created because there are no tracked commits" "${output}"
+}
+
+test_create_pr_allows_tracked_commit_after_branch_point() {
+  local temp_dir pr_json output
+  temp_dir="$(mktemp -d)"
+  pr_json="${temp_dir}/prs.json"
+
+  git -C "${temp_dir}" init -q -b main
+  git -C "${temp_dir}" config user.name "Symphony Test"
+  git -C "${temp_dir}" config user.email "symphony@example.com"
+  printf 'seed\n' > "${temp_dir}/README.md"
+  git -C "${temp_dir}" add README.md
+  git -C "${temp_dir}" commit -q -m "seed"
+  git -C "${temp_dir}" switch -q -c all-626
+  printf 'tracked\n' > "${temp_dir}/tracked.txt"
+  git -C "${temp_dir}" add tracked.txt
+  git -C "${temp_dir}" commit -q -m "ALL-626 tracked change"
+  echo '[]' > "${pr_json}"
+
+  output="$(
+    cd "${temp_dir}"
+    bash "${SCRIPT_PATH}" \
+      --delivery-mode pr \
+      --issue-identifier ALL-626 \
+      --branch all-626 \
+      --repo alliance-genome/agr_ai_curation \
+      --create-if-missing \
+      --pr-json-file "${pr_json}" \
+      --dry-run
+  )"
+
+  assert_contains "READY_FOR_PR_STATUS=dry_run_create" "${output}"
+  assert_contains "READY_FOR_PR_PR_TITLE=ALL-626 tracked change" "${output}"
+  assert_not_contains "READY_FOR_PR_STATUS=no_pr_eligible_commits" "${output}"
+}
+
 test_base_branch_is_rejected() {
   local temp_dir output_file rc output
   temp_dir="$(mktemp -d)"
@@ -160,6 +240,7 @@ test_dry_run_create_reports_title() {
   echo '[]' > "${pr_json}"
 
   output="$(
+    cd "${temp_dir}"
     bash "${SCRIPT_PATH}" \
       --delivery-mode pr \
       --issue-identifier ALL-51 \
@@ -216,6 +297,7 @@ test_dry_run_create_infers_title() {
   echo '[]' > "${pr_json}"
 
   output="$(
+    cd "${temp_dir}"
     bash "${SCRIPT_PATH}" \
       --delivery-mode pr \
       --issue-identifier ALL-54 \
@@ -270,9 +352,10 @@ EOF
   chmod +x "${gh_stub}"
 
   output="$(
-    PATH="${temp_dir}:${PATH}" \
-    GH_STUB_LOG="${log_file}" \
-    SYMPHONY_READY_FOR_PR_CLAUDE_LOOP_HELPER="${temp_dir}/missing-claude-loop" \
+    export PATH="${temp_dir}:${PATH}"
+    export GH_STUB_LOG="${log_file}"
+    export SYMPHONY_READY_FOR_PR_CLAUDE_LOOP_HELPER="${temp_dir}/missing-claude-loop"
+    cd "${temp_dir}"
     bash "${SCRIPT_PATH}" \
       --delivery-mode pr \
       --issue-identifier ALL-52 \
@@ -542,6 +625,106 @@ EOF
   assert_contains "READY_FOR_PR_CLAUDE_ACTION=clean_review_no_bounce" "${output}"
   assert_contains "READY_FOR_PR_CHECK_STATUS=clean" "${output}"
   assert_contains "move to Human Review Prep" "${output}"
+  assert_not_contains "READY_FOR_PR_CLAUDE_ACTION=bounced_to_in_progress" "${output}"
+}
+
+test_ci_only_claude_feedback_after_clean_checks_does_not_auto_bounce() {
+  local temp_dir pr_json pr_view_json loop_stub classifier_stub workpad_stub state_stub report_file fixture output
+  temp_dir="$(mktemp -d)"
+  pr_json="${temp_dir}/prs.json"
+  pr_view_json="${temp_dir}/pr-view.json"
+  loop_stub="${temp_dir}/claude-loop"
+  classifier_stub="${temp_dir}/classifier"
+  workpad_stub="${temp_dir}/workpad"
+  state_stub="${temp_dir}/state"
+  report_file="${temp_dir}/claude-report.md"
+  fixture="${temp_dir}/classifier-fixture.json"
+
+  cat > "${pr_json}" <<'EOF'
+[{"number":345,"title":"ALL-345: Existing PR","url":"https://example.test/pr/345","headRefName":"all-345"}]
+EOF
+
+  cat > "${pr_view_json}" <<'EOF'
+{"number":345,"title":"ALL-345: Existing PR","url":"https://example.test/pr/345","headRefName":"all-345","baseRefName":"main","headRefOid":"abc345","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","createdAt":"2026-05-04T00:13:22Z","statusCheckRollup":[{"__typename":"CheckRun","name":"Agent PR Gate","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"https://example.test/checks/agent"}]}
+EOF
+
+  cat > "${report_file}" <<'EOF'
+# Claude Code Review Report
+
+### BLOCKING Issues
+
+None.
+
+### Non-blocking Notes
+
+- Confirm the four new tests pass in CI before merge.
+
+### Assessment
+
+Approve once CI is green.
+EOF
+
+  cat > "${fixture}" <<'EOF'
+{
+  "classification": "clean",
+  "reason": "Only CI/check verification remains; Ready for PR handles GitHub checks separately.",
+  "action_items": []
+}
+EOF
+
+  cat > "${loop_stub}" <<EOF
+#!/usr/bin/env bash
+cat <<'OUT'
+CLAUDE_LOOP_STATUS=actionable_feedback
+CLAUDE_LOOP_REPORT_FILE=${report_file}
+CLAUDE_LOOP_ROUND=1
+CLAUDE_LOOP_MAX_ROUNDS=5
+OUT
+exit 10
+EOF
+  chmod +x "${loop_stub}"
+
+  cat > "${classifier_stub}" <<EOF
+#!/usr/bin/env bash
+exec bash "${REPO_ROOT}/scripts/utilities/symphony_classify_pr_feedback.sh" "\$@" --fixture-output-file "${fixture}"
+EOF
+  chmod +x "${classifier_stub}"
+
+  cat > "${workpad_stub}" <<'EOF'
+#!/usr/bin/env bash
+echo "workpad should not be called for CI-only Claude feedback" >&2
+exit 97
+EOF
+  chmod +x "${workpad_stub}"
+
+  cat > "${state_stub}" <<'EOF'
+#!/usr/bin/env bash
+echo "state helper should not be called for CI-only Claude feedback" >&2
+exit 98
+EOF
+  chmod +x "${state_stub}"
+
+  output="$(
+    SYMPHONY_READY_FOR_PR_CLAUDE_LOOP_HELPER="${loop_stub}" \
+    SYMPHONY_READY_FOR_PR_FEEDBACK_CLASSIFIER_HELPER="${classifier_stub}" \
+    SYMPHONY_READY_FOR_PR_WORKPAD_HELPER="${workpad_stub}" \
+    SYMPHONY_READY_FOR_PR_STATE_HELPER="${state_stub}" \
+    bash "${SCRIPT_PATH}" \
+      --delivery-mode pr \
+      --issue-identifier ALL-345 \
+      --branch all-345 \
+      --repo alliance-genome/agr_ai_curation \
+      --wait-for-review-seconds 1 \
+      --pr-json-file "${pr_json}" \
+      --pr-view-json-file "${pr_view_json}"
+  )"
+
+  assert_contains "PR_FEEDBACK_CLASSIFIER_STATUS=clean" "${output}"
+  assert_contains "PR_FEEDBACK_CLASSIFIER_GITHUB_CHECK_STATUS=clean" "${output}"
+  assert_contains "Only CI/check verification remains" "${output}"
+  assert_contains "READY_FOR_PR_CLAUDE_STATUS=actionable_feedback" "${output}"
+  assert_contains "READY_FOR_PR_CLAUDE_ACTION=clean_review_no_bounce" "${output}"
+  assert_contains "READY_FOR_PR_CHECK_STATUS=clean" "${output}"
   assert_not_contains "READY_FOR_PR_CLAUDE_ACTION=bounced_to_in_progress" "${output}"
 }
 
@@ -969,6 +1152,8 @@ test_no_pr_skips_lane
 test_existing_pr_is_reported
 test_conflicted_pr_routes_back_to_in_progress
 test_missing_pr_reports_nonzero
+test_create_pr_blocks_when_branch_has_no_tracked_commits
+test_create_pr_allows_tracked_commit_after_branch_point
 test_base_branch_is_rejected
 test_dry_run_create_reports_title
 test_repo_mismatch_is_rejected_when_origin_is_known
@@ -977,6 +1162,7 @@ test_create_pr_uses_plain_cli_output_and_view_json
 test_claude_detected_auto_bounces_to_in_progress
 test_claude_wait_zero_still_scans_existing_feedback
 test_clean_claude_review_does_not_auto_bounce
+test_ci_only_claude_feedback_after_clean_checks_does_not_auto_bounce
 test_default_classifier_uses_source_root_fallback
 test_approval_with_actionable_suggestions_still_auto_bounces
 test_classifier_error_is_conservative_and_auto_bounces

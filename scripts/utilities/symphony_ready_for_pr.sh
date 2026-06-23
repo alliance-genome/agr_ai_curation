@@ -273,6 +273,45 @@ infer_pr_title() {
   fi
 }
 
+resolve_pr_base_ref() {
+  local candidate
+  local -a candidates=()
+
+  if [[ -n "${SYMPHONY_READY_FOR_PR_BASE_REF:-}" ]]; then
+    candidates+=("${SYMPHONY_READY_FOR_PR_BASE_REF}")
+  fi
+  candidates+=(origin/main main origin/master master)
+
+  for candidate in "${candidates[@]}"; do
+    if git rev-parse --verify --quiet "${candidate}^{commit}" >/dev/null 2>&1; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+count_tracked_commits_since_base() {
+  local base_ref="$1"
+  local merge_base
+
+  merge_base="$(git merge-base "${base_ref}" HEAD 2>/dev/null || true)"
+  if [[ -z "${merge_base}" ]]; then
+    return 1
+  fi
+
+  git rev-list --count "${merge_base}..HEAD" 2>/dev/null
+}
+
+runtime_overlay_hint() {
+  if [[ -d ".symphony" ]]; then
+    printf 'ignored_symphony_tree_present'
+  else
+    printf 'none'
+  fi
+}
+
 origin_repo=""
 if [[ -z "${pr_json_file}" && -z "${pr_view_json_file}" ]]; then
   origin_repo="$(infer_repo_from_origin || true)"
@@ -307,7 +346,7 @@ auto_bounce_to_in_progress_for_claude() {
 - Head SHA: ${PR_HEAD_SHA:-}
 - Claude review round: ${loop_round}/${loop_max}
 - Claude report: ${report_file}
-- Implementation focus: triage the latest Claude feedback first. Treat substantive suggestions, non-blocking notes, "worth noting" cleanup, pre-existing divergence, and follow-up implementation as actionable during active development. Fix them, push, and move to Needs Review unless the finding is already resolved, factually wrong, explicitly out of scope, or would cause a regression. Do not skip solely because the touched file was not listed in the ticket; ticket file lists are suggested starting locations, not exhaustive boundaries.
+- Implementation focus: triage the latest Claude feedback first. Treat substantive suggestions, non-blocking notes, "worth noting" cleanup, pre-existing divergence, and follow-up implementation as actionable during active development. Pure CI/check/test-pass verification caveats are handled by the Ready for PR check gate and should not cause an implementation bounce. Fix actionable repository work, push, and move to Needs Review unless the finding is already resolved, factually wrong, explicitly out of scope, or would cause a regression. Do not skip solely because the touched file was not listed in the ticket; ticket file lists are suggested starting locations, not exhaustive boundaries.
 EOF
 
   set +e
@@ -402,6 +441,7 @@ EOF
 
 classify_claude_report() {
   local report_file="$1"
+  local github_check_status="${2:-unknown}"
 
   if [[ ! -s "${report_file}" ]]; then
     echo "PR_FEEDBACK_CLASSIFIER_STATUS=error"
@@ -415,7 +455,9 @@ classify_claude_report() {
     return 2
   fi
 
-  bash "${FEEDBACK_CLASSIFIER_HELPER}" --report-file "${report_file}"
+  bash "${FEEDBACK_CLASSIFIER_HELPER}" \
+    --report-file "${report_file}" \
+    --github-check-status "${github_check_status}"
 }
 
 analyze_check_rollup() {
@@ -755,7 +797,7 @@ INST
         echo "READY_FOR_PR_CLAUDE_MAX_ROUNDS=${loop_max:-5}"
 
         set +e
-        claude_classifier_output="$(classify_claude_report "${CLAUDE_REPORT_FILE}" 2>&1)"
+        claude_classifier_output="$(classify_claude_report "${CLAUDE_REPORT_FILE}" "clean" 2>&1)"
         claude_classifier_rc=$?
         set -e
         if [[ -n "${claude_classifier_output}" ]]; then
@@ -765,7 +807,7 @@ INST
         if (( claude_classifier_rc == 0 )); then
           echo "READY_FOR_PR_CLAUDE_ACTION=clean_review_no_bounce"
           cat <<INST
-READY_FOR_PR_INSTRUCTIONS=Claude Code left a clean approval/LGTM on PR #${pr_num}. GitHub checks are clean; write PR Handoff, move to Human Review Prep, and stop this run.
+READY_FOR_PR_INSTRUCTIONS=Claude Code left a clean approval/LGTM or only CI-gate caveats on PR #${pr_num}. GitHub checks are clean; write PR Handoff, move to Human Review Prep, and stop this run.
 INST
           return 0
         fi
@@ -792,7 +834,8 @@ READY_FOR_PR_INSTRUCTIONS=Claude Code left a review on PR #${pr_num} (round ${lo
 1. Read the latest Claude feedback report at: ${CLAUDE_REPORT_FILE}
 2. Check whether the review is truly clean:
    - A review is clean ONLY if it is 'Approve' with zero findings of any kind — no critical
-     issues, no warnings, no suggestions, no improvement ideas. Pure approval with no comments.
+     issues, no warnings, no suggestions, no improvement ideas — or if the only caveat is
+     pure CI/check/test-pass verification that the Ready for PR gate already handles.
    - If all findings in the report were already addressed in prior runs (check the workpad
      for existing 'Claude Feedback Disposition' entries), the review is already resolved.
    - Only in these two cases: write a short workpad note confirming, then proceed to gate
@@ -944,6 +987,25 @@ fi
 if [[ -z "${repo}" ]]; then
   echo "Missing required argument for PR creation: --repo." >&2
   exit 2
+fi
+
+base_ref="$(resolve_pr_base_ref || true)"
+if [[ -n "${base_ref}" ]]; then
+  tracked_commit_count="$(count_tracked_commits_since_base "${base_ref}" || true)"
+  if [[ "${tracked_commit_count}" == "0" ]]; then
+    echo "READY_FOR_PR_STATUS=no_pr_eligible_commits"
+    echo "READY_FOR_PR_NEXT_STATE=Blocked"
+    echo "READY_FOR_PR_BRANCH=${branch}"
+    echo "READY_FOR_PR_BASE_REF=${base_ref}"
+    echo "READY_FOR_PR_HEAD_SHA=$(git rev-parse HEAD 2>/dev/null || true)"
+    echo "READY_FOR_PR_TRACKED_COMMIT_COUNT=0"
+    echo "READY_FOR_PR_RUNTIME_OVERLAY_HINT=$(runtime_overlay_hint)"
+    echo "READY_FOR_PR_MESSAGE=No open PR exists, and branch ${branch} has no tracked commits ahead of ${base_ref}; GitHub cannot create a useful PR."
+    cat <<INST
+READY_FOR_PR_INSTRUCTIONS=No PR can be created because there are no tracked commits between ${base_ref} and ${branch}. If this ticket changed ignored Symphony runtime-overlay files under .symphony, do not retry PR creation. Choose an explicit delivery path: add a tracked review artifact, test, or documentation change and send the issue back through In Progress/Needs Review; or mark the ticket workflow:no-pr with clear runtime deployment instructions; or keep it Blocked for a human to deploy/decide. This prevents blank head/base SHA and "No commits between" PR creation failures.
+INST
+    exit 22
+  fi
 fi
 
 if [[ -z "${title}" ]]; then

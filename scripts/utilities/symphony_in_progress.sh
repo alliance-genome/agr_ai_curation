@@ -462,6 +462,12 @@ build_brief() {
   echo "For syntax-only checks, use \`PYTHONPYCACHEPREFIX=/tmp/symphony-pycache python3 -m py_compile backend/src/path/to/file.py\`"
   echo "so compile artifacts stay out of the workspace."
   echo ""
+  echo "If this pass changes ignored Symphony runtime-overlay files under \`.symphony/\`,"
+  echo "do not rely on ignored-only work as the review artifact. Either add a tracked"
+  echo "test, helper, documentation, or deployment note that makes the runtime change"
+  echo "reviewable in a PR, or record in the handoff that the ticket needs"
+  echo "\`workflow:no-pr\` plus explicit runtime deployment instructions before PR prep."
+  echo ""
 
   case "${entry_from}" in
     Todo|Backlog)

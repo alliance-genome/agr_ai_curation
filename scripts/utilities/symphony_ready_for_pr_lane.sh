@@ -47,7 +47,7 @@ Options:
   --help                         Show this help.
 
 Output contract:
-  READY_FOR_PR_LANE_STATUS=ready|bounced_to_in_progress|waiting|returned_to_in_progress|noop|error
+  READY_FOR_PR_LANE_STATUS=ready|bounced_to_in_progress|waiting|returned_to_in_progress|blocked|noop|error
   READY_FOR_PR_LANE_TO_STATE=Human Review Prep|In Progress|Ready for PR|<current state>
   READY_FOR_PR_LANE_REASON=...
 EOF
@@ -281,6 +281,9 @@ build_payload() {
     --arg ready_status "${ready_status}" \
     --arg check_status "${check_status}" \
     --arg claude_status "${claude_status}" \
+    --arg base_ref "${pr_base_ref:-}" \
+    --arg tracked_commit_count "${tracked_commit_count:-}" \
+    --arg runtime_overlay_hint "${runtime_overlay_hint:-}" \
     --arg workpad_status "${workpad_status}" \
     --arg state_status "${state_status}" '
     {
@@ -294,6 +297,9 @@ build_payload() {
       ready_for_pr_lane_ready_status: $ready_status,
       ready_for_pr_lane_check_status: $check_status,
       ready_for_pr_lane_claude_status: $claude_status,
+      ready_for_pr_lane_base_ref: $base_ref,
+      ready_for_pr_lane_tracked_commit_count: $tracked_commit_count,
+      ready_for_pr_lane_runtime_overlay_hint: $runtime_overlay_hint,
       ready_for_pr_lane_workpad_status: $workpad_status,
       ready_for_pr_lane_state_status: $state_status
     }'
@@ -570,6 +576,15 @@ write_handoff_section() {
     if [[ -n "${pr_number:-}" ]]; then
       echo "- PR: #${pr_number} ${pr_url:-}"
     fi
+    if [[ -n "${pr_base_ref:-}" ]]; then
+      echo "- PR base ref: \`${pr_base_ref}\`"
+    fi
+    if [[ -n "${tracked_commit_count:-}" ]]; then
+      echo "- PR-eligible tracked commits: ${tracked_commit_count}"
+    fi
+    if [[ -n "${runtime_overlay_hint:-}" ]]; then
+      echo "- Runtime overlay hint: ${runtime_overlay_hint}"
+    fi
     echo "- Reason: ${reason}"
     echo "- Next state: ${next_state}"
     if [[ -n "${instructions:-}" ]]; then
@@ -764,6 +779,9 @@ claude_action="$(extract_kv "READY_FOR_PR_CLAUDE_ACTION" "${ready_output}")"
 pr_number="$(extract_kv "READY_FOR_PR_PR_NUMBER" "${ready_output}")"
 pr_url="$(extract_kv "READY_FOR_PR_PR_URL" "${ready_output}")"
 instructions="$(extract_kv "READY_FOR_PR_INSTRUCTIONS" "${ready_output}")"
+pr_base_ref="$(extract_kv "READY_FOR_PR_BASE_REF" "${ready_output}")"
+tracked_commit_count="$(extract_kv "READY_FOR_PR_TRACKED_COMMIT_COUNT" "${ready_output}")"
+runtime_overlay_hint="$(extract_kv "READY_FOR_PR_RUNTIME_OVERLAY_HINT" "${ready_output}")"
 
 case "${ready_next_state}:${check_action}:${claude_action}" in
   In\ Progress:bounced_to_in_progress:*|In\ Progress:*:bounced_to_in_progress)
@@ -789,6 +807,14 @@ case "${ready_rc}:${ready_status}:${check_status}:${claude_status}" in
     verify_guard_or_return_to_progress "workspace_dirty_after_ready_for_pr"
     state_status="$(move_issue_state "In Progress")" || exit 3
     payload="$(build_payload "returned_to_in_progress" "In Progress" "${ready_status:-invalid_branch}" "${ready_status}" "${check_status}" "${claude_status}" "${workpad_status}" "${state_status}")"
+    emit_payload "${payload}"
+    ;;
+  22:no_pr_eligible_commits:*:*)
+    write_handoff_section "${section_file}" "Ready for PR found no PR-eligible tracked commits, so PR creation is blocked until the delivery path is explicit." "Blocked" "no_pr_eligible_commits"
+    workpad_status="$(append_pr_handoff "${section_file}")" || exit 3
+    verify_guard_or_return_to_progress "workspace_dirty_after_ready_for_pr"
+    state_status="$(move_issue_state "Blocked")" || exit 3
+    payload="$(build_payload "blocked" "Blocked" "no_pr_eligible_commits" "${ready_status}" "${check_status}" "${claude_status}" "${workpad_status}" "${state_status}")"
     emit_payload "${payload}"
     ;;
   0:*:clean:quiet|0:*:clean:maxed_out|0:created_pr:clean:*|0:existing_pr:clean:*)

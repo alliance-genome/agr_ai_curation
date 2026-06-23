@@ -327,12 +327,31 @@ unexpected branch, it records the exact blocker context and moves the issue to
   --workspace-dir ~/.symphony/workspaces/agr_ai_curation/ALL-49
 ```
 
+### utilities/symphony_in_progress_complete.sh
+
+In Progress completion guard. It verifies the implementation workspace is clean,
+required git hooks are present and executable, and the branch head is synchronized
+with its upstream before writing `Review Handoff` and moving the issue to
+`Needs Review`. If any guard fails, it writes the exact dirty, hook, or
+unpushed branch state into `Review Handoff` and keeps the issue in `In Progress`.
+
+```bash
+./scripts/utilities/symphony_in_progress_complete.sh \
+  --issue-identifier ALL-49 \
+  --workspace-dir ~/.symphony/workspaces/agr_ai_curation/ALL-49 \
+  --section-file /tmp/review-handoff.md
+```
+
 ### utilities/symphony_ready_for_pr_lane.sh
 
 Script-only Symphony Ready for PR lane handler. It verifies the workspace is
 clean, runs the canonical PR gate helper with GitHub checks before Claude review,
 lets failed checks or Claude feedback auto-bounce to `In Progress`, and moves
-clean PRs to `Human Review Prep` after writing `PR Handoff`.
+clean PRs to `Human Review Prep` after writing `PR Handoff`. Pure
+approval-pending-CI/check/test-pass caveats stay in the PR gate instead of
+bouncing to implementation. In PR mode, a branch with no PR-eligible tracked
+commits is blocked with explicit delivery-path guidance instead of attempting a
+GitHub PR for ignored Symphony runtime-overlay work.
 
 ```bash
 ./scripts/utilities/symphony_ready_for_pr_lane.sh \

@@ -484,6 +484,63 @@ EOF
   rm -rf "${temp_root}"
 }
 
+test_no_pr_eligible_commits_blocks_with_delivery_path_handoff() {
+  local temp_root repo context helper_dir ready_helper output workpad_log state_log section_log
+  temp_root="$(mktemp -d)"
+  repo="${temp_root}/repo"
+  context="${temp_root}/context.json"
+  helper_dir="${temp_root}/helpers"
+  ready_helper="${helper_dir}/ready.sh"
+  output="${temp_root}/output.txt"
+  workpad_log="${temp_root}/workpad.log"
+  state_log="${temp_root}/state.log"
+  section_log="${temp_root}/section.md"
+
+  make_repo "${repo}"
+  write_context_json "${context}"
+  write_stub_helpers "${helper_dir}" "${workpad_log}" "${state_log}" "${section_log}"
+
+  cat > "${ready_helper}" <<'EOF'
+#!/usr/bin/env bash
+cat <<'OUT'
+READY_FOR_PR_STATUS=no_pr_eligible_commits
+READY_FOR_PR_NEXT_STATE=Blocked
+READY_FOR_PR_BRANCH=all-123
+READY_FOR_PR_BASE_REF=main
+READY_FOR_PR_HEAD_SHA=abc123
+READY_FOR_PR_TRACKED_COMMIT_COUNT=0
+READY_FOR_PR_RUNTIME_OVERLAY_HINT=ignored_symphony_tree_present
+READY_FOR_PR_INSTRUCTIONS=No PR can be created because there are no tracked commits between main and all-123. If this ticket changed ignored Symphony runtime-overlay files under .symphony, do not retry PR creation. Choose an explicit delivery path: add a tracked review artifact, test, or documentation change and send the issue back through In Progress/Needs Review; or mark the ticket workflow:no-pr with clear runtime deployment instructions; or keep it Blocked for a human to deploy/decide.
+OUT
+exit 22
+EOF
+  chmod +x "${ready_helper}"
+
+  bash "${SCRIPT_PATH}" \
+    --issue-identifier ALL-123 \
+    --context-json-file "${context}" \
+    --workspace-dir "${repo}" \
+    --workpad-helper "${helper_dir}/workpad.sh" \
+    --state-helper "${helper_dir}/state.sh" \
+    --ready-helper "${ready_helper}" \
+    --guard-helper "${GUARD_PATH}" \
+    --wait-for-review-seconds 0 \
+    --wait-for-checks-seconds 0 \
+    > "${output}"
+
+  assert_contains "READY_FOR_PR_LANE_STATUS=blocked" "${output}"
+  assert_contains "READY_FOR_PR_LANE_TO_STATE=Blocked" "${output}"
+  assert_contains "READY_FOR_PR_LANE_REASON=no_pr_eligible_commits" "${output}"
+  assert_contains "READY_FOR_PR_LANE_TRACKED_COMMIT_COUNT=0" "${output}"
+  assert_contains "READY_FOR_PR_LANE_RUNTIME_OVERLAY_HINT=ignored_symphony_tree_present" "${output}"
+  assert_contains "target=Blocked" "${state_log}"
+  assert_contains "PR-eligible tracked commits: 0" "${section_log}"
+  assert_contains "workflow:no-pr" "${section_log}"
+  assert_contains "runtime deployment instructions" "${section_log}"
+
+  rm -rf "${temp_root}"
+}
+
 test_dirty_workspace_at_entry_returns_to_in_progress() {
   local temp_root repo context helper_dir ready_helper output workpad_log state_log section_log
   temp_root="$(mktemp -d)"
@@ -585,6 +642,7 @@ test_pr_body_includes_selected_linear_ticket_sections
 test_helper_auto_bounce_does_not_write_second_transition
 test_pending_gate_stays_ready_for_pr_without_transition
 test_no_pr_label_moves_to_human_review_prep
+test_no_pr_eligible_commits_blocks_with_delivery_path_handoff
 test_dirty_workspace_at_entry_returns_to_in_progress
 test_dirty_workspace_after_helper_returns_to_in_progress
 

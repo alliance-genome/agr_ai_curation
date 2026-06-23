@@ -14,6 +14,8 @@ Options:
   --timeout-seconds N       Codex timeout in seconds (default: 120).
   --codex-bin PATH          Codex executable (default: codex).
   --overrides-file PATH     Config override JSON (default: .symphony/codex-overrides.json).
+  --github-check-status VALUE
+                            Deterministic PR gate status for prompt context (default: unknown).
   --fixture-output-file PATH
                             Testing override: parse this model output instead of running Codex.
 
@@ -33,6 +35,7 @@ reasoning_effort="${SYMPHONY_PR_FEEDBACK_CLASSIFIER_REASONING_EFFORT:-}"
 timeout_seconds="${SYMPHONY_PR_FEEDBACK_CLASSIFIER_TIMEOUT_SECONDS:-120}"
 codex_bin="${SYMPHONY_PR_FEEDBACK_CLASSIFIER_CODEX_BIN:-codex}"
 overrides_file="${SYMPHONY_PR_FEEDBACK_CLASSIFIER_OVERRIDES_FILE:-}"
+github_check_status="unknown"
 fixture_output_file=""
 
 while [[ $# -gt 0 ]]; do
@@ -61,6 +64,10 @@ while [[ $# -gt 0 ]]; do
       overrides_file="${2:-}"
       shift 2
       ;;
+    --github-check-status)
+      github_check_status="${2:-}"
+      shift 2
+      ;;
     --fixture-output-file)
       fixture_output_file="${2:-}"
       shift 2
@@ -86,6 +93,15 @@ fi
 if ! [[ "${timeout_seconds}" =~ ^[0-9]+$ ]] || (( timeout_seconds == 0 )); then
   echo "PR_FEEDBACK_CLASSIFIER_STATUS=error"
   echo "PR_FEEDBACK_CLASSIFIER_ERROR=timeout-seconds must be a positive integer"
+  exit 2
+fi
+
+if [[ -z "${github_check_status}" ]]; then
+  github_check_status="unknown"
+fi
+if ! [[ "${github_check_status}" =~ ^[A-Za-z0-9_-]+$ ]]; then
+  echo "PR_FEEDBACK_CLASSIFIER_STATUS=error"
+  echo "PR_FEEDBACK_CLASSIFIER_ERROR=github-check-status must be a simple status token"
   exit 2
 fi
 
@@ -191,10 +207,21 @@ Return JSON only with this exact shape:
   "action_items": ["..."]
 }
 
+EOF
+cat >> "${prompt_file}" <<EOF
+Deterministic PR gate context:
+- GitHub check gate status: ${github_check_status}
+- Shell automation owns PR discovery, merge conflict detection, GitHub check status, pending/missing/failed check routing, Claude review round counting, and workspace dirty/no-code guards.
+- This classifier owns only the semantic reading of Claude's review prose: decide whether it asks for repository implementation work, or whether it is clean / already addressed / out of scope / PR-gate-only.
+- If the GitHub check gate status is clean, do not classify a review as actionable merely because Claude says to wait for, confirm, verify, or ensure CI/checks/tests/builds pass before merge.
+
+EOF
+cat >> "${prompt_file}" <<'EOF'
 Rules:
-- Use "clean" only when the review clearly approves or confirms that no blocking, non-blocking, suggestion, follow-up, cleanup, verification, or actionable implementation work remains.
+- Use "clean" only when the review clearly approves or confirms that no blocking, non-blocking, suggestion, follow-up, cleanup, non-CI verification, or actionable implementation work remains.
 - During active development, classify almost any substantive Claude comment as "actionable" even when Claude labels it non-blocking, optional, a suggestion, "worth noting", polish, cleanup, future follow-up, or pre-existing divergence.
-- Use "actionable" when the review asks for or implies code, tests, docs, config, behavior changes, verification, cleanup, legacy/shadow-copy alignment, or follow-up implementation before the issue advances.
+- Treat pure PR-gate language as "clean" when the only remaining item is to wait for, confirm, verify, or ensure CI/checks/tests/builds pass before merge. The Ready for PR lane gates GitHub checks separately. If the review also asks for code, tests, docs, config, behavior changes, coverage, or failing-check repair, classify as "actionable".
+- Use "actionable" when the review asks for or implies code, tests, docs, config, behavior changes, non-CI verification, cleanup, legacy/shadow-copy alignment, or follow-up implementation before the issue advances.
 - Use "uncertain" when the review is mixed, ambiguous, truncated, mostly metadata, or does not contain enough information to decide safely.
 - Do not classify as clean just because the review says LGTM, approve, or previous approval stands if it also includes suggestions, warnings, concerns, non-blocking issues, follow-ups, or requests.
 - Only classify as clean when the report is a pure approval/confirmation or when every concrete finding is explicitly documented as already addressed.
@@ -259,7 +286,7 @@ else
   fi
 fi
 
-python3 - "${response_file}" "${model}" "${reasoning_effort}" <<'PY'
+python3 - "${response_file}" "${model}" "${reasoning_effort}" "${github_check_status}" <<'PY'
 import json
 import re
 import sys
@@ -268,6 +295,11 @@ from pathlib import Path
 response_path = Path(sys.argv[1])
 model = sys.argv[2]
 reasoning = sys.argv[3]
+github_check_status = sys.argv[4]
+
+
+def compact(value):
+    return " ".join(str(value).split())
 
 raw = response_path.read_text(encoding="utf-8", errors="replace").strip()
 if raw.startswith("```"):
@@ -284,11 +316,11 @@ except Exception as exc:
     sys.exit(2)
 
 classification = str(payload.get("classification", "")).strip().lower()
-reason = " ".join(str(payload.get("reason", "")).split())[:800]
+reason = compact(payload.get("reason", ""))[:800]
 items = payload.get("action_items", [])
 if not isinstance(items, list):
     items = []
-items = [" ".join(str(item).split())[:300] for item in items if str(item).strip()]
+items = [compact(item)[:300] for item in items if str(item).strip()]
 
 if classification not in {"clean", "actionable", "uncertain"}:
     print("PR_FEEDBACK_CLASSIFIER_STATUS=error")
@@ -309,6 +341,7 @@ print(f"PR_FEEDBACK_CLASSIFIER_STATUS={classification}")
 print(f"PR_FEEDBACK_CLASSIFIER_CLASSIFICATION={classification}")
 print(f"PR_FEEDBACK_CLASSIFIER_MODEL={model}")
 print(f"PR_FEEDBACK_CLASSIFIER_REASONING_EFFORT={reasoning}")
+print(f"PR_FEEDBACK_CLASSIFIER_GITHUB_CHECK_STATUS={github_check_status}")
 print(f"PR_FEEDBACK_CLASSIFIER_REASON={reason}")
 for index, item in enumerate(items, start=1):
     print(f"PR_FEEDBACK_CLASSIFIER_ACTION_ITEM_{index}={item}")
