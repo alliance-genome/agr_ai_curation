@@ -128,27 +128,6 @@ function warnStorageFailure(
   ))
 }
 
-export function getBrowserStorage(
-  area: 'localStorage' | 'sessionStorage',
-  context: BrowserStorageContext,
-): BrowserStorageResult<Storage> {
-  if (typeof window === 'undefined') {
-    return { ok: false, reason: 'storage_unavailable' }
-  }
-
-  try {
-    const storage = window[area]
-    if (!storage) {
-      return { ok: false, reason: 'storage_unavailable' }
-    }
-    return { ok: true, value: storage }
-  } catch (error) {
-    const reason = classifyStorageError(error)
-    warnStorageFailure(reason, error, { ...context, operation: context.operation ?? 'get' })
-    return { ok: false, reason, error }
-  }
-}
-
 export function safeGetItem(
   storage: BrowserStorageAccessor,
   key: string,

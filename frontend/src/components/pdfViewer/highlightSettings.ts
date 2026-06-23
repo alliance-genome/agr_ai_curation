@@ -40,19 +40,14 @@ export function normalizeHighlightSettings(
 }
 
 export function loadStoredHighlightSettings(defaults: HighlightSettings): HighlightSettings {
-  try {
-    const stored = safeGetJson<Partial<HighlightSettings>>(
-      localStorage,
-      PDF_VIEWER_SETTINGS_STORAGE_KEY,
-      {
-        owner: 'preferences',
-        key: PDF_VIEWER_SETTINGS_STORAGE_KEY,
-      },
-    )
-    if (!stored.ok || !stored.value) return defaults
-    return normalizeHighlightSettings(stored.value, defaults)
-  } catch (error) {
-    console.warn('Failed to load viewer settings', error)
-    return defaults
-  }
+  const stored = safeGetJson<Partial<HighlightSettings>>(
+    () => window.localStorage,
+    PDF_VIEWER_SETTINGS_STORAGE_KEY,
+    {
+      owner: 'preferences',
+      key: PDF_VIEWER_SETTINGS_STORAGE_KEY,
+    },
+  )
+  if (!stored.ok || !stored.value) return defaults
+  return normalizeHighlightSettings(stored.value, defaults)
 }

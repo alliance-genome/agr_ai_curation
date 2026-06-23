@@ -159,50 +159,37 @@ const BatchPage: React.FC = () => {
 
   // Helper to save audit events to localStorage
   const saveAuditEventsToStorage = (batchId: string, events: AuditEvent[]) => {
-    try {
-      safeSetJson(() => window.localStorage, buildBatchAuditStorageKey(batchId), events, {
-        owner: 'batch',
-        workflowCritical: true,
-      });
-    } catch (e) {
-      console.error('Failed to save audit events to localStorage:', e);
-    }
+    safeSetJson(() => window.localStorage, buildBatchAuditStorageKey(batchId), events, {
+      owner: 'batch',
+      workflowCritical: true,
+    });
   };
 
   // Helper to load audit events from localStorage
   const loadAuditEventsFromStorage = (batchId: string): AuditEvent[] => {
-    try {
-      const stored = safeGetJson<Array<AuditEvent & { timestamp: string }>>(
-        localStorage,
-        buildBatchAuditStorageKey(batchId),
-        {
-          owner: 'batch',
-          workflowCritical: true,
-        },
-      );
-      if (stored.ok && stored.value) {
-        // Restore Date objects
-        return stored.value.map((e) => ({
-          ...e,
-          timestamp: new Date(e.timestamp),
-        }));
-      }
-    } catch (e) {
-      console.error('Failed to load audit events from localStorage:', e);
+    const stored = safeGetJson<Array<AuditEvent & { timestamp: string }>>(
+      () => window.localStorage,
+      buildBatchAuditStorageKey(batchId),
+      {
+        owner: 'batch',
+        workflowCritical: true,
+      },
+    );
+    if (stored.ok && stored.value) {
+      return stored.value.map((e) => ({
+        ...e,
+        timestamp: new Date(e.timestamp),
+      }));
     }
     return [];
   };
 
   // Helper to clear audit events from localStorage
   const clearAuditEventsFromStorage = (batchId: string) => {
-    try {
-      safeRemoveItem(() => window.localStorage, buildBatchAuditStorageKey(batchId), {
-        owner: 'batch',
-        workflowCritical: true,
-      });
-    } catch (e) {
-      console.error('Failed to clear audit events from localStorage:', e);
-    }
+    safeRemoveItem(() => window.localStorage, buildBatchAuditStorageKey(batchId), {
+      owner: 'batch',
+      workflowCritical: true,
+    });
   };
 
   // Toast notification state

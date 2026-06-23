@@ -14,9 +14,6 @@ import {
   getChatLocalStorageKeys,
 } from '@/lib/chatCacheKeys'
 import {
-  cleanupAiCurationLocalCache,
-} from '@/lib/aiCurationLocalCache'
-import {
   safeGetItem,
   safeGetJson,
   safeRemoveItem,
@@ -184,12 +181,6 @@ function HomePage() {
 
   // Single shared SSE stream for both Chat and AuditPanel
   const { events, isLoading, sendMessage, stopStream, executeFlow } = useChatStream()
-
-  useEffect(() => {
-    if (user?.uid) {
-      cleanupAiCurationLocalCache()
-    }
-  }, [user?.uid])
 
   const clearDocumentLoadingTimeout = useCallback(() => {
     if (documentLoadingTimeoutIdRef.current === null) {
@@ -414,25 +405,21 @@ function HomePage() {
    * Get current document ID from PDF viewer localStorage session
    */
   const getCurrentDocumentId = useCallback((): string | undefined => {
-    try {
-      if (!chatStorageKeys) {
-        return undefined
-      }
-
-      const session = safeGetJson<{ documentId?: unknown }>(
-        localStorage,
-        chatStorageKeys.pdfViewerSession,
-        {
-          owner: 'pdf-viewer',
-          workflowCritical: true,
-        },
-      )
-      return session.ok && typeof session.value?.documentId === 'string'
-        ? session.value.documentId
-        : undefined
-    } catch {
+    if (!chatStorageKeys) {
       return undefined
     }
+
+    const session = safeGetJson<{ documentId?: unknown }>(
+      () => window.localStorage,
+      chatStorageKeys.pdfViewerSession,
+      {
+        owner: 'pdf-viewer',
+        workflowCritical: true,
+      },
+    )
+    return session.ok && typeof session.value?.documentId === 'string'
+      ? session.value.documentId
+      : undefined
   }, [chatStorageKeys])
 
   /**

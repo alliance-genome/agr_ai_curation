@@ -561,59 +561,52 @@ export function loadMessagesFromStorage(
   storageKeys: ChatLocalStorageKeys | null,
   sessionId?: string | null,
 ): Message[] {
-  try {
-    if (!storageKeys) {
-      return []
+  if (!storageKeys) {
+    return []
+  }
+
+  const parsed = safeGetJson<unknown>(() => window.localStorage, storageKeys.messages, {
+    owner: 'chat',
+    key: storageKeys.messages,
+    workflowCritical: true,
+  })
+  const storedSessionId = safeGetItem(() => window.localStorage, storageKeys.sessionId, {
+    owner: 'chat',
+    key: storageKeys.sessionId,
+    workflowCritical: true,
+  })
+  const currentSessionId = sessionId ?? (storedSessionId.ok ? storedSessionId.value : null)
+  const data = parsed.ok ? parsed.value : null
+  const storedData = isStoredChatData(data) ? data : null
+
+  debug.log('[Chat] loadMessagesFromStorage called:', {
+    hasStoredMessages: parsed.ok && !!parsed.value,
+    storedLength: storedData?.messages.length ?? 0,
+    currentSessionId: currentSessionId || 'none',
+  })
+
+  if (!parsed.ok) {
+    return []
+  }
+
+  if (storedData) {
+    debug.log('[Chat] Found session-scoped stored messages:', {
+      storedSessionId: storedData.session_id,
+      currentSessionId,
+      match: storedData.session_id === currentSessionId,
+      messageCount: storedData.messages.length,
+    })
+    if (storedData.session_id === currentSessionId) {
+      debug.log('[Chat] Session match - restoring messages')
+      return storedData.messages.map(sanitizeStoredMessage)
     }
 
-    const stored = safeGetItem(() => window.localStorage, storageKeys.messages, {
-      owner: 'chat',
-      key: storageKeys.messages,
-      workflowCritical: true,
-    })
-    const storedSessionId = safeGetItem(() => window.localStorage, storageKeys.sessionId, {
-      owner: 'chat',
-      key: storageKeys.sessionId,
-      workflowCritical: true,
-    })
-    const currentSessionId = sessionId ?? (storedSessionId.ok ? storedSessionId.value : null)
-    debug.log('[Chat] loadMessagesFromStorage called:', {
-      hasStoredMessages: stored.ok && !!stored.value,
-      storedLength: stored.ok ? stored.value?.length || 0 : 0,
-      currentSessionId: currentSessionId || 'none',
-    })
+    debug.log('[Chat] Session mismatch - skipping restore for current session')
+    return []
+  }
 
-    if (stored.ok && stored.value) {
-      const parsed = safeGetJson<unknown>(localStorage, storageKeys.messages, {
-        owner: 'chat',
-        key: storageKeys.messages,
-        workflowCritical: true,
-      })
-      if (!parsed.ok) {
-        return []
-      }
-      const data = parsed.value
-
-      if (isStoredChatData(data)) {
-        debug.log('[Chat] Found session-scoped stored messages:', {
-          storedSessionId: data.session_id,
-          currentSessionId,
-          match: data.session_id === currentSessionId,
-          messageCount: data.messages.length,
-        })
-        if (data.session_id === currentSessionId) {
-          debug.log('[Chat] Session match - restoring messages')
-          return data.messages.map(sanitizeStoredMessage)
-        }
-
-        debug.log('[Chat] Session mismatch - skipping restore for current session')
-        return []
-      }
-
-      debug.log('[Chat] Stored messages are missing session scope - skipping restore')
-    }
-  } catch (error) {
-    console.warn('Failed to load messages from localStorage:', error)
+  if (data) {
+    debug.log('[Chat] Stored messages are missing session scope - skipping restore')
   }
   debug.log('[Chat] No messages to restore')
   return []
