@@ -270,6 +270,30 @@ def _current_chat_extraction_results(
     )
 
 
+def _formatter_source_extraction_results(
+    *,
+    session_id: str,
+    user_id: str,
+    document_id: Optional[str],
+) -> tuple[list[Any], list[Any]]:
+    """Load extraction results available to formatter export routing."""
+
+    current_chat_records = _current_chat_extraction_results(
+        session_id=session_id,
+        user_id=user_id,
+    )
+    records: list[Any] = list(current_chat_records)
+    resolved_document_id = str(document_id or "").strip()
+    if resolved_document_id:
+        records.extend(
+            list_extraction_results(
+                document_id=resolved_document_id,
+                user_id=user_id,
+            )
+        )
+    return _dedupe_extraction_results(records), current_chat_records
+
+
 def _latest_extraction_result(records: Sequence[Any]) -> Any | None:
     if not records:
         return None
@@ -282,18 +306,26 @@ def _latest_extraction_result(records: Sequence[Any]) -> Any | None:
     )
 
 
-def _formatter_runtime_context_for_records(records: Sequence[Any]) -> str:
-    """Build formatter-only runtime guidance for the bound chat result bundle."""
+def _formatter_runtime_context_for_records(
+    records: Sequence[Any],
+    *,
+    default_records: Sequence[Any] | None = None,
+) -> str:
+    """Build formatter-only runtime guidance for the bound result bundle."""
 
-    latest = _latest_extraction_result(records)
+    default_candidates = default_records if default_records else records
+    latest = _latest_extraction_result(default_candidates)
     latest_ref = _record_result_ref(latest) if latest is not None else ""
     lines = [
         "FORMATTER SOURCE BUNDLE:",
-        "You are bound to saved extraction results from this chat. Use only the formatter projection tools to inspect, plan, validate, preview, finalize, or report that the requested file cannot be produced.",
+        "You are bound to saved extraction results from this chat and the active document. Use only the formatter projection tools to inspect, plan, validate, preview, finalize, or report that the requested file cannot be produced.",
     ]
     if latest_ref:
         lines.append(
-            f'For an ordinary export request with no explicit result choice, use source_ref="{latest_ref}" when building the default projection plan. Export multiple/all saved results only when the curator explicitly asks for that scope.'
+            f'For an ordinary export request with no explicit result choice, use source_ref="{latest_ref}" when building the default projection plan. Prefer the latest current-chat saved result when one is available. Export multiple/all saved results only when the curator explicitly asks for that scope.'
+        )
+        lines.append(
+            'For a prior, older, earlier, or otherwise specific export request, preserve the selected source by passing that exact source_ref="extraction-result:<uuid>" into build_default_projection_plan or the final projection plan.'
         )
     lines.append("Available extraction result refs:")
     for record in sorted(
@@ -340,16 +372,17 @@ def _build_chat_formatter_bundle(
         )
 
     try:
-        records = _current_chat_extraction_results(
+        records, current_chat_records = _formatter_source_extraction_results(
             session_id=session_id,
             user_id=resolved_user_id,
+            document_id=document_id,
         )
     except Exception:
-        logger.exception("Failed to load chat extraction results for formatter dispatch")
+        logger.exception("Failed to load extraction results for formatter dispatch")
         return (
             None,
             "",
-            "CSV/TSV/JSON formatter tools are unavailable because saved extraction results could not be loaded for this chat. Do not use any raw export fallback; explain that export is blocked and ask the curator to retry after the saved results are available.",
+            "CSV/TSV/JSON formatter tools are unavailable because saved extraction results could not be loaded for this chat or active document. Do not use any raw export fallback; explain that export is blocked and ask the curator to retry after the saved results are available.",
         )
 
     if not records:
@@ -375,7 +408,14 @@ def _build_chat_formatter_bundle(
             "CSV/TSV/JSON formatter tools are unavailable because the saved extraction results could not be materialized into a formatter bundle. Do not use any raw export fallback; report the export blocker.",
         )
 
-    return bundle, _formatter_runtime_context_for_records(records), ""
+    return (
+        bundle,
+        _formatter_runtime_context_for_records(
+            records,
+            default_records=current_chat_records,
+        ),
+        "",
+    )
 
 
 def _resolved_scope_values(
@@ -1218,7 +1258,11 @@ def _build_runtime_tool_availability_note(
             "call the matching formatter specialist tool from this list: "
             f"{', '.join(available_formatter_tools)}. These tools bind to the latest "
             "saved extraction results at call time, including results saved earlier "
-            "in this same supervisor turn. If the curator asked for an export/download "
+            "in this same supervisor turn. If the curator asks to export a prior, older, "
+            "earlier, or specific result, first use inspect_results action=\"search\" "
+            "or action=\"list\" to identify the intended result_ref, then tell the "
+            "formatter specialist to pass that exact source_ref into projection planning. "
+            "If the curator asked for an export/download "
             "and an extractor returns a non-empty manifest or result reference, call "
             "the matching formatter specialist before your final answer. Formatter "
             "specialists are the only supported export path."
@@ -1231,9 +1275,11 @@ def _build_runtime_tool_availability_note(
         "normally enough to answer the curator's current request unless the "
         "curator asks to broaden/narrow/rerun or the manifest says the "
         "requested scope was not handled. Answer from the manifest; use "
-        "inspect_results to browse existing persisted results, more manifest "
+        "inspect_results to search or browse existing persisted results, more manifest "
         "objects, evidence, validation findings, or exact YAML-declared field "
-        "slices. Do not call extractors again only to summarize existing "
+        "slices. When the curator asks about earlier evidence, prior outputs, "
+        "or a non-latest result, search/list existing results before rerunning "
+        "an extractor. Do not call extractors again only to summarize existing "
         "results or gain confidence. Use formatter specialist tools only for "
         "explicit export/download requests, and use prepare_for_curation only "
         "after explicit confirmation. Use inspect_chat_traces for behavior/debug questions "
@@ -1551,8 +1597,10 @@ def create_supervisor_agent(
         name_override=_INSPECT_RESULTS_TOOL_NAME,
         description_override=(
             "Inspect persisted canonical extraction results for this chat. Use "
-            "action=\"help\" for the contract; action=\"list\" or \"summary\" "
-            "for available results; action=\"objects\" or \"object\" for "
+            "action=\"help\" for the contract; action=\"list\" for available "
+            "results; action=\"search\" with query/target to find prior evidence "
+            "or manifest-field previews and select a stable result_ref; "
+            "action=\"summary\" for one result; action=\"objects\" or \"object\" for "
             "YAML-declared manifest fields; action=\"field\" for one "
             "YAML-declared scalar field; action=\"evidence\" for bounded "
             "evidence text; and action=\"validation\" for validation findings. "
@@ -1564,6 +1612,7 @@ def create_supervisor_agent(
     )
     async def inspect_results_tool(
         action: str = "help",
+        query: str | None = None,
         result_ref: str | None = None,
         target: str = "latest",
         object_ref: str | None = None,
@@ -1577,6 +1626,7 @@ def create_supervisor_agent(
 
         return await inspect_results(
             action=action,
+            query=query,
             result_ref=result_ref,
             target=target,
             object_ref=object_ref,

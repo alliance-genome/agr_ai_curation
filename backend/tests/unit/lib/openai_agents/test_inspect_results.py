@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from datetime import datetime, timezone
 
 import pytest
@@ -161,6 +162,34 @@ def _payload_with_objects(object_count: int) -> dict:
     ]
     payload["validation_findings"] = []
     payload["metadata"] = {"evidence_records": []}
+    return payload
+
+
+def _payload_with_values(
+    *,
+    label: str,
+    symbol: str,
+    quote: str,
+    evidence_id: str = "evidence-1",
+) -> dict:
+    payload = deepcopy(_payload())
+    obj = payload["extracted_objects"][0]
+    obj["pending_ref_id"] = f"assertion-{symbol.lower()}"
+    obj["payload"]["label"] = label
+    obj["payload"]["symbol"] = symbol
+    obj["evidence_record_ids"] = [evidence_id]
+    payload["validation_findings"][0]["field_ref"]["object_ref"] = {
+        "pending_ref_id": obj["pending_ref_id"],
+        "object_type": "Assertion",
+    }
+    payload["metadata"]["evidence_records"] = [
+        {
+            "evidence_record_id": evidence_id,
+            "verified_quote": quote,
+            "page": 7,
+            "section": "Results",
+        }
+    ]
     return payload
 
 
@@ -381,6 +410,144 @@ async def test_inspect_results_evidence_inventory_hides_text_until_object_ref(mo
             "verified_quote": "The paper states APOE is associated with disease.",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_inspect_results_search_returns_bounded_prior_evidence_matches(monkeypatch):
+    older_id = "33333333-3333-3333-3333-333333333333"
+    newer_id = "44444444-4444-4444-4444-444444444444"
+    captured_calls = []
+
+    older_record = _InspectRecord(
+        extraction_result_id=older_id,
+        payload_json=_payload_with_values(
+            label="Endogenous tumor observation",
+            symbol="TUM",
+            quote="Endogenous tumor cells were retained for downstream analysis.",
+            evidence_id="evidence-old",
+        ),
+        created_at=datetime(2026, 6, 13, 12, 0, tzinfo=timezone.utc),
+    )
+    newer_record = _InspectRecord(
+        extraction_result_id=newer_id,
+        payload_json=_payload_with_values(
+            label="Unrelated control observation",
+            symbol="CTRL",
+            quote="Control tissue was not scored as tumor evidence.",
+            evidence_id="evidence-new",
+        ),
+        created_at=datetime(2026, 6, 14, 12, 0, tzinfo=timezone.utc),
+    )
+
+    def _list_records(**kwargs):
+        captured_calls.append(kwargs)
+        return [older_record, newer_record]
+
+    monkeypatch.setattr(inspect_results_module, "list_extraction_results", _list_records)
+
+    response = await inspect_results_module.inspect_results(
+        action="search",
+        target="current_document",
+        query="endogenous tumor",
+        limit=1,
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "ok"
+    assert payload["action"] == "search"
+    assert payload["target"] == "current_document"
+    assert payload["query"] == "endogenous tumor"
+    assert payload["total_count"] == 2
+    assert payload["truncated"] is True
+    assert payload["next_cursor"] == "1"
+    assert captured_calls == [{"document_id": DOCUMENT_ID, "user_id": "user-1"}]
+    first_match = payload["matches"][0]
+    assert first_match["result_ref"] == f"extraction-result:{older_id}"
+    assert first_match["extraction_result_id"] == older_id
+    assert first_match["object_ref"] == "assertion-tum"
+    assert first_match["adapter_key"] == "fixture.inspect"
+    assert first_match["agent_key"] == "fixture_agent"
+    assert first_match["document_id"] == DOCUMENT_ID
+    assert first_match["created_at"] == "2026-06-13T12:00:00+00:00"
+    assert first_match["match_type"] in {"evidence_text", "manifest_field"}
+    assert "Endogenous tumor" in first_match["snippet"]
+
+
+@pytest.mark.asyncio
+async def test_inspect_results_search_without_query_browses_object_previews(monkeypatch):
+    _patch_records(monkeypatch, [_InspectRecord()])
+
+    response = await inspect_results_module.inspect_results(
+        action="search",
+        target="this_chat",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "ok"
+    assert payload["query"] is None
+    assert payload["total_count"] == 1
+    assert payload["matches"][0]["result_ref"] == f"extraction-result:{RESULT_ID}"
+    assert payload["matches"][0]["match_type"] == "object_preview"
+    assert "label: APOE association" in payload["matches"][0]["snippet"]
+    assert "paper states APOE" not in json.dumps(payload)
+
+
+@pytest.mark.asyncio
+async def test_inspect_results_search_empty_scope_returns_empty_match_set(monkeypatch):
+    _patch_records(monkeypatch, [])
+
+    response = await inspect_results_module.inspect_results(
+        action="search",
+        target="this_chat",
+        query="endogenous tumor",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "ok"
+    assert payload["action"] == "search"
+    assert payload["target"] == "this_chat"
+    assert payload["query"] == "endogenous tumor"
+    assert payload["matches"] == []
+    assert payload["total_count"] == 0
+    assert payload["truncated"] is False
+    assert payload["next_cursor"] is None
+
+
+@pytest.mark.asyncio
+async def test_inspect_results_search_latest_targets_newest_result_only(monkeypatch):
+    older_record = _InspectRecord(
+        extraction_result_id="55555555-5555-5555-5555-555555555555",
+        payload_json=_payload_with_values(
+            label="Older shared tumor observation",
+            symbol="OLD",
+            quote="Shared tumor evidence from the older run.",
+        ),
+        created_at=datetime(2026, 6, 13, 12, 0, tzinfo=timezone.utc),
+    )
+    newer_record = _InspectRecord(
+        extraction_result_id="66666666-6666-6666-6666-666666666666",
+        payload_json=_payload_with_values(
+            label="Newer shared tumor observation",
+            symbol="NEW",
+            quote="Shared tumor evidence from the newer run.",
+        ),
+        created_at=datetime(2026, 6, 14, 12, 0, tzinfo=timezone.utc),
+    )
+    _patch_records(monkeypatch, [older_record, newer_record])
+
+    response = await inspect_results_module.inspect_results(
+        action="search",
+        target="latest",
+        query="shared tumor",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "ok"
+    assert payload["matches"]
+    assert {
+        match["extraction_result_id"]
+        for match in payload["matches"]
+    } == {"66666666-6666-6666-6666-666666666666"}
 
 
 def _payload_with_mixed_findings() -> dict:

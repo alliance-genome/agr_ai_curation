@@ -162,7 +162,12 @@ def test_supervisor_prompt_explains_result_inspection_boundaries():
     normalized_prompt = " ".join(prompt_text.split())
 
     assert "inspect_results(action=\"help\")" in prompt_text
+    assert "inspect_results(action=\"search\"" in prompt_text
     assert "extraction-result:<uuid>" in prompt_text
+    assert (
+        "Do not silently export the latest result when the curator asked for an older one."
+        in normalized_prompt
+    )
     assert "do not call another extractor just to summarize" in normalized_prompt
     assert "Export and curation prep are separate explicit actions" in prompt_text
     assert "trace inspection only to debug behavior" in prompt_text
@@ -1049,9 +1054,84 @@ def test_create_supervisor_agent_exposes_formatter_with_saved_chat_bundle(monkey
     assert "export_to_file" not in tool_names
     assert "EXPORT/DOWNLOAD ROUTING" in created.instructions
     assert "including results saved earlier in this same supervisor turn" in created.instructions
+    assert "first use inspect_results action=\"search\"" in created.instructions
+    assert "pass that exact source_ref into projection planning" in created.instructions
     assert "Formatter specialists are the only supported export path" in created.instructions
     assert captured_bundle["extraction_results"] == [fake_record]
     assert captured_langfuse["metadata"]["specialist_count"] == len(created.tools)
+
+
+def test_build_formatter_bundle_includes_active_document_prior_results(monkeypatch):
+    captured_bundle: dict[str, Any] = {}
+    list_calls: list[dict[str, Any]] = []
+    fake_bundle = SimpleNamespace(flow_name="Chat Extraction Results")
+    chat_record = SimpleNamespace(
+        extraction_result_id="00000000-0000-4000-8000-000000000123",
+        created_at=datetime(2026, 6, 17, tzinfo=timezone.utc),
+        agent_key="generic_extractor",
+        adapter_key="generic",
+        source_kind=SimpleNamespace(value="chat"),
+        candidate_count=9,
+        document_id="doc-1",
+        flow_run_id=None,
+    )
+    document_record = SimpleNamespace(
+        extraction_result_id="00000000-0000-4000-8000-000000000456",
+        created_at=datetime(2026, 6, 18, tzinfo=timezone.utc),
+        agent_key="generic_extractor",
+        adapter_key="generic",
+        source_kind=SimpleNamespace(value="chat"),
+        candidate_count=3,
+        document_id="doc-1",
+        flow_run_id=None,
+    )
+
+    monkeypatch.setattr(supervisor_agent, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_agent, "get_current_user_id", lambda: "user-1")
+
+    def _fake_list_extraction_results(**kwargs):
+        list_calls.append(kwargs)
+        source_kind = kwargs.get("source_kind")
+        if getattr(source_kind, "value", None) == "chat":
+            return [chat_record]
+        if kwargs.get("document_id") == "doc-1":
+            return [document_record, chat_record]
+        return []
+
+    monkeypatch.setattr(
+        supervisor_agent,
+        "list_extraction_results",
+        _fake_list_extraction_results,
+    )
+
+    def _fake_build_bundle(**kwargs):
+        captured_bundle.update(kwargs)
+        return fake_bundle
+
+    monkeypatch.setattr(
+        "src.lib.flows.output_projection.build_extraction_result_artifact_bundle",
+        _fake_build_bundle,
+    )
+
+    bundle, runtime_context, unavailable_note = supervisor_agent._build_chat_formatter_bundle(
+        user_id="user-1",
+        document_id="doc-1",
+    )
+
+    assert bundle is fake_bundle
+    assert unavailable_note == ""
+    assert captured_bundle["extraction_results"] == [chat_record, document_record]
+    assert captured_bundle["document_id"] == "doc-1"
+    assert {
+        "document_id": "doc-1",
+        "user_id": "user-1",
+    } in list_calls
+    assert (
+        'source_ref="extraction-result:00000000-0000-4000-8000-000000000123"'
+        in runtime_context
+    )
+    assert "extraction-result:00000000-0000-4000-8000-000000000456" in runtime_context
+    assert "active document" in runtime_context
 
 
 def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(monkeypatch):
@@ -1109,6 +1189,7 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
     )
     inspect_params = inspect.signature(inspect_tool).parameters
     assert "action" in inspect_params
+    assert "query" in inspect_params
     assert "result_ref" in inspect_params
     assert "object_ref" in inspect_params
     assert "review_session_id" not in inspect_params
@@ -1122,6 +1203,7 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
         "use inspect_results for persisted extraction objects"
         in tools_by_name["inspect_chat_traces"].description
     )
+    assert "action=\"search\"" in tools_by_name["inspect_results"].description
     assert "export_to_file" not in tools_by_name
     assert captured_langfuse["metadata"]["specialist_count"] == 4
 

@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
@@ -120,6 +121,33 @@ def _completed_generic_attribute_step() -> dict:
             },
         ),
     }
+
+
+def _completed_generic_attribute_step_for_result(
+    extraction_result_id: str,
+    *,
+    label: str,
+    tumor_term: str,
+) -> dict:
+    step = deepcopy(_completed_generic_attribute_step())
+    step["extraction_result_id"] = extraction_result_id
+    step["candidate"].payload_json["envelope_id"] = f"env-{extraction_result_id}"
+    step["candidate"].payload_json["extracted_objects"] = [
+        {
+            "object_type": "generic_object",
+            "object_id": f"{extraction_result_id}-object",
+            "payload": {
+                "class_key": "generic:generic_object",
+                "label": label,
+                "semantic_class": "tumor_classification_occurrence",
+                "attributes": {
+                    "Tumor Classification Term": tumor_term,
+                    "Section": "Results",
+                },
+            },
+        }
+    ]
+    return step
 
 
 def _completed_generic_claim_text_only_step() -> dict:
@@ -386,6 +414,49 @@ async def test_default_plan_source_ref_prefers_selected_generic_attribute_column
         "object.attribute.species",
         "object.attribute.section",
     ]
+
+
+@pytest.mark.asyncio
+async def test_default_plan_preserves_selected_older_result_source_ref():
+    older_step = _completed_generic_attribute_step_for_result(
+        "extract-older-1",
+        label="Older endogenous tumor observation",
+        tumor_term="endogenous tumor",
+    )
+    newer_step = _completed_generic_attribute_step_for_result(
+        "extract-newer-1",
+        label="Newer unrelated observation",
+        tumor_term="control tissue",
+    )
+    tools = build_output_formatter_tools(
+        bundle=build_flow_output_artifact_bundle(
+            completed_steps=[newer_step, older_step],
+            flow_name="Prior Result Formatter Flow",
+            output_format="csv",
+        ),
+        output_format="csv",
+        formatter_agent_id="csv_formatter",
+        save_projected_output=lambda *_args: None,  # type: ignore[arg-type]
+    )
+
+    default_plan = await _invoke(
+        _tool_by_name(tools, "build_default_projection_plan"),
+        {
+            "row_source": "object",
+            "source_ref": "extraction-result:extract-older-1",
+        },
+    )
+    preview = await _invoke(
+        _tool_by_name(tools, "preview_output_projection"),
+        {"plan_json": json.dumps(default_plan["plan"])},
+    )
+
+    assert default_plan["status"] == "ok"
+    assert default_plan["plan"]["source_extraction_result_ids"] == ["extract-older-1"]
+    assert preview["status"] == "ok"
+    serialized_rows = json.dumps(preview["preview"]["preview_rows"])
+    assert "Older endogenous tumor observation" in serialized_rows
+    assert "Newer unrelated observation" not in serialized_rows
 
 
 @pytest.mark.asyncio
