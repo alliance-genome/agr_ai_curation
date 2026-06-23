@@ -493,6 +493,27 @@ async def test_inspect_results_search_without_query_browses_object_previews(monk
 
 
 @pytest.mark.asyncio
+async def test_inspect_results_search_empty_scope_returns_empty_match_set(monkeypatch):
+    _patch_records(monkeypatch, [])
+
+    response = await inspect_results_module.inspect_results(
+        action="search",
+        target="this_chat",
+        query="endogenous tumor",
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "ok"
+    assert payload["action"] == "search"
+    assert payload["target"] == "this_chat"
+    assert payload["query"] == "endogenous tumor"
+    assert payload["matches"] == []
+    assert payload["total_count"] == 0
+    assert payload["truncated"] is False
+    assert payload["next_cursor"] is None
+
+
+@pytest.mark.asyncio
 async def test_inspect_results_search_latest_targets_newest_result_only(monkeypatch):
     older_record = _InspectRecord(
         extraction_result_id="55555555-5555-5555-5555-555555555555",
