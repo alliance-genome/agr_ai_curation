@@ -122,6 +122,30 @@ def _read_repo_text(relative_path: str) -> str:
     return (REPO_ROOT / relative_path).read_text(encoding="utf-8")
 
 
+def _display_prompt_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
+
+
+def _read_runtime_agent_studio_system_prompt() -> tuple[str, str]:
+    from src.api import agent_studio as api_module
+
+    for candidate in api_module.AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES:
+        if candidate.exists():
+            return _display_prompt_path(candidate), candidate.read_text(encoding="utf-8")
+
+    candidate_list = ", ".join(
+        _display_prompt_path(candidate)
+        for candidate in api_module.AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES
+    )
+    raise AssertionError(
+        "No Agent Studio system prompt template candidate exists: "
+        f"{candidate_list}"
+    )
+
+
 def _validator_dispatch_cleanup_surface_paths() -> tuple[str, ...]:
     paths: set[str] = set(VALIDATOR_DISPATCH_CLEANUP_SURFACE_PATHS)
     for pattern in VALIDATOR_DISPATCH_CLEANUP_SURFACE_GLOBS:
@@ -149,9 +173,11 @@ def _package_agent_prompt_paths(agent_name: str | None = None) -> tuple[str, ...
 
 
 def test_agent_studio_system_prompt_grounded_in_domain_envelope_tools():
-    prompt = _read_repo_text("backend/src/api/agent_studio_system_prompt.md")
+    source_path, prompt = _read_runtime_agent_studio_system_prompt()
 
     assert "domain envelopes are the semantic source of truth" in prompt
+    assert "domain_envelope.extracted_objects" in prompt, source_path
+    assert "domain_envelope.objects" not in prompt, source_path
     assert "call the relevant tools" in prompt
     assert "get_domain_envelope_state" in prompt
     assert "bounded validator request/result summaries" in prompt
@@ -195,7 +221,7 @@ def test_agent_studio_system_prompt_grounded_in_domain_envelope_tools():
 
 
 def test_agent_studio_system_prompt_grounded_in_pdf_evidence_span_tools():
-    prompt = _read_repo_text("backend/src/api/agent_studio_system_prompt.md")
+    _, prompt = _read_runtime_agent_studio_system_prompt()
 
     assert "PDF evidence is span-backed" in prompt
     assert "Do not tell curators or prompt authors that extraction agents should invent" in prompt
