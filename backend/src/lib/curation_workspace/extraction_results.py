@@ -14,6 +14,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from pydantic import ValidationError
 
 from src.lib.openai_agents.evidence_summary import (
     extract_evidence_records_from_structured_result,
@@ -27,6 +28,7 @@ from src.schemas.curation_workspace import (
     CurationExtractionPersistenceResponse,
     CurationExtractionResultRecord,
 )
+from src.schemas.domain_envelope import DomainEnvelope
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +110,7 @@ def build_extraction_envelope_candidate(
     """Convert a tool output payload into a persistable extraction candidate."""
 
     payload = _coerce_tool_output_payload(raw_output)
-    if not _is_extraction_envelope_payload(payload):
+    if payload is None or not _is_extraction_envelope_payload(payload):
         return None
 
     canonical_agent_key = str(agent_key or "").strip()
@@ -626,13 +628,7 @@ def persist_inline_validated_extraction_result(
     only, never old row sources or prose-derived artifacts.
     """
 
-    if not _is_strict_canonical_domain_envelope_payload(payload_json):
-        raise ValueError(
-            "Inline extraction persistence requires a strict canonical domain envelope "
-            "with envelope_id, domain_pack_id, and extracted_objects."
-        )
-
-    canonical_payload = _sanitize_persisted_json_value(dict(payload_json))
+    canonical_payload = _validated_inline_domain_envelope_payload(payload_json)
     payload_hash = _canonical_payload_hash(canonical_payload)
     builder_summary = _builder_finalization_summary(builder_finalization)
     idempotency_key = _inline_extraction_idempotency_key(
@@ -884,6 +880,28 @@ def _is_strict_canonical_domain_envelope_payload(payload: Any) -> bool:
     if any(key in payload for key in _ENVELOPE_EXTRACTION_KEYS):
         return False
     return True
+
+
+def _validated_inline_domain_envelope_payload(
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Validate and normalize the canonical envelope persisted from inline chat."""
+
+    if not _is_strict_canonical_domain_envelope_payload(payload):
+        raise ValueError(
+            "Inline extraction persistence requires a strict canonical domain envelope "
+            "that validates as DomainEnvelope and includes extracted_objects."
+        )
+
+    try:
+        envelope = DomainEnvelope.model_validate(dict(payload))
+    except ValidationError as exc:
+        raise ValueError(
+            "Inline extraction persistence DomainEnvelope schema validation failed: "
+            f"{exc}"
+        ) from exc
+
+    return _sanitize_persisted_json_value(envelope.model_dump(mode="json"))
 
 
 def _canonical_payload_hash(payload: Mapping[str, Any]) -> str:

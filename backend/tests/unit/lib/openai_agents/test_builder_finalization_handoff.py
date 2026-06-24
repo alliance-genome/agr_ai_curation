@@ -274,6 +274,36 @@ def _evidence_record_ids_from_payload(payload: dict) -> list[str]:
     return list(dict.fromkeys(evidence_record_ids))
 
 
+def _domain_envelope_from_builder_payload(
+    payload: dict,
+    *,
+    envelope_id: str = "envelope-post-dispatch",
+    metadata_updates: dict | None = None,
+    validation_findings: list[dict] | None = None,
+) -> dict:
+    metadata = dict(payload.get("metadata") or {})
+    metadata.update(metadata_updates or {})
+    extracted_objects = json.loads(json.dumps(payload.get("curatable_objects", [])))
+    if not extracted_objects:
+        extracted_objects = [
+            {
+                "object_type": "gene_expression_annotation",
+                "pending_ref_id": "gene-expression-annotation-pef-1",
+                "payload": json.loads(json.dumps(payload)),
+            }
+        ]
+    return {
+        "envelope_id": envelope_id,
+        "domain_pack_id": str(payload.get("domain_pack_id") or "agr.test"),
+        "domain_pack_version": "test",
+        "status": "validated",
+        "extracted_objects": extracted_objects,
+        "validation_findings": list(validation_findings or []),
+        "history": [],
+        "metadata": metadata,
+    }
+
+
 class _FakeRunResult:
     def __init__(self, *, final_output):
         self.final_output = final_output
@@ -1114,13 +1144,31 @@ async def test_specialist_internal_event_uses_post_validator_builder_payload(mon
 
     async def _append_validator_materialization(final_output, **_kwargs):
         dispatched_payload = json.loads(final_output)
-        dispatched_payload["curatable_objects"][0]["payload"]["validator_marker"] = (
+        validated_envelope = _domain_envelope_from_builder_payload(
+            dispatched_payload,
+            envelope_id="envelope-post-dispatch-builder-payload",
+            metadata_updates={
+                "validator_appended_findings": [
+                    {"code": "domain_pack.validator_resolved", "message": "Resolved wg"}
+                ]
+            },
+            validation_findings=[
+                {
+                    "severity": "info",
+                    "status": "resolved",
+                    "code": "domain_pack.validator_resolved",
+                    "message": "Resolved wg",
+                    "object_ref": {
+                        "pending_ref_id": "annotation-1",
+                        "object_type": "gene_expression_annotation",
+                    },
+                }
+            ],
+        )
+        validated_envelope["extracted_objects"][0]["payload"]["validator_marker"] = (
             "post-dispatch"
         )
-        dispatched_payload["metadata"]["validator_appended_findings"] = [
-            {"code": "domain_pack.validator_resolved", "message": "Resolved wg"}
-        ]
-        return json.dumps(dispatched_payload)
+        return json.dumps(validated_envelope)
 
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
@@ -1174,7 +1222,9 @@ async def test_specialist_internal_event_uses_post_validator_builder_payload(mon
     assert run_result.workspace is not None
     assert run_result.workspace.finalization is not None
     assert run_result.workspace.finalization.payload == canonical_payload
-    assert canonical_payload["curatable_objects"][0]["payload"][
+    # Post-dispatch builder payloads must be canonical DomainEnvelope payloads.
+    assert "curatable_objects" not in canonical_payload
+    assert canonical_payload["extracted_objects"][0]["payload"][
         "validator_marker"
     ] == "post-dispatch"
     assert canonical_payload["metadata"]["validator_appended_findings"] == [
@@ -1529,8 +1579,13 @@ async def test_chat_path_inline_persistence_persists_chat_row_and_carries_ids(
     _disable_package_tool_rebinding(monkeypatch)
     persist_calls = _spy_inline_persistence(monkeypatch)
 
-    async def _echo_validator_dispatch(serialized_payload, *_args, **_kwargs):
-        return serialized_payload
+    async def _materialize_domain_envelope(serialized_payload, *_args, **_kwargs):
+        return json.dumps(
+            _domain_envelope_from_builder_payload(
+                json.loads(serialized_payload),
+                envelope_id="envelope-inline-chat-persistence",
+            )
+        )
 
     monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
@@ -1547,7 +1602,7 @@ async def test_chat_path_inline_persistence_persists_chat_row_and_carries_ids(
     monkeypatch.setattr(
         streaming_tools,
         "_dispatch_domain_envelope_validators_for_chat",
-        _echo_validator_dispatch,
+        _materialize_domain_envelope,
     )
 
     agent = SimpleNamespace(
@@ -1569,6 +1624,11 @@ async def test_chat_path_inline_persistence_persists_chat_row_and_carries_ids(
 
     # The CHAT-source inline persist helper fired exactly once.
     assert len(persist_calls) == 1
+    persisted_payload = persist_calls[0]["builder_finalization"].payload
+    assert "curatable_objects" not in persisted_payload
+    assert persisted_payload["extracted_objects"][0]["pending_ref_id"] == (
+        "gene-expression-annotation-pef-1"
+    )
 
     internal_event = next(
         event
