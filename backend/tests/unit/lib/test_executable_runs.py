@@ -211,7 +211,7 @@ async def test_producer_startup_failure_publishes_terminal_error_event(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_failed_terminal_run_can_be_restarted_with_same_run_id(monkeypatch):
+async def test_failed_terminal_run_replays_without_restart_for_same_run_id(monkeypatch):
     monkeypatch.setattr(
         "src.lib.executable_runs.get_executable_run_event_replay_limit",
         lambda: 10,
@@ -227,9 +227,8 @@ async def test_failed_terminal_run_can_be_restarted_with_same_run_id(monkeypatch
     async def stream_factory():
         nonlocal attempts
         attempts += 1
-        if attempts == 1:
-            raise RuntimeError("first attempt failed")
-        yield 'data: {"type":"DONE"}\n\n'
+        raise RuntimeError("first attempt failed")
+        yield 'data: {"type":"unreachable"}\n\n'
 
     run, created = await manager.get_or_start_stream(
         run_id="curation_flow_run:session-1:turn-1",
@@ -238,6 +237,9 @@ async def test_failed_terminal_run_can_be_restarted_with_same_run_id(monkeypatch
         session_id="session-1",
         turn_id="turn-1",
         stream_factory=stream_factory,
+        terminal_error_event_factory=lambda exc: (
+            f'data: {{"type":"turn_failed","message":"{exc}"}}\n\n'
+        ),
     )
 
     assert created is True
@@ -254,14 +256,79 @@ async def test_failed_terminal_run_can_be_restarted_with_same_run_id(monkeypatch
         stream_factory=stream_factory,
     )
 
-    assert retry_created is True
-    assert retry_run is not run
+    assert retry_created is False
+    assert retry_run is run
     observer = manager.observe(retry_run)
-    done_event = await asyncio.wait_for(observer.__anext__(), timeout=1)
-    assert "DONE" in done_event
+    failure_event = await asyncio.wait_for(observer.__anext__(), timeout=1)
+    assert "turn_failed" in failure_event
+    assert "first attempt failed" in failure_event
 
     with pytest.raises(StopAsyncIteration):
         await asyncio.wait_for(observer.__anext__(), timeout=1)
 
-    assert retry_run.status == "completed"
-    assert attempts == 2
+    assert retry_run.status == "failed"
+    assert attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_terminal_run_replays_without_restart_for_same_run_id(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.executable_runs.get_executable_run_event_replay_limit",
+        lambda: 10,
+    )
+    monkeypatch.setattr(
+        "src.lib.executable_runs.get_executable_run_retention_seconds",
+        lambda: 60,
+    )
+
+    manager = ExecutableRunManager()
+    attempts = 0
+    continue_stream = asyncio.Event()
+
+    async def stream_factory():
+        nonlocal attempts
+        attempts += 1
+        await continue_stream.wait()
+        yield 'data: {"type":"turn_interrupted"}\n\n'
+
+    run, created = await manager.get_or_start_stream(
+        run_id="assistant_chat_turn:session-1:turn-1",
+        kind="assistant_chat_turn",
+        owner_user_id="user-1",
+        session_id="session-1",
+        turn_id="turn-1",
+        stream_factory=stream_factory,
+    )
+
+    assert created is True
+    cancelled_run = await manager.request_cancel_for_session(
+        session_id="session-1",
+        owner_user_id="user-1",
+    )
+    assert cancelled_run is run
+
+    continue_stream.set()
+    if run.task is not None:
+        await asyncio.wait_for(run.task, timeout=1)
+    assert run.status == "cancelled"
+
+    retry_run, retry_created = await manager.get_or_start_stream(
+        run_id="assistant_chat_turn:session-1:turn-1",
+        kind="assistant_chat_turn",
+        owner_user_id="user-1",
+        session_id="session-1",
+        turn_id="turn-1",
+        stream_factory=stream_factory,
+    )
+
+    assert retry_created is False
+    assert retry_run is run
+    observer = manager.observe(retry_run)
+    interrupted_event = await asyncio.wait_for(observer.__anext__(), timeout=1)
+    assert "turn_interrupted" in interrupted_event
+
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(observer.__anext__(), timeout=1)
+
+    assert retry_run.status == "cancelled"
+    assert attempts == 1

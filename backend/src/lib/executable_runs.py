@@ -145,15 +145,7 @@ class ExecutableRunManager:
             if existing is not None:
                 if existing.owner_user_id != owner_user_id:
                     raise ExecutableRunAccessError("Executable run is owned by another user")
-                if existing.terminal and existing.status != "completed":
-                    self._runs.pop(run_id, None)
-                    if (
-                        existing.session_id
-                        and self._active_session_run_ids.get(existing.session_id) == run_id
-                    ):
-                        self._active_session_run_ids.pop(existing.session_id, None)
-                else:
-                    return existing, False
+                return existing, False
 
             if session_id:
                 active_run_id = self._active_session_run_ids.get(session_id)

@@ -1165,7 +1165,7 @@ def test_execute_flow_endpoint_retries_incomplete_turn_without_reincrementing_co
     assert [message.role for message in stored_turn_messages] == ["user", "flow"]
 
 
-def test_execute_flow_endpoint_retry_reuses_persisted_trace_context(monkeypatch):
+def test_execute_flow_endpoint_terminal_failure_reattach_replays_trace_context(monkeypatch):
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(
         flow_id=flow_id,
@@ -1235,12 +1235,10 @@ def test_execute_flow_endpoint_retry_reuses_persisted_trace_context(monkeypatch)
     second_events = asyncio.run(_consume_stream(second_response))
 
     assert [event["type"] for event in first_events] == ["RUN_STARTED", "SUPERVISOR_ERROR", "RUN_ERROR"]
-    assert [event["type"] for event in second_events] == ["RUN_STARTED", "CHAT_OUTPUT_READY", "FLOW_FINISHED"]
-    assert len(execute_calls) == 2
+    assert second_events == first_events
+    assert len(execute_calls) == 1
     assert execute_calls[0]["flow_run_id"]
-    assert execute_calls[1]["flow_run_id"] == execute_calls[0]["flow_run_id"]
     assert execute_calls[0]["trace_context"] is None
-    assert execute_calls[1]["trace_context"] == {"trace_id": "trace-flow-first"}
     user_turn = repository.get_message_by_turn_id(
         session_id="session-flow-trace-reuse",
         user_auth_sub="auth-sub",
