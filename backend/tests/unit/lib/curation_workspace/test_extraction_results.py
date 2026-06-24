@@ -924,7 +924,10 @@ def test_persist_inline_validated_extraction_result_rejects_invalid_domain_envel
         }
     ]
 
-    with pytest.raises(ValueError, match="DomainEnvelope"):
+    with pytest.raises(
+        ValueError,
+        match="DomainEnvelope schema validation failed",
+    ) as exc_info:
         persist_inline_validated_extraction_result(
             payload_json=payload,
             document_id=str(uuid4()),
@@ -942,6 +945,7 @@ def test_persist_inline_validated_extraction_result_rejects_invalid_domain_envel
             db=session,
         )
 
+    assert "missing-object" in str(exc_info.value)
     assert session.added_records == []
     assert session.flush_calls == 0
 

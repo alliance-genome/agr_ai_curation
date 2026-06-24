@@ -897,8 +897,8 @@ def _validated_inline_domain_envelope_payload(
         envelope = DomainEnvelope.model_validate(dict(payload))
     except ValidationError as exc:
         raise ValueError(
-            "Inline extraction persistence requires a strict canonical domain envelope "
-            "that validates as DomainEnvelope and includes extracted_objects."
+            "Inline extraction persistence DomainEnvelope schema validation failed: "
+            f"{exc}"
         ) from exc
 
     return _sanitize_persisted_json_value(envelope.model_dump(mode="json"))
