@@ -908,6 +908,44 @@ def test_persist_inline_validated_extraction_result_rejects_legacy_row_sources()
         )
 
 
+def test_persist_inline_validated_extraction_result_rejects_invalid_domain_envelope():
+    session = _FakeSession()
+    payload = _sample_persisted_domain_envelope_payload()
+    payload["validation_findings"] = [
+        {
+            "severity": "error",
+            "status": "open",
+            "code": "domain_pack.unknown_ref",
+            "message": "Finding points at an object that is not in extracted_objects.",
+            "object_ref": {
+                "pending_ref_id": "missing-object",
+                "object_type": "gene_mention_evidence",
+            },
+        }
+    ]
+
+    with pytest.raises(ValueError, match="DomainEnvelope"):
+        persist_inline_validated_extraction_result(
+            payload_json=payload,
+            document_id=str(uuid4()),
+            agent_key="gene",
+            adapter_key="gene",
+            tool_name="ask_gene_specialist",
+            source_kind=CurationExtractionSourceKind.CHAT,
+            origin_session_id="session-1",
+            trace_id="trace-1",
+            user_id="user-1",
+            builder_finalization={
+                "builder_run_id": "trace-1",
+                "builder_invocation_id": "builder-invocation-1",
+            },
+            db=session,
+        )
+
+    assert session.added_records == []
+    assert session.flush_calls == 0
+
+
 def test_persist_inline_validated_extraction_result_reloads_after_insert_conflict():
     """The unique-index race loser rolls back and returns the race winner's row."""
 
