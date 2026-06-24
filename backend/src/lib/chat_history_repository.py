@@ -804,6 +804,7 @@ class ChatHistoryRepository:
         user_auth_sub: str,
         chat_kind: str,
         turn_id: str,
+        excluded_message_types: set[str] | None = None,
     ) -> list[ChatMessageRecord]:
         """Return all visible transcript rows for one turn in chronological order."""
 
@@ -813,14 +814,16 @@ class ChatHistoryRepository:
             chat_kind=chat_kind,
         )
         normalized_turn_id = _normalize_required_text(turn_id, field_name="turn_id")
+        stmt = select(ChatMessageModel).where(
+            ChatMessageModel.session_id == session.session_id,
+            ChatMessageModel.chat_kind == session.chat_kind,
+            ChatMessageModel.turn_id == normalized_turn_id,
+        )
+        if excluded_message_types:
+            stmt = stmt.where(ChatMessageModel.message_type.notin_(excluded_message_types))
+
         messages = self._db.scalars(
-            select(ChatMessageModel)
-            .where(
-                ChatMessageModel.session_id == session.session_id,
-                ChatMessageModel.chat_kind == session.chat_kind,
-                ChatMessageModel.turn_id == normalized_turn_id,
-            )
-            .order_by(
+            stmt.order_by(
                 ChatMessageModel.created_at.asc(),
                 ChatMessageModel.message_id.asc(),
             )

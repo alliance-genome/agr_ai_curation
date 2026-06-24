@@ -244,7 +244,11 @@ def test_large_tool_result_is_compacted_for_provider_continuation(monkeypatch):
         "tool": "get_chat_turn",
         "session_id": "agent-studio-session-1",
         "turn_id": "opus-turn-4-abc123",
-        "purpose": "Reload durable current-session turn text and tool-call summaries after provider context editing.",
+        "purpose": (
+            "Reload durable transcript rows already persisted for this turn after "
+            "provider context editing; same-turn tool-call summaries become "
+            "durable only after the assistant turn completes."
+        ),
     }
     assert compact["recall"]["trace_payloads"]["payload_ids"] == [
         "observation:abc:output"
@@ -553,6 +557,7 @@ def test_compact_tool_result_recall_hints_fetch_exact_turn_and_trace_payload(
                 "user_auth_sub": "auth-sub-1",
                 "chat_kind": AGENT_STUDIO_CHAT_KIND,
                 "turn_id": "opus-turn-early-abc123",
+                "excluded_message_types": {"context_compaction"},
             }
             return [
                 _agent_studio_message(
