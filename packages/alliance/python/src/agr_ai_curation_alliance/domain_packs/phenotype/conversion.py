@@ -989,7 +989,10 @@ def materialize_phenotype_builder_state(
         annotation_evidence_ids: list[str] = []
         for evidence_index, evidence_record in enumerate(resolved_evidence, start=1):
             evidence_id = _clean_text(evidence_record.get("evidence_record_id"))
-            assert evidence_id is not None
+            if evidence_id is None:
+                raise ValueError(
+                    "Resolved phenotype evidence records must include evidence_record_id."
+                )
             evidence_ref_id = f"evidence-quote-{annotation_index + 1}-{evidence_index}"
             quote_payload = _evidence_quote_payload(evidence_record)
             annotation_evidence_ids.append(evidence_id)
