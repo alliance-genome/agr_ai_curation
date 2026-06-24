@@ -37,6 +37,16 @@ export interface UseChatStreamReturn {
   events: SSEEvent[]
 
   /**
+   * Version for the current retained event stream. Increments when the stream is replaced.
+   */
+  eventStreamVersion: number
+
+  /**
+   * Number of events the chat renderer has already consumed for this stream version.
+   */
+  processedEventCount: number
+
+  /**
    * Whether a stream request is currently in progress
    */
   isLoading: boolean
@@ -72,6 +82,11 @@ export interface UseChatStreamReturn {
   clearEvents: () => void
 
   /**
+   * Record how many retained events the chat renderer has consumed.
+   */
+  markEventsProcessed: (eventStreamVersion: number, count: number) => void
+
+  /**
    * Abort the current stream (if any)
    */
   stopStream: (sessionId: string) => Promise<void>
@@ -79,6 +94,8 @@ export interface UseChatStreamReturn {
 
 interface SharedChatStreamState {
   events: SSEEvent[]
+  eventStreamVersion: number
+  processedEventCount: number
   isLoading: boolean
   error: Error | null
 }
@@ -86,6 +103,8 @@ interface SharedChatStreamState {
 const sharedListeners = new Set<() => void>()
 let sharedState: SharedChatStreamState = {
   events: [],
+  eventStreamVersion: 0,
+  processedEventCount: 0,
   isLoading: false,
   error: null,
 }
@@ -98,6 +117,14 @@ function emitSharedState(nextState: Partial<SharedChatStreamState>) {
 
 function updateSharedEvents(updater: (events: SSEEvent[]) => SSEEvent[]) {
   emitSharedState({ events: updater(sharedState.events) })
+}
+
+function replaceSharedEvents(events: SSEEvent[]) {
+  emitSharedState({
+    events,
+    eventStreamVersion: sharedState.eventStreamVersion + 1,
+    processedEventCount: 0,
+  })
 }
 
 function buildClientTurnId(): string {
@@ -121,7 +148,21 @@ export function useChatStream(): UseChatStreamReturn {
   }, [])
 
   const clearEvents = useCallback(() => {
-    emitSharedState({ events: [], error: null })
+    replaceSharedEvents([])
+    emitSharedState({ error: null })
+  }, [])
+
+  const markEventsProcessed = useCallback((eventStreamVersion: number, count: number) => {
+    if (eventStreamVersion !== sharedState.eventStreamVersion) {
+      return
+    }
+
+    const nextCount = Math.min(Math.max(0, count), sharedState.events.length)
+    if (nextCount <= sharedState.processedEventCount) {
+      return
+    }
+
+    emitSharedState({ processedEventCount: nextCount })
   }, [])
 
   const stopStream = useCallback(async (sessionId: string) => {
@@ -179,21 +220,19 @@ export function useChatStream(): UseChatStreamReturn {
 
     // Start each run with a fresh stream so consumers do not have to reconcile
     // stale events from prior turns before processing the new audit trail.
-    emitSharedState({
-      events: [
-        {
-          type: 'AGENT_GENERATING',
-          session_id: sessionId,
-          turn_id: options?.turnId,
-          timestamp: new Date().toISOString(),
-          details: {
-            agentRole: 'System',
-            agentDisplayName: 'System',
-            message: 'Initializing AI agents'
-          }
+    replaceSharedEvents([
+      {
+        type: 'AGENT_GENERATING',
+        session_id: sessionId,
+        turn_id: options?.turnId,
+        timestamp: new Date().toISOString(),
+        details: {
+          agentRole: 'System',
+          agentDisplayName: 'System',
+          message: 'Initializing AI agents'
         }
-      ]
-    })
+      }
+    ])
 
     try {
       const response = await fetch('/api/chat/stream', {
@@ -306,21 +345,19 @@ export function useChatStream(): UseChatStreamReturn {
 
     // Start each flow execution with a fresh stream for the same reason as
     // normal chat sends: right-panel consumers should only process this run.
-    emitSharedState({
-      events: [
-        {
-          type: 'AGENT_GENERATING',
-          session_id: sessionId,
-          turn_id: turnId,
-          timestamp: new Date().toISOString(),
-          details: {
-            agentRole: 'System',
-            agentDisplayName: 'Flow Executor',
-            message: 'Starting curation flow'
-          }
+    replaceSharedEvents([
+      {
+        type: 'AGENT_GENERATING',
+        session_id: sessionId,
+        turn_id: turnId,
+        timestamp: new Date().toISOString(),
+        details: {
+          agentRole: 'System',
+          agentDisplayName: 'Flow Executor',
+          message: 'Starting curation flow'
         }
-      ]
-    })
+      }
+    ])
 
     try {
       const response = await fetch('/api/chat/execute-flow', {
@@ -395,11 +432,14 @@ export function useChatStream(): UseChatStreamReturn {
 
   return {
     events: snapshot.events,
+    eventStreamVersion: snapshot.eventStreamVersion,
+    processedEventCount: snapshot.processedEventCount,
     isLoading: snapshot.isLoading,
     sendMessage,
     executeFlow,
     error: snapshot.error,
     clearEvents,
+    markEventsProcessed,
     stopStream
   }
 }

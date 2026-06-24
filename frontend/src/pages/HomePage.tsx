@@ -181,7 +181,16 @@ function HomePage() {
   }, [])
 
   // Single shared SSE stream for both Chat and AuditPanel
-  const { events, isLoading, sendMessage, stopStream, executeFlow } = useChatStream()
+  const {
+    events,
+    eventStreamVersion,
+    processedEventCount,
+    isLoading,
+    sendMessage,
+    markEventsProcessed,
+    stopStream,
+    executeFlow,
+  } = useChatStream()
 
   const clearDocumentLoadingTimeout = useCallback(() => {
     if (documentLoadingTimeoutIdRef.current === null) {
@@ -805,8 +814,11 @@ function HomePage() {
               sessionId={sessionId}
               onSessionChange={handleSessionChange}
               events={events}
+              eventStreamVersion={eventStreamVersion}
+              processedEventCount={processedEventCount}
               isLoading={isLoading}
               sendMessage={sendMessage}
+              markEventsProcessed={markEventsProcessed}
             />
           </Box>
         </Panel>

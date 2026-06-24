@@ -90,8 +90,11 @@ export function useChatController({
   sessionId: propSessionId,
   onSessionChange,
   events,
+  eventStreamVersion,
+  processedEventCount,
   isLoading,
-  sendMessage
+  sendMessage,
+  markEventsProcessed,
 }: ChatProps) {
   const navigate = useNavigate()
   const { user } = useAuth()
@@ -136,7 +139,6 @@ export function useChatController({
   const assistantBuffersRef = useRef<Record<string, string>>({})
   const activeTurnIdRef = useRef<string | null>(null)
   const rescuedTurnIdsRef = useRef<Set<string>>(new Set())
-  const processedEventIdsRef = useRef<Set<number>>(new Set())
   const latestMessagesRef = useRef<Message[]>(messages)
   const latestSessionIdRef = useRef<string | null>(propSessionId)
   const sessionStateVersionRef = useRef(0)
@@ -512,12 +514,16 @@ export function useChatController({
 
   // Process SSE events from useChatStream hook
   useEffect(() => {
-    // Process only new events (track by array index)
-    const newEvents = events.slice(processedEventIdsRef.current.size)
+    // Process only events this shared stream has not already rendered. The cursor
+    // lives with useChatStream so route remounts do not replay old deltas.
+    const startIndex = Math.min(processedEventCount, events.length)
+    const newEvents = events.slice(startIndex)
+    let sawEventForAnotherSession = false
 
     newEvents.forEach((parsed: ChatStreamEvent) => {
       const eventSessionId = getStreamEventSessionId(parsed)
       if (eventSessionId && propSessionId && eventSessionId !== propSessionId) {
+        sawEventForAnotherSession = true
         debug.log('[SSE] Ignoring event for stale session:', {
           eventType: parsed.type,
           eventSessionId,
@@ -941,14 +947,18 @@ export function useChatController({
       }
     })
 
-    // Mark all new events as processed
-    processedEventIdsRef.current = new Set(Array.from({ length: events.length }, (_, i) => i))
+    if (!sawEventForAnotherSession) {
+      markEventsProcessed(eventStreamVersion, events.length)
+    }
   }, [
     events,
     activeDocument,
     clearProgressState,
+    eventStreamVersion,
     getAssistantTurnContent,
     handleAssistantRescue,
+    markEventsProcessed,
+    processedEventCount,
     propSessionId,
     updateProgressMessage,
   ])

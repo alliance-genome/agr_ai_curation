@@ -199,8 +199,11 @@ function renderChat(
   const mergedProps: ComponentProps<typeof Chat> = {
     sessionId: 'session-1',
     events: [],
+    eventStreamVersion: 0,
+    processedEventCount: 0,
     isLoading: false,
     sendMessage,
+    markEventsProcessed: vi.fn(),
     onSessionChange: vi.fn(),
     ...props,
   }
@@ -270,6 +273,53 @@ describe('Chat persistence', () => {
     renderChat({ sessionId: 'session-1' })
 
     expect(screen.getByText('Persist me across navigation')).toBeInTheDocument()
+  })
+
+  it('does not replay retained stream deltas over restored assistant content after remount', async () => {
+    const markEventsProcessed = vi.fn()
+    localStorage.setItem(chatStorageKeys.sessionId, 'session-1')
+    localStorage.setItem(
+      chatStorageKeys.messages,
+      JSON.stringify({
+        session_id: 'session-1',
+        messages: [
+          {
+            id: 'assistant-turn-1',
+            role: 'assistant',
+            content: 'foo',
+            timestamp: new Date().toISOString(),
+            turnId: 'turn-1',
+          },
+        ],
+      }),
+    )
+
+    renderChat({
+      sessionId: 'session-1',
+      eventStreamVersion: 4,
+      processedEventCount: 1,
+      markEventsProcessed,
+      events: [
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          session_id: 'session-1',
+          turn_id: 'turn-1',
+          content: 'foo',
+          timestamp: new Date().toISOString(),
+        },
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          session_id: 'session-1',
+          turn_id: 'turn-1',
+          content: 'bar',
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    })
+
+    expect(await screen.findByText('foobar')).toBeInTheDocument()
+    expect(screen.queryByText('foofoo')).not.toBeInTheDocument()
+    expect(markEventsProcessed).toHaveBeenCalledWith(4, 2)
   })
 
   it('does not delete stored messages when session id mismatches', () => {
@@ -345,8 +395,11 @@ describe('Chat persistence', () => {
         <Chat
           sessionId="session-1"
           events={[]}
+          eventStreamVersion={0}
+          processedEventCount={0}
           isLoading={false}
           sendMessage={sendMessage}
+          markEventsProcessed={vi.fn()}
           onSessionChange={onSessionChange}
         />
       </MemoryRouter>,
@@ -360,8 +413,11 @@ describe('Chat persistence', () => {
         <Chat
           sessionId="session-2"
           events={[]}
+          eventStreamVersion={0}
+          processedEventCount={0}
           isLoading={false}
           sendMessage={sendMessage}
+          markEventsProcessed={vi.fn()}
           onSessionChange={onSessionChange}
         />
       </MemoryRouter>,

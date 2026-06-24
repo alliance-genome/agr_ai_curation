@@ -35,6 +35,15 @@ describe('useChatStream shared lifecycle', () => {
       expect(first.result.current.isLoading).toBe(true)
     })
 
+    act(() => {
+      first.result.current.markEventsProcessed(
+        first.result.current.eventStreamVersion,
+        first.result.current.events.length,
+      )
+    })
+
+    expect(first.result.current.processedEventCount).toBe(1)
+
     first.unmount()
 
     act(() => {
@@ -47,6 +56,7 @@ describe('useChatStream shared lifecycle', () => {
 
     await waitFor(() => {
       expect(second.result.current.isLoading).toBe(true)
+      expect(second.result.current.processedEventCount).toBe(1)
       expect(second.result.current.events).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -68,7 +78,12 @@ describe('useChatStream shared lifecycle', () => {
     })
 
     expect(global.fetch).toHaveBeenCalledTimes(1)
-    second.result.current.clearEvents()
+    act(() => {
+      second.result.current.clearEvents()
+    })
+    await waitFor(() => {
+      expect(second.result.current.processedEventCount).toBe(0)
+    })
     second.unmount()
   })
 
