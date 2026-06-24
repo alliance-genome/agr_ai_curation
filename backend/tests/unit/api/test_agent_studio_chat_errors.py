@@ -13,6 +13,15 @@ from fastapi.responses import StreamingResponse
 from src.api import agent_studio as api_module
 
 
+@pytest.fixture(autouse=True)
+def _reset_executable_runs():
+    api_module.executable_run_manager._runs.clear()
+    api_module.executable_run_manager._active_session_run_ids.clear()
+    yield
+    api_module.executable_run_manager._runs.clear()
+    api_module.executable_run_manager._active_session_run_ids.clear()
+
+
 async def _consume_stream(response: StreamingResponse) -> list[dict]:
     chunks = []
     async for chunk in response.body_iterator:
@@ -22,6 +31,7 @@ async def _consume_stream(response: StreamingResponse) -> list[dict]:
     for line in "".join(chunks).splitlines():
         if line.startswith("data: "):
             payloads.append(json.loads(line[6:]))
+    await asyncio.sleep(0)
     return payloads
 
 
@@ -86,19 +96,15 @@ def _configure_chat_endpoint(monkeypatch, error: Exception):
     def _fake_get_db():
         yield SimpleNamespace(close=lambda: None)
 
-    async def _fake_notify_tool_failure(**kwargs):
+    def _fake_notify_tool_failure(**kwargs):
         alerts.append(kwargs)
+        async def _complete_notification():
+            return None
 
-    def _run_task_immediately(coro):
-        try:
-            coro.send(None)
-        except StopIteration:
-            return SimpleNamespace(done=lambda: True)
-        raise AssertionError("Expected notify_tool_failure stub to complete immediately")
+        return _complete_notification()
 
     monkeypatch.setattr(api_module, "get_db", _fake_get_db)
     monkeypatch.setattr(api_module, "notify_tool_failure", _fake_notify_tool_failure)
-    monkeypatch.setattr(api_module.asyncio, "create_task", _run_task_immediately)
     monkeypatch.setattr(
         api_module.anthropic,
         "AsyncAnthropic",

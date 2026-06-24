@@ -101,15 +101,7 @@ function updateSharedEvents(updater: (events: SSEEvent[]) => SSEEvent[]) {
 }
 
 function buildClientTurnId(): string {
-  const cryptoApi = globalThis.crypto
-  if (cryptoApi && typeof cryptoApi.randomUUID === 'function') {
-    try {
-      return cryptoApi.randomUUID()
-    } catch {
-      // Fall through to timestamp/random ID generation.
-    }
-  }
-  return `turn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  return globalThis.crypto.randomUUID()
 }
 
 /**

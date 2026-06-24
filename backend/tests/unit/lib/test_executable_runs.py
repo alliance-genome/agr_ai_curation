@@ -208,3 +208,60 @@ async def test_producer_startup_failure_publishes_terminal_error_event(monkeypat
         await asyncio.wait_for(observer.__anext__(), timeout=1)
 
     assert run.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_failed_terminal_run_can_be_restarted_with_same_run_id(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.executable_runs.get_executable_run_event_replay_limit",
+        lambda: 10,
+    )
+    monkeypatch.setattr(
+        "src.lib.executable_runs.get_executable_run_retention_seconds",
+        lambda: 60,
+    )
+
+    manager = ExecutableRunManager()
+    attempts = 0
+
+    async def stream_factory():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("first attempt failed")
+        yield 'data: {"type":"DONE"}\n\n'
+
+    run, created = await manager.get_or_start_stream(
+        run_id="curation_flow_run:session-1:turn-1",
+        kind="curation_flow_run",
+        owner_user_id="user-1",
+        session_id="session-1",
+        turn_id="turn-1",
+        stream_factory=stream_factory,
+    )
+
+    assert created is True
+    if run.task is not None:
+        await asyncio.wait_for(run.task, timeout=1)
+    assert run.status == "failed"
+
+    retry_run, retry_created = await manager.get_or_start_stream(
+        run_id="curation_flow_run:session-1:turn-1",
+        kind="curation_flow_run",
+        owner_user_id="user-1",
+        session_id="session-1",
+        turn_id="turn-1",
+        stream_factory=stream_factory,
+    )
+
+    assert retry_created is True
+    assert retry_run is not run
+    observer = manager.observe(retry_run)
+    done_event = await asyncio.wait_for(observer.__anext__(), timeout=1)
+    assert "DONE" in done_event
+
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(observer.__anext__(), timeout=1)
+
+    assert retry_run.status == "completed"
+    assert attempts == 2

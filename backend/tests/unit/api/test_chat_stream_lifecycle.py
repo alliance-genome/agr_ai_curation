@@ -88,7 +88,7 @@ def test_active_stream_lifecycle_cleanup_is_idempotent_and_finalize_backfills_la
 
     asyncio.run(lifecycle.cleanup())
     title_state["value"] = "final title"
-    asyncio.run(lifecycle.background_task(lambda: title_state["value"])())
+    asyncio.run(lifecycle.finalize(title_state["value"]))
 
     assert calls["register"] == [("session-shared-cleanup", "auth-sub", ANY)]
     assert calls["unregister"] == [("session-shared-cleanup", "auth-sub", ANY)]

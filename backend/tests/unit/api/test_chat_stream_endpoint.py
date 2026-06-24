@@ -73,6 +73,8 @@ def _assistant_record(*, session_id: str, turn_id: str, content: str, trace_id: 
 def _stub_stream_turn_persistence(monkeypatch):
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
+    chat.executable_run_manager._runs.clear()
+    chat.executable_run_manager._active_session_run_ids.clear()
 
     _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: object())
     _patch_chat_impl(
@@ -133,9 +135,11 @@ def _stub_stream_turn_persistence(monkeypatch):
     yield
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
+    chat.executable_run_manager._runs.clear()
+    chat.executable_run_manager._active_session_run_ids.clear()
 
 
-def test_chat_stream_endpoint_has_idempotent_cleanup_background_task(monkeypatch):
+def test_chat_stream_endpoint_cleans_up_after_stream_is_consumed(monkeypatch):
     calls = {"register": [], "unregister": [], "clear": []}
 
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
@@ -183,13 +187,9 @@ def test_chat_stream_endpoint_has_idempotent_cleanup_background_task(monkeypatch
     )
 
     assert isinstance(response, StreamingResponse)
-    assert response.background is not None
 
     events = asyncio.run(_consume_stream(response))
     assert [event["type"] for event in events] == ["RUN_STARTED", "turn_completed"]
-
-    # Explicitly invoke response background task to verify cleanup remains idempotent.
-    asyncio.run(response.background())
 
     assert calls["register"] == [("session-chat-stream", "auth-sub", ANY)]
     assert calls["unregister"] == [("session-chat-stream", "auth-sub", ANY)]
@@ -316,7 +316,6 @@ def test_chat_stream_endpoint_background_backfill_uses_final_assistant_aware_tit
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == ["RUN_STARTED", "turn_completed"]
     assert captured_backfill_calls == [
@@ -602,7 +601,6 @@ def test_chat_stream_endpoint_persists_extraction_envelopes_after_success(monkey
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == ["RUN_STARTED", "TOOL_COMPLETE", "turn_completed"]
     assert len(persisted_requests) == 1
@@ -719,7 +717,6 @@ def test_chat_stream_endpoint_persists_internal_extraction_result_without_stream
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == ["RUN_STARTED", "TOOL_COMPLETE", "turn_completed"]
     assert len(persisted_requests) == 1
@@ -812,7 +809,6 @@ def test_chat_stream_endpoint_does_not_repersist_inline_extraction_result(monkey
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == ["RUN_STARTED", "TOOL_COMPLETE", "turn_completed"]
     assert captured_finalize["extraction_candidates"] == []
@@ -921,7 +917,6 @@ def test_chat_stream_endpoint_emits_evidence_summary_after_record_evidence(monke
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == [
         "RUN_STARTED",
@@ -1015,7 +1010,6 @@ def test_chat_stream_endpoint_uses_runner_emitted_evidence_summary(monkeypatch):
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == [
         "RUN_STARTED",
@@ -1112,7 +1106,6 @@ def test_chat_stream_endpoint_flattens_details_evidence_summary(monkeypatch):
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == [
         "RUN_STARTED",
@@ -1241,7 +1234,6 @@ def test_chat_stream_endpoint_infers_scope_for_scope_free_extraction_envelopes(m
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == ["RUN_STARTED", "TOOL_COMPLETE", "turn_completed"]
     assert len(persisted_requests) == 1
@@ -1367,7 +1359,6 @@ def test_chat_stream_endpoint_emits_turn_failed_when_completion_side_effect_pers
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     event_types = [event["type"] for event in events]
     assert event_types == ["RUN_STARTED", "TOOL_COMPLETE", "SUPERVISOR_ERROR", "turn_failed"]
@@ -1432,7 +1423,6 @@ def test_chat_stream_endpoint_emits_turn_save_failed_when_assistant_persistence_
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     event_types = [event["type"] for event in events]
     assert event_types == ["RUN_STARTED", "SUPERVISOR_ERROR", "turn_save_failed"]
@@ -1490,7 +1480,6 @@ def test_chat_stream_endpoint_sanitizes_runner_run_error_event(monkeypatch, capl
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == ["turn_failed"]
     assert (
@@ -1558,7 +1547,6 @@ def test_chat_stream_endpoint_emits_turn_interrupted_on_cancel_signal(monkeypatc
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == ["RUN_STARTED", "turn_interrupted"]
     assert events[-1]["turn_id"] == "generated-turn"
@@ -1627,7 +1615,6 @@ def test_chat_stream_endpoint_replays_existing_assistant_turn_without_runner(mon
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == ["TEXT_MESSAGE_CONTENT", "turn_completed"]
     assert events[0]["content"] == "stored response"
@@ -1687,7 +1674,6 @@ def test_chat_stream_endpoint_emits_session_gone_when_session_disappears_before_
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == ["RUN_STARTED", "session_gone"]
     assert events[-1]["trace_id"] == "trace-gone"

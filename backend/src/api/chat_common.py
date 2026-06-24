@@ -18,14 +18,13 @@ import asyncio
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Literal, Mapping, NoReturn, Optional, Sequence
+from typing import Any, Dict, List, Literal, Mapping, NoReturn, Optional, Sequence
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from starlette.background import BackgroundTask
 from sqlalchemy.exc import SQLAlchemyError
 
 from .auth import get_auth_dependency
@@ -528,20 +527,6 @@ class _ActiveStreamLifecycle:
             self.user_id,
             generated_title_candidate,
         )
-
-    def background_task(
-        self,
-        generated_title_getter: Callable[[], str | None],
-    ) -> BackgroundTask:
-        """Return the shared background finalize task for SSE responses."""
-
-        return BackgroundTask(self._finalize_with_title_getter, generated_title_getter)
-
-    async def _finalize_with_title_getter(
-        self,
-        generated_title_getter: Callable[[], str | None],
-    ) -> None:
-        await self.finalize(generated_title_getter())
 
 
 async def _claim_active_stream_lifecycle(

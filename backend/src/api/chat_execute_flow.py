@@ -744,6 +744,10 @@ async def execute_flow_endpoint(
     )
 
     generated_title_candidate: str | None = None
+    stream_lifecycle = await _claim_active_stream_lifecycle(
+        session_id=request.session_id,
+        user_id=user_id,
+    )
 
     try:
         active_document_id, _ = _resolve_session_create_active_document(
@@ -764,8 +768,10 @@ async def execute_flow_endpoint(
             user_message=prepared_turn.effective_user_message,
         )
     except HTTPException:
+        await stream_lifecycle.cleanup()
         raise
     except ValueError as exc:
+        await stream_lifecycle.cleanup()
         _rollback_and_raise(
             db,
             status_code=400,
@@ -776,6 +782,7 @@ async def execute_flow_endpoint(
         )
         raise AssertionError("unreachable")
     except Exception as exc:
+        await stream_lifecycle.cleanup()
         logger.error(
             "Failed to persist execute-flow request for session %s",
             request.session_id,
@@ -791,6 +798,7 @@ async def execute_flow_endpoint(
                 user_message=prepared_turn.effective_user_message,
                 assistant_message=prepared_turn.replay_assistant_message,
             )
+        await stream_lifecycle.finalize(generated_title_candidate)
 
         async def replay_stream():
             for event_payload in prepared_turn.replay_events:
@@ -811,10 +819,6 @@ async def execute_flow_endpoint(
         nonlocal generated_title_candidate
         current_session_id = request.session_id
         current_turn_id = prepared_turn.turn_id
-        stream_lifecycle = await _claim_active_stream_lifecycle(
-            session_id=current_session_id,
-            user_id=user_id,
-        )
         cancel_event = stream_lifecycle.cancel_event
         trace_id = None
         flow_status: Optional[str] = None
@@ -1165,9 +1169,14 @@ async def execute_flow_endpoint(
             terminal_error_event_factory=terminal_error_event,
         )
     except ExecutableRunAccessError as exc:
+        await stream_lifecycle.cleanup()
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ExecutableRunConflictError as exc:
+        await stream_lifecycle.cleanup()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception:
+        await stream_lifecycle.cleanup()
+        raise
 
     return StreamingResponse(
         executable_run_manager.observe(executable_run),

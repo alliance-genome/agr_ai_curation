@@ -27,9 +27,13 @@ CONFIG_PATH = Path(__file__).resolve().parents[4] / "config"
 def _reset_stream_state():
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
+    chat.executable_run_manager._runs.clear()
+    chat.executable_run_manager._active_session_run_ids.clear()
     yield
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
+    chat.executable_run_manager._runs.clear()
+    chat.executable_run_manager._active_session_run_ids.clear()
 
 
 def test_append_deduped_file_output_replaces_existing_file_id():
@@ -465,9 +469,7 @@ def test_execute_flow_endpoint_streams_flattened_events(monkeypatch):
     )
 
     assert isinstance(response, StreamingResponse)
-    assert response.background is not None
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert db.commit_calls == 1
     assert flow.execution_count == 1
@@ -537,7 +539,6 @@ def test_execute_flow_endpoint_suppresses_duplicate_file_ready_stream_and_transc
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     streamed_file_events = [event for event in events if event["type"] == "FILE_READY"]
     assert len(streamed_file_events) == 1
@@ -606,7 +607,6 @@ def test_execute_flow_endpoint_maps_real_mgi_cognito_groups_to_active_groups(mon
         )
 
         events = asyncio.run(_consume_stream(response))
-        asyncio.run(response.background())
 
         assert events[0]["type"] == "RUN_STARTED"
         assert captured_execute_kwargs["active_groups"] == ["MGI"]
@@ -687,7 +687,6 @@ def test_execute_flow_endpoint_background_backfill_uses_final_assistant_aware_ti
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == [
         "RUN_STARTED",
@@ -1022,7 +1021,6 @@ def test_execute_flow_endpoint_replays_completed_turn_without_rerunning(monkeypa
     )
 
     first_events = asyncio.run(_consume_stream(first_response))
-    asyncio.run(first_response.background())
 
     second_response = asyncio.run(
         chat.execute_flow_endpoint(
@@ -1033,7 +1031,6 @@ def test_execute_flow_endpoint_replays_completed_turn_without_rerunning(monkeypa
     )
 
     second_events = asyncio.run(_consume_stream(second_response))
-    asyncio.run(second_response.background())
 
     assert execute_calls == ["session-flow-replay"]
     assert flow.execution_count == 1
@@ -1132,7 +1129,6 @@ def test_execute_flow_endpoint_retries_incomplete_turn_without_reincrementing_co
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert len(execute_calls) == 1
     assert execute_calls[0]["session_id"] == "session-flow-retry"
@@ -1209,7 +1205,6 @@ def test_execute_flow_endpoint_retry_reuses_persisted_trace_context(monkeypatch)
         )
     )
     first_events = asyncio.run(_consume_stream(first_response))
-    asyncio.run(first_response.background())
 
     second_response = asyncio.run(
         chat.execute_flow_endpoint(
@@ -1219,7 +1214,6 @@ def test_execute_flow_endpoint_retry_reuses_persisted_trace_context(monkeypatch)
         )
     )
     second_events = asyncio.run(_consume_stream(second_response))
-    asyncio.run(second_response.background())
 
     assert [event["type"] for event in first_events] == ["RUN_STARTED", "SUPERVISOR_ERROR", "RUN_ERROR"]
     assert [event["type"] for event in second_events] == ["RUN_STARTED", "CHAT_OUTPUT_READY", "FLOW_FINISHED"]
@@ -1384,7 +1378,6 @@ def test_execute_flow_endpoint_surfaces_trace_checkpoint_persistence_failure(mon
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == ["SUPERVISOR_ERROR", "RUN_ERROR"]
     assert events[0]["details"]["context"] == "RuntimeError"
@@ -1443,7 +1436,6 @@ def test_execute_flow_endpoint_surfaces_completion_persistence_failure(monkeypat
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == [
         "RUN_STARTED",
@@ -1679,7 +1671,6 @@ def test_execute_flow_endpoint_sanitizes_runner_run_error_event(monkeypatch, cap
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == ["RUN_ERROR"]
     assert events[0]["message"] == "Flow execution failed unexpectedly."
