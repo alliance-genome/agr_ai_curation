@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from collections import Counter
+import asyncio
 import json
 import re
+from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, cast, get_args
 
@@ -948,6 +949,8 @@ def build_output_formatter_tools(
         raise ValueError(f"output_format must be one of: {supported}.")
     resolved_output_format = cast(FlowOutputFormat, normalized_format)
     saver = save_projected_output
+    finalization_lock = asyncio.Lock()
+    finalized_file_info: dict[str, Any] | None = None
 
     @function_tool(
         name_override="explain_formatter_capabilities",
@@ -1207,61 +1210,104 @@ def build_output_formatter_tools(
         strict_mode=False,
     )
     async def _finalize_and_save(plan_json: str = "", filename_hint: str = "") -> str:
-        try:
-            if str(plan_json or "").strip():
-                plan = _projection_plan_from_tool_payload(
-                    plan_json,
-                    output_format=resolved_output_format,
-                )
-            else:
-                plan = default_projection_plan(bundle, output_format=resolved_output_format)
-            errors, warnings, columns = validate_projection_plan(bundle, plan)
-            if not errors:
-                errors.extend(_formatter_plan_constraint_errors(plan, columns))
-            if errors:
+        nonlocal finalized_file_info
+        async with finalization_lock:
+            if finalized_file_info is not None:
+                # The duplicate request is invalid; the original finalized file is echoed for model recovery.
                 return _tool_json(
                     {
                         "status": "invalid",
-                        "errors": errors,
-                        "warnings": warnings,
-                    }
-                )
-            if not bundle.rows_for_source(plan.row_source) and projection_plan_allows_empty_bundle(plan):
-                return _tool_json(
-                    {
-                        "status": "invalid",
+                        "code": "already_finalized",
+                        "format": resolved_output_format,
+                        "formatter_agent_id": formatter_agent_id,
+                        "saved_file": True,
                         "errors": [
-                            "Formatter tools cannot save literal-only files without saved source rows."
+                            (
+                                "This formatter run has already finalized and saved one file. "
+                                "Start a new formatter run after any curator-requested changes "
+                                "to create another file."
+                            )
                         ],
+                        "finalized_file": finalized_file_info,
                     }
                 )
-            projection = finalize_output_projection(bundle, plan)
-            if projection.total_count < 1:
-                return _tool_json(
-                    {
-                        "status": "invalid",
-                        "errors": [
-                            "Projection matched no saved rows; call formatter_cannot_complete "
-                            "or inspect the saved bundle before trying again."
-                        ],
-                        "projection_summary": _projection_summary(projection),
+
+            try:
+                if str(plan_json or "").strip():
+                    plan = _projection_plan_from_tool_payload(
+                        plan_json,
+                        output_format=resolved_output_format,
+                    )
+                else:
+                    plan = default_projection_plan(
+                        bundle,
+                        output_format=resolved_output_format,
+                    )
+                errors, warnings, columns = validate_projection_plan(bundle, plan)
+                if not errors:
+                    errors.extend(_formatter_plan_constraint_errors(plan, columns))
+                if errors:
+                    return _tool_json(
+                        {
+                            "status": "invalid",
+                            "errors": errors,
+                            "warnings": warnings,
+                        }
+                    )
+                if (
+                    not bundle.rows_for_source(plan.row_source)
+                    and projection_plan_allows_empty_bundle(plan)
+                ):
+                    return _tool_json(
+                        {
+                            "status": "invalid",
+                            "errors": [
+                                "Formatter tools cannot save literal-only files without saved source rows."
+                            ],
+                        }
+                    )
+                projection = finalize_output_projection(bundle, plan)
+                if projection.total_count < 1:
+                    return _tool_json(
+                        {
+                            "status": "invalid",
+                            "errors": [
+                                "Projection matched no saved rows; call formatter_cannot_complete "
+                                "or inspect the saved bundle before trying again."
+                            ],
+                            "projection_summary": _projection_summary(projection),
+                        }
+                    )
+                descriptor = (
+                    str(filename_hint or "").strip()
+                    or f"{bundle.flow_name}_{resolved_output_format}_export"
+                )
+                file_info = dict(
+                    await saver(
+                        resolved_output_format,
+                        projection,
+                        descriptor,
+                        formatter_agent_id,
+                    )
+                )
+                file_info.setdefault("format", resolved_output_format)
+                file_info["status"] = "ok"
+                file_info["projection_summary"] = _projection_summary(projection)
+                finalized_file_info = {
+                    key: _jsonable(value)
+                    for key, value in file_info.items()
+                    if key
+                    in {
+                        "file_id",
+                        "filename",
+                        "format",
+                        "download_url",
+                        "projection_summary",
                     }
-                )
-            descriptor = str(filename_hint or "").strip() or f"{bundle.flow_name}_{resolved_output_format}_export"
-            file_info = dict(
-                await saver(
-                    resolved_output_format,
-                    projection,
-                    descriptor,
-                    formatter_agent_id,
-                )
-            )
-            file_info.setdefault("format", resolved_output_format)
-            file_info["status"] = "ok"
-            file_info["projection_summary"] = _projection_summary(projection)
-            return _tool_json(file_info)
-        except Exception as exc:
-            return _tool_json({"status": "invalid", "errors": [str(exc)]})
+                }
+                return _tool_json(file_info)
+            except Exception as exc:
+                return _tool_json({"status": "invalid", "errors": [str(exc)]})
 
     @function_tool(
         name_override="formatter_cannot_complete",
