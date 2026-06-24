@@ -1720,7 +1720,7 @@ def test_multi_annotation_fixture_projects_one_review_row_per_expression_stateme
     assert {row.display_label for row in rows} == {"Tmem67"}
     assert [row.secondary_label for row in rows] == ["metanephros", "neural tube"]
     assert [row.validation_state for row in rows] == ["clear", "warning"]
-    assert rows[0].metadata["payload_path"] == "objects[0].payload"
+    assert rows[0].metadata["payload_path"] == "extracted_objects[0].payload"
     assert rows[0].metadata["evidence_record_ids"] == [
         "evidence-tmem67-metanephros-1"
     ]

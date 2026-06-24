@@ -209,7 +209,9 @@ class DomainPackMetadataReviewRowMaterializer:
                 "semantic_source": "domain_envelope.extracted_objects",
                 "materializer": type(self).__name__,
                 "object_index": object_index,
-                "payload_path": f"objects[{object_index}].payload",
+                # The legacy objects[n] review metadata path was dropped after
+                # the downstream contract renamed the list to extracted_objects.
+                "payload_path": f"extracted_objects[{object_index}].payload",
                 "evidence_record_ids": list(
                     domain_object.evidence_record_ids
                 ),

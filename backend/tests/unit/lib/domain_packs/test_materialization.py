@@ -373,7 +373,7 @@ def test_metadata_materializer_regenerates_review_rows_from_envelope_objects():
         }
     ]
     assert row.metadata["semantic_source"] == "domain_envelope.extracted_objects"
-    assert row.metadata["payload_path"] == "objects[0].payload"
+    assert row.metadata["payload_path"] == "extracted_objects[0].payload"
     assert row.metadata["evidence_record_ids"] == []
     assert row.metadata["metadata_refs"] == []
     assert row.metadata["unavailable_validator_capabilities"] == (
@@ -401,7 +401,7 @@ def test_metadata_materializer_projects_provider_agnostic_fixture_pack_objects()
     assert {row.domain_pack_id for row in rows} == {"museum.catalog"}
     assert {row.schema_provider for row in rows} == {"json-schema"}
     assert rows[0].schema_ref["schema_id"] == "artifact.schema.json"
-    assert rows[0].metadata["payload_path"] == "objects[0].payload"
+    assert rows[0].metadata["payload_path"] == "extracted_objects[0].payload"
     assert [field.field_path for field in rows[0].summary_fields] == [
         "artifact.accession_id",
         "artifact.title",
