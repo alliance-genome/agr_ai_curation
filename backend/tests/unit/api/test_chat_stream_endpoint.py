@@ -13,6 +13,7 @@ import pytest
 
 from src.api import chat, chat_common, chat_stream
 from src.lib.curation_workspace import extraction_results as extraction_results_module
+from src.lib.executable_runs import ExecutableRun
 from src.lib.openai_agents.evidence_summary import build_evidence_record_id
 from tests.chat_api_test_support import patch_chat_impl_for
 
@@ -30,6 +31,24 @@ async def _consume_stream(response: StreamingResponse) -> list[dict]:
     for line in "".join(chunks).splitlines():
         if line.startswith("data: "):
             payloads.append(json.loads(line[6:]))
+    return payloads
+
+
+async def _consume_stream_prefix(response: StreamingResponse, count: int) -> list[dict]:
+    chunks = []
+    payloads: list[dict] = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk)
+        payloads = [
+            json.loads(line[6:])
+            for line in "".join(chunks).splitlines()
+            if line.startswith("data: ")
+        ]
+        if len(payloads) >= count:
+            aclose = getattr(response.body_iterator, "aclose", None)
+            if aclose is not None:
+                await aclose()
+            return payloads[:count]
     return payloads
 
 
@@ -481,6 +500,73 @@ def test_chat_stream_endpoint_rejects_same_user_when_session_already_active(monk
     assert exc.value.status_code == 409
     assert chat._LOCAL_SESSION_OWNERS["session-active-same-user"] == "auth-sub"
     assert chat._LOCAL_CANCEL_EVENTS["session-active-same-user"] is existing_event
+
+
+def test_chat_stream_endpoint_reattaches_to_active_same_turn_without_reclaiming(monkeypatch):
+    session_id = "session-active-reattach"
+    turn_id = "turn-active-reattach"
+    run_id = f"assistant_chat_turn:{session_id}:{turn_id}"
+    existing_event = asyncio.Event()
+    chat._LOCAL_SESSION_OWNERS[session_id] = "auth-sub"
+    chat._LOCAL_CANCEL_EVENTS[session_id] = existing_event
+    chat.executable_run_manager._runs[run_id] = ExecutableRun(
+        run_id=run_id,
+        kind="assistant_chat_turn",
+        owner_user_id="auth-sub",
+        session_id=session_id,
+        turn_id=turn_id,
+        status="running",
+        events=[
+            chat._stream_event_sse(
+                chat._stream_event_payload(
+                    "RUN_STARTED",
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    trace_id="trace-active-reattach",
+                )
+            )
+        ],
+    )
+    chat.executable_run_manager._active_session_run_ids[session_id] = run_id
+
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(
+        monkeypatch,
+        "get_supervisor_tool_agent_map",
+        lambda: (_ for _ in ()).throw(AssertionError("reattach should not resolve runner config")),
+    )
+    _patch_chat_impl(
+        monkeypatch,
+        "_prepare_chat_stream_turn",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("reattach should not prepare a new turn")),
+    )
+
+    response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(
+                message="hello",
+                session_id=session_id,
+                turn_id=turn_id,
+            ),
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream_prefix(response, 1))
+
+    assert events == [
+        {
+            "type": "RUN_STARTED",
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "trace_id": "trace-active-reattach",
+        }
+    ]
+    assert chat._LOCAL_SESSION_OWNERS[session_id] == "auth-sub"
+    assert chat._LOCAL_CANCEL_EVENTS[session_id] is existing_event
 
 
 def test_chat_stream_endpoint_persists_extraction_envelopes_after_success(monkeypatch):

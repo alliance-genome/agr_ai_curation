@@ -743,6 +743,31 @@ async def execute_flow_endpoint(
         extra={"session_id": request.session_id, "user_id": user_id, "turn_id": request.turn_id},
     )
 
+    active_executable_run = await executable_run_manager.get_active_session_run(
+        request.session_id,
+    )
+    if active_executable_run is not None:
+        if active_executable_run.owner_user_id != user_id:
+            raise HTTPException(status_code=403, detail="Session is active for a different user")
+
+        expected_run_id = (
+            f"curation_flow_run:{request.session_id}:{request.turn_id}"
+            if request.turn_id
+            else None
+        )
+        if expected_run_id is not None and active_executable_run.run_id == expected_run_id:
+            return StreamingResponse(
+                executable_run_manager.observe(active_executable_run),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        raise HTTPException(status_code=409, detail="Session is already active")
+
     generated_title_candidate: str | None = None
     stream_lifecycle = await _claim_active_stream_lifecycle(
         session_id=request.session_id,

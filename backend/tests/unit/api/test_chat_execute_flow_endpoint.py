@@ -13,6 +13,7 @@ from uuid import uuid4
 from fastapi.responses import StreamingResponse
 import pytest
 
+from src.lib.executable_runs import ExecutableRun
 from tests.chat_api_test_support import patch_chat_impl_for
 
 chat = importlib.import_module("src.api.chat_execute_flow")
@@ -375,6 +376,24 @@ async def _consume_stream(response: StreamingResponse) -> list[dict]:
     for line in "".join(chunks).splitlines():
         if line.startswith("data: "):
             payloads.append(json.loads(line[6:]))
+    return payloads
+
+
+async def _consume_stream_prefix(response: StreamingResponse, count: int) -> list[dict]:
+    chunks = []
+    payloads: list[dict] = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk)
+        payloads = [
+            json.loads(line[6:])
+            for line in "".join(chunks).splitlines()
+            if line.startswith("data: ")
+        ]
+        if len(payloads) >= count:
+            aclose = getattr(response.body_iterator, "aclose", None)
+            if aclose is not None:
+                await aclose()
+            return payloads[:count]
     return payloads
 
 
@@ -1595,6 +1614,83 @@ def test_execute_flow_endpoint_rejects_same_user_when_session_already_active(mon
     assert exc.value.status_code == 409
     assert chat._LOCAL_SESSION_OWNERS["session-active-same-user"] == "auth-sub"
     assert chat._LOCAL_CANCEL_EVENTS["session-active-same-user"] is existing_event
+
+
+def test_execute_flow_endpoint_reattaches_to_active_same_turn_without_reclaiming(monkeypatch):
+    flow_id = uuid4()
+    session_id = "session-flow-active-reattach"
+    turn_id = "turn-flow-active-reattach"
+    run_id = f"curation_flow_run:{session_id}:{turn_id}"
+    request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id=session_id, turn_id=turn_id)
+    flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Flow Active Reattach",
+        execution_count=0,
+        last_executed_at=None,
+    )
+    db = _DummyDB(flow=flow)
+    existing_event = asyncio.Event()
+    chat._LOCAL_SESSION_OWNERS[session_id] = "auth-sub"
+    chat._LOCAL_CANCEL_EVENTS[session_id] = existing_event
+    chat.executable_run_manager._runs[run_id] = ExecutableRun(
+        run_id=run_id,
+        kind="curation_flow_run",
+        owner_user_id="auth-sub",
+        session_id=session_id,
+        turn_id=turn_id,
+        flow_run_id="flow-run-active-reattach",
+        status="running",
+        events=[
+            chat._stream_event_sse(
+                chat._stream_event_payload(
+                    "RUN_STARTED",
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    trace_id="trace-flow-active-reattach",
+                )
+            )
+        ],
+    )
+    chat.executable_run_manager._active_session_run_ids[session_id] = run_id
+
+    _patch_chat_impl(
+        monkeypatch,
+        "set_global_user_from_cognito",
+        lambda _db, _user: SimpleNamespace(id=7),
+    )
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(
+        monkeypatch,
+        "_prepare_execute_flow_turn",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("reattach should not prepare a new turn")),
+    )
+
+    response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream_prefix(response, 1))
+
+    assert events == [
+        {
+            "type": "RUN_STARTED",
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "trace_id": "trace-flow-active-reattach",
+        }
+    ]
+    assert db.commit_calls == 0
+    assert flow.execution_count == 0
+    assert chat._LOCAL_SESSION_OWNERS[session_id] == "auth-sub"
+    assert chat._LOCAL_CANCEL_EVENTS[session_id] is existing_event
 
 
 def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkeypatch, caplog):

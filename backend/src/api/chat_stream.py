@@ -400,6 +400,29 @@ async def chat_stream_endpoint(
             extra={"session_id": session_id, "user_id": user_id},
         )
 
+    active_executable_run = await executable_run_manager.get_active_session_run(session_id)
+    if active_executable_run is not None:
+        if active_executable_run.owner_user_id != user_id:
+            raise HTTPException(status_code=403, detail="Session is active for a different user")
+
+        expected_run_id = (
+            f"assistant_chat_turn:{session_id}:{chat_message.turn_id}"
+            if chat_message.turn_id
+            else None
+        )
+        if expected_run_id is not None and active_executable_run.run_id == expected_run_id:
+            return StreamingResponse(
+                executable_run_manager.observe(active_executable_run),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        raise HTTPException(status_code=409, detail="Session is already active")
+
     try:
         tool_agent_map = get_supervisor_tool_agent_map()
     except Exception as exc:
