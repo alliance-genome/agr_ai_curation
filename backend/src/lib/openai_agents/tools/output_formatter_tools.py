@@ -1213,6 +1213,7 @@ def build_output_formatter_tools(
         nonlocal finalized_file_info
         async with finalization_lock:
             if finalized_file_info is not None:
+                # The duplicate request is invalid; the original finalized file is echoed for model recovery.
                 return _tool_json(
                     {
                         "status": "invalid",
