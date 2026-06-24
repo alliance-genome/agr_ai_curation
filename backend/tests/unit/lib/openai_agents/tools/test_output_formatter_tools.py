@@ -575,6 +575,84 @@ async def test_default_plan_and_finalize_save_projected_rows_only():
 
 
 @pytest.mark.asyncio
+async def test_finalize_and_save_saves_once_per_formatter_tool_suite():
+    saved = []
+
+    async def _fake_save(output_format, projection, filename_hint, formatter_agent_id):
+        file_id = f"file-{len(saved) + 1}"
+        saved.append(
+            {
+                "output_format": output_format,
+                "projection": projection,
+                "filename_hint": filename_hint,
+                "formatter_agent_id": formatter_agent_id,
+                "file_id": file_id,
+            }
+        )
+        return {
+            "file_id": file_id,
+            "filename": f"{filename_hint}.{output_format}",
+            "format": output_format,
+            "size_bytes": 123,
+            "download_url": f"/download/{file_id}",
+        }
+
+    tools = build_output_formatter_tools(
+        bundle=_bundle(),
+        output_format="csv",
+        formatter_agent_id="csv_formatter",
+        save_projected_output=_fake_save,
+    )
+    finalize = _tool_by_name(tools, "finalize_and_save")
+
+    first = await _invoke(
+        finalize,
+        {
+            "plan_json": "",
+            "filename_hint": "gene-export",
+        },
+    )
+    second = await _invoke(
+        finalize,
+        {
+            "plan_json": "",
+            "filename_hint": "gene-export-recreated",
+        },
+    )
+
+    assert first["status"] == "ok"
+    assert first["file_id"] == "file-1"
+    assert second["status"] == "invalid"
+    assert second["code"] == "already_finalized"
+    assert second["format"] == "csv"
+    assert second["formatter_agent_id"] == "csv_formatter"
+    assert second["saved_file"] is True
+    assert second["finalized_file"]["file_id"] == "file-1"
+    assert "already finalized and saved one file" in second["errors"][0]
+    assert len(saved) == 1
+    assert saved[0]["filename_hint"] == "gene-export"
+
+    later_tools = build_output_formatter_tools(
+        bundle=_bundle(),
+        output_format="csv",
+        formatter_agent_id="csv_formatter",
+        save_projected_output=_fake_save,
+    )
+    later = await _invoke(
+        _tool_by_name(later_tools, "finalize_and_save"),
+        {
+            "plan_json": "",
+            "filename_hint": "gene-export-recreated",
+        },
+    )
+
+    assert later["status"] == "ok"
+    assert later["file_id"] == "file-2"
+    assert len(saved) == 2
+    assert saved[1]["filename_hint"] == "gene-export-recreated"
+
+
+@pytest.mark.asyncio
 async def test_validate_preview_and_finalize_support_full_csv_shaping_surface():
     saved = []
 
