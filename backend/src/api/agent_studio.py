@@ -1709,7 +1709,11 @@ def _provider_tool_result_recall_hints(
             "tool": "get_chat_turn",
             "session_id": session_id,
             "turn_id": turn_id,
-            "purpose": "Reload durable current-session turn text and tool-call summaries after provider context editing.",
+            "purpose": (
+                "Reload durable transcript rows already persisted for this turn after "
+                "provider context editing; same-turn tool-call summaries become "
+                "durable only after the assistant turn completes."
+            ),
         },
         "repeat_or_narrow_tool": {
             "tool": tool_name,

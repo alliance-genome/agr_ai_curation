@@ -18,9 +18,11 @@ from src.lib.chat_history_repository import (
     ChatSessionRecord,
     MAX_MESSAGE_PAGE_SIZE,
 )
+from src.lib.openai_agents.chat_compaction_session import CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE
 from src.models.sql.chat_session import ChatSession as ChatSessionModel
 
 AGENT_STUDIO_SEEDED_SESSION_PREFIX = "agent-studio-seed:"
+AGENT_STUDIO_HIDDEN_MESSAGE_TYPES = frozenset({CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE})
 
 
 @dataclass(frozen=True)
@@ -116,6 +118,7 @@ def get_chat_conversation_payload(
         session_id=session_id,
         user_auth_sub=user_auth_sub,
         message_limit=MAX_MESSAGE_PAGE_SIZE,
+        excluded_message_types=set(AGENT_STUDIO_HIDDEN_MESSAGE_TYPES),
     )
     if detail is None:
         return {
@@ -135,6 +138,7 @@ def get_chat_conversation_payload(
             chat_kind=session_chat_kind,
             limit=MAX_MESSAGE_PAGE_SIZE,
             cursor=cursor,
+            excluded_message_types=set(AGENT_STUDIO_HIDDEN_MESSAGE_TYPES),
         )
         messages.extend(page.items)
         cursor = page.next_cursor
@@ -174,6 +178,7 @@ def get_chat_turn_payload(
         user_auth_sub=user_auth_sub,
         chat_kind=session.chat_kind,
         turn_id=turn_id,
+        excluded_message_types=set(AGENT_STUDIO_HIDDEN_MESSAGE_TYPES),
     )
     if not messages:
         return {

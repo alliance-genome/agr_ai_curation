@@ -252,8 +252,9 @@ GET_CHAT_CONVERSATION_TOOL = {
     "description": (
         "Load the full durable transcript for one visible chat session by session_id. "
         "Use this when the user asks to open a specific prior conversation, or when "
-        "you need to rehydrate earlier context from the current session after "
-        "provider context editing compacted it."
+        "you need to rehydrate durable prior-turn context from the current session "
+        "after provider context editing compacted it. Hidden context-compaction "
+        "projection rows are not returned."
     ),
     "input_schema": {
         "type": "object",
@@ -271,9 +272,11 @@ GET_CHAT_TURN_TOOL = {
     "name": "get_chat_turn",
     "description": (
         "Load durable transcript rows for one turn_id in a visible chat session. "
-        "Use this to rehydrate a specific earlier current-session turn after "
-        "provider context editing clears stale live context. Prefer this over "
-        "loading a whole conversation when you know the turn_id."
+        "Use this to rehydrate a completed prior turn, or rows from the current "
+        "turn that have already been persisted, after provider context editing "
+        "clears stale live context. Same-turn tool-call summaries are durable only "
+        "after the assistant turn completes. Prefer this over loading a whole "
+        "conversation when you know the turn_id."
     ),
     "input_schema": {
         "type": "object",
