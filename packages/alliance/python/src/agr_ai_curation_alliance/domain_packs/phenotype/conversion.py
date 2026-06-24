@@ -78,6 +78,117 @@ _TERM_WRITE_BLOCKED_REASON = "phenotype term CURIE unresolved"
 _REFERENCE_PENDING_STATE = "pending_reference_resolution"
 
 
+def normalize_phenotype_extraction_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Materialize standalone PhenotypeTerm support objects from nested terms."""
+
+    objects = payload.get("curatable_objects")
+    if not isinstance(objects, list):
+        return payload
+
+    existing_pending_ref_ids = {
+        str(obj.get("pending_ref_id"))
+        for obj in objects
+        if isinstance(obj, Mapping)
+        and isinstance(obj.get("pending_ref_id"), str)
+        and str(obj.get("pending_ref_id")).strip()
+    }
+    existing_term_refs = _phenotype_term_refs_by_signature(objects)
+    sanitized_objects: list[Any] = []
+    synthesized_terms: list[dict[str, Any]] = []
+
+    for object_index, obj in enumerate(objects, start=1):
+        if not (
+            isinstance(obj, Mapping)
+            and obj.get("object_type") == PHENOTYPE_OBJECT_TYPE
+        ):
+            sanitized_objects.append(obj)
+            continue
+
+        annotation_payload = obj.get("payload")
+        if not isinstance(annotation_payload, Mapping):
+            sanitized_objects.append(obj)
+            continue
+        phenotype_terms = annotation_payload.get("phenotype_terms")
+        if not isinstance(phenotype_terms, list):
+            sanitized_objects.append(obj)
+            continue
+
+        object_refs = [
+            ref
+            for ref in (obj.get("object_refs") or [])
+            if isinstance(ref, Mapping)
+        ]
+        updated_refs = list(object_refs)
+        annotation_changed = False
+        for term_index, raw_term in enumerate(phenotype_terms, start=1):
+            if not isinstance(raw_term, Mapping):
+                continue
+            term_payload = _normalized_phenotype_term_payload(raw_term)
+            if term_payload is None:
+                continue
+            term_signature = _phenotype_term_signature(
+                term_payload,
+                fallback_evidence_ids=_string_list(obj.get("evidence_record_ids")),
+            )
+            term_ref_id = existing_term_refs.get(term_signature)
+            if term_ref_id is None:
+                term_ref_id = _next_phenotype_term_ref_id(
+                    existing_pending_ref_ids,
+                    annotation_index=object_index,
+                    term_index=term_index,
+                )
+                existing_pending_ref_ids.add(term_ref_id)
+                existing_term_refs[term_signature] = term_ref_id
+                synthesized_terms.append(
+                    _phenotype_term_support_object(
+                        term_ref_id,
+                        term_payload,
+                        fallback_evidence_ids=_string_list(
+                            obj.get("evidence_record_ids")
+                        ),
+                    )
+                )
+            term_ref = {
+                "pending_ref_id": term_ref_id,
+                "object_type": PHENOTYPE_TERM_OBJECT_TYPE,
+            }
+            if term_ref not in updated_refs:
+                updated_refs.append(term_ref)
+                annotation_changed = True
+
+        if annotation_changed:
+            updated_obj = dict(obj)
+            updated_obj["object_refs"] = updated_refs
+            sanitized_objects.append(updated_obj)
+        else:
+            sanitized_objects.append(obj)
+
+    if not synthesized_terms:
+        return payload
+
+    sanitized = dict(payload)
+    sanitized["curatable_objects"] = [*sanitized_objects, *synthesized_terms]
+
+    metadata = dict(sanitized.get("metadata") or {})
+    notes = list(metadata.get("notes") or [])
+    notes.append(
+        "Phenotype adapter materialized standalone PhenotypeTerm support objects "
+        "from nested PhenotypeAnnotation phenotype_terms[] so active ontology "
+        "validators can run."
+    )
+    metadata["notes"] = notes
+    sanitized["metadata"] = metadata
+
+    run_summary = dict(sanitized.get("run_summary") or {})
+    warnings = list(run_summary.get("warnings") or [])
+    warnings.append(
+        f"materialized_nested_phenotype_terms:{len(synthesized_terms)}"
+    )
+    run_summary["warnings"] = warnings
+    sanitized["run_summary"] = run_summary
+    return sanitized
+
+
 def _clean_text(value: Any) -> str | None:
     text = str(value if value is not None else "").strip()
     return text or None
@@ -303,6 +414,154 @@ def _phenotype_term_payload(
         "export_state": _TERM_EXPORT_BLOCKED,
         "write_blocked_reason": _TERM_WRITE_BLOCKED_REASON,
     }
+
+
+def _normalized_phenotype_term_payload(
+    raw_term: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    curie = _clean_text(raw_term.get("curie"))
+    label = _clean_text(raw_term.get("label"))
+    if curie is None and label is None:
+        return None
+
+    term_payload = dict(raw_term)
+    term_payload["curie"] = curie
+    term_payload["label"] = label
+    source_mentions = _string_list(term_payload.get("source_mentions"))
+    if not source_mentions and label is not None:
+        source_mentions = [label]
+    term_payload["source_mentions"] = source_mentions
+
+    resolution_state = _clean_text(term_payload.get("resolution_state"))
+    term_payload["resolution_state"] = resolution_state or (
+        "resolved" if curie is not None else _TERM_PENDING_STATE
+    )
+    term_payload.setdefault("export_state", _TERM_EXPORT_BLOCKED)
+    term_payload.setdefault("write_blocked_reason", _TERM_WRITE_BLOCKED_REASON)
+    return term_payload
+
+
+def _phenotype_term_support_object(
+    pending_ref_id: str,
+    term_payload: Mapping[str, Any],
+    *,
+    fallback_evidence_ids: Sequence[str],
+) -> dict[str, Any]:
+    evidence_record_ids = _phenotype_term_evidence_record_ids(
+        term_payload,
+        fallback_evidence_ids=fallback_evidence_ids,
+    )
+    metadata = {
+        "object_role": "validated_reference",
+        "validation_state": term_payload.get("resolution_state") or _TERM_PENDING_STATE,
+        "validator_binding_id": PHENOTYPE_TERM_VALIDATOR_BINDING_ID,
+    }
+    for key in ("export_state", "write_blocked_reason"):
+        value = term_payload.get(key)
+        if value is not None:
+            metadata[key] = value
+    return {
+        "object_type": PHENOTYPE_TERM_OBJECT_TYPE,
+        "object_role": "validated_reference",
+        "pending_ref_id": pending_ref_id,
+        "model_ref": "PhenotypeTermPayload",
+        "status": "pending",
+        "definition_state": "in_development",
+        "definition_notes": [
+            "Materialized from nested PhenotypeAnnotation.phenotype_terms[] "
+            "for active ontology validation."
+        ],
+        "payload": dict(term_payload),
+        "evidence_record_ids": evidence_record_ids,
+        "metadata": metadata,
+    }
+
+
+def _phenotype_term_refs_by_signature(
+    objects: Sequence[Any],
+) -> dict[tuple[Any, ...], str]:
+    refs: dict[tuple[Any, ...], str] = {}
+    for obj in objects:
+        if not (
+            isinstance(obj, Mapping)
+            and obj.get("object_type") == PHENOTYPE_TERM_OBJECT_TYPE
+            and isinstance(obj.get("pending_ref_id"), str)
+        ):
+            continue
+        payload = obj.get("payload")
+        if not isinstance(payload, Mapping):
+            continue
+        term_payload = _normalized_phenotype_term_payload(payload)
+        if term_payload is None:
+            continue
+        refs.setdefault(
+            _phenotype_term_signature(
+                term_payload,
+                fallback_evidence_ids=_string_list(obj.get("evidence_record_ids")),
+            ),
+            str(obj["pending_ref_id"]),
+        )
+    return refs
+
+
+def _phenotype_term_signature(
+    term_payload: Mapping[str, Any],
+    *,
+    fallback_evidence_ids: Sequence[str],
+) -> tuple[Any, ...]:
+    hint = term_payload.get("ontology_lookup_hint")
+    hint = hint if isinstance(hint, Mapping) else {}
+    return (
+        _clean_text(term_payload.get("curie")),
+        _clean_text(term_payload.get("label")),
+        _clean_text(hint.get("data_provider")),
+        _clean_text(hint.get("taxon_id")),
+        tuple(
+            _phenotype_term_evidence_record_ids(
+                term_payload,
+                fallback_evidence_ids=fallback_evidence_ids,
+            )
+        ),
+    )
+
+
+def _phenotype_term_evidence_record_ids(
+    term_payload: Mapping[str, Any],
+    *,
+    fallback_evidence_ids: Sequence[str],
+) -> list[str]:
+    hint = term_payload.get("ontology_lookup_hint")
+    hint = hint if isinstance(hint, Mapping) else {}
+    hint_evidence_id = _clean_text(hint.get("evidence_record_id"))
+    if hint_evidence_id is not None:
+        return [hint_evidence_id]
+    return list(fallback_evidence_ids)
+
+
+def _next_phenotype_term_ref_id(
+    existing_pending_ref_ids: set[str],
+    *,
+    annotation_index: int,
+    term_index: int,
+) -> str:
+    base = f"phenotype-term-{annotation_index}-{term_index}"
+    if base not in existing_pending_ref_ids:
+        return base
+    suffix = 2
+    while f"{base}-{suffix}" in existing_pending_ref_ids:
+        suffix += 1
+    return f"{base}-{suffix}"
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        text = _clean_text(item)
+        if text is not None:
+            result.append(text)
+    return result
 
 
 def _evidence_quote_payload(
@@ -730,6 +989,7 @@ def materialize_phenotype_builder_state(
         annotation_evidence_ids: list[str] = []
         for evidence_index, evidence_record in enumerate(resolved_evidence, start=1):
             evidence_id = _clean_text(evidence_record.get("evidence_record_id"))
+            assert evidence_id is not None
             evidence_ref_id = f"evidence-quote-{annotation_index + 1}-{evidence_index}"
             quote_payload = _evidence_quote_payload(evidence_record)
             annotation_evidence_ids.append(evidence_id)
@@ -879,5 +1139,6 @@ __all__ = [
     "PhenotypeBuilderExtractionOutput",
     "PhenotypeMaterializationResult",
     "materialize_phenotype_builder_state",
+    "normalize_phenotype_extraction_payload",
     "validate_phenotype_builder_objects",
 ]

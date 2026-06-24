@@ -42,12 +42,6 @@ _DOMAIN_ENVELOPE_KEYS = frozenset(
     {"envelope_id", "domain_pack_id", "extracted_objects"}
 )
 _NUL_CHARACTER = "\x00"
-_ZFIN_TAXON_CURIE = "NCBITaxon:7955"
-_PHENOTYPE_ADAPTER_KEY = "phenotype"
-_PHENOTYPE_ANNOTATION_OBJECT_TYPE = "PhenotypeAnnotation"
-_PHENOTYPE_TERM_OBJECT_TYPE = "PhenotypeTerm"
-_PHENOTYPE_TERM_MODEL_REF = "PhenotypeTermPayload"
-_PHENOTYPE_TERM_VALIDATOR_BINDING_ID = "phenotype_term_ontology_validator"
 
 
 @dataclass(frozen=True)
@@ -159,7 +153,7 @@ def build_extraction_envelope_candidate(
         return None
 
     if isinstance(payload, dict):
-        payload = _sanitize_extraction_payload_for_adapter(
+        payload = _normalize_extraction_payload_for_adapter(
             payload,
             adapter_key=resolved_adapter_key,
         )
@@ -176,380 +170,29 @@ def build_extraction_envelope_candidate(
     )
 
 
-def _sanitize_extraction_payload_for_adapter(
+def _normalize_extraction_payload_for_adapter(
     payload: dict[str, Any],
     *,
     adapter_key: str,
 ) -> dict[str, Any]:
-    if adapter_key == "gene":
-        return _sanitize_gene_extraction_payload(payload)
-    if adapter_key == _PHENOTYPE_ADAPTER_KEY:
-        return _sanitize_phenotype_extraction_payload(payload)
-    return payload
-
-
-def _sanitize_gene_extraction_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    objects = payload.get("curatable_objects")
-    if not isinstance(objects, list):
+    normalizer = _extraction_payload_normalizer_for_adapter(adapter_key)
+    if normalizer is None:
         return payload
-
-    kept_objects: list[Any] = []
-    removed_objects: list[Mapping[str, Any]] = []
-    for obj in objects:
-        if isinstance(obj, Mapping) and _is_zfin_drug_like_gene_object(obj):
-            removed_objects.append(obj)
-        else:
-            kept_objects.append(obj)
-
-    if not removed_objects:
-        return payload
-
-    sanitized = dict(payload)
-    sanitized["curatable_objects"] = kept_objects
-    metadata = dict(sanitized.get("metadata") or {})
-    exclusions = list(metadata.get("exclusions") or [])
-    notes = list(metadata.get("notes") or [])
-    warnings: list[str] = []
-    for obj in removed_objects:
-        object_payload = obj.get("payload")
-        object_payload = object_payload if isinstance(object_payload, Mapping) else {}
-        mention = str(object_payload.get("mention") or "").strip() or "unknown"
-        evidence_record_id = str(object_payload.get("evidence_record_id") or "").strip()
-        evidence_record_ids = [evidence_record_id] if evidence_record_id else []
-        exclusions.append(
-            {
-                "mention": mention,
-                "reason_code": "unsupported_entity_type",
-                "evidence_record_ids": evidence_record_ids,
-                "details": (
-                    "Dropped from gene curatable_objects because ZFIN context "
-                    "plus uppercase/digit notation indicates a compound or reagent "
-                    "without a gene identity hint."
-                ),
-            }
+    normalized = normalizer(payload)
+    if not isinstance(normalized, dict):
+        raise ValueError(
+            "Curation extraction payload normalizers must return a JSON object "
+            f"(adapter_key={adapter_key})."
         )
-        warnings.append(f"dropped_non_gene_zfin_candidate:{mention}")
-    notes.append(
-        "Gene adapter removed non-gene ZFIN compound/reagent candidates before "
-        "domain validation dispatch."
-    )
-    metadata["exclusions"] = exclusions
-    metadata["notes"] = notes
-    sanitized["metadata"] = metadata
-
-    run_summary = dict(sanitized.get("run_summary") or {})
-    if isinstance(run_summary.get("kept_count"), int):
-        run_summary["kept_count"] = max(0, run_summary["kept_count"] - len(removed_objects))
-    if isinstance(run_summary.get("excluded_count"), int):
-        run_summary["excluded_count"] += len(removed_objects)
-    summary_warnings = list(run_summary.get("warnings") or [])
-    summary_warnings.extend(warnings)
-    run_summary["warnings"] = summary_warnings
-    sanitized["run_summary"] = run_summary
-    return sanitized
+    return normalized
 
 
-def _sanitize_phenotype_extraction_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    objects = payload.get("curatable_objects")
-    if not isinstance(objects, list):
-        return payload
-
-    existing_pending_ref_ids = {
-        str(obj.get("pending_ref_id"))
-        for obj in objects
-        if isinstance(obj, Mapping)
-        and isinstance(obj.get("pending_ref_id"), str)
-        and str(obj.get("pending_ref_id")).strip()
-    }
-    existing_term_refs = _phenotype_term_refs_by_signature(objects)
-    sanitized_objects: list[Any] = []
-    synthesized_terms: list[dict[str, Any]] = []
-
-    for object_index, obj in enumerate(objects, start=1):
-        if not (
-            isinstance(obj, Mapping)
-            and obj.get("object_type") == _PHENOTYPE_ANNOTATION_OBJECT_TYPE
-        ):
-            sanitized_objects.append(obj)
-            continue
-
-        annotation_payload = obj.get("payload")
-        if not isinstance(annotation_payload, Mapping):
-            sanitized_objects.append(obj)
-            continue
-        phenotype_terms = annotation_payload.get("phenotype_terms")
-        if not isinstance(phenotype_terms, list):
-            sanitized_objects.append(obj)
-            continue
-
-        object_refs = [
-            ref
-            for ref in (obj.get("object_refs") or [])
-            if isinstance(ref, Mapping)
-        ]
-        updated_refs = list(object_refs)
-        annotation_changed = False
-        for term_index, raw_term in enumerate(phenotype_terms, start=1):
-            if not isinstance(raw_term, Mapping):
-                continue
-            term_payload = _normalized_phenotype_term_payload(raw_term)
-            if term_payload is None:
-                continue
-            term_signature = _phenotype_term_signature(
-                term_payload,
-                fallback_evidence_ids=_string_list(obj.get("evidence_record_ids")),
-            )
-            term_ref_id = existing_term_refs.get(term_signature)
-            if term_ref_id is None:
-                term_ref_id = _next_phenotype_term_ref_id(
-                    existing_pending_ref_ids,
-                    annotation_index=object_index,
-                    term_index=term_index,
-                )
-                existing_pending_ref_ids.add(term_ref_id)
-                existing_term_refs[term_signature] = term_ref_id
-                synthesized_terms.append(
-                    _phenotype_term_support_object(
-                        term_ref_id,
-                        term_payload,
-                        fallback_evidence_ids=_string_list(
-                            obj.get("evidence_record_ids")
-                        ),
-                    )
-                )
-            term_ref = {
-                "pending_ref_id": term_ref_id,
-                "object_type": _PHENOTYPE_TERM_OBJECT_TYPE,
-            }
-            if term_ref not in updated_refs:
-                updated_refs.append(term_ref)
-                annotation_changed = True
-
-        if annotation_changed:
-            updated_obj = dict(obj)
-            updated_obj["object_refs"] = updated_refs
-            sanitized_objects.append(updated_obj)
-        else:
-            sanitized_objects.append(obj)
-
-    if not synthesized_terms:
-        return payload
-
-    sanitized = dict(payload)
-    sanitized["curatable_objects"] = [*sanitized_objects, *synthesized_terms]
-
-    metadata = dict(sanitized.get("metadata") or {})
-    notes = list(metadata.get("notes") or [])
-    notes.append(
-        "Phenotype adapter materialized standalone PhenotypeTerm support objects "
-        "from nested PhenotypeAnnotation phenotype_terms[] so active ontology "
-        "validators can run."
-    )
-    metadata["notes"] = notes
-    sanitized["metadata"] = metadata
-
-    run_summary = dict(sanitized.get("run_summary") or {})
-    warnings = list(run_summary.get("warnings") or [])
-    warnings.append(
-        f"materialized_nested_phenotype_terms:{len(synthesized_terms)}"
-    )
-    run_summary["warnings"] = warnings
-    sanitized["run_summary"] = run_summary
-    return sanitized
-
-
-def _normalized_phenotype_term_payload(
-    raw_term: Mapping[str, Any],
-) -> dict[str, Any] | None:
-    curie = _optional_text(raw_term.get("curie"))
-    label = _optional_text(raw_term.get("label"))
-    if curie is None and label is None:
-        return None
-
-    term_payload = dict(raw_term)
-    term_payload["curie"] = curie
-    term_payload["label"] = label
-    source_mentions = _string_list(term_payload.get("source_mentions"))
-    if not source_mentions and label is not None:
-        source_mentions = [label]
-    term_payload["source_mentions"] = source_mentions
-
-    resolution_state = _optional_text(term_payload.get("resolution_state"))
-    term_payload["resolution_state"] = resolution_state or (
-        "resolved" if curie is not None else "pending_ontology_resolution"
-    )
-    term_payload.setdefault("export_state", "blocked_pending_ontology_resolution")
-    term_payload.setdefault("write_blocked_reason", "phenotype term CURIE unresolved")
-    return term_payload
-
-
-def _phenotype_term_support_object(
-    pending_ref_id: str,
-    term_payload: Mapping[str, Any],
-    *,
-    fallback_evidence_ids: Sequence[str],
-) -> dict[str, Any]:
-    evidence_record_ids = _phenotype_term_evidence_record_ids(
-        term_payload,
-        fallback_evidence_ids=fallback_evidence_ids,
-    )
-    metadata = {
-        "object_role": "validated_reference",
-        "validation_state": term_payload.get("resolution_state")
-        or "pending_ontology_resolution",
-        "validator_binding_id": _PHENOTYPE_TERM_VALIDATOR_BINDING_ID,
-    }
-    for key in ("export_state", "write_blocked_reason"):
-        value = term_payload.get(key)
-        if value is not None:
-            metadata[key] = value
-    return {
-        "object_type": _PHENOTYPE_TERM_OBJECT_TYPE,
-        "object_role": "validated_reference",
-        "pending_ref_id": pending_ref_id,
-        "model_ref": _PHENOTYPE_TERM_MODEL_REF,
-        "status": "pending",
-        "definition_state": "in_development",
-        "definition_notes": [
-            "Materialized from nested PhenotypeAnnotation.phenotype_terms[] "
-            "for active ontology validation."
-        ],
-        "payload": dict(term_payload),
-        "evidence_record_ids": evidence_record_ids,
-        "metadata": metadata,
-    }
-
-
-def _phenotype_term_refs_by_signature(
-    objects: Sequence[Any],
-) -> dict[tuple[Any, ...], str]:
-    refs: dict[tuple[Any, ...], str] = {}
-    for obj in objects:
-        if not (
-            isinstance(obj, Mapping)
-            and obj.get("object_type") == _PHENOTYPE_TERM_OBJECT_TYPE
-            and isinstance(obj.get("pending_ref_id"), str)
-        ):
-            continue
-        payload = obj.get("payload")
-        if not isinstance(payload, Mapping):
-            continue
-        term_payload = _normalized_phenotype_term_payload(payload)
-        if term_payload is None:
-            continue
-        refs.setdefault(
-            _phenotype_term_signature(
-                term_payload,
-                fallback_evidence_ids=_string_list(obj.get("evidence_record_ids")),
-            ),
-            str(obj["pending_ref_id"]),
-        )
-    return refs
-
-
-def _phenotype_term_signature(
-    term_payload: Mapping[str, Any],
-    *,
-    fallback_evidence_ids: Sequence[str],
-) -> tuple[Any, ...]:
-    hint = term_payload.get("ontology_lookup_hint")
-    hint = hint if isinstance(hint, Mapping) else {}
-    return (
-        _optional_text(term_payload.get("curie")),
-        _optional_text(term_payload.get("label")),
-        _optional_text(hint.get("data_provider")),
-        _optional_text(hint.get("taxon_id")),
-        tuple(
-            _phenotype_term_evidence_record_ids(
-                term_payload,
-                fallback_evidence_ids=fallback_evidence_ids,
-            )
-        ),
+def _extraction_payload_normalizer_for_adapter(adapter_key: str) -> Any | None:
+    from src.lib.curation_workspace.adapter_registry import (
+        load_curation_adapter_registry,
     )
 
-
-def _phenotype_term_evidence_record_ids(
-    term_payload: Mapping[str, Any],
-    *,
-    fallback_evidence_ids: Sequence[str],
-) -> list[str]:
-    hint = term_payload.get("ontology_lookup_hint")
-    hint = hint if isinstance(hint, Mapping) else {}
-    hint_evidence_id = _optional_text(hint.get("evidence_record_id"))
-    if hint_evidence_id is not None:
-        return [hint_evidence_id]
-    return list(fallback_evidence_ids)
-
-
-def _next_phenotype_term_ref_id(
-    existing_pending_ref_ids: set[str],
-    *,
-    annotation_index: int,
-    term_index: int,
-) -> str:
-    base = f"phenotype-term-{annotation_index}-{term_index}"
-    if base not in existing_pending_ref_ids:
-        return base
-    suffix = 2
-    while f"{base}-{suffix}" in existing_pending_ref_ids:
-        suffix += 1
-    return f"{base}-{suffix}"
-
-
-def _is_zfin_drug_like_gene_object(obj: Mapping[str, Any]) -> bool:
-    if obj.get("object_type") != "gene_mention_evidence":
-        return False
-    payload = obj.get("payload")
-    if not isinstance(payload, Mapping):
-        return False
-    if not _has_zfin_context(payload):
-        return False
-    if _has_gene_identity_hint(payload):
-        return False
-    mention = str(payload.get("mention") or "").strip()
-    return bool(re.search(r"[A-Z]", mention) and re.search(r"\d", mention))
-
-
-def _has_zfin_context(payload: Mapping[str, Any]) -> bool:
-    species = str(payload.get("species") or "").strip().lower()
-    return (
-        payload.get("data_provider_hint") == "ZFIN"
-        or payload.get("taxon_hint") == _ZFIN_TAXON_CURIE
-        or payload.get("proposed_taxon") == _ZFIN_TAXON_CURIE
-        or payload.get("taxon") == _ZFIN_TAXON_CURIE
-        or species in {"danio rerio", "zebrafish"}
-    )
-
-
-def _has_gene_identity_hint(payload: Mapping[str, Any]) -> bool:
-    for field_name in (
-        "primary_external_id",
-        "gene_symbol",
-        "proposed_primary_external_id",
-        "proposed_gene_symbol",
-    ):
-        value = payload.get(field_name)
-        if isinstance(value, str) and value.strip():
-            return True
-    return False
-
-
-def _optional_text(value: Any) -> str | None:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    return text or None
-
-
-def _string_list(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    result: list[str] = []
-    for item in value:
-        text = _optional_text(item)
-        if text is not None:
-            result.append(text)
-    return result
+    return load_curation_adapter_registry().get_extraction_payload_normalizer(adapter_key)
 
 
 def build_extraction_envelope_candidate_with_evidence(

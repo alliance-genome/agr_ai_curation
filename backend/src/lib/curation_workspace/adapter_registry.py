@@ -19,6 +19,7 @@ class CurationAdapterRegistry:
     def __init__(self) -> None:
         self._candidate_normalizers: dict[str, Any] = {}
         self._export_adapters: dict[str, Any] = {}
+        self._extraction_payload_normalizers: dict[str, Any] = {}
         self._submission_transport_adapters: list[Any] = []
         self._domain_packs: dict[str, Any] = {}
         self._domain_packs_by_id: dict[str, Any] = {}
@@ -35,6 +36,7 @@ class CurationAdapterRegistry:
         submission_transport_adapters: Any | None = None,
         domain_pack: Any | None = None,
         domain_envelope_validator: Any | None = None,
+        extraction_payload_normalizer: Any | None = None,
         review_row_materializer: Any | None = None,
     ) -> None:
         normalized_key = str(adapter_key).strip()
@@ -51,6 +53,24 @@ class CurationAdapterRegistry:
             if existing_export_adapter is not None and existing_export_adapter is not export_adapter:
                 raise ValueError(f"Curation export adapter '{normalized_key}' is already registered")
             self._export_adapters[normalized_key] = export_adapter
+
+        if extraction_payload_normalizer is not None:
+            if not callable(extraction_payload_normalizer):
+                raise ValueError("extraction_payload_normalizer must be callable")
+            existing_payload_normalizer = self._extraction_payload_normalizers.get(
+                normalized_key
+            )
+            if (
+                existing_payload_normalizer is not None
+                and existing_payload_normalizer is not extraction_payload_normalizer
+            ):
+                raise ValueError(
+                    "Curation extraction payload normalizer for "
+                    f"'{normalized_key}' is already registered"
+                )
+            self._extraction_payload_normalizers[normalized_key] = (
+                extraction_payload_normalizer
+            )
 
         for submission_adapter in _normalize_submission_transport_adapters(
             submission_transport_adapters,
@@ -147,6 +167,9 @@ class CurationAdapterRegistry:
 
     def get_domain_pack_by_id(self, domain_pack_id: str) -> Any | None:
         return self._domain_packs_by_id.get(str(domain_pack_id).strip())
+
+    def get_extraction_payload_normalizer(self, adapter_key: str) -> Any | None:
+        return self._extraction_payload_normalizers.get(str(adapter_key).strip())
 
     def get_domain_envelope_validator_by_id(self, domain_pack_id: str) -> Any | None:
         return self._domain_envelope_validators_by_pack_id.get(
