@@ -1,5 +1,5 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '../../test/test-utils';
+import { render, screen, fireEvent, waitFor, within } from '../../test/test-utils';
 import DocumentList from './DocumentList';
 import type { DocumentSummary } from '../../services/weaviate';
 import {
@@ -73,6 +73,10 @@ vi.mock('@mui/x-data-grid', async () => {
     checkboxSelection = false,
     rowSelectionModel,
     onRowSelectionModelChange,
+    sortModel = [],
+    onSortModelChange,
+    sortingMode = 'client',
+    sortingOrder = ['asc', 'desc', null],
     sx,
   }: {
     rows?: any[];
@@ -80,17 +84,52 @@ vi.mock('@mui/x-data-grid', async () => {
     checkboxSelection?: boolean;
     rowSelectionModel?: string[];
     onRowSelectionModelChange?: (ids: string[]) => void;
+    sortModel?: Array<{ field: string; sort?: 'asc' | 'desc' | null }>;
+    onSortModelChange?: (model: Array<{ field: string; sort?: 'asc' | 'desc' | null }>) => void;
+    sortingMode?: 'client' | 'server';
+    sortingOrder?: Array<'asc' | 'desc' | null>;
     sx?: Record<string, unknown>;
   }) => {
     const [internalSelection, setInternalSelection] = React.useState<string[]>([]);
     const selectedIds =
       rowSelectionModel !== undefined ? rowSelectionModel.map(String) : internalSelection;
+    const activeSort = sortModel[0];
+    const sortedRows = React.useMemo(() => {
+      if (sortingMode === 'server' || !activeSort?.field || !activeSort.sort) {
+        return rows;
+      }
+
+      const sortedColumn = columns.find((column: any) => column.field === activeSort.field);
+      if (!sortedColumn) {
+        return rows;
+      }
+
+      const direction = activeSort.sort === 'asc' ? 1 : -1;
+      return [...rows].sort((left, right) => {
+        const leftValue = left[activeSort.field];
+        const rightValue = right[activeSort.field];
+        const comparison =
+          typeof sortedColumn.sortComparator === 'function'
+            ? sortedColumn.sortComparator(leftValue, rightValue)
+            : String(leftValue ?? '').localeCompare(String(rightValue ?? ''));
+
+        return comparison * direction;
+      });
+    }, [activeSort?.field, activeSort?.sort, columns, rows, sortingMode]);
 
     const setSelection = (ids: string[]) => {
       if (rowSelectionModel === undefined) {
         setInternalSelection(ids);
       }
       onRowSelectionModelChange?.(ids);
+    };
+
+    const handleHeaderClick = (field: string) => {
+      const currentSort = activeSort?.field === field ? activeSort.sort : null;
+      const currentIndex = sortingOrder.findIndex((sort) => sort === currentSort);
+      const nextSort = sortingOrder[(currentIndex + 1) % sortingOrder.length];
+
+      onSortModelChange?.(nextSort ? [{ field, sort: nextSort }] : []);
     };
 
     return (
@@ -111,12 +150,24 @@ vi.mock('@mui/x-data-grid', async () => {
                 </th>
               )}
               {columns.map((column: any) => (
-                <th key={column.field}>{column.headerName}</th>
+                <th
+                  key={column.field}
+                  aria-sort={
+                    activeSort?.field === column.field && activeSort.sort
+                      ? activeSort.sort === 'asc'
+                        ? 'ascending'
+                        : 'descending'
+                      : undefined
+                  }
+                  onClick={() => column.sortable !== false && handleHeaderClick(column.field)}
+                >
+                  {column.headerName}
+                </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {rows.map((row: any) => (
+            {sortedRows.map((row: any) => (
               <tr key={row.id} className="MuiDataGrid-row" style={{ cursor: 'pointer' }}>
                 {checkboxSelection && (
                   <td>
@@ -341,15 +392,51 @@ describe('DocumentList', () => {
     expect(grid).toBeInTheDocument();
   });
 
-  it('handles sorting', () => {
-    const { container } = render(<DocumentList {...defaultProps} />);
+  it('sorts rows by text, number, and date columns and toggles direction', () => {
+    const documents = [
+      createTestDocument({
+        id: 'doc-gamma',
+        filename: 'gamma.pdf',
+        fileSize: 3000,
+        creationDate: '2024-01-03T00:00:00.000Z',
+      }),
+      createTestDocument({
+        id: 'doc-alpha',
+        filename: 'alpha.pdf',
+        fileSize: 1000,
+        creationDate: '2024-01-02T00:00:00.000Z',
+      }),
+      createTestDocument({
+        id: 'doc-beta',
+        filename: 'beta.pdf',
+        fileSize: 2000,
+        creationDate: '2024-01-01T00:00:00.000Z',
+      }),
+    ];
+    const getRenderedFilenames = () =>
+      within(screen.getByRole('grid'))
+        .getAllByRole('row')
+        .slice(1)
+        .map((row) => within(row).getAllByRole('cell')[0].textContent);
 
-    // Click on filename header to sort
+    render(<DocumentList {...defaultProps} documents={documents} />);
+
+    expect(getRenderedFilenames()).toEqual(['gamma.pdf', 'alpha.pdf', 'beta.pdf']);
+
     const filenameHeader = screen.getByText('Filename');
     fireEvent.click(filenameHeader);
+    expect(getRenderedFilenames()).toEqual(['alpha.pdf', 'beta.pdf', 'gamma.pdf']);
+    expect(filenameHeader.closest('th')).toHaveAttribute('aria-sort', 'ascending');
 
-    // DataGrid handles sorting internally
-    expect(container.querySelector('.MuiDataGrid-root')).toBeInTheDocument();
+    fireEvent.click(filenameHeader);
+    expect(getRenderedFilenames()).toEqual(['gamma.pdf', 'beta.pdf', 'alpha.pdf']);
+    expect(filenameHeader.closest('th')).toHaveAttribute('aria-sort', 'descending');
+
+    fireEvent.click(screen.getByText('Size'));
+    expect(getRenderedFilenames()).toEqual(['alpha.pdf', 'beta.pdf', 'gamma.pdf']);
+
+    fireEvent.click(screen.getByText('Created'));
+    expect(getRenderedFilenames()).toEqual(['beta.pdf', 'alpha.pdf', 'gamma.pdf']);
   });
 
   it('displays correct column headers', () => {
