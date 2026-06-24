@@ -121,3 +121,90 @@ async def test_active_session_rejects_different_run_and_other_owner(monkeypatch)
     block_stream.set()
     if run.task is not None:
         await asyncio.wait_for(run.task, timeout=1)
+    assert run.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_cancel_request_marks_active_session_run_before_producer_claims_lifecycle(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.executable_runs.get_executable_run_event_replay_limit",
+        lambda: 10,
+    )
+    monkeypatch.setattr(
+        "src.lib.executable_runs.get_executable_run_retention_seconds",
+        lambda: 60,
+    )
+
+    manager = ExecutableRunManager()
+    block_stream = asyncio.Event()
+
+    async def stream_factory():
+        await block_stream.wait()
+        yield 'data: {"type":"turn_interrupted"}\n\n'
+
+    run, created = await manager.get_or_start_stream(
+        run_id="assistant_chat_turn:session-1:turn-1",
+        kind="assistant_chat_turn",
+        owner_user_id="user-1",
+        session_id="session-1",
+        turn_id="turn-1",
+        stream_factory=stream_factory,
+    )
+
+    assert created is True
+    assert run.status == "running"
+
+    cancelled_run = await manager.request_cancel_for_session(
+        session_id="session-1",
+        owner_user_id="user-1",
+    )
+
+    assert cancelled_run is run
+    assert run.status == "cancel_requested"
+
+    block_stream.set()
+    if run.task is not None:
+        await asyncio.wait_for(run.task, timeout=1)
+    assert run.status == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_producer_startup_failure_publishes_terminal_error_event(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.executable_runs.get_executable_run_event_replay_limit",
+        lambda: 10,
+    )
+    monkeypatch.setattr(
+        "src.lib.executable_runs.get_executable_run_retention_seconds",
+        lambda: 60,
+    )
+
+    manager = ExecutableRunManager()
+
+    async def stream_factory():
+        raise RuntimeError("startup rejected")
+        yield 'data: {"type":"unreachable"}\n\n'
+
+    run, created = await manager.get_or_start_stream(
+        run_id="assistant_chat_turn:session-1:turn-1",
+        kind="assistant_chat_turn",
+        owner_user_id="user-1",
+        session_id="session-1",
+        turn_id="turn-1",
+        stream_factory=stream_factory,
+        terminal_error_event_factory=lambda exc: (
+            f'data: {{"type":"turn_failed","message":"{exc}"}}\n\n'
+        ),
+    )
+
+    assert created is True
+
+    observer = manager.observe(run)
+    error_event = await asyncio.wait_for(observer.__anext__(), timeout=1)
+    assert "turn_failed" in error_event
+    assert "startup rejected" in error_event
+
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(observer.__anext__(), timeout=1)
+
+    assert run.status == "failed"

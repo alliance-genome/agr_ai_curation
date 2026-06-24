@@ -89,6 +89,7 @@ class ExecutableRun:
     subscribers: set[asyncio.Queue[str | None]] = field(default_factory=set)
     task: asyncio.Task[None] | None = None
     terminal_monotonic: float | None = None
+    terminal_error_event_factory: Callable[[Exception], str] | None = None
 
     def snapshot(self) -> ExecutableRunSnapshot:
         return ExecutableRunSnapshot(
@@ -135,6 +136,7 @@ class ExecutableRunManager:
         batch_id: str | None = None,
         job_id: str | None = None,
         can_cancel: bool = True,
+        terminal_error_event_factory: Callable[[Exception], str] | None = None,
     ) -> tuple[ExecutableRun, bool]:
         await self._prune_expired_terminal_runs()
 
@@ -162,6 +164,7 @@ class ExecutableRunManager:
                 job_id=job_id,
                 can_cancel=can_cancel,
                 status="running",
+                terminal_error_event_factory=terminal_error_event_factory,
             )
             self._runs[run_id] = run
             if session_id:
@@ -169,6 +172,37 @@ class ExecutableRunManager:
 
             run.task = asyncio.create_task(self._drive_stream(run, stream_factory))
             return run, True
+
+    async def get_active_session_run(self, session_id: str) -> ExecutableRun | None:
+        await self._prune_expired_terminal_runs()
+
+        async with self._lock:
+            active_run_id = self._active_session_run_ids.get(session_id)
+            active_run = self._runs.get(active_run_id) if active_run_id else None
+            if active_run is None or active_run.terminal:
+                return None
+            return active_run
+
+    async def request_cancel_for_session(
+        self,
+        *,
+        session_id: str,
+        owner_user_id: str,
+    ) -> ExecutableRun | None:
+        await self._prune_expired_terminal_runs()
+
+        async with self._lock:
+            active_run_id = self._active_session_run_ids.get(session_id)
+            active_run = self._runs.get(active_run_id) if active_run_id else None
+            if active_run is None or active_run.terminal:
+                return None
+            if active_run.owner_user_id != owner_user_id:
+                raise ExecutableRunAccessError("Executable run is owned by another user")
+            if not active_run.can_cancel:
+                return None
+            active_run.status = "cancel_requested"
+            active_run.updated_at = datetime.now(timezone.utc)
+            return active_run
 
     async def observe(self, run: ExecutableRun) -> AsyncIterator[str]:
         queue: asyncio.Queue[str | None] = asyncio.Queue()
@@ -206,12 +240,21 @@ class ExecutableRunManager:
         except asyncio.CancelledError:
             await self._finish(run, "cancelled")
             raise
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "Executable run producer failed: run_id=%s kind=%s",
                 run.run_id,
                 run.kind,
             )
+            if run.terminal_error_event_factory is not None:
+                try:
+                    await self._publish(run, run.terminal_error_event_factory(exc))
+                except Exception:
+                    logger.exception(
+                        "Executable run terminal error event failed: run_id=%s kind=%s",
+                        run.run_id,
+                        run.kind,
+                    )
             await self._finish(run, "failed")
 
     async def _publish(self, run: ExecutableRun, event: str) -> None:
@@ -228,7 +271,11 @@ class ExecutableRunManager:
 
     async def _finish(self, run: ExecutableRun, status: ExecutableRunStatus) -> None:
         async with self._lock:
-            run.status = status
+            run.status = (
+                "cancelled"
+                if run.status == "cancel_requested" and status == "completed"
+                else status
+            )
             run.updated_at = datetime.now(timezone.utc)
             run.completed_at = run.updated_at
             run.terminal_monotonic = time.monotonic()

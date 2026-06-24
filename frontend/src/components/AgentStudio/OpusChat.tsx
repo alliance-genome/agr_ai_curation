@@ -5,7 +5,7 @@
  * Includes tool support for suggestion submission.
  */
 
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, type SetStateAction } from 'react'
 import {
   Box,
   Typography,
@@ -131,6 +131,82 @@ interface DisplayMessage {
   content: string
   timestamp?: string
   toolCalls?: ToolCallRecord[]  // Tool calls made during this message
+}
+
+interface SharedOpusChatState {
+  messages: DisplayMessage[]
+  isStreaming: boolean
+  durableSessionId: string | null
+}
+
+const OPUS_DRAFT_CONVERSATION_KEY = 'agent-studio:draft'
+const sharedOpusChatStates = new Map<string, SharedOpusChatState>()
+const sharedOpusChatAliases = new Map<string, string>()
+const sharedOpusChatListeners = new Set<() => void>()
+
+function resolveOpusConversationKey(
+  context: ChatContext,
+  durableSessionId?: string | null,
+  sourceSessionId?: string,
+): string {
+  return durableSessionId || sourceSessionId || context.session_id || OPUS_DRAFT_CONVERSATION_KEY
+}
+
+function getSharedOpusChatState(
+  key: string,
+  initialConversation?: ToolIdeaConversationEntry[] | null,
+  initialDurableSessionId?: string | null,
+): SharedOpusChatState {
+  const resolvedKey = sharedOpusChatAliases.get(key) ?? key
+  const existing = sharedOpusChatStates.get(resolvedKey)
+  if (existing) {
+    return existing
+  }
+
+  const nextState = {
+    messages: buildDisplayMessages(initialConversation),
+    isStreaming: false,
+    durableSessionId: initialDurableSessionId ?? null,
+  }
+  sharedOpusChatStates.set(resolvedKey, nextState)
+  return nextState
+}
+
+function emitSharedOpusChatState(
+  key: string,
+  updater: (current: SharedOpusChatState) => SharedOpusChatState,
+) {
+  const resolvedKey = sharedOpusChatAliases.get(key) ?? key
+  const current = getSharedOpusChatState(resolvedKey)
+  sharedOpusChatStates.set(resolvedKey, updater(current))
+  sharedOpusChatListeners.forEach((listener) => listener())
+}
+
+function migrateSharedOpusChatState(fromKey: string, toKey: string) {
+  if (fromKey === toKey) {
+    return
+  }
+
+  const fromState = sharedOpusChatStates.get(fromKey)
+  if (!fromState) {
+    return
+  }
+
+  const existingToState = sharedOpusChatStates.get(toKey)
+  if (!existingToState || existingToState.messages.length === 0 || fromState.isStreaming) {
+    sharedOpusChatStates.set(toKey, {
+      ...fromState,
+      durableSessionId: toKey,
+    })
+    sharedOpusChatListeners.forEach((listener) => listener())
+  }
+  sharedOpusChatAliases.set(fromKey, toKey)
+}
+
+export function resetSharedOpusChatStateForTests() {
+  sharedOpusChatStates.clear()
+  sharedOpusChatAliases.clear()
+  sharedOpusChatListeners.clear()
 }
 
 const AGR_CURATION_METHOD_LABELS: Record<string, string> = {
@@ -439,10 +515,17 @@ function OpusChat({
   onConversationSnapshotChange,
   onApplyWorkshopPromptUpdate,
 }: OpusChatProps) {
-  const [messages, setMessages] = useState<DisplayMessage[]>(() => buildDisplayMessages(initialConversation))
+  const conversationKey = useMemo(
+    () => resolveOpusConversationKey(context, durableSessionIdProp, sourceSessionId),
+    [context, durableSessionIdProp, sourceSessionId]
+  )
+  const [sharedSnapshot, setSharedSnapshot] = useState<SharedOpusChatState>(() =>
+    getSharedOpusChatState(conversationKey, initialConversation, durableSessionIdProp)
+  )
+  const messages = sharedSnapshot.messages
+  const isStreaming = sharedSnapshot.isStreaming
+  const durableSessionId = sharedSnapshot.durableSessionId
   const [input, setInput] = useState('')
-  const [isStreaming, setIsStreaming] = useState(false)
-  const [durableSessionId, setDurableSessionId] = useState<string | null>(durableSessionIdProp ?? null)
   const [toolCallsExpanded, setToolCallsExpanded] = useState<{ [key: number]: boolean }>({})  // Track expanded state per message
   const [suggestionDialogOpen, setSuggestionDialogOpen] = useState(false)
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false)
@@ -465,16 +548,57 @@ function OpusChat({
   const preserveCurrentConversationSessionRef = useRef<string | null>(null)
   const sessionCreatePromiseRef = useRef<Promise<string> | null>(null)
 
+  useEffect(() => {
+    setSharedSnapshot(getSharedOpusChatState(conversationKey, initialConversation, durableSessionIdProp))
+    const listener = () => {
+      setSharedSnapshot(getSharedOpusChatState(conversationKey, initialConversation, durableSessionIdProp))
+    }
+    sharedOpusChatListeners.add(listener)
+    return () => {
+      sharedOpusChatListeners.delete(listener)
+    }
+  }, [conversationKey, durableSessionIdProp, initialConversation])
+
+  const setMessages = useCallback((nextMessages: SetStateAction<DisplayMessage[]>) => {
+    emitSharedOpusChatState(conversationKey, (current) => ({
+      ...current,
+      messages: typeof nextMessages === 'function'
+        ? nextMessages(current.messages)
+        : nextMessages,
+    }))
+  }, [conversationKey])
+
+  const setIsStreaming = useCallback((nextIsStreaming: SetStateAction<boolean>) => {
+    emitSharedOpusChatState(conversationKey, (current) => ({
+      ...current,
+      isStreaming: typeof nextIsStreaming === 'function'
+        ? nextIsStreaming(current.isStreaming)
+        : nextIsStreaming,
+    }))
+  }, [conversationKey])
+
+  const setDurableSessionId = useCallback((nextSessionId: SetStateAction<string | null>) => {
+    emitSharedOpusChatState(conversationKey, (current) => ({
+      ...current,
+      durableSessionId: typeof nextSessionId === 'function'
+        ? nextSessionId(current.durableSessionId)
+        : nextSessionId,
+    }))
+  }, [conversationKey])
+
   const syncDurableSessionId = useCallback((
     nextSessionId: string | null,
     options: { notifyParent?: boolean } = {},
   ) => {
+    if (nextSessionId) {
+      migrateSharedOpusChatState(conversationKey, nextSessionId)
+    }
     setDurableSessionId(nextSessionId)
 
     if (nextSessionId && options.notifyParent) {
       onDurableSessionIdChange?.(nextSessionId)
     }
-  }, [onDurableSessionIdChange])
+  }, [conversationKey, onDurableSessionIdChange, setDurableSessionId])
 
   // Scroll to bottom when messages change
   useEffect(() => {

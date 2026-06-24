@@ -3656,6 +3656,18 @@ async def chat_with_opus(
             logger.debug("Cleared workflow and flow context after streaming")
 
     run_id = f"agent_studio_chat_turn:{prepared_turn.session_id}:{prepared_turn.turn_id}"
+
+    def terminal_error_event(exc: Exception) -> str:
+        detail = getattr(exc, "detail", None)
+        message = str(detail or exc or "Agent Studio turn failed to start.")
+        return _opus_sse_event(
+            session_id=prepared_turn.session_id,
+            turn_id=prepared_turn.turn_id,
+            event_type="ERROR",
+            message=message,
+            error_source=type(exc).__name__,
+        )
+
     try:
         executable_run, _ = await executable_run_manager.get_or_start_stream(
             run_id=run_id,
@@ -3665,6 +3677,7 @@ async def chat_with_opus(
             turn_id=prepared_turn.turn_id,
             stream_factory=generate_stream,
             can_cancel=False,
+            terminal_error_event_factory=terminal_error_event,
         )
     except ExecutableRunAccessError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc

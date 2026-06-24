@@ -1139,6 +1139,20 @@ async def execute_flow_endpoint(
             await stream_lifecycle.finalize(generated_title_candidate)
 
     run_id = f"curation_flow_run:{request.session_id}:{prepared_turn.turn_id}"
+
+    def terminal_error_event(exc: Exception) -> str:
+        detail = getattr(exc, "detail", None)
+        message = str(detail or exc or "Flow execution failed to start.")
+        return _stream_event_sse(
+            _stream_event_payload(
+                "RUN_ERROR",
+                session_id=request.session_id,
+                turn_id=prepared_turn.turn_id,
+                message=message,
+                error_type=type(exc).__name__,
+            )
+        )
+
     try:
         executable_run, _ = await executable_run_manager.get_or_start_stream(
             run_id=run_id,
@@ -1148,6 +1162,7 @@ async def execute_flow_endpoint(
             turn_id=prepared_turn.turn_id,
             flow_run_id=prepared_turn.flow_run_id,
             stream_factory=event_generator,
+            terminal_error_event_factory=terminal_error_event,
         )
     except ExecutableRunAccessError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc

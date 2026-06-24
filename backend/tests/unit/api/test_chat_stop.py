@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.api import chat_stream as chat
+from src.lib.executable_runs import ExecutableRunManager
 
 
 def _reset_local_state():
@@ -86,6 +87,60 @@ def test_stop_chat_allows_owner_and_sets_cancel(monkeypatch):
     assert "Cancellation requested" in result["message"]
     assert local_event.is_set() is True
     assert calls["set_cancel"] == 1
+
+
+def test_stop_chat_cancels_executable_run_before_stream_lifecycle_claim(monkeypatch):
+    _reset_local_state()
+    session_id = "session-executable-startup"
+    manager = ExecutableRunManager()
+    block_stream = asyncio.Event()
+
+    async def _stream_factory():
+        await block_stream.wait()
+        yield 'data: {"type":"turn_interrupted"}\n\n'
+
+    async def _run_test():
+        run, _ = await manager.get_or_start_stream(
+            run_id=f"assistant_chat_turn:{session_id}:turn-1",
+            kind="assistant_chat_turn",
+            owner_user_id="owner-sub",
+            session_id=session_id,
+            turn_id="turn-1",
+            stream_factory=_stream_factory,
+        )
+
+        calls = {"set_cancel": 0}
+
+        async def _fake_get_stream_owner(_session_id: str):
+            return None
+
+        async def _fake_is_stream_active(_session_id: str) -> bool:
+            return False
+
+        async def _fake_set_cancel_signal(_session_id: str):
+            calls["set_cancel"] += 1
+            return True
+
+        monkeypatch.setattr(chat, "executable_run_manager", manager)
+        monkeypatch.setattr(chat, "get_stream_owner", _fake_get_stream_owner)
+        monkeypatch.setattr(chat, "is_stream_active", _fake_is_stream_active)
+        monkeypatch.setattr(chat, "set_cancel_signal", _fake_set_cancel_signal)
+
+        result = await chat.stop_chat(
+            request=chat.StopRequest(session_id=session_id),
+            user={"sub": "owner-sub"},
+        )
+
+        assert result["status"] == "ok"
+        assert "Cancellation requested" in result["message"]
+        assert run.status == "cancel_requested"
+        assert calls["set_cancel"] == 1
+
+        block_stream.set()
+        if run.task is not None:
+            await asyncio.wait_for(run.task, timeout=1)
+
+    asyncio.run(_run_test())
 
 
 def test_stop_chat_rejects_when_owner_unknown_but_stream_active(monkeypatch):

@@ -908,6 +908,20 @@ async def chat_stream_endpoint(
             await stream_lifecycle.finalize(generated_title_candidate)
 
     run_id = f"assistant_chat_turn:{session_id}:{prepared_turn.turn_id}"
+
+    def terminal_error_event(exc: Exception) -> str:
+        detail = getattr(exc, "detail", None)
+        message = str(detail or exc or "Chat turn failed to start.")
+        return _stream_event_sse(
+            _build_terminal_turn_event(
+                "turn_failed",
+                session_id=session_id,
+                turn_id=prepared_turn.turn_id,
+                message=message,
+                error_type=type(exc).__name__,
+            )
+        )
+
     try:
         executable_run, _ = await executable_run_manager.get_or_start_stream(
             run_id=run_id,
@@ -916,6 +930,7 @@ async def chat_stream_endpoint(
             session_id=session_id,
             turn_id=prepared_turn.turn_id,
             stream_factory=generate_stream,
+            terminal_error_event_factory=terminal_error_event,
         )
     except ExecutableRunAccessError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -948,6 +963,9 @@ async def stop_chat(request: StopRequest, user: Dict[str, Any] = get_auth_depend
     owner_id = _LOCAL_SESSION_OWNERS.get(session_id)
     if owner_id is None:
         owner_id = await get_stream_owner(session_id)
+    active_run = await executable_run_manager.get_active_session_run(session_id)
+    if owner_id is None and active_run is not None:
+        owner_id = active_run.owner_user_id
     if owner_id and owner_id != requester_id:
         raise HTTPException(status_code=403, detail="You do not have permission to cancel this session")
 
@@ -958,7 +976,20 @@ async def stop_chat(request: StopRequest, user: Dict[str, Any] = get_auth_depend
     if stream_active and owner_id is None:
         raise HTTPException(status_code=403, detail="Unable to verify stream ownership for cancellation")
 
-    if not local_event and not stream_active:
+    executable_run_cancel_requested = False
+    if active_run is not None:
+        try:
+            executable_run_cancel_requested = (
+                await executable_run_manager.request_cancel_for_session(
+                    session_id=session_id,
+                    owner_user_id=requester_id,
+                )
+                is not None
+            )
+        except ExecutableRunAccessError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    if not local_event and not stream_active and not executable_run_cancel_requested:
         return {"status": "ok", "message": "No running chat for this session."}
 
     # Signal cancellation via Redis (cross-worker) and local event (same-worker)
