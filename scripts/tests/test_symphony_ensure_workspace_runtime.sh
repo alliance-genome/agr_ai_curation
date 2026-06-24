@@ -93,6 +93,7 @@ EOF
     symphony_needs_review_claim.sh \
     symphony_finalizing_lane.sh \
     symphony_finalize_issue.sh \
+    symphony_close_linked_jira.sh \
     symphony_request_claude_rereview.sh \
     symphony_wait_for_claude_review.sh \
     symphony_claude_review_rounds.sh \

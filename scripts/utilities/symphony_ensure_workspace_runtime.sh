@@ -233,6 +233,10 @@ verify_one "scripts/utilities/symphony_linear_workpad.sh" "required"
 verify_one "scripts/utilities/symphony_linear_issue_state.sh" "required"
 verify_one_or_source_fallback "scripts/utilities/symphony_finalizing_lane.sh" "required"
 verify_one "scripts/utilities/symphony_finalize_issue.sh" "required"
+# Best-effort linked-Jira close runs from the Finalizing lane wrapper. Existing
+# workspaces created before this helper existed can run the source-root copy,
+# and the wrapper tolerates its absence, so keep it optional + source-fallback.
+verify_one_or_source_fallback "scripts/utilities/symphony_close_linked_jira.sh" "optional"
 # Legacy scripts kept for backward compatibility until all workspaces update.
 verify_one "scripts/utilities/symphony_request_claude_rereview.sh" "optional"
 verify_one "scripts/utilities/symphony_wait_for_claude_review.sh" "optional"

@@ -189,6 +189,73 @@ EOF
   rm -rf "${temp_root}"
 }
 
+test_successful_finalization_closes_linked_jira() {
+  local temp_root repo context helper_dir finalizer output workpad_log state_log section_log jira_helper jira_log
+  temp_root="$(mktemp -d)"
+  repo="${temp_root}/repo"
+  context="${temp_root}/context.json"
+  helper_dir="${temp_root}/helpers"
+  finalizer="${helper_dir}/finalize.sh"
+  output="${temp_root}/output.txt"
+  workpad_log="${temp_root}/workpad.log"
+  state_log="${temp_root}/state.log"
+  section_log="${temp_root}/section.md"
+  jira_helper="${helper_dir}/jira_close.sh"
+  jira_log="${temp_root}/jira_called.log"
+
+  make_repo "${repo}"
+  write_context_json "${context}" "Finalizing" "workflow:no-pr"
+  write_stub_helpers "${helper_dir}" "${workpad_log}" "${state_log}" "${section_log}"
+
+  cat > "${finalizer}" <<'EOF'
+#!/usr/bin/env bash
+cat <<'OUT'
+FINALIZE_STATUS=finalized_no_pr
+FINALIZE_NEXT_STATE=Done
+FINALIZE_DELIVERY_MODE=no_pr
+FINALIZE_BRANCH=all-123
+FINALIZE_MERGE_STATUS=skipped_no_pr
+FINALIZE_MESSAGE=No PR merge required.
+OUT
+EOF
+  chmod +x "${finalizer}"
+
+  # Stub linked-Jira close helper records that it was called and reports closed.
+  cat > "${jira_helper}" <<EOF
+#!/usr/bin/env bash
+echo "called \$*" > "${jira_log}"
+cat <<'OUT'
+CLOSE_LINKED_JIRA_STATUS=closed
+CLOSE_LINKED_JIRA_KEY=PROJ-101
+CLOSE_LINKED_JIRA_LINK_SOURCE=attachment
+CLOSE_LINKED_JIRA_TRANSITION=Done
+CLOSE_LINKED_JIRA_COMMENTED=true
+CLOSE_LINKED_JIRA_REASON=Transitioned PROJ-101 to Done.
+OUT
+EOF
+  chmod +x "${jira_helper}"
+
+  bash "${SCRIPT_PATH}" \
+    --issue-identifier ALL-123 \
+    --context-json-file "${context}" \
+    --workspace-dir "${repo}" \
+    --workpad-helper "${helper_dir}/workpad.sh" \
+    --state-helper "${helper_dir}/state.sh" \
+    --finalize-helper "${finalizer}" \
+    --jira-close-helper "${jira_helper}" \
+    > "${output}"
+
+  assert_contains "FINALIZING_LANE_STATUS=done" "${output}"
+  assert_contains "FINALIZING_LANE_JIRA_CLOSE_STATUS=closed" "${output}"
+  assert_contains "Linked Jira Closure" "${section_log}"
+  assert_contains "CLOSE_LINKED_JIRA_KEY: \`PROJ-101\`" "${section_log}"
+  [[ -f "${jira_log}" ]]
+  # The wrapper reuses the already-resolved Linear context (passes context.json).
+  assert_contains "context.json" "${jira_log}"
+
+  rm -rf "${temp_root}"
+}
+
 test_successful_finalization_tolerates_already_done_state() {
   local temp_root repo context helper_dir finalizer output workpad_log state_log section_log
   temp_root="$(mktemp -d)"
@@ -391,6 +458,7 @@ EOF
 }
 
 test_successful_finalization_moves_to_done
+test_successful_finalization_closes_linked_jira
 test_successful_finalization_tolerates_already_done_state
 test_merge_conflict_returns_to_in_progress
 test_missing_pr_moves_to_blocked

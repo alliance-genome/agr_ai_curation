@@ -8,6 +8,7 @@ CONTEXT_HELPER="${SYMPHONY_FINALIZING_CONTEXT_HELPER:-${SCRIPT_DIR}/symphony_lin
 WORKPAD_HELPER="${SYMPHONY_FINALIZING_WORKPAD_HELPER:-${SCRIPT_DIR}/symphony_linear_workpad.sh}"
 STATE_HELPER="${SYMPHONY_FINALIZING_STATE_HELPER:-${SCRIPT_DIR}/symphony_linear_issue_state.sh}"
 FINALIZE_HELPER="${SYMPHONY_FINALIZING_HELPER:-${SCRIPT_DIR}/symphony_finalize_issue.sh}"
+JIRA_CLOSE_HELPER="${SYMPHONY_FINALIZING_JIRA_CLOSE_HELPER:-${SCRIPT_DIR}/symphony_close_linked_jira.sh}"
 
 usage() {
   cat <<'EOF'
@@ -37,6 +38,7 @@ Options:
   --workpad-helper PATH       Override workpad helper path.
   --state-helper PATH         Override state helper path.
   --finalize-helper PATH      Override finalization helper path.
+  --jira-close-helper PATH    Override linked-Jira close helper path. Best-effort; never blocks.
   --json-output-file PATH     Write JSON summary to this path.
   --format VALUE              One of: env, json, pretty. Default: env.
   --help                      Show this help.
@@ -45,6 +47,7 @@ Output contract:
   FINALIZING_LANE_STATUS=done|returned_to_in_progress|blocked|noop|error
   FINALIZING_LANE_TO_STATE=Done|In Progress|Blocked|<current state>
   FINALIZING_LANE_REASON=...
+  FINALIZING_LANE_JIRA_CLOSE_STATUS=closed|already_done|no_link|no_jira_creds|error|not_attempted|helper_absent
 EOF
 }
 
@@ -102,6 +105,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --finalize-helper)
       FINALIZE_HELPER="${2:-}"
+      shift 2
+      ;;
+    --jira-close-helper)
+      JIRA_CLOSE_HELPER="${2:-}"
       shift 2
       ;;
     --json-output-file)
@@ -240,6 +247,7 @@ build_payload() {
   local finalize_status="${4:-}"
   local workpad_status="${5:-}"
   local state_status="${6:-}"
+  local jira_close_status="${7:-}"
 
   jq -cn \
     --arg status "${status}" \
@@ -251,7 +259,8 @@ build_payload() {
     --arg reason "${reason}" \
     --arg finalize_status "${finalize_status}" \
     --arg workpad_status "${workpad_status}" \
-    --arg state_status "${state_status}" '
+    --arg state_status "${state_status}" \
+    --arg jira_close_status "${jira_close_status}" '
     {
       finalizing_lane_status: $status,
       finalizing_lane_issue_identifier: $issue_identifier,
@@ -262,7 +271,8 @@ build_payload() {
       finalizing_lane_reason: $reason,
       finalizing_lane_finalize_status: $finalize_status,
       finalizing_lane_workpad_status: $workpad_status,
-      finalizing_lane_state_status: $state_status
+      finalizing_lane_state_status: $state_status,
+      finalizing_lane_jira_close_status: $jira_close_status
     }'
 }
 
@@ -412,6 +422,64 @@ write_summary_section() {
   } > "${section_file}"
 }
 
+run_jira_close() {
+  # Best-effort close of the linked Jira ticket. Never fails the lane.
+  # Reuses the already-resolved Linear context so no extra Linear fetch or API
+  # key is required. Echoes the helper's env-style output (or a synthetic
+  # status line) for the caller to record.
+  if [[ -z "${JIRA_CLOSE_HELPER}" || ! -x "${JIRA_CLOSE_HELPER}" ]]; then
+    echo "CLOSE_LINKED_JIRA_STATUS=helper_absent"
+    return 0
+  fi
+
+  local -a cmd=(bash "${JIRA_CLOSE_HELPER}"
+    --context-json-file "${context_json_path}"
+    --agent-name "Symphony"
+    --format env)
+  if [[ -n "${issue_identifier}" ]]; then
+    cmd+=(--issue-identifier "${issue_identifier}")
+  fi
+  if [[ -n "${linear_api_key}" ]]; then
+    cmd+=(--linear-api-key "${linear_api_key}")
+  fi
+
+  local output rc
+  set +e
+  output="$("${cmd[@]}" 2>&1)"
+  rc=$?
+  set -e
+
+  printf '%s\n' "${output}"
+  if [[ "${rc}" -ne 0 ]]; then
+    echo "CLOSE_LINKED_JIRA_STATUS=error"
+  fi
+}
+
+append_jira_close_to_section() {
+  local section_file="$1"
+  local jira_output="$2"
+  local key value
+  local keys=(
+    CLOSE_LINKED_JIRA_STATUS
+    CLOSE_LINKED_JIRA_KEY
+    CLOSE_LINKED_JIRA_LINK_SOURCE
+    CLOSE_LINKED_JIRA_TRANSITION
+    CLOSE_LINKED_JIRA_COMMENTED
+    CLOSE_LINKED_JIRA_REASON
+  )
+
+  {
+    echo
+    echo "### Linked Jira Closure"
+    for key in "${keys[@]}"; do
+      value="$(extract_kv "${key}" "${jira_output}")"
+      if [[ -n "${value}" ]]; then
+        echo "- ${key}: \`$(sanitize_value "${value}")\`"
+      fi
+    done
+  } >> "${section_file}"
+}
+
 run_finalize_helper() {
   local -a cmd
 
@@ -469,9 +537,16 @@ section_file="$(mktemp "${TMPDIR:-/tmp}/symphony-finalizing-summary-XXXXXX.md")"
 case "${finalize_status}:${finalize_next_state}" in
   merged:Done|finalized_no_pr:Done|dry_run:Done)
     write_summary_section "${section_file}" "Finalization completed." "Done" "${finalize_status}" "${finalize_output}"
+    jira_close_status="not_attempted"
+    if [[ "${finalize_status}" != "dry_run" ]]; then
+      jira_close_output="$(run_jira_close)"
+      jira_close_status="$(extract_kv "CLOSE_LINKED_JIRA_STATUS" "${jira_close_output}")"
+      jira_close_status="${jira_close_status:-unknown}"
+      append_jira_close_to_section "${section_file}" "${jira_close_output}"
+    fi
     workpad_status="$(append_finalization_summary "${section_file}")" || exit 3
     state_status="$(move_issue_state "Done")" || exit 3
-    payload="$(build_payload "done" "Done" "${finalize_status}" "${finalize_status}" "${workpad_status}" "${state_status}")"
+    payload="$(build_payload "done" "Done" "${finalize_status}" "${finalize_status}" "${workpad_status}" "${state_status}" "${jira_close_status:-}")"
     emit_payload "${payload}"
     ;;
   merge_conflict:In\ Progress)
