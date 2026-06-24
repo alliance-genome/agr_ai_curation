@@ -14,7 +14,6 @@ VALIDATOR_DISPATCH_CLEANUP_SURFACE_PATHS = (
     "backend/src/schemas/flows.py",
     "backend/src/api/agent_studio.py",
     "backend/src/api/agent_studio_opus_tools.py",
-    "backend/src/api/agent_studio_system_prompt.md",
     "backend/src/lib/agent_studio/domain_envelope_metadata.py",
     "backend/src/lib/agent_studio/domain_envelope_tools.py",
     "backend/src/lib/agent_studio/flow_tools.py",
@@ -234,17 +233,15 @@ def test_agent_studio_system_prompt_grounded_in_pdf_evidence_span_tools():
     assert "Do not recommend fuzzy quote repair" in prompt
 
 
-def test_agent_studio_system_prompt_canonical_and_packaged_copies_match():
+def test_agent_studio_system_prompt_has_no_backend_core_copy():
+    from src.api import agent_studio as api_module
+
     canonical_path = REPO_ROOT / "alliance_config" / "agent_studio_system_prompt.md"
-    if not canonical_path.exists():
-        # The backend unit-test image may include only /app/backend. Local and
-        # full-repo runs still guard the canonical runtime copy.
-        return
+    backend_core_path = REPO_ROOT / "backend/src/api/agent_studio_system_prompt.md"
 
-    canonical_prompt = canonical_path.read_text(encoding="utf-8")
-    packaged_prompt = _read_repo_text("backend/src/api/agent_studio_system_prompt.md")
-
-    assert canonical_prompt == packaged_prompt
+    assert canonical_path.exists()
+    assert not backend_core_path.exists()
+    assert backend_core_path not in api_module.AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES
 
 
 def test_validator_dispatch_cleanup_guardrail_rejects_stale_active_surface_terms():

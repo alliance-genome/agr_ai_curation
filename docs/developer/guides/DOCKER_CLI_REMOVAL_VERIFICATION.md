@@ -57,7 +57,7 @@ This is the expected out-of-scope implementation owned by ALL-144.
   - Imports `get_docker_logs`.
 - `backend/src/api/agent_studio.py:1823-1827`
   - Dispatches tool calls to `get_docker_logs()`.
-- `backend/src/api/agent_studio_system_prompt.md:209`
+- `alliance_config/agent_studio_system_prompt.md`
   - Documents the `get_docker_logs(container, lines)` tool for the agent.
 - `backend/src/lib/agent_studio/tools.py:4-16`
   - Module docstring describes Docker log retrieval as part of the workflow analysis tool surface.
@@ -298,7 +298,7 @@ backend/tests/fixtures/generate_pdfx_fixture.py:4:Usage (from inside the backend
 backend/tests/fixtures/generate_pdfx_fixture.py:7:Or via docker compose:
 backend/tests/fixtures/generate_pdfx_fixture.py:8:    docker compose -f docker-compose.test.yml run --rm \
 backend/src/api/maintenance.py:15:# Path to the maintenance message file (mounted via docker-compose)
-backend/src/api/agent_studio_system_prompt.md:209:- **`get_docker_logs(container, lines)`** - System logs. Use only for failed calls or reported errors. Containers: backend, weaviate, postgres.
+alliance_config/agent_studio_system_prompt.md:- **`get_docker_logs(container, lines)`** - System logs. Use only for failed calls or reported errors. Containers: backend, weaviate, postgres.
 backend/tests/contract/test_health.py:241:    def test_health_check_docker_environment(self, client, mock_weaviate_connection):
 backend/tests/contract/test_health.py:247:            assert response.json()["details"]["environment"]["docker"] is True
 backend/src/lib/agent_studio/tools.py:4:Provides tool functions for Opus to dynamically query trace data and Docker logs.

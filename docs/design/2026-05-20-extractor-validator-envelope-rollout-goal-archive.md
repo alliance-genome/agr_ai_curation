@@ -729,9 +729,8 @@ Prompt updates:
 - Supervisor/chat prompts must explain that envelope-backed extractors may run validators internally before the supervisor sees the result.
 - Opus/Claude “Chat with Claude” knowledge must explain the runtime architecture so external review does not confuse extractor proposals with validated materialized fields.
 - Done at `8e7ca7e7`: the configured supervisor prompt no longer says gene extraction returns `normalized IDs` or performs `evidence and normalization`; it now describes validator-ready identity context and validator findings when active.
-- Update the canonical Agent Studio system prompt and its fallback/test copy:
+- Update the canonical Agent Studio system prompt:
   - `alliance_config/agent_studio_system_prompt.md`
-  - `backend/src/api/agent_studio_system_prompt.md`
 - Update associated prompt-policy tests, especially Agent Studio domain-envelope prompt guardrails, so stale “extractor calls validators directly” assumptions cannot reappear.
 
 Agent Studio / Workshop updates:

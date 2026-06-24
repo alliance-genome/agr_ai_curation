@@ -44,6 +44,7 @@ COPY scripts/testing/dev_release_smoke.py /app/scripts/testing/dev_release_smoke
 
 # Copy config directories needed by config-driven architecture tests
 COPY config/ /app/config/
+COPY alliance_config/ /app/alliance_config/
 COPY packages/ /app/packages/
 
 # Set Python path

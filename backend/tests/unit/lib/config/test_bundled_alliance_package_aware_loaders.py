@@ -470,7 +470,6 @@ def test_retired_ontology_mapping_identifiers_are_not_active_runtime_references(
     scanned_paths = [
         REPO_ROOT / ".env.example",
         REPO_ROOT / "alliance_config" / "agent_studio_system_prompt.md",
-        REPO_ROOT / "backend" / "src" / "api" / "agent_studio_system_prompt.md",
         REPO_ROOT / "backend" / "src" / "lib" / "agent_studio",
         REPO_ROOT / "backend" / "src" / "lib" / "openai_agents",
         REPO_ROOT / "backend" / "src" / "schemas" / "models",
