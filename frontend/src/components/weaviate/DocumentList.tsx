@@ -709,8 +709,6 @@ const DocumentList: React.FC<DocumentListProps> = ({
             sortingOrder={['asc', 'desc']}
             filterModel={filterModel}
             onFilterModelChange={setFilterModel}
-            paginationMode="server"
-            filterMode="server"
             disableRowSelectionOnClick
             checkboxSelection={checkboxSelection}
             rowSelectionModel={selectedIds}

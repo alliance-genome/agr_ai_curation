@@ -76,6 +76,8 @@ vi.mock('@mui/x-data-grid', async () => {
     sortModel = [],
     onSortModelChange,
     sortingMode = 'client',
+    paginationMode = 'client',
+    filterMode = 'client',
     sortingOrder = ['asc', 'desc', null],
     sx,
   }: {
@@ -87,6 +89,8 @@ vi.mock('@mui/x-data-grid', async () => {
     sortModel?: Array<{ field: string; sort?: 'asc' | 'desc' | null }>;
     onSortModelChange?: (model: Array<{ field: string; sort?: 'asc' | 'desc' | null }>) => void;
     sortingMode?: 'client' | 'server';
+    paginationMode?: 'client' | 'server';
+    filterMode?: 'client' | 'server';
     sortingOrder?: Array<'asc' | 'desc' | null>;
     sx?: Record<string, unknown>;
   }) => {
@@ -136,6 +140,9 @@ vi.mock('@mui/x-data-grid', async () => {
       <div
         className="MuiDataGrid-root"
         role="grid"
+        data-sorting-mode={sortingMode}
+        data-pagination-mode={paginationMode}
+        data-filter-mode={filterMode}
         style={{
           height: typeof sx?.height === 'string' ? sx.height : undefined,
           minHeight: typeof sx?.minHeight === 'number' ? `${sx.minHeight}px` : undefined,
@@ -387,9 +394,11 @@ describe('DocumentList', () => {
   it('handles pagination changes', async () => {
     const { container } = render(<DocumentList {...defaultProps} totalCount={100} />);
 
-    // DataGrid should handle pagination internally
     const grid = container.querySelector('.MuiDataGrid-root');
     expect(grid).toBeInTheDocument();
+    expect(grid).toHaveAttribute('data-pagination-mode', 'client');
+    expect(grid).toHaveAttribute('data-filter-mode', 'client');
+    expect(grid).toHaveAttribute('data-sorting-mode', 'client');
   });
 
   it('sorts rows by text, number, and date columns and toggles direction', () => {
