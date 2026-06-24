@@ -13,6 +13,7 @@ import pytest
 
 from src.api import chat, chat_common, chat_stream
 from src.lib.curation_workspace import extraction_results as extraction_results_module
+from src.lib.executable_runs import ExecutableRun
 from src.lib.openai_agents.evidence_summary import build_evidence_record_id
 from tests.chat_api_test_support import patch_chat_impl_for
 
@@ -30,6 +31,24 @@ async def _consume_stream(response: StreamingResponse) -> list[dict]:
     for line in "".join(chunks).splitlines():
         if line.startswith("data: "):
             payloads.append(json.loads(line[6:]))
+    return payloads
+
+
+async def _consume_stream_prefix(response: StreamingResponse, count: int) -> list[dict]:
+    chunks = []
+    payloads: list[dict] = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk)
+        payloads = [
+            json.loads(line[6:])
+            for line in "".join(chunks).splitlines()
+            if line.startswith("data: ")
+        ]
+        if len(payloads) >= count:
+            aclose = getattr(response.body_iterator, "aclose", None)
+            if aclose is not None:
+                await aclose()
+            return payloads[:count]
     return payloads
 
 
@@ -73,6 +92,8 @@ def _assistant_record(*, session_id: str, turn_id: str, content: str, trace_id: 
 def _stub_stream_turn_persistence(monkeypatch):
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
+    chat.executable_run_manager._runs.clear()
+    chat.executable_run_manager._active_session_run_ids.clear()
 
     _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: object())
     _patch_chat_impl(
@@ -133,9 +154,11 @@ def _stub_stream_turn_persistence(monkeypatch):
     yield
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
+    chat.executable_run_manager._runs.clear()
+    chat.executable_run_manager._active_session_run_ids.clear()
 
 
-def test_chat_stream_endpoint_has_idempotent_cleanup_background_task(monkeypatch):
+def test_chat_stream_endpoint_cleans_up_after_stream_is_consumed(monkeypatch):
     calls = {"register": [], "unregister": [], "clear": []}
 
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
@@ -183,13 +206,9 @@ def test_chat_stream_endpoint_has_idempotent_cleanup_background_task(monkeypatch
     )
 
     assert isinstance(response, StreamingResponse)
-    assert response.background is not None
 
     events = asyncio.run(_consume_stream(response))
     assert [event["type"] for event in events] == ["RUN_STARTED", "turn_completed"]
-
-    # Explicitly invoke response background task to verify cleanup remains idempotent.
-    asyncio.run(response.background())
 
     assert calls["register"] == [("session-chat-stream", "auth-sub", ANY)]
     assert calls["unregister"] == [("session-chat-stream", "auth-sub", ANY)]
@@ -316,7 +335,6 @@ def test_chat_stream_endpoint_background_backfill_uses_final_assistant_aware_tit
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == ["RUN_STARTED", "turn_completed"]
     assert captured_backfill_calls == [
@@ -484,6 +502,73 @@ def test_chat_stream_endpoint_rejects_same_user_when_session_already_active(monk
     assert chat._LOCAL_CANCEL_EVENTS["session-active-same-user"] is existing_event
 
 
+def test_chat_stream_endpoint_reattaches_to_active_same_turn_without_reclaiming(monkeypatch):
+    session_id = "session-active-reattach"
+    turn_id = "turn-active-reattach"
+    run_id = f"assistant_chat_turn:{session_id}:{turn_id}"
+    existing_event = asyncio.Event()
+    chat._LOCAL_SESSION_OWNERS[session_id] = "auth-sub"
+    chat._LOCAL_CANCEL_EVENTS[session_id] = existing_event
+    chat.executable_run_manager._runs[run_id] = ExecutableRun(
+        run_id=run_id,
+        kind="assistant_chat_turn",
+        owner_user_id="auth-sub",
+        session_id=session_id,
+        turn_id=turn_id,
+        status="running",
+        events=[
+            chat._stream_event_sse(
+                chat._stream_event_payload(
+                    "RUN_STARTED",
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    trace_id="trace-active-reattach",
+                )
+            )
+        ],
+    )
+    chat.executable_run_manager._active_session_run_ids[session_id] = run_id
+
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(
+        monkeypatch,
+        "get_supervisor_tool_agent_map",
+        lambda: (_ for _ in ()).throw(AssertionError("reattach should not resolve runner config")),
+    )
+    _patch_chat_impl(
+        monkeypatch,
+        "_prepare_chat_stream_turn",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("reattach should not prepare a new turn")),
+    )
+
+    response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(
+                message="hello",
+                session_id=session_id,
+                turn_id=turn_id,
+            ),
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream_prefix(response, 1))
+
+    assert events == [
+        {
+            "type": "RUN_STARTED",
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "trace_id": "trace-active-reattach",
+        }
+    ]
+    assert chat._LOCAL_SESSION_OWNERS[session_id] == "auth-sub"
+    assert chat._LOCAL_CANCEL_EVENTS[session_id] is existing_event
+
+
 def test_chat_stream_endpoint_persists_extraction_envelopes_after_success(monkeypatch):
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
@@ -602,7 +687,6 @@ def test_chat_stream_endpoint_persists_extraction_envelopes_after_success(monkey
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == ["RUN_STARTED", "TOOL_COMPLETE", "turn_completed"]
     assert len(persisted_requests) == 1
@@ -719,7 +803,6 @@ def test_chat_stream_endpoint_persists_internal_extraction_result_without_stream
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == ["RUN_STARTED", "TOOL_COMPLETE", "turn_completed"]
     assert len(persisted_requests) == 1
@@ -812,7 +895,6 @@ def test_chat_stream_endpoint_does_not_repersist_inline_extraction_result(monkey
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == ["RUN_STARTED", "TOOL_COMPLETE", "turn_completed"]
     assert captured_finalize["extraction_candidates"] == []
@@ -921,7 +1003,6 @@ def test_chat_stream_endpoint_emits_evidence_summary_after_record_evidence(monke
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == [
         "RUN_STARTED",
@@ -1015,7 +1096,6 @@ def test_chat_stream_endpoint_uses_runner_emitted_evidence_summary(monkeypatch):
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == [
         "RUN_STARTED",
@@ -1112,7 +1192,6 @@ def test_chat_stream_endpoint_flattens_details_evidence_summary(monkeypatch):
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == [
         "RUN_STARTED",
@@ -1241,7 +1320,6 @@ def test_chat_stream_endpoint_infers_scope_for_scope_free_extraction_envelopes(m
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == ["RUN_STARTED", "TOOL_COMPLETE", "turn_completed"]
     assert len(persisted_requests) == 1
@@ -1367,7 +1445,6 @@ def test_chat_stream_endpoint_emits_turn_failed_when_completion_side_effect_pers
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     event_types = [event["type"] for event in events]
     assert event_types == ["RUN_STARTED", "TOOL_COMPLETE", "SUPERVISOR_ERROR", "turn_failed"]
@@ -1432,7 +1509,6 @@ def test_chat_stream_endpoint_emits_turn_save_failed_when_assistant_persistence_
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     event_types = [event["type"] for event in events]
     assert event_types == ["RUN_STARTED", "SUPERVISOR_ERROR", "turn_save_failed"]
@@ -1490,7 +1566,6 @@ def test_chat_stream_endpoint_sanitizes_runner_run_error_event(monkeypatch, capl
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == ["turn_failed"]
     assert (
@@ -1558,7 +1633,6 @@ def test_chat_stream_endpoint_emits_turn_interrupted_on_cancel_signal(monkeypatc
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == ["RUN_STARTED", "turn_interrupted"]
     assert events[-1]["turn_id"] == "generated-turn"
@@ -1627,12 +1701,109 @@ def test_chat_stream_endpoint_replays_existing_assistant_turn_without_runner(mon
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == ["TEXT_MESSAGE_CONTENT", "turn_completed"]
     assert events[0]["content"] == "stored response"
     assert events[1]["turn_id"] == "turn-replay"
     assert events[1]["trace_id"] == "trace-replay"
+
+
+def test_chat_stream_endpoint_terminal_replay_releases_lifecycle_before_next_turn(monkeypatch):
+    chat._LOCAL_CANCEL_EVENTS.clear()
+    chat._LOCAL_SESSION_OWNERS.clear()
+
+    calls = {"register": [], "unregister": [], "clear": []}
+    runner_calls = []
+
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+
+    async def _register_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        calls["register"].append((session_id, user_id, stream_token))
+        return True
+
+    async def _unregister_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        calls["unregister"].append((session_id, user_id, stream_token))
+
+    async def _clear_cancel_signal(session_id: str):
+        calls["clear"].append(session_id)
+
+    async def _check_cancel_signal(_session_id: str) -> bool:
+        return False
+
+    async def _run_agent_streamed(**_kwargs):
+        runner_calls.append(_kwargs)
+        yield {"type": "RUN_STARTED", "data": {"trace_id": f"trace-{len(runner_calls)}"}}
+        if len(runner_calls) == 1:
+            raise RuntimeError("terminal failure")
+        yield {"type": "RUN_FINISHED", "data": {"response": "fresh reply"}}
+
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _check_cancel_signal)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _run_agent_streamed)
+
+    first_response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(
+                message="fail once",
+                session_id="session-terminal-replay",
+                turn_id="turn-terminal-replay",
+            ),
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+    first_events = asyncio.run(_consume_stream(first_response))
+
+    second_response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(
+                message="fail once",
+                session_id="session-terminal-replay",
+                turn_id="turn-terminal-replay",
+            ),
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+    second_events = asyncio.run(_consume_stream(second_response))
+
+    third_response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(
+                message="fresh turn",
+                session_id="session-terminal-replay",
+                turn_id="turn-after-terminal-replay",
+            ),
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+    third_events = asyncio.run(_consume_stream(third_response))
+
+    assert [event["type"] for event in first_events] == [
+        "RUN_STARTED",
+        "SUPERVISOR_ERROR",
+        "turn_failed",
+    ]
+    assert second_events == first_events
+    assert [event["type"] for event in third_events] == ["RUN_STARTED", "turn_completed"]
+    assert len(runner_calls) == 2
+    assert chat._LOCAL_SESSION_OWNERS == {}
+    assert chat._LOCAL_CANCEL_EVENTS == {}
+    assert len(calls["register"]) == 3
+    assert len(calls["unregister"]) == 3
+    assert calls["clear"] == ["session-terminal-replay"] * 3
 
 
 def test_chat_stream_endpoint_emits_session_gone_when_session_disappears_before_completion_save(monkeypatch):
@@ -1687,7 +1858,6 @@ def test_chat_stream_endpoint_emits_session_gone_when_session_disappears_before_
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == ["RUN_STARTED", "session_gone"]
     assert events[-1]["trace_id"] == "trace-gone"

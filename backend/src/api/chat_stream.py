@@ -2,6 +2,11 @@
 """Chat response, streaming, cancellation, and assistant rescue endpoints."""
 
 from .chat_common import *
+from src.lib.executable_runs import (
+    ExecutableRunAccessError,
+    ExecutableRunConflictError,
+    executable_run_manager,
+)
 
 _LOCAL_NON_STREAM_TURN_OWNERS: Dict[str, str] = {}
 
@@ -395,6 +400,29 @@ async def chat_stream_endpoint(
             extra={"session_id": session_id, "user_id": user_id},
         )
 
+    active_executable_run = await executable_run_manager.get_active_session_run(session_id)
+    if active_executable_run is not None:
+        if active_executable_run.owner_user_id != user_id:
+            raise HTTPException(status_code=403, detail="Session is active for a different user")
+
+        expected_run_id = (
+            f"assistant_chat_turn:{session_id}:{chat_message.turn_id}"
+            if chat_message.turn_id
+            else None
+        )
+        if expected_run_id is not None and active_executable_run.run_id == expected_run_id:
+            return StreamingResponse(
+                executable_run_manager.observe(active_executable_run),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        raise HTTPException(status_code=409, detail="Session is already active")
+
     try:
         tool_agent_map = get_supervisor_tool_agent_map()
     except Exception as exc:
@@ -408,9 +436,11 @@ async def chat_stream_endpoint(
             detail="Internal configuration error: unable to process chat request",
         ) from exc
 
-    stream_lifecycle = await _claim_active_stream_lifecycle(session_id=session_id, user_id=user_id)
-    cancel_event = stream_lifecycle.cancel_event
     generated_title_candidate: str | None = None
+    stream_lifecycle = await _claim_active_stream_lifecycle(
+        session_id=session_id,
+        user_id=user_id,
+    )
 
     try:
         active_document_id, _ = _resolve_session_create_active_document(
@@ -430,10 +460,10 @@ async def chat_stream_endpoint(
             user_message=prepared_turn.effective_user_message,
         )
     except HTTPException:
-        await stream_lifecycle.cleanup(session_id)
+        await stream_lifecycle.cleanup()
         raise
     except ValueError as exc:
-        await stream_lifecycle.cleanup(session_id)
+        await stream_lifecycle.cleanup()
         _rollback_and_raise(
             db,
             status_code=400,
@@ -442,8 +472,9 @@ async def chat_stream_endpoint(
             log_message=f"Failed to prepare durable stream user turn for session {session_id}",
             level=logging.WARNING,
         )
+        raise AssertionError("unreachable")
     except Exception as exc:
-        await stream_lifecycle.cleanup(session_id)
+        await stream_lifecycle.cleanup()
         logger.error(
             "Failed to persist durable stream user turn for session %s",
             session_id,
@@ -462,34 +493,31 @@ async def chat_stream_endpoint(
             user_message=prepared_turn.effective_user_message,
             assistant_message=prepared_turn.replay_assistant_turn.content,
         )
+        await stream_lifecycle.finalize(generated_title_candidate)
 
         async def replay_stream():
-            try:
-                yield _stream_event_sse(
-                    _stream_event_payload(
-                        "TEXT_MESSAGE_CONTENT",
-                        session_id=session_id,
-                        turn_id=prepared_turn.turn_id,
-                        trace_id=prepared_turn.replay_assistant_turn.trace_id,
-                        content=prepared_turn.replay_assistant_turn.content,
-                    )
+            yield _stream_event_sse(
+                _stream_event_payload(
+                    "TEXT_MESSAGE_CONTENT",
+                    session_id=session_id,
+                    turn_id=prepared_turn.turn_id,
+                    trace_id=prepared_turn.replay_assistant_turn.trace_id,
+                    content=prepared_turn.replay_assistant_turn.content,
                 )
-                yield _stream_event_sse(
-                    _build_terminal_turn_event(
-                        "turn_completed",
-                        session_id=session_id,
-                        turn_id=prepared_turn.turn_id,
-                        trace_id=prepared_turn.replay_assistant_turn.trace_id,
-                        message="Chat turn completed.",
-                    )
+            )
+            yield _stream_event_sse(
+                _build_terminal_turn_event(
+                    "turn_completed",
+                    session_id=session_id,
+                    turn_id=prepared_turn.turn_id,
+                    trace_id=prepared_turn.replay_assistant_turn.trace_id,
+                    message="Chat turn completed.",
                 )
-            finally:
-                await stream_lifecycle.cleanup(session_id)
+            )
 
         return StreamingResponse(
             replay_stream(),
             media_type="text/event-stream",
-            background=stream_lifecycle.background_task(lambda: generated_title_candidate),
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
@@ -502,6 +530,7 @@ async def chat_stream_endpoint(
         nonlocal generated_title_candidate
         current_session_id = session_id
         current_turn_id = prepared_turn.turn_id
+        cancel_event = stream_lifecycle.cancel_event
         full_response = ""
         trace_id = None
         run_finished = False
@@ -903,12 +932,49 @@ async def chat_stream_endpoint(
                 )
             )
         finally:
-            await stream_lifecycle.cleanup(current_session_id)
+            await stream_lifecycle.finalize(generated_title_candidate)
+
+    run_id = f"assistant_chat_turn:{session_id}:{prepared_turn.turn_id}"
+
+    def terminal_error_event(exc: Exception) -> str:
+        detail = getattr(exc, "detail", None)
+        message = str(detail or exc or "Chat turn failed to start.")
+        return _stream_event_sse(
+            _build_terminal_turn_event(
+                "turn_failed",
+                session_id=session_id,
+                turn_id=prepared_turn.turn_id,
+                message=message,
+                error_type=type(exc).__name__,
+            )
+        )
+
+    try:
+        executable_run, created = await executable_run_manager.get_or_start_stream(
+            run_id=run_id,
+            kind="assistant_chat_turn",
+            owner_user_id=user_id,
+            session_id=session_id,
+            turn_id=prepared_turn.turn_id,
+            stream_factory=generate_stream,
+            terminal_error_event_factory=terminal_error_event,
+        )
+    except ExecutableRunAccessError as exc:
+        await stream_lifecycle.cleanup()
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ExecutableRunConflictError as exc:
+        await stream_lifecycle.cleanup()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception:
+        await stream_lifecycle.cleanup()
+        raise
+
+    if not created:
+        await stream_lifecycle.cleanup()
 
     return StreamingResponse(
-        generate_stream(),
+        executable_run_manager.observe(executable_run),
         media_type="text/event-stream",
-        background=stream_lifecycle.background_task(lambda: generated_title_candidate),
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
@@ -932,6 +998,9 @@ async def stop_chat(request: StopRequest, user: Dict[str, Any] = get_auth_depend
     owner_id = _LOCAL_SESSION_OWNERS.get(session_id)
     if owner_id is None:
         owner_id = await get_stream_owner(session_id)
+    active_run = await executable_run_manager.get_active_session_run(session_id)
+    if owner_id is None and active_run is not None:
+        owner_id = active_run.owner_user_id
     if owner_id and owner_id != requester_id:
         raise HTTPException(status_code=403, detail="You do not have permission to cancel this session")
 
@@ -942,7 +1011,20 @@ async def stop_chat(request: StopRequest, user: Dict[str, Any] = get_auth_depend
     if stream_active and owner_id is None:
         raise HTTPException(status_code=403, detail="Unable to verify stream ownership for cancellation")
 
-    if not local_event and not stream_active:
+    executable_run_cancel_requested = False
+    if active_run is not None:
+        try:
+            executable_run_cancel_requested = (
+                await executable_run_manager.request_cancel_for_session(
+                    session_id=session_id,
+                    owner_user_id=requester_id,
+                )
+                is not None
+            )
+        except ExecutableRunAccessError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    if not local_event and not stream_active and not executable_run_cancel_requested:
         return {"status": "ok", "message": "No running chat for this session."}
 
     # Signal cancellation via Redis (cross-worker) and local event (same-worker)

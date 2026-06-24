@@ -13,6 +13,7 @@ from uuid import uuid4
 from fastapi.responses import StreamingResponse
 import pytest
 
+from src.lib.executable_runs import ExecutableRun
 from tests.chat_api_test_support import patch_chat_impl_for
 
 chat = importlib.import_module("src.api.chat_execute_flow")
@@ -27,9 +28,13 @@ CONFIG_PATH = Path(__file__).resolve().parents[4] / "config"
 def _reset_stream_state():
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
+    chat.executable_run_manager._runs.clear()
+    chat.executable_run_manager._active_session_run_ids.clear()
     yield
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
+    chat.executable_run_manager._runs.clear()
+    chat.executable_run_manager._active_session_run_ids.clear()
 
 
 def test_append_deduped_file_output_replaces_existing_file_id():
@@ -374,6 +379,24 @@ async def _consume_stream(response: StreamingResponse) -> list[dict]:
     return payloads
 
 
+async def _consume_stream_prefix(response: StreamingResponse, count: int) -> list[dict]:
+    chunks = []
+    payloads: list[dict] = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk)
+        payloads = [
+            json.loads(line[6:])
+            for line in "".join(chunks).splitlines()
+            if line.startswith("data: ")
+        ]
+        if len(payloads) >= count:
+            aclose = getattr(response.body_iterator, "aclose", None)
+            if aclose is not None:
+                await aclose()
+            return payloads[:count]
+    return payloads
+
+
 def _patch_stream_dependencies(monkeypatch, *, cancel_requested: bool):
     calls = {"register": [], "unregister": [], "clear": []}
     repository = _FakeChatHistoryRepository()
@@ -465,9 +488,7 @@ def test_execute_flow_endpoint_streams_flattened_events(monkeypatch):
     )
 
     assert isinstance(response, StreamingResponse)
-    assert response.background is not None
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert db.commit_calls == 1
     assert flow.execution_count == 1
@@ -537,7 +558,6 @@ def test_execute_flow_endpoint_suppresses_duplicate_file_ready_stream_and_transc
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     streamed_file_events = [event for event in events if event["type"] == "FILE_READY"]
     assert len(streamed_file_events) == 1
@@ -606,7 +626,6 @@ def test_execute_flow_endpoint_maps_real_mgi_cognito_groups_to_active_groups(mon
         )
 
         events = asyncio.run(_consume_stream(response))
-        asyncio.run(response.background())
 
         assert events[0]["type"] == "RUN_STARTED"
         assert captured_execute_kwargs["active_groups"] == ["MGI"]
@@ -687,7 +706,6 @@ def test_execute_flow_endpoint_background_backfill_uses_final_assistant_aware_ti
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == [
         "RUN_STARTED",
@@ -1022,7 +1040,6 @@ def test_execute_flow_endpoint_replays_completed_turn_without_rerunning(monkeypa
     )
 
     first_events = asyncio.run(_consume_stream(first_response))
-    asyncio.run(first_response.background())
 
     second_response = asyncio.run(
         chat.execute_flow_endpoint(
@@ -1033,7 +1050,6 @@ def test_execute_flow_endpoint_replays_completed_turn_without_rerunning(monkeypa
     )
 
     second_events = asyncio.run(_consume_stream(second_response))
-    asyncio.run(second_response.background())
 
     assert execute_calls == ["session-flow-replay"]
     assert flow.execution_count == 1
@@ -1132,7 +1148,6 @@ def test_execute_flow_endpoint_retries_incomplete_turn_without_reincrementing_co
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert len(execute_calls) == 1
     assert execute_calls[0]["session_id"] == "session-flow-retry"
@@ -1150,7 +1165,7 @@ def test_execute_flow_endpoint_retries_incomplete_turn_without_reincrementing_co
     assert [message.role for message in stored_turn_messages] == ["user", "flow"]
 
 
-def test_execute_flow_endpoint_retry_reuses_persisted_trace_context(monkeypatch):
+def test_execute_flow_endpoint_terminal_failure_reattach_replays_trace_context(monkeypatch):
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(
         flow_id=flow_id,
@@ -1209,7 +1224,6 @@ def test_execute_flow_endpoint_retry_reuses_persisted_trace_context(monkeypatch)
         )
     )
     first_events = asyncio.run(_consume_stream(first_response))
-    asyncio.run(first_response.background())
 
     second_response = asyncio.run(
         chat.execute_flow_endpoint(
@@ -1219,15 +1233,12 @@ def test_execute_flow_endpoint_retry_reuses_persisted_trace_context(monkeypatch)
         )
     )
     second_events = asyncio.run(_consume_stream(second_response))
-    asyncio.run(second_response.background())
 
     assert [event["type"] for event in first_events] == ["RUN_STARTED", "SUPERVISOR_ERROR", "RUN_ERROR"]
-    assert [event["type"] for event in second_events] == ["RUN_STARTED", "CHAT_OUTPUT_READY", "FLOW_FINISHED"]
-    assert len(execute_calls) == 2
+    assert second_events == first_events
+    assert len(execute_calls) == 1
     assert execute_calls[0]["flow_run_id"]
-    assert execute_calls[1]["flow_run_id"] == execute_calls[0]["flow_run_id"]
     assert execute_calls[0]["trace_context"] is None
-    assert execute_calls[1]["trace_context"] == {"trace_id": "trace-flow-first"}
     user_turn = repository.get_message_by_turn_id(
         session_id="session-flow-trace-reuse",
         user_auth_sub="auth-sub",
@@ -1239,6 +1250,96 @@ def test_execute_flow_endpoint_retry_reuses_persisted_trace_context(monkeypatch)
     flow_run_id, trace_id = chat._extract_execute_flow_runtime_identifiers(user_turn.payload_json)
     assert flow_run_id == execute_calls[0]["flow_run_id"]
     assert trace_id == "trace-flow-first"
+
+
+def test_execute_flow_endpoint_terminal_replay_releases_lifecycle_before_next_turn(monkeypatch):
+    flow_id = uuid4()
+    flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Replay Cleanup Flow",
+        execution_count=0,
+        last_executed_at=None,
+    )
+    db = _DummyDB(flow=flow)
+
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    execute_calls = []
+
+    async def _fake_execute_flow(**kwargs):
+        execute_calls.append(kwargs)
+        yield {"type": "RUN_STARTED", "data": {"trace_id": f"trace-flow-{len(execute_calls)}"}}
+        if len(execute_calls) == 1:
+            raise RuntimeError("terminal flow failure")
+        yield {
+            "type": "CHAT_OUTPUT_READY",
+            "timestamp": "2026-02-26T00:01:03+00:00",
+            "details": {"output": "Fresh flow output."},
+        }
+        yield {
+            "type": "FLOW_FINISHED",
+            "timestamp": "2026-02-26T00:01:04+00:00",
+            "data": {
+                "flow_id": str(flow_id),
+                "flow_name": "Replay Cleanup Flow",
+                "flow_run_id": kwargs["flow_run_id"],
+                "document_id": None,
+                "origin_session_id": kwargs["session_id"],
+                "status": "completed",
+                "failure_reason": None,
+                "total_evidence_records": 0,
+                "step_evidence_counts": {},
+                "adapter_keys": [],
+            },
+        }
+
+    _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
+
+    first_request = chat.ExecuteFlowRequest(
+        flow_id=flow_id,
+        session_id="session-flow-terminal-replay",
+        turn_id="turn-flow-terminal-replay",
+    )
+    first_response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=first_request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+    first_events = asyncio.run(_consume_stream(first_response))
+
+    second_response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=first_request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+    second_events = asyncio.run(_consume_stream(second_response))
+
+    third_response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=chat.ExecuteFlowRequest(
+                flow_id=flow_id,
+                session_id="session-flow-terminal-replay",
+                turn_id="turn-after-flow-terminal-replay",
+            ),
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+    third_events = asyncio.run(_consume_stream(third_response))
+
+    assert [event["type"] for event in first_events] == ["RUN_STARTED", "SUPERVISOR_ERROR", "RUN_ERROR"]
+    assert second_events == first_events
+    assert [event["type"] for event in third_events] == ["RUN_STARTED", "CHAT_OUTPUT_READY", "FLOW_FINISHED"]
+    assert len(execute_calls) == 2
+    assert chat._LOCAL_SESSION_OWNERS == {}
+    assert chat._LOCAL_CANCEL_EVENTS == {}
+    assert len(calls["register"]) == 3
+    assert len(calls["unregister"]) == 3
+    assert calls["clear"] == ["session-flow-terminal-replay"] * 3
 
 
 def test_build_flow_memory_message_contains_refs_not_hidden_payloads():
@@ -1384,7 +1485,6 @@ def test_execute_flow_endpoint_surfaces_trace_checkpoint_persistence_failure(mon
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == ["SUPERVISOR_ERROR", "RUN_ERROR"]
     assert events[0]["details"]["context"] == "RuntimeError"
@@ -1443,7 +1543,6 @@ def test_execute_flow_endpoint_surfaces_completion_persistence_failure(monkeypat
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == [
         "RUN_STARTED",
@@ -1605,6 +1704,83 @@ def test_execute_flow_endpoint_rejects_same_user_when_session_already_active(mon
     assert chat._LOCAL_CANCEL_EVENTS["session-active-same-user"] is existing_event
 
 
+def test_execute_flow_endpoint_reattaches_to_active_same_turn_without_reclaiming(monkeypatch):
+    flow_id = uuid4()
+    session_id = "session-flow-active-reattach"
+    turn_id = "turn-flow-active-reattach"
+    run_id = f"curation_flow_run:{session_id}:{turn_id}"
+    request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id=session_id, turn_id=turn_id)
+    flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Flow Active Reattach",
+        execution_count=0,
+        last_executed_at=None,
+    )
+    db = _DummyDB(flow=flow)
+    existing_event = asyncio.Event()
+    chat._LOCAL_SESSION_OWNERS[session_id] = "auth-sub"
+    chat._LOCAL_CANCEL_EVENTS[session_id] = existing_event
+    chat.executable_run_manager._runs[run_id] = ExecutableRun(
+        run_id=run_id,
+        kind="curation_flow_run",
+        owner_user_id="auth-sub",
+        session_id=session_id,
+        turn_id=turn_id,
+        flow_run_id="flow-run-active-reattach",
+        status="running",
+        events=[
+            chat._stream_event_sse(
+                chat._stream_event_payload(
+                    "RUN_STARTED",
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    trace_id="trace-flow-active-reattach",
+                )
+            )
+        ],
+    )
+    chat.executable_run_manager._active_session_run_ids[session_id] = run_id
+
+    _patch_chat_impl(
+        monkeypatch,
+        "set_global_user_from_cognito",
+        lambda _db, _user: SimpleNamespace(id=7),
+    )
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(
+        monkeypatch,
+        "_prepare_execute_flow_turn",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("reattach should not prepare a new turn")),
+    )
+
+    response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream_prefix(response, 1))
+
+    assert events == [
+        {
+            "type": "RUN_STARTED",
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "trace_id": "trace-flow-active-reattach",
+        }
+    ]
+    assert db.commit_calls == 0
+    assert flow.execution_count == 0
+    assert chat._LOCAL_SESSION_OWNERS[session_id] == "auth-sub"
+    assert chat._LOCAL_CANCEL_EVENTS[session_id] is existing_event
+
+
 def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkeypatch, caplog):
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-flow-error")
@@ -1679,7 +1855,6 @@ def test_execute_flow_endpoint_sanitizes_runner_run_error_event(monkeypatch, cap
     )
 
     events = asyncio.run(_consume_stream(response))
-    asyncio.run(response.background())
 
     assert [event["type"] for event in events] == ["RUN_ERROR"]
     assert events[0]["message"] == "Flow execution failed unexpectedly."

@@ -12,7 +12,7 @@
  * Note: Uses POST fetch with ReadableStream, NOT EventSource API
  */
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { debug } from '@/utils/env'
 
 export interface SSEEvent {
@@ -26,11 +26,25 @@ export interface SendChatMessageOptions {
   turnId?: string
 }
 
+export interface ExecuteFlowOptions {
+  turnId?: string
+}
+
 export interface UseChatStreamReturn {
   /**
    * All SSE events received in this session
    */
   events: SSEEvent[]
+
+  /**
+   * Version for the current retained event stream. Increments when the stream is replaced.
+   */
+  eventStreamVersion: number
+
+  /**
+   * Number of events the chat renderer has already consumed for this stream version.
+   */
+  processedEventCount: number
 
   /**
    * Whether a stream request is currently in progress
@@ -53,7 +67,8 @@ export interface UseChatStreamReturn {
     flowId: string,
     sessionId: string,
     documentId?: string,
-    userQuery?: string
+    userQuery?: string,
+    options?: ExecuteFlowOptions,
   ) => Promise<void>
 
   /**
@@ -67,9 +82,53 @@ export interface UseChatStreamReturn {
   clearEvents: () => void
 
   /**
+   * Record how many retained events the chat renderer has consumed.
+   */
+  markEventsProcessed: (eventStreamVersion: number, count: number) => void
+
+  /**
    * Abort the current stream (if any)
    */
   stopStream: (sessionId: string) => Promise<void>
+}
+
+interface SharedChatStreamState {
+  events: SSEEvent[]
+  eventStreamVersion: number
+  processedEventCount: number
+  isLoading: boolean
+  error: Error | null
+}
+
+const sharedListeners = new Set<() => void>()
+let sharedState: SharedChatStreamState = {
+  events: [],
+  eventStreamVersion: 0,
+  processedEventCount: 0,
+  isLoading: false,
+  error: null,
+}
+let sharedAbortController: AbortController | null = null
+
+function emitSharedState(nextState: Partial<SharedChatStreamState>) {
+  sharedState = { ...sharedState, ...nextState }
+  sharedListeners.forEach((listener) => listener())
+}
+
+function updateSharedEvents(updater: (events: SSEEvent[]) => SSEEvent[]) {
+  emitSharedState({ events: updater(sharedState.events) })
+}
+
+function replaceSharedEvents(events: SSEEvent[]) {
+  emitSharedState({
+    events,
+    eventStreamVersion: sharedState.eventStreamVersion + 1,
+    processedEventCount: 0,
+  })
+}
+
+function buildClientTurnId(): string {
+  return globalThis.crypto.randomUUID()
 }
 
 /**
@@ -78,24 +137,42 @@ export interface UseChatStreamReturn {
  * @returns Stream state and control functions
  */
 export function useChatStream(): UseChatStreamReturn {
-  const [events, setEvents] = useState<SSEEvent[]>([])
-  const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState<Error | null>(null)
-  const abortControllerRef = useRef<AbortController | null>(null)
+  const [snapshot, setSnapshot] = useState<SharedChatStreamState>(sharedState)
+
+  useEffect(() => {
+    const listener = () => setSnapshot(sharedState)
+    sharedListeners.add(listener)
+    return () => {
+      sharedListeners.delete(listener)
+    }
+  }, [])
 
   const clearEvents = useCallback(() => {
-    setEvents([])
-    setError(null)
+    replaceSharedEvents([])
+    emitSharedState({ error: null })
+  }, [])
+
+  const markEventsProcessed = useCallback((eventStreamVersion: number, count: number) => {
+    if (eventStreamVersion !== sharedState.eventStreamVersion) {
+      return
+    }
+
+    const nextCount = Math.min(Math.max(0, count), sharedState.events.length)
+    if (nextCount <= sharedState.processedEventCount) {
+      return
+    }
+
+    emitSharedState({ processedEventCount: nextCount })
   }, [])
 
   const stopStream = useCallback(async (sessionId: string) => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
-      abortControllerRef.current = null
+    if (sharedAbortController) {
+      sharedAbortController.abort()
+      sharedAbortController = null
     }
-    setIsLoading(false)
+    emitSharedState({ isLoading: false })
     // Emit a synthetic event so Audit/Chat can show a stop notice even without SSE
-    setEvents(prev => [
+    updateSharedEvents(prev => [
       ...prev,
       {
         type: 'STOP_CONFIRMED',
@@ -127,28 +204,27 @@ export function useChatStream(): UseChatStreamReturn {
 
     if (!sessionId) {
       const err = new Error('No session ID available')
-      setError(err)
+      emitSharedState({ error: err })
       console.error(err)
       return
     }
 
-    // Abort any existing stream
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
+    if (sharedState.isLoading) {
+      console.warn('Cannot start a new chat message while another stream is active')
+      return
     }
 
-    // Create new abort controller
-    abortControllerRef.current = new AbortController()
+    sharedAbortController = new AbortController()
 
-    setIsLoading(true)
-    setError(null)
+    emitSharedState({ isLoading: true, error: null })
 
     // Start each run with a fresh stream so consumers do not have to reconcile
     // stale events from prior turns before processing the new audit trail.
-    setEvents([
+    replaceSharedEvents([
       {
         type: 'AGENT_GENERATING',
         session_id: sessionId,
+        turn_id: options?.turnId,
         timestamp: new Date().toISOString(),
         details: {
           agentRole: 'System',
@@ -169,7 +245,7 @@ export function useChatStream(): UseChatStreamReturn {
           session_id: sessionId,
           turn_id: options?.turnId,
         }),
-        signal: abortControllerRef.current.signal
+        signal: sharedAbortController.signal
       })
 
       if (!response.ok) {
@@ -214,7 +290,7 @@ export function useChatStream(): UseChatStreamReturn {
                 debug.log('🔍 [useChatStream] Received SSE event:', parsed.type, parsed)
 
                 // Add event to events array
-                setEvents(prev => [...prev, parsed])
+                updateSharedEvents(prev => [...prev, parsed])
               } catch (parseError) {
                 console.error('Failed to parse SSE event:', parseError, data)
               }
@@ -223,19 +299,21 @@ export function useChatStream(): UseChatStreamReturn {
         }
       }
 
-      setIsLoading(false)
+      sharedAbortController = null
+      emitSharedState({ isLoading: false })
     } catch (err) {
       // Ignore abort errors (user cancelled)
       if (err instanceof Error && err.name === 'AbortError') {
         debug.log('Stream aborted by user')
-        setIsLoading(false)
+        emitSharedState({ isLoading: false })
         return
       }
 
       const error = err instanceof Error ? err : new Error('Unknown error during streaming')
-      setError(error)
-      setIsLoading(false)
+      emitSharedState({ error, isLoading: false })
       console.error('Error in chat stream:', error)
+    } finally {
+      sharedAbortController = null
     }
   }, [])
 
@@ -246,30 +324,32 @@ export function useChatStream(): UseChatStreamReturn {
     flowId: string,
     sessionId: string,
     documentId?: string,
-    userQuery?: string
+    userQuery?: string,
+    options?: ExecuteFlowOptions,
   ) => {
     if (!sessionId) {
       const err = new Error('No session ID available')
-      setError(err)
+      emitSharedState({ error: err })
       console.error(err)
       return
     }
 
-    // Abort any existing stream
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
+    if (sharedState.isLoading) {
+      console.warn('Cannot start a new flow execution while another stream is active')
+      return
     }
 
-    abortControllerRef.current = new AbortController()
-    setIsLoading(true)
-    setError(null)
+    const turnId = options?.turnId ?? buildClientTurnId()
+    sharedAbortController = new AbortController()
+    emitSharedState({ isLoading: true, error: null })
 
     // Start each flow execution with a fresh stream for the same reason as
     // normal chat sends: right-panel consumers should only process this run.
-    setEvents([
+    replaceSharedEvents([
       {
         type: 'AGENT_GENERATING',
         session_id: sessionId,
+        turn_id: turnId,
         timestamp: new Date().toISOString(),
         details: {
           agentRole: 'System',
@@ -286,10 +366,11 @@ export function useChatStream(): UseChatStreamReturn {
         body: JSON.stringify({
           flow_id: flowId,
           session_id: sessionId,
+          turn_id: turnId,
           document_id: documentId || null,
           user_query: userQuery || null
         }),
-        signal: abortControllerRef.current.signal
+        signal: sharedAbortController.signal
       })
 
       if (!response.ok) {
@@ -324,7 +405,7 @@ export function useChatStream(): UseChatStreamReturn {
               try {
                 const parsed: SSEEvent = JSON.parse(data)
                 debug.log('🔍 [useChatStream] Flow SSE event:', parsed.type, parsed)
-                setEvents(prev => [...prev, parsed])
+                updateSharedEvents(prev => [...prev, parsed])
               } catch (parseError) {
                 console.error('Failed to parse SSE event:', parseError, data)
               }
@@ -333,27 +414,32 @@ export function useChatStream(): UseChatStreamReturn {
         }
       }
 
-      setIsLoading(false)
+      sharedAbortController = null
+      emitSharedState({ isLoading: false })
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
         debug.log('Flow execution aborted by user')
-        setIsLoading(false)
+        emitSharedState({ isLoading: false })
         return
       }
       const error = err instanceof Error ? err : new Error('Unknown error during flow execution')
-      setError(error)
-      setIsLoading(false)
+      emitSharedState({ error, isLoading: false })
       console.error('Error in flow execution:', error)
+    } finally {
+      sharedAbortController = null
     }
   }, [])
 
   return {
-    events,
-    isLoading,
+    events: snapshot.events,
+    eventStreamVersion: snapshot.eventStreamVersion,
+    processedEventCount: snapshot.processedEventCount,
+    isLoading: snapshot.isLoading,
     sendMessage,
     executeFlow,
-    error,
+    error: snapshot.error,
     clearEvents,
+    markEventsProcessed,
     stopStream
   }
 }

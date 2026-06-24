@@ -56,8 +56,11 @@ vi.mock('@/components/RightPanel', () => ({
 
 const chatStreamStub = {
   events: [],
+  eventStreamVersion: 0,
+  processedEventCount: 0,
   isLoading: false,
   sendMessage: vi.fn(),
+  markEventsProcessed: vi.fn(),
   stopStream: vi.fn(),
   executeFlow: vi.fn(),
 }

@@ -21,6 +21,11 @@ from .chat_common import (
     _stream_event_payload,
     _stream_event_sse,
 )
+from src.lib.executable_runs import (
+    ExecutableRunAccessError,
+    ExecutableRunConflictError,
+    executable_run_manager,
+)
 
 
 def _extract_execute_flow_runtime_identifiers(
@@ -738,12 +743,36 @@ async def execute_flow_endpoint(
         extra={"session_id": request.session_id, "user_id": user_id, "turn_id": request.turn_id},
     )
 
+    active_executable_run = await executable_run_manager.get_active_session_run(
+        request.session_id,
+    )
+    if active_executable_run is not None:
+        if active_executable_run.owner_user_id != user_id:
+            raise HTTPException(status_code=403, detail="Session is active for a different user")
+
+        expected_run_id = (
+            f"curation_flow_run:{request.session_id}:{request.turn_id}"
+            if request.turn_id
+            else None
+        )
+        if expected_run_id is not None and active_executable_run.run_id == expected_run_id:
+            return StreamingResponse(
+                executable_run_manager.observe(active_executable_run),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        raise HTTPException(status_code=409, detail="Session is already active")
+
+    generated_title_candidate: str | None = None
     stream_lifecycle = await _claim_active_stream_lifecycle(
         session_id=request.session_id,
         user_id=user_id,
     )
-    cancel_event = stream_lifecycle.cancel_event
-    generated_title_candidate: str | None = None
 
     try:
         active_document_id, _ = _resolve_session_create_active_document(
@@ -764,10 +793,10 @@ async def execute_flow_endpoint(
             user_message=prepared_turn.effective_user_message,
         )
     except HTTPException:
-        await stream_lifecycle.cleanup(request.session_id)
+        await stream_lifecycle.cleanup()
         raise
     except ValueError as exc:
-        await stream_lifecycle.cleanup(request.session_id)
+        await stream_lifecycle.cleanup()
         _rollback_and_raise(
             db,
             status_code=400,
@@ -776,7 +805,9 @@ async def execute_flow_endpoint(
             log_message=f"Failed to prepare execute-flow request for session {request.session_id}",
             level=logging.WARNING,
         )
+        raise AssertionError("unreachable")
     except Exception as exc:
+        await stream_lifecycle.cleanup()
         logger.error(
             "Failed to persist execute-flow request for session %s",
             request.session_id,
@@ -784,7 +815,6 @@ async def execute_flow_endpoint(
             exc_info=True,
         )
         db.rollback()
-        await stream_lifecycle.cleanup(request.session_id)
         raise HTTPException(status_code=500, detail="Failed to start flow execution") from exc
 
     if prepared_turn.replay_events:
@@ -793,6 +823,7 @@ async def execute_flow_endpoint(
                 user_message=prepared_turn.effective_user_message,
                 assistant_message=prepared_turn.replay_assistant_message,
             )
+        await stream_lifecycle.finalize(generated_title_candidate)
 
         async def replay_stream():
             for event_payload in prepared_turn.replay_events:
@@ -801,7 +832,6 @@ async def execute_flow_endpoint(
         return StreamingResponse(
             replay_stream(),
             media_type="text/event-stream",
-            background=stream_lifecycle.background_task(lambda: generated_title_candidate),
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
@@ -814,6 +844,7 @@ async def execute_flow_endpoint(
         nonlocal generated_title_candidate
         current_session_id = request.session_id
         current_turn_id = prepared_turn.turn_id
+        cancel_event = stream_lifecycle.cancel_event
         trace_id = None
         flow_status: Optional[str] = None
         flow_failure_reason: Optional[str] = None
@@ -1134,12 +1165,50 @@ async def execute_flow_endpoint(
                 )
             )
         finally:
-            await stream_lifecycle.cleanup(current_session_id)
+            await stream_lifecycle.finalize(generated_title_candidate)
+
+    run_id = f"curation_flow_run:{request.session_id}:{prepared_turn.turn_id}"
+
+    def terminal_error_event(exc: Exception) -> str:
+        detail = getattr(exc, "detail", None)
+        message = str(detail or exc or "Flow execution failed to start.")
+        return _stream_event_sse(
+            _stream_event_payload(
+                "RUN_ERROR",
+                session_id=request.session_id,
+                turn_id=prepared_turn.turn_id,
+                message=message,
+                error_type=type(exc).__name__,
+            )
+        )
+
+    try:
+        executable_run, created = await executable_run_manager.get_or_start_stream(
+            run_id=run_id,
+            kind="curation_flow_run",
+            owner_user_id=user_id,
+            session_id=request.session_id,
+            turn_id=prepared_turn.turn_id,
+            flow_run_id=prepared_turn.flow_run_id,
+            stream_factory=event_generator,
+            terminal_error_event_factory=terminal_error_event,
+        )
+    except ExecutableRunAccessError as exc:
+        await stream_lifecycle.cleanup()
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ExecutableRunConflictError as exc:
+        await stream_lifecycle.cleanup()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception:
+        await stream_lifecycle.cleanup()
+        raise
+
+    if not created:
+        await stream_lifecycle.cleanup()
 
     return StreamingResponse(
-        event_generator(),
+        executable_run_manager.observe(executable_run),
         media_type="text/event-stream",
-        background=stream_lifecycle.background_task(lambda: generated_title_candidate),
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
