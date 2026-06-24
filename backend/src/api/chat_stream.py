@@ -950,7 +950,7 @@ async def chat_stream_endpoint(
         )
 
     try:
-        executable_run, _ = await executable_run_manager.get_or_start_stream(
+        executable_run, created = await executable_run_manager.get_or_start_stream(
             run_id=run_id,
             kind="assistant_chat_turn",
             owner_user_id=user_id,
@@ -968,6 +968,9 @@ async def chat_stream_endpoint(
     except Exception:
         await stream_lifecycle.cleanup()
         raise
+
+    if not created:
+        await stream_lifecycle.cleanup()
 
     return StreamingResponse(
         executable_run_manager.observe(executable_run),

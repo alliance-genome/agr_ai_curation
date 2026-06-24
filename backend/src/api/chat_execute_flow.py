@@ -1183,7 +1183,7 @@ async def execute_flow_endpoint(
         )
 
     try:
-        executable_run, _ = await executable_run_manager.get_or_start_stream(
+        executable_run, created = await executable_run_manager.get_or_start_stream(
             run_id=run_id,
             kind="curation_flow_run",
             owner_user_id=user_id,
@@ -1202,6 +1202,9 @@ async def execute_flow_endpoint(
     except Exception:
         await stream_lifecycle.cleanup()
         raise
+
+    if not created:
+        await stream_lifecycle.cleanup()
 
     return StreamingResponse(
         executable_run_manager.observe(executable_run),

@@ -1708,6 +1708,104 @@ def test_chat_stream_endpoint_replays_existing_assistant_turn_without_runner(mon
     assert events[1]["trace_id"] == "trace-replay"
 
 
+def test_chat_stream_endpoint_terminal_replay_releases_lifecycle_before_next_turn(monkeypatch):
+    chat._LOCAL_CANCEL_EVENTS.clear()
+    chat._LOCAL_SESSION_OWNERS.clear()
+
+    calls = {"register": [], "unregister": [], "clear": []}
+    runner_calls = []
+
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+
+    async def _register_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        calls["register"].append((session_id, user_id, stream_token))
+        return True
+
+    async def _unregister_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        calls["unregister"].append((session_id, user_id, stream_token))
+
+    async def _clear_cancel_signal(session_id: str):
+        calls["clear"].append(session_id)
+
+    async def _check_cancel_signal(_session_id: str) -> bool:
+        return False
+
+    async def _run_agent_streamed(**_kwargs):
+        runner_calls.append(_kwargs)
+        yield {"type": "RUN_STARTED", "data": {"trace_id": f"trace-{len(runner_calls)}"}}
+        if len(runner_calls) == 1:
+            raise RuntimeError("terminal failure")
+        yield {"type": "RUN_FINISHED", "data": {"response": "fresh reply"}}
+
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _check_cancel_signal)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _run_agent_streamed)
+
+    first_response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(
+                message="fail once",
+                session_id="session-terminal-replay",
+                turn_id="turn-terminal-replay",
+            ),
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+    first_events = asyncio.run(_consume_stream(first_response))
+
+    second_response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(
+                message="fail once",
+                session_id="session-terminal-replay",
+                turn_id="turn-terminal-replay",
+            ),
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+    second_events = asyncio.run(_consume_stream(second_response))
+
+    third_response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(
+                message="fresh turn",
+                session_id="session-terminal-replay",
+                turn_id="turn-after-terminal-replay",
+            ),
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+    third_events = asyncio.run(_consume_stream(third_response))
+
+    assert [event["type"] for event in first_events] == [
+        "RUN_STARTED",
+        "SUPERVISOR_ERROR",
+        "turn_failed",
+    ]
+    assert second_events == first_events
+    assert [event["type"] for event in third_events] == ["RUN_STARTED", "turn_completed"]
+    assert len(runner_calls) == 2
+    assert chat._LOCAL_SESSION_OWNERS == {}
+    assert chat._LOCAL_CANCEL_EVENTS == {}
+    assert len(calls["register"]) == 3
+    assert len(calls["unregister"]) == 3
+    assert calls["clear"] == ["session-terminal-replay"] * 3
+
+
 def test_chat_stream_endpoint_emits_session_gone_when_session_disappears_before_completion_save(monkeypatch):
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
