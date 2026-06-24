@@ -141,11 +141,10 @@ PROMPT_EXPLORER_MODEL_ENV_VAR = "PROMPT_EXPLORER_MODEL_ID"
 LEGACY_PROMPT_EXPLORER_MODEL_ENV_VAR = "ANTHROPIC_OPUS_MODEL"
 AGENT_STUDIO_SEEDED_SESSION_PREFIX = agent_studio_chat_session.AGENT_STUDIO_SEEDED_SESSION_PREFIX
 AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES = [
-    # Prefer the canonical config copy when it exists; packaged files are
-    # retained as fallbacks for test containers and backend-only packaging.
+    # Project prompts must be supplied by config/package sources; backend-core
+    # prompt files are intentionally not runtime fallback candidates.
     FilePath(__file__).resolve().parents[3] / "alliance_config" / "agent_studio_system_prompt.md",
     FilePath(__file__).resolve().parents[2] / "alliance_config" / "agent_studio_system_prompt.md",
-    FilePath(__file__).with_name("agent_studio_system_prompt.md"),
 ]
 
 
