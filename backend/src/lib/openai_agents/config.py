@@ -1459,6 +1459,24 @@ def get_chat_recent_message_scan_size_max() -> int:
     return max(1, _get_env_int_with_fallback("CHAT_RECENT_MESSAGE_SCAN_SIZE_MAX", 5000))
 
 
+def get_executable_run_event_replay_limit() -> int:
+    """Replay buffer size per active executable run (EXECUTABLE_RUN_EVENT_REPLAY_LIMIT).
+
+    Bounds in-memory event replay for observers that detach and reattach to a
+    running chat, flow, or Agent Studio turn. Default 1000.
+    """
+    return max(1, _get_env_int_with_fallback("EXECUTABLE_RUN_EVENT_REPLAY_LIMIT", 1000))
+
+
+def get_executable_run_retention_seconds() -> int:
+    """Seconds to retain terminal in-memory executable runs (EXECUTABLE_RUN_RETENTION_SECONDS).
+
+    Retention lets a route remount replay terminal events shortly after a run
+    finishes while durable chat history remains the long-lived source. Default 900.
+    """
+    return max(1, _get_env_int_with_fallback("EXECUTABLE_RUN_RETENTION_SECONDS", 900))
+
+
 def get_flow_list_page_size_default() -> int:
     """Default page size for flow listings (FLOW_LIST_PAGE_SIZE_DEFAULT).
 

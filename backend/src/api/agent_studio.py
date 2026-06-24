@@ -112,6 +112,11 @@ from src.lib.openai_agents.config import (
     get_agent_studio_opus_context_editing_trigger_tokens,
     get_agent_studio_provider_tool_result_inline_max_chars,
 )
+from src.lib.executable_runs import (
+    ExecutableRunAccessError,
+    ExecutableRunConflictError,
+    executable_run_manager,
+)
 from src.lib.alerts.tool_failure_notifier import notify_tool_failure
 from src.lib.chat_history_repository import (
     ChatHistoryRepository,
@@ -3650,8 +3655,24 @@ async def chat_with_opus(
             clear_current_flow_context()
             logger.debug("Cleared workflow and flow context after streaming")
 
+    run_id = f"agent_studio_chat_turn:{prepared_turn.session_id}:{prepared_turn.turn_id}"
+    try:
+        executable_run, _ = await executable_run_manager.get_or_start_stream(
+            run_id=run_id,
+            kind="agent_studio_chat_turn",
+            owner_user_id=user_id,
+            session_id=prepared_turn.session_id,
+            turn_id=prepared_turn.turn_id,
+            stream_factory=generate_stream,
+            can_cancel=False,
+        )
+    except ExecutableRunAccessError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ExecutableRunConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     return StreamingResponse(
-        generate_stream(),
+        executable_run_manager.observe(executable_run),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

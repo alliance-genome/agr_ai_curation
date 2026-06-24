@@ -12,7 +12,7 @@
  * Note: Uses POST fetch with ReadableStream, NOT EventSource API
  */
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { debug } from '@/utils/env'
 
 export interface SSEEvent {
@@ -23,6 +23,10 @@ export interface SSEEvent {
 }
 
 export interface SendChatMessageOptions {
+  turnId?: string
+}
+
+export interface ExecuteFlowOptions {
   turnId?: string
 }
 
@@ -53,7 +57,8 @@ export interface UseChatStreamReturn {
     flowId: string,
     sessionId: string,
     documentId?: string,
-    userQuery?: string
+    userQuery?: string,
+    options?: ExecuteFlowOptions,
   ) => Promise<void>
 
   /**
@@ -72,30 +77,69 @@ export interface UseChatStreamReturn {
   stopStream: (sessionId: string) => Promise<void>
 }
 
+interface SharedChatStreamState {
+  events: SSEEvent[]
+  isLoading: boolean
+  error: Error | null
+}
+
+const sharedListeners = new Set<() => void>()
+let sharedState: SharedChatStreamState = {
+  events: [],
+  isLoading: false,
+  error: null,
+}
+let sharedAbortController: AbortController | null = null
+
+function emitSharedState(nextState: Partial<SharedChatStreamState>) {
+  sharedState = { ...sharedState, ...nextState }
+  sharedListeners.forEach((listener) => listener())
+}
+
+function updateSharedEvents(updater: (events: SSEEvent[]) => SSEEvent[]) {
+  emitSharedState({ events: updater(sharedState.events) })
+}
+
+function buildClientTurnId(): string {
+  const cryptoApi = globalThis.crypto
+  if (cryptoApi && typeof cryptoApi.randomUUID === 'function') {
+    try {
+      return cryptoApi.randomUUID()
+    } catch {
+      // Fall through to timestamp/random ID generation.
+    }
+  }
+  return `turn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 /**
  * Hook for managing chat SSE stream
  *
  * @returns Stream state and control functions
  */
 export function useChatStream(): UseChatStreamReturn {
-  const [events, setEvents] = useState<SSEEvent[]>([])
-  const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState<Error | null>(null)
-  const abortControllerRef = useRef<AbortController | null>(null)
+  const [snapshot, setSnapshot] = useState<SharedChatStreamState>(sharedState)
+
+  useEffect(() => {
+    const listener = () => setSnapshot(sharedState)
+    sharedListeners.add(listener)
+    return () => {
+      sharedListeners.delete(listener)
+    }
+  }, [])
 
   const clearEvents = useCallback(() => {
-    setEvents([])
-    setError(null)
+    emitSharedState({ events: [], error: null })
   }, [])
 
   const stopStream = useCallback(async (sessionId: string) => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
-      abortControllerRef.current = null
+    if (sharedAbortController) {
+      sharedAbortController.abort()
+      sharedAbortController = null
     }
-    setIsLoading(false)
+    emitSharedState({ isLoading: false })
     // Emit a synthetic event so Audit/Chat can show a stop notice even without SSE
-    setEvents(prev => [
+    updateSharedEvents(prev => [
       ...prev,
       {
         type: 'STOP_CONFIRMED',
@@ -127,36 +171,37 @@ export function useChatStream(): UseChatStreamReturn {
 
     if (!sessionId) {
       const err = new Error('No session ID available')
-      setError(err)
+      emitSharedState({ error: err })
       console.error(err)
       return
     }
 
-    // Abort any existing stream
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
+    if (sharedState.isLoading) {
+      console.warn('Cannot start a new chat message while another stream is active')
+      return
     }
 
-    // Create new abort controller
-    abortControllerRef.current = new AbortController()
+    sharedAbortController = new AbortController()
 
-    setIsLoading(true)
-    setError(null)
+    emitSharedState({ isLoading: true, error: null })
 
     // Start each run with a fresh stream so consumers do not have to reconcile
     // stale events from prior turns before processing the new audit trail.
-    setEvents([
-      {
-        type: 'AGENT_GENERATING',
-        session_id: sessionId,
-        timestamp: new Date().toISOString(),
-        details: {
-          agentRole: 'System',
-          agentDisplayName: 'System',
-          message: 'Initializing AI agents'
+    emitSharedState({
+      events: [
+        {
+          type: 'AGENT_GENERATING',
+          session_id: sessionId,
+          turn_id: options?.turnId,
+          timestamp: new Date().toISOString(),
+          details: {
+            agentRole: 'System',
+            agentDisplayName: 'System',
+            message: 'Initializing AI agents'
+          }
         }
-      }
-    ])
+      ]
+    })
 
     try {
       const response = await fetch('/api/chat/stream', {
@@ -169,7 +214,7 @@ export function useChatStream(): UseChatStreamReturn {
           session_id: sessionId,
           turn_id: options?.turnId,
         }),
-        signal: abortControllerRef.current.signal
+        signal: sharedAbortController.signal
       })
 
       if (!response.ok) {
@@ -214,7 +259,7 @@ export function useChatStream(): UseChatStreamReturn {
                 debug.log('🔍 [useChatStream] Received SSE event:', parsed.type, parsed)
 
                 // Add event to events array
-                setEvents(prev => [...prev, parsed])
+                updateSharedEvents(prev => [...prev, parsed])
               } catch (parseError) {
                 console.error('Failed to parse SSE event:', parseError, data)
               }
@@ -223,19 +268,21 @@ export function useChatStream(): UseChatStreamReturn {
         }
       }
 
-      setIsLoading(false)
+      sharedAbortController = null
+      emitSharedState({ isLoading: false })
     } catch (err) {
       // Ignore abort errors (user cancelled)
       if (err instanceof Error && err.name === 'AbortError') {
         debug.log('Stream aborted by user')
-        setIsLoading(false)
+        emitSharedState({ isLoading: false })
         return
       }
 
       const error = err instanceof Error ? err : new Error('Unknown error during streaming')
-      setError(error)
-      setIsLoading(false)
+      emitSharedState({ error, isLoading: false })
       console.error('Error in chat stream:', error)
+    } finally {
+      sharedAbortController = null
     }
   }, [])
 
@@ -246,38 +293,42 @@ export function useChatStream(): UseChatStreamReturn {
     flowId: string,
     sessionId: string,
     documentId?: string,
-    userQuery?: string
+    userQuery?: string,
+    options?: ExecuteFlowOptions,
   ) => {
     if (!sessionId) {
       const err = new Error('No session ID available')
-      setError(err)
+      emitSharedState({ error: err })
       console.error(err)
       return
     }
 
-    // Abort any existing stream
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
+    if (sharedState.isLoading) {
+      console.warn('Cannot start a new flow execution while another stream is active')
+      return
     }
 
-    abortControllerRef.current = new AbortController()
-    setIsLoading(true)
-    setError(null)
+    const turnId = options?.turnId ?? buildClientTurnId()
+    sharedAbortController = new AbortController()
+    emitSharedState({ isLoading: true, error: null })
 
     // Start each flow execution with a fresh stream for the same reason as
     // normal chat sends: right-panel consumers should only process this run.
-    setEvents([
-      {
-        type: 'AGENT_GENERATING',
-        session_id: sessionId,
-        timestamp: new Date().toISOString(),
-        details: {
-          agentRole: 'System',
-          agentDisplayName: 'Flow Executor',
-          message: 'Starting curation flow'
+    emitSharedState({
+      events: [
+        {
+          type: 'AGENT_GENERATING',
+          session_id: sessionId,
+          turn_id: turnId,
+          timestamp: new Date().toISOString(),
+          details: {
+            agentRole: 'System',
+            agentDisplayName: 'Flow Executor',
+            message: 'Starting curation flow'
+          }
         }
-      }
-    ])
+      ]
+    })
 
     try {
       const response = await fetch('/api/chat/execute-flow', {
@@ -286,10 +337,11 @@ export function useChatStream(): UseChatStreamReturn {
         body: JSON.stringify({
           flow_id: flowId,
           session_id: sessionId,
+          turn_id: turnId,
           document_id: documentId || null,
           user_query: userQuery || null
         }),
-        signal: abortControllerRef.current.signal
+        signal: sharedAbortController.signal
       })
 
       if (!response.ok) {
@@ -324,7 +376,7 @@ export function useChatStream(): UseChatStreamReturn {
               try {
                 const parsed: SSEEvent = JSON.parse(data)
                 debug.log('🔍 [useChatStream] Flow SSE event:', parsed.type, parsed)
-                setEvents(prev => [...prev, parsed])
+                updateSharedEvents(prev => [...prev, parsed])
               } catch (parseError) {
                 console.error('Failed to parse SSE event:', parseError, data)
               }
@@ -333,26 +385,28 @@ export function useChatStream(): UseChatStreamReturn {
         }
       }
 
-      setIsLoading(false)
+      sharedAbortController = null
+      emitSharedState({ isLoading: false })
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
         debug.log('Flow execution aborted by user')
-        setIsLoading(false)
+        emitSharedState({ isLoading: false })
         return
       }
       const error = err instanceof Error ? err : new Error('Unknown error during flow execution')
-      setError(error)
-      setIsLoading(false)
+      emitSharedState({ error, isLoading: false })
       console.error('Error in flow execution:', error)
+    } finally {
+      sharedAbortController = null
     }
   }, [])
 
   return {
-    events,
-    isLoading,
+    events: snapshot.events,
+    isLoading: snapshot.isLoading,
     sendMessage,
     executeFlow,
-    error,
+    error: snapshot.error,
     clearEvents,
     stopStream
   }

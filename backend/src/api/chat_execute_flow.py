@@ -21,6 +21,11 @@ from .chat_common import (
     _stream_event_payload,
     _stream_event_sse,
 )
+from src.lib.executable_runs import (
+    ExecutableRunAccessError,
+    ExecutableRunConflictError,
+    executable_run_manager,
+)
 
 
 def _extract_execute_flow_runtime_identifiers(
@@ -738,11 +743,6 @@ async def execute_flow_endpoint(
         extra={"session_id": request.session_id, "user_id": user_id, "turn_id": request.turn_id},
     )
 
-    stream_lifecycle = await _claim_active_stream_lifecycle(
-        session_id=request.session_id,
-        user_id=user_id,
-    )
-    cancel_event = stream_lifecycle.cancel_event
     generated_title_candidate: str | None = None
 
     try:
@@ -764,10 +764,8 @@ async def execute_flow_endpoint(
             user_message=prepared_turn.effective_user_message,
         )
     except HTTPException:
-        await stream_lifecycle.cleanup(request.session_id)
         raise
     except ValueError as exc:
-        await stream_lifecycle.cleanup(request.session_id)
         _rollback_and_raise(
             db,
             status_code=400,
@@ -776,6 +774,7 @@ async def execute_flow_endpoint(
             log_message=f"Failed to prepare execute-flow request for session {request.session_id}",
             level=logging.WARNING,
         )
+        raise AssertionError("unreachable")
     except Exception as exc:
         logger.error(
             "Failed to persist execute-flow request for session %s",
@@ -784,7 +783,6 @@ async def execute_flow_endpoint(
             exc_info=True,
         )
         db.rollback()
-        await stream_lifecycle.cleanup(request.session_id)
         raise HTTPException(status_code=500, detail="Failed to start flow execution") from exc
 
     if prepared_turn.replay_events:
@@ -801,7 +799,6 @@ async def execute_flow_endpoint(
         return StreamingResponse(
             replay_stream(),
             media_type="text/event-stream",
-            background=stream_lifecycle.background_task(lambda: generated_title_candidate),
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
@@ -814,6 +811,11 @@ async def execute_flow_endpoint(
         nonlocal generated_title_candidate
         current_session_id = request.session_id
         current_turn_id = prepared_turn.turn_id
+        stream_lifecycle = await _claim_active_stream_lifecycle(
+            session_id=current_session_id,
+            user_id=user_id,
+        )
+        cancel_event = stream_lifecycle.cancel_event
         trace_id = None
         flow_status: Optional[str] = None
         flow_failure_reason: Optional[str] = None
@@ -1134,12 +1136,27 @@ async def execute_flow_endpoint(
                 )
             )
         finally:
-            await stream_lifecycle.cleanup(current_session_id)
+            await stream_lifecycle.finalize(generated_title_candidate)
+
+    run_id = f"curation_flow_run:{request.session_id}:{prepared_turn.turn_id}"
+    try:
+        executable_run, _ = await executable_run_manager.get_or_start_stream(
+            run_id=run_id,
+            kind="curation_flow_run",
+            owner_user_id=user_id,
+            session_id=request.session_id,
+            turn_id=prepared_turn.turn_id,
+            flow_run_id=prepared_turn.flow_run_id,
+            stream_factory=event_generator,
+        )
+    except ExecutableRunAccessError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ExecutableRunConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return StreamingResponse(
-        event_generator(),
+        executable_run_manager.observe(executable_run),
         media_type="text/event-stream",
-        background=stream_lifecycle.background_task(lambda: generated_title_candidate),
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",

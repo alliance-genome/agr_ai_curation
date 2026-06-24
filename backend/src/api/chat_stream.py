@@ -2,6 +2,11 @@
 """Chat response, streaming, cancellation, and assistant rescue endpoints."""
 
 from .chat_common import *
+from src.lib.executable_runs import (
+    ExecutableRunAccessError,
+    ExecutableRunConflictError,
+    executable_run_manager,
+)
 
 _LOCAL_NON_STREAM_TURN_OWNERS: Dict[str, str] = {}
 
@@ -408,8 +413,6 @@ async def chat_stream_endpoint(
             detail="Internal configuration error: unable to process chat request",
         ) from exc
 
-    stream_lifecycle = await _claim_active_stream_lifecycle(session_id=session_id, user_id=user_id)
-    cancel_event = stream_lifecycle.cancel_event
     generated_title_candidate: str | None = None
 
     try:
@@ -430,10 +433,8 @@ async def chat_stream_endpoint(
             user_message=prepared_turn.effective_user_message,
         )
     except HTTPException:
-        await stream_lifecycle.cleanup(session_id)
         raise
     except ValueError as exc:
-        await stream_lifecycle.cleanup(session_id)
         _rollback_and_raise(
             db,
             status_code=400,
@@ -442,8 +443,8 @@ async def chat_stream_endpoint(
             log_message=f"Failed to prepare durable stream user turn for session {session_id}",
             level=logging.WARNING,
         )
+        raise AssertionError("unreachable")
     except Exception as exc:
-        await stream_lifecycle.cleanup(session_id)
         logger.error(
             "Failed to persist durable stream user turn for session %s",
             session_id,
@@ -464,32 +465,28 @@ async def chat_stream_endpoint(
         )
 
         async def replay_stream():
-            try:
-                yield _stream_event_sse(
-                    _stream_event_payload(
-                        "TEXT_MESSAGE_CONTENT",
-                        session_id=session_id,
-                        turn_id=prepared_turn.turn_id,
-                        trace_id=prepared_turn.replay_assistant_turn.trace_id,
-                        content=prepared_turn.replay_assistant_turn.content,
-                    )
+            yield _stream_event_sse(
+                _stream_event_payload(
+                    "TEXT_MESSAGE_CONTENT",
+                    session_id=session_id,
+                    turn_id=prepared_turn.turn_id,
+                    trace_id=prepared_turn.replay_assistant_turn.trace_id,
+                    content=prepared_turn.replay_assistant_turn.content,
                 )
-                yield _stream_event_sse(
-                    _build_terminal_turn_event(
-                        "turn_completed",
-                        session_id=session_id,
-                        turn_id=prepared_turn.turn_id,
-                        trace_id=prepared_turn.replay_assistant_turn.trace_id,
-                        message="Chat turn completed.",
-                    )
+            )
+            yield _stream_event_sse(
+                _build_terminal_turn_event(
+                    "turn_completed",
+                    session_id=session_id,
+                    turn_id=prepared_turn.turn_id,
+                    trace_id=prepared_turn.replay_assistant_turn.trace_id,
+                    message="Chat turn completed.",
                 )
-            finally:
-                await stream_lifecycle.cleanup(session_id)
+            )
 
         return StreamingResponse(
             replay_stream(),
             media_type="text/event-stream",
-            background=stream_lifecycle.background_task(lambda: generated_title_candidate),
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
@@ -502,6 +499,11 @@ async def chat_stream_endpoint(
         nonlocal generated_title_candidate
         current_session_id = session_id
         current_turn_id = prepared_turn.turn_id
+        stream_lifecycle = await _claim_active_stream_lifecycle(
+            session_id=current_session_id,
+            user_id=user_id,
+        )
+        cancel_event = stream_lifecycle.cancel_event
         full_response = ""
         trace_id = None
         run_finished = False
@@ -903,12 +905,26 @@ async def chat_stream_endpoint(
                 )
             )
         finally:
-            await stream_lifecycle.cleanup(current_session_id)
+            await stream_lifecycle.finalize(generated_title_candidate)
+
+    run_id = f"assistant_chat_turn:{session_id}:{prepared_turn.turn_id}"
+    try:
+        executable_run, _ = await executable_run_manager.get_or_start_stream(
+            run_id=run_id,
+            kind="assistant_chat_turn",
+            owner_user_id=user_id,
+            session_id=session_id,
+            turn_id=prepared_turn.turn_id,
+            stream_factory=generate_stream,
+        )
+    except ExecutableRunAccessError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ExecutableRunConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return StreamingResponse(
-        generate_stream(),
+        executable_run_manager.observe(executable_run),
         media_type="text/event-stream",
-        background=stream_lifecycle.background_task(lambda: generated_title_candidate),
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
