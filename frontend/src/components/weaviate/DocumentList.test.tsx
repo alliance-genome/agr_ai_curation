@@ -396,7 +396,7 @@ describe('DocumentList', () => {
 
     const grid = container.querySelector('.MuiDataGrid-root');
     expect(grid).toBeInTheDocument();
-    expect(grid).toHaveAttribute('data-pagination-mode', 'client');
+    expect(grid).toHaveAttribute('data-pagination-mode', 'server');
     expect(grid).toHaveAttribute('data-filter-mode', 'client');
     expect(grid).toHaveAttribute('data-sorting-mode', 'client');
   });
