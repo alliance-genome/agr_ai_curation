@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Callable, Literal, Sequence
@@ -86,6 +87,108 @@ _GENE_EVIDENCE_LOCATOR_FIELDS = (
     "chunk_id",
     "figure_reference",
 )
+_ZFIN_TAXON_CURIE = "NCBITaxon:7955"
+
+
+def normalize_gene_extraction_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Drop Alliance/ZFIN compound-like gene candidates before persistence."""
+
+    objects = payload.get("curatable_objects")
+    if not isinstance(objects, list):
+        return payload
+
+    kept_objects: list[Any] = []
+    removed_objects: list[Mapping[str, Any]] = []
+    for obj in objects:
+        if isinstance(obj, Mapping) and _is_zfin_drug_like_gene_object(obj):
+            removed_objects.append(obj)
+        else:
+            kept_objects.append(obj)
+
+    if not removed_objects:
+        return payload
+
+    sanitized = dict(payload)
+    sanitized["curatable_objects"] = kept_objects
+    metadata = dict(sanitized.get("metadata") or {})
+    exclusions = list(metadata.get("exclusions") or [])
+    notes = list(metadata.get("notes") or [])
+    warnings: list[str] = []
+    for obj in removed_objects:
+        object_payload = obj.get("payload")
+        object_payload = object_payload if isinstance(object_payload, Mapping) else {}
+        mention = str(object_payload.get("mention") or "").strip() or "unknown"
+        evidence_record_id = str(object_payload.get("evidence_record_id") or "").strip()
+        evidence_record_ids = [evidence_record_id] if evidence_record_id else []
+        exclusions.append(
+            {
+                "mention": mention,
+                "reason_code": "unsupported_entity_type",
+                "evidence_record_ids": evidence_record_ids,
+                "details": (
+                    "Dropped from gene curatable_objects because ZFIN context "
+                    "plus uppercase/digit notation indicates a compound or reagent "
+                    "without a gene identity hint."
+                ),
+            }
+        )
+        warnings.append(f"dropped_non_gene_zfin_candidate:{mention}")
+    notes.append(
+        "Gene adapter removed non-gene ZFIN compound/reagent candidates before "
+        "domain validation dispatch."
+    )
+    metadata["exclusions"] = exclusions
+    metadata["notes"] = notes
+    sanitized["metadata"] = metadata
+
+    run_summary = dict(sanitized.get("run_summary") or {})
+    if isinstance(run_summary.get("kept_count"), int):
+        run_summary["kept_count"] = max(0, run_summary["kept_count"] - len(removed_objects))
+    if isinstance(run_summary.get("excluded_count"), int):
+        run_summary["excluded_count"] += len(removed_objects)
+    summary_warnings = list(run_summary.get("warnings") or [])
+    summary_warnings.extend(warnings)
+    run_summary["warnings"] = summary_warnings
+    sanitized["run_summary"] = run_summary
+    return sanitized
+
+
+def _is_zfin_drug_like_gene_object(obj: Mapping[str, Any]) -> bool:
+    if obj.get("object_type") != GENE_MENTION_EVIDENCE_OBJECT_TYPE:
+        return False
+    object_payload = obj.get("payload")
+    if not isinstance(object_payload, Mapping):
+        return False
+    if not _has_zfin_context(object_payload):
+        return False
+    if _has_gene_identity_hint(object_payload):
+        return False
+    mention = str(object_payload.get("mention") or "").strip()
+    return bool(re.search(r"[A-Z]", mention) and re.search(r"\d", mention))
+
+
+def _has_zfin_context(payload: Mapping[str, Any]) -> bool:
+    species = str(payload.get("species") or "").strip().lower()
+    return (
+        payload.get("data_provider_hint") == "ZFIN"
+        or payload.get("taxon_hint") == _ZFIN_TAXON_CURIE
+        or payload.get("proposed_taxon") == _ZFIN_TAXON_CURIE
+        or payload.get("taxon") == _ZFIN_TAXON_CURIE
+        or species in {"danio rerio", "zebrafish"}
+    )
+
+
+def _has_gene_identity_hint(payload: Mapping[str, Any]) -> bool:
+    for field_name in (
+        "primary_external_id",
+        "gene_symbol",
+        "proposed_primary_external_id",
+        "proposed_gene_symbol",
+    ):
+        value = payload.get(field_name)
+        if isinstance(value, str) and value.strip():
+            return True
+    return False
 
 
 def _strip_required_string(value: object, field_name: str) -> object:
@@ -909,5 +1012,6 @@ __all__ = [
     "ToolVerifiedGeneMention",
     "ToolVerifiedGeneOutput",
     "materialize_gene_builder_state",
+    "normalize_gene_extraction_payload",
     "tool_verified_gene_output_to_pending_envelope",
 ]

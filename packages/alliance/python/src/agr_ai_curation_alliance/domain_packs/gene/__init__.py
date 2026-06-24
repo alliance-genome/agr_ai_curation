@@ -19,6 +19,7 @@ from .conversion import (
     ToolVerifiedGeneMention,
     ToolVerifiedGeneOutput,
     materialize_gene_builder_state,
+    normalize_gene_extraction_payload,
     tool_verified_gene_output_to_pending_envelope,
     validate_gene_builder_objects,
 )
@@ -50,6 +51,7 @@ __all__ = [
     "build_gene_mention_evidence_export",
     "build_gene_mention_evidence_submission_plan",
     "materialize_gene_builder_state",
+    "normalize_gene_extraction_payload",
     "tool_verified_gene_output_to_pending_envelope",
     "validate_gene_builder_objects",
 ]

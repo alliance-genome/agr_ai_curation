@@ -48,6 +48,7 @@ from .conversion import (
     PhenotypeBuilderExtractionOutput,
     PhenotypeMaterializationResult,
     materialize_phenotype_builder_state,
+    normalize_phenotype_extraction_payload,
     validate_phenotype_builder_objects,
 )
 from .export import (
@@ -1079,6 +1080,7 @@ __all__ = [
     "build_pending_phenotype_envelope_from_tool_verified_fixture",
     "get_phenotype_domain_pack_metadata_path",
     "materialize_phenotype_builder_state",
+    "normalize_phenotype_extraction_payload",
     "validate_phenotype_builder_objects",
     "validate_pending_phenotype_envelope",
 ]

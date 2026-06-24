@@ -454,23 +454,9 @@ def test_build_extraction_envelope_candidate_accepts_domain_envelope_curatable_o
     assert evidence_metadata["evidence_records"][0]["evidence_record_id"] == "evidence-notch"
 
 
-def test_gene_adapter_drops_zfin_compound_like_gene_objects():
+def test_build_extraction_envelope_candidate_leaves_non_alliance_payload_assumptions_alone():
     payload = _sample_domain_envelope_payload()
     payload["curatable_objects"] = [
-        {
-            "object_type": "gene_mention_evidence",
-            "pending_ref_id": "gene-mention-evidence-her1",
-            "payload": {
-                "mention": "her1",
-                "primary_external_id": "ZFIN:ZDB-GENE-980526-125",
-                "gene_symbol": "her1",
-                "taxon": "NCBITaxon:7955",
-                "species": "Danio rerio",
-                "data_provider_hint": "ZFIN",
-                "evidence_record_id": "evidence-her1",
-            },
-            "evidence_record_ids": ["evidence-her1"],
-        },
         {
             "object_type": "gene_mention_evidence",
             "pending_ref_id": "gene-mention-evidence-SB225002",
@@ -483,16 +469,24 @@ def test_gene_adapter_drops_zfin_compound_like_gene_objects():
             },
             "evidence_record_ids": ["evidence-sb225002"],
         },
+        {
+            "object_type": "PhenotypeAnnotation",
+            "pending_ref_id": "phenotype-annotation-1",
+            "payload": {
+                "phenotype_terms": [
+                    {
+                        "label": "boundary disruptions",
+                        "ontology_lookup_hint": {
+                            "taxon_id": "NCBITaxon:7955",
+                            "evidence_record_id": "evidence-phenotype",
+                        },
+                    }
+                ],
+            },
+            "evidence_record_ids": ["evidence-phenotype"],
+        },
     ]
     payload["metadata"]["evidence_records"] = [
-        {
-            "evidence_record_id": "evidence-her1",
-            "entity": "her1",
-            "verified_quote": "the her1 mutant background was analyzed.",
-            "page": 1,
-            "section": "Results",
-            "chunk_id": "chunk-her1",
-        },
         {
             "evidence_record_id": "evidence-sb225002",
             "entity": "SB225002",
@@ -501,113 +495,35 @@ def test_gene_adapter_drops_zfin_compound_like_gene_objects():
             "section": "Results",
             "chunk_id": "chunk-sb225002",
         },
-    ]
-
-    candidate = build_extraction_envelope_candidate(
-        json.dumps(payload),
-        agent_key="gene_extractor",
-        adapter_key="gene",
-        conversation_summary="Extract cross-domain gene evidence.",
-    )
-
-    assert candidate is not None
-    assert [obj["pending_ref_id"] for obj in candidate.payload_json["curatable_objects"]] == [
-        "gene-mention-evidence-her1"
-    ]
-    assert candidate.payload_json["metadata"]["exclusions"][-1] == {
-        "mention": "SB225002",
-        "reason_code": "unsupported_entity_type",
-        "evidence_record_ids": ["evidence-sb225002"],
-        "details": (
-            "Dropped from gene curatable_objects because ZFIN context plus "
-            "uppercase/digit notation indicates a compound or reagent without "
-            "a gene identity hint."
-        ),
-    }
-    assert "dropped_non_gene_zfin_candidate:SB225002" in candidate.payload_json[
-        "run_summary"
-    ]["warnings"]
-
-
-def test_phenotype_adapter_materializes_nested_term_object_for_validation():
-    payload = _sample_domain_envelope_payload()
-    payload["curatable_objects"] = [
-        {
-            "object_type": "PhenotypeAnnotation",
-            "pending_ref_id": "phenotype-annotation-1",
-            "payload": {
-                "annotation_kind": "phenotype_assertion",
-                "phenotype_annotation_object": "boundary disruptions",
-                "phenotype_terms": [
-                    {
-                        "resolution_state": "pending_ontology_resolution",
-                        "curie": None,
-                        "label": "boundary disruptions",
-                        "source_mentions": ["boundary disruptions"],
-                        "ontology_lookup_hint": {
-                            "taxon_id": "NCBITaxon:7955",
-                            "evidence_record_id": "evidence-phenotype",
-                        },
-                        "export_state": "blocked_pending_ontology_resolution",
-                        "write_blocked_reason": "phenotype term CURIE unresolved",
-                    }
-                ],
-                "evidence_record_ids": ["evidence-phenotype"],
-            },
-            "evidence_record_ids": ["evidence-phenotype"],
-        }
-    ]
-    payload["metadata"]["evidence_records"] = [
         {
             "evidence_record_id": "evidence-phenotype",
             "entity": "phenotype",
-            "verified_quote": "SB225002 caused boundary disruptions.",
+            "verified_quote": "Boundary disruptions were observed.",
             "page": 1,
             "section": "Results",
             "chunk_id": "chunk-phenotype",
-        }
+        },
     ]
 
     candidate = build_extraction_envelope_candidate(
         json.dumps(payload),
-        agent_key="phenotype_extractor",
-        adapter_key="phenotype",
-        conversation_summary="Extract phenotype evidence.",
+        agent_key="demo_extractor",
+        adapter_key="demo",
+        conversation_summary="Extract neutral demo evidence.",
     )
 
     assert candidate is not None
     objects = candidate.payload_json["curatable_objects"]
+    assert [obj["pending_ref_id"] for obj in objects] == [
+        "gene-mention-evidence-SB225002",
+        "phenotype-annotation-1",
+    ]
+    assert "exclusions" not in candidate.payload_json["metadata"]
     assert [obj["object_type"] for obj in objects] == [
+        "gene_mention_evidence",
         "PhenotypeAnnotation",
-        "PhenotypeTerm",
     ]
-    annotation = objects[0]
-    phenotype_term = objects[1]
-    assert annotation["object_refs"] == [
-        {
-            "pending_ref_id": "phenotype-term-1-1",
-            "object_type": "PhenotypeTerm",
-        }
-    ]
-    assert phenotype_term["pending_ref_id"] == "phenotype-term-1-1"
-    assert phenotype_term["object_role"] == "validated_reference"
-    assert phenotype_term["model_ref"] == "PhenotypeTermPayload"
-    assert phenotype_term["payload"]["label"] == "boundary disruptions"
-    assert phenotype_term["payload"]["ontology_lookup_hint"] == {
-        "taxon_id": "NCBITaxon:7955",
-        "evidence_record_id": "evidence-phenotype",
-    }
-    assert phenotype_term["evidence_record_ids"] == ["evidence-phenotype"]
-    assert phenotype_term["metadata"] == {
-        "object_role": "validated_reference",
-        "validation_state": "pending_ontology_resolution",
-        "validator_binding_id": "phenotype_term_ontology_validator",
-        "export_state": "blocked_pending_ontology_resolution",
-        "write_blocked_reason": "phenotype term CURIE unresolved",
-    }
-    assert "materialized_nested_phenotype_terms:1" in candidate.payload_json[
-        "run_summary"
-    ]["warnings"]
+    assert candidate.payload_json["run_summary"]["warnings"] == []
 
 
 def test_build_extraction_envelope_candidate_accepts_persisted_domain_envelope_shape():

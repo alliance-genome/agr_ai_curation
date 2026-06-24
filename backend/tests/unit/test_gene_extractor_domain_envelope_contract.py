@@ -422,6 +422,84 @@ def test_gene_extractor_payload_persists_as_curatable_objects_only_for_new_runs(
     assert evidence_metadata["evidence_records"][0]["evidence_record_id"] == "ev-daf16-1"
 
 
+def test_gene_package_normalizer_drops_zfin_compound_like_gene_objects():
+    payload = _valid_gene_extractor_payload()
+    retained_obj = payload["curatable_objects"][0]
+    retained_obj["pending_ref_id"] = "gene-mention-evidence-her1"
+    retained_obj["payload"].update(
+        {
+            "mention": "her1",
+            "species": "Danio rerio",
+            "taxon_hint": "NCBITaxon:7955",
+            "data_provider_hint": "ZFIN",
+            "proposed_primary_external_id": "ZFIN:ZDB-GENE-980526-125",
+            "proposed_gene_symbol": "her1",
+            "proposed_taxon": "NCBITaxon:7955",
+            "evidence_record_id": "ev-her1",
+            "verified_quote": "the her1 mutant background was analyzed.",
+            "chunk_id": "chunk-her1",
+        }
+    )
+    retained_obj["evidence_record_ids"] = ["ev-her1"]
+    dropped_obj = copy.deepcopy(retained_obj)
+    dropped_obj["pending_ref_id"] = "gene-mention-evidence-SB225002"
+    dropped_obj["payload"].update(
+        {
+            "mention": "SB225002",
+            "proposed_primary_external_id": None,
+            "proposed_gene_symbol": None,
+            "evidence_record_id": "ev-sb225002",
+            "verified_quote": "SB225002 caused boundary disruptions.",
+            "chunk_id": "chunk-sb225002",
+        }
+    )
+    dropped_obj["evidence_record_ids"] = ["ev-sb225002"]
+    payload["curatable_objects"] = [retained_obj, dropped_obj]
+    payload["metadata"]["evidence_records"] = [
+        {
+            "evidence_record_id": "ev-her1",
+            "entity": "her1",
+            "verified_quote": "the her1 mutant background was analyzed.",
+            "page": 4,
+            "section": "Results",
+            "chunk_id": "chunk-her1",
+        },
+        {
+            "evidence_record_id": "ev-sb225002",
+            "entity": "SB225002",
+            "verified_quote": "SB225002 caused boundary disruptions.",
+            "page": 4,
+            "section": "Results",
+            "chunk_id": "chunk-sb225002",
+        },
+    ]
+
+    candidate, _evidence_metadata = build_extraction_envelope_candidate_with_evidence(
+        json.dumps(payload),
+        agent_key="gene_extractor",
+        adapter_key="gene",
+        conversation_summary="Extract cross-domain gene evidence.",
+    )
+
+    assert candidate is not None
+    assert [obj["pending_ref_id"] for obj in candidate.payload_json["curatable_objects"]] == [
+        "gene-mention-evidence-her1"
+    ]
+    assert candidate.payload_json["metadata"]["exclusions"][-1] == {
+        "mention": "SB225002",
+        "reason_code": "unsupported_entity_type",
+        "evidence_record_ids": ["ev-sb225002"],
+        "details": (
+            "Dropped from gene curatable_objects because ZFIN context plus "
+            "uppercase/digit notation indicates a compound or reagent without "
+            "a gene identity hint."
+        ),
+    }
+    assert "dropped_non_gene_zfin_candidate:SB225002" in candidate.payload_json[
+        "run_summary"
+    ]["warnings"]
+
+
 def test_gene_domain_pack_fixture_converts_to_pending_gene_mention_envelope():
     raw_fixture_path = (
         REPO_ROOT
