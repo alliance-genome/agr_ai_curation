@@ -203,8 +203,58 @@ test_missing_handoff_returns_to_in_progress() {
   rm -rf "${temp_dir}"
 }
 
+test_state_transition_failure_emits_structured_error() {
+  local temp_dir workspace context_json curl_stub curl_log output rc
+  temp_dir="$(mktemp -d)"
+  workspace="${temp_dir}/workspace"
+  context_json="${temp_dir}/context.json"
+  curl_stub="${temp_dir}/curl"
+  curl_log="${temp_dir}/curl.log"
+
+  make_workspace "${workspace}"
+  make_context_json "${context_json}" '<!-- symphony-workpad:v1 issue:ALL-123 -->
+
+# Symphony Workpad
+
+## Review Handoff
+
+- Outcome: Implemented prompt update.
+- Reviewer focus: Verify prompt mirrors stay identical.' "Blocked"
+  write_curl_stub "${curl_stub}"
+
+  set +e
+  output="$(
+    PATH="${temp_dir}:${PATH}" \
+    CURL_STUB_LOG="${curl_log}" \
+    bash "${SCRIPT_PATH}" \
+      --issue-identifier ALL-123 \
+      --workspace-dir "${workspace}" \
+      --context-json-file "${context_json}" \
+      --linear-api-key test-key
+  )"
+  rc=$?
+  set -e
+
+  if [[ "${rc}" -ne 3 ]]; then
+    echo "FAIL: Expected exit code 3, got ${rc}" >&2
+    printf 'Actual output:\n%s\n' "${output}" >&2
+    exit 1
+  fi
+
+  assert_contains "NEEDS_REVIEW_CLAIM_STATUS=error" "${output}"
+  assert_contains "NEEDS_REVIEW_CLAIM_REASON=state_preflight_failed" "${output}"
+  assert_contains "NEEDS_REVIEW_CLAIM_STATE_ERROR=Current state does not match --from-state." "${output}"
+  assert_contains "LINEAR_STATE_FROM=Blocked" "${output}"
+  if [[ -f "${curl_log}" ]]; then
+    assert_not_contains "Review Claim" "$(cat "${curl_log}")"
+  fi
+
+  rm -rf "${temp_dir}"
+}
+
 test_help_describes_claim_lane
 test_claims_clean_handoff_to_in_review
 test_missing_handoff_returns_to_in_progress
+test_state_transition_failure_emits_structured_error
 
 echo "symphony_needs_review_claim tests passed"
