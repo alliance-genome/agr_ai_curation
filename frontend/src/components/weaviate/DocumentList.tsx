@@ -90,10 +90,20 @@ const compareTextValues = (left: unknown, right: unknown): number => {
 };
 
 const compareNumberValues = (left: unknown, right: unknown): number => {
-  const leftValue = typeof left === 'number' ? left : Number(left);
-  const rightValue = typeof right === 'number' ? right : Number(right);
-  const leftComparable = Number.isFinite(leftValue) ? leftValue : null;
-  const rightComparable = Number.isFinite(rightValue) ? rightValue : null;
+  const toComparableNumber = (value: unknown): number | null => {
+    if (value === null || value === undefined) {
+      return null;
+    }
+
+    if (typeof value === 'string' && value.trim() === '') {
+      return null;
+    }
+
+    const numberValue = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(numberValue) ? numberValue : null;
+  };
+  const leftComparable = toComparableNumber(left);
+  const rightComparable = toComparableNumber(right);
 
   if (leftComparable === null && rightComparable === null) return 0;
   if (leftComparable === null) return 1;

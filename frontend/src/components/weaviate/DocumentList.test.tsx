@@ -448,6 +448,64 @@ describe('DocumentList', () => {
     expect(getRenderedFilenames()).toEqual(['beta.pdf', 'alpha.pdf', 'gamma.pdf']);
   });
 
+  it('sorts nullable number and date values as missing values', () => {
+    const documents = [
+      createTestDocument({
+        id: 'doc-missing',
+        filename: 'missing-values.pdf',
+        fileSize: null,
+        creationDate: null,
+      }),
+      createTestDocument({
+        id: 'doc-zero',
+        filename: 'zero-values.pdf',
+        fileSize: 0,
+        creationDate: '1970-01-01T00:00:00.000Z',
+      }),
+      createTestDocument({
+        id: 'doc-current',
+        filename: 'current-values.pdf',
+        fileSize: 2000,
+        creationDate: '2024-01-01T00:00:00.000Z',
+      }),
+    ];
+    const getRenderedFilenames = () =>
+      within(screen.getByRole('grid'))
+        .getAllByRole('row')
+        .slice(1)
+        .map((row) => within(row).getAllByRole('cell')[0].textContent);
+
+    render(<DocumentList {...defaultProps} documents={documents} />);
+
+    fireEvent.click(screen.getByText('Size'));
+    expect(getRenderedFilenames()).toEqual([
+      'zero-values.pdf',
+      'current-values.pdf',
+      'missing-values.pdf',
+    ]);
+
+    fireEvent.click(screen.getByText('Size'));
+    expect(getRenderedFilenames()).toEqual([
+      'missing-values.pdf',
+      'current-values.pdf',
+      'zero-values.pdf',
+    ]);
+
+    fireEvent.click(screen.getByText('Created'));
+    expect(getRenderedFilenames()).toEqual([
+      'zero-values.pdf',
+      'current-values.pdf',
+      'missing-values.pdf',
+    ]);
+
+    fireEvent.click(screen.getByText('Created'));
+    expect(getRenderedFilenames()).toEqual([
+      'missing-values.pdf',
+      'current-values.pdf',
+      'zero-values.pdf',
+    ]);
+  });
+
   it('displays correct column headers', () => {
     render(<DocumentList {...defaultProps} />);
 
