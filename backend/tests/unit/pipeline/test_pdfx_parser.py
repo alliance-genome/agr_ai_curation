@@ -191,6 +191,28 @@ async def test_download_markdown_uses_merged_variant_when_merge_enabled(parser_e
 
 
 @pytest.mark.asyncio
+async def test_download_markdown_retries_transient_503(parser_env, monkeypatch):
+    async def _no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("src.lib.pipeline.pdfx_parser.asyncio.sleep", _no_sleep)
+    monkeypatch.setenv("PDF_EXTRACTION_DOWNLOAD_RETRY_SECONDS", "30")
+
+    parser = PDFXParser()
+    session = _SequenceSession(
+        get_responses=[
+            _DummyResponse(503, '{"detail":"EC2 is not running"}'),
+            _DummyResponse(200, "# merged markdown\n"),
+        ]
+    )
+
+    markdown = await parser._download_markdown(session=session, process_id="proc-1", headers={})
+
+    assert markdown == "# merged markdown"
+    assert session.get_calls == 2
+
+
+@pytest.mark.asyncio
 async def test_download_markdown_uses_first_method_when_merge_disabled(parser_env, monkeypatch):
     monkeypatch.setenv("PDF_EXTRACTION_MERGE", "false")
     monkeypatch.setenv("PDF_EXTRACTION_METHODS", "grobid,marker")

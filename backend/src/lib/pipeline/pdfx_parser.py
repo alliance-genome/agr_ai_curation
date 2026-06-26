@@ -64,6 +64,16 @@ class PDFXParser:
         if self.poll_interval_seconds <= 0:
             raise ConfigurationError("PDF_EXTRACTION_POLL_INTERVAL_SECONDS must be greater than 0")
 
+        download_retry_raw = os.getenv("PDF_EXTRACTION_DOWNLOAD_RETRY_SECONDS", "120")
+        try:
+            self.download_retry_seconds = int(download_retry_raw)
+        except ValueError as exc:
+            raise ConfigurationError(
+                f"PDF_EXTRACTION_DOWNLOAD_RETRY_SECONDS must be an integer, got: {download_retry_raw}"
+            ) from exc
+        if self.download_retry_seconds < 0:
+            raise ConfigurationError("PDF_EXTRACTION_DOWNLOAD_RETRY_SECONDS must be 0 or greater")
+
         methods_raw = os.getenv("PDF_EXTRACTION_METHODS", "grobid,marker")
         self._method_list = [part.strip() for part in methods_raw.split(",") if part.strip()]
         self.methods = ",".join(self._method_list)
@@ -97,10 +107,12 @@ class PDFXParser:
         self.max_invocations_per_session = 50
 
         logger.info(
-            "Initialized PDF extraction parser service=%s timeout=%ss poll_interval=%ss methods=%s merge=%s auth_mode=%s",
+            "Initialized PDF extraction parser service=%s timeout=%ss poll_interval=%ss "
+            "download_retry=%ss methods=%s merge=%s auth_mode=%s",
             self.service_url,
             self.timeout_seconds,
             self.poll_interval_seconds,
+            self.download_retry_seconds,
             self.methods,
             self.merge_enabled,
             self.auth_mode,
@@ -455,13 +467,44 @@ class PDFXParser:
         download_endpoint = (
             f"{self.service_url}/api/v1/extract/{process_id}/download/{self.download_variant}"
         )
-        async with session.get(download_endpoint, headers=headers) as response:
-            body_text = await response.text()
-            if response.status != 200:
-                raise PDFParsingError(
-                    f"PDF extraction {self.download_variant} download failed. "
-                    f"Expected GET {download_endpoint} -> 200, got {response.status}: {body_text}"
-                )
+        download_deadline = time.monotonic() + self.download_retry_seconds
+        attempt = 0
+
+        while True:
+            attempt += 1
+            try:
+                async with session.get(download_endpoint, headers=headers) as response:
+                    body_text = await response.text()
+                    if response.status == 200:
+                        break
+
+                    error_message = (
+                        f"PDF extraction {self.download_variant} download failed. "
+                        f"Expected GET {download_endpoint} -> 200, got {response.status}: {body_text}"
+                    )
+                    if response.status in _TRANSIENT_HTTP_STATUS and time.monotonic() < download_deadline:
+                        logger.warning(
+                            "Transient PDF extraction %s download error for process_id=%s (attempt %s): %s",
+                            self.download_variant,
+                            process_id,
+                            attempt,
+                            error_message,
+                        )
+                        await asyncio.sleep(self.poll_interval_seconds)
+                        continue
+                    raise PDFParsingError(error_message)
+            except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
+                if time.monotonic() < download_deadline:
+                    logger.warning(
+                        "Transient PDF extraction %s download network error for process_id=%s (attempt %s): %s",
+                        self.download_variant,
+                        process_id,
+                        attempt,
+                        exc,
+                    )
+                    await asyncio.sleep(self.poll_interval_seconds)
+                    continue
+                raise PDFParsingError(f"Network error downloading PDF extraction result: {exc}") from exc
 
         markdown = body_text.strip()
         if not markdown:
