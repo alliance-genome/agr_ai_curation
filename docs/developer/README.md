@@ -15,6 +15,7 @@ Documentation for the AI Curation Platform developers.
 |-----------|---------|
 | `api/` | API reference documentation |
 | `guides/` | Developer guides and how-tos |
+| `integrations/` | External integration contracts |
 | `traces/` | Langfuse trace analysis tools |
 
 ## Quick Navigation
@@ -32,6 +33,7 @@ Start here for new developers:
 7. **[DEVELOPMENT_DOCTRINE.md](guides/DEVELOPMENT_DOCTRINE.md)** -- Forward-only development rules for fallbacks, compatibility, and migrations
 8. **[AGENTS_DEVELOPMENT_GUIDE.md](guides/AGENTS_DEVELOPMENT_GUIDE.md)** -- Comprehensive agent/runtime architecture reference
 9. **[UPLOAD_RUNTIME_CONTRACT.md](guides/UPLOAD_RUNTIME_CONTRACT.md)** -- Upload runtime contract (status/cancellation/rollback/idempotency; implementation in ALL-23)
+10. **[ABC Literature converted text retrieval](integrations/abc_literature/converted_text_contract.md)** -- Canonical converted Markdown selection, access, and download contract
 
 ### Developer Guides
 
