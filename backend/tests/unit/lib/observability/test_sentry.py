@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from types import SimpleNamespace
 
 import pytest
@@ -179,6 +180,59 @@ def test_before_send_omits_malformed_trace_context_fields():
         "type": "trace",
         "client_sample_rate": 0.25,
     }
+
+
+def test_before_send_preserves_safe_runtime_exception_context_without_raw_ids():
+    event = {
+        "contexts": {
+            "runtime_exception": {
+                "component": "execute_flow_stream",
+                "operation": "event_generator_failed",
+                "session_id": "session-flow-error",
+                "turn_id": "turn-flow-error",
+                "trace_id": "trace-flow-error",
+                "flow_id": "fb6a3770-ec3b-49ac-9d85-d38ea43cb4f8",
+                "flow_run_id": "flow-run-123",
+                "document_id": None,
+                "stages_completed": ["parsing", "chunking"],
+                "stages_completed_count": 2,
+                "validate_first": False,
+                "extraction_strategy": "auto",
+                "prompt": "curator free text",
+                "notes": {"raw_text": "should not survive"},
+            }
+        },
+        "exception": {"values": [{"type": "RuntimeError", "value": "raw exception text"}]},
+    }
+
+    scrubbed = sentry.before_send(event)
+    runtime_context = scrubbed["contexts"]["runtime_exception"]
+
+    assert runtime_context["component"] == "execute_flow_stream"
+    assert runtime_context["operation"] == "event_generator_failed"
+    assert runtime_context["session_id"] == (
+        "sha256:" + hashlib.sha256(b"session-flow-error").hexdigest()[:16]
+    )
+    assert runtime_context["turn_id"] == (
+        "sha256:" + hashlib.sha256(b"turn-flow-error").hexdigest()[:16]
+    )
+    assert runtime_context["trace_id"] == (
+        "sha256:" + hashlib.sha256(b"trace-flow-error").hexdigest()[:16]
+    )
+    assert runtime_context["flow_id"] == (
+        "sha256:" + hashlib.sha256(b"fb6a3770-ec3b-49ac-9d85-d38ea43cb4f8").hexdigest()[:16]
+    )
+    assert runtime_context["flow_run_id"] == (
+        "sha256:" + hashlib.sha256(b"flow-run-123").hexdigest()[:16]
+    )
+    assert "document_id" not in runtime_context
+    assert runtime_context["stages_completed"] == ["parsing", "chunking"]
+    assert runtime_context["stages_completed_count"] == 2
+    assert runtime_context["validate_first"] is False
+    assert runtime_context["extraction_strategy"] == "auto"
+    assert runtime_context["prompt"] == "[Filtered]"
+    assert runtime_context["notes"]["raw_text"] == "[Filtered]"
+    assert scrubbed["exception"]["values"][0]["value"] == "[Filtered]"
 
 
 def test_before_send_transaction_uses_same_redaction_policy():

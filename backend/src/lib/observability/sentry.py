@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import hashlib
 import importlib
 import logging
 import os
@@ -67,6 +68,19 @@ _TRACE_TEXT_KEYS = {"op", "origin", "status", "type"}
 _TRACE_NUMERIC_KEYS = {"client_sample_rate", "exclusive_time"}
 _TRACE_BOOLEAN_KEYS = {"sampled"}
 _SPAN_NUMERIC_KEYS = {"client_sample_rate", "exclusive_time", "start_timestamp", "timestamp"}
+_RUNTIME_IDENTIFIER_CONTEXT_KEYS = {
+    "batch_id",
+    "document_id",
+    "flow_id",
+    "flow_run_id",
+    "job_id",
+    "run_id",
+    "session_id",
+    "trace_id",
+    "turn_id",
+}
+_RUNTIME_TEXT_CONTEXT_KEYS = {"component", "extraction_strategy", "operation", "type"}
+_RUNTIME_TEXT_LIST_CONTEXT_KEYS = {"stages_completed"}
 
 _SECRET_PATTERNS = (
     re.compile(r"sk-[A-Za-z0-9_-]{16,}"),
@@ -272,6 +286,57 @@ def _redact_trace_fields(trace_context: Mapping[str, Any]) -> dict[str, Any]:
     return redacted
 
 
+def _hash_identifier(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+
+    text = value.strip()
+    if not text:
+        return None
+    if _scrub_string(text) != text:
+        return _REDACTED
+
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    return f"sha256:{digest}"
+
+
+def _redact_runtime_exception_context(context: Mapping[str, Any]) -> dict[str, Any]:
+    """Preserve bounded runtime diagnostics without exposing raw identifiers."""
+
+    redacted: dict[str, Any] = {}
+    for child_key, child_value in context.items():
+        key = str(child_key)
+
+        if key in _RUNTIME_IDENTIFIER_CONTEXT_KEYS:
+            hashed = _hash_identifier(child_value)
+            if hashed is not None:
+                redacted[key] = hashed
+            continue
+
+        if key in _RUNTIME_TEXT_CONTEXT_KEYS:
+            safe_text = _safe_trace_text(child_value)
+            if safe_text is not None:
+                redacted[key] = safe_text
+            continue
+
+        if key in _RUNTIME_TEXT_LIST_CONTEXT_KEYS and isinstance(child_value, list):
+            safe_items = [
+                safe_text
+                for item in child_value
+                if (safe_text := _safe_trace_text(item)) is not None
+            ]
+            redacted[key] = safe_items
+            continue
+
+        if child_value is None or isinstance(child_value, (bool, int, float)):
+            redacted[key] = child_value
+            continue
+
+        redacted[key] = _redact_untrusted_strings(child_value)
+
+    return redacted
+
+
 def _redact_contexts(contexts: dict[str, Any]) -> dict[str, Any]:
     """Redact custom contexts while preserving Sentry trace bookkeeping."""
 
@@ -280,6 +345,10 @@ def _redact_contexts(contexts: dict[str, Any]) -> dict[str, Any]:
         normalized_key = str(context_key)
         if normalized_key == "trace" and isinstance(context_value, Mapping):
             redacted[normalized_key] = _redact_trace_fields(context_value)
+            continue
+
+        if normalized_key == "runtime_exception" and isinstance(context_value, Mapping):
+            redacted[normalized_key] = _redact_runtime_exception_context(context_value)
             continue
 
         redacted[normalized_key] = _redact_untrusted_strings(context_value)
@@ -334,6 +403,7 @@ def _remove_stack_frame_vars(container: dict[str, Any]) -> None:
 def _redact_event(event: dict[str, Any]) -> dict[str, Any]:
     """Redact sensitive or curator/document-derived data before Sentry upload."""
 
+    raw_contexts = event.get("contexts")
     scrubbed = _scrub_value(event)
     if not isinstance(scrubbed, dict):
         return {}
@@ -352,8 +422,8 @@ def _redact_event(event: dict[str, Any]) -> dict[str, Any]:
 
     if isinstance(scrubbed.get("extra"), dict):
         scrubbed["extra"] = _redact_untrusted_strings(scrubbed["extra"])
-    if isinstance(scrubbed.get("contexts"), dict):
-        scrubbed["contexts"] = _redact_contexts(scrubbed["contexts"])
+    if isinstance(raw_contexts, dict):
+        scrubbed["contexts"] = _redact_contexts(raw_contexts)
     if isinstance(scrubbed.get("spans"), list):
         scrubbed["spans"] = _redact_spans(scrubbed["spans"])
 
