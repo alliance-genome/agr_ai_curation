@@ -2256,6 +2256,7 @@ def test_backfill_chat_session_generated_title_logs_and_rolls_back_when_chat_kin
 ):
     commits: list[str] = []
     rollbacks: list[str] = []
+    report_calls = []
     repository = FakeChatHistoryRepository(
         sessions=[_session_record(session_id="session-missing-kind", chat_kind=None)]
     )
@@ -2266,6 +2267,18 @@ def test_backfill_chat_session_generated_title_logs_and_rolls_back_when_chat_kin
     )
     _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
     _patch_chat_impl(monkeypatch, "SessionLocal", lambda: completion_db)
+    _patch_chat_impl(
+        monkeypatch,
+        "report_background_task_exception",
+        lambda exc, *, task_name, tags=None, context=None: report_calls.append(
+            {
+                "exc_type": type(exc).__name__,
+                "task_name": task_name,
+                "tags": dict(tags or {}),
+                "context": dict(context or {}),
+            }
+        ),
+    )
 
     with caplog.at_level("WARNING"):
         chat._backfill_chat_session_generated_title("session-missing-kind", "user-1")
@@ -2274,6 +2287,17 @@ def test_backfill_chat_session_generated_title_logs_and_rolls_back_when_chat_kin
     assert rollbacks == ["rollback"]
     assert "Failed to generate durable chat title" in caplog.text
     assert "Session session-missing-kind is missing chat_kind during durable title backfill" in caplog.text
+    assert report_calls == [
+        {
+            "exc_type": "ValueError",
+            "task_name": "chat.backfill_session_title",
+            "tags": {
+                "component": "chat",
+                "session_id": "session-missing-kind",
+            },
+            "context": {},
+        }
+    ]
 
 
 def test_serialize_session_raises_when_chat_kind_is_missing():

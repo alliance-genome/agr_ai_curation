@@ -217,6 +217,59 @@ def test_process_batch_task_does_not_double_count_failed_documents(monkeypatch):
     assert batch_doc.status == BatchDocumentStatus.FAILED
 
 
+def test_process_batch_task_reports_swallowed_document_exception(monkeypatch):
+    batch, batch_doc, _flow = _build_batch_context()
+    batch.flow_id = uuid4()
+    batch.documents = [batch_doc]
+    batch.status = BatchStatus.PENDING
+    batch.started_at = None
+    batch.completed_at = None
+
+    flow = SimpleNamespace(id=batch.flow_id, name="Batch Flow")
+    user = SimpleNamespace(id=batch.user_id, auth_sub="auth-sub")
+    db = _DummyDB(batch=batch, batch_doc=batch_doc, flow=flow, user=user)
+    report_calls = []
+
+    @contextmanager
+    def _fake_get_db_session():
+        yield db
+
+    def _raise_process_single_document(db, batch, batch_doc, flow, cognito_sub):
+        raise RuntimeError("batch document failed")
+
+    monkeypatch.setattr(processor, "get_db_session", _fake_get_db_session)
+    monkeypatch.setattr(processor, "_process_single_document", _raise_process_single_document)
+    monkeypatch.setattr(
+        processor,
+        "report_background_task_exception",
+        lambda exc, *, task_name, tags=None, context=None: report_calls.append(
+            {
+                "exc_type": type(exc).__name__,
+                "task_name": task_name,
+                "tags": dict(tags or {}),
+                "context": dict(context or {}),
+            }
+        ),
+    )
+
+    processor.process_batch_task(batch.id)
+
+    assert batch_doc.status == BatchDocumentStatus.FAILED
+    assert report_calls == [
+        {
+            "exc_type": "RuntimeError",
+            "task_name": "batch.process_document",
+            "tags": {
+                "component": "batch",
+                "batch_id": batch.id,
+                "document_id": batch_doc.document_id,
+                "batch_document_id": batch_doc.id,
+            },
+            "context": {},
+        }
+    ]
+
+
 def test_execute_flow_for_document_ignores_file_ready_without_file_id(monkeypatch):
     async def _fake_execute_flow(**_kwargs):
         yield {

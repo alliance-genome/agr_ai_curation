@@ -77,7 +77,10 @@ from src.lib.agent_studio.flow_tools import (
     set_current_flow_context,
     clear_current_flow_context,
 )
-from src.lib.observability.background_tasks import add_observed_background_task
+from src.lib.observability.background_tasks import (
+    add_observed_background_task,
+    report_background_task_exception,
+)
 from src.lib.agent_studio.flow_agent_policy import flow_palette_show_in_palette
 from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry
 from src.lib.agent_studio.custom_agent_service import (
@@ -3808,6 +3811,14 @@ async def _process_suggestion_background(
         if not tool_use_block:
             error_msg = "Configured model did not call submit_prompt_suggestion despite forced tool choice"
             logger.error('[Background] %s', error_msg)
+            report_background_task_exception(
+                RuntimeError("agent_studio_suggestion_missing_tool_use"),
+                task_name="agent_studio.process_suggestion",
+                tags={
+                    "component": "agent_studio",
+                    "failure_stage": "missing_tool_use",
+                },
+            )
             _send_error_notification_sns(user_email, error_msg, context)
             return
 
@@ -3826,16 +3837,40 @@ async def _process_suggestion_background(
         else:
             error_msg = tool_result.get("error", "Unknown error during tool execution")
             logger.error('[Background] Tool execution failed: %s', error_msg)
+            report_background_task_exception(
+                RuntimeError("agent_studio_suggestion_tool_failed"),
+                task_name="agent_studio.process_suggestion",
+                tags={
+                    "component": "agent_studio",
+                    "failure_stage": "tool_execution",
+                },
+            )
             _send_error_notification_sns(user_email, error_msg, context)
 
     except anthropic.APIError as e:
         error_msg = f"Anthropic API error: {str(e)}"
         logger.error('[Background] %s', error_msg, exc_info=True)
+        report_background_task_exception(
+            e,
+            task_name="agent_studio.process_suggestion",
+            tags={
+                "component": "agent_studio",
+                "failure_stage": "anthropic_api",
+            },
+        )
         _send_error_notification_sns(user_email, error_msg, context)
 
     except Exception as e:
         error_msg = f"Unexpected error: {str(e)}"
         logger.error('[Background] %s', error_msg, exc_info=True)
+        report_background_task_exception(
+            e,
+            task_name="agent_studio.process_suggestion",
+            tags={
+                "component": "agent_studio",
+                "failure_stage": "unexpected",
+            },
+        )
         _send_error_notification_sns(user_email, error_msg, context)
 
 
@@ -3955,7 +3990,6 @@ Please review our conversation history above and submit a general suggestion usi
             task_name="agent_studio.process_suggestion",
             tags={
                 "component": "agent_studio",
-                "user_auth_sub": user_auth_sub,
             },
         )
 

@@ -121,6 +121,7 @@ def observed_background_task(
 
     setattr(wrapper, "__observability_original_task__", func)
     setattr(wrapper, "__observability_task_name__", name)
+    setattr(wrapper, "__observability_tags__", _safe_tags(tags))
     return wrapper
 
 

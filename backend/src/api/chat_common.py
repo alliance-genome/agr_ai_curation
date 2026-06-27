@@ -61,7 +61,10 @@ from ..lib.curation_workspace.models import (
 )
 from ..lib.curation_workspace.extraction_results import get_agent_curation_metadata
 from ..lib.openai_agents import run_agent_streamed
-from ..lib.observability.background_tasks import add_observed_background_task
+from ..lib.observability.background_tasks import (
+    add_observed_background_task,
+    report_background_task_exception,
+)
 from ..lib.openai_agents.chat_compaction_session import CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE
 from ..lib.openai_agents.config import (
     get_flow_memory_max_visible_output_chars,
@@ -890,12 +893,20 @@ def _backfill_chat_session_generated_title(
             "Skipping durable chat title backfill because session is no longer available",
             extra={"session_id": session_id, "user_id": user_id},
         )
-    except (SQLAlchemyError, ValueError):
+    except (SQLAlchemyError, ValueError) as exc:
         completion_db.rollback()
         logger.warning(
             "Failed to generate durable chat title",
             extra={"session_id": session_id, "user_id": user_id},
             exc_info=True,
+        )
+        report_background_task_exception(
+            exc,
+            task_name="chat.backfill_session_title",
+            tags={
+                "component": "chat",
+                "session_id": session_id,
+            },
         )
     finally:
         completion_db.close()

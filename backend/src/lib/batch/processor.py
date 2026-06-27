@@ -28,6 +28,7 @@ from src.models.sql.batch import Batch, BatchDocument, BatchStatus, BatchDocumen
 from src.models.sql.curation_flow import CurationFlow
 from src.models.sql.user import User
 from src.models.sql.file_output import FileOutput
+from src.lib.observability.background_tasks import report_background_task_exception
 from .events import get_batch_broadcaster
 
 logger = logging.getLogger(__name__)
@@ -157,6 +158,16 @@ def process_batch_task(batch_id: UUID) -> None:
                 logger.exception(
                     "Error processing document: batch_id=%s, doc_id=%s",
                     batch_id, batch_doc.document_id
+                )
+                report_background_task_exception(
+                    e,
+                    task_name="batch.process_document",
+                    tags={
+                        "component": "batch",
+                        "batch_id": batch_id,
+                        "document_id": batch_doc.document_id,
+                        "batch_document_id": batch_doc.id,
+                    },
                 )
                 # Re-fetch objects after rollback to ensure they're in session
                 batch = db.query(Batch).filter(Batch.id == batch_id).first()
