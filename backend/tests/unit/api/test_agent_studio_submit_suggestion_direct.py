@@ -99,10 +99,15 @@ def test_submit_suggestion_direct_enqueues_background_job(monkeypatch):
 
     assert response.success is True
     assert response.message == "Submission sent"
-    assert captured["func"] == api_module._process_suggestion_background
+    assert getattr(captured["func"], "__observability_original_task__") == api_module._process_suggestion_background
+    assert getattr(captured["func"], "__observability_task_name__") == "agent_studio.process_suggestion"
+    assert getattr(captured["func"], "__observability_tags__") == {
+        "component": "agent_studio"
+    }
     assert captured["kwargs"]["user_email"] == "curator@example.org"
     assert captured["kwargs"]["user_auth_sub"] == "auth-sub-1"
     assert captured["kwargs"]["api_key"] == "test-key"
+    assert captured["kwargs"]["context"] == request.context
     assert captured["kwargs"]["messages"][0]["content"] == "Please help"
     assert captured["kwargs"]["messages"][-1]["content"].startswith(
         "The user has requested you submit feedback to the development team"
@@ -113,6 +118,7 @@ def test_process_suggestion_background_notifies_when_no_tool_use(monkeypatch):
     import src.api.agent_studio as api_module
 
     notified = {}
+    reported = []
     monkeypatch.setenv("PROMPT_EXPLORER_MODEL_ID", "claude-opus-test")
 
     class _FakeMessagesClient:
@@ -134,6 +140,18 @@ def test_process_suggestion_background_notifies_when_no_tool_use(monkeypatch):
             {"user_email": user_email, "error_message": error_message, "context": context}
         ),
     )
+    monkeypatch.setattr(
+        api_module,
+        "report_background_task_exception",
+        lambda exc, *, task_name, tags=None, context=None: reported.append(
+            {
+                "exc": str(exc),
+                "task_name": task_name,
+                "tags": dict(tags or {}),
+                "context": dict(context or {}),
+            }
+        ),
+    )
 
     asyncio.run(
         api_module._process_suggestion_background(
@@ -148,6 +166,17 @@ def test_process_suggestion_background_notifies_when_no_tool_use(monkeypatch):
 
     assert notified["user_email"] == "curator@example.org"
     assert "did not call submit_prompt_suggestion" in notified["error_message"]
+    assert reported == [
+        {
+            "exc": "agent_studio_suggestion_missing_tool_use",
+            "task_name": "agent_studio.process_suggestion",
+            "tags": {
+                "component": "agent_studio",
+                "failure_stage": "missing_tool_use",
+            },
+            "context": {},
+        }
+    ]
 
 
 def test_submit_suggestion_direct_sanitizes_unexpected_errors(monkeypatch, caplog):

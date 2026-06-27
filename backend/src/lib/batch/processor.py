@@ -28,10 +28,19 @@ from src.models.sql.batch import Batch, BatchDocument, BatchStatus, BatchDocumen
 from src.models.sql.curation_flow import CurationFlow
 from src.models.sql.user import User
 from src.models.sql.file_output import FileOutput
+from src.lib.observability.background_tasks import report_background_task_exception
 from .events import get_batch_broadcaster
 
 logger = logging.getLogger(__name__)
 _BACKEND_ONLY_EVENT_FIELDS = {"internal"}
+
+
+class BatchFlowExecutionError(RuntimeError):
+    """Raised when a flow emits a terminal failure during batch processing."""
+
+    def __init__(self, message: str, *, sentry_already_reported: bool = False) -> None:
+        super().__init__(message)
+        self.sentry_already_reported = sentry_already_reported
 
 
 def _validate_file_ownership(file_id: str, expected_curator_id: str) -> bool:
@@ -154,10 +163,29 @@ def process_batch_task(batch_id: UUID) -> None:
                 # CR-3: Explicit rollback before updating failure status
                 # If _process_single_document made partial changes, rollback ensures clean state
                 db.rollback()
-                logger.exception(
-                    "Error processing document: batch_id=%s, doc_id=%s",
-                    batch_id, batch_doc.document_id
-                )
+                sentry_already_reported = getattr(e, "sentry_already_reported", False)
+                if sentry_already_reported:
+                    logger.warning(
+                        "Batch document failed after upstream Sentry reporting: batch_id=%s, doc_id=%s",
+                        batch_id,
+                        batch_doc.document_id,
+                    )
+                else:
+                    logger.exception(
+                        "Error processing document: batch_id=%s, doc_id=%s",
+                        batch_id,
+                        batch_doc.document_id,
+                    )
+                    report_background_task_exception(
+                        e,
+                        task_name="batch.process_document",
+                        tags={
+                            "component": "batch",
+                            "batch_id": batch_id,
+                            "document_id": batch_doc.document_id,
+                            "batch_document_id": batch_doc.id,
+                        },
+                    )
                 # Re-fetch objects after rollback to ensure they're in session
                 batch = db.query(Batch).filter(Batch.id == batch_id).first()
                 batch_doc = db.query(BatchDocument).filter(BatchDocument.id == batch_doc.id).first()
@@ -315,6 +343,7 @@ async def _execute_flow_for_document(
     result_file_path = None
     review_session_ids: list[str] = []
     flow_failure_message: Optional[str] = None
+    flow_failure_already_reported = False
 
     try:
         # Execute the flow and collect events
@@ -406,6 +435,13 @@ async def _execute_flow_for_document(
                     or event.get("message")
                     or "Flow execution failed."
                 )
+                flow_failure_already_reported = (
+                    failure_details.get("reason") in {
+                        "extraction_persistence_empty_result",
+                        "extraction_persistence_failed",
+                        "extraction_persistence_partial_result",
+                    }
+                )
 
             # Log supervisor completion for debugging
             if event_type == "SUPERVISOR_COMPLETE":
@@ -434,7 +470,10 @@ async def _execute_flow_for_document(
     if flow_failure_message:
         # A late flow error invalidates any earlier output event; do not return
         # a partial file or review handoff as a successful batch document.
-        raise RuntimeError(flow_failure_message)
+        raise BatchFlowExecutionError(
+            flow_failure_message,
+            sentry_already_reported=flow_failure_already_reported,
+        )
 
     if not result_file_path and not review_session_ids:
         logger.warning(

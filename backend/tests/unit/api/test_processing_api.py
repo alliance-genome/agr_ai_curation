@@ -154,6 +154,86 @@ async def test_reprocess_document_success_schedules_background_task(monkeypatch,
 
 
 @pytest.mark.asyncio
+async def test_reprocess_background_failure_reports_observability(
+    monkeypatch,
+    tmp_path,
+):
+    user_id = "user-1"
+    document_id = "doc-1"
+    filename = "paper.pdf"
+    file_dir = tmp_path / user_id / document_id
+    file_dir.mkdir(parents=True)
+    (file_dir / filename).write_text("pdf", encoding="utf-8")
+
+    async def _get_document(_user_id, _doc_id):
+        return {"document": {"processing_status": "completed", "filename": filename}}
+
+    status_calls = []
+    report_calls = []
+
+    async def _update_status(doc_id, uid, status):
+        status_calls.append((doc_id, uid, status))
+
+    async def _track(_doc_id, _stage):
+        return None
+
+    class _FailingOrchestrator:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def process_pdf_document(self, **_kwargs):
+            raise RuntimeError("raw document processing failure")
+
+    def _report(exc, *, task_name, tags=None, context=None):
+        report_calls.append(
+            {
+                "exc_type": type(exc).__name__,
+                "task_name": task_name,
+                "tags": dict(tags or {}),
+                "context": dict(context or {}),
+            }
+        )
+        return True
+
+    monkeypatch.setattr(processing, "get_document", _get_document)
+    monkeypatch.setattr(processing, "_latest_job_for_user_document", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(processing, "get_pdf_storage_path", lambda: tmp_path)
+    monkeypatch.setattr(processing, "update_document_status", _update_status)
+    monkeypatch.setattr(processing.pipeline_tracker, "track_pipeline_progress", _track)
+    monkeypatch.setattr(processing, "get_connection", lambda: object())
+    monkeypatch.setattr(processing, "DocumentPipelineOrchestrator", _FailingOrchestrator)
+    monkeypatch.setattr(processing, "report_background_task_exception", _report)
+    monkeypatch.setattr("src.lib.document_cache.invalidate_cache", lambda *_args, **_kwargs: None)
+
+    background = BackgroundTasks()
+    await processing.reprocess_document_endpoint(
+        background,
+        document_id=document_id,
+        request=ReprocessRequest(strategy_name="default", force_reparse=False),
+        user={"sub": user_id},
+    )
+
+    task = background.tasks[0]
+    await task.func(*task.args, **task.kwargs)
+
+    assert status_calls == [
+        (document_id, user_id, ProcessingStatus.PROCESSING),
+        (document_id, user_id, ProcessingStatus.FAILED),
+    ]
+    assert report_calls == [
+        {
+            "exc_type": "RuntimeError",
+            "task_name": "documents.reprocess",
+            "tags": {
+                "component": "documents",
+                "document_id": document_id,
+            },
+            "context": {},
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_reembed_document_no_chunks(monkeypatch):
     async def _get_document(_user_id, _doc_id):
         return {"document": {"processing_status": "completed"}, "total_chunks": 0}

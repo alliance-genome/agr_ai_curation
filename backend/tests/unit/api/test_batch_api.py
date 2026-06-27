@@ -93,7 +93,8 @@ async def test_create_batch_success(monkeypatch):
 
     assert result.id == batch_id
     assert len(background_tasks.tasks) == 1
-    assert background_tasks.tasks[0].func is batch_api.process_batch_task
+    assert getattr(background_tasks.tasks[0].func, "__observability_original_task__") is batch_api.process_batch_task
+    assert getattr(background_tasks.tasks[0].func, "__observability_task_name__") == "batch.process_batch"
     assert background_tasks.tasks[0].args == (batch_id,)
 
 

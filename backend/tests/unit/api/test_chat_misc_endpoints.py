@@ -21,6 +21,7 @@ from src.lib.chat_history_repository import (
     ChatSessionDetail,
     ChatMessageRecord,
 )
+from src.lib import http_errors
 from src.lib.curation_workspace import extraction_results as extraction_results_module
 from tests.chat_api_test_support import patch_chat_impl_for
 
@@ -646,6 +647,31 @@ async def test_load_document_for_chat_404_on_value_error(monkeypatch, caplog):
     assert exc.value.status_code == 404
     assert exc.value.detail == "Document not found"
     assert "missing" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_load_document_for_chat_500_reports_unexpected_load_error(monkeypatch):
+    calls = []
+
+    async def _raise(*_args, **_kwargs):
+        raise RuntimeError("weaviate unavailable")
+
+    def _fake_report_runtime_exception(exc, **kwargs):
+        calls.append((exc, kwargs))
+        return True
+
+    _patch_chat_impl(monkeypatch, "get_document", _raise)
+    monkeypatch.setattr(http_errors, "report_runtime_exception", _fake_report_runtime_exception)
+
+    with pytest.raises(HTTPException) as exc:
+        await chat.load_document_for_chat(chat.LoadDocumentRequest(document_id="doc-500"), {"sub": "user-1"})
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "Failed to load document for chat"
+    assert len(calls) == 1
+    assert isinstance(calls[0][0], RuntimeError)
+    assert calls[0][1]["component"] == "api"
+    assert calls[0][1]["operation"] == "sanitized_http_exception"
 
 
 @pytest.mark.asyncio
@@ -1666,8 +1692,15 @@ async def test_chat_endpoint_sanitizes_non_stream_validation_error(monkeypatch, 
 
 @pytest.mark.asyncio
 async def test_chat_endpoint_wraps_unexpected_exceptions(monkeypatch, caplog):
+    calls = []
     commits: list[str] = []
     repository = FakeChatHistoryRepository()
+
+    def _fake_report_runtime_exception(exc, **kwargs):
+        calls.append((exc, kwargs))
+        return True
+
+    monkeypatch.setattr(http_errors, "report_runtime_exception", _fake_report_runtime_exception)
     _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _sid: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
@@ -1693,6 +1726,45 @@ async def test_chat_endpoint_wraps_unexpected_exceptions(monkeypatch, caplog):
     assert commits == ["commit"]
     assert [call["role"] for call in repository.append_calls] == ["user"]
     assert "boom" in caplog.text
+    assert len(calls) == 1
+    assert calls[0][1]["component"] == "api"
+    assert calls[0][1]["operation"] == "sanitized_http_exception"
+
+
+@pytest.mark.asyncio
+async def test_chat_endpoint_reports_tool_map_resolution_failure(monkeypatch):
+    calls = []
+    commits: list[str] = []
+    repository = FakeChatHistoryRepository()
+
+    def _fake_report_runtime_exception(exc, **kwargs):
+        calls.append((exc, kwargs))
+        return True
+
+    def _raise_tool_map():
+        raise RuntimeError("agent registry unavailable")
+
+    monkeypatch.setattr(http_errors, "report_runtime_exception", _fake_report_runtime_exception)
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _sid: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", _raise_tool_map)
+
+    with pytest.raises(HTTPException) as exc:
+        await chat.chat_endpoint(
+            chat.ChatMessage(message="hello", session_id="session-1"),
+            {"sub": "user-1", "cognito:groups": []},
+            db=_db_stub(commits=commits),
+        )
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "Internal configuration error: unable to process chat request"
+    assert commits == ["commit"]
+    assert len(calls) == 1
+    assert calls[0][1]["component"] == "api"
+    assert calls[0][1]["operation"] == "sanitized_http_exception"
 
 
 @pytest.mark.asyncio
@@ -1744,7 +1816,14 @@ async def test_get_conversation_status_and_reset_endpoints(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_conversation_endpoints_sanitize_internal_errors(monkeypatch, caplog):
+    calls = []
     repository = FakeChatHistoryRepository()
+
+    def _fake_report_runtime_exception(exc, **kwargs):
+        calls.append((exc, kwargs))
+        return True
+
+    monkeypatch.setattr(http_errors, "report_runtime_exception", _fake_report_runtime_exception)
     _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
     _patch_chat_impl(
         monkeypatch,
@@ -1759,6 +1838,8 @@ async def test_conversation_endpoints_sanitize_internal_errors(monkeypatch, capl
     assert exc_status.value.status_code == 500
     assert exc_status.value.detail == "Failed to retrieve conversation status"
     assert "conversation backend unavailable" in caplog.text
+    assert len(calls) == 1
+    assert calls[0][1]["operation"] == "sanitized_http_exception"
 
     caplog.clear()
     _patch_chat_impl(monkeypatch, "_resolve_session_create_active_document", lambda **_kwargs: (None, None))
@@ -1774,6 +1855,8 @@ async def test_conversation_endpoints_sanitize_internal_errors(monkeypatch, capl
     assert exc_reset.value.status_code == 500
     assert exc_reset.value.detail == "Failed to reset conversation"
     assert "conversation reset failed" in caplog.text
+    assert len(calls) == 2
+    assert calls[1][1]["operation"] == "sanitized_http_exception"
 
 
 def test_chat_router_omits_legacy_chat_config_route():
@@ -2256,6 +2339,7 @@ def test_backfill_chat_session_generated_title_logs_and_rolls_back_when_chat_kin
 ):
     commits: list[str] = []
     rollbacks: list[str] = []
+    report_calls = []
     repository = FakeChatHistoryRepository(
         sessions=[_session_record(session_id="session-missing-kind", chat_kind=None)]
     )
@@ -2266,6 +2350,18 @@ def test_backfill_chat_session_generated_title_logs_and_rolls_back_when_chat_kin
     )
     _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
     _patch_chat_impl(monkeypatch, "SessionLocal", lambda: completion_db)
+    _patch_chat_impl(
+        monkeypatch,
+        "report_background_task_exception",
+        lambda exc, *, task_name, tags=None, context=None: report_calls.append(
+            {
+                "exc_type": type(exc).__name__,
+                "task_name": task_name,
+                "tags": dict(tags or {}),
+                "context": dict(context or {}),
+            }
+        ),
+    )
 
     with caplog.at_level("WARNING"):
         chat._backfill_chat_session_generated_title("session-missing-kind", "user-1")
@@ -2274,6 +2370,17 @@ def test_backfill_chat_session_generated_title_logs_and_rolls_back_when_chat_kin
     assert rollbacks == ["rollback"]
     assert "Failed to generate durable chat title" in caplog.text
     assert "Session session-missing-kind is missing chat_kind during durable title backfill" in caplog.text
+    assert report_calls == [
+        {
+            "exc_type": "ValueError",
+            "task_name": "chat.backfill_session_title",
+            "tags": {
+                "component": "chat",
+                "session_id": "session-missing-kind",
+            },
+            "context": {},
+        }
+    ]
 
 
 def test_serialize_session_raises_when_chat_kind_is_missing():

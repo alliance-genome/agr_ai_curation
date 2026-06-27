@@ -4725,6 +4725,7 @@ class TestExecuteFlowTermination:
             _task_input_node(),
             _agent_node("n1", "gene", step_goal="Extract genes"),
         ])
+        runtime_reports = []
         evidence_record = _make_evidence_record(
             "TP53",
             verified_quote="TP53 expression increased.",
@@ -4773,6 +4774,10 @@ class TestExecuteFlowTermination:
             "src.lib.flows.executor.persist_extraction_results",
             lambda _requests: [],
         )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.report_runtime_exception",
+            lambda exc, **kwargs: runtime_reports.append((exc, kwargs)),
+        )
 
         async def _fake_run_agent_streamed(**_kwargs):
             yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
@@ -4801,6 +4806,135 @@ class TestExecuteFlowTermination:
         assert finished_audit["persistenceAttempted"] is True
         assert finished_audit["persistenceStatus"] == "failed"
         assert finished_audit["persistedResultCount"] == 0
+        assert len(runtime_reports) == 1
+        reported_exc, report_kwargs = runtime_reports[0]
+        assert isinstance(reported_exc, RuntimeError)
+        assert report_kwargs["component"] == "flow_executor"
+        assert report_kwargs["operation"] == "extraction_persistence_empty_result"
+        context = report_kwargs["context"]
+        assert UUID(context.pop("flow_run_id"))
+        assert context == {
+            "document_id": "doc-1",
+            "session_id": "s1",
+            "trace_id": "trace-1",
+            "candidate_count": 1,
+            "extraction_output_required": True,
+            "persisted_count": 0,
+        }
+
+    @pytest.mark.asyncio
+    async def test_fails_when_required_extraction_persistence_returns_partial_records(
+        self, monkeypatch
+    ):
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene", step_goal="Extract genes"),
+            _agent_node("n2", "allele", step_goal="Extract alleles"),
+        ])
+        completed_gene_step = _make_completed_step(
+            agent_id="gene",
+            agent_name="Gene",
+            tool_name="ask_gene_specialist",
+            step=1,
+            adapter_key="gene",
+            payload=_structured_step_output("TP53", actor="gene", destination="gene"),
+        )
+        completed_allele_step = _make_completed_step(
+            agent_id="allele",
+            agent_name="Allele",
+            tool_name="ask_allele_specialist",
+            step=2,
+            adapter_key="allele",
+            payload=_structured_step_output("notch", actor="allele", destination="allele"),
+        )
+        completed_gene_step["extraction_handoff_audit"] = _make_extraction_handoff_audit(
+            step=1,
+            tool_name="ask_gene_specialist",
+            agent_id="gene",
+            agent_name="Gene",
+            adapter_key="gene",
+        )
+        completed_allele_step["extraction_handoff_audit"] = _make_extraction_handoff_audit(
+            step=2,
+            tool_name="ask_allele_specialist",
+            agent_id="allele",
+            agent_name="Allele",
+            adapter_key="allele",
+        )
+
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(
+            completed_gene_step,
+            completed_allele_step,
+        )
+        runtime_reports = []
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.DocumentContext.fetch",
+            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+        )
+
+        def _persist_first_only(requests):
+            return _recording_persist_extraction_results([])(requests[:1])
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.persist_extraction_results",
+            _persist_first_only,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.report_runtime_exception",
+            lambda exc, **kwargs: runtime_reports.append((exc, kwargs)),
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            yield {"type": "CHAT_OUTPUT_READY", "data": {}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [
+            event
+            async for event in execute_flow(
+                flow,
+                user_id="u1",
+                session_id="s1",
+                document_id="doc-1",
+            )
+        ]
+
+        flow_error = next(event for event in events if event.get("type") == "FLOW_ERROR")
+        assert flow_error["details"]["reason"] == "extraction_persistence_partial_result"
+        assert flow_error["details"]["persisted_count"] == 1
+        assert flow_error["details"]["candidate_count"] == 2
+        flow_finished = next(event for event in events if event.get("type") == "FLOW_FINISHED")
+        assert flow_finished["data"]["status"] == "failed"
+        assert len(runtime_reports) == 1
+        reported_exc, report_kwargs = runtime_reports[0]
+        assert isinstance(reported_exc, RuntimeError)
+        assert report_kwargs["component"] == "flow_executor"
+        assert report_kwargs["operation"] == "extraction_persistence_partial_result"
+        context = report_kwargs["context"]
+        assert UUID(context.pop("flow_run_id"))
+        assert context == {
+            "document_id": "doc-1",
+            "session_id": "s1",
+            "trace_id": "trace-1",
+            "candidate_count": 2,
+            "extraction_output_required": True,
+            "persisted_count": 1,
+        }
 
     @pytest.mark.asyncio
     async def test_marks_completed_on_curation_handoff_ready_and_preserves_extraction_refs(
@@ -5157,11 +5291,12 @@ class TestExecuteFlowTermination:
         assert persisted_requests[0].flow_run_id == "00000000-0000-0000-0000-000000000123"
 
     @pytest.mark.asyncio
-    async def test_failed_extraction_persistence_updates_handoff_audit(self, monkeypatch):
+    async def test_failed_extraction_persistence_updates_handoff_audit(self, monkeypatch, caplog):
         flow = _make_flow([
             _task_input_node(),
             _agent_node("n1", "gene-expression", step_goal="Extract genes"),
         ])
+        runtime_reports = []
         evidence_record = _make_evidence_record(
             "TP53",
             verified_quote="TP53 expression increased.",
@@ -5213,6 +5348,10 @@ class TestExecuteFlowTermination:
             "src.lib.flows.executor.persist_extraction_results",
             _raise_persistence_error,
         )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.report_runtime_exception",
+            lambda exc, **kwargs: runtime_reports.append((exc, kwargs)),
+        )
 
         async def _fake_run_agent_streamed(**_kwargs):
             yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
@@ -5222,6 +5361,7 @@ class TestExecuteFlowTermination:
             "src.lib.openai_agents.runner.run_agent_streamed",
             _fake_run_agent_streamed,
         )
+        caplog.set_level(logging.WARNING, logger="src.lib.flows.executor")
 
         events = [
             event
@@ -5243,6 +5383,28 @@ class TestExecuteFlowTermination:
         assert finished_audit["persistenceStatus"] == "failed"
         assert finished_audit["persistedResultCount"] == 0
         assert "db unavailable" in finished_audit["persistenceErrorReason"]
+        matching_records = [
+            record
+            for record in caplog.records
+            if "Extraction persistence failed" in record.getMessage()
+        ]
+        assert len(matching_records) == 1
+        assert matching_records[0].exc_info is None
+        assert len(runtime_reports) == 1
+        reported_exc, report_kwargs = runtime_reports[0]
+        assert isinstance(reported_exc, RuntimeError)
+        assert str(reported_exc) == "db unavailable"
+        assert report_kwargs["component"] == "flow_executor"
+        assert report_kwargs["operation"] == "extraction_persistence_failed"
+        context = report_kwargs["context"]
+        assert UUID(context.pop("flow_run_id"))
+        assert context == {
+            "document_id": "doc-1",
+            "session_id": "flow-session-1",
+            "trace_id": "trace-1",
+            "candidate_count": 1,
+            "extraction_output_required": True,
+        }
 
     @pytest.mark.asyncio
     async def test_execute_flow_emits_validator_lookup_audit_events(self, monkeypatch):
@@ -5695,6 +5857,7 @@ class TestExecuteFlowTermination:
             _task_input_node(),
             _agent_node("n1", "gene-expression", step_goal="Extract genes"),
         ])
+        runtime_reports = []
         payload = _structured_step_output("notch")
         completed_step = _make_completed_step(
             agent_id="gene-expression",
@@ -5729,6 +5892,10 @@ class TestExecuteFlowTermination:
             "src.lib.flows.executor.persist_extraction_results",
             _raise_persistence,
         )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.report_runtime_exception",
+            lambda exc, **kwargs: runtime_reports.append((exc, kwargs)),
+        )
 
         async def _fake_run_agent_streamed(**_kwargs):
             yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
@@ -5760,3 +5927,17 @@ class TestExecuteFlowTermination:
         flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
         assert flow_finished["data"]["status"] == "failed"
         assert "db unavailable" in (flow_finished["data"]["failure_reason"] or "")
+        assert len(runtime_reports) == 1
+        reported_exc, report_kwargs = runtime_reports[0]
+        assert isinstance(reported_exc, RuntimeError)
+        assert report_kwargs["component"] == "flow_executor"
+        assert report_kwargs["operation"] == "extraction_persistence_failed"
+        context = report_kwargs["context"]
+        assert UUID(context.pop("flow_run_id"))
+        assert context == {
+            "document_id": "doc-1",
+            "session_id": "flow-session-1",
+            "trace_id": "trace-1",
+            "candidate_count": 1,
+            "extraction_output_required": True,
+        }

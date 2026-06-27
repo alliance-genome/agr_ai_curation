@@ -43,6 +43,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/agent-studio/custom-agents")
 
 
+class _CustomAgentDatabaseError(RuntimeError):
+    """Sanitized custom-agent database failure safe for logs and Sentry."""
+
+
+def _sanitized_custom_agent_db_error(exc: IntegrityError, *, operation: str) -> _CustomAgentDatabaseError:
+    return _CustomAgentDatabaseError(
+        f"Custom agent {operation} database error ({type(exc.orig).__name__})"
+    )
+
+
 def _raise_custom_agent_lookup_http_exception(
     *,
     exc: CustomAgentNotFoundError | CustomAgentAccessError,
@@ -323,7 +333,13 @@ async def create_custom_agent_endpoint(
             or "duplicate key value violates unique constraint" in error_text
         ):
             raise HTTPException(status_code=409, detail="A custom agent with this name already exists")
-        raise HTTPException(status_code=500, detail="Database error while creating custom agent")
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Database error while creating custom agent",
+            log_message="Database error while creating custom agent",
+            exc=_sanitized_custom_agent_db_error(exc, operation="create"),
+        )
 
 
 @router.get("", response_model=ListCustomAgentsResponse)
@@ -437,7 +453,13 @@ async def update_custom_agent_endpoint(
             or "duplicate key value violates unique constraint" in error_text
         ):
             raise HTTPException(status_code=409, detail="A custom agent with this name already exists")
-        raise HTTPException(status_code=500, detail="Database error while updating custom agent")
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Database error while updating custom agent",
+            log_message=f"Database error while updating custom agent '{custom_agent_id}'",
+            exc=_sanitized_custom_agent_db_error(exc, operation="update"),
+        )
 
 
 @router.delete("/{custom_agent_id}")

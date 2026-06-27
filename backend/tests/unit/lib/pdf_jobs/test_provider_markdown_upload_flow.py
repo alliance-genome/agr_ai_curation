@@ -456,7 +456,8 @@ async def test_upload_intake_ready_provider_markdown_runs_generic_ingestion(
     assert (tmp_path / record.file_path).exists()
     assert len(background_tasks.tasks) == 1
     task = background_tasks.tasks[0]
-    assert task.func == execution_service.execute_provider_markdown
+    assert getattr(task.func, "__observability_original_task__") == execution_service.execute_provider_markdown
+    assert getattr(task.func, "__observability_task_name__") == "pdf_jobs.execute_provider_markdown"
     queued_request = cast(ProviderMarkdownExecutionRequest, task.args[0])
     assert queued_request.document_id == result.document_id
     assert queued_request.converted_artifact_id == "markdown-55"

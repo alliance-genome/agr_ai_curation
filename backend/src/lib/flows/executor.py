@@ -97,6 +97,7 @@ from src.lib.flows.output_projection import (
     finalize_output_projection,
 )
 from src.lib.flows.validation_attachments import validation_schedule_from_node_data
+from src.lib.observability.runtime import report_runtime_exception
 from src.models.sql.curation_flow import CurationFlow
 from src.models.sql.database import SessionLocal
 from src.lib.agent_studio.catalog_service import (
@@ -3450,6 +3451,36 @@ def _merge_persisted_flow_extraction_results(
         seen.add(record_id)
 
 
+def _report_flow_extraction_persistence_failure(
+    exc: BaseException,
+    *,
+    operation: str,
+    document_id: Optional[str],
+    session_id: str,
+    trace_id: Optional[str],
+    flow_run_id: Optional[str],
+    candidate_count: int,
+    extraction_output_required: bool,
+    persisted_count: int | None = None,
+) -> None:
+    context: dict[str, Any] = {
+        "document_id": document_id,
+        "session_id": session_id,
+        "trace_id": trace_id,
+        "flow_run_id": flow_run_id,
+        "candidate_count": candidate_count,
+        "extraction_output_required": extraction_output_required,
+    }
+    if persisted_count is not None:
+        context["persisted_count"] = persisted_count
+    report_runtime_exception(
+        exc,
+        component="flow_executor",
+        operation=operation,
+        context=context,
+    )
+
+
 def _persist_flow_extraction_candidates_or_build_error(
     *,
     flow_name: str,
@@ -3539,10 +3570,21 @@ def _persist_flow_extraction_candidates_or_build_error(
             flow_run_id=flow_run_id,
         )
     except Exception as exc:
+        _report_flow_extraction_persistence_failure(
+            exc,
+            operation="extraction_persistence_failed",
+            document_id=document_id,
+            session_id=session_id,
+            trace_id=trace_id,
+            flow_run_id=flow_run_id,
+            candidate_count=len(candidates),
+            extraction_output_required=extraction_output_required,
+        )
         failure_reason = f"Failed to persist extraction results for flow '{flow_name}'. {exc}"
-        logger.exception(
-            "[Flow Executor] Extraction persistence failed for flow '%s'",
+        logger.warning(
+            "[Flow Executor] Extraction persistence failed for flow '%s': %s",
             flow_name,
+            exc,
             extra={
                 "document_id": document_id,
                 "session_id": session_id,
@@ -3564,6 +3606,17 @@ def _persist_flow_extraction_candidates_or_build_error(
         )
 
     if extraction_output_required and not persisted_records:
+        _report_flow_extraction_persistence_failure(
+            RuntimeError("flow_extraction_persistence_empty_result"),
+            operation="extraction_persistence_empty_result",
+            document_id=document_id,
+            session_id=session_id,
+            trace_id=trace_id,
+            flow_run_id=flow_run_id,
+            candidate_count=len(candidates),
+            extraction_output_required=extraction_output_required,
+            persisted_count=0,
+        )
         failure_reason = (
             f"Flow '{flow_name}' expected persisted extraction results, but "
             "persistence returned no records."
@@ -3582,6 +3635,17 @@ def _persist_flow_extraction_candidates_or_build_error(
             [],
         )
     if extraction_output_required and len(persisted_records) < len(candidates):
+        _report_flow_extraction_persistence_failure(
+            RuntimeError("flow_extraction_persistence_partial_result"),
+            operation="extraction_persistence_partial_result",
+            document_id=document_id,
+            session_id=session_id,
+            trace_id=trace_id,
+            flow_run_id=flow_run_id,
+            candidate_count=len(candidates),
+            extraction_output_required=extraction_output_required,
+            persisted_count=len(persisted_records),
+        )
         failure_reason = (
             f"Flow '{flow_name}' persisted only {len(persisted_records)} of "
             f"{len(candidates)} required extraction candidate(s)."

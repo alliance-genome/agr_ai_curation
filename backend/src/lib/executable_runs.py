@@ -20,6 +20,7 @@ from src.lib.openai_agents.config import (
     get_executable_run_event_replay_limit,
     get_executable_run_retention_seconds,
 )
+from src.lib.observability.runtime import report_runtime_exception
 
 logger = logging.getLogger(__name__)
 
@@ -241,19 +242,54 @@ class ExecutableRunManager:
             await self._finish(run, "cancelled")
             raise
         except Exception as exc:
-            logger.exception(
+            report_runtime_exception(
+                exc,
+                component="executable_run",
+                operation="producer_failed",
+                tags={"run_kind": run.kind},
+                context={
+                    "run_id": run.run_id,
+                    "kind": run.kind,
+                    "session_id": run.session_id,
+                    "turn_id": run.turn_id,
+                    "flow_run_id": run.flow_run_id,
+                    "batch_id": run.batch_id,
+                    "job_id": run.job_id,
+                    "terminal_error_event_factory": run.terminal_error_event_factory
+                    is not None,
+                },
+            )
+            logger.warning(
                 "Executable run producer failed: run_id=%s kind=%s",
                 run.run_id,
                 run.kind,
+                exc_info=True,
             )
             if run.terminal_error_event_factory is not None:
                 try:
                     await self._publish(run, run.terminal_error_event_factory(exc))
-                except Exception:
-                    logger.exception(
+                except Exception as terminal_exc:
+                    terminal_exc.__context__ = None
+                    report_runtime_exception(
+                        terminal_exc,
+                        component="executable_run",
+                        operation="terminal_error_event_failed",
+                        tags={"run_kind": run.kind},
+                        context={
+                            "run_id": run.run_id,
+                            "kind": run.kind,
+                            "session_id": run.session_id,
+                            "turn_id": run.turn_id,
+                            "flow_run_id": run.flow_run_id,
+                            "batch_id": run.batch_id,
+                            "job_id": run.job_id,
+                        },
+                    )
+                    logger.warning(
                         "Executable run terminal error event failed: run_id=%s kind=%s",
                         run.run_id,
                         run.kind,
+                        exc_info=True,
                     )
             await self._finish(run, "failed")
 

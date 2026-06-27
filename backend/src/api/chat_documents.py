@@ -34,13 +34,13 @@ async def load_document_for_chat(
             level=logging.WARNING,
         )
     except Exception as exc:
-        logger.error(
-            "Error loading document %s: %s",
-            payload.document_id,
-            exc,
-            extra={"user_id": user_id, "document_id": payload.document_id},
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to load document for chat",
+            log_message="Error loading document for chat",
+            exc=exc,
         )
-        raise HTTPException(status_code=500, detail="Failed to load document for chat") from exc
 
     document_summary = document_detail.get("document")
     if not document_summary:

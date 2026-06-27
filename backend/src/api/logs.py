@@ -28,6 +28,19 @@ class LogsResponse(BaseModel):
     logs: str
 
 
+class _LokiQueryError(RuntimeError):
+    """Sanitized Loki query failure safe for Sentry exception capture."""
+
+
+def _new_loki_query_error() -> _LokiQueryError:
+    """Create a sanitized Loki query error with traceback context."""
+
+    try:
+        raise _LokiQueryError("Loki log query returned an error result")
+    except _LokiQueryError as exc:
+        return exc
+
+
 # Whitelist of allowed containers (security measure)
 ALLOWED_CONTAINERS = {
     "backend",
@@ -91,7 +104,7 @@ def _extract_chronological_lines(payload: dict[str, Any]) -> list[str]:
     return [line for _, _, line in entries]
 
 
-def _format_loki_error(result: dict[str, str]) -> str:
+def _format_loki_error(result: loki.LokiQueryError) -> str:
     """Render a Loki client error into the endpoint's string detail payload."""
     detail = f"Failed to retrieve logs from Loki: {result['error']}"
     help_text = result.get("help")
@@ -100,15 +113,19 @@ def _format_loki_error(result: dict[str, str]) -> str:
     return detail
 
 
-def _raise_loki_query_error(*, container: str, result: dict[str, str]) -> NoReturn:
+def _raise_loki_query_error(*, container: str, result: loki.LokiQueryError) -> NoReturn:
     """Log the full Loki failure details while returning a stable client message."""
 
-    logger.error(
-        "Loki log query failed for container %s: %s",
-        container,
-        _format_loki_error(result),
+    raise_sanitized_http_exception(
+        logger,
+        status_code=500,
+        detail="Failed to retrieve logs from Loki",
+        log_message=(
+            f"Loki log query failed for container {container}: "
+            f"{_format_loki_error(result)}"
+        ),
+        exc=_new_loki_query_error(),
     )
-    raise HTTPException(status_code=500, detail="Failed to retrieve logs from Loki")
 
 
 async def _query_logs(
@@ -119,7 +136,7 @@ async def _query_logs(
     end: datetime,
     limit: int,
     level: str | None,
-) -> list[str] | dict[str, str]:
+) -> loki.LokiQueryResult:
     """
     Query Loki through the shared client with endpoint-specific chronological rendering.
     """
@@ -202,7 +219,7 @@ async def get_container_logs(
             level=normalized_level,
         )
 
-        if isinstance(result, dict) and result.get("status") == "error":
+        if not isinstance(result, list):
             _raise_loki_query_error(container=container, result=result)
 
         logs_text, returned_line_count = _tail_rendered_logs(result, line_limit=lines)

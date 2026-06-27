@@ -373,7 +373,8 @@ async def test_dispatch_upload_execution_tracks_upload_and_queues_task():
     assert tracker.calls[-1]["document_id"] == "doc-dispatch"
     assert tracker.calls[-1]["stage"] == ProcessingStage.UPLOAD
     assert len(background_tasks.tasks) == 1
-    assert background_tasks.tasks[0].func == service.execute_upload
+    assert getattr(background_tasks.tasks[0].func, "__observability_original_task__") == service.execute_upload
+    assert getattr(background_tasks.tasks[0].func, "__observability_task_name__") == "pdf_jobs.execute_upload"
     assert background_tasks.tasks[0].args == (request,)
 
 
@@ -1266,6 +1267,7 @@ async def test_execute_upload_marks_failed_when_orchestrator_raises(monkeypatch)
 
     events = {"failed": [], "cancelled": []}
     status_updates = []
+    report_calls = []
 
     async def _update_document_status(document_id, user_id, status):
         status_updates.append((document_id, user_id, status))
@@ -1278,6 +1280,18 @@ async def test_execute_upload_marks_failed_when_orchestrator_raises(monkeypatch)
     monkeypatch.setattr(service_module.pdf_job_service, "mark_failed", lambda **kwargs: events["failed"].append(kwargs))
     monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **kwargs: events["cancelled"].append(kwargs))
     monkeypatch.setattr(service_module, "update_document_status", _update_document_status)
+    monkeypatch.setattr(
+        service_module,
+        "report_background_task_exception",
+        lambda exc, *, task_name, tags=None, context=None: report_calls.append(
+            {
+                "exc_type": type(exc).__name__,
+                "task_name": task_name,
+                "tags": dict(tags or {}),
+                "context": dict(context or {}),
+            }
+        ),
+    )
 
     await service.execute_upload(
         UploadExecutionRequest(
@@ -1291,6 +1305,19 @@ async def test_execute_upload_marks_failed_when_orchestrator_raises(monkeypatch)
     assert status_updates == [("doc-exc-1", "user-exc-1", "failed")]
     assert events["failed"] == [{"job_id": job_id, "message": "pipeline down", "stage": ProcessingStage.FAILED.value}]
     assert not events["cancelled"]
+    assert report_calls == [
+        {
+            "exc_type": "RuntimeError",
+            "task_name": "pdf_jobs.execute_upload",
+            "tags": {
+                "component": "pdf_jobs",
+                "document_id": "doc-exc-1",
+                "job_id": job_id,
+                "failure_stage": "pipeline",
+            },
+            "context": {},
+        }
+    ]
 
 
 @pytest.mark.asyncio

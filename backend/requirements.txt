@@ -23,6 +23,7 @@ anthropic>=0.87.0  # Anthropic SDK for Opus chat in Prompt Explorer
 aiohttp>=3.13.4  # Async HTTP client for PDFX service
 langfuse>=4.0.0,<5.0.0  # Observability for LLM applications (v4 API: start_as_current_observation + propagate_attributes)
 openinference-instrumentation-openai-agents==1.6.1  # Export OpenAI Agents SDK spans to Langfuse via OpenTelemetry.
+sentry-sdk[fastapi]>=2.63.0  # Application error reporting; disabled unless SENTRY_DSN is configured.
 
 # Database dependencies
 sqlalchemy>=2.0

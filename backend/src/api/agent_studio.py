@@ -77,6 +77,10 @@ from src.lib.agent_studio.flow_tools import (
     set_current_flow_context,
     clear_current_flow_context,
 )
+from src.lib.observability.background_tasks import (
+    add_observed_background_task,
+    report_background_task_exception,
+)
 from src.lib.agent_studio.flow_agent_policy import flow_palette_show_in_palette
 from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry
 from src.lib.agent_studio.custom_agent_service import (
@@ -416,8 +420,13 @@ async def get_models_endpoint(
             ]
         )
     except Exception as e:
-        logger.error("Failed to load model options: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to load model options")
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to load model options",
+            log_message="Failed to load model options",
+            exc=e,
+        )
 
 
 @router.get(
@@ -449,8 +458,13 @@ async def get_tool_library_endpoint(
             ]
         )
     except Exception as e:
-        logger.error("Failed to load tool library: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to load tool library")
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to load tool library",
+            log_message="Failed to load tool library",
+            exc=e,
+        )
 
 
 @router.get(
@@ -491,8 +505,13 @@ async def get_agent_templates_endpoint(
             ]
         )
     except Exception as e:
-        logger.error("Failed to load agent templates: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to load agent templates")
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to load agent templates",
+            log_message="Failed to load agent templates",
+            exc=e,
+        )
 
 
 @router.post(
@@ -3807,6 +3826,14 @@ async def _process_suggestion_background(
         if not tool_use_block:
             error_msg = "Configured model did not call submit_prompt_suggestion despite forced tool choice"
             logger.error('[Background] %s', error_msg)
+            report_background_task_exception(
+                RuntimeError("agent_studio_suggestion_missing_tool_use"),
+                task_name="agent_studio.process_suggestion",
+                tags={
+                    "component": "agent_studio",
+                    "failure_stage": "missing_tool_use",
+                },
+            )
             _send_error_notification_sns(user_email, error_msg, context)
             return
 
@@ -3825,16 +3852,40 @@ async def _process_suggestion_background(
         else:
             error_msg = tool_result.get("error", "Unknown error during tool execution")
             logger.error('[Background] Tool execution failed: %s', error_msg)
+            report_background_task_exception(
+                RuntimeError("agent_studio_suggestion_tool_failed"),
+                task_name="agent_studio.process_suggestion",
+                tags={
+                    "component": "agent_studio",
+                    "failure_stage": "tool_execution",
+                },
+            )
             _send_error_notification_sns(user_email, error_msg, context)
 
     except anthropic.APIError as e:
         error_msg = f"Anthropic API error: {str(e)}"
         logger.error('[Background] %s', error_msg, exc_info=True)
+        report_background_task_exception(
+            e,
+            task_name="agent_studio.process_suggestion",
+            tags={
+                "component": "agent_studio",
+                "failure_stage": "anthropic_api",
+            },
+        )
         _send_error_notification_sns(user_email, error_msg, context)
 
     except Exception as e:
         error_msg = f"Unexpected error: {str(e)}"
         logger.error('[Background] %s', error_msg, exc_info=True)
+        report_background_task_exception(
+            e,
+            task_name="agent_studio.process_suggestion",
+            tags={
+                "component": "agent_studio",
+                "failure_stage": "unexpected",
+            },
+        )
         _send_error_notification_sns(user_email, error_msg, context)
 
 
@@ -3942,7 +3993,8 @@ Please review our conversation history above and submit a general suggestion usi
         })
 
         # Spawn background task and return immediately
-        background_tasks.add_task(
+        add_observed_background_task(
+            background_tasks,
             _process_suggestion_background,
             messages=messages,
             system_prompt=system_prompt,
@@ -3950,6 +4002,10 @@ Please review our conversation history above and submit a general suggestion usi
             user_email=user_email,
             user_auth_sub=user_auth_sub,
             api_key=api_key,
+            task_name="agent_studio.process_suggestion",
+            tags={
+                "component": "agent_studio",
+            },
         )
 
         logger.info('[AI-Assisted Submit] Background task spawned for %s', user_email)
@@ -4042,14 +4098,21 @@ async def get_trace_context(
             detail="Trace service temporarily unavailable"
         )
     except TraceContextError as e:
-        logger.error('Trace context extraction failed: %s', e, exc_info=True)
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
-            detail="Failed to extract trace context"
+            detail="Failed to extract trace context",
+            log_message="Trace context extraction failed",
+            exc=e,
         )
     except Exception as e:
-        logger.error('Unexpected error getting trace context: %s', e, exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Internal server error",
+            log_message="Unexpected error getting trace context",
+            exc=e,
+        )
 
 
 # ============================================================================

@@ -26,6 +26,10 @@ from src.lib.document_sources.models import (
 )
 from src.lib.document_sources.registry import get_configured_document_source_provider
 from src.lib.exceptions import PDFCancellationError
+from src.lib.observability.background_tasks import (
+    add_observed_background_task,
+    report_background_task_exception,
+)
 from src.lib.openai_agents.config import (
     get_document_source_import_timeout_seconds,
     get_document_source_poll_interval_seconds,
@@ -212,7 +216,17 @@ class UploadExecutionService:
     ) -> None:
         """Prime tracking and queue upload execution on FastAPI background tasks."""
         await self.pipeline_tracker.track_pipeline_progress(request.document_id, ProcessingStage.UPLOAD)
-        background_tasks.add_task(self.execute_upload, request)
+        add_observed_background_task(
+            background_tasks,
+            self.execute_upload,
+            request,
+            task_name="pdf_jobs.execute_upload",
+            tags={
+                "component": "pdf_jobs",
+                "document_id": request.document_id,
+                "job_id": request.job_id,
+            },
+        )
 
     async def dispatch_provider_markdown_execution(
         self,
@@ -222,7 +236,17 @@ class UploadExecutionService:
     ) -> None:
         """Prime tracking and queue provider Markdown ingestion on background tasks."""
         await self.pipeline_tracker.track_pipeline_progress(request.document_id, ProcessingStage.UPLOAD)
-        background_tasks.add_task(self.execute_provider_markdown, request)
+        add_observed_background_task(
+            background_tasks,
+            self.execute_provider_markdown,
+            request,
+            task_name="pdf_jobs.execute_provider_markdown",
+            tags={
+                "component": "pdf_jobs",
+                "document_id": request.document_id,
+                "job_id": request.job_id,
+            },
+        )
 
     async def dispatch_provider_conversion_execution(
         self,
@@ -232,7 +256,17 @@ class UploadExecutionService:
     ) -> None:
         """Prime tracking and queue provider conversion polling."""
         await self.pipeline_tracker.track_pipeline_progress(request.document_id, ProcessingStage.UPLOAD)
-        background_tasks.add_task(self.execute_provider_conversion, request)
+        add_observed_background_task(
+            background_tasks,
+            self.execute_provider_conversion,
+            request,
+            task_name="pdf_jobs.execute_provider_conversion",
+            tags={
+                "component": "pdf_jobs",
+                "document_id": request.document_id,
+                "job_id": request.job_id,
+            },
+        )
 
     async def execute_upload(self, request: UploadExecutionRequest) -> None:
         """Run upload orchestration and persist durable job transitions."""
@@ -288,6 +322,13 @@ class UploadExecutionService:
             )
         except Exception as exc:
             logger.error("Error processing document %s: %s", request.document_id, exc, exc_info=True)
+            if not isinstance(exc, PDFCancellationError):
+                self._report_execution_failure(
+                    exc,
+                    task_name="pdf_jobs.execute_upload",
+                    request=request,
+                    failure_stage="pipeline",
+                )
             try:
                 await update_document_status(request.document_id, request.user_id, ProcessingStatus.FAILED.value)
             except Exception as status_err:
@@ -321,6 +362,12 @@ class UploadExecutionService:
                 "Provider Markdown import timed out for document %s after %s seconds",
                 request.document_id,
                 timeout_seconds,
+            )
+            self._report_execution_failure(
+                timeout_error,
+                task_name="pdf_jobs.execute_provider_markdown",
+                request=request,
+                failure_stage="timeout",
             )
             try:
                 await update_document_status(
@@ -357,6 +404,12 @@ class UploadExecutionService:
                 "Provider conversion timed out for document %s after %s seconds",
                 request.document_id,
                 timeout_seconds,
+            )
+            self._report_execution_failure(
+                timeout_error,
+                task_name="pdf_jobs.execute_provider_conversion",
+                request=request,
+                failure_stage="timeout",
             )
             try:
                 await update_document_status(
@@ -470,6 +523,13 @@ class UploadExecutionService:
                 exc,
                 exc_info=True,
             )
+            if not isinstance(exc, PDFCancellationError):
+                self._report_execution_failure(
+                    exc,
+                    task_name="pdf_jobs.execute_provider_conversion",
+                    request=request,
+                    failure_stage="provider_conversion",
+                )
             try:
                 await update_document_status(
                     request.document_id,
@@ -628,6 +688,13 @@ class UploadExecutionService:
                 exc,
                 exc_info=True,
             )
+            if not isinstance(exc, PDFCancellationError):
+                self._report_execution_failure(
+                    exc,
+                    task_name="pdf_jobs.execute_provider_markdown",
+                    request=request,
+                    failure_stage="provider_markdown",
+                )
             try:
                 await update_document_status(
                     request.document_id,
@@ -682,6 +749,25 @@ class UploadExecutionService:
                 request.document_id,
                 sync_err,
             )
+
+    @staticmethod
+    def _report_execution_failure(
+        exc: Exception,
+        *,
+        task_name: str,
+        request: Any,
+        failure_stage: str,
+    ) -> bool:
+        return report_background_task_exception(
+            exc,
+            task_name=task_name,
+            tags={
+                "component": "pdf_jobs",
+                "document_id": getattr(request, "document_id", None),
+                "job_id": getattr(request, "job_id", None),
+                "failure_stage": failure_stage,
+            },
+        )
 
     async def _sync_provider_conversion_sql_failure(
         self,

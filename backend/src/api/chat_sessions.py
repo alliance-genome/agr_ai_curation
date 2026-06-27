@@ -95,13 +95,13 @@ async def get_conversation_status(
             message="Conversation status retrieved successfully",
         )
     except Exception as e:
-        logger.error(
-            "Failed to get conversation status: %s",
-            e,
-            extra={"user_id": user_id},
-            exc_info=True,
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to retrieve conversation status",
+            log_message="Failed to get conversation status",
+            exc=e,
         )
-        raise HTTPException(status_code=500, detail="Failed to retrieve conversation status") from e
 
 
 @router.post("/chat/conversation/reset", response_model=ConversationResetResponse)
@@ -139,13 +139,13 @@ async def reset_conversation(
         )
     except Exception as e:
         db.rollback()
-        logger.error(
-            "Failed to reset conversation: %s",
-            e,
-            extra={"user_id": user_id},
-            exc_info=True,
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to reset conversation",
+            log_message="Failed to reset conversation",
+            exc=e,
         )
-        raise HTTPException(status_code=500, detail="Failed to reset conversation") from e
 
 
 @router.get("/chat/history/{session_id}", response_model=ChatSessionDetailResponse)

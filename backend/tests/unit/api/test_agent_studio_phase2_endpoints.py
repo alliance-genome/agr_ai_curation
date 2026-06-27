@@ -6,6 +6,8 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
+from src.lib import http_errors
+
 
 def test_get_models_endpoint_returns_sorted_models(monkeypatch):
     import src.api.agent_studio as api_module
@@ -127,25 +129,41 @@ def test_get_agent_templates_endpoint_returns_system_templates():
 def test_get_models_endpoint_returns_500_on_loader_error(monkeypatch):
     import src.api.agent_studio as api_module
 
+    calls = []
+
     def _raise():
         raise RuntimeError("models loader failed")
 
+    def _fake_report_runtime_exception(exc, **kwargs):
+        calls.append((exc, kwargs))
+        return True
+
     monkeypatch.setattr(api_module, "list_model_definitions", _raise)
+    monkeypatch.setattr(http_errors, "report_runtime_exception", _fake_report_runtime_exception)
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(api_module.get_models_endpoint(user={"sub": "test"}))
 
     assert exc_info.value.status_code == 500
     assert "Failed to load model options" in str(exc_info.value.detail)
+    assert len(calls) == 1
+    assert calls[0][1]["operation"] == "sanitized_http_exception"
 
 
 def test_get_tool_library_endpoint_returns_500_on_service_error(monkeypatch):
     import src.api.agent_studio as api_module
 
+    calls = []
+
+    def _fake_report_runtime_exception(exc, **kwargs):
+        calls.append((exc, kwargs))
+        return True
+
     fake_service = SimpleNamespace(
         list_curator_visible=lambda _db: (_ for _ in ()).throw(RuntimeError("tool policy cache unavailable"))
     )
     monkeypatch.setattr(api_module, "get_tool_policy_cache", lambda: fake_service)
+    monkeypatch.setattr(http_errors, "report_runtime_exception", _fake_report_runtime_exception)
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(
@@ -157,14 +175,23 @@ def test_get_tool_library_endpoint_returns_500_on_service_error(monkeypatch):
 
     assert exc_info.value.status_code == 500
     assert "Failed to load tool library" in str(exc_info.value.detail)
+    assert len(calls) == 1
+    assert calls[0][1]["operation"] == "sanitized_http_exception"
 
 
-def test_get_agent_templates_endpoint_returns_500_on_db_error():
+def test_get_agent_templates_endpoint_returns_500_on_db_error(monkeypatch):
     import src.api.agent_studio as api_module
+
+    calls = []
+
+    def _fake_report_runtime_exception(exc, **kwargs):
+        calls.append((exc, kwargs))
+        return True
 
     fake_db = SimpleNamespace(
         query=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("db unavailable"))
     )
+    monkeypatch.setattr(http_errors, "report_runtime_exception", _fake_report_runtime_exception)
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(
@@ -176,3 +203,5 @@ def test_get_agent_templates_endpoint_returns_500_on_db_error():
 
     assert exc_info.value.status_code == 500
     assert "Failed to load agent templates" in str(exc_info.value.detail)
+    assert len(calls) == 1
+    assert calls[0][1]["operation"] == "sanitized_http_exception"

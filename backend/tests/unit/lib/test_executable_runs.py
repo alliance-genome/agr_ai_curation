@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from typing import Any, cast
 
 import pytest
@@ -169,7 +170,7 @@ async def test_cancel_request_marks_active_session_run_before_producer_claims_li
 
 
 @pytest.mark.asyncio
-async def test_producer_startup_failure_publishes_terminal_error_event(monkeypatch):
+async def test_producer_startup_failure_publishes_terminal_error_event(monkeypatch, caplog):
     monkeypatch.setattr(
         "src.lib.executable_runs.get_executable_run_event_replay_limit",
         lambda: 10,
@@ -178,8 +179,14 @@ async def test_producer_startup_failure_publishes_terminal_error_event(monkeypat
         "src.lib.executable_runs.get_executable_run_retention_seconds",
         lambda: 60,
     )
+    runtime_reports = []
+    monkeypatch.setattr(
+        "src.lib.executable_runs.report_runtime_exception",
+        lambda exc, **kwargs: runtime_reports.append((exc, kwargs)) or True,
+    )
 
     manager = ExecutableRunManager()
+    caplog.set_level(logging.WARNING, logger="src.lib.executable_runs")
 
     async def stream_factory():
         raise RuntimeError("startup rejected")
@@ -208,6 +215,31 @@ async def test_producer_startup_failure_publishes_terminal_error_event(monkeypat
         await asyncio.wait_for(observer.__anext__(), timeout=1)
 
     assert run.status == "failed"
+    assert len(runtime_reports) == 1
+    reported_exc, report_kwargs = runtime_reports[0]
+    assert isinstance(reported_exc, RuntimeError)
+    assert str(reported_exc) == "startup rejected"
+    assert report_kwargs["component"] == "executable_run"
+    assert report_kwargs["operation"] == "producer_failed"
+    assert report_kwargs["tags"] == {"run_kind": "assistant_chat_turn"}
+    assert report_kwargs["context"] == {
+        "run_id": "assistant_chat_turn:session-1:turn-1",
+        "kind": "assistant_chat_turn",
+        "session_id": "session-1",
+        "turn_id": "turn-1",
+        "flow_run_id": None,
+        "batch_id": None,
+        "job_id": None,
+        "terminal_error_event_factory": True,
+    }
+    failure_logs = [
+        record
+        for record in caplog.records
+        if record.message.startswith("Executable run producer failed")
+    ]
+    assert len(failure_logs) == 1
+    assert failure_logs[0].levelno == logging.WARNING
+    assert failure_logs[0].exc_info is not None
 
 
 @pytest.mark.asyncio
@@ -268,6 +300,79 @@ async def test_failed_terminal_run_replays_without_restart_for_same_run_id(monke
 
     assert retry_run.status == "failed"
     assert attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_terminal_error_event_factory_failure_is_reported(monkeypatch, caplog):
+    monkeypatch.setattr(
+        "src.lib.executable_runs.get_executable_run_event_replay_limit",
+        lambda: 10,
+    )
+    monkeypatch.setattr(
+        "src.lib.executable_runs.get_executable_run_retention_seconds",
+        lambda: 60,
+    )
+    runtime_reports = []
+    monkeypatch.setattr(
+        "src.lib.executable_runs.report_runtime_exception",
+        lambda exc, **kwargs: runtime_reports.append((exc, kwargs)) or True,
+    )
+
+    manager = ExecutableRunManager()
+    caplog.set_level(logging.WARNING, logger="src.lib.executable_runs")
+
+    async def stream_factory():
+        raise RuntimeError("producer failed")
+        yield 'data: {"type":"unreachable"}\n\n'
+
+    def broken_terminal_event(exc: Exception) -> str:
+        raise ValueError("terminal event failed")
+
+    run, created = await manager.get_or_start_stream(
+        run_id="assistant_chat_turn:session-1:turn-2",
+        kind="assistant_chat_turn",
+        owner_user_id="user-1",
+        session_id="session-1",
+        turn_id="turn-2",
+        stream_factory=stream_factory,
+        terminal_error_event_factory=broken_terminal_event,
+    )
+
+    assert created is True
+    observer = manager.observe(run)
+    if run.task is not None:
+        await asyncio.wait_for(run.task, timeout=1)
+
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(observer.__anext__(), timeout=1)
+
+    assert run.status == "failed"
+    assert len(runtime_reports) == 2
+    assert isinstance(runtime_reports[0][0], RuntimeError)
+    assert runtime_reports[0][1]["operation"] == "producer_failed"
+    assert runtime_reports[1][1] == {
+        "component": "executable_run",
+        "operation": "terminal_error_event_failed",
+        "tags": {"run_kind": "assistant_chat_turn"},
+        "context": {
+            "run_id": "assistant_chat_turn:session-1:turn-2",
+            "kind": "assistant_chat_turn",
+            "session_id": "session-1",
+            "turn_id": "turn-2",
+            "flow_run_id": None,
+            "batch_id": None,
+            "job_id": None,
+        },
+    }
+    assert isinstance(runtime_reports[1][0], ValueError)
+    terminal_logs = [
+        record
+        for record in caplog.records
+        if record.message.startswith("Executable run terminal error event failed")
+    ]
+    assert len(terminal_logs) == 1
+    assert terminal_logs[0].levelno == logging.WARNING
+    assert terminal_logs[0].exc_info is not None
 
 
 @pytest.mark.asyncio

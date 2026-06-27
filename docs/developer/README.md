@@ -33,6 +33,7 @@ Start here for new developers:
 7. **[DEVELOPMENT_DOCTRINE.md](guides/DEVELOPMENT_DOCTRINE.md)** -- Forward-only development rules for fallbacks, compatibility, and migrations
 8. **[AGENTS_DEVELOPMENT_GUIDE.md](guides/AGENTS_DEVELOPMENT_GUIDE.md)** -- Comprehensive agent/runtime architecture reference
 9. **[UPLOAD_RUNTIME_CONTRACT.md](guides/UPLOAD_RUNTIME_CONTRACT.md)** -- Upload runtime contract (status/cancellation/rollback/idempotency; implementation in ALL-23)
+10. **[SENTRY_OBSERVABILITY.md](guides/SENTRY_OBSERVABILITY.md)** -- Backend Sentry initialization, redaction, reporting facades, and dev smoke procedure
 
 ### Developer Guides
 
@@ -54,6 +55,7 @@ Start here for new developers:
 | [SYMPHONY_FLOW_AND_OPTIMIZATION.md](guides/SYMPHONY_FLOW_AND_OPTIMIZATION.md) | Current Symphony runtime flow, lane transition map, and prompt/context optimization audit based on the live `.symphony` implementation |
 | [SYMPHONY_INCUS_VM_REBUILD.md](guides/SYMPHONY_INCUS_VM_REBUILD.md) | Rebuild `symphony-main` from a tracked cloud-init source, including default git safety scanners |
 | [SYMPHONY_VM_CODEX_SHORTCUTS.md](guides/SYMPHONY_VM_CODEX_SHORTCUTS.md) | Interactive Codex shortcuts in the Symphony VM, including PAT-backed `co` and rebuild persistence |
+| [SENTRY_OBSERVABILITY.md](guides/SENTRY_OBSERVABILITY.md) | Backend Sentry operating model: initialization, redaction, reporting facades, CloudWatch/Langfuse boundaries, and dev smoke testing |
 | [UPLOAD_RUNTIME_CONTRACT.md](guides/UPLOAD_RUNTIME_CONTRACT.md) | Upload runtime behavioral contract: status precedence, cancellation, rollback matrix, and idempotency expectations (implementation tracked in ALL-23) |
 | [ABC Literature API Contract Verification](integrations/abc_literature/api_contract_verification.md) | Verified Literature OpenAPI hostnames, endpoint allowlist, forbidden endpoints, and fixture-backed live-check procedure |
 | [ABC Literature Conversion Handoff](integrations/abc_literature/conversion_handoff.md) | Boundary between AI Curation, ABC Literature conversion_request, nXML/TEI behavior, and local PDFX fallback |

@@ -13,6 +13,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
+from src.lib import http_errors
+
 
 class TestCustomAgentTestEndpoint:
     """Unit tests for POST /api/agent-studio/custom-agents/{id}/test."""
@@ -454,7 +456,12 @@ class TestCustomAgentCrudErrorsAndBranches:
     def test_create_endpoint_returns_500_for_non_unique_integrity_error(self, monkeypatch):
         import src.api.agent_studio_custom as api_module
 
-        db_exc = IntegrityError(statement="insert", params={}, orig=Exception("db write failed"))
+        report_calls = []
+        db_exc = IntegrityError(
+            statement="insert",
+            params={"instructions": "secret prompt text"},
+            orig=Exception("db write failed secret prompt text"),
+        )
         monkeypatch.setattr(
             api_module,
             "set_global_user_from_cognito",
@@ -465,6 +472,12 @@ class TestCustomAgentCrudErrorsAndBranches:
             "create_custom_agent",
             lambda **_kwargs: (_ for _ in ()).throw(db_exc),
         )
+
+        def _fake_report_runtime_exception(exc, **kwargs):
+            report_calls.append((exc, kwargs))
+            return True
+
+        monkeypatch.setattr(http_errors, "report_runtime_exception", _fake_report_runtime_exception)
 
         db = _db_mock()
         with pytest.raises(HTTPException) as exc_info:
@@ -478,6 +491,65 @@ class TestCustomAgentCrudErrorsAndBranches:
 
         assert exc_info.value.status_code == 500
         db.rollback.assert_called_once()
+        assert len(report_calls) == 1
+        assert isinstance(report_calls[0][0], api_module._CustomAgentDatabaseError)
+        assert "Exception" in str(report_calls[0][0])
+        assert "secret prompt text" not in str(report_calls[0][0])
+        assert report_calls[0][1]["component"] == "api"
+        assert report_calls[0][1]["operation"] == "sanitized_http_exception"
+        assert report_calls[0][1]["context"]["logger_name"] == api_module.logger.name
+        assert report_calls[0][1]["context"]["status_code"] == 500
+
+    def test_update_endpoint_returns_500_for_non_unique_integrity_error(self, monkeypatch):
+        import src.api.agent_studio_custom as api_module
+
+        report_calls = []
+        custom_agent = SimpleNamespace(id=uuid.uuid4())
+        db_exc = IntegrityError(
+            statement="update",
+            params={"instructions": "secret prompt text"},
+            orig=Exception("db write failed secret prompt text"),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        )
+        monkeypatch.setattr(api_module, "get_custom_agent_for_user", lambda *_args, **_kwargs: custom_agent)
+        monkeypatch.setattr(
+            api_module,
+            "update_custom_agent",
+            lambda **_kwargs: (_ for _ in ()).throw(db_exc),
+        )
+
+        def _fake_report_runtime_exception(exc, **kwargs):
+            report_calls.append((exc, kwargs))
+            return True
+
+        monkeypatch.setattr(http_errors, "report_runtime_exception", _fake_report_runtime_exception)
+
+        db = _db_mock()
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                api_module.update_custom_agent_endpoint(
+                    custom_agent_id=custom_agent.id,
+                    request=api_module.UpdateCustomAgentRequest(name="Updated"),
+                    user={"sub": "auth-sub"},
+                    db=db,
+                )
+            )
+
+        assert exc_info.value.status_code == 500
+        assert exc_info.value.detail == "Database error while updating custom agent"
+        db.rollback.assert_called_once()
+        assert len(report_calls) == 1
+        assert isinstance(report_calls[0][0], api_module._CustomAgentDatabaseError)
+        assert "Exception" in str(report_calls[0][0])
+        assert "secret prompt text" not in str(report_calls[0][0])
+        assert report_calls[0][1]["component"] == "api"
+        assert report_calls[0][1]["operation"] == "sanitized_http_exception"
+        assert report_calls[0][1]["context"]["logger_name"] == api_module.logger.name
+        assert report_calls[0][1]["context"]["status_code"] == 500
 
     def test_list_endpoint_value_error_maps_to_400(self, monkeypatch, caplog):
         import src.api.agent_studio_custom as api_module
