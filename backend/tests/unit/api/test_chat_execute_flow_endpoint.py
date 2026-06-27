@@ -13,6 +13,7 @@ from uuid import uuid4
 from fastapi.responses import StreamingResponse
 import pytest
 
+from src.lib import http_errors
 from src.lib.executable_runs import ExecutableRun
 from tests.chat_api_test_support import patch_chat_impl_for
 
@@ -1474,7 +1475,7 @@ def test_execute_flow_endpoint_surfaces_trace_checkpoint_persistence_failure(mon
 
     _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
     _patch_chat_impl(monkeypatch, "_persist_execute_flow_runtime_state", _raise_checkpoint_failure)
-    caplog.set_level(logging.ERROR, logger=chat.logger.name)
+    caplog.set_level(logging.WARNING, logger=chat.logger.name)
 
     response = asyncio.run(
         chat.execute_flow_endpoint(
@@ -1532,7 +1533,7 @@ def test_execute_flow_endpoint_surfaces_completion_persistence_failure(monkeypat
 
     _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
     _patch_chat_impl(monkeypatch, "_persist_completed_execute_flow_turn", _raise_completion_failure)
-    caplog.set_level(logging.ERROR, logger=chat.logger.name)
+    caplog.set_level(logging.WARNING, logger=chat.logger.name)
 
     response = asyncio.run(
         chat.execute_flow_endpoint(
@@ -2012,6 +2013,7 @@ def test_execute_flow_endpoint_requires_user_sub(monkeypatch):
 
 
 def test_execute_flow_endpoint_cleans_up_when_commit_fails(monkeypatch):
+    report_calls = []
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-commit-failure")
     flow = SimpleNamespace(
@@ -2028,7 +2030,12 @@ def test_execute_flow_endpoint_cleans_up_when_commit_fails(monkeypatch):
         db.commit_calls += 1
         raise RuntimeError("db down")
 
+    def _fake_report_runtime_exception(exc, **kwargs):
+        report_calls.append((exc, kwargs))
+        return True
+
     db.commit = _failing_commit
+    monkeypatch.setattr(http_errors, "report_runtime_exception", _fake_report_runtime_exception)
 
     with pytest.raises(chat.HTTPException) as exc:
         asyncio.run(
@@ -2043,6 +2050,12 @@ def test_execute_flow_endpoint_cleans_up_when_commit_fails(monkeypatch):
     assert "Failed to start flow execution" in str(exc.value.detail)
     assert db.commit_calls == 1
     assert db.rollback_calls == 1
+    assert len(report_calls) == 1
+    assert isinstance(report_calls[0][0], RuntimeError)
+    assert report_calls[0][1]["component"] == "api"
+    assert report_calls[0][1]["operation"] == "sanitized_http_exception"
+    assert report_calls[0][1]["context"]["logger_name"] == chat.logger.name
+    assert report_calls[0][1]["context"]["status_code"] == 500
     assert calls["register"] == [("session-commit-failure", "auth-sub", ANY)]
     assert calls["unregister"] == [("session-commit-failure", "auth-sub", ANY)]
     assert calls["clear"] == ["session-commit-failure"]

@@ -26,6 +26,7 @@ from src.lib.executable_runs import (
     ExecutableRunConflictError,
     executable_run_manager,
 )
+from src.lib.http_errors import raise_sanitized_http_exception
 from src.lib.observability.runtime import report_runtime_exception
 
 
@@ -809,14 +810,14 @@ async def execute_flow_endpoint(
         raise AssertionError("unreachable")
     except Exception as exc:
         await stream_lifecycle.cleanup()
-        logger.error(
-            "Failed to persist execute-flow request for session %s",
-            request.session_id,
-            extra={"session_id": request.session_id, "user_id": user_id, "turn_id": request.turn_id},
-            exc_info=True,
-        )
         db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to start flow execution") from exc
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to start flow execution",
+            log_message=f"Failed to persist execute-flow request for session {request.session_id}",
+            exc=exc,
+        )
 
     if prepared_turn.replay_events:
         if prepared_turn.replay_assistant_message is not None:
