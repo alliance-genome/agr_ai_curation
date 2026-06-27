@@ -420,8 +420,13 @@ async def get_models_endpoint(
             ]
         )
     except Exception as e:
-        logger.error("Failed to load model options: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to load model options")
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to load model options",
+            log_message="Failed to load model options",
+            exc=e,
+        )
 
 
 @router.get(
@@ -453,8 +458,13 @@ async def get_tool_library_endpoint(
             ]
         )
     except Exception as e:
-        logger.error("Failed to load tool library: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to load tool library")
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to load tool library",
+            log_message="Failed to load tool library",
+            exc=e,
+        )
 
 
 @router.get(
@@ -495,8 +505,13 @@ async def get_agent_templates_endpoint(
             ]
         )
     except Exception as e:
-        logger.error("Failed to load agent templates: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to load agent templates")
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to load agent templates",
+            log_message="Failed to load agent templates",
+            exc=e,
+        )
 
 
 @router.post(

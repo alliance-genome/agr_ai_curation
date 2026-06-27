@@ -21,6 +21,7 @@ from src.lib.chat_history_repository import (
     ChatSessionDetail,
     ChatMessageRecord,
 )
+from src.lib import http_errors
 from src.lib.curation_workspace import extraction_results as extraction_results_module
 from tests.chat_api_test_support import patch_chat_impl_for
 
@@ -646,6 +647,31 @@ async def test_load_document_for_chat_404_on_value_error(monkeypatch, caplog):
     assert exc.value.status_code == 404
     assert exc.value.detail == "Document not found"
     assert "missing" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_load_document_for_chat_500_reports_unexpected_load_error(monkeypatch):
+    calls = []
+
+    async def _raise(*_args, **_kwargs):
+        raise RuntimeError("weaviate unavailable")
+
+    def _fake_report_runtime_exception(exc, **kwargs):
+        calls.append((exc, kwargs))
+        return True
+
+    _patch_chat_impl(monkeypatch, "get_document", _raise)
+    monkeypatch.setattr(http_errors, "report_runtime_exception", _fake_report_runtime_exception)
+
+    with pytest.raises(HTTPException) as exc:
+        await chat.load_document_for_chat(chat.LoadDocumentRequest(document_id="doc-500"), {"sub": "user-1"})
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "Failed to load document for chat"
+    assert len(calls) == 1
+    assert isinstance(calls[0][0], RuntimeError)
+    assert calls[0][1]["component"] == "api"
+    assert calls[0][1]["operation"] == "sanitized_http_exception"
 
 
 @pytest.mark.asyncio
@@ -1744,7 +1770,14 @@ async def test_get_conversation_status_and_reset_endpoints(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_conversation_endpoints_sanitize_internal_errors(monkeypatch, caplog):
+    calls = []
     repository = FakeChatHistoryRepository()
+
+    def _fake_report_runtime_exception(exc, **kwargs):
+        calls.append((exc, kwargs))
+        return True
+
+    monkeypatch.setattr(http_errors, "report_runtime_exception", _fake_report_runtime_exception)
     _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
     _patch_chat_impl(
         monkeypatch,
@@ -1759,6 +1792,8 @@ async def test_conversation_endpoints_sanitize_internal_errors(monkeypatch, capl
     assert exc_status.value.status_code == 500
     assert exc_status.value.detail == "Failed to retrieve conversation status"
     assert "conversation backend unavailable" in caplog.text
+    assert len(calls) == 1
+    assert calls[0][1]["operation"] == "sanitized_http_exception"
 
     caplog.clear()
     _patch_chat_impl(monkeypatch, "_resolve_session_create_active_document", lambda **_kwargs: (None, None))
@@ -1774,6 +1809,8 @@ async def test_conversation_endpoints_sanitize_internal_errors(monkeypatch, capl
     assert exc_reset.value.status_code == 500
     assert exc_reset.value.detail == "Failed to reset conversation"
     assert "conversation reset failed" in caplog.text
+    assert len(calls) == 2
+    assert calls[1][1]["operation"] == "sanitized_http_exception"
 
 
 def test_chat_router_omits_legacy_chat_config_route():
