@@ -1,14 +1,98 @@
-"""SNS notifier for infrastructure and tool-call failures."""
+"""Runtime alert facade for infrastructure and tool-call failures."""
 
 import asyncio
+import importlib
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 import boto3
 
 logger = logging.getLogger(__name__)
+
+_REDACTED = "[Filtered]"
+_MAX_CONTEXT_CHARS = 500
+
+
+def _alert_summary(value: Optional[str], *, max_chars: int = _MAX_CONTEXT_CHARS) -> str:
+    """Return a bounded, non-sensitive summary for logs/SNS."""
+
+    text = str(value or "").strip()
+    if not text:
+        return "N/A"
+    text = " ".join(text.split())
+    if len(text) > max_chars:
+        return f"{text[:max_chars]}..."
+    return text
+
+
+def _sentry_extra(
+    *,
+    error_type: str,
+    source: str,
+    specialist_name: Optional[str],
+    trace_id: Optional[str],
+    session_id: Optional[str],
+    curator_id: Optional[str],
+) -> dict[str, Any]:
+    """Build Sentry-safe structured context for a runtime alert."""
+
+    return {
+        "error_type": error_type or "UnknownError",
+        "source": source or "unknown",
+        "tool_name": specialist_name or "N/A",
+        "trace_id": trace_id or None,
+        "session_id": session_id or None,
+        "curator_id": curator_id or None,
+    }
+
+
+def _capture_tool_failure_to_sentry(
+    *,
+    error_type: str,
+    source: str,
+    specialist_name: Optional[str],
+    trace_id: Optional[str],
+    session_id: Optional[str],
+    curator_id: Optional[str],
+) -> bool:
+    """Best-effort Sentry capture for caught runtime failures."""
+
+    try:
+        sentry_sdk = importlib.import_module("sentry_sdk")
+    except ImportError:
+        return False
+
+    tool_name = specialist_name or "N/A"
+    extra = _sentry_extra(
+        error_type=error_type,
+        source=source,
+        specialist_name=specialist_name,
+        trace_id=trace_id,
+        session_id=session_id,
+        curator_id=curator_id,
+    )
+
+    try:
+        with sentry_sdk.push_scope() as scope:
+            scope.set_level("error")
+            scope.set_tag("alert_type", "tool_failure")
+            scope.set_tag("source", source or "unknown")
+            scope.set_tag("tool_name", tool_name)
+            if trace_id:
+                scope.set_tag("trace_id", trace_id)
+            if session_id:
+                scope.set_tag("session_id", session_id)
+            scope.set_context("runtime_alert", extra)
+            sentry_sdk.capture_message(
+                f"Tool failure: {error_type or 'UnknownError'} ({tool_name})",
+                level="error",
+            )
+        return True
+    except Exception as exc:
+        logger.warning("Failed to capture tool failure in Sentry: %s", exc)
+        return False
 
 
 async def notify_tool_failure(
@@ -22,11 +106,21 @@ async def notify_tool_failure(
     context: Optional[str] = None,
 ) -> bool:
     """
-    Send a tool failure alert to SNS.
+    Report a tool failure through the runtime alert facade.
 
-    Alerts are gated by TOOL_FAILURE_ALERTS_ENABLED and are best-effort only:
+    Sentry capture is attempted whenever the SDK is initialized. SNS alerts are
+    separately gated by TOOL_FAILURE_ALERTS_ENABLED. All paths are best-effort:
     failures are logged but never raised to callers.
     """
+    _capture_tool_failure_to_sentry(
+        error_type=error_type,
+        source=source,
+        specialist_name=specialist_name,
+        trace_id=trace_id,
+        session_id=session_id,
+        curator_id=curator_id,
+    )
+
     alerts_enabled = os.getenv("TOOL_FAILURE_ALERTS_ENABLED", "false").lower() == "true"
     sns_topic_arn = os.getenv("PROMPT_SUGGESTIONS_SNS_TOPIC_ARN")
 
@@ -52,7 +146,7 @@ async def notify_tool_failure(
         "=" * 58,
         f"Source:         {source_description}",
         f"Error Type:     {error_type or 'N/A'}",
-        f"Error Message:  {error_message or 'N/A'}",
+        f"Error Message:  {_alert_summary(error_message)}",
         f"Tool:           {tool_name}",
         f"Trace ID:       {trace_id or 'N/A'}",
         f"Session ID:     {session_id or 'N/A'}",
@@ -61,7 +155,7 @@ async def notify_tool_failure(
     ]
 
     if context:
-        lines.append(f"Context:        {context}")
+        lines.append(f"Context:        {_alert_summary(context)}")
 
     langfuse_url = os.getenv("LANGFUSE_PUBLIC_URL")
     if trace_id and langfuse_url:
