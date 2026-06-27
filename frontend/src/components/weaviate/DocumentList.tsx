@@ -78,6 +78,57 @@ interface DocumentListProps {
 const PDF_BACKGROUND_PROCESSING_TOAST =
   'Your PDFs are processing in the background. You can safely navigate away.';
 const PDF_BACKGROUND_PROCESSING_TOAST_AUTO_HIDE_MS = 6000;
+
+const compareTextValues = (left: unknown, right: unknown): number => {
+  const leftValue = left == null ? '' : String(left);
+  const rightValue = right == null ? '' : String(right);
+
+  return leftValue.localeCompare(rightValue, undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  });
+};
+
+const compareNumberValues = (left: unknown, right: unknown): number => {
+  const toComparableNumber = (value: unknown): number | null => {
+    if (value === null || value === undefined) {
+      return null;
+    }
+
+    if (typeof value === 'string' && value.trim() === '') {
+      return null;
+    }
+
+    const numberValue = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(numberValue) ? numberValue : null;
+  };
+  const leftComparable = toComparableNumber(left);
+  const rightComparable = toComparableNumber(right);
+
+  if (leftComparable === null && rightComparable === null) return 0;
+  if (leftComparable === null) return 1;
+  if (rightComparable === null) return -1;
+
+  return leftComparable - rightComparable;
+};
+
+const compareDateValues = (left: unknown, right: unknown): number => {
+  const toTimestamp = (value: unknown): number | null => {
+    if (value instanceof Date) {
+      return value.getTime();
+    }
+
+    if (typeof value !== 'string' || value.trim() === '') {
+      return null;
+    }
+
+    const timestamp = Date.parse(value);
+    return Number.isFinite(timestamp) ? timestamp : null;
+  };
+
+  return compareNumberValues(toTimestamp(left), toTimestamp(right));
+};
+
 const DocumentList: React.FC<DocumentListProps> = ({
   documents,
   loading,
@@ -325,6 +376,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
       minWidth: 150,
       sortable: true,
       filterable: true,
+      sortComparator: compareTextValues,
     },
     {
       field: 'title',
@@ -333,6 +385,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
       minWidth: 120,
       sortable: true,
       filterable: true,
+      sortComparator: compareTextValues,
       valueFormatter: (params) => params.value || '—',
     },
     {
@@ -340,6 +393,8 @@ const DocumentList: React.FC<DocumentListProps> = ({
       headerName: 'Size',
       width: 90,
       sortable: true,
+      type: 'number',
+      sortComparator: compareNumberValues,
       valueFormatter: (params) => formatFileSize(params.value as number | null),
     },
     {
@@ -348,6 +403,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
       flex: 1,
       minWidth: 120,
       sortable: true,
+      sortComparator: compareDateValues,
       valueFormatter: (params) => {
         const value = params.value as string | null;
         return value ? new Date(value).toLocaleDateString() : '—';
@@ -359,6 +415,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
       flex: 1,
       minWidth: 120,
       sortable: true,
+      sortComparator: compareDateValues,
       valueFormatter: (params) => {
         const value = params.value as string | null;
         return value ? new Date(value).toLocaleDateString() : '—';
@@ -370,6 +427,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
       width: 120,
       sortable: true,
       filterable: true,
+      sortComparator: compareTextValues,
       renderCell: (params: GridRenderCellParams) => (
         <Chip
           label={params.value}
@@ -385,6 +443,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
       width: 80,
       sortable: true,
       type: 'number',
+      sortComparator: compareNumberValues,
     },
     {
       field: 'chunkCount',
@@ -392,6 +451,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
       width: 80,
       sortable: true,
       type: 'number',
+      sortComparator: compareNumberValues,
     },
     {
       field: 'actions',
@@ -656,11 +716,11 @@ const DocumentList: React.FC<DocumentListProps> = ({
             onPaginationModelChange={setPaginationModel}
             sortModel={sortModel}
             onSortModelChange={setSortModel}
+            sortingOrder={['asc', 'desc']}
             filterModel={filterModel}
             onFilterModelChange={setFilterModel}
-            paginationMode="server"
-            sortingMode="server"
             filterMode="server"
+            paginationMode="server"
             disableRowSelectionOnClick
             checkboxSelection={checkboxSelection}
             rowSelectionModel={selectedIds}
