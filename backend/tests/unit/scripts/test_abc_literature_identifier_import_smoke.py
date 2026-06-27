@@ -7,8 +7,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 
 def _load_identifier_smoke_module():
     repo_root = Path(__file__).resolve().parents[4]

@@ -128,6 +128,10 @@ class _RaisingProvider(_Provider):
         raise RuntimeError("provider unavailable")
 
 
+async def _async_value(value):
+    return value
+
+
 class _MidRunCancellingOrchestrator:
     def __init__(self, tracker, cancel_state):
         self.tracker = tracker
