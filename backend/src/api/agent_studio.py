@@ -77,6 +77,7 @@ from src.lib.agent_studio.flow_tools import (
     set_current_flow_context,
     clear_current_flow_context,
 )
+from src.lib.observability.background_tasks import add_observed_background_task
 from src.lib.agent_studio.flow_agent_policy import flow_palette_show_in_palette
 from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry
 from src.lib.agent_studio.custom_agent_service import (
@@ -3942,7 +3943,8 @@ Please review our conversation history above and submit a general suggestion usi
         })
 
         # Spawn background task and return immediately
-        background_tasks.add_task(
+        add_observed_background_task(
+            background_tasks,
             _process_suggestion_background,
             messages=messages,
             system_prompt=system_prompt,
@@ -3950,6 +3952,11 @@ Please review our conversation history above and submit a general suggestion usi
             user_email=user_email,
             user_auth_sub=user_auth_sub,
             api_key=api_key,
+            task_name="agent_studio.process_suggestion",
+            tags={
+                "component": "agent_studio",
+                "user_auth_sub": user_auth_sub,
+            },
         )
 
         logger.info('[AI-Assisted Submit] Background task spawned for %s', user_email)

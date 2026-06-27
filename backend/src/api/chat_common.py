@@ -61,6 +61,7 @@ from ..lib.curation_workspace.models import (
 )
 from ..lib.curation_workspace.extraction_results import get_agent_curation_metadata
 from ..lib.openai_agents import run_agent_streamed
+from ..lib.observability.background_tasks import add_observed_background_task
 from ..lib.openai_agents.chat_compaction_session import CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE
 from ..lib.openai_agents.config import (
     get_flow_memory_max_visible_output_chars,
@@ -916,11 +917,17 @@ def _queue_chat_title_backfill(
         )
         return
 
-    background_tasks.add_task(
+    add_observed_background_task(
+        background_tasks,
         _backfill_chat_session_generated_title,
         session_id,
         user_id,
         preferred_generated_title,
+        task_name="chat.backfill_session_title",
+        tags={
+            "component": "chat",
+            "session_id": session_id,
+        },
     )
 
 

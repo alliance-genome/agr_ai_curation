@@ -99,10 +99,12 @@ def test_submit_suggestion_direct_enqueues_background_job(monkeypatch):
 
     assert response.success is True
     assert response.message == "Submission sent"
-    assert captured["func"] == api_module._process_suggestion_background
+    assert getattr(captured["func"], "__observability_original_task__") == api_module._process_suggestion_background
+    assert getattr(captured["func"], "__observability_task_name__") == "agent_studio.process_suggestion"
     assert captured["kwargs"]["user_email"] == "curator@example.org"
     assert captured["kwargs"]["user_auth_sub"] == "auth-sub-1"
     assert captured["kwargs"]["api_key"] == "test-key"
+    assert captured["kwargs"]["context"] == request.context
     assert captured["kwargs"]["messages"][0]["content"] == "Please help"
     assert captured["kwargs"]["messages"][-1]["content"].startswith(
         "The user has requested you submit feedback to the development team"

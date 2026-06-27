@@ -26,6 +26,7 @@ from src.lib.document_sources.models import (
 )
 from src.lib.document_sources.registry import get_configured_document_source_provider
 from src.lib.exceptions import PDFCancellationError
+from src.lib.observability.background_tasks import add_observed_background_task
 from src.lib.openai_agents.config import (
     get_document_source_import_timeout_seconds,
     get_document_source_poll_interval_seconds,
@@ -212,7 +213,17 @@ class UploadExecutionService:
     ) -> None:
         """Prime tracking and queue upload execution on FastAPI background tasks."""
         await self.pipeline_tracker.track_pipeline_progress(request.document_id, ProcessingStage.UPLOAD)
-        background_tasks.add_task(self.execute_upload, request)
+        add_observed_background_task(
+            background_tasks,
+            self.execute_upload,
+            request,
+            task_name="pdf_jobs.execute_upload",
+            tags={
+                "component": "pdf_jobs",
+                "document_id": request.document_id,
+                "job_id": request.job_id,
+            },
+        )
 
     async def dispatch_provider_markdown_execution(
         self,
@@ -222,7 +233,17 @@ class UploadExecutionService:
     ) -> None:
         """Prime tracking and queue provider Markdown ingestion on background tasks."""
         await self.pipeline_tracker.track_pipeline_progress(request.document_id, ProcessingStage.UPLOAD)
-        background_tasks.add_task(self.execute_provider_markdown, request)
+        add_observed_background_task(
+            background_tasks,
+            self.execute_provider_markdown,
+            request,
+            task_name="pdf_jobs.execute_provider_markdown",
+            tags={
+                "component": "pdf_jobs",
+                "document_id": request.document_id,
+                "job_id": request.job_id,
+            },
+        )
 
     async def dispatch_provider_conversion_execution(
         self,
@@ -232,7 +253,17 @@ class UploadExecutionService:
     ) -> None:
         """Prime tracking and queue provider conversion polling."""
         await self.pipeline_tracker.track_pipeline_progress(request.document_id, ProcessingStage.UPLOAD)
-        background_tasks.add_task(self.execute_provider_conversion, request)
+        add_observed_background_task(
+            background_tasks,
+            self.execute_provider_conversion,
+            request,
+            task_name="pdf_jobs.execute_provider_conversion",
+            tags={
+                "component": "pdf_jobs",
+                "document_id": request.document_id,
+                "job_id": request.job_id,
+            },
+        )
 
     async def execute_upload(self, request: UploadExecutionRequest) -> None:
         """Run upload orchestration and persist durable job transitions."""

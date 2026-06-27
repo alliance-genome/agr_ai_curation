@@ -373,7 +373,8 @@ async def test_dispatch_upload_execution_tracks_upload_and_queues_task():
     assert tracker.calls[-1]["document_id"] == "doc-dispatch"
     assert tracker.calls[-1]["stage"] == ProcessingStage.UPLOAD
     assert len(background_tasks.tasks) == 1
-    assert background_tasks.tasks[0].func == service.execute_upload
+    assert getattr(background_tasks.tasks[0].func, "__observability_original_task__") == service.execute_upload
+    assert getattr(background_tasks.tasks[0].func, "__observability_task_name__") == "pdf_jobs.execute_upload"
     assert background_tasks.tasks[0].args == (request,)
 
 

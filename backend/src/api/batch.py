@@ -24,6 +24,7 @@ from ..lib.batch.validation import validate_flow_for_batch
 from ..lib.batch.processor import process_batch_task
 from ..lib.batch.events import get_batch_broadcaster
 from ..models.sql import get_db, CurationFlow, PDFDocument
+from ..lib.observability.background_tasks import add_observed_background_task
 from ..models.sql.batch import BatchStatus, BatchDocumentStatus
 from ..models.sql.database import SessionLocal
 from ..schemas.batch import (
@@ -147,7 +148,16 @@ async def create_batch(
 
     # Start background processing
     logger.info("Starting background task for batch_id=%s", batch.id)
-    background_tasks.add_task(process_batch_task, batch.id)
+    add_observed_background_task(
+        background_tasks,
+        process_batch_task,
+        batch.id,
+        task_name="batch.process_batch",
+        tags={
+            "component": "batch",
+            "batch_id": batch.id,
+        },
+    )
 
     # Return created batch (flow name already known from validation)
     return service.batch_to_response(batch, flow_name=flow.name)
