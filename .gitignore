@@ -184,6 +184,10 @@ docs/superpowers/
 # Git worktrees
 .worktrees/
 
+# Local clone of the private AI Curation observability operations repo.
+# This is intentionally not a submodule/subtree of the application repo.
+/agr_ai_curation_observability/
+
 # Local planning docs (private - not for public repo)
 docs/plans/
 !docs/plans/
