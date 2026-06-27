@@ -76,7 +76,7 @@ def _capture_tool_failure_to_sentry(
     )
 
     try:
-        with sentry_sdk.push_scope() as scope:
+        with sentry_sdk.new_scope() as scope:
             scope.set_level("error")
             scope.set_tag("alert_type", "tool_failure")
             scope.set_tag("source", source or "unknown")

@@ -57,7 +57,7 @@ def fake_sentry(monkeypatch):
             return False
 
     fake_sdk = SimpleNamespace(
-        push_scope=lambda: _ScopeManager(),
+        new_scope=lambda: _ScopeManager(),
         capture_message=lambda message, level=None: calls["messages"].append(
             {"message": message, "level": level}
         ),
@@ -237,7 +237,7 @@ def test_notify_tool_failure_sentry_failure_does_not_block_sns(monkeypatch, dire
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    fake_sdk = SimpleNamespace(push_scope=lambda: _BrokenScopeManager())
+    fake_sdk = SimpleNamespace(new_scope=lambda: _BrokenScopeManager())
 
     def _fake_import(name):
         if name == "sentry_sdk":
