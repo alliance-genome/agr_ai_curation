@@ -1554,6 +1554,27 @@ def get_executable_run_retention_seconds() -> int:
     return max(1, _get_env_int_with_fallback("EXECUTABLE_RUN_RETENTION_SECONDS", 900))
 
 
+def get_runtime_observability_tag_value_max_chars() -> int:
+    """Char cap for runtime observability tag values (RUNTIME_OBSERVABILITY_TAG_VALUE_MAX_CHARS).
+
+    Bounds low-cardinality Sentry tag values emitted by caught runtime exception
+    reporting. Default 200.
+    """
+    return max(1, _get_env_int_with_fallback("RUNTIME_OBSERVABILITY_TAG_VALUE_MAX_CHARS", 200))
+
+
+def get_runtime_observability_context_value_max_chars() -> int:
+    """Char cap for runtime observability context values (RUNTIME_OBSERVABILITY_CONTEXT_VALUE_MAX_CHARS).
+
+    Bounds custom Sentry context values emitted by caught runtime exception
+    reporting before the global redaction hook applies. Default 500.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback("RUNTIME_OBSERVABILITY_CONTEXT_VALUE_MAX_CHARS", 500),
+    )
+
+
 def get_flow_list_page_size_default() -> int:
     """Default page size for flow listings (FLOW_LIST_PAGE_SIZE_DEFAULT).
 

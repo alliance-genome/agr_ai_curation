@@ -259,10 +259,11 @@ class ExecutableRunManager:
                     is not None,
                 },
             )
-            logger.exception(
+            logger.warning(
                 "Executable run producer failed: run_id=%s kind=%s",
                 run.run_id,
                 run.kind,
+                exc_info=True,
             )
             if run.terminal_error_event_factory is not None:
                 try:

@@ -38,29 +38,43 @@ def test_report_runtime_exception_captures_with_safe_tags_and_context(monkeypatc
         raise ImportError(name)
 
     monkeypatch.setattr(runtime.importlib, "import_module", _fake_import)
+    monkeypatch.setattr(
+        runtime,
+        "get_runtime_observability_tag_value_max_chars",
+        lambda: 12,
+    )
+    monkeypatch.setattr(
+        runtime,
+        "get_runtime_observability_context_value_max_chars",
+        lambda: 9,
+    )
     exc = RuntimeError("raw curator detail")
 
     reported = runtime.report_runtime_exception(
         exc,
         component="executable_run",
-        operation="producer_failed",
-        tags={"run_kind": "assistant_chat_turn"},
-        context={"session_id": "session-1", "attempt": 2},
+        operation="producer_failed_long_name",
+        tags={
+            "run_kind": "assistant_chat_turn",
+            "session_id": "must-not-be-indexed",
+        },
+        context={"session_id": "session-1-long", "attempt": 2},
     )
 
     assert reported is True
     assert calls["exceptions"] == [exc]
     assert calls["levels"] == ["error"]
     assert ("alert_type", "runtime_exception") in calls["tags"]
-    assert ("runtime_component", "executable_run") in calls["tags"]
-    assert ("operation", "producer_failed") in calls["tags"]
-    assert ("run_kind", "assistant_chat_turn") in calls["tags"]
+    assert ("runtime_component", "executable_r") in calls["tags"]
+    assert ("operation", "producer_fai") in calls["tags"]
+    assert ("run_kind", "assistant_ch") in calls["tags"]
+    assert ("session_id", "must-not-be-indexed") not in calls["tags"]
     assert calls["contexts"] == [
         (
             "runtime_exception",
             {
-                "component": "executable_run",
-                "operation": "producer_failed",
+                "component": "executable_r",
+                "operation": "producer_fai",
                 "session_id": "session-1",
                 "attempt": 2,
             },

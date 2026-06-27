@@ -7,10 +7,14 @@ import importlib
 import logging
 from typing import Any, Literal
 
+from src.lib.openai_agents.config import (
+    get_runtime_observability_context_value_max_chars,
+    get_runtime_observability_tag_value_max_chars,
+)
+
 logger = logging.getLogger(__name__)
 
-_MAX_TAG_CHARS = 200
-_MAX_CONTEXT_CHARS = 500
+_ALLOWED_TAG_KEYS = {"run_kind"}
 
 
 def _safe_text(value: Any, *, max_chars: int) -> str:
@@ -21,19 +25,22 @@ def _safe_text(value: Any, *, max_chars: int) -> str:
 
 
 def _safe_tags(tags: Mapping[str, Any] | None) -> dict[str, str]:
+    tag_value_max_chars = get_runtime_observability_tag_value_max_chars()
     return {
-        str(key): _safe_text(value, max_chars=_MAX_TAG_CHARS)
+        str(key): _safe_text(value, max_chars=tag_value_max_chars)
         for key, value in (tags or {}).items()
+        if str(key) in _ALLOWED_TAG_KEYS
     }
 
 
 def _safe_context(context: Mapping[str, Any] | None) -> dict[str, Any]:
+    context_value_max_chars = get_runtime_observability_context_value_max_chars()
     safe: dict[str, Any] = {}
     for key, value in (context or {}).items():
         if value is None or isinstance(value, (bool, int, float)):
             safe[str(key)] = value
         else:
-            safe[str(key)] = _safe_text(value, max_chars=_MAX_CONTEXT_CHARS)
+            safe[str(key)] = _safe_text(value, max_chars=context_value_max_chars)
     return safe
 
 
@@ -54,8 +61,9 @@ def report_runtime_exception(
         logger.warning("Sentry SDK unavailable for runtime exception capture: %s", import_exc)
         return False
 
-    safe_component = _safe_text(component, max_chars=_MAX_TAG_CHARS)
-    safe_operation = _safe_text(operation, max_chars=_MAX_TAG_CHARS)
+    tag_value_max_chars = get_runtime_observability_tag_value_max_chars()
+    safe_component = _safe_text(component, max_chars=tag_value_max_chars)
+    safe_operation = _safe_text(operation, max_chars=tag_value_max_chars)
 
     try:
         with sentry_sdk.new_scope() as scope:

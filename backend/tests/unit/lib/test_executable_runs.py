@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from typing import Any, cast
 
 import pytest
@@ -169,7 +170,7 @@ async def test_cancel_request_marks_active_session_run_before_producer_claims_li
 
 
 @pytest.mark.asyncio
-async def test_producer_startup_failure_publishes_terminal_error_event(monkeypatch):
+async def test_producer_startup_failure_publishes_terminal_error_event(monkeypatch, caplog):
     monkeypatch.setattr(
         "src.lib.executable_runs.get_executable_run_event_replay_limit",
         lambda: 10,
@@ -185,6 +186,7 @@ async def test_producer_startup_failure_publishes_terminal_error_event(monkeypat
     )
 
     manager = ExecutableRunManager()
+    caplog.set_level(logging.WARNING, logger="src.lib.executable_runs")
 
     async def stream_factory():
         raise RuntimeError("startup rejected")
@@ -230,6 +232,14 @@ async def test_producer_startup_failure_publishes_terminal_error_event(monkeypat
         "job_id": None,
         "terminal_error_event_factory": True,
     }
+    failure_logs = [
+        record
+        for record in caplog.records
+        if record.message.startswith("Executable run producer failed")
+    ]
+    assert len(failure_logs) == 1
+    assert failure_logs[0].levelno == logging.WARNING
+    assert failure_logs[0].exc_info is not None
 
 
 @pytest.mark.asyncio
