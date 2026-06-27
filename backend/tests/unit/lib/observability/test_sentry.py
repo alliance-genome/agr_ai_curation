@@ -240,6 +240,18 @@ def test_initialize_sentry_sdk_init_failure_is_non_fatal(monkeypatch):
     assert sentry.initialize_sentry_if_configured() is False
 
 
+def test_initialize_sentry_import_failure_is_non_fatal(monkeypatch):
+    def _broken_import(name: str):
+        if name == "sentry_sdk":
+            raise RuntimeError("broken sentry import")
+        raise ImportError(name)
+
+    monkeypatch.setattr(sentry.importlib, "import_module", _broken_import)
+    monkeypatch.setenv("SENTRY_DSN", "https://public@example.invalid/1")
+
+    assert sentry.initialize_sentry_if_configured() is False
+
+
 def test_initialize_sentry_allows_http_only_with_explicit_flag(monkeypatch):
     calls = {}
 
