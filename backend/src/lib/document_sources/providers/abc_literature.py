@@ -9,6 +9,7 @@ from src.lib.document_sources.models import (
     DocumentSourceError,
     DocumentSourceHealth,
     DocumentSourceProvider,
+    NormalizedSourceIdentifier,
     SourceAccessPolicy,
     SourceAccessScope,
     SourceArtifact,
@@ -93,6 +94,86 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
             raise DocumentSourceError("ABC Literature reference lookup failed") from exc
 
         return self._map_reference(payload)
+
+    def normalize_identifier(self, identifier: str) -> NormalizedSourceIdentifier:
+        original = (identifier or "").strip()
+        if not original:
+            return NormalizedSourceIdentifier(
+                original=identifier,
+                normalized=None,
+                error="Identifier is empty",
+            )
+        if original.isdigit():
+            return NormalizedSourceIdentifier(original=original, normalized=f"PMID:{original}")
+
+        upper = original.upper()
+        for prefix in ("PMID:", "AGRKB:", "ABC:"):
+            if upper.startswith(prefix):
+                value = original.split(":", 1)[1].strip()
+                if value:
+                    return NormalizedSourceIdentifier(
+                        original=original,
+                        normalized=f"{prefix}{value}",
+                    )
+
+        pubmed_prefix = "PUBMED ID"
+        if upper.startswith(pubmed_prefix):
+            value = original[len(pubmed_prefix):].strip(" :#")
+            if value.isdigit():
+                return NormalizedSourceIdentifier(
+                    original=original,
+                    normalized=f"PMID:{value}",
+                )
+
+        if _looks_like_provider_cross_reference(original):
+            return NormalizedSourceIdentifier(original=original, normalized=original)
+
+        return NormalizedSourceIdentifier(
+            original=original,
+            normalized=None,
+            error=(
+                "Unsupported identifier. Use PMID, PubMed ID, AGRKB, ABC, "
+                "or an ABC Literature cross-reference such as FBrf."
+            ),
+        )
+
+    def is_main_text_artifact(self, artifact: SourceArtifact) -> bool:
+        file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
+        return file_class == "converted_merged_main" and not _artifact_looks_tei(artifact)
+
+    def main_text_artifact_sort_key(self, artifact: SourceArtifact) -> tuple[int, ...]:
+        file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
+        display_name = str(artifact.display_name or "").strip().lower()
+        combined = f"{file_class} {display_name}"
+        if file_class == "converted_merged_main":
+            class_rank = 0
+        elif file_class.startswith("converted") and "main" in file_class:
+            class_rank = 5
+        else:
+            class_rank = 20
+
+        if "_tei" in combined or "tei" in file_class:
+            source_rank = 100
+        elif "_nxml" in combined or "nxml" in file_class:
+            source_rank = 0
+        elif "_merged" in combined or "merged" in file_class:
+            source_rank = 1
+        else:
+            source_rank = 10
+
+        status_rank = 0 if artifact.status is SourceArtifactStatus.AVAILABLE else 1
+        return (class_rank, source_rank, status_rank)
+
+    def conversion_exposes_main_text(self, result: SourceConversionResult) -> bool:
+        if "converted_merged_main" in result.converted_classes:
+            return True
+        for progress in result.per_file_progress:
+            converted = progress.get("converted")
+            if not isinstance(converted, Mapping):
+                continue
+            if converted.get("file_class") == "converted_merged_main":
+                return True
+        return False
 
     async def list_artifacts(
         self,
@@ -421,6 +502,24 @@ def _is_converted_payload(payload: Mapping[str, Any]) -> bool:
         file_class=file_class,
         extension=extension,
     ) is SourceArtifactRole.CONVERTED_TEXT
+
+
+def _artifact_looks_tei(artifact: SourceArtifact) -> bool:
+    file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
+    display_name = str(artifact.display_name or "").strip().lower()
+    return "tei" in file_class or "_tei" in display_name or display_name.endswith("tei.md")
+
+
+def _looks_like_provider_cross_reference(identifier: str) -> bool:
+    normalized = identifier.strip()
+    if not normalized or any(char.isspace() for char in normalized):
+        return False
+    lowered = normalized.lower()
+    if lowered.startswith(("http://", "https://", "doi:")):
+        return False
+    return any(char.isalpha() for char in normalized) and any(
+        char.isdigit() for char in normalized
+    )
 
 
 def _extract_external_ids(

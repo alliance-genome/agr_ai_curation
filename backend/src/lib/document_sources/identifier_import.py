@@ -24,6 +24,7 @@ from src.lib.document_sources.models import (
     DocumentSourceConfigError,
     DocumentSourceError,
     DocumentSourceProvider,
+    NormalizedSourceIdentifier,
     SourceArtifact,
     SourceArtifactFormat,
     SourceArtifactRole,
@@ -63,24 +64,10 @@ from src.services.user_service import principal_from_claims, provision_user
 logger = logging.getLogger(__name__)
 
 _PMID_RE = re.compile(r"^(?:PMID|PUBMED(?:\s+ID)?)\s*[:#]?\s*(\d+)$", re.IGNORECASE)
-_AGRKB_RE = re.compile(r"^(AGRKB|ABC)\s*:\s*(\S+)$", re.IGNORECASE)
 
 
 class IdentifierImportValidationError(ValueError):
     """Raised when the identifier import request itself is invalid."""
-
-
-@dataclass(frozen=True, slots=True)
-class NormalizedSourceIdentifier:
-    """A curator-supplied identifier after provider-neutral normalization."""
-
-    original: str
-    normalized: str | None
-    error: str | None = None
-
-    @property
-    def is_valid(self) -> bool:
-        return self.normalized is not None and self.error is None
 
 
 class ReferenceImportDecisionStatus(str):
@@ -173,6 +160,28 @@ class IdentifierImportBatchResult:
         }
 
 
+def _batch_document_source_token_unavailable(
+    raw_identifiers: tuple[str, ...],
+) -> IdentifierImportBatchResult:
+    results = tuple(
+        IdentifierImportItemResult(
+            identifier=raw_identifier,
+            normalized_identifier=None,
+            status="error",
+            error_code="document_source_curator_token_unavailable",
+            message="Document-source import requires a curator bearer token.",
+        )
+        for raw_identifier in raw_identifiers
+    )
+    return IdentifierImportBatchResult(
+        results=results,
+        requested_count=len(raw_identifiers),
+        imported_count=0,
+        duplicate_count=0,
+        error_count=len(raw_identifiers),
+    )
+
+
 def parse_source_identifier_batch(raw_identifiers: str, *, batch_limit: int | None = None) -> tuple[str, ...]:
     """Split a comma/newline separated identifier string and enforce the batch cap."""
 
@@ -191,8 +200,12 @@ def parse_source_identifier_batch(raw_identifiers: str, *, batch_limit: int | No
     return identifiers
 
 
-def normalize_source_identifier(identifier: str) -> NormalizedSourceIdentifier:
-    """Normalize supported PMID/PubMed and ABC/AGRKB Literature identifiers."""
+def normalize_source_identifier(
+    identifier: str,
+    *,
+    provider: DocumentSourceProvider | None = None,
+) -> NormalizedSourceIdentifier:
+    """Normalize generic PMID/PubMed identifiers or delegate provider syntax."""
 
     original = (identifier or "").strip()
     if not original:
@@ -201,6 +214,11 @@ def normalize_source_identifier(identifier: str) -> NormalizedSourceIdentifier:
             normalized=None,
             error="Identifier is empty",
         )
+
+    normalize_identifier = getattr(provider, "normalize_identifier", None)
+    if callable(normalize_identifier):
+        return normalize_identifier(original)
+
     if original.isdigit():
         return NormalizedSourceIdentifier(original=original, normalized=f"PMID:{original}")
 
@@ -211,19 +229,10 @@ def normalize_source_identifier(identifier: str) -> NormalizedSourceIdentifier:
             normalized=f"PMID:{pmid_match.group(1)}",
         )
 
-    agrkb_match = _AGRKB_RE.match(original)
-    if agrkb_match:
-        prefix = agrkb_match.group(1).upper()
-        value = agrkb_match.group(2).strip()
-        return NormalizedSourceIdentifier(
-            original=original,
-            normalized=f"{prefix}:{value}",
-        )
-
     return NormalizedSourceIdentifier(
         original=original,
         normalized=None,
-        error="Unsupported identifier. Use PMID, PubMed ID, AGRKB, or ABC identifiers.",
+        error="Unsupported identifier. Use PMID, PubMed ID, or a provider-supported identifier.",
     )
 
 
@@ -305,9 +314,10 @@ async def select_reference_import_candidate(
         artifact
         for artifact in markdown_artifacts
         if _converted_artifact_is_ready(artifact)
-        and _is_main_markdown_artifact(artifact)
+        and _provider_is_main_text_artifact(provider, artifact)
     )
     selected_artifact, ambiguous_count = _select_preferred_converted_markdown(
+        provider,
         ready_artifacts
     )
     if ambiguous_count > 1:
@@ -340,7 +350,7 @@ async def select_reference_import_candidate(
         )
     if any(
         artifact.status is SourceArtifactStatus.RUNNING
-        and _is_main_markdown_artifact(artifact)
+        and _provider_is_main_text_artifact(provider, artifact)
         for artifact in markdown_artifacts
     ):
         return _reference_decision(
@@ -356,7 +366,7 @@ async def select_reference_import_candidate(
         )
     if any(
         artifact.status is SourceArtifactStatus.FAILED
-        and _is_main_markdown_artifact(artifact)
+        and _provider_is_main_text_artifact(provider, artifact)
         for artifact in markdown_artifacts
     ):
         return _reference_decision(
@@ -382,14 +392,15 @@ async def select_reference_import_candidate(
     if conversion_result is not None:
         conversion_metadata = _reference_conversion_metadata(conversion_result)
         if _reference_conversion_has_main_text(
+            provider,
             conversion_result,
-            provider_id=provider.provider_id,
         ):
             refreshed_artifacts = await provider.list_artifacts(
                 reference,
                 request_bearer_token=request_bearer_token,
             )
             converted_artifact, ambiguous_count = _select_reference_level_markdown_artifact(
+                provider=provider,
                 source_artifact=source_artifact,
                 artifacts=refreshed_artifacts,
             )
@@ -543,9 +554,37 @@ class IdentifierImportService:
         finally:
             session.close()
 
+        curator_token = (document_source_context.curator_token or "").strip()
+        if not curator_token:
+            return _batch_document_source_token_unavailable(raw_identifiers)
+
         results: list[IdentifierImportItemResult] = []
+        normalization_provider: DocumentSourceProvider | None = None
+        try:
+            normalization_provider = self._provider_factory()
+        except (DocumentSourceConfigError, DocumentSourceError) as exc:
+            logger.warning("Document-source identifier normalization unavailable: %s", exc)
+            return IdentifierImportBatchResult(
+                results=tuple(
+                    IdentifierImportItemResult(
+                        identifier=raw_identifier,
+                        normalized_identifier=None,
+                        status="error",
+                        error_code="document_source_unavailable",
+                        message="Document-source lookup is unavailable.",
+                    )
+                    for raw_identifier in raw_identifiers
+                ),
+                requested_count=len(raw_identifiers),
+                imported_count=0,
+                duplicate_count=0,
+                error_count=len(raw_identifiers),
+            )
         for raw_identifier in raw_identifiers:
-            normalized = normalize_source_identifier(raw_identifier)
+            normalized = normalize_source_identifier(
+                raw_identifier,
+                provider=normalization_provider,
+            )
             if not normalized.is_valid:
                 results.append(
                     IdentifierImportItemResult(
@@ -566,6 +605,8 @@ class IdentifierImportService:
                 document_source_context=document_source_context,
             )
             results.append(result)
+        if normalization_provider is not None:
+            await normalization_provider.aclose()
 
         return IdentifierImportBatchResult(
             results=tuple(results),
@@ -594,9 +635,37 @@ class IdentifierImportService:
         finally:
             session.close()
 
+        curator_token = (document_source_context.curator_token or "").strip()
+        if not curator_token:
+            return _batch_document_source_token_unavailable(raw_identifiers)
+
         results: list[IdentifierImportItemResult] = []
+        normalization_provider: DocumentSourceProvider | None = None
+        try:
+            normalization_provider = self._provider_factory()
+        except (DocumentSourceConfigError, DocumentSourceError) as exc:
+            logger.warning("Document-source identifier normalization unavailable: %s", exc)
+            return IdentifierImportBatchResult(
+                results=tuple(
+                    IdentifierImportItemResult(
+                        identifier=raw_identifier,
+                        normalized_identifier=None,
+                        status="error",
+                        error_code="document_source_unavailable",
+                        message="Document-source lookup is unavailable.",
+                    )
+                    for raw_identifier in raw_identifiers
+                ),
+                requested_count=len(raw_identifiers),
+                imported_count=0,
+                duplicate_count=0,
+                error_count=len(raw_identifiers),
+            )
         for raw_identifier in raw_identifiers:
-            normalized = normalize_source_identifier(raw_identifier)
+            normalized = normalize_source_identifier(
+                raw_identifier,
+                provider=normalization_provider,
+            )
             if not normalized.is_valid:
                 results.append(
                     IdentifierImportItemResult(
@@ -616,6 +685,8 @@ class IdentifierImportService:
                 document_source_context=document_source_context,
             )
             results.append(result)
+        if normalization_provider is not None:
+            await normalization_provider.aclose()
 
         return IdentifierImportBatchResult(
             results=tuple(results),
@@ -654,8 +725,7 @@ class IdentifierImportService:
                 allow_conversion_request=False,
             )
             wait_for_conversion = (
-                decision.provider == "abc_literature"
-                and decision.status == ReferenceImportDecisionStatus.CONVERSION_RUNNING
+                decision.status == ReferenceImportDecisionStatus.CONVERSION_RUNNING
                 and decision.selected is not None
             )
             if not decision.is_ready and not wait_for_conversion:
@@ -746,8 +816,7 @@ class IdentifierImportService:
                 request_bearer_token=curator_token,
             )
             wait_for_conversion = (
-                decision.provider == "abc_literature"
-                and decision.status == ReferenceImportDecisionStatus.CONVERSION_RUNNING
+                decision.status == ReferenceImportDecisionStatus.CONVERSION_RUNNING
                 and decision.selected is not None
             )
             if not decision.is_ready and not wait_for_conversion:
@@ -1188,26 +1257,14 @@ def _converted_artifact_is_ready(artifact: SourceArtifact) -> bool:
     return artifact.status in {SourceArtifactStatus.AVAILABLE, SourceArtifactStatus.UNKNOWN}
 
 
-def _is_main_markdown_artifact(artifact: SourceArtifact) -> bool:
-    file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
-    if artifact.provider == "abc_literature":
-        return file_class == "converted_merged_main" and not _artifact_looks_tei(artifact)
-    return True
-
-
-def _artifact_looks_tei(artifact: SourceArtifact) -> bool:
-    file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
-    display_name = str(artifact.display_name or "").strip().lower()
-    return "tei" in file_class or "_tei" in display_name or display_name.endswith("tei.md")
-
-
 def _select_preferred_converted_markdown(
+    provider: DocumentSourceProvider,
     artifacts: tuple[SourceArtifact, ...],
 ) -> tuple[SourceArtifact | None, int]:
     if not artifacts:
         return None, 0
     ranked = sorted(
-        ((_converted_markdown_rank(artifact), artifact) for artifact in artifacts),
+        ((_provider_main_text_sort_key(provider, artifact), artifact) for artifact in artifacts),
         key=lambda item: (item[0], item[1].artifact_id),
     )
     best_rank = ranked[0][0]
@@ -1217,28 +1274,24 @@ def _select_preferred_converted_markdown(
     return best[0], 1
 
 
-def _converted_markdown_rank(artifact: SourceArtifact) -> tuple[int, int, int]:
-    file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
-    display_name = str(artifact.display_name or "").strip().lower()
-    combined = f"{file_class} {display_name}"
-    if file_class == "converted_merged_main":
-        class_rank = 0
-    elif file_class.startswith("converted") and "main" in file_class:
-        class_rank = 5
-    else:
-        class_rank = 20
+def _provider_is_main_text_artifact(
+    provider: DocumentSourceProvider,
+    artifact: SourceArtifact,
+) -> bool:
+    is_main_text_artifact = getattr(provider, "is_main_text_artifact", None)
+    if callable(is_main_text_artifact):
+        return bool(is_main_text_artifact(artifact))
+    return True
 
-    if "_tei" in combined or "tei" in file_class:
-        source_rank = 100
-    elif "_nxml" in combined or "nxml" in file_class:
-        source_rank = 0
-    elif "_merged" in combined or "merged" in file_class:
-        source_rank = 1
-    else:
-        source_rank = 10
 
-    status_rank = 0 if artifact.status is SourceArtifactStatus.AVAILABLE else 1
-    return (class_rank, source_rank, status_rank)
+def _provider_main_text_sort_key(
+    provider: DocumentSourceProvider,
+    artifact: SourceArtifact,
+) -> tuple[int, ...]:
+    main_text_artifact_sort_key = getattr(provider, "main_text_artifact_sort_key", None)
+    if callable(main_text_artifact_sort_key):
+        return tuple(main_text_artifact_sort_key(artifact))
+    return (0,)
 
 
 async def _request_reference_conversion_if_supported(
@@ -1266,29 +1319,24 @@ async def _request_reference_conversion_if_supported(
 
 
 def _reference_conversion_has_main_text(
+    provider: DocumentSourceProvider,
     result: SourceConversionResult,
-    *,
-    provider_id: str,
 ) -> bool:
-    if provider_id != "abc_literature":
-        return result.status in {
+    conversion_exposes_main_text = getattr(provider, "conversion_exposes_main_text", None)
+    if callable(conversion_exposes_main_text):
+        return bool(conversion_exposes_main_text(result))
+    return (
+        result.status in {
             SourceConversionStatus.CONVERTED,
             SourceConversionStatus.RUNNING,
-        } and bool(result.converted_classes or result.per_file_progress)
-
-    if "converted_merged_main" in result.converted_classes:
-        return True
-    for progress in result.per_file_progress:
-        converted = progress.get("converted")
-        if not isinstance(converted, dict):
-            continue
-        if converted.get("file_class") == "converted_merged_main":
-            return True
-    return False
+        }
+        and bool(result.converted_classes or result.per_file_progress)
+    )
 
 
 def _select_reference_level_markdown_artifact(
     *,
+    provider: DocumentSourceProvider,
     source_artifact: SourceArtifact,
     artifacts: list[SourceArtifact],
 ) -> tuple[SourceArtifact | None, int]:
@@ -1298,10 +1346,10 @@ def _select_reference_level_markdown_artifact(
         if artifact.role is SourceArtifactRole.CONVERTED_TEXT
         and artifact.artifact_format is SourceArtifactFormat.MARKDOWN
         and artifact.status in {SourceArtifactStatus.AVAILABLE, SourceArtifactStatus.UNKNOWN}
-        and _is_main_markdown_artifact(artifact)
+        and _provider_is_main_text_artifact(provider, artifact)
         and _same_reference(source_artifact, artifact)
     )
-    return _select_preferred_converted_markdown(candidates)
+    return _select_preferred_converted_markdown(provider, candidates)
 
 
 def _reference_conversion_metadata(result: SourceConversionResult) -> dict[str, Any]:

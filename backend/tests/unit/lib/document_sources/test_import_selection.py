@@ -85,6 +85,15 @@ class FakeChecksumProvider:
             message="ok",
         )
 
+    def is_main_text_artifact(self, artifact: SourceArtifact) -> bool:
+        return _fake_is_main_text_artifact(artifact, provider_id=self.provider_id)
+
+    def main_text_artifact_sort_key(self, artifact: SourceArtifact) -> tuple[int, ...]:
+        return _fake_main_text_artifact_sort_key(artifact, provider_id=self.provider_id)
+
+    def conversion_exposes_main_text(self, result: SourceConversionResult) -> bool:
+        return _fake_conversion_exposes_main_text(result, provider_id=self.provider_id)
+
 
 class FakeConversionProvider(FakeChecksumProvider):
     def __init__(
@@ -131,6 +140,57 @@ class FakeConversionProvider(FakeChecksumProvider):
             }
         )
         return self.listed_artifacts
+
+
+def _fake_is_main_text_artifact(
+    artifact: SourceArtifact,
+    *,
+    provider_id: str,
+) -> bool:
+    file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
+    display_name = str(artifact.display_name or "").strip().lower()
+    combined = f"{file_class} {display_name}"
+    if provider_id == "abc_literature":
+        return file_class == "converted_merged_main" and "tei" not in combined
+    return "supplement" not in combined
+
+
+def _fake_main_text_artifact_sort_key(
+    artifact: SourceArtifact,
+    *,
+    provider_id: str,
+) -> tuple[int, ...]:
+    file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
+    display_name = str(artifact.display_name or "").strip().lower()
+    combined = f"{file_class} {display_name}"
+    if provider_id == "abc_literature" and "tei" in combined:
+        return (100,)
+    if "_nxml" in combined or "nxml" in file_class:
+        return (0,)
+    if "_merged" in combined or "merged" in file_class:
+        return (1,)
+    if "tei" in combined:
+        return (2,)
+    return (10,)
+
+
+def _fake_conversion_exposes_main_text(
+    result: SourceConversionResult,
+    *,
+    provider_id: str,
+) -> bool:
+    if provider_id != "abc_literature":
+        return result.status in {
+            SourceConversionStatus.CONVERTED,
+            SourceConversionStatus.RUNNING,
+        } and bool(result.converted_classes or result.per_file_progress)
+    if "converted_merged_main" in result.converted_classes:
+        return True
+    for progress in result.per_file_progress:
+        converted = progress.get("converted")
+        if isinstance(converted, dict) and converted.get("file_class") == "converted_merged_main":
+            return True
+    return False
 
 
 def _source(

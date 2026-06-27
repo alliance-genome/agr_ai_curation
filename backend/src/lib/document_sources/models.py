@@ -80,6 +80,19 @@ class SourceReference:
 
 
 @dataclass(frozen=True, slots=True)
+class NormalizedSourceIdentifier:
+    """A curator-supplied identifier after provider-aware normalization."""
+
+    original: str
+    normalized: str | None
+    error: str | None = None
+
+    @property
+    def is_valid(self) -> bool:
+        return self.normalized is not None and self.error is None
+
+
+@dataclass(frozen=True, slots=True)
 class SourceArtifact:
     """Provider-normalized downloadable/listable source artifact."""
 
@@ -147,6 +160,22 @@ class DocumentSourceProvider(Protocol):
         request_bearer_token: str | None = None,
     ) -> SourceReference:
         """Resolve a user/provider identifier to a source reference."""
+        raise NotImplementedError
+
+    def normalize_identifier(self, identifier: str) -> NormalizedSourceIdentifier:
+        """Normalize provider-specific identifier syntax without network I/O."""
+        raise NotImplementedError
+
+    def is_main_text_artifact(self, artifact: SourceArtifact) -> bool:
+        """Return whether a converted text artifact is provider-designated main text."""
+        raise NotImplementedError
+
+    def main_text_artifact_sort_key(self, artifact: SourceArtifact) -> tuple[int, ...]:
+        """Rank converted text artifacts when more than one main-text candidate exists."""
+        raise NotImplementedError
+
+    def conversion_exposes_main_text(self, result: SourceConversionResult) -> bool:
+        """Return whether a conversion response says provider main text exists or is pending."""
         raise NotImplementedError
 
     async def list_artifacts(

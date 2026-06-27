@@ -140,9 +140,10 @@ async def select_checksum_import_candidate(
         artifact
         for artifact in markdown_artifacts
         if artifact.status is SourceArtifactStatus.AVAILABLE
-        and _is_main_markdown_artifact(artifact)
+        and _provider_is_main_text_artifact(provider, artifact)
     )
     selected_ready_artifact, ambiguous_ready_count = _select_preferred_markdown_artifact(
+        provider,
         ready_markdown_artifacts
     )
     if ambiguous_ready_count > 1:
@@ -179,7 +180,7 @@ async def select_checksum_import_candidate(
         )
     if any(
         artifact.status is SourceArtifactStatus.RUNNING
-        and _is_main_markdown_artifact(artifact)
+        and _provider_is_main_text_artifact(provider, artifact)
         for artifact in markdown_artifacts
     ):
         return _decision(
@@ -192,7 +193,7 @@ async def select_checksum_import_candidate(
         )
     if any(
         artifact.status is SourceArtifactStatus.FAILED
-        and _is_main_markdown_artifact(artifact)
+        and _provider_is_main_text_artifact(provider, artifact)
         for artifact in markdown_artifacts
     ):
         return _decision(
@@ -214,14 +215,15 @@ async def select_checksum_import_candidate(
     if conversion_result is not None:
         conversion_metadata = _conversion_metadata(conversion_result)
         if _conversion_has_usable_main_text(
+            provider,
             conversion_result,
-            provider_id=provider.provider_id,
         ):
             refreshed_artifacts = await provider.list_artifacts(
                 _reference_lookup_value(source_artifact),
                 request_bearer_token=request_bearer_token,
             )
             converted_artifact, ambiguous_count = _select_reference_markdown_artifact(
+                provider=provider,
                 source_artifact=source_artifact,
                 artifacts=refreshed_artifacts,
             )
@@ -375,25 +377,19 @@ async def _request_conversion_if_supported(
 
 
 def _conversion_has_usable_main_text(
+    provider: DocumentSourceProvider,
     result: SourceConversionResult,
-    *,
-    provider_id: str,
 ) -> bool:
-    if provider_id != "abc_literature":
-        return result.status in {
+    conversion_exposes_main_text = getattr(provider, "conversion_exposes_main_text", None)
+    if callable(conversion_exposes_main_text):
+        return bool(conversion_exposes_main_text(result))
+    return (
+        result.status in {
             SourceConversionStatus.CONVERTED,
             SourceConversionStatus.RUNNING,
-        } and bool(result.converted_classes or result.per_file_progress)
-
-    if "converted_merged_main" in result.converted_classes:
-        return True
-    for progress in result.per_file_progress:
-        converted = progress.get("converted")
-        if not isinstance(converted, dict):
-            continue
-        if converted.get("file_class") == "converted_merged_main":
-            return True
-    return False
+        }
+        and bool(result.converted_classes or result.per_file_progress)
+    )
 
 
 def _same_reference(source_artifact: SourceArtifact, artifact: SourceArtifact) -> bool:
@@ -406,6 +402,7 @@ def _same_reference(source_artifact: SourceArtifact, artifact: SourceArtifact) -
 
 def _select_reference_markdown_artifact(
     *,
+    provider: DocumentSourceProvider,
     source_artifact: SourceArtifact,
     artifacts: list[SourceArtifact],
 ) -> tuple[SourceArtifact | None, int]:
@@ -416,20 +413,21 @@ def _select_reference_markdown_artifact(
         if _is_converted_markdown(artifact)
         and _reference_lookup_value(artifact) == reference_key
         and artifact.status is SourceArtifactStatus.AVAILABLE
-        and _is_main_markdown_artifact(artifact)
+        and _provider_is_main_text_artifact(provider, artifact)
     ]
     if not candidates:
         return None, 0
-    return _select_preferred_markdown_artifact(tuple(candidates))
+    return _select_preferred_markdown_artifact(provider, tuple(candidates))
 
 
 def _select_preferred_markdown_artifact(
+    provider: DocumentSourceProvider,
     artifacts: tuple[SourceArtifact, ...],
 ) -> tuple[SourceArtifact | None, int]:
     if not artifacts:
         return None, 0
     ranked = sorted(
-        ((_reference_markdown_sort_key(artifact), artifact) for artifact in artifacts),
+        ((_provider_main_text_sort_key(provider, artifact), artifact) for artifact in artifacts),
         key=lambda item: (
             item[0],
             str(item[1].display_name or "").strip().lower(),
@@ -443,29 +441,24 @@ def _select_preferred_markdown_artifact(
     return best[0], 1
 
 
-def _is_main_markdown_artifact(artifact: SourceArtifact) -> bool:
-    file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
-    if artifact.provider == "abc_literature":
-        return file_class == "converted_merged_main" and not _artifact_looks_tei(artifact)
+def _provider_is_main_text_artifact(
+    provider: DocumentSourceProvider,
+    artifact: SourceArtifact,
+) -> bool:
+    is_main_text_artifact = getattr(provider, "is_main_text_artifact", None)
+    if callable(is_main_text_artifact):
+        return bool(is_main_text_artifact(artifact))
     return True
 
 
-def _artifact_looks_tei(artifact: SourceArtifact) -> bool:
-    file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
-    display_name = str(artifact.display_name or "").strip().lower()
-    return "tei" in file_class or "_tei" in display_name or display_name.endswith("tei.md")
-
-
-def _reference_markdown_sort_key(artifact: SourceArtifact) -> tuple[int, int]:
-    file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
-    display_name = (artifact.display_name or "").strip().lower()
-    is_main = file_class == "converted_merged_main"
-    is_nxml = display_name.endswith("_nxml") or display_name.endswith("_nxml.md")
-    is_tei = display_name.endswith("_tei") or display_name.endswith("_tei.md")
-    return (
-        0 if is_main else 1,
-        0 if is_nxml else 2 if is_tei else 1,
-    )
+def _provider_main_text_sort_key(
+    provider: DocumentSourceProvider,
+    artifact: SourceArtifact,
+) -> tuple[int, ...]:
+    main_text_artifact_sort_key = getattr(provider, "main_text_artifact_sort_key", None)
+    if callable(main_text_artifact_sort_key):
+        return tuple(main_text_artifact_sort_key(artifact))
+    return (0,)
 
 
 def _reference_lookup_value(artifact: SourceArtifact) -> str:
