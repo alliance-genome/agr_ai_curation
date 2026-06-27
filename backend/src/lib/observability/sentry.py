@@ -48,6 +48,19 @@ _CONTENT_KEY_MARKERS = (
     "verified_quote",
 )
 
+_TRACE_CONTEXT_KEYS = {
+    "client_sample_rate",
+    "exclusive_time",
+    "op",
+    "origin",
+    "parent_span_id",
+    "sampled",
+    "span_id",
+    "status",
+    "trace_id",
+    "type",
+}
+
 _SECRET_PATTERNS = (
     re.compile(r"sk-[A-Za-z0-9_-]{16,}"),
     re.compile(r"pk-[A-Za-z0-9_-]{16,}"),
@@ -198,6 +211,25 @@ def _redact_untrusted_strings(value: Any, *, depth: int = 0) -> Any:
     return value
 
 
+def _redact_contexts(contexts: dict[str, Any]) -> dict[str, Any]:
+    """Redact custom contexts while preserving Sentry trace bookkeeping."""
+
+    redacted: dict[str, Any] = {}
+    for context_key, context_value in contexts.items():
+        normalized_key = str(context_key)
+        if normalized_key == "trace" and isinstance(context_value, Mapping):
+            redacted[normalized_key] = {
+                str(child_key): _scrub_value(child_value, key=str(child_key))
+                for child_key, child_value in context_value.items()
+                if str(child_key) in _TRACE_CONTEXT_KEYS
+            }
+            continue
+
+        redacted[normalized_key] = _redact_untrusted_strings(context_value)
+
+    return redacted
+
+
 def _remove_stack_frame_vars(container: dict[str, Any]) -> None:
     """Drop stack-frame locals if an event already contains them."""
 
@@ -238,9 +270,10 @@ def _redact_event(event: dict[str, Any]) -> dict[str, Any]:
         if key in scrubbed:
             scrubbed[key] = _REDACTED
 
-    for key in ("extra", "contexts"):
-        if isinstance(scrubbed.get(key), dict):
-            scrubbed[key] = _redact_untrusted_strings(scrubbed[key])
+    if isinstance(scrubbed.get("extra"), dict):
+        scrubbed["extra"] = _redact_untrusted_strings(scrubbed["extra"])
+    if isinstance(scrubbed.get("contexts"), dict):
+        scrubbed["contexts"] = _redact_contexts(scrubbed["contexts"])
 
     breadcrumbs = scrubbed.get("breadcrumbs")
     if isinstance(breadcrumbs, dict) and isinstance(breadcrumbs.get("values"), list):

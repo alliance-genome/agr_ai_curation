@@ -114,6 +114,44 @@ def test_before_send_redacts_sensitive_and_document_content():
     assert "vars" not in scrubbed["threads"]["values"][0]["stacktrace"]["frames"][0]
 
 
+def test_before_send_preserves_sentry_trace_context_and_redacts_custom_contexts():
+    event = {
+        "contexts": {
+            "trace": {
+                "trace_id": "0123456789abcdef0123456789abcdef",
+                "span_id": "0123456789abcdef",
+                "parent_span_id": "fedcba9876543210",
+                "op": "queue.process",
+                "status": "internal_error",
+                "type": "trace",
+                "description": "curator prompt text should not survive",
+            },
+            "background_task": {
+                "task_name": "src.api.chat_common.generate_title_for_user_text",
+                "curator_note": "free text",
+            },
+            "custom": {"payload": "curator entered unpublished text"},
+        },
+        "exception": {"values": [{"type": "RuntimeError", "value": "raw exception text"}]},
+    }
+
+    scrubbed = sentry.before_send(event)
+
+    assert scrubbed["contexts"]["trace"] == {
+        "trace_id": "0123456789abcdef0123456789abcdef",
+        "span_id": "0123456789abcdef",
+        "parent_span_id": "fedcba9876543210",
+        "op": "queue.process",
+        "status": "internal_error",
+        "type": "trace",
+    }
+    assert "description" not in scrubbed["contexts"]["trace"]
+    assert scrubbed["contexts"]["background_task"]["task_name"] == "[Filtered]"
+    assert scrubbed["contexts"]["background_task"]["curator_note"] == "[Filtered]"
+    assert scrubbed["contexts"]["custom"]["payload"] == "[Filtered]"
+    assert scrubbed["exception"]["values"][0]["value"] == "[Filtered]"
+
+
 def test_before_send_transaction_uses_same_redaction_policy():
     event = {
         "transaction": "GET /api/chat",
