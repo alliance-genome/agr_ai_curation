@@ -20,6 +20,7 @@ from src.lib.openai_agents.config import (
     get_executable_run_event_replay_limit,
     get_executable_run_retention_seconds,
 )
+from src.lib.observability.runtime import report_runtime_exception
 
 logger = logging.getLogger(__name__)
 
@@ -241,6 +242,23 @@ class ExecutableRunManager:
             await self._finish(run, "cancelled")
             raise
         except Exception as exc:
+            report_runtime_exception(
+                exc,
+                component="executable_run",
+                operation="producer_failed",
+                tags={"run_kind": run.kind},
+                context={
+                    "run_id": run.run_id,
+                    "kind": run.kind,
+                    "session_id": run.session_id,
+                    "turn_id": run.turn_id,
+                    "flow_run_id": run.flow_run_id,
+                    "batch_id": run.batch_id,
+                    "job_id": run.job_id,
+                    "terminal_error_event_factory": run.terminal_error_event_factory
+                    is not None,
+                },
+            )
             logger.exception(
                 "Executable run producer failed: run_id=%s kind=%s",
                 run.run_id,

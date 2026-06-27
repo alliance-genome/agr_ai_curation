@@ -178,6 +178,11 @@ async def test_producer_startup_failure_publishes_terminal_error_event(monkeypat
         "src.lib.executable_runs.get_executable_run_retention_seconds",
         lambda: 60,
     )
+    runtime_reports = []
+    monkeypatch.setattr(
+        "src.lib.executable_runs.report_runtime_exception",
+        lambda exc, **kwargs: runtime_reports.append((exc, kwargs)) or True,
+    )
 
     manager = ExecutableRunManager()
 
@@ -208,6 +213,23 @@ async def test_producer_startup_failure_publishes_terminal_error_event(monkeypat
         await asyncio.wait_for(observer.__anext__(), timeout=1)
 
     assert run.status == "failed"
+    assert len(runtime_reports) == 1
+    reported_exc, report_kwargs = runtime_reports[0]
+    assert isinstance(reported_exc, RuntimeError)
+    assert str(reported_exc) == "startup rejected"
+    assert report_kwargs["component"] == "executable_run"
+    assert report_kwargs["operation"] == "producer_failed"
+    assert report_kwargs["tags"] == {"run_kind": "assistant_chat_turn"}
+    assert report_kwargs["context"] == {
+        "run_id": "assistant_chat_turn:session-1:turn-1",
+        "kind": "assistant_chat_turn",
+        "session_id": "session-1",
+        "turn_id": "turn-1",
+        "flow_run_id": None,
+        "batch_id": None,
+        "job_id": None,
+        "terminal_error_event_factory": True,
+    }
 
 
 @pytest.mark.asyncio
