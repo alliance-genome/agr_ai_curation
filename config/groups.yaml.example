@@ -31,6 +31,9 @@ groups:
     provider_groups:
       - "flybase-curators"
       - "flybase-admins"
+      # Add your IdP's concrete group names here, for example:
+      # - "FBStaff"
+      # - "FlyBaseCurator"
 
   WB:
     name: "WormBase"

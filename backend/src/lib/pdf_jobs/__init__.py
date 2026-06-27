@@ -14,6 +14,7 @@ from .service import (
     update_progress,
 )
 from .upload_execution_service import (
+    ProviderMarkdownExecutionRequest,
     UploadExecutionRequest,
     UploadExecutionService,
     normalize_pipeline_result,
@@ -37,6 +38,7 @@ __all__ = [
     "request_cancel",
     "set_process_id",
     "update_progress",
+    "ProviderMarkdownExecutionRequest",
     "UploadExecutionRequest",
     "UploadExecutionService",
     "normalize_pipeline_result",

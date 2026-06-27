@@ -32,7 +32,8 @@ class PDFDocumentSummary(BaseModel):
         description="File size in bytes",
     )
     upload_timestamp: datetime
-    viewer_url: str = Field(..., pattern=r"^/uploads/.*")
+    viewer_url: str | None = Field(..., pattern=r"^/uploads/.*")
+    viewer_mode: str | None = None
 
 
 class PDFDocumentDetail(PDFDocumentSummary):
@@ -41,7 +42,8 @@ class PDFDocumentDetail(PDFDocumentSummary):
 
 
 class ViewerURLResponse(BaseModel):
-    viewer_url: str = Field(..., pattern=r"^/uploads/.*")
+    viewer_url: str | None = Field(..., pattern=r"^/uploads/.*")
+    viewer_mode: str | None = None
 
 
 class DocumentListResponse(BaseModel):
@@ -101,6 +103,16 @@ def _viewer_url(file_path: str) -> str:
     return f"/uploads/{normalized}"
 
 
+def _viewer_mode(record: PdfDocumentModel) -> str:
+    return str(record.viewer_mode or "local_pdf").strip().lower() or "local_pdf"
+
+
+def _document_viewer_url(record: PdfDocumentModel) -> str | None:
+    if _viewer_mode(record) == "text_only":
+        return None
+    return _viewer_url(record.file_path)
+
+
 def _document_select() -> Select[tuple[PdfDocumentModel]]:
     return select(PdfDocumentModel).order_by(PdfDocumentModel.upload_timestamp.desc())
 
@@ -126,7 +138,8 @@ def list_documents(
             page_count=record.page_count,
             file_size=record.file_size,
             upload_timestamp=record.upload_timestamp,
-            viewer_url=_viewer_url(record.file_path),
+            viewer_url=_document_viewer_url(record),
+            viewer_mode=_viewer_mode(record),
         )
         for record in records
     ]
@@ -167,7 +180,8 @@ def get_document_detail(
         file_size=record.file_size,
         upload_timestamp=record.upload_timestamp,
         last_accessed=record.last_accessed,
-        viewer_url=_viewer_url(record.file_path),
+        viewer_url=_document_viewer_url(record),
+        viewer_mode=_viewer_mode(record),
         file_hash=record.file_hash,
     )
 
@@ -182,7 +196,10 @@ def get_document_viewer_url(
     record.last_accessed = datetime.now(timezone.utc)
     db.commit()
 
-    return ViewerURLResponse(viewer_url=_viewer_url(record.file_path))
+    return ViewerURLResponse(
+        viewer_url=_document_viewer_url(record),
+        viewer_mode=_viewer_mode(record),
+    )
 
 
 def _serialize_match_range(match_range: MatchRange | None) -> PdfViewerFuzzyMatchRange | None:

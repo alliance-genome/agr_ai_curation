@@ -15,6 +15,7 @@ Documentation for the AI Curation Platform developers.
 |-----------|---------|
 | `api/` | API reference documentation |
 | `guides/` | Developer guides and how-tos |
+| `integrations/` | External service integration contracts and verification notes |
 | `traces/` | Langfuse trace analysis tools |
 
 ## Quick Navigation
@@ -54,6 +55,10 @@ Start here for new developers:
 | [SYMPHONY_INCUS_VM_REBUILD.md](guides/SYMPHONY_INCUS_VM_REBUILD.md) | Rebuild `symphony-main` from a tracked cloud-init source, including default git safety scanners |
 | [SYMPHONY_VM_CODEX_SHORTCUTS.md](guides/SYMPHONY_VM_CODEX_SHORTCUTS.md) | Interactive Codex shortcuts in the Symphony VM, including PAT-backed `co` and rebuild persistence |
 | [UPLOAD_RUNTIME_CONTRACT.md](guides/UPLOAD_RUNTIME_CONTRACT.md) | Upload runtime behavioral contract: status precedence, cancellation, rollback matrix, and idempotency expectations (implementation tracked in ALL-23) |
+| [ABC Literature API Contract Verification](integrations/abc_literature/api_contract_verification.md) | Verified Literature OpenAPI hostnames, endpoint allowlist, forbidden endpoints, and fixture-backed live-check procedure |
+| [ABC Literature Conversion Handoff](integrations/abc_literature/conversion_handoff.md) | Boundary between AI Curation, ABC Literature conversion_request, nXML/TEI behavior, and local PDFX fallback |
+| [ABC Literature Import Lifecycle](integrations/abc_literature/import_lifecycle.md) | Provider-neutral ABC import lifecycle, conversion polling/status mapping, failures, cancellation, and timeout behavior |
+| [ABC Literature Release Configuration](integrations/abc_literature/release_config.md) | Env/config, health/readiness, smoke evidence, and disable procedure for the ABC Literature document-source integration |
 
 ### API Reference
 

@@ -220,6 +220,7 @@ external_review_prompt.md
 /*.pdf
 # Loose markdown in root (analysis notes, drafts, working docs)
 /goal.md
+/CURRENT_STATE.md
 /*_analysis*.md
 /*_working*.md
 /*_draft*.md

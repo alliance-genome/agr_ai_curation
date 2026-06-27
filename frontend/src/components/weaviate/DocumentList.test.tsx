@@ -257,6 +257,42 @@ describe('DocumentList', () => {
     expect(screen.getByText('doc3.pdf')).toBeInTheDocument();
   });
 
+  it('displays provider provenance in the source column', () => {
+    const docs = [
+      createTestDocument({
+        id: 'provider-doc',
+        filename: 'provider.pdf',
+        sourceProvenance: {
+          provider: 'abc_literature',
+          referenceCurie: 'AGRKB:101',
+          referenceId: null,
+          sourceFileId: 'source-pdf-1',
+          pdfArtifactId: 'source-pdf-1',
+          convertedArtifactId: 'converted-md-1',
+          externalIds: { pmid: '12345' },
+          sourceMd5: 'abc123',
+          fileClass: 'converted_merged_nxml',
+          fileExtension: 'md',
+          artifactStatus: 'ready',
+          importStatus: 'imported',
+          importedAt: null,
+          accessScope: 'restricted',
+          accessMods: { mods: ['FB'] },
+          viewerMode: 'local_pdf',
+        },
+      }),
+      createTestDocument({ id: 'local-doc', filename: 'local.pdf', sourceProvenance: null }),
+    ];
+
+    render(<DocumentList {...defaultProps} documents={docs} totalCount={2} />);
+
+    expect(screen.getByText('Source')).toBeInTheDocument();
+    expect(screen.getByText('ABC Literature')).toBeInTheDocument();
+    expect(screen.getByText('AGRKB:101')).toBeInTheDocument();
+    expect(screen.getByText('Local PDF')).toBeInTheDocument();
+    expect(screen.getByText('Uploaded PDF')).toBeInTheDocument();
+  });
+
   it('displays loading state', () => {
     render(<DocumentList {...defaultProps} loading={true} />);
 

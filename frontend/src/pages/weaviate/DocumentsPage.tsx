@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   cancelPdfJob,
   fetchPdfJobs,
+  normalizeDocumentSourceProvenance,
 } from '../../services/weaviate';
 import { emitGlobalToast } from '../../lib/globalNotifications';
 import { buildPdfTerminalNotification } from '@/features/documents/pdfTerminalNotifications';
@@ -197,6 +198,9 @@ const DocumentsPage: React.FC = () => {
           ) as DocumentSummary['embeddingStatus'],
           chunkCount: typeof doc.chunk_count === 'number' ? doc.chunk_count : (typeof doc.chunkCount === 'number' ? doc.chunkCount : 0),
           vectorCount: typeof doc.vector_count === 'number' ? doc.vector_count : (typeof doc.vectorCount === 'number' ? doc.vectorCount : 0),
+          sourceProvenance: normalizeDocumentSourceProvenance(
+            doc.source_provenance ?? doc.sourceProvenance,
+          ),
         };
       });
       setDocuments(normalizedDocs);

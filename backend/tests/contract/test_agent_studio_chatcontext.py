@@ -10,6 +10,10 @@ from src.api import agent_studio as api_module
 from src.lib.chat_history_repository import AGENT_STUDIO_CHAT_KIND, ChatMessageRecord
 
 
+CONTEXT_SESSION_ID = "agent-studio-chatcontext-session"
+CONTEXT_TURN_ID = "agent-studio-chatcontext-turn-1"
+
+
 def _consume_sse_events(stream_response) -> list[dict]:
     events: list[dict] = []
     for line in stream_response.iter_lines():
@@ -102,8 +106,8 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
     def _prepare_turn(*, request, **_kwargs):
         captured["request_context_session_id"] = request.context.session_id
         return api_module.PreparedAgentStudioTurn(
-            session_id="agent-studio-session-1",
-            turn_id="opus-turn-1",
+            session_id=CONTEXT_SESSION_ID,
+            turn_id=CONTEXT_TURN_ID,
             user_message=request.messages[-1].content,
             requested_context_session_id=request.context.session_id,
             user_turn_created=False,
@@ -114,9 +118,9 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
         captured["assistant_trace_id"] = trace_id
         return ChatMessageRecord(
             message_id=uuid4(),
-            session_id="agent-studio-session-1",
+            session_id=CONTEXT_SESSION_ID,
             chat_kind=AGENT_STUDIO_CHAT_KIND,
-            turn_id="opus-turn-1",
+            turn_id=CONTEXT_TURN_ID,
             role="assistant",
             message_type="text",
             content="Stored answer",
@@ -165,9 +169,12 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
     assert [
         event["type"] for event in events if event["type"] != "PROVIDER_CONTEXT_PREFLIGHT"
     ] == ["TEXT_DELTA", "DONE"]
-    assert all(event["session_id"] == "agent-studio-session-1" for event in events)
+    assert all(event["session_id"] == CONTEXT_SESSION_ID for event in events)
     assert captured["request_context_session_id"] == "assistant-session-123"
-    assert captured["assistant_trace_id"] == "trace-123"
+    assert captured.get("assistant_trace_id") == "trace-123", {
+        "events": events,
+        "captured": captured,
+    }
     assistant_payload = captured["assistant_payload"]
     assert isinstance(assistant_payload, dict)
     preflight_events = assistant_payload.pop("provider_context_preflight_events", None)

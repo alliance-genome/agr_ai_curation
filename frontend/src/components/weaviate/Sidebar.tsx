@@ -10,22 +10,16 @@ import {
   Divider,
   Box,
   Typography,
-  Collapse,
+  Tooltip,
   useTheme,
   useMediaQuery,
 } from '@mui/material';
 import {
   Storage,
-  Settings,
-  Schema,
   Description,
-  ExpandLess,
-  ExpandMore,
   ChevronLeft,
   ChevronRight,
-  Tune,
-  CloudSync,
-  Dashboard,
+  PostAdd,
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
 
@@ -41,8 +35,24 @@ interface NavigationItem {
   label: string;
   icon: React.ReactNode;
   path?: string;
-  children?: NavigationItem[];
+  aliases?: string[];
 }
+
+const NAVIGATION_ITEMS: NavigationItem[] = [
+  {
+    id: 'documents',
+    label: 'Documents',
+    icon: <Description />,
+    path: '/weaviate/documents',
+  },
+  {
+    id: 'add-literature',
+    label: 'Add Literature',
+    icon: <PostAdd />,
+    path: '/weaviate/add-literature',
+    aliases: ['/weaviate/documents/import-mock'],
+  },
+];
 
 const Sidebar: React.FC<SidebarProps> = ({
   open = true,
@@ -54,54 +64,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const navigate = useNavigate();
   const location = useLocation();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
-  const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set(['settings']));
   const [collapsed, setCollapsed] = useState(false);
-
-  const navigationItems: NavigationItem[] = [
-    {
-      id: 'documents',
-      label: 'Documents',
-      icon: <Description />,
-      path: '/weaviate/documents',
-    },
-    {
-      id: 'dashboard',
-      label: 'Dashboard',
-      icon: <Dashboard />,
-      path: '/weaviate/dashboard',
-    },
-    {
-      id: 'settings',
-      label: 'Settings',
-      icon: <Settings />,
-      children: [
-        {
-          id: 'embeddings',
-          label: 'Embeddings',
-          icon: <CloudSync />,
-          path: '/weaviate/settings/embeddings',
-        },
-        {
-          id: 'database',
-          label: 'Database',
-          icon: <Storage />,
-          path: '/weaviate/settings/database',
-        },
-        {
-          id: 'schema',
-          label: 'Schema',
-          icon: <Schema />,
-          path: '/weaviate/settings/schema',
-        },
-        {
-          id: 'chunking',
-          label: 'Chunking',
-          icon: <Tune />,
-          path: '/weaviate/settings/chunking',
-        },
-      ],
-    },
-  ];
 
   const handleItemClick = (item: NavigationItem) => {
     if (item.path) {
@@ -109,89 +72,76 @@ const Sidebar: React.FC<SidebarProps> = ({
       if (isMobile && onToggle) {
         onToggle();
       }
-    } else if (item.children) {
-      setExpandedItems((prev) => {
-        const newSet = new Set(prev);
-        if (newSet.has(item.id)) {
-          newSet.delete(item.id);
-        } else {
-          newSet.add(item.id);
-        }
-        return newSet;
-      });
     }
   };
 
   const toggleCollapse = () => {
-    setCollapsed(!collapsed);
+    setCollapsed((isCollapsed) => !isCollapsed);
   };
 
-  const isActiveRoute = (path?: string): boolean => {
+  const isActiveRoute = (path?: string, aliases: string[] = []): boolean => {
     if (!path) return false;
+    const normalizedPathname = location.pathname.replace(/\/+$/, '');
+    if (aliases.includes(normalizedPathname)) {
+      return true;
+    }
+    if (path === '/weaviate/documents' && normalizedPathname === '/weaviate/documents/import-mock') {
+      return false;
+    }
     // Exact match or starts with path followed by a slash (for sub-routes)
-    return location.pathname === path || location.pathname.startsWith(`${path}/`);
+    return normalizedPathname === path || normalizedPathname.startsWith(`${path}/`);
   };
 
-  const renderNavigationItem = (item: NavigationItem, depth: number = 0): React.ReactNode => {
-    const hasChildren = item.children && item.children.length > 0;
-    const isExpanded = expandedItems.has(item.id);
-    const isActive = isActiveRoute(item.path);
+  const renderNavigationItem = (item: NavigationItem): React.ReactNode => {
+    const isActive = isActiveRoute(item.path, item.aliases);
 
     return (
       <React.Fragment key={item.id}>
         <ListItem disablePadding sx={{ display: 'block' }}>
-          <ListItemButton
-            onClick={() => handleItemClick(item)}
-            selected={isActive}
-            sx={{
-              minHeight: 48,
-              justifyContent: collapsed ? 'center' : 'initial',
-              px: depth === 0 ? 2.5 : 4,
-              pl: depth > 0 && !collapsed ? depth * 3 : undefined,
-              bgcolor: isActive ? 'action.selected' : 'transparent',
-              '&:hover': {
-                bgcolor: 'action.hover',
-              },
-              '&.Mui-selected': {
-                bgcolor: 'action.selected',
-                borderLeft: `3px solid ${theme.palette.primary.main}`,
-                '&:hover': {
-                  bgcolor: 'action.selected',
-                },
-              },
-            }}
-          >
-            <ListItemIcon
+          <Tooltip title={collapsed ? item.label : ''} placement="right">
+            <ListItemButton
+              onClick={() => handleItemClick(item)}
+              selected={isActive}
+              aria-label={collapsed ? item.label : undefined}
               sx={{
-                minWidth: 0,
-                mr: collapsed ? 0 : 3,
-                justifyContent: 'center',
-                color: isActive ? 'primary.main' : 'inherit',
+                minHeight: 48,
+                justifyContent: collapsed ? 'center' : 'initial',
+                px: 2.5,
+                bgcolor: isActive ? 'action.selected' : 'transparent',
+                '&:hover': {
+                  bgcolor: 'action.hover',
+                },
+                '&.Mui-selected': {
+                  bgcolor: 'action.selected',
+                  borderLeft: `3px solid ${theme.palette.primary.main}`,
+                  '&:hover': {
+                    bgcolor: 'action.selected',
+                  },
+                },
               }}
             >
-              {item.icon}
-            </ListItemIcon>
-            {!collapsed && (
-              <>
+              <ListItemIcon
+                sx={{
+                  minWidth: 0,
+                  mr: collapsed ? 0 : 3,
+                  justifyContent: 'center',
+                  color: isActive ? 'primary.main' : 'inherit',
+                }}
+              >
+                {item.icon}
+              </ListItemIcon>
+              {!collapsed && (
                 <ListItemText
                   primary={item.label}
                   primaryTypographyProps={{
-                    fontSize: depth === 0 ? '0.95rem' : '0.875rem',
+                    fontSize: '0.95rem',
                     fontWeight: isActive ? 600 : 400,
                   }}
                 />
-                {hasChildren && (isExpanded ? <ExpandLess /> : <ExpandMore />)}
-              </>
-            )}
-          </ListItemButton>
+              )}
+            </ListItemButton>
+          </Tooltip>
         </ListItem>
-        {hasChildren && !collapsed && (
-          <Collapse in={isExpanded} timeout="auto" unmountOnExit>
-            <List component="div" disablePadding>
-              {item.children!.map((child) => renderNavigationItem(child, depth + 1))}
-            </List>
-          </Collapse>
-        )}
       </React.Fragment>
     );
   };
@@ -215,7 +165,11 @@ const Sidebar: React.FC<SidebarProps> = ({
             </Typography>
           </Box>
         )}
-        <IconButton onClick={toggleCollapse} size="small">
+        <IconButton
+          onClick={toggleCollapse}
+          size="small"
+          aria-label={collapsed ? 'Expand Documents navigation' : 'Collapse Documents navigation'}
+        >
           {collapsed ? <ChevronRight /> : <ChevronLeft />}
         </IconButton>
       </Box>
@@ -223,7 +177,7 @@ const Sidebar: React.FC<SidebarProps> = ({
       <Divider />
 
       <List sx={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
-        {navigationItems.map((item) => renderNavigationItem(item))}
+        {NAVIGATION_ITEMS.map((item) => renderNavigationItem(item))}
       </List>
 
       <Divider />

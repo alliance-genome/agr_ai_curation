@@ -5,7 +5,7 @@ from typing import List, Optional, Dict, Any
 from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict
 
-from .document import PDFDocument, EmbeddingStatus
+from .document import EmbeddingStatus
 from .chunk import DocumentChunk
 
 
@@ -26,12 +26,12 @@ class SortBy(str, Enum):
 class DocumentFilter(BaseModel):
     """Filter criteria for document list pagination."""
 
-    search_term: Optional[str] = Field(None, description="Text search in filename/metadata")
-    embedding_status: Optional[List[EmbeddingStatus]] = Field(None, description="Filter by status")
-    date_from: Optional[datetime] = Field(None, description="Creation date start")
-    date_to: Optional[datetime] = Field(None, description="Creation date end")
-    min_vector_count: Optional[int] = Field(None, ge=0, description="Minimum vectors")
-    max_vector_count: Optional[int] = Field(None, ge=0, description="Maximum vectors")
+    search_term: Optional[str] = Field(default=None, description="Text search in filename/metadata")
+    embedding_status: Optional[List[EmbeddingStatus]] = Field(default=None, description="Filter by status")
+    date_from: Optional[datetime] = Field(default=None, description="Creation date start")
+    date_to: Optional[datetime] = Field(default=None, description="Creation date end")
+    min_vector_count: Optional[int] = Field(default=None, ge=0, description="Minimum vectors")
+    max_vector_count: Optional[int] = Field(default=None, ge=0, description="Maximum vectors")
 
     @property
     def is_date_range_valid(self) -> bool:
@@ -84,6 +84,62 @@ class DocumentListResponse(BaseModel):
     total: int  # Total number of documents
     limit: int  # Page size (items per page)
     offset: int  # Number of items skipped
+
+
+class DocumentSourceProvenance(BaseModel):
+    """Compact non-secret provenance for provider-backed documents."""
+
+    provider: Optional[str] = None
+    reference_id: Optional[str] = None
+    reference_curie: Optional[str] = None
+    source_file_id: Optional[str] = None
+    pdf_artifact_id: Optional[str] = None
+    converted_artifact_id: Optional[str] = None
+    external_ids: Optional[Dict[str, str | List[str]]] = None
+    source_md5: Optional[str] = None
+    file_class: Optional[str] = None
+    file_extension: Optional[str] = None
+    artifact_status: Optional[str] = None
+    import_status: Optional[str] = None
+    imported_at: Optional[datetime] = None
+    access_scope: Optional[str] = None
+    access_mods: Optional[Dict[str, List[str]]] = None
+    viewer_mode: Optional[str] = None
+
+
+class DocumentSourceIdentifierImportRequest(BaseModel):
+    """Request to import papers from the configured document source."""
+
+    identifiers: str = Field(
+        ...,
+        min_length=1,
+        description="Comma- or newline-separated PMID/PubMed/ABC/AGRKB identifiers",
+    )
+
+
+class DocumentSourceIdentifierImportResult(BaseModel):
+    """Per-identifier source import result."""
+
+    identifier: str
+    normalized_identifier: Optional[str] = None
+    status: str
+    message: str
+    document_id: Optional[str] = None
+    job_id: Optional[str] = None
+    filename: Optional[str] = None
+    error_code: Optional[str] = None
+    existing_document_id: Optional[str] = None
+    source_provenance: Optional[DocumentSourceProvenance] = None
+
+
+class DocumentSourceIdentifierImportResponse(BaseModel):
+    """Batch source import response with partial-success accounting."""
+
+    results: List[DocumentSourceIdentifierImportResult]
+    requested_count: int = Field(..., ge=0)
+    imported_count: int = Field(..., ge=0)
+    duplicate_count: int = Field(..., ge=0)
+    error_count: int = Field(..., ge=0)
 
 
 class EmbeddingModelBreakdown(BaseModel):
@@ -149,6 +205,7 @@ class OperationResult(BaseModel):
     success: bool
     message: str
     document_id: Optional[str] = None
+    operation: Optional[str] = None
     error: Optional[Dict[str, str]] = None
 
     @classmethod
@@ -242,3 +299,7 @@ class DocumentResponse(BaseModel):
     weaviate_tenant: str = Field(..., description="Weaviate tenant name (user_id with underscores)")
     chunk_count: Optional[int] = Field(None, description="Number of chunks created")
     error_message: Optional[str] = Field(None, description="Error message if processing failed")
+    source_provenance: Optional[DocumentSourceProvenance] = Field(
+        default=None,
+        description="Non-secret upstream document-source provenance",
+    )

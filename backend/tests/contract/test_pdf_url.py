@@ -32,6 +32,20 @@ def _resolve(schema: Dict[str, Any], components: Dict[str, Any]) -> Dict[str, An
     return components["schemas"][ref_name]
 
 
+def _assert_nullable_upload_viewer_url(viewer_url: Dict[str, Any]) -> None:
+    any_of = viewer_url.get("anyOf", [])
+    string_schema = next(
+        (item for item in any_of if item.get("type") == "string"),
+        None,
+    )
+    null_schema = next((item for item in any_of if item.get("type") == "null"), None)
+    assert string_schema is not None, "viewer_url must allow /uploads/ string values"
+    assert null_schema is not None, "viewer_url must allow null for text-only documents"
+    pattern = string_schema.get("pattern")
+    if pattern is not None:
+        assert pattern.startswith("^/uploads/"), "viewer_url must reference /uploads/ path"
+
+
 def test_pdf_viewer_url_contract():
     """Ensure OpenAPI contract for viewer URL endpoint aligns with spec."""
     schema = _load_openapi_schema()
@@ -63,7 +77,4 @@ def test_pdf_viewer_url_contract():
     assert "viewer_url" in required, "viewer_url field is required in response"
 
     viewer_url = resolved.get("properties", {}).get("viewer_url", {})
-    assert viewer_url.get("type") == "string"
-    pattern = viewer_url.get("pattern")
-    if pattern is not None:
-        assert pattern.startswith("^/uploads/"), "viewer_url must reference /uploads/ path"
+    _assert_nullable_upload_viewer_url(viewer_url)

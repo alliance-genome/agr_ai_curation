@@ -269,6 +269,41 @@ elif [[ "${dirty_status}" != "clean" ]]; then
   reason="workspace_${dirty_status}"
 fi
 
+set +e
+state_preflight_output="$(bash "${STATE_HELPER}" "${helper_args_common[@]}" --state "Needs Review" --from-state "Needs Review" 2>&1)"
+state_preflight_rc=$?
+set -e
+
+if [[ "${state_preflight_rc}" -ne 0 ]]; then
+  state_preflight_status="$(awk -F= '/^LINEAR_STATE_STATUS=/{print $2}' <<< "${state_preflight_output}" | tail -n 1)"
+  state_preflight_error="$(awk -F= '/^LINEAR_STATE_ERROR=/{sub(/^LINEAR_STATE_ERROR=/, ""); print}' <<< "${state_preflight_output}" | tail -n 1)"
+  payload="$(jq -cn \
+    --arg status "error" \
+    --arg issue_identifier "${issue_identifier}" \
+    --arg branch "${branch}" \
+    --arg head_sha "${head_sha}" \
+    --arg from_state "Needs Review" \
+    --arg to_state "${target_state}" \
+    --arg reason "state_preflight_failed" \
+    --arg details "${state_preflight_output}" \
+    --arg state_error "${state_preflight_error}" \
+    --arg state_status "${state_preflight_status}" '
+    {
+      needs_review_claim_status: $status,
+      needs_review_claim_issue_identifier: $issue_identifier,
+      needs_review_claim_branch: $branch,
+      needs_review_claim_head_sha: $head_sha,
+      needs_review_claim_from_state: $from_state,
+      needs_review_claim_to_state: $to_state,
+      needs_review_claim_reason: $reason,
+      needs_review_claim_details: $details,
+      needs_review_claim_state_error: $state_error,
+      needs_review_claim_state_status: $state_status
+    }')"
+  emit_payload "${payload}"
+  exit 3
+fi
+
 section_file="$(mktemp "${TMPDIR:-/tmp}/symphony-needs-review-claim-XXXXXX.md")"
 {
   if [[ "${claim_status}" == "claimed" ]]; then
@@ -291,11 +326,69 @@ section_file="$(mktemp "${TMPDIR:-/tmp}/symphony-needs-review-claim-XXXXXX.md")"
   fi
 } > "${section_file}"
 
-workpad_append_output="$(bash "${WORKPAD_HELPER}" append-section "${helper_args_common[@]}" --section-title "Review Claim" --section-file "${section_file}")"
+set +e
+workpad_append_output="$(bash "${WORKPAD_HELPER}" append-section "${helper_args_common[@]}" --section-title "Review Claim" --section-file "${section_file}" 2>&1)"
+workpad_append_rc=$?
+set -e
 
-state_output="$(bash "${STATE_HELPER}" "${helper_args_common[@]}" --state "${target_state}" --from-state "Needs Review")"
+if [[ "${workpad_append_rc}" -ne 0 ]]; then
+  payload="$(jq -cn \
+    --arg status "error" \
+    --arg issue_identifier "${issue_identifier}" \
+    --arg branch "${branch}" \
+    --arg head_sha "${head_sha}" \
+    --arg reason "workpad_append_failed" \
+    --arg details "${workpad_append_output}" '
+    {
+      needs_review_claim_status: $status,
+      needs_review_claim_issue_identifier: $issue_identifier,
+      needs_review_claim_branch: $branch,
+      needs_review_claim_head_sha: $head_sha,
+      needs_review_claim_reason: $reason,
+      needs_review_claim_details: $details
+    }')"
+  emit_payload "${payload}"
+  exit 3
+fi
+
+set +e
+state_output="$(bash "${STATE_HELPER}" "${helper_args_common[@]}" --state "${target_state}" --from-state "Needs Review" 2>&1)"
+state_rc=$?
+set -e
+
 workpad_append_status="$(awk -F= '/^WORKPAD_STATUS=/{print $2}' <<< "${workpad_append_output}" | tail -n 1)"
 state_status="$(awk -F= '/^LINEAR_STATE_STATUS=/{print $2}' <<< "${state_output}" | tail -n 1)"
+
+if [[ "${state_rc}" -ne 0 ]]; then
+  state_error="$(awk -F= '/^LINEAR_STATE_ERROR=/{sub(/^LINEAR_STATE_ERROR=/, ""); print}' <<< "${state_output}" | tail -n 1)"
+  payload="$(jq -cn \
+    --arg status "error" \
+    --arg issue_identifier "${issue_identifier}" \
+    --arg branch "${branch}" \
+    --arg head_sha "${head_sha}" \
+    --arg from_state "Needs Review" \
+    --arg to_state "${target_state}" \
+    --arg reason "state_transition_failed" \
+    --arg details "${state_output}" \
+    --arg state_error "${state_error}" \
+    --arg workpad_status "${workpad_append_status}" \
+    --arg state_status "${state_status}" '
+    {
+      needs_review_claim_status: $status,
+      needs_review_claim_issue_identifier: $issue_identifier,
+      needs_review_claim_branch: $branch,
+      needs_review_claim_head_sha: $head_sha,
+      needs_review_claim_from_state: $from_state,
+      needs_review_claim_to_state: $to_state,
+      needs_review_claim_reason: $reason,
+      needs_review_claim_details: $details,
+      needs_review_claim_state_error: $state_error,
+      needs_review_claim_workpad_status: $workpad_status,
+      needs_review_claim_state_status: $state_status
+    }')"
+  emit_payload "${payload}"
+  exit 3
+fi
 
 payload="$(jq -cn \
   --arg status "${claim_status}" \

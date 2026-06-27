@@ -52,6 +52,7 @@ class PDFDocument(BaseModel):
     chunk_count: int = Field(default=0, ge=0)
     vector_count: int = Field(default=0, ge=0)
     metadata: DocumentMetadata
+    source_provenance: Optional[Dict[str, Any]] = Field(default=None)
 
     @field_validator('filename')
     @classmethod

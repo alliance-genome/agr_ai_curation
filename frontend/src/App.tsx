@@ -99,6 +99,7 @@ const PersistentPdfWorkspaceLayout = lazy(() => import('./components/pdfViewer/P
 const Settings = lazy(() => import('./pages/weaviate/Settings'))
 const DocumentDetail = lazy(() => import('./pages/weaviate/DocumentDetail'))
 const DocumentsPage = lazy(() => import('./pages/weaviate/DocumentsPage'))
+const AddLiteraturePage = lazy(() => import('./pages/weaviate/AddLiteraturePage'))
 const Dashboard = lazy(() => import('./pages/weaviate/Dashboard'))
 const EmbeddingsSettings = lazy(() => import('./pages/weaviate/settings/EmbeddingsSettings'))
 const DatabaseSettings = lazy(() => import('./pages/weaviate/settings/DatabaseSettings'))
@@ -282,6 +283,10 @@ export function AppContent() {
   const { user, logout, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const normalizedPathname = location.pathname.replace(/\/+$/, '');
+  const suppressChangelogDialog =
+    normalizedPathname === '/weaviate/add-literature' ||
+    normalizedPathname === '/weaviate/documents/import-mock';
   const lastAuthenticatedUserIdRef = React.useRef<string | null>(isAuthenticated ? user?.uid ?? null : null);
   const [logoutDialogOpen, setLogoutDialogOpen] = useState(false);
   const [changelogDialogOpen, setChangelogDialogOpen] = useState(false);
@@ -333,7 +338,7 @@ export function AppContent() {
   }, [markLatestChangelogSeen, navigate]);
 
   useEffect(() => {
-    if (!isAuthenticated || !user?.uid || !POPUP_CHANGELOG_ENTRY) {
+    if (suppressChangelogDialog || !isAuthenticated || !user?.uid || !POPUP_CHANGELOG_ENTRY) {
       setChangelogDialogOpen(false);
       return;
     }
@@ -346,7 +351,7 @@ export function AppContent() {
     if (!lastSeenId.ok || lastSeenId.value !== POPUP_CHANGELOG_ENTRY.id) {
       setChangelogDialogOpen(true);
     }
-  }, [isAuthenticated, user?.uid]);
+  }, [isAuthenticated, suppressChangelogDialog, user?.uid]);
 
   useEffect(() => {
     const onGlobalToast = (event: Event) => {
@@ -424,7 +429,11 @@ export function AppContent() {
     }
 
     const pollNotifications = async () => {
-      const onDocumentsPage = location.pathname.startsWith('/weaviate/documents');
+      const currentPathname = location.pathname.replace(/\/+$/, '');
+      const onDocumentsPage =
+        currentPathname === '/weaviate/documents' ||
+        (currentPathname.startsWith('/weaviate/documents/') &&
+          currentPathname !== '/weaviate/documents/import-mock');
       const onBatchPage = location.pathname.startsWith('/batch');
 
       if (!onDocumentsPage) {
@@ -542,16 +551,29 @@ export function AppContent() {
       }}
     >
       <AppBar position="fixed" sx={{ zIndex: (theme) => theme.zIndex.drawer + 1 }}>
-        <Toolbar>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexGrow: 1 }}>
+        <Toolbar
+          sx={{
+            gap: { xs: 1, md: 0 },
+            overflowX: { xs: 'auto', md: 'visible' },
+            overflowY: 'hidden',
+            whiteSpace: 'nowrap',
+            '&::-webkit-scrollbar': {
+              display: 'none',
+            },
+            scrollbarWidth: 'none',
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexGrow: { xs: 0, md: 1 }, flexShrink: 0 }}>
             <Typography
               variant="h1"
               component={Link}
               to="/"
+              noWrap
               sx={{
                 textDecoration: 'none',
                 color: 'inherit',
                 cursor: 'pointer',
+                maxWidth: { xs: 220, sm: 300 },
                 '&:hover': {
                   opacity: 0.9
                 }
@@ -786,6 +808,8 @@ export function AppContent() {
           <Route path="/weaviate/*" element={<WeaviateLayout />}>
             <Route index element={<Navigate to="/weaviate/documents" replace />} />
             <Route path="documents" element={renderLazyRoute(<DocumentsPage />)} />
+            <Route path="add-literature" element={renderLazyRoute(<AddLiteraturePage />)} />
+            <Route path="documents/import-mock" element={renderLazyRoute(<AddLiteraturePage />)} />
             <Route path="documents/:id" element={renderLazyRoute(<DocumentDetail />)} />
             <Route path="dashboard" element={renderLazyRoute(<Dashboard />)} />
             <Route path="settings" element={renderLazyRoute(<Settings />)} />

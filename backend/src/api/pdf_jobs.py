@@ -182,6 +182,6 @@ async def cancel_pdf_job(
     if updated.status in {PdfJobStatus.COMPLETED.value, PdfJobStatus.FAILED.value, PdfJobStatus.CANCELLED.value}:
         message = f"Job already terminal ({updated.status}); no cancellation needed"
     else:
-        message = "Cancellation requested; remote extraction termination is best-effort"
+        message = "Cancellation requested; background processing termination is best-effort"
 
     return CancelPdfJobResponse(success=True, message=message, job=updated)

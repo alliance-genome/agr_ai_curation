@@ -53,6 +53,47 @@ class PDFDocument(Base):
     # Stores: sections, top_level_sections, created_at, model_used, llm_raw_response
     hierarchy_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
+    # Optional upstream document-source provenance for ABC Literature imports.
+    source_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_provider_reference_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    source_provider_reference_curie: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+    )
+    source_provider_source_file_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    source_provider_converted_artifact_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    source_provider_pdf_artifact_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    source_external_ids: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    source_md5: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_file_class: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    source_file_extension: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source_artifact_status: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    source_import_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_imported_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    source_payload_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    source_markdown_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    source_access_scope: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source_access_mods: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    viewer_mode: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     # User ownership (T007: Alembic migration a7f8b9c0d1e2)
     # Foreign key to users table for multi-tenant data isolation (FR-012, FR-016)
     user_id: Mapped[int | None] = mapped_column(

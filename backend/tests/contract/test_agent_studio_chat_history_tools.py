@@ -12,6 +12,10 @@ from src.api import agent_studio as api_module
 from src.lib.chat_history_repository import AGENT_STUDIO_CHAT_KIND, ALL_CHAT_KINDS_SENTINEL
 
 
+HISTORY_TOOLS_SESSION_ID = "agent-studio-history-tools-session"
+HISTORY_TOOLS_TURN_ID = "agent-studio-history-tools-turn-1"
+
+
 def _consume_sse_events(stream_response) -> list[dict]:
     events: list[dict] = []
     for line in stream_response.iter_lines():
@@ -101,8 +105,8 @@ def test_agent_studio_chat_endpoint_registers_chat_history_tools_on_the_wire(
         api_module,
         "_prepare_agent_studio_turn",
         lambda *, request, **_kwargs: api_module.PreparedAgentStudioTurn(
-            session_id="agent-studio-session-1",
-            turn_id="opus-turn-1",
+            session_id=HISTORY_TOOLS_SESSION_ID,
+            turn_id=HISTORY_TOOLS_TURN_ID,
             user_message=request.messages[-1].content,
             requested_context_session_id=request.context.session_id if request.context else None,
             user_turn_created=False,

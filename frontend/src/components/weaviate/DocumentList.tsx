@@ -42,6 +42,7 @@ import DocumentDownloadDialog from './DocumentDownloadDialog';
 import EditDocumentDialog from './EditDocumentDialog';
 import {
   DocumentSummary,
+  DocumentSourceProvenance,
   usePdfExtractionHealth,
 } from '../../services/weaviate';
 import { emitGlobalToast } from '../../lib/globalNotifications';
@@ -127,6 +128,62 @@ const compareDateValues = (left: unknown, right: unknown): number => {
   };
 
   return compareNumberValues(toTimestamp(left), toTimestamp(right));
+};
+
+const formatProviderLabel = (provider?: string | null): string => {
+  if (!provider) {
+    return 'Local PDF';
+  }
+  if (provider === 'abc_literature') {
+    return 'ABC Literature';
+  }
+  return provider
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+};
+
+const firstExternalIdentifier = (
+  externalIds?: Record<string, string | string[]> | null
+): string | null => {
+  if (!externalIds) {
+    return null;
+  }
+
+  const preferredKeys = ['pmid', 'pmcid', 'doi', 'fbrf'];
+  for (const key of preferredKeys) {
+    const match = Object.entries(externalIds).find(
+      ([candidate]) => candidate.toLowerCase() === key
+    );
+    if (!match) {
+      continue;
+    }
+    const [label, rawValue] = match;
+    const value = Array.isArray(rawValue) ? rawValue[0] : rawValue;
+    if (value) {
+      return `${label.toUpperCase()}: ${value}`;
+    }
+  }
+
+  const firstEntry = Object.entries(externalIds)[0];
+  if (!firstEntry) {
+    return null;
+  }
+  const [label, rawValue] = firstEntry;
+  const value = Array.isArray(rawValue) ? rawValue[0] : rawValue;
+  return value ? `${label.toUpperCase()}: ${value}` : null;
+};
+
+const sourceReferenceLabel = (source?: DocumentSourceProvenance | null): string => {
+  if (!source) {
+    return 'Uploaded PDF';
+  }
+  return (
+    source.referenceCurie ||
+    source.referenceId ||
+    firstExternalIdentifier(source.externalIds) ||
+    source.sourceMd5 ||
+    'Provider import'
+  );
 };
 
 const DocumentList: React.FC<DocumentListProps> = ({
@@ -387,6 +444,47 @@ const DocumentList: React.FC<DocumentListProps> = ({
       filterable: true,
       sortComparator: compareTextValues,
       valueFormatter: (params) => params.value || '—',
+    },
+    {
+      field: 'sourceProvenance',
+      headerName: 'Source',
+      flex: 1.2,
+      minWidth: 180,
+      sortable: false,
+      filterable: false,
+      renderCell: (params: GridRenderCellParams<DocumentSummary, DocumentSourceProvenance | null>) => {
+        const source = params.value ?? params.row.sourceProvenance ?? null;
+        const providerLabel = formatProviderLabel(source?.provider);
+        const referenceLabel = sourceReferenceLabel(source);
+        const statusLabel = source?.importStatus ?? source?.artifactStatus ?? null;
+
+        return (
+          <Stack spacing={0.25} sx={{ minWidth: 0, py: 0.5 }}>
+            <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
+              <Chip
+                label={providerLabel}
+                size="small"
+                variant={source ? 'filled' : 'outlined'}
+                color={source ? 'primary' : 'default'}
+                sx={{ maxWidth: 140 }}
+              />
+              {statusLabel && (
+                <Chip label={statusLabel} size="small" variant="outlined" sx={{ maxWidth: 100 }} />
+              )}
+            </Stack>
+            <Tooltip title={referenceLabel}>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                noWrap
+                sx={{ display: 'block', maxWidth: '100%' }}
+              >
+                {referenceLabel}
+              </Typography>
+            </Tooltip>
+          </Stack>
+        );
+      },
     },
     {
       field: 'fileSize',
