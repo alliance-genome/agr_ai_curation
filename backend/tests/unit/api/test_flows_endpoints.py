@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 import inspect
 import importlib
+import logging
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -15,6 +16,7 @@ from src.schemas.flows import (
     FlowValidationAttachmentSelection,
     UpdateFlowRequest,
 )
+from src.lib import http_errors
 
 flows = importlib.import_module("src.api.flows")
 
@@ -279,7 +281,10 @@ async def test_create_flow_maps_unique_integrity_error_to_409(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_create_flow_maps_other_integrity_error_to_500(monkeypatch):
+async def test_create_flow_maps_other_integrity_error_to_500(monkeypatch, caplog):
+    report_calls = []
+    secret_text = "SECRET_FLOW_DEFINITION_SHOULD_NOT_APPEAR"
+
     class _DB:
         def add(self, _obj):
             return None
@@ -287,8 +292,8 @@ async def test_create_flow_maps_other_integrity_error_to_500(monkeypatch):
         def commit(self):
             raise IntegrityError(
                 statement="insert into curation_flows",
-                params={},
-                orig=Exception("some other integrity error"),
+                params={"flow_definition": secret_text},
+                orig=Exception(f"some other integrity error {secret_text}"),
             )
 
         def rollback(self):
@@ -300,6 +305,13 @@ async def test_create_flow_maps_other_integrity_error_to_500(monkeypatch):
     db = _DB()
     monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_args, **_kwargs: SimpleNamespace(id=17))
 
+    def _fake_report_runtime_exception(exc, **kwargs):
+        report_calls.append((exc, kwargs))
+        return True
+
+    monkeypatch.setattr(http_errors, "report_runtime_exception", _fake_report_runtime_exception)
+    caplog.set_level(logging.ERROR, logger=flows.logger.name)
+
     with pytest.raises(HTTPException) as exc:
         await flows.create_flow(
             request=CreateFlowRequest(name="Err", description=None, flow_definition=_flow_definition()),
@@ -307,6 +319,18 @@ async def test_create_flow_maps_other_integrity_error_to_500(monkeypatch):
             db=db,
         )
     assert exc.value.status_code == 500
+    assert exc.value.detail == "Database error while creating flow"
+    assert db.rolled_back is True
+    assert len(report_calls) == 1
+    assert isinstance(report_calls[0][0], flows._FlowDatabaseError)
+    assert "Exception" in str(report_calls[0][0])
+    assert secret_text not in str(report_calls[0][0])
+    assert report_calls[0][0].__traceback__ is not None
+    assert report_calls[0][1]["component"] == "api"
+    assert report_calls[0][1]["operation"] == "sanitized_http_exception"
+    assert report_calls[0][1]["context"]["logger_name"] == flows.logger.name
+    assert report_calls[0][1]["context"]["status_code"] == 500
+    assert secret_text not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -403,6 +427,58 @@ async def test_update_flow_maps_unique_integrity_error_to_409(monkeypatch):
             db=db,
         )
     assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_update_flow_maps_other_integrity_error_to_500(monkeypatch, caplog):
+    report_calls = []
+    secret_text = "SECRET_FLOW_UPDATE_SHOULD_NOT_APPEAR"
+    flow_obj = _flow(name="Before")
+
+    class _DB:
+        def commit(self):
+            raise IntegrityError(
+                statement="update curation_flows",
+                params={"flow_definition": secret_text},
+                orig=Exception(f"some other integrity error {secret_text}"),
+            )
+
+        def rollback(self):
+            self.rolled_back = True
+
+        def refresh(self, _obj):
+            return None
+
+    db = _DB()
+    monkeypatch.setattr(flows, "verify_flow_ownership", lambda *_args, **_kwargs: flow_obj)
+
+    def _fake_report_runtime_exception(exc, **kwargs):
+        report_calls.append((exc, kwargs))
+        return True
+
+    monkeypatch.setattr(http_errors, "report_runtime_exception", _fake_report_runtime_exception)
+    caplog.set_level(logging.ERROR, logger=flows.logger.name)
+
+    with pytest.raises(HTTPException) as exc:
+        await flows.update_flow(
+            flow_id=flow_obj.id,
+            request=UpdateFlowRequest(name="After", description=None),
+            user={"sub": "u1"},
+            db=db,
+        )
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "Database error while updating flow"
+    assert db.rolled_back is True
+    assert len(report_calls) == 1
+    assert isinstance(report_calls[0][0], flows._FlowDatabaseError)
+    assert "Exception" in str(report_calls[0][0])
+    assert secret_text not in str(report_calls[0][0])
+    assert report_calls[0][0].__traceback__ is not None
+    assert report_calls[0][1]["component"] == "api"
+    assert report_calls[0][1]["operation"] == "sanitized_http_exception"
+    assert report_calls[0][1]["context"]["logger_name"] == flows.logger.name
+    assert report_calls[0][1]["context"]["status_code"] == 500
+    assert secret_text not in caplog.text
 
 
 @pytest.mark.asyncio

@@ -61,6 +61,16 @@ router = APIRouter(prefix="/api/flows")
 DEFAULT_FLOW_LIST_PAGE_SIZE = get_flow_list_page_size_default()
 
 
+class _FlowDatabaseError(RuntimeError):
+    """Sanitized flow database failure safe for logs and Sentry."""
+
+
+def _sanitized_flow_db_error(exc: IntegrityError, *, operation: str) -> _FlowDatabaseError:
+    return _FlowDatabaseError(
+        f"Flow {operation} failed ({type(exc.orig).__name__})"
+    ).with_traceback(exc.__traceback__)
+
+
 def _validated_flow_definition_payload(
     flow_definition: FlowDefinition,
     *,
@@ -515,10 +525,12 @@ async def create_flow(
                 detail="A flow with this name already exists"
             )
         # Wrap other integrity errors to avoid exposing database internals
-        logger.error('Unexpected IntegrityError creating flow: %s', e)
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
-            detail="Database error while creating flow"
+            detail="Database error while creating flow",
+            log_message="Unexpected database integrity error creating flow",
+            exc=_sanitized_flow_db_error(e, operation="create"),
         )
 
     logger.info("Created flow %s '%s' for user %s", flow.id, flow.name, db_user.id)
@@ -592,7 +604,6 @@ async def update_flow(
             db.refresh(flow)
             logger.info('[Flow Update] Success - flow %s updated_at now: %s', flow_id, flow.updated_at)
         except IntegrityError as e:
-            logger.error('[Flow Update] IntegrityError during commit: %s', e)
             db.rollback()
             # Check if it's a unique constraint violation on name
             if "uq_user_flow_name_active" in str(e.orig).lower():
@@ -601,10 +612,12 @@ async def update_flow(
                     detail="A flow with this name already exists"
                 )
             # Wrap other integrity errors to avoid exposing database internals
-            logger.error('Unexpected IntegrityError updating flow %s: %s', flow_id, e)
-            raise HTTPException(
+            raise_sanitized_http_exception(
+                logger,
                 status_code=500,
-                detail="Database error while updating flow"
+                detail="Database error while updating flow",
+                log_message=f"Unexpected database integrity error updating flow {flow_id}",
+                exc=_sanitized_flow_db_error(e, operation="update"),
             )
     else:
         logger.info('[Flow Update] No changes detected for flow %s', flow_id)
