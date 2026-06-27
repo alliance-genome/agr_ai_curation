@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+import subprocess
+import sys
+import textwrap
 from types import SimpleNamespace
 
 import pytest
@@ -198,6 +202,9 @@ def test_before_send_preserves_safe_runtime_exception_context_without_raw_ids():
                 "stages_completed_count": 2,
                 "validate_first": False,
                 "extraction_strategy": "auto",
+                "logger_name": "src.api.documents",
+                "level_name": "ERROR",
+                "status_code": 500,
                 "prompt": "curator free text",
                 "notes": {"raw_text": "should not survive"},
             }
@@ -230,6 +237,9 @@ def test_before_send_preserves_safe_runtime_exception_context_without_raw_ids():
     assert runtime_context["stages_completed_count"] == 2
     assert runtime_context["validate_first"] is False
     assert runtime_context["extraction_strategy"] == "auto"
+    assert runtime_context["logger_name"] == "src.api.documents"
+    assert runtime_context["level_name"] == "ERROR"
+    assert runtime_context["status_code"] == 500
     assert runtime_context["prompt"] == "[Filtered]"
     assert runtime_context["notes"]["raw_text"] == "[Filtered]"
     assert scrubbed["exception"]["values"][0]["value"] == "[Filtered]"
@@ -316,15 +326,29 @@ def test_initialize_sentry_calls_sdk_with_safe_options(monkeypatch):
         def set_tag(self, key, value):
             calls.setdefault("tags", {})[key] = value
 
-    class FakeIntegration:
-        def __init__(self):
-            calls.setdefault("integrations", 0)
-            calls["integrations"] += 1
+    class FakeFastApiIntegration:
+        def __init__(self, **kwargs):
+            calls["fastapi_integration"] = kwargs
+
+    class FakeStarletteIntegration:
+        def __init__(self, **kwargs):
+            calls["starlette_integration"] = kwargs
+
+    class FakeLoggingIntegration:
+        def __init__(self, **kwargs):
+            calls["logging_integration"] = kwargs
 
     fake_modules = {
         "sentry_sdk": FakeSentrySdk(),
-        "sentry_sdk.integrations.fastapi": SimpleNamespace(FastApiIntegration=FakeIntegration),
-        "sentry_sdk.integrations.starlette": SimpleNamespace(StarletteIntegration=FakeIntegration),
+        "sentry_sdk.integrations.fastapi": SimpleNamespace(
+            FastApiIntegration=FakeFastApiIntegration
+        ),
+        "sentry_sdk.integrations.logging": SimpleNamespace(
+            LoggingIntegration=FakeLoggingIntegration
+        ),
+        "sentry_sdk.integrations.starlette": SimpleNamespace(
+            StarletteIntegration=FakeStarletteIntegration
+        ),
     }
 
     def fake_import(name: str):
@@ -347,7 +371,17 @@ def test_initialize_sentry_calls_sdk_with_safe_options(monkeypatch):
     assert init["before_send_transaction"] is sentry.before_send_transaction
     assert init["include_local_variables"] is False
     assert init["send_default_pii"] is False
-    assert len(init["integrations"]) == 2
+    assert len(init["integrations"]) == 3
+    assert calls["starlette_integration"] == {
+        "failed_request_status_codes": set(),
+    }
+    assert calls["fastapi_integration"] == {
+        "failed_request_status_codes": set(),
+    }
+    assert calls["logging_integration"] == {
+        "level": logging.INFO,
+        "event_level": None,
+    }
     assert calls["tags"] == {"app": "ai-curation", "component": "backend"}
 
 
@@ -362,11 +396,13 @@ def test_initialize_sentry_omits_tracing_when_unset(monkeypatch):
             calls.setdefault("tags", {})[key] = value
 
     class FakeIntegration:
-        pass
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
 
     fake_modules = {
         "sentry_sdk": FakeSentrySdk(),
         "sentry_sdk.integrations.fastapi": SimpleNamespace(FastApiIntegration=FakeIntegration),
+        "sentry_sdk.integrations.logging": SimpleNamespace(LoggingIntegration=FakeIntegration),
         "sentry_sdk.integrations.starlette": SimpleNamespace(StarletteIntegration=FakeIntegration),
     }
     monkeypatch.setattr(sentry.importlib, "import_module", lambda name: fake_modules[name])
@@ -386,11 +422,13 @@ def test_initialize_sentry_sdk_init_failure_is_non_fatal(monkeypatch):
             raise AssertionError("tags should not be set after init failure")
 
     class FakeIntegration:
-        pass
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
 
     fake_modules = {
         "sentry_sdk": FakeSentrySdk(),
         "sentry_sdk.integrations.fastapi": SimpleNamespace(FastApiIntegration=FakeIntegration),
+        "sentry_sdk.integrations.logging": SimpleNamespace(LoggingIntegration=FakeIntegration),
         "sentry_sdk.integrations.starlette": SimpleNamespace(StarletteIntegration=FakeIntegration),
     }
     monkeypatch.setattr(sentry.importlib, "import_module", lambda name: fake_modules[name])
@@ -422,11 +460,13 @@ def test_initialize_sentry_allows_http_only_with_explicit_flag(monkeypatch):
             calls.setdefault("tags", {})[key] = value
 
     class FakeIntegration:
-        pass
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
 
     fake_modules = {
         "sentry_sdk": FakeSentrySdk(),
         "sentry_sdk.integrations.fastapi": SimpleNamespace(FastApiIntegration=FakeIntegration),
+        "sentry_sdk.integrations.logging": SimpleNamespace(LoggingIntegration=FakeIntegration),
         "sentry_sdk.integrations.starlette": SimpleNamespace(StarletteIntegration=FakeIntegration),
     }
     monkeypatch.setattr(sentry.importlib, "import_module", lambda name: fake_modules[name])
@@ -435,3 +475,75 @@ def test_initialize_sentry_allows_http_only_with_explicit_flag(monkeypatch):
 
     assert sentry.initialize_sentry_if_configured() is True
     assert calls["dsn"] == "http://public@example.invalid/1"
+
+
+def test_sanitized_http_exception_emits_one_real_sentry_event_with_framework_integrations():
+    """Regression test for duplicate handled-HTTPException events from Starlette."""
+
+    pytest.importorskip("sentry_sdk")
+    script = textwrap.dedent(
+        """
+        import logging
+
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.logging import LoggingIntegration
+        from sentry_sdk.integrations.starlette import StarletteIntegration
+
+        from src.lib.http_errors import raise_sanitized_http_exception
+
+        events = []
+
+        def transport(event):
+            events.append(event)
+
+        sentry_sdk.init(
+            dsn="http://public@example.invalid/1",
+            transport=transport,
+            include_local_variables=False,
+            send_default_pii=False,
+            integrations=[
+                StarletteIntegration(failed_request_status_codes=set()),
+                FastApiIntegration(failed_request_status_codes=set()),
+                LoggingIntegration(level=logging.INFO, event_level=None),
+            ],
+            default_integrations=True,
+        )
+
+        app = FastAPI()
+
+        @app.get("/sanitized")
+        def sanitized():
+            try:
+                raise RuntimeError("synthetic sanitized failure")
+            except Exception as exc:
+                raise_sanitized_http_exception(
+                    logging.getLogger("test.api"),
+                    status_code=500,
+                    detail="safe detail",
+                    log_message="safe log",
+                    exc=exc,
+                )
+
+        response = TestClient(app, raise_server_exceptions=False).get("/sanitized")
+        if response.status_code != 500:
+            raise AssertionError(f"unexpected status {response.status_code}")
+        if len(events) != 1:
+            raise AssertionError(f"expected one Sentry event, got {len(events)}")
+        values = events[0].get("exception", {}).get("values", [])
+        exception_types = [value.get("type") for value in values]
+        if exception_types != ["RuntimeError"]:
+            raise AssertionError(f"unexpected exception chain {exception_types!r}")
+        """
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr + completed.stdout

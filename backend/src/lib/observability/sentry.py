@@ -79,7 +79,14 @@ _RUNTIME_IDENTIFIER_CONTEXT_KEYS = {
     "trace_id",
     "turn_id",
 }
-_RUNTIME_TEXT_CONTEXT_KEYS = {"component", "extraction_strategy", "operation", "type"}
+_RUNTIME_TEXT_CONTEXT_KEYS = {
+    "component",
+    "extraction_strategy",
+    "level_name",
+    "logger_name",
+    "operation",
+    "type",
+}
 _RUNTIME_TEXT_LIST_CONTEXT_KEYS = {"stages_completed"}
 
 _SECRET_PATTERNS = (
@@ -485,6 +492,7 @@ def initialize_sentry_if_configured() -> bool:
     try:
         sentry_sdk = importlib.import_module("sentry_sdk")
         fastapi_integration = importlib.import_module("sentry_sdk.integrations.fastapi")
+        logging_integration = importlib.import_module("sentry_sdk.integrations.logging")
         starlette_integration = importlib.import_module("sentry_sdk.integrations.starlette")
     except Exception as exc:
         logger.warning("Sentry SDK is not available: %s", exc)
@@ -499,8 +507,18 @@ def initialize_sentry_if_configured() -> bool:
         "include_local_variables": False,
         "send_default_pii": False,
         "integrations": [
-            starlette_integration.StarletteIntegration(),
-            fastapi_integration.FastApiIntegration(),
+            # Explicit runtime helpers report sanitized 5xx HTTP failures; avoid
+            # a second handled-HTTPException event from the framework integration.
+            starlette_integration.StarletteIntegration(
+                failed_request_status_codes=set(),
+            ),
+            fastapi_integration.FastApiIntegration(
+                failed_request_status_codes=set(),
+            ),
+            logging_integration.LoggingIntegration(
+                level=logging.INFO,
+                event_level=None,
+            ),
         ],
         "default_integrations": True,
     }
