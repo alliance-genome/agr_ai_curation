@@ -213,7 +213,7 @@ def _scrub_value(value: Any, *, key: str = "", depth: int = 0) -> Any:
     return value
 
 
-def _strip_query_string(url: str) -> str:
+def _redact_request_url(url: str) -> str:
     if not url:
         return url
     parsed = urlsplit(url)
@@ -421,7 +421,7 @@ def _redact_event(event: dict[str, Any]) -> dict[str, Any]:
         request.pop("data", None)
         request.pop("cookies", None)
         if isinstance(request.get("url"), str):
-            request["url"] = _strip_query_string(request["url"])
+            request["url"] = _redact_request_url(request["url"])
 
     for key in ("message", "logentry"):
         if key in scrubbed:

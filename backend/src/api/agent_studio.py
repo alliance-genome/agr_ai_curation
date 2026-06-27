@@ -4098,14 +4098,21 @@ async def get_trace_context(
             detail="Trace service temporarily unavailable"
         )
     except TraceContextError as e:
-        logger.error('Trace context extraction failed: %s', e, exc_info=True)
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
-            detail="Failed to extract trace context"
+            detail="Failed to extract trace context",
+            log_message="Trace context extraction failed",
+            exc=e,
         )
     except Exception as e:
-        logger.error('Unexpected error getting trace context: %s', e, exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Internal server error",
+            log_message="Unexpected error getting trace context",
+            exc=e,
+        )
 
 
 # ============================================================================

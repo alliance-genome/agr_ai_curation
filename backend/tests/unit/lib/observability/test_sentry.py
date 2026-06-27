@@ -119,6 +119,29 @@ def test_before_send_redacts_sensitive_and_document_content():
     assert "vars" not in scrubbed["threads"]["values"][0]["stacktrace"]["frames"][0]
 
 
+def test_before_send_preserves_request_url_identifiers_but_strips_query_string():
+    event = {
+        "request": {
+            "url": (
+                "https://example.org/api/agent-studio/trace/"
+                "01784cd8-7512-4830-b5f5-a427502ab923/context"
+                "?token=secret"
+            ),
+            "query_string": "token=secret",
+        },
+    }
+
+    scrubbed = sentry.before_send(event)
+
+    assert scrubbed["request"]["url"] == (
+        "https://example.org/api/agent-studio/trace/"
+        "01784cd8-7512-4830-b5f5-a427502ab923/context"
+    )
+    assert "01784cd8-7512-4830-b5f5-a427502ab923" in scrubbed["request"]["url"]
+    assert "token=secret" not in scrubbed["request"]["url"]
+    assert "query_string" not in scrubbed["request"]
+
+
 def test_before_send_preserves_sentry_trace_context_and_redacts_custom_contexts():
     event = {
         "contexts": {
@@ -536,6 +559,87 @@ def test_sanitized_http_exception_emits_one_real_sentry_event_with_framework_int
         exception_types = [value.get("type") for value in values]
         if exception_types != ["RuntimeError"]:
             raise AssertionError(f"unexpected exception chain {exception_types!r}")
+        """
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr + completed.stdout
+
+
+def test_real_sentry_request_url_preserves_trace_id_path_parameter_without_query_string():
+    """Regression test for private operational IDs staying useful without query secrets."""
+
+    pytest.importorskip("sentry_sdk")
+    script = textwrap.dedent(
+        """
+        import logging
+
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.logging import LoggingIntegration
+        from sentry_sdk.integrations.starlette import StarletteIntegration
+
+        from src.lib.http_errors import raise_sanitized_http_exception
+        from src.lib.observability import sentry
+
+        events = []
+        trace_id = "01784cd8-7512-4830-b5f5-a427502ab923"
+
+        def transport(event):
+            events.append(event)
+
+        sentry_sdk.init(
+            dsn="http://public@example.invalid/1",
+            transport=transport,
+            include_local_variables=False,
+            send_default_pii=False,
+            before_send=sentry.before_send,
+            integrations=[
+                StarletteIntegration(failed_request_status_codes=set()),
+                FastApiIntegration(failed_request_status_codes=set()),
+                LoggingIntegration(level=logging.INFO, event_level=None),
+            ],
+            default_integrations=True,
+        )
+
+        app = FastAPI()
+
+        @app.get("/api/agent-studio/trace/{trace_id}/context")
+        def trace_context(trace_id: str):
+            try:
+                raise RuntimeError("synthetic trace context failure")
+            except Exception as exc:
+                raise_sanitized_http_exception(
+                    logging.getLogger("test.agent_studio.trace_context"),
+                    status_code=500,
+                    detail="safe detail",
+                    log_message="safe log",
+                    exc=exc,
+                )
+
+        response = TestClient(app, raise_server_exceptions=False).get(
+            f"/api/agent-studio/trace/{trace_id}/context"
+        )
+        if response.status_code != 500:
+            raise AssertionError(f"unexpected status {response.status_code}")
+        if len(events) != 1:
+            raise AssertionError(f"expected one Sentry event, got {len(events)}")
+        url = events[0].get("request", {}).get("url")
+        expected = f"http://testserver/api/agent-studio/trace/{trace_id}/context"
+        if url != expected:
+            raise AssertionError(f"unexpected sanitized url {url!r}")
+        if trace_id not in repr(events[0]):
+            raise AssertionError("raw trace id was removed from Sentry event")
+        if "token=secret" in repr(events[0]):
+            raise AssertionError("query secret survived in Sentry event")
         """
     )
 
