@@ -49,7 +49,7 @@ from src.lib.document_sources.registry import (
     get_configured_document_source_provider,
 )
 from src.lib.openai_agents.config import (
-    get_abc_literature_import_enabled,
+    get_document_source_import_enabled,
     get_document_source_provider,
 )
 from src.lib.pdf_limits import (
@@ -191,7 +191,7 @@ def external_document_source_import_enabled() -> bool:
     """Return whether upload intake should use an external source provider."""
 
     return (
-        get_abc_literature_import_enabled()
+        get_document_source_import_enabled()
         and get_document_source_provider().strip().lower() != LOCAL_PDF_PROVIDER_ID
     )
 

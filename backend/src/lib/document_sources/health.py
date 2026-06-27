@@ -13,7 +13,7 @@ from src.lib.document_sources.registry import (
     get_configured_document_source_provider,
 )
 from src.lib.openai_agents.config import (
-    get_abc_literature_import_enabled,
+    get_document_source_import_enabled,
     get_document_source_provider,
 )
 
@@ -29,13 +29,13 @@ _UNAVAILABLE_MESSAGE = "Document-source provider unavailable"
 async def check_configured_document_source_health() -> DocumentSourceHealth:
     """Return sanitized health for the configured document source.
 
-    External provider checks are strict only when ABC Literature import is
+    External provider checks are strict only when document-source import is
     enabled. The default local PDF flow remains handled by the existing upload
     stack and does not require a provider health check.
     """
 
     provider_id = get_document_source_provider().strip().lower()
-    import_enabled = get_abc_literature_import_enabled()
+    import_enabled = get_document_source_import_enabled()
 
     if not import_enabled:
         return DocumentSourceHealth(

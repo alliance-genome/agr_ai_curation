@@ -30,7 +30,7 @@ or ingestion failure marks it failed.
 ## Upload Checksum Preflight
 
 When `DOCUMENT_SOURCE_PROVIDER=abc_literature` and
-`ABC_LITERATURE_IMPORT_ENABLED=true`, uploaded PDFs use their MD5 checksum as a
+`DOCUMENT_SOURCE_IMPORT_ENABLED=true`, uploaded PDFs use their MD5 checksum as a
 provider preflight before any durable provider-backed import work is queued.
 
 | Provider decision | HTTP/API behavior | Local job behavior |

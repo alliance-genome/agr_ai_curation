@@ -229,7 +229,7 @@ class _FailingUploadHandler:
 def test_external_document_source_import_enabled_ignores_local_pdf_provider(monkeypatch):
     monkeypatch.setattr(
         upload_intake_module,
-        "get_abc_literature_import_enabled",
+        "get_document_source_import_enabled",
         lambda: True,
     )
     monkeypatch.setattr(

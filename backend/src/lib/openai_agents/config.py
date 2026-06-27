@@ -718,9 +718,9 @@ def get_supervisor_max_calls_per_specialist() -> int:
 # --- Document source / ABC Literature ---
 
 
-def get_abc_literature_import_enabled() -> bool:
-    """Feature flag for ABC Literature document import."""
-    return _get_env_bool("ABC_LITERATURE_IMPORT_ENABLED", False)
+def get_document_source_import_enabled() -> bool:
+    """Feature flag for external document-source import."""
+    return _get_env_bool("DOCUMENT_SOURCE_IMPORT_ENABLED", False)
 
 
 def get_document_source_provider() -> str:

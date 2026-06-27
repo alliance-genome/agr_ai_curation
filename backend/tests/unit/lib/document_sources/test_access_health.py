@@ -104,7 +104,7 @@ def test_build_document_source_request_context_accepts_comma_group_string() -> N
 @pytest.mark.asyncio
 async def test_document_source_health_disabled_does_not_construct_provider(monkeypatch):
     monkeypatch.setattr(
-        "src.lib.document_sources.health.get_abc_literature_import_enabled",
+        "src.lib.document_sources.health.get_document_source_import_enabled",
         lambda: False,
     )
     monkeypatch.setattr(
@@ -130,7 +130,7 @@ async def test_document_source_health_disabled_does_not_construct_provider(monke
 @pytest.mark.asyncio
 async def test_document_source_health_local_pdf_enabled_is_healthy(monkeypatch):
     monkeypatch.setattr(
-        "src.lib.document_sources.health.get_abc_literature_import_enabled",
+        "src.lib.document_sources.health.get_document_source_import_enabled",
         lambda: True,
     )
     monkeypatch.setattr(
@@ -148,7 +148,7 @@ async def test_document_source_health_local_pdf_enabled_is_healthy(monkeypatch):
 @pytest.mark.asyncio
 async def test_document_source_health_local_pdf_is_case_insensitive(monkeypatch):
     monkeypatch.setattr(
-        "src.lib.document_sources.health.get_abc_literature_import_enabled",
+        "src.lib.document_sources.health.get_document_source_import_enabled",
         lambda: True,
     )
     monkeypatch.setattr(
@@ -166,7 +166,7 @@ async def test_document_source_health_local_pdf_is_case_insensitive(monkeypatch)
 @pytest.mark.asyncio
 async def test_document_source_health_wraps_provider_config_error(monkeypatch):
     monkeypatch.setattr(
-        "src.lib.document_sources.health.get_abc_literature_import_enabled",
+        "src.lib.document_sources.health.get_document_source_import_enabled",
         lambda: True,
     )
     monkeypatch.setattr(
@@ -202,7 +202,7 @@ async def test_document_source_health_closes_provider(monkeypatch):
         )
     )
     monkeypatch.setattr(
-        "src.lib.document_sources.health.get_abc_literature_import_enabled",
+        "src.lib.document_sources.health.get_document_source_import_enabled",
         lambda: True,
     )
     monkeypatch.setattr(
@@ -234,7 +234,7 @@ async def test_document_source_health_sanitizes_unhealthy_provider_message(monke
         )
     )
     monkeypatch.setattr(
-        "src.lib.document_sources.health.get_abc_literature_import_enabled",
+        "src.lib.document_sources.health.get_document_source_import_enabled",
         lambda: True,
     )
     monkeypatch.setattr(

@@ -11,7 +11,7 @@ The default runtime remains the ordinary local PDF upload/extraction path:
 
 ```bash
 DOCUMENT_SOURCE_PROVIDER=local_pdf
-ABC_LITERATURE_IMPORT_ENABLED=false
+DOCUMENT_SOURCE_IMPORT_ENABLED=false
 ```
 
 Enable the ABC Literature import path only on stacks that have the Add
@@ -20,7 +20,7 @@ ABC Literature REST config in place:
 
 ```bash
 DOCUMENT_SOURCE_PROVIDER=abc_literature
-ABC_LITERATURE_IMPORT_ENABLED=true
+DOCUMENT_SOURCE_IMPORT_ENABLED=true
 ABC_LITERATURE_API_BASE_URL=https://stage-literature-rest.alliancegenome.org
 ```
 
@@ -30,7 +30,7 @@ Use the production REST base URL only after release approval:
 ABC_LITERATURE_API_BASE_URL=https://literature-rest.alliancegenome.org
 ```
 
-`ABC_LITERATURE_IMPORT_ENABLED=false` is the supported disable path. It does not
+`DOCUMENT_SOURCE_IMPORT_ENABLED=false` is the supported disable path. It does not
 delete imported documents, change existing document provenance, or enable any
 Literature mutation path. It leaves ordinary local PDF upload available through
 the existing `local_pdf` flow.
@@ -105,7 +105,7 @@ not replace these provider/readiness checks.
 
 Expected disabled/local behavior:
 
-- `ABC_LITERATURE_IMPORT_ENABLED=false`: document-source health is OK and
+- `DOCUMENT_SOURCE_IMPORT_ENABLED=false`: document-source health is OK and
   reports disabled; local PDF upload remains active.
 - `DOCUMENT_SOURCE_PROVIDER=local_pdf`: document-source health is OK and uses
   the local upload flow.
@@ -146,7 +146,7 @@ python3 scripts/testing/abc_literature_live_smoke.py --aws-profile ctabone
 To disable ABC Literature for new imports:
 
 ```bash
-ABC_LITERATURE_IMPORT_ENABLED=false
+DOCUMENT_SOURCE_IMPORT_ENABLED=false
 DOCUMENT_SOURCE_PROVIDER=local_pdf
 ```
 
