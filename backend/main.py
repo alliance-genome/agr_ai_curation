@@ -23,10 +23,10 @@ from src.api.admin import connections_router as admin_connections_router
 from src.api.admin import prompts_router as admin_prompts_router
 from src.config import get_app_version, get_pdf_storage_path
 from src.lib.logging_config import configure_logging, create_request_context_middleware
+from src.lib.observability.sentry import initialize_sentry_if_configured
 from src.lib.runtime_entrypoint import maybe_prepare_package_tool_environments_on_start
 from src.lib.storage_permissions import ensure_writable_directory
 from src.lib.weaviate_client.connection import WeaviateConnection, set_connection
-from src.lib.weaviate_client.settings import get_embedding_config
 from src.models.sql.database import SessionLocal
 
 configure_logging()
@@ -712,7 +712,7 @@ async def deep_health_check():
         with connection.session() as client:
             client.collections.list_all()
             health_status["services"]["weaviate"] = "connected"
-    except Exception as e:
+    except Exception:
         health_status["services"]["weaviate"] = "disconnected"
         health_status["status"] = "degraded"
 
@@ -744,6 +744,8 @@ async def deep_health_check():
 
 def create_app() -> FastAPI:
     """Create a FastAPI application instance."""
+    initialize_sentry_if_configured()
+
     application = FastAPI(
         title="AI Curation Platform API",
         description="Unified API for AI Chat (OpenAI Agents SDK) and Weaviate Control Panel",
@@ -753,7 +755,7 @@ def create_app() -> FastAPI:
 
     application.add_exception_handler(
         RequestValidationError,
-        validation_exception_handler,
+        validation_exception_handler,  # pyright: ignore[reportArgumentType]
     )
 
     application.add_middleware(
