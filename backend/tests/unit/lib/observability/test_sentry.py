@@ -152,11 +152,64 @@ def test_before_send_preserves_sentry_trace_context_and_redacts_custom_contexts(
     assert scrubbed["exception"]["values"][0]["value"] == "[Filtered]"
 
 
+def test_before_send_omits_malformed_trace_context_fields():
+    event = {
+        "contexts": {
+            "trace": {
+                "trace_id": "not-a-valid-trace-id",
+                "span_id": "not-a-span",
+                "parent_span_id": "fedcba9876543210",
+                "op": "search curator prompt text",
+                "origin": "auto.http.starlette",
+                "status": "unknown",
+                "type": "trace",
+                "sampled": "yes",
+                "client_sample_rate": 0.25,
+                "exclusive_time": True,
+            }
+        }
+    }
+
+    scrubbed = sentry.before_send(event)
+
+    assert scrubbed["contexts"]["trace"] == {
+        "parent_span_id": "fedcba9876543210",
+        "origin": "auto.http.starlette",
+        "status": "unknown",
+        "type": "trace",
+        "client_sample_rate": 0.25,
+    }
+
+
 def test_before_send_transaction_uses_same_redaction_policy():
     event = {
         "transaction": "GET /api/chat",
         "request": {"url": "https://example.org/api/chat?prompt=raw"},
         "extra": {"payload": "curator free text", "attempt": 2},
+        "contexts": {
+            "trace": {
+                "trace_id": "0123456789abcdef0123456789abcdef",
+                "span_id": "0123456789abcdef",
+                "op": "http.server",
+                "status": "ok",
+                "type": "trace",
+            }
+        },
+        "spans": [
+            {
+                "trace_id": "0123456789abcdef0123456789abcdef",
+                "span_id": "fedcba9876543210",
+                "parent_span_id": "0123456789abcdef",
+                "op": "db.query",
+                "status": "ok",
+                "description": "SELECT * FROM curator_prompt_text",
+                "data": {"prompt": "raw curator text", "row_count": 2},
+                "tags": {"paper_title": "free text"},
+                "start_timestamp": 1.25,
+                "timestamp": 1.75,
+            },
+            "unexpected span text",
+        ],
     }
 
     scrubbed = sentry.before_send_transaction(event)
@@ -164,6 +217,20 @@ def test_before_send_transaction_uses_same_redaction_policy():
     assert scrubbed["request"]["url"] == "https://example.org/api/chat"
     assert scrubbed["extra"]["payload"] == "[Filtered]"
     assert scrubbed["extra"]["attempt"] == 2
+    assert scrubbed["contexts"]["trace"]["trace_id"] == "0123456789abcdef0123456789abcdef"
+    assert scrubbed["spans"][0] == {
+        "trace_id": "0123456789abcdef0123456789abcdef",
+        "span_id": "fedcba9876543210",
+        "parent_span_id": "0123456789abcdef",
+        "op": "db.query",
+        "status": "ok",
+        "description": "[Filtered]",
+        "data": {"prompt": "[Filtered]", "row_count": 2},
+        "tags": {"paper_title": "[Filtered]"},
+        "start_timestamp": 1.25,
+        "timestamp": 1.75,
+    }
+    assert scrubbed["spans"][1] == "[Filtered]"
 
 
 def test_initialize_sentry_skips_without_dsn(monkeypatch):

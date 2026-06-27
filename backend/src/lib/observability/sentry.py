@@ -60,6 +60,13 @@ _TRACE_CONTEXT_KEYS = {
     "trace_id",
     "type",
 }
+_TRACE_ID_PATTERN = re.compile(r"^[0-9a-fA-F]{32}$")
+_SPAN_ID_PATTERN = re.compile(r"^[0-9a-fA-F]{16}$")
+_SAFE_TRACE_TEXT_PATTERN = re.compile(r"^[A-Za-z0-9_.:/-]{1,100}$")
+_TRACE_TEXT_KEYS = {"op", "origin", "status", "type"}
+_TRACE_NUMERIC_KEYS = {"client_sample_rate", "exclusive_time"}
+_TRACE_BOOLEAN_KEYS = {"sampled"}
+_SPAN_NUMERIC_KEYS = {"client_sample_rate", "exclusive_time", "start_timestamp", "timestamp"}
 
 _SECRET_PATTERNS = (
     re.compile(r"sk-[A-Za-z0-9_-]{16,}"),
@@ -211,6 +218,60 @@ def _redact_untrusted_strings(value: Any, *, depth: int = 0) -> Any:
     return value
 
 
+def _is_real_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _safe_trace_text(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+
+    scrubbed = _scrub_string(value.strip())
+    if scrubbed != value.strip():
+        return None
+    if not _SAFE_TRACE_TEXT_PATTERN.fullmatch(scrubbed):
+        return None
+    return scrubbed
+
+
+def _redact_trace_fields(trace_context: Mapping[str, Any]) -> dict[str, Any]:
+    """Preserve only schema-valid Sentry trace fields."""
+
+    redacted: dict[str, Any] = {}
+    for child_key, child_value in trace_context.items():
+        key = str(child_key)
+        if key not in _TRACE_CONTEXT_KEYS:
+            continue
+
+        if key == "trace_id":
+            value = str(child_value)
+            if _TRACE_ID_PATTERN.fullmatch(value):
+                redacted[key] = value
+            continue
+
+        if key in {"span_id", "parent_span_id"}:
+            value = str(child_value)
+            if _SPAN_ID_PATTERN.fullmatch(value):
+                redacted[key] = value
+            continue
+
+        if key in _TRACE_TEXT_KEYS:
+            safe_text = _safe_trace_text(child_value)
+            if safe_text is not None:
+                redacted[key] = safe_text
+            continue
+
+        if key in _TRACE_BOOLEAN_KEYS:
+            if isinstance(child_value, bool):
+                redacted[key] = child_value
+            continue
+
+        if key in _TRACE_NUMERIC_KEYS and _is_real_number(child_value):
+            redacted[key] = child_value
+
+    return redacted
+
+
 def _redact_contexts(contexts: dict[str, Any]) -> dict[str, Any]:
     """Redact custom contexts while preserving Sentry trace bookkeeping."""
 
@@ -218,14 +279,34 @@ def _redact_contexts(contexts: dict[str, Any]) -> dict[str, Any]:
     for context_key, context_value in contexts.items():
         normalized_key = str(context_key)
         if normalized_key == "trace" and isinstance(context_value, Mapping):
-            redacted[normalized_key] = {
-                str(child_key): _scrub_value(child_value, key=str(child_key))
-                for child_key, child_value in context_value.items()
-                if str(child_key) in _TRACE_CONTEXT_KEYS
-            }
+            redacted[normalized_key] = _redact_trace_fields(context_value)
             continue
 
         redacted[normalized_key] = _redact_untrusted_strings(context_value)
+
+    return redacted
+
+
+def _redact_spans(spans: list[Any]) -> list[Any]:
+    """Redact transaction span payloads while preserving low-risk trace fields."""
+
+    redacted: list[Any] = []
+    for span in spans:
+        if not isinstance(span, Mapping):
+            redacted.append(_redact_untrusted_strings(span))
+            continue
+
+        safe_span = _redact_trace_fields(span)
+        for key, value in span.items():
+            normalized_key = str(key)
+            if normalized_key in safe_span:
+                continue
+            if normalized_key in _SPAN_NUMERIC_KEYS and _is_real_number(value):
+                safe_span[normalized_key] = value
+            elif normalized_key in {"description", "data", "tags"}:
+                safe_span[normalized_key] = _redact_untrusted_strings(value)
+
+        redacted.append(safe_span)
 
     return redacted
 
@@ -274,6 +355,8 @@ def _redact_event(event: dict[str, Any]) -> dict[str, Any]:
         scrubbed["extra"] = _redact_untrusted_strings(scrubbed["extra"])
     if isinstance(scrubbed.get("contexts"), dict):
         scrubbed["contexts"] = _redact_contexts(scrubbed["contexts"])
+    if isinstance(scrubbed.get("spans"), list):
+        scrubbed["spans"] = _redact_spans(scrubbed["spans"])
 
     breadcrumbs = scrubbed.get("breadcrumbs")
     if isinstance(breadcrumbs, dict) and isinstance(breadcrumbs.get("values"), list):
