@@ -141,9 +141,9 @@ def test_create_saved_view_persists_view_and_sanitizes_queue_state(db_session):
         CurationSavedViewCreateRequest(
             name="  My pending sessions  ",
             description="  Sessions assigned to me  ",
-        filters={
-            "inventory_scope": "show_all",
-            "statuses": ["in_progress"],
+            filters={
+                "inventory_scope": "show_all",
+                "statuses": ["in_progress"],
                 "adapter_keys": ["gene"],
                 "curator_ids": ["user-1"],
                 "tags": [],

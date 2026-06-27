@@ -326,9 +326,9 @@ describe('curationInventoryService', () => {
       JSON.stringify({
         name: 'My pending sessions',
         description: 'Only my active work',
-          filters: {
-            inventory_scope: 'show_all',
-            statuses: ['in_progress'],
+        filters: {
+          inventory_scope: 'show_all',
+          statuses: ['in_progress'],
           adapter_keys: ['gene'],
           curator_ids: [],
           tags: [],
