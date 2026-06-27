@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 import pytest
 
 from src.api import chat, chat_common, chat_stream
+from src.lib import http_errors
 from src.lib.curation_workspace import extraction_results as extraction_results_module
 from src.lib.executable_runs import ExecutableRun
 from src.lib.openai_agents.evidence_summary import build_evidence_record_id
@@ -1965,9 +1966,15 @@ async def test_assistant_rescue_endpoint_sanitizes_validation_error(monkeypatch,
 
 def test_chat_stream_endpoint_raises_when_tool_map_resolution_fails(monkeypatch):
     """Regression: ALL-137 — tool-map resolution failure must fail closed, not silently disable extraction."""
+    calls = []
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
 
+    def _fake_report_runtime_exception(exc, **kwargs):
+        calls.append((exc, kwargs))
+        return True
+
+    monkeypatch.setattr(http_errors, "report_runtime_exception", _fake_report_runtime_exception)
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
     _patch_chat_impl(
@@ -2007,3 +2014,6 @@ def test_chat_stream_endpoint_raises_when_tool_map_resolution_fails(monkeypatch)
     assert exc.value.status_code == 500
     assert "Internal configuration error" in exc.value.detail
     assert not stream_infra_called, "Stream registration should not run when tool-map resolution fails"
+    assert len(calls) == 1
+    assert calls[0][1]["component"] == "api"
+    assert calls[0][1]["operation"] == "sanitized_http_exception"

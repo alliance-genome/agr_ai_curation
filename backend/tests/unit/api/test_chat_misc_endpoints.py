@@ -1692,8 +1692,15 @@ async def test_chat_endpoint_sanitizes_non_stream_validation_error(monkeypatch, 
 
 @pytest.mark.asyncio
 async def test_chat_endpoint_wraps_unexpected_exceptions(monkeypatch, caplog):
+    calls = []
     commits: list[str] = []
     repository = FakeChatHistoryRepository()
+
+    def _fake_report_runtime_exception(exc, **kwargs):
+        calls.append((exc, kwargs))
+        return True
+
+    monkeypatch.setattr(http_errors, "report_runtime_exception", _fake_report_runtime_exception)
     _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _sid: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
@@ -1719,6 +1726,45 @@ async def test_chat_endpoint_wraps_unexpected_exceptions(monkeypatch, caplog):
     assert commits == ["commit"]
     assert [call["role"] for call in repository.append_calls] == ["user"]
     assert "boom" in caplog.text
+    assert len(calls) == 1
+    assert calls[0][1]["component"] == "api"
+    assert calls[0][1]["operation"] == "sanitized_http_exception"
+
+
+@pytest.mark.asyncio
+async def test_chat_endpoint_reports_tool_map_resolution_failure(monkeypatch):
+    calls = []
+    commits: list[str] = []
+    repository = FakeChatHistoryRepository()
+
+    def _fake_report_runtime_exception(exc, **kwargs):
+        calls.append((exc, kwargs))
+        return True
+
+    def _raise_tool_map():
+        raise RuntimeError("agent registry unavailable")
+
+    monkeypatch.setattr(http_errors, "report_runtime_exception", _fake_report_runtime_exception)
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _sid: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", _raise_tool_map)
+
+    with pytest.raises(HTTPException) as exc:
+        await chat.chat_endpoint(
+            chat.ChatMessage(message="hello", session_id="session-1"),
+            {"sub": "user-1", "cognito:groups": []},
+            db=_db_stub(commits=commits),
+        )
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "Internal configuration error: unable to process chat request"
+    assert commits == ["commit"]
+    assert len(calls) == 1
+    assert calls[0][1]["component"] == "api"
+    assert calls[0][1]["operation"] == "sanitized_http_exception"
 
 
 @pytest.mark.asyncio

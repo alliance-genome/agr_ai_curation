@@ -181,15 +181,13 @@ async def chat_endpoint(
         tool_agent_map = get_supervisor_tool_agent_map()
     except Exception as exc:
         await _release_non_stream_turn_claim()
-        logger.error(
-            "Supervisor tool-map resolution failed; aborting chat run to prevent silent extraction data loss",
-            extra={"session_id": session_id, "user_id": user_id},
-            exc_info=True,
-        )
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
             detail="Internal configuration error: unable to process chat request",
-        ) from exc
+            log_message="Supervisor tool-map resolution failed; aborting chat run",
+            exc=exc,
+        )
 
     try:
         context_messages = [{"role": "user", "content": effective_user_message}]
@@ -351,13 +349,13 @@ async def chat_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(
-            "Chat error: %s",
-            e,
-            extra={"session_id": session_id, "user_id": user_id},
-            exc_info=True,
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to process chat request",
+            log_message="Chat error while processing non-stream request",
+            exc=e,
         )
-        raise HTTPException(status_code=500, detail="Failed to process chat request") from e
     finally:
         await _release_non_stream_turn_claim()
 
@@ -426,15 +424,13 @@ async def chat_stream_endpoint(
     try:
         tool_agent_map = get_supervisor_tool_agent_map()
     except Exception as exc:
-        logger.error(
-            "Supervisor tool-map resolution failed; aborting chat stream to prevent silent extraction data loss",
-            extra={"session_id": session_id, "user_id": user_id},
-            exc_info=True,
-        )
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
             detail="Internal configuration error: unable to process chat request",
-        ) from exc
+            log_message="Supervisor tool-map resolution failed; aborting chat stream",
+            exc=exc,
+        )
 
     generated_title_candidate: str | None = None
     stream_lifecycle = await _claim_active_stream_lifecycle(
