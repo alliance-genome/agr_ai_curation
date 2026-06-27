@@ -83,4 +83,3 @@ def test_get_document_detail_preserves_local_pdf_viewer_url():
 
     assert response.viewer_url == "/uploads/user123/paper.pdf"
     assert response.viewer_mode == "local_pdf"
-
