@@ -29,6 +29,7 @@ scripts/
 │   └── rerank_provider_smoke_local.sh  # Local rerank provider smoke across bedrock/local/none
 │   └── file_output_storage_preflight.sh # Deployment-stage probe for export temp/output writeability
 │   └── dev_release_smoke.py     # Deep dev-release smoke: upload, chat, custom flow, batch, optional rerank smoke, cleanup
+│   └── abc_literature_live_smoke.py # ABC Literature stage smoke with ephemeral Cognito users and evidence JSON
 │
 └── utilities/
     ├── check_services.sh               # Health check all Docker services
@@ -692,6 +693,213 @@ python3 scripts/testing/dev_release_smoke.py \
   --base-url http://localhost:8000 \
   --include-rerank-provider-smoke
 ```
+
+### testing/abc_literature_live_smoke.py
+
+Runs the durable ABC Literature stage smoke for release evidence:
+
+- creates one temporary authorized Cognito user and one temporary unauthorized
+  control user through boto3 using the selected AWS profile
+- gives the authorized user the configured Literature/MOD groups
+- obtains request-local bearer tokens through Cognito admin auth
+- runs `backend/tests/live_integration/test_abc_literature_live_smoke.py`
+  against the real Literature stage API
+- verifies `by_md5`, PMID/reference lookup, `show_all`, authorized
+  `download_file`, and unauthorized `download_file` -> `403`
+- deletes the temporary Cognito users in `finally`
+- writes non-secret evidence JSON under `file_outputs/temp/`
+
+Typical usage on the dev host:
+
+```bash
+python3 scripts/testing/abc_literature_live_smoke.py --aws-profile ctabone
+```
+
+Useful environment/CLI overrides:
+
+- `ABC_LITERATURE_SMOKE_AWS_PROFILE` / `--aws-profile`
+- `ABC_LITERATURE_SMOKE_USER_POOL_ID` / `--user-pool-id`
+- `ABC_LITERATURE_SMOKE_CLIENT_ID` / `--client-id`
+- `ABC_LITERATURE_SMOKE_CLIENT_SECRET` / `--client-secret`, only if the
+  Cognito app client requires one and the runner cannot discover it through
+  `describe-user-pool-client`
+- `ABC_LITERATURE_SMOKE_AUTHORIZED_GROUPS` / `--authorized-groups`
+- `ABC_LITERATURE_SMOKE_EVIDENCE_DIR` / `--evidence-dir`
+- `ABC_LITERATURE_SMOKE_PYTEST_TIMEOUT_SECONDS` / `--pytest-timeout-seconds`
+- `ABC_LITERATURE_SMOKE_AWS_API_TIMEOUT_SECONDS` / `--aws-api-timeout-seconds`
+- `ABC_LITERATURE_SMOKE_EVIDENCE_TAIL_LIMIT` / `--evidence-tail-limit`
+
+Evidence output:
+
+- `file_outputs/temp/abc_literature_live_smoke_<timestamp>.json`
+
+Do not use `--keep-users` for release evidence. It is a debugging escape hatch
+only; runs with retained users are marked `debug_keep_users` and exit nonzero.
+The normal smoke deletes the temporary Cognito users and does not write tokens,
+passwords, or Cognito client secrets into the evidence file.
+
+### testing/abc_literature_ready_upload_smoke.py
+
+Runs the durable end-to-end AI Curation upload smoke for an ABC Literature
+READY fixture:
+
+- authenticates as an existing test Cognito curator from local `.env` values
+  using either username/password or an already-issued IdToken
+- verifies the target backend is using real Cognito auth and an external
+  document-source provider, not the local PDF fallback
+- downloads the known ABC Literature source PDF fixture into a temporary
+  directory and verifies its MD5 before upload
+- posts the PDF to `/weaviate/documents/upload` using an `auth_token` cookie so
+  the backend can forward the request-local curator token to ABC
+- waits for provider Markdown ingestion to complete
+- verifies source provenance, PDF-backed download-info, chunks, source Markdown
+  download, and original-PDF download availability
+- deletes the uploaded document in `finally`
+- writes globally redacted, non-secret evidence JSON under `file_outputs/temp/`
+
+Typical usage on a backend configured with `AUTH_PROVIDER=cognito`,
+`ABC_LITERATURE_IMPORT_ENABLED=true`, and
+`DOCUMENT_SOURCE_PROVIDER=abc_literature`:
+
+```bash
+python3 scripts/testing/abc_literature_ready_upload_smoke.py \
+  --aws-profile ctabone \
+  --backend-base-url http://localhost:8000
+```
+
+Docker-first usage against a running Compose backend:
+
+```bash
+./scripts/testing/abc_literature_ready_upload_smoke_docker.sh
+```
+
+The Docker wrapper runs the smoke from the Compose `backend` image, builds a
+temporary smoke-only env file plus a temporary AWS config containing only the
+selected profile chain, mounts both read-only, and defaults the backend URL to
+`http://backend:8000` so the runner talks to the backend service over the
+Compose network. It also mounts `scripts/` into the one-off runner container so
+production-style backend images that do not bake test scripts can still execute
+the smoke, mounts `file_outputs/` so evidence persists on the host, and
+overrides the one-off entrypoint to `python` so production startup/bootstrap
+hooks are not run by the smoke container. Curator password, IdToken, and
+Cognito client secrets are read from the mounted smoke env file rather than
+passed as `docker compose run -e NAME=value` arguments. If
+`ABC_LITERATURE_READY_UPLOAD_SMOKE_CURATOR_ID_TOKEN` is set, the wrapper skips
+AWS credential setup because the runner does not need Cognito admin auth for
+that mode.
+
+Useful environment/CLI overrides:
+
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_BACKEND_BASE_URL` / `--backend-base-url`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_LITERATURE_BASE_URL` /
+  `--literature-base-url`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_ENV_FILE` / `--env-file`, local
+  uncommitted env file loaded for smoke defaults, default
+  `${HOME}/.agr_ai_curation/.env`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_AWS_PROFILE` / `--aws-profile`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_AWS_DIR` for the Docker wrapper's source
+  AWS config directory, default `${HOME}/.aws`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_COMPOSE_FILE` for the Docker wrapper's
+  Compose file, default `docker-compose.yml`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_BACKEND_SERVICE` for the Docker wrapper's
+  running backend service preflight, default `backend`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_DOCKER_SERVICE` for the Docker wrapper's
+  runner image service, default `backend`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_DOCKER_BACKEND_BASE_URL` for the Docker
+  wrapper's in-network backend URL, default `http://backend:8000`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_DOCKER_USER` for the one-off runner user,
+  default the host UID:GID running the wrapper, so persisted evidence files stay
+  writable by the checkout owner
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_USER_POOL_ID` / `--user-pool-id`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_CLIENT_ID` / `--client-id`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_CLIENT_SECRET` / `--client-secret`, only if
+  the Cognito app client requires one and the runner cannot discover it through
+  `describe-user-pool-client`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_AUTHORIZED_GROUPS` / `--authorized-groups`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_CURATOR_USERNAME` /
+  `--curator-username`, existing test curator username
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_CURATOR_PASSWORD` /
+  `--curator-password`, existing test curator password from local `.env`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_CURATOR_ID_TOKEN` /
+  `--curator-id-token`, optional short-lived token for manual runs instead of
+  username/password
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_EVIDENCE_DIR` / `--evidence-dir`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_HTTP_TIMEOUT_SECONDS` /
+  `--http-timeout-seconds`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_UPLOAD_TIMEOUT_SECONDS` /
+  `--upload-timeout-seconds`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_PROCESSING_TIMEOUT_SECONDS` /
+  `--processing-timeout-seconds`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_POLL_INTERVAL_SECONDS` /
+  `--poll-interval-seconds`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_AWS_API_TIMEOUT_SECONDS` /
+  `--aws-api-timeout-seconds`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_EVIDENCE_TAIL_LIMIT` /
+  `--evidence-tail-limit`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_KNOWN_MD5` / `--known-md5`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_PMID` / `--pmid`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_REFERENCE` / `--reference`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_SOURCE_REFERENCEFILE_ID` /
+  `--source-referencefile-id`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_CONVERTED_REFERENCEFILE_ID` /
+  `--converted-referencefile-id`
+- `ABC_LITERATURE_READY_UPLOAD_SMOKE_SOURCE_PDF_FILENAME` /
+  `--source-pdf-filename`
+
+Evidence output:
+
+- `file_outputs/temp/abc_literature_ready_upload_smoke_<timestamp>.json`
+
+Do not use `--keep-document` for release evidence. It is a debugging escape
+hatch; successful runs with the uploaded document retained exit nonzero with a
+`debug_keep_document` status. Normal runs delete the uploaded document and do
+not write tokens, passwords, Cognito client secrets, or PDF contents into the
+evidence file.
+
+### testing/abc_literature_identifier_import_smoke.py
+
+Runs the durable AI Curation identifier-import smoke for the same ABC
+Literature READY fixture, but enters through the backend identifier endpoint
+instead of uploading the PDF:
+
+- authenticates as the existing test Cognito curator using the same local
+  `.env` values as the READY upload smoke
+- independently downloads the expected ABC source PDF and converted Markdown
+  fixture for byte/hash comparison
+- posts `{"identifiers": "<identifier>"}` to
+  `/weaviate/documents/import/source-identifiers`
+- verifies the import response is PDF-backed with `viewer_mode=local_pdf`, the
+  expected source PDF artifact ID, and the expected converted Markdown artifact
+  ID
+- waits for processing completion, then reuses the READY smoke checks for
+  provenance, PDF-backed download-info, chunks, source Markdown download,
+  original-PDF download, cleanup, and secret-redacted evidence
+
+Typical usage:
+
+```bash
+python3 scripts/testing/abc_literature_identifier_import_smoke.py \
+  --aws-profile ctabone \
+  --backend-base-url http://localhost:8000
+```
+
+Docker-first usage against a running Compose backend:
+
+```bash
+./scripts/testing/abc_literature_identifier_import_smoke_docker.sh
+```
+
+The identifier Docker wrapper delegates to the READY upload wrapper's secure
+temporary-env/AWS-profile machinery and runs
+`abc_literature_identifier_import_smoke.py` inside the Compose backend image.
+It accepts the same overrides as `abc_literature_ready_upload_smoke.py`, plus:
+
+- `ABC_LITERATURE_IDENTIFIER_IMPORT_SMOKE_IDENTIFIER` / `--identifier`, default
+  `PMID:<ABC_LITERATURE_READY_UPLOAD_SMOKE_PMID>`
+
+Evidence output:
+
+- `file_outputs/temp/abc_literature_identifier_import_smoke_<timestamp>.json`
 
 ## Code Analysis Utilities
 

@@ -55,4 +55,49 @@ describe('chatDocumentRehydration', () => {
 
     window.removeEventListener('pdf-viewer-document-changed', documentChanged)
   })
+
+  it('keeps text-only documents active for chat without restoring the PDF viewer', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.endsWith('/url')) {
+        return new Response(JSON.stringify({
+          viewer_url: null,
+          viewer_mode: 'text_only',
+        }), { status: 200 })
+      }
+
+      return new Response(JSON.stringify({
+        filename: 'provider-paper.md',
+        page_count: 1,
+      }), { status: 200 })
+    }))
+
+    const storageKeys = getChatLocalStorageKeys('user-1')
+    localStorage.setItem(storageKeys.pdfViewerSession, JSON.stringify({
+      documentId: 'old-doc',
+      viewerUrl: '/viewer/old-doc.pdf',
+      filename: 'old-doc.pdf',
+      pageCount: 4,
+    }))
+    const documentChanged = vi.fn()
+    window.addEventListener('pdf-viewer-document-changed', documentChanged)
+
+    await expect(rehydrateChatDocument({
+      document: {
+        id: 'doc-text-only',
+        filename: 'provider-paper.md',
+      },
+      chatStorageKeys: storageKeys,
+    })).resolves.toMatchObject({
+      viewerUrl: null,
+      viewerMode: 'text_only',
+      filename: 'provider-paper.md',
+      pageCount: 1,
+    })
+
+    expect(documentChanged).not.toHaveBeenCalled()
+    expect(localStorage.getItem(storageKeys.activeDocument)).toContain('doc-text-only')
+    expect(localStorage.getItem(storageKeys.pdfViewerSession)).toBeNull()
+
+    window.removeEventListener('pdf-viewer-document-changed', documentChanged)
+  })
 })

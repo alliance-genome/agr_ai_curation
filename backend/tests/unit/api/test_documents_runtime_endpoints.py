@@ -4,14 +4,17 @@ from datetime import datetime, timezone
 from io import BytesIO
 import logging
 from types import SimpleNamespace
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
-from fastapi import BackgroundTasks, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile
+from fastapi.testclient import TestClient
 
 from src.api import documents
 from src.lib.pdf_jobs.upload_intake_service import (
     UploadIntakeDuplicateError,
+    UploadIntakeProviderDecisionError,
     UploadIntakeResult,
     UploadIntakeValidationError,
 )
@@ -148,7 +151,7 @@ async def test_validate_user_file_path_returns_resolved_path(tmp_path):
 @pytest.mark.asyncio
 async def test_validate_user_file_path_handles_resolve_errors(tmp_path):
     with pytest.raises(HTTPException) as exc:
-        documents.validate_user_file_path(_BoomPath(), tmp_path, "user-1")
+        documents.validate_user_file_path(cast(Any, _BoomPath()), tmp_path, "user-1")
     assert exc.value.status_code == 500
 
 
@@ -287,8 +290,9 @@ async def test_update_document_endpoint_rolls_back_on_error(monkeypatch, caplog)
 async def test_delete_document_endpoint_returns_success(monkeypatch):
     doc_id = str(uuid4())
     verify_session = _FakeSession()
+    snapshot_session = _FakeSession(execute_doc=None)
     cleanup_session = _FakeSession(execute_doc=None)
-    _patch_session_factory(monkeypatch, [verify_session, cleanup_session])
+    _patch_session_factory(monkeypatch, [verify_session, snapshot_session, cleanup_session])
 
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
     monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
@@ -308,7 +312,8 @@ async def test_delete_document_endpoint_returns_success(monkeypatch):
 async def test_delete_document_endpoint_blocks_processing_documents(monkeypatch):
     doc_id = str(uuid4())
     verify_session = _FakeSession()
-    _patch_session_factory(monkeypatch, [verify_session])
+    snapshot_session = _FakeSession(execute_doc=None)
+    _patch_session_factory(monkeypatch, [verify_session, snapshot_session])
 
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
     monkeypatch.setattr(
@@ -349,8 +354,9 @@ async def test_delete_document_endpoint_blocks_active_pdf_job(monkeypatch):
 async def test_delete_document_endpoint_allows_reconciled_stale_pdf_job(monkeypatch):
     doc_id = str(uuid4())
     verify_session = _FakeSession()
+    snapshot_session = _FakeSession(execute_doc=None)
     cleanup_session = _FakeSession(execute_doc=None)
-    _patch_session_factory(monkeypatch, [verify_session, cleanup_session])
+    _patch_session_factory(monkeypatch, [verify_session, snapshot_session, cleanup_session])
 
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
     monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
@@ -370,8 +376,9 @@ async def test_delete_document_endpoint_allows_reconciled_stale_pdf_job(monkeypa
 async def test_delete_document_endpoint_allows_stale_processing_status_when_job_terminal(monkeypatch):
     doc_id = str(uuid4())
     verify_session = _FakeSession()
+    snapshot_session = _FakeSession(execute_doc=None)
     cleanup_session = _FakeSession(execute_doc=None)
-    _patch_session_factory(monkeypatch, [verify_session, cleanup_session])
+    _patch_session_factory(monkeypatch, [verify_session, snapshot_session, cleanup_session])
 
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
     monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "processing"}}))
@@ -398,8 +405,9 @@ async def test_delete_document_endpoint_allows_stale_postgres_only_document_clea
         pdfx_json_path=None,
         processed_json_path=None,
     )
+    snapshot_session = _FakeSession(execute_doc=cleanup_doc)
     cleanup_session = _FakeSession(execute_doc=cleanup_doc)
-    _patch_session_factory(monkeypatch, [verify_session, cleanup_session])
+    _patch_session_factory(monkeypatch, [verify_session, snapshot_session, cleanup_session])
 
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
 
@@ -429,10 +437,137 @@ async def test_delete_document_endpoint_allows_stale_postgres_only_document_clea
 
 
 @pytest.mark.asyncio
+async def test_delete_document_endpoint_removes_text_only_source_markdown(monkeypatch, tmp_path):
+    doc_id = str(uuid4())
+    source_dir = tmp_path / "user-1" / "source_markdown"
+    source_dir.mkdir(parents=True)
+    source_markdown = source_dir / f"{doc_id}.md"
+    source_markdown.write_text("# Provider Markdown\n", encoding="utf-8")
+    provider_placeholder_dir = tmp_path / "document_sources" / "abc_literature"
+    provider_placeholder_dir.mkdir(parents=True)
+    provider_placeholder = provider_placeholder_dir / f"{doc_id}-4672234.md"
+    provider_placeholder.write_text("placeholder", encoding="utf-8")
+
+    verify_session = _FakeSession()
+    cleanup_doc = SimpleNamespace(
+        id=doc_id,
+        user_id=42,
+        file_path=f"document_sources/abc_literature/{doc_id}-4672234.md",
+        pdfx_json_path=None,
+        processed_json_path=None,
+        source_markdown_path=f"user-1/source_markdown/{doc_id}.md",
+        viewer_mode="text_only",
+    )
+    snapshot_session = _FakeSession(execute_doc=cleanup_doc)
+    cleanup_session = _FakeSession(execute_doc=cleanup_doc)
+    _patch_session_factory(monkeypatch, [verify_session, snapshot_session, cleanup_session])
+
+    monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: str(tmp_path))
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
+    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
+    monkeypatch.setattr(documents, "delete_document", lambda *_args, **_kwargs: _async_value({"success": True, "chunks_deleted": 0}))
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
+
+    result = await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
+
+    assert result.success is True
+    assert not source_markdown.exists()
+    assert provider_placeholder.exists()
+    assert cleanup_session.deleted == [cleanup_doc]
+    assert cleanup_session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_document_endpoint_uses_snapshot_when_helper_removes_sql_row(monkeypatch, tmp_path):
+    doc_id = str(uuid4())
+    pdf_dir = tmp_path / "user-1" / doc_id
+    pdf_dir.mkdir(parents=True)
+    pdf_file = pdf_dir / "paper.pdf"
+    pdf_file.write_bytes(b"%PDF-1.7\n")
+    source_dir = tmp_path / "user-1" / "source_markdown"
+    source_dir.mkdir(parents=True)
+    source_markdown = source_dir / f"{doc_id}.md"
+    source_markdown.write_text("# Provider Markdown\n", encoding="utf-8")
+
+    verify_session = _FakeSession()
+    snapshot_doc = SimpleNamespace(
+        id=doc_id,
+        user_id=42,
+        file_path=f"user-1/{doc_id}/paper.pdf",
+        pdfx_json_path=None,
+        processed_json_path=None,
+        source_markdown_path=f"user-1/source_markdown/{doc_id}.md",
+        viewer_mode="local_pdf",
+    )
+    snapshot_session = _FakeSession(execute_doc=snapshot_doc)
+    cleanup_session = _FakeSession(execute_doc=None)
+    _patch_session_factory(monkeypatch, [verify_session, snapshot_session, cleanup_session])
+
+    monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: str(tmp_path))
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
+    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
+    monkeypatch.setattr(documents, "delete_document", lambda *_args, **_kwargs: _async_value({"success": True, "chunks_deleted": 2}))
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
+
+    result = await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
+
+    assert result.success is True
+    assert "2 chunks deleted" in result.message
+    assert not pdf_dir.exists()
+    assert not source_markdown.exists()
+    assert cleanup_session.deleted == []
+    assert cleanup_session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_document_endpoint_raises_when_cleanup_fails(monkeypatch, tmp_path, caplog):
+    doc_id = str(uuid4())
+    verify_session = _FakeSession()
+    cleanup_doc = SimpleNamespace(
+        id=doc_id,
+        user_id=42,
+        file_path=None,
+        pdfx_json_path=None,
+        processed_json_path=None,
+        source_markdown_path=f"user-1/source_markdown/{doc_id}.md",
+        viewer_mode="text_only",
+    )
+    snapshot_session = _FakeSession(execute_doc=cleanup_doc)
+    cleanup_session = _FakeSession(execute_doc=cleanup_doc)
+    _patch_session_factory(monkeypatch, [verify_session, snapshot_session, cleanup_session])
+
+    monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: str(tmp_path))
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
+    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
+    monkeypatch.setattr(documents, "delete_document", lambda *_args, **_kwargs: _async_value({"success": True, "chunks_deleted": 0}))
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
+
+    def _raise_cleanup(**kwargs):
+        if kwargs.get("relative_path"):
+            raise RuntimeError("source cleanup failed")
+
+    monkeypatch.setattr(documents, "_unlink_user_storage_file_if_present", _raise_cleanup)
+    caplog.set_level(logging.ERROR, logger=documents.logger.name)
+
+    with pytest.raises(HTTPException) as exc:
+        await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "Failed to delete document"
+    assert cleanup_session.rollbacks == 1
+    assert cleanup_session.deleted == []
+    assert "source cleanup failed" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_delete_document_endpoint_blocks_stale_postgres_only_document_with_active_job(monkeypatch):
     doc_id = str(uuid4())
     verify_session = _FakeSession()
-    _patch_session_factory(monkeypatch, [verify_session])
+    snapshot_session = _FakeSession(execute_doc=None)
+    _patch_session_factory(monkeypatch, [verify_session, snapshot_session])
 
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
 
@@ -458,7 +593,8 @@ async def test_delete_document_endpoint_blocks_stale_postgres_only_document_with
 async def test_delete_document_endpoint_raises_500_when_delete_fails(monkeypatch):
     doc_id = str(uuid4())
     verify_session = _FakeSession()
-    _patch_session_factory(monkeypatch, [verify_session])
+    snapshot_session = _FakeSession(execute_doc=None)
+    _patch_session_factory(monkeypatch, [verify_session, snapshot_session])
 
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
     monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
@@ -508,6 +644,7 @@ async def test_status_endpoint_raises_500_on_unexpected_error(monkeypatch, caplo
 @pytest.mark.asyncio
 async def test_upload_document_endpoint_rejects_non_pdf(monkeypatch, caplog):
     background_tasks = BackgroundTasks()
+    request = SimpleNamespace(cookies={})
     upload = UploadFile(filename="notes.txt", file=BytesIO(b"text"))
 
     async def _raise_validation(**_kwargs):
@@ -517,7 +654,12 @@ async def test_upload_document_endpoint_rejects_non_pdf(monkeypatch, caplog):
     caplog.set_level(logging.WARNING, logger=documents.logger.name)
 
     with pytest.raises(HTTPException) as exc:
-        await documents.upload_document_endpoint(background_tasks, upload, {"sub": "user-1"})
+        await documents.upload_document_endpoint(
+            background_tasks,
+            request,  # type: ignore[arg-type]
+            upload,
+            {"sub": "user-1"},
+        )
     assert exc.value.status_code == 400
     assert exc.value.detail == "Invalid document upload request"
     assert "File must be a PDF. Got: notes.txt" in caplog.text
@@ -526,6 +668,7 @@ async def test_upload_document_endpoint_rejects_non_pdf(monkeypatch, caplog):
 @pytest.mark.asyncio
 async def test_upload_document_endpoint_happy_path(monkeypatch):
     background_tasks = BackgroundTasks()
+    request = SimpleNamespace(cookies={"auth_token": "curator-token"})
     upload = UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7"))
     captured = {}
 
@@ -547,7 +690,12 @@ async def test_upload_document_endpoint_happy_path(monkeypatch):
         )
 
     monkeypatch.setattr(documents.upload_intake_service, "intake_upload", _intake_upload)
-    response = await documents.upload_document_endpoint(background_tasks, upload, {"sub": "user-1"})
+    response = await documents.upload_document_endpoint(
+        background_tasks,
+        request,  # type: ignore[arg-type]
+        upload,
+        {"sub": "user-1", "groups": ["MGICurator"]},
+    )
 
     assert response.user_id == 99
     assert response.filename == "paper.pdf"
@@ -555,12 +703,57 @@ async def test_upload_document_endpoint_happy_path(monkeypatch):
     assert response.weaviate_tenant == "tenant-user-1"
     assert captured["background_tasks"] is background_tasks
     assert captured["file"] is upload
-    assert captured["user"] == {"sub": "user-1"}
+    assert captured["user"] == {"sub": "user-1", "groups": ["MGICurator"]}
+    assert captured["document_source_context"].authorized_group_ids == ("MGI",)
+    assert captured["document_source_context"].curator_token == "curator-token"
+
+
+def test_upload_document_route_builds_document_source_request_context(monkeypatch):
+    monkeypatch.setenv("TESTING_API_KEY", "contract-test-key")
+    monkeypatch.setenv("TESTING_API_KEY_GROUPS", "MGIStaff")
+    captured = {}
+
+    async def _intake_upload(**kwargs):
+        captured.update(kwargs)
+        return UploadIntakeResult(
+            document_id="doc-route-context",
+            job_id="job-route-context",
+            user_id=123,
+            filename="research_paper.pdf",
+            status="PENDING",
+            upload_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            processing_started_at=None,
+            processing_completed_at=None,
+            file_size_bytes=1234,
+            weaviate_tenant="tenant-route-context",
+            chunk_count=None,
+            error_message=None,
+        )
+
+    monkeypatch.setattr(documents.upload_intake_service, "intake_upload", _intake_upload)
+    app = FastAPI()
+    app.include_router(documents.router)
+    client = TestClient(app)
+    client.cookies.set("auth_token", "browser-cookie-token")
+
+    response = client.post(
+        "/weaviate/documents/upload",
+        headers={"X-API-Key": "contract-test-key"},
+        files={"file": ("research_paper.pdf", BytesIO(b"%PDF-1.7"), "application/pdf")},
+    )
+
+    assert response.status_code == 201
+    context = captured["document_source_context"]
+    assert context.provider_groups == ("MGIStaff",)
+    assert context.authorized_group_ids == ("MGI",)
+    assert context.curator_token is None
+    assert captured["file"].filename == "research_paper.pdf"
 
 
 @pytest.mark.asyncio
 async def test_upload_document_endpoint_maps_duplicate_error_to_409(monkeypatch):
     background_tasks = BackgroundTasks()
+    request = SimpleNamespace(cookies={})
     upload = UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7"))
 
     async def _raise_duplicate(**_kwargs):
@@ -575,14 +768,55 @@ async def test_upload_document_endpoint_maps_duplicate_error_to_409(monkeypatch)
     monkeypatch.setattr(documents.upload_intake_service, "intake_upload", _raise_duplicate)
 
     with pytest.raises(HTTPException) as exc:
-        await documents.upload_document_endpoint(background_tasks, upload, {"sub": "user-1"})
+        await documents.upload_document_endpoint(
+            background_tasks,
+            request,  # type: ignore[arg-type]
+            upload,
+            {"sub": "user-1"},
+    )
     assert exc.value.status_code == 409
-    assert exc.value.detail["error"] == "duplicate_file"
+    detail = cast(dict[str, Any], exc.value.detail)
+    assert isinstance(detail, dict)
+    assert detail["error"] == "duplicate_file"
+
+
+@pytest.mark.asyncio
+async def test_upload_document_endpoint_maps_provider_decision_error(monkeypatch):
+    background_tasks = BackgroundTasks()
+    request = SimpleNamespace(cookies={})
+    upload = UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7"))
+
+    async def _raise_provider_decision(**_kwargs):
+        raise UploadIntakeProviderDecisionError(
+            status_code=403,
+            detail={
+                "error": "document_source_access_denied",
+                "message": "No matching source document is accessible to this curator.",
+                "provider": "fake_provider",
+                "status": "access_denied",
+            },
+        )
+
+    monkeypatch.setattr(documents.upload_intake_service, "intake_upload", _raise_provider_decision)
+
+    with pytest.raises(HTTPException) as exc:
+        await documents.upload_document_endpoint(
+            background_tasks,
+            request,  # type: ignore[arg-type]
+            upload,
+            {"sub": "user-1"},
+        )
+
+    assert exc.value.status_code == 403
+    detail = cast(dict[str, Any], exc.value.detail)
+    assert detail["error"] == "document_source_access_denied"
+    assert detail["provider"] == "fake_provider"
 
 
 @pytest.mark.asyncio
 async def test_upload_document_endpoint_sanitizes_unexpected_error(monkeypatch, caplog):
     background_tasks = BackgroundTasks()
+    request = SimpleNamespace(cookies={})
     upload = UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7"))
 
     async def _raise_unexpected(**_kwargs):
@@ -592,7 +826,12 @@ async def test_upload_document_endpoint_sanitizes_unexpected_error(monkeypatch, 
     caplog.set_level(logging.ERROR, logger=documents.logger.name)
 
     with pytest.raises(HTTPException) as exc:
-        await documents.upload_document_endpoint(background_tasks, upload, {"sub": "user-1"})
+        await documents.upload_document_endpoint(
+            background_tasks,
+            request,  # type: ignore[arg-type]
+            upload,
+            {"sub": "user-1"},
+        )
 
     assert exc.value.status_code == 500
     assert exc.value.detail == "Failed to upload document"

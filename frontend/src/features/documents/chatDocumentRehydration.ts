@@ -5,7 +5,7 @@ import {
 } from '@/components/pdfViewer/pdfEvents'
 import { loadDocumentForChat } from '@/features/documents/pdfUploadFlow'
 import type { ChatLocalStorageKeys } from '@/lib/chatCacheKeys'
-import { safeSetJson } from '@/lib/browserStorage'
+import { safeRemoveItem, safeSetJson } from '@/lib/browserStorage'
 import { normalizeChatHistoryValue } from '@/lib/chatHistoryNormalization'
 
 export interface RehydratableChatDocument {
@@ -20,6 +20,7 @@ interface PdfViewerDocumentMetadata {
 
 interface PdfViewerDocumentUrlPayload {
   viewer_url?: unknown
+  viewer_mode?: unknown
 }
 
 export interface RehydrateChatDocumentOptions {
@@ -33,7 +34,8 @@ export interface RehydrateChatDocumentOptions {
 }
 
 export interface RehydratedChatDocumentResult {
-  viewerUrl: string
+  viewerUrl: string | null
+  viewerMode: string
   filename: string
   pageCount: number
   loadedAt: string
@@ -101,8 +103,12 @@ export async function rehydrateChatDocument(
   const detail = await detailResponse.json() as PdfViewerDocumentMetadata
   const urlData = await urlResponse.json() as PdfViewerDocumentUrlPayload
   const viewerUrl = typeof urlData.viewer_url === 'string' ? urlData.viewer_url : null
+  const viewerMode = typeof urlData.viewer_mode === 'string' && urlData.viewer_mode.trim()
+    ? urlData.viewer_mode.trim().toLowerCase()
+    : 'local_pdf'
+  const isTextOnlyDocument = viewerMode === 'text_only'
 
-  if (!viewerUrl) {
+  if (!viewerUrl && !isTextOnlyDocument) {
     throw new Error('Document viewer URL unavailable')
   }
 
@@ -121,6 +127,7 @@ export async function rehydrateChatDocument(
   const loadedAt = new Date().toISOString()
   const result: RehydratedChatDocumentResult = {
     viewerUrl,
+    viewerMode,
     filename,
     pageCount,
     loadedAt,
@@ -132,32 +139,41 @@ export async function rehydrateChatDocument(
   }
 
   if (chatStorageKeys) {
-    safeSetJson(() => window.localStorage, chatStorageKeys.pdfViewerSession, {
-      documentId: document.id,
+    if (viewerUrl) {
+      safeSetJson(() => window.localStorage, chatStorageKeys.pdfViewerSession, {
+        documentId: document.id,
+        viewerUrl,
+        filename,
+        pageCount,
+        loadedAt,
+        currentPage: viewerState?.currentPage ?? 1,
+        zoomLevel: 1,
+        scrollPosition: viewerState?.scrollPosition ?? 0,
+        lastInteraction: loadedAt,
+      }, {
+        owner: 'pdf-viewer',
+        workflowCritical: true,
+      })
+    } else {
+      safeRemoveItem(() => window.localStorage, chatStorageKeys.pdfViewerSession, {
+        owner: 'pdf-viewer',
+        workflowCritical: true,
+      })
+    }
+  }
+
+  if (viewerUrl) {
+    dispatchPDFDocumentChanged(
+      document.id,
       viewerUrl,
       filename,
       pageCount,
-      loadedAt,
-      currentPage: viewerState?.currentPage ?? 1,
-      zoomLevel: 1,
-      scrollPosition: viewerState?.scrollPosition ?? 0,
-      lastInteraction: loadedAt,
-    }, {
-      owner: 'pdf-viewer',
-      workflowCritical: true,
-    })
+      {
+        ownerToken,
+        viewerState,
+      },
+    )
   }
-
-  dispatchPDFDocumentChanged(
-    document.id,
-    viewerUrl,
-    filename,
-    pageCount,
-    {
-      ownerToken,
-      viewerState,
-    },
-  )
 
   return result
 }

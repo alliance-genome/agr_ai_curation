@@ -143,7 +143,9 @@ The local "GPU is spinning up" confusion was a reporting mismatch, not proof tha
 OpenAPI was downloaded from both production and stage:
 
 - Production: `https://literature-rest.alliancegenome.org/openapi.json`
-- Stage: `https://literature-rest-stage.alliancegenome.org/openapi.json`
+- Stage: `https://stage-literature-rest.alliancegenome.org/openapi.json`
+  (`https://literature-rest-stage.alliancegenome.org/openapi.json` did not
+  resolve from the AI Curation workspace on 2026-06-25.)
 
 Both currently report title `Alliance Literature Service` and version `0.1.0`.
 
@@ -653,7 +655,9 @@ Add provider-neutral nullable columns to `pdf_documents`:
 - `source_imported_at`
 - `source_payload_path`
 - `source_markdown_path`
-- `viewer_mode`: e.g. `provider_pdf_proxy`, `text_only`
+- `viewer_mode`: expected ABC happy path is PDF-backed (`local_pdf` for cached
+  local/upload bytes, or `provider_pdf_proxy` only if a future provider proxy is
+  implemented)
 
 ABC Literature adapter mapping:
 
@@ -670,19 +674,27 @@ Existing PDF-shaped contracts that must be handled in Workstream 2:
 - `backend/src/lib/weaviate_client/documents.py` creates Weaviate documents through a PDF-shaped `PDFDocument` model.
 - `backend/src/api/pdf_viewer.py` and download routes assume local PDF files under upload storage.
 
-Workstream 2 must update these contracts before text-only provider imports are enabled. This is not polish.
+Workstream 2 must keep these contracts PDF-backed for successful ABC imports.
+The chat/PDF viewer is core product behavior, so ABC converted Markdown must not
+replace the document PDF.
 
 Repurpose existing fields:
 
-- `file_path`: nullable or points to a locally cached provider PDF/Markdown artifact, not a direct-PDFX upload source.
+- `file_path`: points to the AI Curation-served PDF artifact for successful ABC
+  imports. For upload/checksum imports this can be the retained uploaded PDF;
+  for identifier imports it must be a cached/proxied provider source PDF before
+  the import is considered complete.
 - `pdfx_json_path`: stop writing and stop reading in active import code. The migration may leave this as a nullable historical column, but new imports must not write direct PDFX metadata here.
 - `processed_json_path`: still useful for converted Markdown processed elements.
 
-For provider imports with no local PDF:
+For provider imports:
 
-- Make `file_path`, `file_hash`, `file_size`, and `page_count` nullable or redefine them around the actual cached artifact in the migration. Do not create placeholder PDF values.
-- Store downloaded Markdown as a first-class source artifact and set `document_type=external_converted_markdown`.
-- Update PDF viewer/download contracts so `viewer_mode=text_only` documents return a clear "PDF unavailable" response instead of a broken local-file path.
+- Do not create a text-only happy path for ABC Literature. Store or proxy the
+  source PDF so the AI Curation viewer/download/chat surfaces remain PDF-backed.
+- Store downloaded Markdown as a first-class source text artifact and use it for
+  processed JSON/chunks.
+- Update PDF viewer/download contracts and tests so successful ABC imports report
+  `pdf_available=true`, expose a viewer URL, and also expose source Markdown.
 
 Weaviate document metadata mirror:
 
@@ -906,20 +918,28 @@ There are three different artifacts:
 
 Cutover viewer behavior:
 
-- For identifier import, ingest converted Markdown.
-- Set `viewer_mode=text_only` when AI Curation does not cache/proxy the source PDF.
-- Set `viewer_mode=provider_pdf_proxy` when AI Curation does cache or proxy the source PDF through the configured provider.
+- For identifier import, ingest converted Markdown and cache/proxy the source PDF
+  before the document is available in AI Curation.
+- Use `viewer_mode=local_pdf` when the PDF is cached in AI Curation storage.
+- Use `viewer_mode=provider_pdf_proxy` only if a future provider proxy is built
+  and tested end to end.
 - Evidence search and extraction should work from text chunks.
-- PDF coordinate highlighting should be disabled or clearly unavailable for text-only imports.
-- Download dialog should offer processed JSON and provenance, not a fake local PDF.
+- PDF viewer/download/chat surfaces must remain available for successful ABC
+  imports.
+- Download dialog should offer the real PDF, source Markdown, processed JSON, and
+  provenance.
 
 For local PDF MD5 lookup:
 
-- Treat local PDF bytes as transient input only.
-- Compute MD5, perform read-only Literature lookup, then discard the bytes.
-- If the source PDF is cached for viewing, record it as a provider-backed cached artifact and use `viewer_mode=provider_pdf_proxy`.
+- Compute MD5 and perform read-only Literature lookup.
+- If the lookup resolves to converted Markdown, retain the uploaded PDF as the
+  AI Curation-served PDF artifact and ingest ABC converted Markdown as the text
+  source.
 - Store ABC provenance for MD5 matches that resolve to existing Literature artifacts.
-- Image/figure manifests and page/text coordinate mapping are cutover scope only if the required provider/PDFX sidecar data is available and tested; otherwise the UI must make those affordances unavailable for provider-backed documents.
+- Image/figure manifests and page/text coordinate mapping are cutover scope only
+  if the required provider/PDFX sidecar data is available and tested; otherwise
+  the UI must still keep the PDF viewer available while disabling only those
+  unsupported sidecar affordances.
 
 ## Frontend Design
 
@@ -1026,6 +1046,7 @@ Work:
   - `search/references`
   - `external_lookup`
   - `by_cross_reference`
+  - `reference/{curie_or_reference_id}`
   - `show_all`
   - `by_md5`
   - `download_file`
@@ -1105,11 +1126,14 @@ Files likely touched:
 Work:
 
 - Add provider-neutral provenance columns.
-- Relax or redefine PDF-only constraints so `external_converted_markdown` documents do not need fake PDF metadata.
-- Store downloaded Markdown as a first-class artifact.
-- Keep local cached provider PDFs only when we intentionally fetch/proxy/cache the source PDF from the configured provider.
+- Keep successful provider imports PDF-backed; do not create
+  `external_converted_markdown` documents as the ABC happy path.
+- Store downloaded Markdown as a first-class text artifact.
+- Keep local cached provider PDFs, or a tested provider PDF proxy, for every
+  successful ABC import.
 - Update document creation models.
-- Update viewer/download behavior so `viewer_mode=text_only` and `viewer_mode=provider_pdf_proxy` are explicit.
+- Update viewer/download behavior so successful ABC imports expose a PDF viewer
+  URL and PDF download while also exposing source Markdown.
 - Add indexes:
   - `(user_id, source_provider, source_provider_reference_curie)`
   - `(user_id, source_provider, source_provider_converted_artifact_id)`
@@ -1263,7 +1287,8 @@ Backend contract tests:
 - Import endpoint request/response.
 - Progress/status endpoint for document-source stages.
 - Document list/detail includes provenance.
-- Download info behaves correctly for text-only provider imports.
+- Download info behaves correctly for provider imports with both PDF and source
+  Markdown available.
 
 Frontend tests:
 

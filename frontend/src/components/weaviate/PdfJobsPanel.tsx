@@ -69,6 +69,48 @@ const canDismiss = (job: PdfProcessingJob): boolean => {
   return job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled';
 };
 
+const sourceDisplayName = (value: unknown): string | null => {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const displayName = (value as Record<string, unknown>).display_name;
+  return typeof displayName === 'string' && displayName.trim() ? displayName : null;
+};
+
+const conversionSummary = (job: PdfProcessingJob): string | null => {
+  const documentSource = job.metadata?.document_source;
+  if (!documentSource || typeof documentSource !== 'object') {
+    return null;
+  }
+  const payload = documentSource as Record<string, unknown>;
+  const fileProgress = Array.isArray(payload.per_file_progress) ? payload.per_file_progress : [];
+  if (fileProgress.length > 0) {
+    const summaries = fileProgress.slice(0, 3).map((entry) => {
+      if (!entry || typeof entry !== 'object') {
+        return null;
+      }
+      const item = entry as Record<string, unknown>;
+      const status = typeof item.status === 'string' && item.status.trim() ? item.status : 'pending';
+      const sourceName = sourceDisplayName(item.source) ?? 'source file';
+      const error = typeof item.error === 'string' && item.error.trim() ? `: ${item.error}` : '';
+      return `${sourceName} ${status}${error}`;
+    }).filter(Boolean);
+    if (summaries.length > 0) {
+      const remainder = fileProgress.length > summaries.length ? ` +${fileProgress.length - summaries.length} more` : '';
+      return `${summaries.join(' · ')}${remainder}`;
+    }
+  }
+
+  const convertedClasses = Array.isArray(payload.converted_classes)
+    ? payload.converted_classes.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    : [];
+  if (convertedClasses.length > 0) {
+    return `Converted text available: ${convertedClasses.join(', ')}`;
+  }
+  const conversionStatus = typeof payload.conversion_status === 'string' ? payload.conversion_status : null;
+  return conversionStatus ? `ABC conversion status: ${conversionStatus}` : null;
+};
+
 const PdfJobsPanel: React.FC<PdfJobsPanelProps> = ({ jobs, loading = false, onCancelJob }) => {
   const [dismissedJobIds, setDismissedJobIds] = React.useState<Set<string>>(new Set());
   const [page, setPage] = React.useState(1);
@@ -185,6 +227,7 @@ const PdfJobsPanel: React.FC<PdfJobsPanelProps> = ({ jobs, loading = false, onCa
             const progress = Math.max(0, Math.min(100, job.progress_percentage ?? 0));
             const message = job.error_message || job.message || 'Processing...';
             const updatedLabel = job.updated_at ? new Date(job.updated_at).toLocaleString() : 'unknown';
+            const providerConversionSummary = conversionSummary(job);
 
             return (
               <Box key={job.job_id} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1.5 }}>
@@ -247,6 +290,11 @@ const PdfJobsPanel: React.FC<PdfJobsPanelProps> = ({ jobs, loading = false, onCa
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
                   {progress}% • {message}
                 </Typography>
+                {providerConversionSummary && (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
+                    {providerConversionSummary}
+                  </Typography>
+                )}
                 <Typography variant="caption" color="text.secondary" noWrap>
                   Updated: {updatedLabel}
                 </Typography>

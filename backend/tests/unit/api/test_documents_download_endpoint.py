@@ -215,6 +215,63 @@ async def test_download_document_file_returns_processed_json_response(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_download_document_file_returns_source_markdown_response(monkeypatch, tmp_path):
+    _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
+
+    user_dir = tmp_path / "user123" / "source_markdown"
+    user_dir.mkdir(parents=True)
+    (user_dir / "doc.md").write_text("# Provider Markdown\n")
+
+    doc = SimpleNamespace(
+        id=_DOC_ID,
+        user_id=1,
+        file_path="document_sources/fake_provider/doc.md",
+        pdfx_json_path=None,
+        processed_json_path=None,
+        source_markdown_path="user123/source_markdown/doc.md",
+        viewer_mode="text_only",
+        filename="paper.pdf",
+    )
+    _mock_session(monkeypatch, doc=doc, user_id=1)
+
+    response = await documents.download_document_file(
+        document_id=_DOC_ID,
+        file_type="source_markdown",
+        user={"sub": "user123"},
+    )
+
+    assert isinstance(response, FileResponse)
+    assert response.media_type == "text/markdown; charset=utf-8"
+    assert response.filename == "paper_source.md"
+
+
+@pytest.mark.asyncio
+async def test_download_document_file_text_only_pdf_is_not_available(monkeypatch, tmp_path):
+    _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
+
+    doc = SimpleNamespace(
+        id=_DOC_ID,
+        user_id=1,
+        file_path="document_sources/fake_provider/doc.md",
+        pdfx_json_path=None,
+        processed_json_path=None,
+        source_markdown_path="user123/source_markdown/doc.md",
+        viewer_mode="text_only",
+        filename="paper.pdf",
+    )
+    _mock_session(monkeypatch, doc=doc, user_id=1)
+
+    with pytest.raises(HTTPException, match="pdf file not available") as exc:
+        await documents.download_document_file(
+            document_id=_DOC_ID,
+            file_type="pdf",
+            user={"sub": "user123"},
+        )
+
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_download_document_file_blocks_path_traversal(monkeypatch, tmp_path):
     _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
 
@@ -371,6 +428,105 @@ async def test_get_download_info_reports_file_availability_and_sizes(monkeypatch
     assert payload["pdfx_json_size"] > 0
     assert payload["processed_json_size"] > 0
     assert payload["filename"] == "paper.pdf"
+    assert payload["source_provenance"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_download_info_reports_text_only_source_markdown(monkeypatch, tmp_path):
+    _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
+
+    user_dir = tmp_path / "user123" / "source_markdown"
+    user_dir.mkdir(parents=True)
+    (user_dir / "doc.md").write_text("# Provider Markdown\n")
+
+    doc = SimpleNamespace(
+        id=_DOC_ID,
+        user_id=1,
+        file_path="document_sources/fake_provider/doc.md",
+        pdfx_json_path=None,
+        processed_json_path=None,
+        source_markdown_path="user123/source_markdown/doc.md",
+        viewer_mode="text_only",
+        filename="paper.pdf",
+    )
+    _mock_session(monkeypatch, doc=doc, user_id=1)
+
+    payload = await documents.get_download_info(
+        document_id=_DOC_ID,
+        user={"sub": "user123"},
+    )
+
+    assert payload["viewer_mode"] == "text_only"
+    assert payload["pdf_available"] is False
+    assert payload["pdf_size"] is None
+    assert payload["source_markdown_available"] is True
+    assert payload["source_markdown_size"] > 0
+
+
+@pytest.mark.asyncio
+async def test_get_download_info_reports_pdf_backed_provider_markdown(monkeypatch, tmp_path):
+    _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
+
+    user_dir = tmp_path / "user123"
+    (user_dir / "11111111-1111-1111-1111-111111111111").mkdir(parents=True)
+    (user_dir / "source_markdown").mkdir(parents=True)
+    (user_dir / "11111111-1111-1111-1111-111111111111" / "paper.pdf").write_bytes(b"%PDF-1.7 provider")
+    (user_dir / "source_markdown" / "doc.md").write_text("# Provider Markdown\n")
+
+    doc = SimpleNamespace(
+        id=_DOC_ID,
+        user_id=1,
+        file_path="user123/11111111-1111-1111-1111-111111111111/paper.pdf",
+        pdfx_json_path=None,
+        processed_json_path=None,
+        source_markdown_path="user123/source_markdown/doc.md",
+        viewer_mode="local_pdf",
+        filename="paper.pdf",
+        source_provider="abc_literature",
+        source_provider_reference_id="ref-123",
+        source_provider_reference_curie="AGRKB:101",
+        source_provider_source_file_id="source-pdf-1",
+        source_provider_pdf_artifact_id="source-pdf-1",
+        source_provider_converted_artifact_id="converted-md-1",
+        source_external_ids={"pmid": "12345"},
+        source_md5="abc123",
+        source_file_class="converted_merged_nxml",
+        source_file_extension="md",
+        source_artifact_status="ready",
+        source_import_status="imported",
+        source_imported_at=None,
+        source_access_scope="restricted",
+        source_access_mods={"mods": ["FB"]},
+    )
+    _mock_session(monkeypatch, doc=doc, user_id=1)
+
+    payload = await documents.get_download_info(
+        document_id=_DOC_ID,
+        user={"sub": "user123"},
+    )
+
+    assert payload["viewer_mode"] == "local_pdf"
+    assert payload["pdf_available"] is True
+    assert payload["pdf_size"] > 0
+    assert payload["source_markdown_available"] is True
+    assert payload["source_markdown_size"] > 0
+    assert payload["source_provenance"] == {
+        "provider": "abc_literature",
+        "reference_id": "ref-123",
+        "reference_curie": "AGRKB:101",
+        "source_file_id": "source-pdf-1",
+        "pdf_artifact_id": "source-pdf-1",
+        "converted_artifact_id": "converted-md-1",
+        "source_md5": "abc123",
+        "file_class": "converted_merged_nxml",
+        "file_extension": "md",
+        "artifact_status": "ready",
+        "import_status": "imported",
+        "access_scope": "restricted",
+        "viewer_mode": "local_pdf",
+        "external_ids": {"pmid": "12345"},
+        "access_mods": {"mods": ["FB"]},
+    }
 
 
 @pytest.mark.asyncio
@@ -504,6 +660,57 @@ async def test_get_download_info_blocks_processed_json_path_traversal(monkeypatc
         file_path=None,
         pdfx_json_path=None,
         processed_json_path="../outside.json",
+        filename="paper.pdf",
+    )
+    _mock_session(monkeypatch, doc=doc, user_id=1)
+
+    with pytest.raises(HTTPException, match="Access denied") as exc:
+        await documents.get_download_info(
+            document_id=_DOC_ID,
+            user={"sub": "user123"},
+        )
+
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_download_document_file_blocks_source_markdown_path_traversal(monkeypatch, tmp_path):
+    _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
+
+    doc = SimpleNamespace(
+        id=_DOC_ID,
+        user_id=1,
+        file_path="document_sources/fake_provider/doc.md",
+        pdfx_json_path=None,
+        processed_json_path=None,
+        source_markdown_path="../outside.md",
+        viewer_mode="text_only",
+        filename="paper.pdf",
+    )
+    _mock_session(monkeypatch, doc=doc, user_id=1)
+
+    with pytest.raises(HTTPException, match="Access denied") as exc:
+        await documents.download_document_file(
+            document_id=_DOC_ID,
+            file_type="source_markdown",
+            user={"sub": "user123"},
+        )
+
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_get_download_info_blocks_source_markdown_path_traversal(monkeypatch, tmp_path):
+    _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
+
+    doc = SimpleNamespace(
+        id=_DOC_ID,
+        user_id=1,
+        file_path="document_sources/fake_provider/doc.md",
+        pdfx_json_path=None,
+        processed_json_path=None,
+        source_markdown_path="../outside.md",
+        viewer_mode="text_only",
         filename="paper.pdf",
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)

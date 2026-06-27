@@ -31,6 +31,8 @@ groups:
     provider_groups:
       - "flybase-curators"
       - "flybase-admins"
+      - "FBStaff"
+      - "FlyBaseCurator"
 
   # ---------------------------------------------------------------------------
   # WormBase (WB)

@@ -33,12 +33,17 @@ vi.mock('./components/BatchNavIcon', () => ({
 }));
 
 vi.mock('./components/weaviate/WeaviateLayout', () => ({
-  default: () => <div data-testid="weaviate-layout" />,
+  default: () => (
+    <div data-testid="weaviate-layout">
+      <Outlet />
+    </div>
+  ),
 }));
 
 vi.mock('./pages/weaviate/Settings', () => ({ default: () => <div>Settings</div> }));
 vi.mock('./pages/weaviate/DocumentDetail', () => ({ default: () => <div>Document Detail</div> }));
 vi.mock('./pages/weaviate/DocumentsPage', () => ({ default: () => <div>Documents Page</div> }));
+vi.mock('./pages/weaviate/AddLiteraturePage', () => ({ default: () => <div>Add Literature Page</div> }));
 vi.mock('./pages/weaviate/Dashboard', () => ({ default: () => <div>Dashboard</div> }));
 vi.mock('./pages/weaviate/settings/EmbeddingsSettings', () => ({ default: () => <div>Embeddings</div> }));
 vi.mock('./pages/weaviate/settings/DatabaseSettings', () => ({ default: () => <div>Database</div> }));
@@ -154,6 +159,46 @@ describe('AppContent global notifications', () => {
     expect(screen.queryByText(`What's New: v${POPUP_CHANGELOG_ENTRY!.version}`)).not.toBeInTheDocument();
   });
 
+  it('renders the add literature route without the changelog popup', async () => {
+    localStorage.removeItem(`changelog:last-seen:user-1`);
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/weaviate/pdf-jobs')) {
+        return jsonResponse({ jobs: [] });
+      }
+      if (url.includes('/api/batches')) {
+        return jsonResponse({ batches: [] });
+      }
+      return jsonResponse({});
+    });
+
+    renderAppContent('/weaviate/add-literature/');
+
+    expect(await screen.findByText('Add Literature Page')).toBeInTheDocument();
+    expect(screen.queryByText(`What's New: v${POPUP_CHANGELOG_ENTRY!.version}`)).not.toBeInTheDocument();
+  });
+
+  it('keeps the document import mock route as an add literature alias', async () => {
+    localStorage.removeItem(`changelog:last-seen:user-1`);
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/weaviate/pdf-jobs')) {
+        return jsonResponse({ jobs: [] });
+      }
+      if (url.includes('/api/batches')) {
+        return jsonResponse({ batches: [] });
+      }
+      return jsonResponse({});
+    });
+
+    renderAppContent('/weaviate/documents/import-mock/');
+
+    expect(await screen.findByText('Add Literature Page')).toBeInTheDocument();
+    expect(screen.queryByText(`What's New: v${POPUP_CHANGELOG_ENTRY!.version}`)).not.toBeInTheDocument();
+  });
+
   it('uses the substantive v0.7.0 release notes for the changelog popup', () => {
     expect(POPUP_CHANGELOG_ENTRY?.id).toBe('2026-06-09-v0.7.0');
     expect(POPUP_CHANGELOG_ENTRY?.version).toBe('0.7.0');
@@ -199,6 +244,45 @@ describe('AppContent global notifications', () => {
     });
 
     expect(screen.getByText('PDF processing completed: new.pdf')).toBeInTheDocument();
+  });
+
+  it('continues PDF job polling on the add literature route after work starts there', async () => {
+    vi.useFakeTimers();
+
+    let pdfPoll = 0;
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/weaviate/pdf-jobs')) {
+        pdfPoll += 1;
+        if (pdfPoll === 1) {
+          return jsonResponse({
+            jobs: [{ job_id: 'active-add-literature', status: 'running', filename: 'queued-from-add-literature.pdf', document_id: 'doc-add-lit' }],
+          });
+        }
+        return jsonResponse({
+          jobs: [{ job_id: 'active-add-literature', status: 'completed', filename: 'queued-from-add-literature.pdf', document_id: 'doc-add-lit' }],
+        });
+      }
+      if (url.includes('/api/batches')) {
+        return jsonResponse({ batches: [] });
+      }
+      return jsonResponse({});
+    });
+
+    renderAppContent('/weaviate/add-literature');
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByText('Add Literature Page')).toBeInTheDocument();
+    expect(screen.queryByText('PDF processing completed: queued-from-add-literature.pdf')).not.toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(10000);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('PDF processing completed: queued-from-add-literature.pdf')).toBeInTheDocument();
   });
 
   it('ignores failed PDF snapshots when cancellation has been requested', async () => {

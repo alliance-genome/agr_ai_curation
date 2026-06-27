@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib
+import json
 from contextlib import contextmanager
 from datetime import datetime
 from types import SimpleNamespace
@@ -229,6 +230,98 @@ async def test_create_document_success():
     assert result["success"] is True
     assert result["document_id"] == "doc-123"
     pdf_collection.data.insert.assert_called_once()
+    properties = pdf_collection.data.insert.call_args.kwargs["properties"]
+    assert properties["metadata"] == '{"species": "WB"}'
+
+
+@pytest.mark.asyncio
+async def test_create_document_includes_source_provenance_metadata():
+    pdf_collection = MagicMock()
+    pdf_collection.data.insert.return_value = "doc-123"
+    chunk_collection = MagicMock()
+    connection = _connection_with_client(MagicMock())
+
+    document = SimpleNamespace(
+        id="doc-123",
+        filename="paper.md",
+        file_size=1024,
+        creation_date=datetime(2026, 2, 1, 0, 0, 0),
+        last_accessed_date=None,
+        processing_status="pending",
+        embedding_status="pending",
+        chunk_count=0,
+        vector_count=0,
+        metadata={"document_type": "provider_text"},
+        source_provenance={
+            "provider": "abc_literature",
+            "reference_curie": "AGRKB:101",
+            "converted_artifact_id": "converted-file-1",
+            "access_scope": "restricted",
+            "access_mods": {"mods": ["FB"], "raw_mod_objects": [{"secret": "drop"}]},
+            "source_payload_path": "/internal/raw.json",
+            "curator_token": "secret-token",
+            "full_markdown": "# Full content",
+        },
+    )
+
+    with patch("src.lib.weaviate_client.documents.get_connection", return_value=connection), \
+         patch("src.lib.weaviate_client.documents.get_user_collections", return_value=(chunk_collection, pdf_collection)), \
+         patch("src.lib.weaviate_client.documents.asyncio.get_event_loop", return_value=_event_loop_with_sync_executor()):
+        result = await documents.create_document("user-1", document)
+
+    assert result["success"] is True
+    properties = pdf_collection.data.insert.call_args.kwargs["properties"]
+    metadata = json.loads(properties["metadata"])
+    assert metadata["document_type"] == "provider_text"
+    assert metadata["source_provenance"] == {
+        "provider": "abc_literature",
+        "reference_curie": "AGRKB:101",
+        "converted_artifact_id": "converted-file-1",
+        "access_scope": "restricted",
+        "access_mods": {"mods": ["FB"]},
+    }
+    assert "curator_token" not in metadata["source_provenance"]
+    assert "source_payload_path" not in metadata["source_provenance"]
+    assert "full_markdown" not in metadata["source_provenance"]
+
+
+@pytest.mark.asyncio
+async def test_create_document_strips_raw_metadata_source_provenance():
+    pdf_collection = MagicMock()
+    pdf_collection.data.insert.return_value = "doc-123"
+    chunk_collection = MagicMock()
+    connection = _connection_with_client(MagicMock())
+
+    document = SimpleNamespace(
+        id="doc-123",
+        filename="paper.pdf",
+        file_size=1024,
+        creation_date=datetime(2026, 2, 1, 0, 0, 0),
+        last_accessed_date=None,
+        processing_status="pending",
+        embedding_status="pending",
+        chunk_count=0,
+        vector_count=0,
+        metadata={
+            "document_type": "general",
+            "source_provenance": {
+                "provider": "abc_literature",
+                "client_secret": "secret-client",
+                "full_markdown": "# Full content",
+            },
+        },
+        source_provenance=None,
+    )
+
+    with patch("src.lib.weaviate_client.documents.get_connection", return_value=connection), \
+         patch("src.lib.weaviate_client.documents.get_user_collections", return_value=(chunk_collection, pdf_collection)), \
+         patch("src.lib.weaviate_client.documents.asyncio.get_event_loop", return_value=_event_loop_with_sync_executor()):
+        result = await documents.create_document("user-1", document)
+
+    assert result["success"] is True
+    properties = pdf_collection.data.insert.call_args.kwargs["properties"]
+    metadata = json.loads(properties["metadata"])
+    assert metadata == {"document_type": "general"}
 
 
 @pytest.mark.asyncio

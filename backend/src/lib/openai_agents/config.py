@@ -715,6 +715,83 @@ def get_supervisor_max_calls_per_specialist() -> int:
 # for the documented rationale and consequences of each.
 # =============================================================================
 
+# --- Document source / ABC Literature ---
+
+
+def get_abc_literature_import_enabled() -> bool:
+    """Feature flag for ABC Literature document import."""
+    return _get_env_bool("ABC_LITERATURE_IMPORT_ENABLED", False)
+
+
+def get_document_source_provider() -> str:
+    """Primary document-source provider identifier (DOCUMENT_SOURCE_PROVIDER)."""
+    return os.getenv("DOCUMENT_SOURCE_PROVIDER", "local_pdf").strip() or "local_pdf"
+
+
+def get_abc_literature_api_base_url() -> str:
+    """ABC Literature REST API base URL (ABC_LITERATURE_API_BASE_URL)."""
+    return os.getenv("ABC_LITERATURE_API_BASE_URL", "")
+
+
+def get_abc_literature_auth_mode() -> str:
+    """ABC Literature auth mode (ABC_LITERATURE_AUTH_MODE)."""
+    return os.getenv("ABC_LITERATURE_AUTH_MODE", "none")
+
+
+def get_abc_literature_bearer_token() -> str | None:
+    """Static bearer token for ABC Literature auth (ABC_LITERATURE_BEARER_TOKEN)."""
+    return os.getenv("ABC_LITERATURE_BEARER_TOKEN")
+
+
+def get_abc_literature_cognito_token_url() -> str | None:
+    """Cognito token endpoint for ABC Literature auth."""
+    return os.getenv("ABC_LITERATURE_COGNITO_TOKEN_URL")
+
+
+def get_abc_literature_cognito_client_id() -> str | None:
+    """Cognito client id for ABC Literature auth (ABC_LITERATURE_COGNITO_CLIENT_ID)."""
+    return os.getenv("ABC_LITERATURE_COGNITO_CLIENT_ID")
+
+
+def get_abc_literature_cognito_client_secret() -> str | None:
+    """Cognito client secret for ABC Literature auth."""
+    return os.getenv("ABC_LITERATURE_COGNITO_CLIENT_SECRET")
+
+
+def get_abc_literature_cognito_scope() -> str | None:
+    """Cognito client-credentials scope for ABC Literature auth."""
+    return os.getenv("ABC_LITERATURE_COGNITO_SCOPE")
+
+
+def get_document_source_request_timeout_seconds() -> float:
+    """HTTP timeout for document-source provider calls."""
+    return max(
+        0.1,
+        _get_env_float_with_fallback("DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS", 10.0),
+    )
+
+
+def get_document_source_import_batch_limit() -> int:
+    """Maximum documents accepted by one source import request."""
+    return max(1, _get_env_int_with_fallback("DOCUMENT_SOURCE_IMPORT_BATCH_LIMIT", 10))
+
+
+def get_document_source_poll_interval_seconds() -> float:
+    """Status-poll interval for provider-backed document imports."""
+    return max(
+        0.1,
+        _get_env_float_with_fallback("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", 2.0),
+    )
+
+
+def get_document_source_import_timeout_seconds() -> float:
+    """Wall-clock timeout for one provider-backed import job."""
+    return max(
+        1.0,
+        _get_env_float_with_fallback("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", 300.0),
+    )
+
+
 # --- Agent / turn limits ---
 
 

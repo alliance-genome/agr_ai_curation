@@ -1,6 +1,8 @@
 """Unit tests for upload execution orchestration service."""
 
+import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import BackgroundTasks
@@ -9,8 +11,20 @@ from src.lib.exceptions import PDFCancellationError
 from src.lib.pdf_jobs import upload_execution_service as service_module
 from src.lib.pdf_jobs.upload_execution_service import (
     JobAwarePipelineTracker,
+    ProviderConversionExecutionRequest,
+    ProviderMarkdownExecutionRequest,
     UploadExecutionRequest,
     UploadExecutionService,
+)
+from src.lib.document_sources.models import (
+    SourceAccessPolicy,
+    SourceAccessScope,
+    SourceArtifact,
+    SourceArtifactFormat,
+    SourceArtifactRole,
+    SourceArtifactStatus,
+    SourceConversionResult,
+    SourceConversionStatus,
 )
 from src.models.pipeline import ProcessingStage
 from src.models.sql.pdf_processing_job import PdfJobStatus
@@ -55,6 +69,63 @@ class _RaisingTracker(_Tracker):
 
     async def track_pipeline_progress(self, document_id, stage, progress_percentage=None, message=None):
         raise self.exc
+
+
+class _Provider:
+    provider_id = "fake_provider"
+
+    def __init__(self, payload=b"# Title\n\nBody"):
+        self.payload = payload
+        self.downloads = []
+        self.conversion_requests = []
+        self.list_artifact_calls = []
+        self.artifacts = []
+        self.conversion_results = []
+        self.closed = False
+
+    async def request_conversion(self, reference, *, wait=False, request_bearer_token=None):
+        self.conversion_requests.append(
+            {
+                "reference": reference,
+                "wait": wait,
+                "request_bearer_token": request_bearer_token,
+            }
+        )
+        if self.conversion_results:
+            return self.conversion_results.pop(0)
+        return SourceConversionResult(
+            provider=self.provider_id,
+            status=SourceConversionStatus.RUNNING,
+        )
+
+    async def list_artifacts(self, reference, *, request_bearer_token=None):
+        self.list_artifact_calls.append(
+            {"reference": reference, "request_bearer_token": request_bearer_token}
+        )
+        return list(self.artifacts)
+
+    async def download_artifact(self, artifact_id, *, request_bearer_token=None):
+        self.downloads.append(
+            {
+                "artifact_id": artifact_id,
+                "request_bearer_token": request_bearer_token,
+            }
+        )
+        return self.payload
+
+    async def aclose(self):
+        self.closed = True
+
+
+class _RaisingProvider(_Provider):
+    async def download_artifact(self, artifact_id, *, request_bearer_token=None):
+        self.downloads.append(
+            {
+                "artifact_id": artifact_id,
+                "request_bearer_token": request_bearer_token,
+            }
+        )
+        raise RuntimeError("provider unavailable")
 
 
 class _MidRunCancellingOrchestrator:
@@ -300,6 +371,884 @@ async def test_dispatch_upload_execution_tracks_upload_and_queues_task():
     assert len(background_tasks.tasks) == 1
     assert background_tasks.tasks[0].func == service.execute_upload
     assert background_tasks.tasks[0].args == (request,)
+
+
+@pytest.mark.asyncio
+async def test_execute_provider_markdown_downloads_with_curator_token_and_marks_completed(monkeypatch):
+    tracker = _Tracker()
+    provider = _Provider()
+    ingestion_calls = []
+    progress_updates = []
+    completed_events = []
+
+    async def _ingest(request, *, weaviate_client):
+        ingestion_calls.append({"request": request, "weaviate_client": weaviate_client})
+
+    service = UploadExecutionService(
+        pipeline_tracker=tracker,
+        document_source_provider_factory=lambda: provider,
+        provider_markdown_ingestion_fn=_ingest,
+    )
+
+    monkeypatch.setattr(service_module, "get_connection", lambda: "weaviate-client")
+    monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_kwargs: False)
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "update_progress",
+        lambda **kwargs: progress_updates.append(kwargs),
+    )
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_completed",
+        lambda **kwargs: completed_events.append(kwargs),
+    )
+    monkeypatch.setattr(service_module.pdf_job_service, "mark_failed", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **_kwargs: None)
+
+    await service.execute_provider_markdown(
+        ProviderMarkdownExecutionRequest(
+            document_id="doc-provider",
+            job_id="job-provider",
+            user_id="user-provider",
+            owner_user_id=42,
+            filename="paper.pdf",
+            converted_artifact_id="markdown-1",
+            curator_token="curator-token",
+            source_provenance={
+                "provider": "fake_provider",
+                "access_scope": "global",
+            },
+        )
+    )
+
+    assert provider.downloads == [
+        {
+            "artifact_id": "markdown-1",
+            "request_bearer_token": "curator-token",
+        }
+    ]
+    assert provider.closed is True
+    assert ingestion_calls[0]["weaviate_client"] == "weaviate-client"
+    ingestion_request = ingestion_calls[0]["request"]
+    assert ingestion_request.document_id == "doc-provider"
+    assert ingestion_request.user_id == "user-provider"
+    assert ingestion_request.document_owner_user_id == 42
+    assert ingestion_request.markdown == "# Title\n\nBody"
+    assert ingestion_request.filename == "paper.pdf"
+    assert progress_updates[0]["message"] == "Downloading converted Markdown"
+    assert progress_updates[1]["message"] == "Ingesting converted Markdown"
+    assert completed_events == [
+        {
+            "job_id": "job-provider",
+            "message": "Processing completed",
+        }
+    ]
+    assert tracker.calls[-1]["stage"] == ProcessingStage.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_execute_provider_conversion_polls_then_ingests_main_markdown(monkeypatch):
+    tracker = _Tracker()
+    provider = _Provider()
+    provider.conversion_results = [
+        SourceConversionResult(
+            provider="fake_provider",
+            status=SourceConversionStatus.RUNNING,
+            reference_curie="AGRKB:101",
+            job_id="abc-job-1",
+            converted_classes=("converted_merged_main",),
+            per_file_progress=(
+                {
+                    "source": {"display_name": "paper", "file_class": "main"},
+                    "converted": {
+                        "display_name": "paper_nxml",
+                        "file_class": "converted_merged_main",
+                        "referencefile_id": 88,
+                    },
+                    "status": "success",
+                    "error": None,
+                },
+            ),
+        )
+    ]
+    provider.artifacts = [
+        SourceArtifact(
+            provider="fake_provider",
+            artifact_id="markdown-88",
+            role=SourceArtifactRole.CONVERTED_TEXT,
+            artifact_format=SourceArtifactFormat.MARKDOWN,
+            status=SourceArtifactStatus.AVAILABLE,
+            reference_curie="AGRKB:101",
+            display_name="paper_nxml.md",
+            access_policy=SourceAccessPolicy(scope=SourceAccessScope.GLOBAL),
+            metadata={"file_class": "converted_merged_main", "file_extension": "md"},
+        )
+    ]
+    progress_updates = []
+    ingested = []
+    sql_selections = []
+
+    async def _ingest(request, *, weaviate_client):
+        ingested.append({"request": request, "weaviate_client": weaviate_client})
+
+    async def _sync_selection(self, request, converted_artifact):
+        sql_selections.append((request.document_id, converted_artifact.artifact_id))
+
+    service = UploadExecutionService(
+        pipeline_tracker=tracker,
+        document_source_provider_factory=lambda: provider,
+        provider_markdown_ingestion_fn=_ingest,
+    )
+
+    monkeypatch.setattr(service_module, "get_connection", lambda: "weaviate-client")
+    monkeypatch.setattr(service_module, "get_document_source_import_timeout_seconds", lambda: 5)
+    monkeypatch.setattr(service_module, "get_document_source_poll_interval_seconds", lambda: 0.01)
+    job_statuses = [
+        SimpleNamespace(status=PdfJobStatus.PENDING.value),
+        SimpleNamespace(status=PdfJobStatus.RUNNING.value),
+    ]
+
+    def _get_job_by_id(**_kwargs):
+        if job_statuses:
+            return job_statuses.pop(0)
+        return SimpleNamespace(status=PdfJobStatus.RUNNING.value)
+
+    monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", _get_job_by_id)
+    monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_kwargs: False)
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "update_progress",
+        lambda **kwargs: progress_updates.append(kwargs),
+    )
+    completed_events = []
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_completed",
+        lambda **kwargs: completed_events.append(kwargs),
+    )
+    monkeypatch.setattr(service_module.pdf_job_service, "mark_failed", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        UploadExecutionService,
+        "_sync_provider_conversion_sql_selection",
+        _sync_selection,
+    )
+
+    await service.execute_provider_conversion(
+        ProviderConversionExecutionRequest(
+            document_id="doc-conversion",
+            job_id="job-conversion",
+            user_id="user-provider",
+            owner_user_id=42,
+            filename="paper.pdf",
+            reference="AGRKB:101",
+            source_artifact_id="source-pdf-1",
+            curator_token="curator-token",
+            source_provenance={
+                "provider": "abc_literature",
+                "reference_curie": "AGRKB:101",
+                "pdf_artifact_id": "source-pdf-1",
+                "viewer_mode": "local_pdf",
+            },
+        )
+    )
+
+    assert provider.conversion_requests == [
+        {
+            "reference": "AGRKB:101",
+            "wait": False,
+            "request_bearer_token": "curator-token",
+        }
+    ]
+    assert provider.list_artifact_calls == [
+        {"reference": "AGRKB:101", "request_bearer_token": "curator-token"}
+    ]
+    assert sql_selections == [("doc-conversion", "markdown-88")]
+    assert provider.downloads == [
+        {"artifact_id": "markdown-88", "request_bearer_token": "curator-token"}
+    ]
+    assert len(job_statuses) == 1
+    assert ingested[0]["request"].source_provenance["converted_artifact_id"] == "markdown-88"
+    assert progress_updates[0]["stage"] == "provider_conversion"
+    assert progress_updates[0]["metadata"]["document_source"]["conversion_job_id"] == "abc-job-1"
+    assert completed_events == [{"job_id": "job-conversion", "message": "Processing completed"}]
+
+
+def test_select_preferred_main_markdown_skips_abc_tei_only_artifact():
+    artifact = SourceArtifact(
+        provider="abc_literature",
+        artifact_id="tei-markdown-1",
+        role=SourceArtifactRole.CONVERTED_TEXT,
+        artifact_format=SourceArtifactFormat.MARKDOWN,
+        status=SourceArtifactStatus.AVAILABLE,
+        reference_curie="AGRKB:101",
+        display_name="paper_tei.md",
+        access_policy=SourceAccessPolicy(scope=SourceAccessScope.GLOBAL),
+        metadata={"file_class": "converted_merged_main", "file_extension": "md"},
+    )
+
+    selected, ambiguous_count = service_module._select_preferred_main_markdown(
+        [artifact],
+        reference="AGRKB:101",
+    )
+
+    assert selected is None
+    assert ambiguous_count == 0
+
+
+def test_select_preferred_main_markdown_reports_ambiguous_equal_candidates():
+    artifacts = [
+        SourceArtifact(
+            provider="abc_literature",
+            artifact_id=artifact_id,
+            role=SourceArtifactRole.CONVERTED_TEXT,
+            artifact_format=SourceArtifactFormat.MARKDOWN,
+            status=SourceArtifactStatus.AVAILABLE,
+            reference_curie="AGRKB:101",
+            display_name=display_name,
+            access_policy=SourceAccessPolicy(scope=SourceAccessScope.GLOBAL),
+            metadata={"file_class": "converted_merged_main", "file_extension": "md"},
+        )
+        for artifact_id, display_name in (
+            ("nxml-markdown-1", "paper_a_nxml.md"),
+            ("nxml-markdown-2", "paper_b_nxml.md"),
+        )
+    ]
+
+    selected, ambiguous_count = service_module._select_preferred_main_markdown(
+        artifacts,
+        reference="AGRKB:101",
+    )
+
+    assert selected is None
+    assert ambiguous_count == 2
+
+
+@pytest.mark.asyncio
+async def test_execute_provider_conversion_fails_when_completed_without_canonical_markdown(monkeypatch):
+    tracker = _Tracker()
+    provider = _Provider()
+    provider.conversion_results = [
+        SourceConversionResult(
+            provider="abc_literature",
+            status=SourceConversionStatus.CONVERTED,
+            reference_curie="AGRKB:101",
+            job_id="abc-job-1",
+            converted_classes=("converted_merged_main",),
+        )
+    ]
+    provider.artifacts = [
+        SourceArtifact(
+            provider="abc_literature",
+            artifact_id="tei-markdown-1",
+            role=SourceArtifactRole.CONVERTED_TEXT,
+            artifact_format=SourceArtifactFormat.MARKDOWN,
+            status=SourceArtifactStatus.AVAILABLE,
+            reference_curie="AGRKB:101",
+            display_name="paper_tei.md",
+            access_policy=SourceAccessPolicy(scope=SourceAccessScope.GLOBAL),
+            metadata={"file_class": "converted_merged_main", "file_extension": "md"},
+        )
+    ]
+    progress_updates = []
+    failed_events = []
+    status_updates = []
+    sql_failures = []
+
+    async def _update_document_status(document_id, user_id, status):
+        status_updates.append((document_id, user_id, status))
+
+    async def _sync_sql_failure(self, request, exc):
+        sql_failures.append((request.document_id, str(exc)))
+
+    service = UploadExecutionService(
+        pipeline_tracker=tracker,
+        document_source_provider_factory=lambda: provider,
+    )
+
+    monkeypatch.setattr(service_module, "get_document_source_import_timeout_seconds", lambda: 5)
+    monkeypatch.setattr(service_module, "get_document_source_poll_interval_seconds", lambda: 0.01)
+    monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_kwargs: False)
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "update_progress",
+        lambda **kwargs: progress_updates.append(kwargs),
+    )
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_failed",
+        lambda **kwargs: failed_events.append(kwargs),
+    )
+    monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module, "update_document_status", _update_document_status)
+    monkeypatch.setattr(
+        UploadExecutionService,
+        "_sync_provider_conversion_sql_failure",
+        _sync_sql_failure,
+    )
+
+    await service.execute_provider_conversion(
+        ProviderConversionExecutionRequest(
+            document_id="doc-conversion",
+            job_id="job-conversion",
+            user_id="user-provider",
+            owner_user_id=42,
+            filename="paper.pdf",
+            reference="AGRKB:101",
+            source_artifact_id="source-pdf-1",
+            curator_token="curator-token",
+            source_provenance={"provider": "abc_literature"},
+        )
+    )
+
+    assert failed_events == [
+        {
+            "job_id": "job-conversion",
+            "message": "Provider conversion completed without canonical converted Markdown",
+            "stage": ProcessingStage.FAILED.value,
+        }
+    ]
+    assert status_updates == [("doc-conversion", "user-provider", "failed")]
+    assert sql_failures == [
+        ("doc-conversion", "Provider conversion completed without canonical converted Markdown")
+    ]
+    assert progress_updates[0]["metadata"]["document_source"]["conversion_status"] == "converted"
+
+
+@pytest.mark.asyncio
+async def test_execute_provider_conversion_marks_failed_when_provider_fails(monkeypatch):
+    tracker = _Tracker()
+    provider = _Provider()
+    provider.conversion_results = [
+        SourceConversionResult(
+            provider="fake_provider",
+            status=SourceConversionStatus.FAILED,
+            reference_curie="AGRKB:101",
+            job_id="abc-job-1",
+            error_message="pdfx 500",
+            per_file_progress=(
+                {
+                    "source": {"display_name": "paper", "file_class": "main"},
+                    "converted": None,
+                    "status": "failed",
+                    "error": "pdfx 500",
+                },
+            ),
+        )
+    ]
+    progress_updates = []
+    failed_events = []
+    status_updates = []
+    sql_failures = []
+
+    async def _update_document_status(document_id, user_id, status):
+        status_updates.append((document_id, user_id, status))
+
+    async def _sync_sql_failure(self, request, exc):
+        sql_failures.append((request.document_id, str(exc)))
+
+    service = UploadExecutionService(
+        pipeline_tracker=tracker,
+        document_source_provider_factory=lambda: provider,
+    )
+
+    monkeypatch.setattr(service_module, "get_document_source_import_timeout_seconds", lambda: 5)
+    monkeypatch.setattr(service_module, "get_document_source_poll_interval_seconds", lambda: 0.01)
+    monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_kwargs: False)
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "update_progress",
+        lambda **kwargs: progress_updates.append(kwargs),
+    )
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_failed",
+        lambda **kwargs: failed_events.append(kwargs),
+    )
+    monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module, "update_document_status", _update_document_status)
+    monkeypatch.setattr(
+        UploadExecutionService,
+        "_sync_provider_conversion_sql_failure",
+        _sync_sql_failure,
+    )
+
+    await service.execute_provider_conversion(
+        ProviderConversionExecutionRequest(
+            document_id="doc-conversion",
+            job_id="job-conversion",
+            user_id="user-provider",
+            owner_user_id=42,
+            filename="paper.pdf",
+            reference="AGRKB:101",
+            source_artifact_id="source-pdf-1",
+            curator_token="curator-token",
+            source_provenance={"provider": "abc_literature"},
+        )
+    )
+
+    assert failed_events == [
+        {
+            "job_id": "job-conversion",
+            "message": "pdfx 500",
+            "stage": ProcessingStage.FAILED.value,
+        }
+    ]
+    assert status_updates == [("doc-conversion", "user-provider", "failed")]
+    assert sql_failures == [("doc-conversion", "pdfx 500")]
+    assert progress_updates[-1]["metadata"]["document_source"]["per_file_progress"][0]["error"] == "pdfx 500"
+    assert provider.closed is True
+
+
+@pytest.mark.asyncio
+async def test_execute_provider_conversion_marks_failed_when_provider_has_no_sources(monkeypatch):
+    tracker = _Tracker()
+    provider = _Provider()
+    provider.conversion_results = [
+        SourceConversionResult(
+            provider="abc_literature",
+            status=SourceConversionStatus.NO_SOURCES,
+            reference_curie="AGRKB:101",
+            job_id="abc-job-1",
+        )
+    ]
+    progress_updates = []
+    failed_events = []
+    status_updates = []
+    sql_failures = []
+
+    async def _update_document_status(document_id, user_id, status):
+        status_updates.append((document_id, user_id, status))
+
+    async def _sync_sql_failure(self, request, exc):
+        sql_failures.append((request.document_id, str(exc)))
+
+    service = UploadExecutionService(
+        pipeline_tracker=tracker,
+        document_source_provider_factory=lambda: provider,
+    )
+
+    monkeypatch.setattr(service_module, "get_document_source_import_timeout_seconds", lambda: 5)
+    monkeypatch.setattr(service_module, "get_document_source_poll_interval_seconds", lambda: 0.01)
+    monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_kwargs: False)
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "update_progress",
+        lambda **kwargs: progress_updates.append(kwargs),
+    )
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_failed",
+        lambda **kwargs: failed_events.append(kwargs),
+    )
+    monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module, "update_document_status", _update_document_status)
+    monkeypatch.setattr(
+        UploadExecutionService,
+        "_sync_provider_conversion_sql_failure",
+        _sync_sql_failure,
+    )
+
+    await service.execute_provider_conversion(
+        ProviderConversionExecutionRequest(
+            document_id="doc-conversion",
+            job_id="job-conversion",
+            user_id="user-provider",
+            owner_user_id=42,
+            filename="paper.pdf",
+            reference="AGRKB:101",
+            source_artifact_id="source-pdf-1",
+            curator_token="curator-token",
+            source_provenance={"provider": "abc_literature"},
+        )
+    )
+
+    assert failed_events == [
+        {
+            "job_id": "job-conversion",
+            "message": "Provider conversion found no convertible source files",
+            "stage": ProcessingStage.FAILED.value,
+        }
+    ]
+    assert status_updates == [("doc-conversion", "user-provider", "failed")]
+    assert sql_failures == [
+        ("doc-conversion", "Provider conversion found no convertible source files")
+    ]
+    assert progress_updates[-1]["metadata"]["document_source"]["conversion_status"] == "no_sources"
+    assert provider.closed is True
+
+
+@pytest.mark.asyncio
+async def test_execute_provider_conversion_times_out_and_syncs_sql_failure(monkeypatch):
+    tracker = _Tracker()
+    failed_events = []
+    status_updates = []
+    sql_failures = []
+
+    async def _slow_conversion(self, request):
+        del self, request
+        await asyncio.sleep(10)
+
+    async def _update_document_status(document_id, user_id, status):
+        status_updates.append((document_id, user_id, status))
+
+    async def _sync_sql_failure(self, request, exc):
+        sql_failures.append((request.document_id, str(exc)))
+
+    service = UploadExecutionService(
+        pipeline_tracker=tracker,
+        document_source_provider_factory=lambda: _Provider(),
+    )
+
+    monkeypatch.setattr(service_module, "get_document_source_import_timeout_seconds", lambda: 0.01)
+    monkeypatch.setattr(
+        UploadExecutionService,
+        "_execute_provider_conversion_unbounded",
+        _slow_conversion,
+    )
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_failed",
+        lambda **kwargs: failed_events.append(kwargs),
+    )
+    monkeypatch.setattr(service_module, "update_document_status", _update_document_status)
+    monkeypatch.setattr(
+        UploadExecutionService,
+        "_sync_provider_conversion_sql_failure",
+        _sync_sql_failure,
+    )
+
+    await service.execute_provider_conversion(
+        ProviderConversionExecutionRequest(
+            document_id="doc-conversion",
+            job_id="job-conversion",
+            user_id="user-provider",
+            owner_user_id=42,
+            filename="paper.pdf",
+            reference="AGRKB:101",
+            source_artifact_id="source-pdf-1",
+            curator_token="curator-token",
+            source_provenance={"provider": "abc_literature"},
+        )
+    )
+
+    assert status_updates == [("doc-conversion", "user-provider", "failed")]
+    assert sql_failures == [
+        ("doc-conversion", "Provider conversion exceeded 0.01 seconds")
+    ]
+    assert failed_events == [
+        {
+            "job_id": "job-conversion",
+            "message": "Provider conversion exceeded 0.01 seconds",
+            "stage": ProcessingStage.FAILED.value,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_provider_markdown_times_out_and_marks_failed(monkeypatch):
+    tracker = _Tracker()
+    provider = _Provider()
+    failed_events = []
+    status_updates = []
+    sql_failures = []
+
+    async def _ingest(_request, *, weaviate_client):
+        del weaviate_client
+        await asyncio.sleep(10)
+
+    async def _update_document_status(document_id, user_id, status):
+        status_updates.append((document_id, user_id, status))
+
+    async def _sync_sql_failure(self, request, exc):
+        sql_failures.append((request.document_id, str(exc)))
+
+    service = UploadExecutionService(
+        pipeline_tracker=tracker,
+        document_source_provider_factory=lambda: provider,
+        provider_markdown_ingestion_fn=_ingest,
+    )
+
+    monkeypatch.setattr(service_module, "get_connection", lambda: "weaviate-client")
+    monkeypatch.setattr(service_module, "get_document_source_import_timeout_seconds", lambda: 0.01)
+    monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_kwargs: False)
+    monkeypatch.setattr(service_module.pdf_job_service, "update_progress", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_failed",
+        lambda **kwargs: failed_events.append(kwargs),
+    )
+    monkeypatch.setattr(service_module, "update_document_status", _update_document_status)
+    monkeypatch.setattr(
+        UploadExecutionService,
+        "_sync_provider_markdown_sql_failure",
+        _sync_sql_failure,
+    )
+
+    await service.execute_provider_markdown(
+        ProviderMarkdownExecutionRequest(
+            document_id="doc-provider",
+            job_id="job-provider",
+            user_id="user-provider",
+            owner_user_id=42,
+            filename="paper.pdf",
+            converted_artifact_id="markdown-1",
+            curator_token="curator-token",
+            source_provenance={
+                "provider": "fake_provider",
+                "access_scope": "global",
+            },
+        )
+    )
+
+    assert provider.closed is True
+    assert status_updates == [("doc-provider", "user-provider", "failed")]
+    assert sql_failures == [
+        ("doc-provider", "Provider Markdown import exceeded 0.01 seconds")
+    ]
+    assert failed_events == [
+        {
+            "job_id": "job-provider",
+            "message": "Provider Markdown import exceeded 0.01 seconds",
+            "stage": ProcessingStage.FAILED.value,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_provider_markdown_rejects_blank_curator_token_before_download(monkeypatch):
+    tracker = _Tracker()
+    provider_calls = []
+    failed_events = []
+    sql_failures = []
+
+    async def _sync_sql_failure(self, request, exc):
+        sql_failures.append((request.document_id, str(exc)))
+
+    service = UploadExecutionService(
+        pipeline_tracker=tracker,
+        document_source_provider_factory=lambda: provider_calls.append("provider") or _Provider(),
+        provider_markdown_ingestion_fn=lambda *_args, **_kwargs: None,
+    )
+
+    monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_kwargs: False)
+    monkeypatch.setattr(service_module.pdf_job_service, "update_progress", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_failed",
+        lambda **kwargs: failed_events.append(kwargs),
+    )
+    monkeypatch.setattr(service_module, "update_document_status", lambda *_args, **_kwargs: _async_value(None))
+    monkeypatch.setattr(
+        UploadExecutionService,
+        "_sync_provider_markdown_sql_failure",
+        _sync_sql_failure,
+    )
+
+    await service.execute_provider_markdown(
+        ProviderMarkdownExecutionRequest(
+            document_id="doc-provider",
+            job_id="job-provider",
+            user_id="user-provider",
+            owner_user_id=42,
+            filename="paper.pdf",
+            converted_artifact_id="markdown-1",
+            curator_token="  ",
+            source_provenance={
+                "provider": "fake_provider",
+                "access_scope": "global",
+            },
+        )
+    )
+
+    assert provider_calls == []
+    assert failed_events[0]["message"] == "Provider Markdown download requires a request curator token"
+    assert sql_failures == [
+        ("doc-provider", "Provider Markdown download requires a request curator token")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_provider_markdown_syncs_sql_failure_when_download_fails(monkeypatch):
+    tracker = _Tracker()
+    provider = _RaisingProvider()
+    failed_events = []
+    sql_failures = []
+
+    async def _sync_sql_failure(self, request, exc):
+        sql_failures.append((request.document_id, str(exc)))
+
+    service = UploadExecutionService(
+        pipeline_tracker=tracker,
+        document_source_provider_factory=lambda: provider,
+        provider_markdown_ingestion_fn=lambda *_args, **_kwargs: None,
+    )
+
+    monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_kwargs: False)
+    monkeypatch.setattr(service_module.pdf_job_service, "update_progress", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_failed",
+        lambda **kwargs: failed_events.append(kwargs),
+    )
+    monkeypatch.setattr(service_module, "update_document_status", lambda *_args, **_kwargs: _async_value(None))
+    monkeypatch.setattr(
+        UploadExecutionService,
+        "_sync_provider_markdown_sql_failure",
+        _sync_sql_failure,
+    )
+
+    await service.execute_provider_markdown(
+        ProviderMarkdownExecutionRequest(
+            document_id="doc-provider",
+            job_id="job-provider",
+            user_id="user-provider",
+            owner_user_id=42,
+            filename="paper.pdf",
+            converted_artifact_id="markdown-1",
+            curator_token="curator-token",
+            source_provenance={
+                "provider": "fake_provider",
+                "access_scope": "global",
+            },
+        )
+    )
+
+    assert provider.downloads == [
+        {
+            "artifact_id": "markdown-1",
+            "request_bearer_token": "curator-token",
+        }
+    ]
+    assert provider.closed is True
+    assert failed_events[0]["message"] == "provider unavailable"
+    assert sql_failures == [("doc-provider", "provider unavailable")]
+
+
+@pytest.mark.asyncio
+async def test_execute_provider_markdown_marks_cancelled_when_cancel_requested_after_download(monkeypatch):
+    tracker = _Tracker()
+    provider = _Provider()
+    cancel_checks = {"count": 0}
+    cancelled_events = []
+    failed_events = []
+    ingestion_calls = []
+
+    def _is_cancel_requested(**_kwargs):
+        cancel_checks["count"] += 1
+        return cancel_checks["count"] >= 2
+
+    async def _ingest(*_args, **_kwargs):
+        ingestion_calls.append("ingest")
+
+    service = UploadExecutionService(
+        pipeline_tracker=tracker,
+        document_source_provider_factory=lambda: provider,
+        provider_markdown_ingestion_fn=_ingest,
+    )
+
+    monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", _is_cancel_requested)
+    monkeypatch.setattr(service_module.pdf_job_service, "update_progress", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_cancelled",
+        lambda **kwargs: cancelled_events.append(kwargs),
+    )
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_failed",
+        lambda **kwargs: failed_events.append(kwargs),
+    )
+    monkeypatch.setattr(service_module, "update_document_status", lambda *_args, **_kwargs: _async_value(None))
+
+    await service.execute_provider_markdown(
+        ProviderMarkdownExecutionRequest(
+            document_id="doc-provider",
+            job_id="job-provider",
+            user_id="user-provider",
+            owner_user_id=42,
+            filename="paper.pdf",
+            converted_artifact_id="markdown-1",
+            curator_token="curator-token",
+            source_provenance={
+                "provider": "fake_provider",
+                "access_scope": "global",
+            },
+        )
+    )
+
+    assert ingestion_calls == []
+    assert failed_events == []
+    assert cancelled_events == [
+        {
+            "job_id": "job-provider",
+            "reason": "Processing cancelled by user request",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_provider_markdown_tracker_completed_failure_does_not_fail_job(monkeypatch):
+    tracker = _RaisingTracker(RuntimeError("tracker unavailable"))
+    provider = _Provider()
+    completed_events = []
+    failed_events = []
+
+    async def _ingest(*_args, **_kwargs):
+        return None
+
+    service = UploadExecutionService(
+        pipeline_tracker=tracker,
+        document_source_provider_factory=lambda: provider,
+        provider_markdown_ingestion_fn=_ingest,
+    )
+
+    monkeypatch.setattr(service_module, "get_connection", lambda: "weaviate-client")
+    monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_kwargs: False)
+    monkeypatch.setattr(service_module.pdf_job_service, "update_progress", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_completed",
+        lambda **kwargs: completed_events.append(kwargs),
+    )
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_failed",
+        lambda **kwargs: failed_events.append(kwargs),
+    )
+
+    await service.execute_provider_markdown(
+        ProviderMarkdownExecutionRequest(
+            document_id="doc-provider",
+            job_id="job-provider",
+            user_id="user-provider",
+            owner_user_id=42,
+            filename="paper.pdf",
+            converted_artifact_id="markdown-1",
+            curator_token="curator-token",
+            source_provenance={
+                "provider": "fake_provider",
+                "access_scope": "global",
+            },
+        )
+    )
+
+    assert completed_events == [
+        {
+            "job_id": "job-provider",
+            "message": "Processing completed",
+        }
+    ]
+    assert failed_events == []
 
 
 @pytest.mark.asyncio

@@ -2,14 +2,34 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from fastapi import BackgroundTasks
 
+from src.lib.document_sources.ingestion import (
+    DocumentSourceIngestionError,
+    ProviderMarkdownIngestionRequest,
+    ingest_provider_markdown_document,
+)
+from src.lib.document_sources.models import DocumentSourceProvider
+from src.lib.document_sources.models import (
+    SourceArtifact,
+    SourceArtifactFormat,
+    SourceArtifactRole,
+    SourceArtifactStatus,
+    SourceConversionResult,
+    SourceConversionStatus,
+)
+from src.lib.document_sources.registry import get_configured_document_source_provider
 from src.lib.exceptions import PDFCancellationError
+from src.lib.openai_agents.config import (
+    get_document_source_import_timeout_seconds,
+    get_document_source_poll_interval_seconds,
+)
 from src.lib.pipeline.orchestrator import DocumentPipelineOrchestrator
 from src.lib.pipeline.tracker import PipelineTracker
 from src.lib.weaviate_helpers import get_connection
@@ -139,6 +159,35 @@ class UploadExecutionRequest:
     file_path: Path
 
 
+@dataclass(frozen=True)
+class ProviderMarkdownExecutionRequest:
+    """Context needed to ingest provider-converted Markdown in the background."""
+
+    document_id: str
+    job_id: str
+    user_id: str
+    owner_user_id: int
+    filename: str
+    converted_artifact_id: str
+    curator_token: str = field(repr=False)
+    source_provenance: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class ProviderConversionExecutionRequest:
+    """Context needed to wait for provider conversion before Markdown ingestion."""
+
+    document_id: str
+    job_id: str
+    user_id: str
+    owner_user_id: int
+    filename: str
+    reference: str
+    source_artifact_id: str
+    curator_token: str = field(repr=False)
+    source_provenance: Mapping[str, Any]
+
+
 class UploadExecutionService:
     """Dispatch and execute the upload processing pipeline lifecycle."""
 
@@ -146,10 +195,14 @@ class UploadExecutionService:
         self,
         *,
         pipeline_tracker: PipelineTracker,
-        orchestrator_factory: Optional[Callable[[Any, PipelineTracker], DocumentPipelineOrchestrator]] = None,
+        orchestrator_factory: Optional[Callable[[Any, Any], DocumentPipelineOrchestrator]] = None,
+        document_source_provider_factory: Callable[[], DocumentSourceProvider] = get_configured_document_source_provider,
+        provider_markdown_ingestion_fn: Callable[..., Any] = ingest_provider_markdown_document,
     ) -> None:
         self.pipeline_tracker = pipeline_tracker
         self._orchestrator_factory = orchestrator_factory or self._default_orchestrator_factory
+        self._document_source_provider_factory = document_source_provider_factory
+        self._provider_markdown_ingestion = provider_markdown_ingestion_fn
 
     async def dispatch_upload_execution(
         self,
@@ -160,6 +213,26 @@ class UploadExecutionService:
         """Prime tracking and queue upload execution on FastAPI background tasks."""
         await self.pipeline_tracker.track_pipeline_progress(request.document_id, ProcessingStage.UPLOAD)
         background_tasks.add_task(self.execute_upload, request)
+
+    async def dispatch_provider_markdown_execution(
+        self,
+        *,
+        background_tasks: BackgroundTasks,
+        request: ProviderMarkdownExecutionRequest,
+    ) -> None:
+        """Prime tracking and queue provider Markdown ingestion on background tasks."""
+        await self.pipeline_tracker.track_pipeline_progress(request.document_id, ProcessingStage.UPLOAD)
+        background_tasks.add_task(self.execute_provider_markdown, request)
+
+    async def dispatch_provider_conversion_execution(
+        self,
+        *,
+        background_tasks: BackgroundTasks,
+        request: ProviderConversionExecutionRequest,
+    ) -> None:
+        """Prime tracking and queue provider conversion polling."""
+        await self.pipeline_tracker.track_pipeline_progress(request.document_id, ProcessingStage.UPLOAD)
+        background_tasks.add_task(self.execute_provider_conversion, request)
 
     async def execute_upload(self, request: UploadExecutionRequest) -> None:
         """Run upload orchestration and persist durable job transitions."""
@@ -232,17 +305,467 @@ class UploadExecutionService:
                     stage=ProcessingStage.FAILED.value,
                 )
 
+    async def execute_provider_markdown(self, request: ProviderMarkdownExecutionRequest) -> None:
+        """Run provider Markdown ingestion with the configured wall-clock bound."""
+        timeout_seconds = get_document_source_import_timeout_seconds()
+        try:
+            await asyncio.wait_for(
+                self._execute_provider_markdown_unbounded(request),
+                timeout=timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            timeout_error = RuntimeError(
+                f"Provider Markdown import exceeded {timeout_seconds:g} seconds"
+            )
+            logger.error(
+                "Provider Markdown import timed out for document %s after %s seconds",
+                request.document_id,
+                timeout_seconds,
+            )
+            try:
+                await update_document_status(
+                    request.document_id,
+                    request.user_id,
+                    ProcessingStatus.FAILED.value,
+                )
+            except Exception as status_err:
+                logger.warning(
+                    "Failed to sync document status for timed-out provider Markdown document=%s: %s",
+                    request.document_id,
+                    status_err,
+                )
+            await self._sync_provider_markdown_sql_failure(request, timeout_error)
+            pdf_job_service.mark_failed(
+                job_id=request.job_id,
+                message=str(timeout_error),
+                stage=ProcessingStage.FAILED.value,
+            )
+
+    async def execute_provider_conversion(self, request: ProviderConversionExecutionRequest) -> None:
+        """Poll provider conversion until main Markdown can be ingested."""
+        timeout_seconds = get_document_source_import_timeout_seconds()
+        try:
+            await asyncio.wait_for(
+                self._execute_provider_conversion_unbounded(request),
+                timeout=timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            timeout_error = RuntimeError(
+                f"Provider conversion exceeded {timeout_seconds:g} seconds"
+            )
+            logger.error(
+                "Provider conversion timed out for document %s after %s seconds",
+                request.document_id,
+                timeout_seconds,
+            )
+            try:
+                await update_document_status(
+                    request.document_id,
+                    request.user_id,
+                    ProcessingStatus.FAILED.value,
+                )
+            except Exception as status_err:
+                logger.warning(
+                    "Failed to sync document status for timed-out provider conversion document=%s: %s",
+                    request.document_id,
+                    status_err,
+                )
+            await self._sync_provider_conversion_sql_failure(request, timeout_error)
+            pdf_job_service.mark_failed(
+                job_id=request.job_id,
+                message=str(timeout_error),
+                stage=ProcessingStage.FAILED.value,
+            )
+
+    async def _execute_provider_conversion_unbounded(
+        self,
+        request: ProviderConversionExecutionRequest,
+    ) -> None:
+        """Wait for provider main Markdown, then ingest it through provider Markdown flow."""
+        if pdf_job_service.is_cancel_requested(job_id=request.job_id):
+            await self._handle_pre_start_cancellation(request)
+            return
+
+        existing_job = pdf_job_service.get_job_by_id(job_id=request.job_id, reconcile_stale=False)
+        if existing_job and existing_job.status in _NON_PENDING_JOB_STATUSES:
+            logger.info(
+                "Skipping replayed provider conversion execution for job %s with durable status %s",
+                request.job_id,
+                existing_job.status,
+            )
+            return
+
+        provider: DocumentSourceProvider | None = None
+        poll_interval_seconds = max(0.1, get_document_source_poll_interval_seconds())
+        last_result: SourceConversionResult | None = None
+        try:
+            curator_token = (request.curator_token or "").strip()
+            if not curator_token:
+                raise RuntimeError("Provider conversion requires a request curator token")
+
+            provider = self._document_source_provider_factory()
+            while True:
+                if pdf_job_service.is_cancel_requested(job_id=request.job_id):
+                    raise PDFCancellationError("Processing cancelled by user request")
+
+                last_result = await provider.request_conversion(
+                    request.reference,
+                    wait=False,
+                    request_bearer_token=curator_token,
+                )
+                selected_artifact = await self._select_converted_main_artifact(
+                    provider=provider,
+                    request=request,
+                    conversion_result=last_result,
+                    curator_token=curator_token,
+                )
+                progress_metadata = _conversion_job_metadata(last_result)
+                progress_percentage = 35 if selected_artifact is not None else _conversion_progress_percentage(last_result)
+                message = _conversion_progress_message(last_result)
+                pdf_job_service.update_progress(
+                    job_id=request.job_id,
+                    stage="provider_conversion",
+                    progress_percentage=progress_percentage,
+                    message=message,
+                    status=PdfJobStatus.RUNNING.value,
+                    metadata=progress_metadata,
+                )
+
+                if selected_artifact is not None:
+                    source_provenance = _source_provenance_with_converted_artifact(
+                        request.source_provenance,
+                        selected_artifact,
+                    )
+                    await self._sync_provider_conversion_sql_selection(
+                        request,
+                        selected_artifact,
+                    )
+                    await self._execute_provider_markdown_unbounded(
+                        ProviderMarkdownExecutionRequest(
+                            document_id=request.document_id,
+                            job_id=request.job_id,
+                            user_id=request.user_id,
+                            owner_user_id=request.owner_user_id,
+                            filename=request.filename,
+                            converted_artifact_id=selected_artifact.artifact_id,
+                            curator_token=curator_token,
+                            source_provenance=source_provenance,
+                        ),
+                        skip_replay_guard=True,
+                    )
+                    return
+
+                if last_result.status is SourceConversionStatus.FAILED:
+                    raise RuntimeError(_conversion_failure_message(last_result))
+                if last_result.status is SourceConversionStatus.NO_SOURCES:
+                    raise RuntimeError("Provider conversion found no convertible source files")
+                if last_result.status is SourceConversionStatus.CONVERTED:
+                    raise RuntimeError("Provider conversion completed without canonical converted Markdown")
+
+                await asyncio.sleep(poll_interval_seconds)
+        except Exception as exc:
+            logger.error(
+                "Error waiting for provider conversion document %s: %s",
+                request.document_id,
+                exc,
+                exc_info=True,
+            )
+            try:
+                await update_document_status(
+                    request.document_id,
+                    request.user_id,
+                    ProcessingStatus.FAILED.value,
+                )
+            except Exception as status_err:
+                logger.warning(
+                    "Failed to sync document status for failed provider conversion document=%s: %s",
+                    request.document_id,
+                    status_err,
+                )
+            if isinstance(exc, PDFCancellationError):
+                pdf_job_service.mark_cancelled(job_id=request.job_id, reason=str(exc))
+            else:
+                failure_metadata = (
+                    _conversion_job_metadata(last_result)
+                    if last_result is not None
+                    else {"document_source": {"conversion_status": "failed"}}
+                )
+                pdf_job_service.update_progress(
+                    job_id=request.job_id,
+                    stage="provider_conversion",
+                    status=PdfJobStatus.RUNNING.value,
+                    metadata=failure_metadata,
+                )
+                await self._sync_provider_conversion_sql_failure(request, exc)
+                pdf_job_service.mark_failed(
+                    job_id=request.job_id,
+                    message=str(exc),
+                    stage=ProcessingStage.FAILED.value,
+                )
+        finally:
+            if provider is not None:
+                try:
+                    await provider.aclose()
+                except Exception as cleanup_err:
+                    logger.warning(
+                        "Best-effort document-source provider cleanup failed: %s",
+                        cleanup_err,
+                    )
+
+    async def _select_converted_main_artifact(
+        self,
+        *,
+        provider: DocumentSourceProvider,
+        request: ProviderConversionExecutionRequest,
+        conversion_result: SourceConversionResult,
+        curator_token: str,
+    ) -> SourceArtifact | None:
+        if not _conversion_result_has_main_text(
+            conversion_result,
+            provider_id=str(request.source_provenance.get("provider") or ""),
+        ):
+            return None
+        artifacts = await provider.list_artifacts(
+            request.reference,
+            request_bearer_token=curator_token,
+        )
+        selected, ambiguous_count = _select_preferred_main_markdown(
+            artifacts,
+            reference=request.reference,
+        )
+        if ambiguous_count > 1:
+            raise RuntimeError("Provider conversion produced multiple equally preferred Markdown artifacts")
+        return selected
+
+    async def _execute_provider_markdown_unbounded(
+        self,
+        request: ProviderMarkdownExecutionRequest,
+        *,
+        skip_replay_guard: bool = False,
+    ) -> None:
+        """Download provider Markdown and ingest it through the local pipeline."""
+        if pdf_job_service.is_cancel_requested(job_id=request.job_id):
+            await self._handle_pre_start_cancellation(request)
+            return
+
+        existing_job = None
+        if not skip_replay_guard:
+            existing_job = pdf_job_service.get_job_by_id(
+                job_id=request.job_id,
+                reconcile_stale=False,
+            )
+        if existing_job and existing_job.status in _NON_PENDING_JOB_STATUSES:
+            logger.info(
+                "Skipping replayed provider Markdown execution for job %s with durable status %s",
+                request.job_id,
+                existing_job.status,
+            )
+            return
+
+        provider: DocumentSourceProvider | None = None
+        try:
+            curator_token = (request.curator_token or "").strip()
+            if not curator_token:
+                raise RuntimeError("Provider Markdown download requires a request curator token")
+
+            pdf_job_service.update_progress(
+                job_id=request.job_id,
+                stage=ProcessingStage.UPLOAD.value,
+                progress_percentage=10,
+                message="Downloading converted Markdown",
+                status=PdfJobStatus.RUNNING.value,
+            )
+            provider = self._document_source_provider_factory()
+            markdown_bytes = await provider.download_artifact(
+                request.converted_artifact_id,
+                request_bearer_token=curator_token,
+            )
+            if pdf_job_service.is_cancel_requested(job_id=request.job_id):
+                raise PDFCancellationError("Processing cancelled by user request")
+            markdown = markdown_bytes.decode("utf-8")
+
+            pdf_job_service.update_progress(
+                job_id=request.job_id,
+                stage=ProcessingStage.PARSING.value,
+                progress_percentage=25,
+                message="Ingesting converted Markdown",
+                status=PdfJobStatus.RUNNING.value,
+            )
+            if pdf_job_service.is_cancel_requested(job_id=request.job_id):
+                raise PDFCancellationError("Processing cancelled by user request")
+            connection = get_connection()
+            await self._provider_markdown_ingestion(
+                ProviderMarkdownIngestionRequest(
+                    document_id=request.document_id,
+                    user_id=request.user_id,
+                    document_owner_user_id=request.owner_user_id,
+                    markdown=markdown,
+                    source_provenance=request.source_provenance,
+                    filename=request.filename,
+                ),
+                weaviate_client=connection,
+            )
+            if pdf_job_service.is_cancel_requested(job_id=request.job_id):
+                raise PDFCancellationError("Processing cancelled by user request")
+            try:
+                await self.pipeline_tracker.track_pipeline_progress(
+                    request.document_id,
+                    ProcessingStage.COMPLETED,
+                    progress_percentage=100,
+                    message="Processing completed",
+                )
+            except Exception as tracker_err:
+                logger.warning(
+                    "Failed to sync in-memory tracker for completed provider Markdown document=%s: %s",
+                    request.document_id,
+                    tracker_err,
+                )
+            pdf_job_service.mark_completed(job_id=request.job_id, message="Processing completed")
+        except Exception as exc:
+            logger.error(
+                "Error ingesting provider Markdown document %s: %s",
+                request.document_id,
+                exc,
+                exc_info=True,
+            )
+            try:
+                await update_document_status(
+                    request.document_id,
+                    request.user_id,
+                    ProcessingStatus.FAILED.value,
+                )
+            except Exception as status_err:
+                logger.warning(
+                    "Failed to sync document status for failed provider Markdown document=%s: %s",
+                    request.document_id,
+                    status_err,
+                )
+            if isinstance(exc, PDFCancellationError):
+                pdf_job_service.mark_cancelled(job_id=request.job_id, reason=str(exc))
+            else:
+                await self._sync_provider_markdown_sql_failure(request, exc)
+                pdf_job_service.mark_failed(
+                    job_id=request.job_id,
+                    message=str(exc),
+                    stage=ProcessingStage.FAILED.value,
+                )
+        finally:
+            if provider is not None:
+                try:
+                    await provider.aclose()
+                except Exception as cleanup_err:
+                    logger.warning(
+                        "Best-effort document-source provider cleanup failed: %s",
+                        cleanup_err,
+                    )
+
+    async def _sync_provider_markdown_sql_failure(
+        self,
+        request: ProviderMarkdownExecutionRequest,
+        exc: Exception,
+    ) -> None:
+        if isinstance(exc, DocumentSourceIngestionError):
+            return
+        try:
+            from src.lib.document_sources.ingestion import _sync_sql_document_status
+
+            await _sync_sql_document_status(
+                request.document_id,
+                user_id=request.user_id,
+                owner_user_id=request.owner_user_id,
+                status="failed",
+                error_message=str(exc),
+            )
+        except Exception as sync_err:
+            logger.warning(
+                "Failed to sync SQL provider Markdown failure for document=%s: %s",
+                request.document_id,
+                sync_err,
+            )
+
+    async def _sync_provider_conversion_sql_failure(
+        self,
+        request: ProviderConversionExecutionRequest,
+        exc: Exception,
+    ) -> None:
+        try:
+            from src.lib.document_sources.ingestion import _sync_sql_document_status
+
+            await _sync_sql_document_status(
+                request.document_id,
+                user_id=request.user_id,
+                owner_user_id=request.owner_user_id,
+                status="failed",
+                error_message=str(exc),
+            )
+        except Exception as sync_err:
+            logger.warning(
+                "Failed to sync SQL provider conversion failure for document=%s: %s",
+                request.document_id,
+                sync_err,
+            )
+
+    async def _sync_provider_conversion_sql_selection(
+        self,
+        request: ProviderConversionExecutionRequest,
+        converted_artifact: SourceArtifact,
+    ) -> None:
+        try:
+            from uuid import UUID
+
+            from sqlalchemy import select
+
+            from src.models.sql.database import SessionLocal
+            from src.models.sql.pdf_document import PDFDocument as ViewerPDFDocument
+
+            source_provenance = _source_provenance_with_converted_artifact(
+                request.source_provenance,
+                converted_artifact,
+            )
+            session = SessionLocal()
+            try:
+                document = session.execute(
+                    select(ViewerPDFDocument).where(
+                        ViewerPDFDocument.id == UUID(str(request.document_id)),
+                        ViewerPDFDocument.user_id == request.owner_user_id,
+                    )
+                ).scalar_one_or_none()
+                if document is None:
+                    return
+                document.source_provider_converted_artifact_id = source_provenance.get(
+                    "converted_artifact_id"
+                )
+                document.source_file_class = source_provenance.get("file_class")
+                document.source_file_extension = source_provenance.get("file_extension")
+                document.source_artifact_status = source_provenance.get("artifact_status")
+                document.source_import_status = "pending"
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+        except Exception as sync_err:
+            logger.warning(
+                "Failed to sync SQL provider conversion selection for document=%s: %s",
+                request.document_id,
+                sync_err,
+            )
+
     def _default_orchestrator_factory(
         self,
         connection: Any,
-        tracker: PipelineTracker,
+        tracker: Any,
     ) -> DocumentPipelineOrchestrator:
         return DocumentPipelineOrchestrator(
             weaviate_client=connection,
             tracker=tracker,
         )
 
-    async def _handle_pre_start_cancellation(self, request: UploadExecutionRequest) -> None:
+    async def _handle_pre_start_cancellation(
+        self,
+        request: UploadExecutionRequest | ProviderMarkdownExecutionRequest | ProviderConversionExecutionRequest,
+    ) -> None:
         cancellation_message = "Cancelled before processing started"
         pdf_job_service.mark_cancelled(
             job_id=request.job_id,
@@ -332,3 +855,193 @@ class UploadExecutionService:
             message=error_message or "Processing failed",
             stage=ProcessingStage.FAILED.value,
         )
+
+
+def _conversion_result_has_main_text(
+    result: SourceConversionResult,
+    *,
+    provider_id: str,
+) -> bool:
+    if provider_id != "abc_literature":
+        return result.status in {
+            SourceConversionStatus.CONVERTED,
+            SourceConversionStatus.RUNNING,
+        } and bool(result.converted_classes or result.per_file_progress)
+
+    if "converted_merged_main" in result.converted_classes:
+        return True
+    for progress in result.per_file_progress:
+        converted = progress.get("converted")
+        if not isinstance(converted, dict):
+            continue
+        if converted.get("file_class") == "converted_merged_main":
+            return True
+    for mod_status in result.per_mod_status:
+        if mod_status.get("main_converted") is True:
+            return True
+    return False
+
+
+def _select_preferred_main_markdown(
+    artifacts: list[SourceArtifact],
+    *,
+    reference: str,
+) -> tuple[SourceArtifact | None, int]:
+    reference_key = str(reference or "").strip()
+    candidates = [
+        artifact
+        for artifact in artifacts
+        if artifact.role is SourceArtifactRole.CONVERTED_TEXT
+        and artifact.artifact_format is SourceArtifactFormat.MARKDOWN
+        and artifact.status in {SourceArtifactStatus.AVAILABLE, SourceArtifactStatus.UNKNOWN}
+        and _is_canonical_main_markdown_artifact(artifact)
+        and (
+            not reference_key
+            or artifact.reference_curie == reference_key
+            or artifact.reference_id == reference_key
+        )
+    ]
+    if not candidates:
+        return None, 0
+    ranked = sorted(
+        ((_main_markdown_sort_key(artifact), artifact) for artifact in candidates),
+        key=lambda item: (
+            item[0],
+            str(item[1].display_name or "").strip().lower(),
+            item[1].artifact_id,
+        ),
+    )
+    best_rank = ranked[0][0]
+    best = [artifact for rank, artifact in ranked if rank == best_rank]
+    if len(best) > 1:
+        return None, len(best)
+    return best[0], 1
+
+
+def _is_canonical_main_markdown_artifact(artifact: SourceArtifact) -> bool:
+    file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
+    if artifact.provider == "abc_literature":
+        return file_class == "converted_merged_main" and not _artifact_looks_tei(artifact)
+    return True
+
+
+def _artifact_looks_tei(artifact: SourceArtifact) -> bool:
+    file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
+    display_name = str(artifact.display_name or "").strip().lower()
+    return "tei" in file_class or "_tei" in display_name or display_name.endswith("tei.md")
+
+
+def _main_markdown_sort_key(artifact: SourceArtifact) -> tuple[int]:
+    display_name = str(artifact.display_name or "").strip().lower()
+    is_nxml = display_name.endswith("_nxml") or display_name.endswith("_nxml.md")
+    is_tei = display_name.endswith("_tei") or display_name.endswith("_tei.md")
+    return (0 if is_nxml else 2 if is_tei else 1,)
+
+
+def _conversion_job_metadata(result: SourceConversionResult) -> dict[str, Any]:
+    document_source: dict[str, Any] = {
+        "conversion_status": result.status.value,
+        "converted_classes": list(result.converted_classes),
+        "per_file_progress": [_json_safe_mapping(item) for item in result.per_file_progress],
+        "per_mod_status": [_json_safe_mapping(item) for item in result.per_mod_status],
+    }
+    if result.job_id:
+        document_source["conversion_job_id"] = result.job_id
+    if result.error_message:
+        document_source["conversion_error_message"] = result.error_message
+    return {"document_source": document_source}
+
+
+def _json_safe_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
+    safe: dict[str, Any] = {}
+    for key, raw_value in value.items():
+        if isinstance(raw_value, Mapping):
+            safe[str(key)] = _json_safe_mapping(raw_value)
+        elif isinstance(raw_value, list | tuple):
+            safe[str(key)] = [
+                _json_safe_mapping(item) if isinstance(item, Mapping) else item
+                for item in raw_value
+            ]
+        else:
+            safe[str(key)] = raw_value
+    return safe
+
+
+def _conversion_progress_percentage(result: SourceConversionResult) -> int:
+    if result.status is SourceConversionStatus.RUNNING:
+        if "converted_merged_main" in result.converted_classes:
+            return 35
+        return 20
+    if result.status is SourceConversionStatus.CONVERTED:
+        return 35
+    if result.status in {SourceConversionStatus.FAILED, SourceConversionStatus.NO_SOURCES}:
+        return 100
+    return 15
+
+
+def _conversion_progress_message(result: SourceConversionResult) -> str:
+    if "converted_merged_main" in result.converted_classes:
+        return "ABC Literature main text is ready; importing converted Markdown"
+    if result.status is SourceConversionStatus.RUNNING:
+        pending_count = _count_progress_status(result, "pending")
+        if pending_count:
+            return f"ABC Literature conversion running ({pending_count} file{'s' if pending_count != 1 else ''} pending)"
+        return "ABC Literature conversion running"
+    if result.status is SourceConversionStatus.CONVERTED:
+        return "ABC Literature conversion completed; locating converted Markdown"
+    if result.status is SourceConversionStatus.FAILED:
+        return _conversion_failure_message(result)
+    if result.status is SourceConversionStatus.NO_SOURCES:
+        return "ABC Literature found no convertible source files"
+    return "Waiting for ABC Literature conversion status"
+
+
+def _count_progress_status(result: SourceConversionResult, status: str) -> int:
+    return sum(
+        1
+        for progress in result.per_file_progress
+        if str(progress.get("status") or "").strip().lower() == status
+    )
+
+
+def _conversion_failure_message(result: SourceConversionResult) -> str:
+    if result.error_message:
+        return result.error_message
+    failures = []
+    for progress in result.per_file_progress:
+        if str(progress.get("status") or "").strip().lower() != "failed":
+            continue
+        source = progress.get("source")
+        source_name = None
+        if isinstance(source, Mapping):
+            source_name = source.get("display_name")
+        error = progress.get("error")
+        if source_name and error:
+            failures.append(f"{source_name}: {error}")
+        elif error:
+            failures.append(str(error))
+    if failures:
+        return "; ".join(failures)
+    return "ABC Literature conversion failed"
+
+
+def _source_provenance_with_converted_artifact(
+    source_provenance: Mapping[str, Any],
+    converted_artifact: SourceArtifact,
+) -> dict[str, Any]:
+    updated = dict(source_provenance)
+    updated["converted_artifact_id"] = converted_artifact.artifact_id
+    updated["file_class"] = (
+        converted_artifact.metadata.get("file_class")
+        or getattr(converted_artifact.role, "value", str(converted_artifact.role))
+    )
+    updated["file_extension"] = (
+        converted_artifact.metadata.get("file_extension")
+        or getattr(converted_artifact.artifact_format, "value", str(converted_artifact.artifact_format))
+    )
+    updated["artifact_status"] = getattr(
+        converted_artifact.status,
+        "value",
+        str(converted_artifact.status),
+    )
+    return updated
