@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 import functools
+import hashlib
 import importlib
 import inspect
 import logging
@@ -13,10 +14,36 @@ from fastapi import BackgroundTasks
 
 logger = logging.getLogger(__name__)
 
+_IDENTIFIER_TAG_KEYS = {
+    "batch_document_id",
+    "batch_id",
+    "curator_id",
+    "document_id",
+    "file_id",
+    "flow_id",
+    "flow_run_id",
+    "job_id",
+    "run_id",
+    "session_id",
+    "trace_id",
+    "turn_id",
+    "user_auth_sub",
+    "user_id",
+}
+
+
 def _task_name(func: Callable[..., Any], explicit_name: str | None) -> str:
     if explicit_name:
         return explicit_name
     return getattr(func, "__qualname__", getattr(func, "__name__", "background_task"))
+
+
+def _hash_identifier(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    return f"sha256:{digest}"
 
 
 def _safe_tag_value(value: Any) -> str:
@@ -27,7 +54,14 @@ def _safe_tag_value(value: Any) -> str:
 
 
 def _safe_tags(tags: Mapping[str, Any] | None) -> dict[str, str]:
-    return {str(key): _safe_tag_value(value) for key, value in (tags or {}).items()}
+    safe: dict[str, str] = {}
+    for key, value in (tags or {}).items():
+        normalized_key = str(key)
+        if normalized_key in _IDENTIFIER_TAG_KEYS:
+            safe[normalized_key] = _hash_identifier(value) or "unknown"
+        else:
+            safe[normalized_key] = _safe_tag_value(value)
+    return safe
 
 
 def _safe_context(context: Mapping[str, Any] | None) -> dict[str, Any]:

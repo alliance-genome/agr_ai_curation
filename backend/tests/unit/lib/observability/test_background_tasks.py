@@ -64,7 +64,10 @@ def test_observed_sync_background_task_reports_and_reraises(fake_sentry):
     assert fake_sentry["exceptions"]
     assert ("alert_type", "background_task_failure") in fake_sentry["tags"]
     assert ("task_name", "sync.task") in fake_sentry["tags"]
-    assert ("document_id", "doc-1") in fake_sentry["tags"]
+    document_tag = next(value for key, value in fake_sentry["tags"] if key == "document_id")
+    assert document_tag.startswith("sha256:")
+    assert document_tag != "doc-1"
+    assert ("component", "unit") in fake_sentry["tags"]
 
 
 def test_observed_async_background_task_reports_and_reraises(fake_sentry):

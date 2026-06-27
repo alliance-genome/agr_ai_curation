@@ -3,6 +3,7 @@
 import asyncio
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import logging
 from types import SimpleNamespace
 from uuid import uuid4
 from unittest.mock import Mock
@@ -217,6 +218,56 @@ def test_process_batch_task_does_not_double_count_failed_documents(monkeypatch):
     assert batch_doc.status == BatchDocumentStatus.FAILED
 
 
+def test_process_batch_task_does_not_report_already_reported_flow_failure(monkeypatch, caplog):
+    batch, batch_doc, _flow = _build_batch_context()
+    batch.flow_id = uuid4()
+    batch.documents = [batch_doc]
+    batch.status = BatchStatus.PENDING
+    batch.started_at = None
+    batch.completed_at = None
+
+    flow = SimpleNamespace(id=batch.flow_id, name="Batch Flow")
+    user = SimpleNamespace(id=batch.user_id, auth_sub="auth-sub")
+    db = _DummyDB(batch=batch, batch_doc=batch_doc, flow=flow, user=user)
+    report_calls = []
+
+    @contextmanager
+    def _fake_get_db_session():
+        yield db
+
+    def _fake_process_single_document(db, batch, batch_doc, flow, cognito_sub):
+        batch_doc.status = BatchDocumentStatus.FAILED
+        batch_doc.error_message = "Flow extraction persistence failed"
+        batch_doc.processed_at = datetime.now(timezone.utc)
+        batch.failed_documents += 1
+        raise processor.BatchFlowExecutionError(
+            "Flow extraction persistence failed",
+            sentry_already_reported=True,
+        )
+
+    monkeypatch.setattr(processor, "get_db_session", _fake_get_db_session)
+    monkeypatch.setattr(processor, "_process_single_document", _fake_process_single_document)
+    monkeypatch.setattr(
+        processor,
+        "report_background_task_exception",
+        lambda *args, **kwargs: report_calls.append((args, kwargs)),
+    )
+    caplog.set_level(logging.WARNING, logger=processor.logger.name)
+
+    processor.process_batch_task(batch.id)
+
+    assert batch.failed_documents == 1
+    assert batch_doc.status == BatchDocumentStatus.FAILED
+    assert report_calls == []
+    matching_records = [
+        record
+        for record in caplog.records
+        if "upstream Sentry reporting" in record.getMessage()
+    ]
+    assert len(matching_records) == 1
+    assert matching_records[0].exc_info is None
+
+
 def test_process_batch_task_reports_swallowed_document_exception(monkeypatch):
     batch, batch_doc, _flow = _build_batch_context()
     batch.flow_id = uuid4()
@@ -268,6 +319,47 @@ def test_process_batch_task_reports_swallowed_document_exception(monkeypatch):
             "context": {},
         }
     ]
+
+
+def test_execute_flow_for_document_marks_reported_persistence_flow_error(monkeypatch):
+    async def _fake_execute_flow(**_kwargs):
+        yield {
+            "type": "FLOW_ERROR",
+            "details": {
+                "reason": "extraction_persistence_failed",
+                "message": "Failed to persist extraction results",
+            },
+        }
+
+    published_events = []
+    monkeypatch.setattr(
+        "src.lib.flows.executor.execute_flow",
+        _fake_execute_flow,
+    )
+    monkeypatch.setattr(
+        processor,
+        "get_batch_broadcaster",
+        lambda: SimpleNamespace(
+            publish_sync=lambda _batch_uuid, event: published_events.append(event)
+        ),
+    )
+
+    flow = SimpleNamespace(name="Batch Flow")
+    batch_id = str(uuid4())
+
+    with pytest.raises(processor.BatchFlowExecutionError) as exc_info:
+        asyncio.run(
+            processor._execute_flow_for_document(
+                flow=flow,
+                document_id=str(uuid4()),
+                cognito_sub="auth-sub",
+                batch_id=batch_id,
+            )
+        )
+
+    assert exc_info.value.sentry_already_reported is True
+    assert published_events
+    assert published_events[0]["type"] == "FLOW_ERROR"
 
 
 def test_execute_flow_for_document_ignores_file_ready_without_file_id(monkeypatch):
