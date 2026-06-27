@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.api import logs as logs_api
+from src.lib import http_errors
 
 
 class _FrozenDateTime(datetime):
@@ -191,9 +192,16 @@ async def test_get_container_logs_returns_empty_payload_for_no_logs(
     ],
 )
 async def test_get_container_logs_formats_loki_unavailable_errors(
-    patch_loki_async_client, exc, expected_error, expected_help, caplog
+    monkeypatch, patch_loki_async_client, exc, expected_error, expected_help, caplog
 ):
+    report_calls = []
     patch_loki_async_client(logs_api.loki, exc=exc)
+
+    def _fake_report_runtime_exception(exc, **kwargs):
+        report_calls.append((exc, kwargs))
+        return True
+
+    monkeypatch.setattr(http_errors, "report_runtime_exception", _fake_report_runtime_exception)
     caplog.set_level(logging.ERROR, logger=logs_api.logger.name)
 
     with pytest.raises(HTTPException) as error:
@@ -203,6 +211,14 @@ async def test_get_container_logs_formats_loki_unavailable_errors(
     assert error.value.detail == "Failed to retrieve logs from Loki"
     assert expected_error in caplog.text
     assert expected_help in caplog.text
+    assert len(report_calls) == 1
+    assert isinstance(report_calls[0][0], logs_api._LokiQueryError)
+    assert str(report_calls[0][0]) == "Loki log query returned an error result"
+    assert report_calls[0][0].__traceback__ is not None
+    assert report_calls[0][1]["component"] == "api"
+    assert report_calls[0][1]["operation"] == "sanitized_http_exception"
+    assert report_calls[0][1]["context"]["logger_name"] == logs_api.logger.name
+    assert report_calls[0][1]["context"]["status_code"] == 500
 
 
 @pytest.mark.asyncio
