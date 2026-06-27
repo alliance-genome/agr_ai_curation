@@ -293,7 +293,6 @@ def _redact_spans(spans: list[Any]) -> list[Any]:
     redacted: list[Any] = []
     for span in spans:
         if not isinstance(span, Mapping):
-            redacted.append(_redact_untrusted_strings(span))
             continue
 
         safe_span = _redact_trace_fields(span)

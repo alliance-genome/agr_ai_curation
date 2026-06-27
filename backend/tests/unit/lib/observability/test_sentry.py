@@ -230,7 +230,7 @@ def test_before_send_transaction_uses_same_redaction_policy():
         "start_timestamp": 1.25,
         "timestamp": 1.75,
     }
-    assert scrubbed["spans"][1] == "[Filtered]"
+    assert len(scrubbed["spans"]) == 1
 
 
 def test_initialize_sentry_skips_without_dsn(monkeypatch):
