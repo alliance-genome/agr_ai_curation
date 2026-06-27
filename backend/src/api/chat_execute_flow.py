@@ -26,6 +26,7 @@ from src.lib.executable_runs import (
     ExecutableRunConflictError,
     executable_run_manager,
 )
+from src.lib.observability.runtime import report_runtime_exception
 
 
 def _extract_execute_flow_runtime_identifiers(
@@ -1130,7 +1131,20 @@ async def execute_flow_endpoint(
                 if isinstance(exc, ValueError)
                 else "Flow execution failed unexpectedly."
             )
-            logger.error(
+            report_runtime_exception(
+                exc,
+                component="execute_flow_stream",
+                operation="event_generator_failed",
+                context={
+                    "session_id": current_session_id,
+                    "turn_id": current_turn_id,
+                    "trace_id": trace_id,
+                    "flow_id": str(flow.id),
+                    "flow_run_id": prepared_turn.flow_run_id,
+                    "document_id": str(request.document_id) if request.document_id else None,
+                },
+            )
+            logger.warning(
                 "Flow execution error: %s",
                 exc,
                 extra={

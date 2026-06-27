@@ -1793,6 +1793,12 @@ def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkey
     )
     db = _DummyDB(flow=flow)
     calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    runtime_reports = []
+    monkeypatch.setattr(
+        chat,
+        "report_runtime_exception",
+        lambda exc, **kwargs: runtime_reports.append((exc, kwargs)) or True,
+    )
 
     async def _fake_execute_flow(**_kwargs):
         if False:
@@ -1800,7 +1806,7 @@ def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkey
         raise RuntimeError("executor boom")
 
     _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
-    caplog.set_level(logging.ERROR, logger=chat.logger.name)
+    caplog.set_level(logging.WARNING, logger=chat.logger.name)
 
     response = asyncio.run(
         chat.execute_flow_endpoint(
@@ -1820,6 +1826,28 @@ def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkey
     assert events[1]["session_id"] == "session-flow-error"
     assert calls["unregister"] == [("session-flow-error", "auth-sub", ANY)]
     assert calls["clear"] == ["session-flow-error"]
+    assert len(runtime_reports) == 1
+    reported_exc, report_kwargs = runtime_reports[0]
+    assert isinstance(reported_exc, RuntimeError)
+    assert str(reported_exc) == "executor boom"
+    assert report_kwargs == {
+        "component": "execute_flow_stream",
+        "operation": "event_generator_failed",
+        "context": {
+            "session_id": "session-flow-error",
+            "turn_id": ANY,
+            "trace_id": None,
+            "flow_id": str(flow_id),
+            "flow_run_id": ANY,
+            "document_id": None,
+        },
+    }
+    failure_logs = [
+        record for record in caplog.records if record.message.startswith("Flow execution error")
+    ]
+    assert len(failure_logs) == 1
+    assert failure_logs[0].levelno == logging.WARNING
+    assert failure_logs[0].exc_info is not None
 
 
 def test_execute_flow_endpoint_sanitizes_runner_run_error_event(monkeypatch, caplog):
