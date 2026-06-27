@@ -268,11 +268,27 @@ class ExecutableRunManager:
             if run.terminal_error_event_factory is not None:
                 try:
                     await self._publish(run, run.terminal_error_event_factory(exc))
-                except Exception:
-                    logger.exception(
+                except Exception as terminal_exc:
+                    report_runtime_exception(
+                        terminal_exc,
+                        component="executable_run",
+                        operation="terminal_error_event_failed",
+                        tags={"run_kind": run.kind},
+                        context={
+                            "run_id": run.run_id,
+                            "kind": run.kind,
+                            "session_id": run.session_id,
+                            "turn_id": run.turn_id,
+                            "flow_run_id": run.flow_run_id,
+                            "batch_id": run.batch_id,
+                            "job_id": run.job_id,
+                        },
+                    )
+                    logger.warning(
                         "Executable run terminal error event failed: run_id=%s kind=%s",
                         run.run_id,
                         run.kind,
+                        exc_info=True,
                     )
             await self._finish(run, "failed")
 
