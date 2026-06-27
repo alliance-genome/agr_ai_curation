@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from src.api.admin.prompts import get_admin_emails
 from src.api.auth import get_auth_dependency
 from src.lib.feedback.service import FeedbackDebugDetailForbidden, FeedbackService
+from src.lib.observability.runtime import report_runtime_exception
 from src.models.sql.database import get_feedback_db
 from src.schemas.feedback import (
     ErrorResponse,
@@ -25,6 +26,37 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/feedback")
 TRACE_REVIEW_INTERNAL_API_TOKEN_ENV = "TRACE_REVIEW_INTERNAL_API_TOKEN"
+
+
+class _FeedbackApiError(RuntimeError):
+    """Sanitized feedback API failure safe for logs and Sentry."""
+
+
+def _report_feedback_api_error(
+    exc: Exception,
+    *,
+    operation: str,
+    status_code: int,
+) -> _FeedbackApiError:
+    sanitized = _FeedbackApiError(
+        f"Feedback API {operation} failed ({type(exc).__name__})"
+    ).with_traceback(exc.__traceback__)
+    try:
+        report_runtime_exception(
+            sanitized,
+            component="api",
+            operation=operation,
+            context={
+                "logger_name": logger.name,
+                "status_code": status_code,
+            },
+        )
+    except Exception as report_exc:
+        logger.warning(
+            "Failed to report feedback API error to Sentry: %s",
+            report_exc,
+        )
+    return sanitized
 
 
 def _require_user_sub(user: Dict[str, Any]) -> str:
@@ -192,10 +224,14 @@ def submit_feedback(
             },
         )
     except Exception as exc:
+        sanitized = _report_feedback_api_error(
+            exc,
+            operation="feedback_submission_failed",
+            status_code=500,
+        )
         logger.error(
-            "Failed to save feedback to database: %s",
-            str(exc),
-            exc_info=True,
+            "Failed to save feedback to database",
+            exc_info=(type(sanitized), sanitized, sanitized.__traceback__),
         )
         return JSONResponse(
             status_code=500,
@@ -274,11 +310,15 @@ def get_feedback_debug_detail(
             },
         )
     except Exception as exc:
-        logger.error(
-            "Failed to load feedback debug detail for %s: %s",
-            feedback_id,
+        sanitized = _report_feedback_api_error(
             exc,
-            exc_info=True,
+            operation="feedback_debug_detail_failed",
+            status_code=500,
+        )
+        logger.error(
+            "Failed to load feedback debug detail for %s",
+            feedback_id,
+            exc_info=(type(sanitized), sanitized, sanitized.__traceback__),
         )
         return JSONResponse(
             status_code=500,
