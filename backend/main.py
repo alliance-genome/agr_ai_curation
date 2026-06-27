@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 os.environ['POSTHOG_DISABLED'] = 'true'  # Disable PostHog telemetry
 os.environ['ANONYMIZED_TELEMETRY'] = 'False'  # Disable ChromaDB telemetry (capital F)
 
-from src.api import documents, chunks, processing, strategies, settings, schema, health, chat, pdf_viewer, feedback, auth, users, agent_studio, agent_studio_custom, logs, flows, files, maintenance, batch, pdf_jobs, curation_workspace
+from src.api import documents, chunks, processing, strategies, settings, schema, health, chat, pdf_viewer, feedback, auth, users, agent_studio, agent_studio_custom, logs, flows, files, maintenance, batch, pdf_jobs, curation_workspace, observability
 from src.api.admin import connections_router as admin_connections_router
 from src.api.admin import prompts_router as admin_prompts_router
 from src.config import get_app_version, get_pdf_storage_path
@@ -776,6 +776,7 @@ def create_app() -> FastAPI:
     application.include_router(chat.router, tags=["Chat"])
     application.include_router(feedback.router, tags=["Feedback"])
     application.include_router(maintenance.router, tags=["Maintenance"])
+    application.include_router(observability.router, tags=["Observability"])
     application.include_router(agent_studio.router, tags=["Agent Studio"])
     application.include_router(agent_studio_custom.router, tags=["Agent Studio"])
     application.include_router(flows.router, tags=["Flows"])
