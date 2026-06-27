@@ -66,9 +66,12 @@ class _FlowDatabaseError(RuntimeError):
 
 
 def _sanitized_flow_db_error(exc: IntegrityError, *, operation: str) -> _FlowDatabaseError:
-    return _FlowDatabaseError(
-        f"Flow {operation} failed ({type(exc.orig).__name__})"
-    ).with_traceback(exc.__traceback__)
+    try:
+        raise _FlowDatabaseError(f"Flow {operation} failed ({type(exc.orig).__name__})") from None
+    except _FlowDatabaseError as sanitized:
+        sanitized.__context__ = None
+        sanitized.__cause__ = None
+        return sanitized
 
 
 def _validated_flow_definition_payload(

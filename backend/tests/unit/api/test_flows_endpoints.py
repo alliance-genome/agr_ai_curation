@@ -326,6 +326,8 @@ async def test_create_flow_maps_other_integrity_error_to_500(monkeypatch, caplog
     assert "Exception" in str(report_calls[0][0])
     assert secret_text not in str(report_calls[0][0])
     assert report_calls[0][0].__traceback__ is not None
+    assert report_calls[0][0].__context__ is None
+    assert report_calls[0][0].__cause__ is None
     assert report_calls[0][1]["component"] == "api"
     assert report_calls[0][1]["operation"] == "sanitized_http_exception"
     assert report_calls[0][1]["context"]["logger_name"] == flows.logger.name
@@ -474,6 +476,8 @@ async def test_update_flow_maps_other_integrity_error_to_500(monkeypatch, caplog
     assert "Exception" in str(report_calls[0][0])
     assert secret_text not in str(report_calls[0][0])
     assert report_calls[0][0].__traceback__ is not None
+    assert report_calls[0][0].__context__ is None
+    assert report_calls[0][0].__cause__ is None
     assert report_calls[0][1]["component"] == "api"
     assert report_calls[0][1]["operation"] == "sanitized_http_exception"
     assert report_calls[0][1]["context"]["logger_name"] == flows.logger.name
