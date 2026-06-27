@@ -24,8 +24,11 @@ from src.schemas.curation_workspace import (
     CurationFlowRunSessionsRequest,
     CurationManualCandidateCreateRequest,
     CurationManualEvidenceCreateRequest,
+    CurationNextSessionRequest,
     CurationSavedViewCreateRequest,
     CurationSessionCreateRequest,
+    CurationSessionListRequest,
+    CurationSessionStatsRequest,
     CurationSessionValidationRequest,
     CurationSubmissionExecuteRequest,
     CurationSubmissionRetryRequest,
@@ -205,6 +208,37 @@ async def test_post_review_session_propagates_missing_document_error(monkeypatch
 
     assert exc.value.status_code == 404
     assert exc.value.detail == "Document document-404 not found"
+
+
+@pytest.mark.asyncio
+async def test_list_review_sessions_passes_current_user_scope_to_service(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    expected = object()
+    captured: dict[str, object] = {}
+
+    def _list_sessions(db, request, *, current_user_id):
+        captured["db"] = db
+        captured["request"] = request
+        captured["current_user_id"] = current_user_id
+        return expected
+
+    monkeypatch.setattr(module, "list_sessions", _list_sessions)
+
+    request = CurationSessionListRequest()
+    db = object()
+
+    response = await module.list_review_sessions(
+        request=request,
+        user={"sub": "user-1"},
+        db=db,
+    )
+
+    assert response is expected
+    assert captured == {
+        "db": db,
+        "request": request,
+        "current_user_id": "user-1",
+    }
 
 
 @pytest.mark.asyncio
@@ -1005,9 +1039,10 @@ async def test_get_review_flow_runs_delegates_to_service(monkeypatch):
     expected = object()
     captured: dict[str, object] = {}
 
-    def _list_flow_runs(db, request):
+    def _list_flow_runs(db, request, *, current_user_id):
         captured["db"] = db
         captured["request"] = request
+        captured["current_user_id"] = current_user_id
         return expected
 
     monkeypatch.setattr(module, "list_flow_runs", _list_flow_runs)
@@ -1025,6 +1060,7 @@ async def test_get_review_flow_runs_delegates_to_service(monkeypatch):
     assert captured == {
         "db": db,
         "request": request,
+        "current_user_id": "user-1",
     }
 
 
@@ -1034,9 +1070,10 @@ async def test_get_review_flow_run_sessions_delegates_to_service(monkeypatch):
     expected = object()
     captured: dict[str, object] = {}
 
-    def _list_flow_run_sessions(db, request):
+    def _list_flow_run_sessions(db, request, *, current_user_id):
         captured["db"] = db
         captured["request"] = request
+        captured["current_user_id"] = current_user_id
         return expected
 
     monkeypatch.setattr(module, "list_flow_run_sessions", _list_flow_run_sessions)
@@ -1054,6 +1091,69 @@ async def test_get_review_flow_run_sessions_delegates_to_service(monkeypatch):
     assert captured == {
         "db": db,
         "request": request,
+        "current_user_id": "user-1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_review_session_stats_passes_current_user_scope_to_service(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    expected = object()
+    captured: dict[str, object] = {}
+
+    def _get_session_stats(db, request, *, current_user_id):
+        captured["db"] = db
+        captured["request"] = request
+        captured["current_user_id"] = current_user_id
+        return expected
+
+    monkeypatch.setattr(module, "get_session_stats", _get_session_stats)
+
+    request = CurationSessionStatsRequest()
+    db = object()
+
+    response = await module.get_review_session_stats(
+        request=request,
+        user={"uid": "uid-1"},
+        db=db,
+    )
+
+    assert response is expected
+    assert captured == {
+        "db": db,
+        "request": request,
+        "current_user_id": "uid-1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_next_review_session_passes_current_user_scope_to_service(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    expected = object()
+    captured: dict[str, object] = {}
+
+    def _get_next_session(db, request, *, current_user_id):
+        captured["db"] = db
+        captured["request"] = request
+        captured["current_user_id"] = current_user_id
+        return expected
+
+    monkeypatch.setattr(module, "get_next_session", _get_next_session)
+
+    request = CurationNextSessionRequest()
+    db = object()
+
+    response = await module.get_next_review_session(
+        request=request,
+        user={"sub": "user-1"},
+        db=db,
+    )
+
+    assert response is expected
+    assert captured == {
+        "db": db,
+        "request": request,
+        "current_user_id": "user-1",
     }
 
 

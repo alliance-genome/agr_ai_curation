@@ -721,6 +721,7 @@ def test_list_review_sessions_supports_filters_sorting_and_pagination(
     response = client.get(
         "/api/curation-workspace/sessions",
         params={
+            "inventory_scope": "show_all",
             "curator_id": seeded_review_sessions["current_user_auth_sub"],
             "prepared_from": "2026-03-01T00:00:00Z",
             "prepared_to": "2026-03-15T00:00:00Z",
@@ -753,6 +754,7 @@ def test_list_review_sessions_supports_filters_sorting_and_pagination(
     filtered_response = client.get(
         "/api/curation-workspace/sessions",
         params={
+            "inventory_scope": "show_all",
             "status": "in_progress",
             "adapter_key": "gene",
             "flow_run_id": "flow-alpha",
@@ -766,6 +768,57 @@ def test_list_review_sessions_supports_filters_sorting_and_pagination(
     assert [session["session_id"] for session in filtered_payload["sessions"]] == [
         seeded_review_sessions["session_beta_id"]
     ]
+
+
+def test_list_review_sessions_defaults_to_my_inventory_and_show_all_expands(
+    client: TestClient,
+    seeded_review_sessions,
+):
+    default_response = client.get(
+        "/api/curation-workspace/sessions",
+        params={
+            "sort_by": "prepared_at",
+            "sort_direction": "asc",
+        },
+    )
+    assert default_response.status_code == 200, default_response.text
+    default_payload = default_response.json()
+
+    assert default_payload["applied_filters"]["inventory_scope"] == "my_inventory"
+    assert [session["session_id"] for session in default_payload["sessions"]] == [
+        seeded_review_sessions["session_alpha_id"],
+        seeded_review_sessions["session_gamma_id"],
+    ]
+    assert default_payload["page_info"]["total_items"] == 2
+
+    show_all_response = client.get(
+        "/api/curation-workspace/sessions",
+        params={
+            "inventory_scope": "show_all",
+            "sort_by": "prepared_at",
+            "sort_direction": "asc",
+        },
+    )
+    assert show_all_response.status_code == 200, show_all_response.text
+    show_all_payload = show_all_response.json()
+
+    assert show_all_payload["applied_filters"]["inventory_scope"] == "show_all"
+    assert [session["session_id"] for session in show_all_payload["sessions"]] == [
+        seeded_review_sessions["session_alpha_id"],
+        seeded_review_sessions["session_beta_id"],
+        seeded_review_sessions["session_gamma_id"],
+    ]
+    assert show_all_payload["page_info"]["total_items"] == 3
+
+
+def test_my_organization_inventory_scope_returns_explicit_error(client: TestClient):
+    response = client.get(
+        "/api/curation-workspace/sessions",
+        params={"inventory_scope": "my_organization"},
+    )
+
+    assert response.status_code == 400, response.text
+    assert "organization or group metadata" in response.json()["detail"]
 
 
 def test_get_review_flow_runs_returns_filtered_group_summaries(
@@ -803,6 +856,7 @@ def test_get_review_flow_run_sessions_returns_paginated_group_members(
     response = client.get(
         "/api/curation-workspace/flow-runs/flow-alpha/sessions",
         params={
+            "inventory_scope": "show_all",
             "page": 1,
             "page_size": 1,
         },
@@ -891,7 +945,7 @@ def test_list_review_sessions_search_escapes_like_wildcards(
 ):
     percent_response = client.get(
         "/api/curation-workspace/sessions",
-        params={"search": "100%"},
+        params={"inventory_scope": "show_all", "search": "100%"},
     )
     assert percent_response.status_code == 200, percent_response.text
     assert [session["session_id"] for session in percent_response.json()["sessions"]] == [
@@ -900,7 +954,7 @@ def test_list_review_sessions_search_escapes_like_wildcards(
 
     underscore_response = client.get(
         "/api/curation-workspace/sessions",
-        params={"search": "Beta_gene"},
+        params={"inventory_scope": "show_all", "search": "Beta_gene"},
     )
     assert underscore_response.status_code == 200, underscore_response.text
     assert [session["session_id"] for session in underscore_response.json()["sessions"]] == [
@@ -915,6 +969,7 @@ def test_list_review_sessions_supports_adapter_sorting(
     ascending_response = client.get(
         "/api/curation-workspace/sessions",
         params={
+            "inventory_scope": "show_all",
             "sort_by": "adapter",
             "sort_direction": "asc",
         },
@@ -929,6 +984,7 @@ def test_list_review_sessions_supports_adapter_sorting(
     descending_response = client.get(
         "/api/curation-workspace/sessions",
         params={
+            "inventory_scope": "show_all",
             "sort_by": "adapter",
             "sort_direction": "desc",
         },
@@ -1155,17 +1211,25 @@ def test_get_review_session_stats_returns_aggregate_counts(
     payload = response.json()
     stats = payload["stats"]
 
-    assert stats["total_sessions"] == 3
-    assert stats["adapter_count"] == 2
+    assert payload["applied_filters"]["inventory_scope"] == "my_inventory"
+    assert stats["total_sessions"] == 2
+    assert stats["adapter_count"] == 1
     assert stats["new_sessions"] == 1
-    assert stats["in_progress_sessions"] == 1
+    assert stats["in_progress_sessions"] == 0
     assert stats["ready_for_submission_sessions"] == 0
     assert stats["paused_sessions"] == 0
     assert stats["submitted_sessions"] == 1
     assert stats["rejected_sessions"] == 0
     assert stats["assigned_to_current_user"] == 2
-    assert stats["assigned_to_others"] == 1
+    assert stats["assigned_to_others"] == 0
     assert stats["submitted_last_7_days"] == 1
+
+    show_all_response = client.get(
+        "/api/curation-workspace/sessions/stats",
+        params={"inventory_scope": "show_all"},
+    )
+    assert show_all_response.status_code == 200, show_all_response.text
+    assert show_all_response.json()["stats"]["total_sessions"] == 3
 
 
 def test_get_next_review_session_returns_queue_navigation_context(
@@ -1183,9 +1247,10 @@ def test_get_next_review_session_returns_queue_navigation_context(
     assert response.status_code == 200, response.text
     payload = response.json()
 
-    assert payload["session"]["session_id"] == seeded_review_sessions["session_beta_id"]
+    assert payload["session"]["session_id"] == seeded_review_sessions["session_gamma_id"]
     assert payload["queue_context"] == {
         "filters": {
+            "inventory_scope": "my_inventory",
             "statuses": [],
             "adapter_keys": [],
             "curator_ids": [],
@@ -1201,9 +1266,9 @@ def test_get_next_review_session_returns_queue_navigation_context(
         "sort_by": "prepared_at",
         "sort_direction": "asc",
         "position": 2,
-        "total_sessions": 3,
+        "total_sessions": 2,
         "previous_session_id": seeded_review_sessions["session_alpha_id"],
-        "next_session_id": seeded_review_sessions["session_gamma_id"],
+        "next_session_id": None,
     }
 
 

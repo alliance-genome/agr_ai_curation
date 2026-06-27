@@ -437,7 +437,12 @@ export interface CurationActionLogEntry {
   metadata: Record<string, unknown>
 }
 
+export const CURATION_INVENTORY_SCOPES = ['my_inventory', 'my_organization', 'show_all'] as const
+export type CurationInventoryScope = (typeof CURATION_INVENTORY_SCOPES)[number]
+export const DEFAULT_CURATION_INVENTORY_SCOPE: CurationInventoryScope = 'my_inventory'
+
 export interface CurationSessionFilters {
+  inventory_scope?: CurationInventoryScope
   statuses?: CurationSessionStatus[]
   adapter_keys?: string[]
   curator_ids?: string[]

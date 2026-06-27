@@ -10,11 +10,14 @@ import {
   Stack,
   TextField,
   Typography,
+  ToggleButton,
+  ToggleButtonGroup,
 } from '@mui/material'
 import { alpha, useTheme } from '@mui/material/styles'
 import type { Theme } from '@mui/material/styles'
 
 import type {
+  CurationInventoryScope,
   CurationSessionStats,
   CurationSessionStatus,
 } from '../types'
@@ -28,6 +31,7 @@ import {
 } from './inventoryPresentation'
 
 interface CurationInventoryFilterBarProps {
+  inventoryScope: CurationInventoryScope
   statuses: CurationSessionStatus[]
   adapterKeys: string[]
   searchInput: string
@@ -38,6 +42,7 @@ interface CurationInventoryFilterBarProps {
   onClearStatuses: () => void
   onToggleAdapterKey: (adapterKey: string) => void
   onClearAdapterKeys: () => void
+  onInventoryScopeChange: (scope: CurationInventoryScope) => void
   onSearchChange: (value: string) => void
   onClearAllFilters: () => void
   hasActiveFilters: boolean
@@ -136,6 +141,7 @@ function FilterChipGroup({
 }
 
 export default function CurationInventoryFilterBar({
+  inventoryScope,
   statuses,
   adapterKeys,
   searchInput,
@@ -146,6 +152,7 @@ export default function CurationInventoryFilterBar({
   onClearStatuses,
   onToggleAdapterKey,
   onClearAdapterKeys,
+  onInventoryScopeChange,
   onSearchChange,
   onClearAllFilters,
   hasActiveFilters,
@@ -163,6 +170,30 @@ export default function CurationInventoryFilterBar({
           justifyContent="space-between"
         >
           <Stack spacing={1.5} sx={{ flex: 1 }}>
+            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+              <Typography variant="body2" color="text.secondary" sx={{ minWidth: 72 }}>
+                Scope
+              </Typography>
+              <ToggleButtonGroup
+                exclusive
+                onChange={(_event, nextScope: CurationInventoryScope | null) => {
+                  if (nextScope && nextScope !== inventoryScope) {
+                    onInventoryScopeChange(nextScope)
+                  }
+                }}
+                size="small"
+                value={inventoryScope}
+                aria-label="Inventory scope"
+              >
+                <ToggleButton value="my_inventory" aria-label="My inventory">
+                  My inventory
+                </ToggleButton>
+                <ToggleButton value="show_all" aria-label="Show all">
+                  Show all
+                </ToggleButton>
+              </ToggleButtonGroup>
+            </Stack>
+
             <Stack spacing={1}>
               <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
                 <Typography variant="body2" color="text.secondary" sx={{ minWidth: 72 }}>
