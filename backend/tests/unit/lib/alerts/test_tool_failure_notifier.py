@@ -267,3 +267,37 @@ def test_notify_tool_failure_sentry_failure_does_not_block_sns(monkeypatch, dire
 
     assert result is True
     mock_client.publish.assert_called_once()
+
+
+def test_notify_tool_failure_sentry_import_failure_does_not_block_sns(
+    monkeypatch,
+    direct_to_thread,
+):
+    """A Sentry import-time failure is non-fatal and SNS still publishes."""
+    mock_client = MagicMock()
+    mock_client.publish.return_value = {"MessageId": "msg-789"}
+    monkeypatch.setattr(notifier.boto3, "client", lambda *_args, **_kwargs: mock_client)
+
+    def _broken_import(name):
+        if name == "sentry_sdk":
+            raise RuntimeError("broken sentry import")
+        raise ImportError(name)
+
+    monkeypatch.setattr(notifier.importlib, "import_module", _broken_import)
+    monkeypatch.setenv("TOOL_FAILURE_ALERTS_ENABLED", "true")
+    monkeypatch.setenv("PROMPT_SUGGESTIONS_SNS_TOPIC_ARN", "arn:aws:sns:us-east-1:123456789012:test")
+
+    result = asyncio.run(
+        notifier.notify_tool_failure(
+            error_type="RuntimeError",
+            error_message="boom",
+            source="infrastructure",
+            specialist_name="gene_expression",
+            trace_id="trace-3",
+            session_id="session-3",
+            curator_id="curator@example.com",
+        )
+    )
+
+    assert result is True
+    mock_client.publish.assert_called_once()

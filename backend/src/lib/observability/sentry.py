@@ -301,7 +301,7 @@ def initialize_sentry_if_configured() -> bool:
         sentry_sdk = importlib.import_module("sentry_sdk")
         fastapi_integration = importlib.import_module("sentry_sdk.integrations.fastapi")
         starlette_integration = importlib.import_module("sentry_sdk.integrations.starlette")
-    except ImportError as exc:
+    except Exception as exc:
         logger.warning("Sentry SDK is not available: %s", exc)
         return False
 

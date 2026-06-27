@@ -61,7 +61,8 @@ def _capture_tool_failure_to_sentry(
 
     try:
         sentry_sdk = importlib.import_module("sentry_sdk")
-    except ImportError:
+    except Exception as exc:
+        logger.warning("Sentry SDK unavailable for tool failure capture: %s", exc)
         return False
 
     tool_name = specialist_name or "N/A"
