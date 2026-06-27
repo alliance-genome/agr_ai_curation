@@ -65,9 +65,9 @@ class _FlowDatabaseError(RuntimeError):
     """Sanitized flow database failure safe for logs and Sentry."""
 
 
-def _sanitized_flow_db_error(exc: IntegrityError, *, operation: str) -> _FlowDatabaseError:
+def _sanitized_flow_db_error(orig_type_name: str, *, operation: str) -> _FlowDatabaseError:
     try:
-        raise _FlowDatabaseError(f"Flow {operation} failed ({type(exc.orig).__name__})") from None
+        raise _FlowDatabaseError(f"Flow {operation} failed ({orig_type_name})") from None
     except _FlowDatabaseError as sanitized:
         sanitized.__context__ = None
         sanitized.__cause__ = None
@@ -533,7 +533,7 @@ async def create_flow(
             status_code=500,
             detail="Database error while creating flow",
             log_message="Unexpected database integrity error creating flow",
-            exc=_sanitized_flow_db_error(e, operation="create"),
+            exc=_sanitized_flow_db_error(type(e.orig).__name__, operation="create"),
         )
 
     logger.info("Created flow %s '%s' for user %s", flow.id, flow.name, db_user.id)
@@ -620,7 +620,7 @@ async def update_flow(
                 status_code=500,
                 detail="Database error while updating flow",
                 log_message=f"Unexpected database integrity error updating flow {flow_id}",
-                exc=_sanitized_flow_db_error(e, operation="update"),
+                exc=_sanitized_flow_db_error(type(e.orig).__name__, operation="update"),
             )
     else:
         logger.info('[Flow Update] No changes detected for flow %s', flow_id)
