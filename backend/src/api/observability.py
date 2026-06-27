@@ -4,6 +4,7 @@ import os
 
 from fastapi import APIRouter, HTTPException
 
+from src.config import is_dev_mode
 from src.lib.alerts.tool_failure_notifier import notify_tool_failure
 
 router = APIRouter(prefix="/api/observability")
@@ -11,8 +12,11 @@ router = APIRouter(prefix="/api/observability")
 
 def _synthetic_endpoints_enabled() -> bool:
     return (
-        os.getenv("DEV_MODE", "false").strip().lower() == "true"
-        and os.getenv("SENTRY_SYNTHETIC_TEST_ENDPOINTS_ENABLED", "false").strip().lower()
+        is_dev_mode()
+        and os.getenv(
+            "SENTRY_SYNTHETIC_TEST_ENDPOINTS_ENABLED",
+            "false",
+        ).strip().lower()
         in {"1", "true", "yes", "on"}
     )
 
