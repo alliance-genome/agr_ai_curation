@@ -269,6 +269,7 @@ class ExecutableRunManager:
                 try:
                     await self._publish(run, run.terminal_error_event_factory(exc))
                 except Exception as terminal_exc:
+                    terminal_exc.__context__ = None
                     report_runtime_exception(
                         terminal_exc,
                         component="executable_run",

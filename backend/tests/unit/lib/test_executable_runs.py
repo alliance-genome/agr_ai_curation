@@ -339,8 +339,12 @@ async def test_terminal_error_event_factory_failure_is_reported(monkeypatch, cap
     )
 
     assert created is True
+    observer = manager.observe(run)
     if run.task is not None:
         await asyncio.wait_for(run.task, timeout=1)
+
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(observer.__anext__(), timeout=1)
 
     assert run.status == "failed"
     assert len(runtime_reports) == 2
