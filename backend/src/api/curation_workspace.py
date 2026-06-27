@@ -86,6 +86,7 @@ from src.schemas.curation_workspace import (
     CurationFlowRunListResponse,
     CurationFlowRunSessionsRequest,
     CurationFlowRunSessionsResponse,
+    CurationInventoryScope,
     CurationManualCandidateCreateRequest,
     CurationManualCandidateCreateResponse,
     CurationNextSessionRequest,
@@ -138,6 +139,10 @@ def _date_range(from_at: datetime | None, to_at: datetime | None) -> CurationDat
 
 
 def _session_filters_from_query(
+    inventory_scope: CurationInventoryScope = Query(
+        default=CurationInventoryScope.MY_INVENTORY,
+        alias="inventory_scope",
+    ),
     statuses: Annotated[list[CurationSessionStatus] | None, Query(alias="status")] = None,
     adapter_keys: Annotated[list[str] | None, Query(alias="adapter_key")] = None,
     curator_ids: Annotated[list[str] | None, Query(alias="curator_id")] = None,
@@ -153,6 +158,7 @@ def _session_filters_from_query(
     last_worked_to: datetime | None = Query(default=None, alias="last_worked_to"),
 ) -> CurationSessionFilters:
     return CurationSessionFilters(
+        inventory_scope=inventory_scope,
         statuses=statuses or [],
         adapter_keys=adapter_keys or [],
         curator_ids=curator_ids or [],
@@ -259,7 +265,7 @@ async def list_review_sessions(
     db: Session = Depends(get_db),
 ) -> CurationSessionListResponse:
     set_global_user_from_cognito(db, user)
-    return list_sessions(db, request)
+    return list_sessions(db, request, current_user_id=_require_current_user_id(user))
 
 
 @router.post("/sessions", response_model=CurationSessionCreateResponse)
@@ -328,7 +334,7 @@ async def get_review_session_stats(
     return get_session_stats(
         db,
         request,
-        current_user_id=_current_user_id(user),
+        current_user_id=_require_current_user_id(user),
     )
 
 
@@ -339,7 +345,7 @@ async def get_review_flow_runs(
     db: Session = Depends(get_db),
 ) -> CurationFlowRunListResponse:
     set_global_user_from_cognito(db, user)
-    return list_flow_runs(db, request)
+    return list_flow_runs(db, request, current_user_id=_require_current_user_id(user))
 
 
 @router.get("/flow-runs/{run_id}/sessions", response_model=CurationFlowRunSessionsResponse)
@@ -349,7 +355,7 @@ async def get_review_flow_run_sessions(
     db: Session = Depends(get_db),
 ) -> CurationFlowRunSessionsResponse:
     set_global_user_from_cognito(db, user)
-    return list_flow_run_sessions(db, request)
+    return list_flow_run_sessions(db, request, current_user_id=_require_current_user_id(user))
 
 
 @router.get("/sessions/next", response_model=CurationNextSessionResponse)
@@ -359,7 +365,7 @@ async def get_next_review_session(
     db: Session = Depends(get_db),
 ) -> CurationNextSessionResponse:
     set_global_user_from_cognito(db, user)
-    return get_next_session(db, request)
+    return get_next_session(db, request, current_user_id=_require_current_user_id(user))
 
 
 @router.get("/sessions/{session_id}", response_model=None)

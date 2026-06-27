@@ -263,6 +263,14 @@ class CurationSessionStatus(str, Enum):
     REJECTED = "rejected"
 
 
+class CurationInventoryScope(str, Enum):
+    """Server-resolved inventory visibility scope."""
+
+    MY_INVENTORY = "my_inventory"
+    MY_ORGANIZATION = "my_organization"
+    SHOW_ALL = "show_all"
+
+
 class CurationCandidateStatus(str, Enum):
     """Curator-facing decision state for an individual candidate."""
 
@@ -1301,6 +1309,10 @@ class CurationActionLogEntry(CurationWorkspaceBaseModel):
 class CurationSessionFilters(CurationWorkspaceBaseModel):
     """Reusable inventory and queue filter contract for session list APIs and saved views."""
 
+    inventory_scope: CurationInventoryScope = Field(
+        default=CurationInventoryScope.MY_INVENTORY,
+        description="Server-resolved inventory visibility scope",
+    )
     statuses: list[CurationSessionStatus] = Field(default_factory=list)
     adapter_keys: list[str] = Field(default_factory=list)
     curator_ids: list[str] = Field(default_factory=list)
@@ -2501,6 +2513,7 @@ __all__ = [
     "CurationSavedViewCreateResponse",
     "CurationSavedViewDeleteResponse",
     "CurationSavedViewListResponse",
+    "CurationInventoryScope",
     "CurationSessionCreateRequest",
     "CurationSessionCreateResponse",
     "CurationSessionFilters",

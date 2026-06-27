@@ -8,7 +8,7 @@ from typing import Any, Mapping, Sequence
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import String, case, exists, func, or_, select
+from sqlalchemy import String, and_, case, exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from src.lib.curation_workspace.models import (
@@ -51,6 +51,7 @@ from src.schemas.curation_workspace import (
     CurationFlowRunSessionsRequest,
     CurationFlowRunSessionsResponse,
     CurationFlowRunSummary,
+    CurationInventoryScope,
     CurationNextSessionRequest,
     CurationNextSessionResponse,
     CurationPageInfo,
@@ -114,7 +115,53 @@ EVIDENCE_COUNT_SORT_ORDER = (
     .scalar_subquery()
 )
 
-def _apply_filters(statement: Any, filters: CurationSessionFilters) -> Any:
+def _apply_inventory_scope(
+    statement: Any,
+    filters: CurationSessionFilters,
+    *,
+    current_user_id: str | None,
+) -> Any:
+    if filters.inventory_scope == CurationInventoryScope.SHOW_ALL:
+        return statement
+
+    if filters.inventory_scope == CurationInventoryScope.MY_ORGANIZATION:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "The my_organization inventory scope is not available until "
+                "review sessions persist organization or group metadata."
+            ),
+        )
+
+    if not current_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User identifier is required for my_inventory scope",
+        )
+
+    return statement.where(
+        or_(
+            ReviewSessionModel.assigned_curator_id == current_user_id,
+            and_(
+                ReviewSessionModel.assigned_curator_id.is_(None),
+                ReviewSessionModel.created_by_id == current_user_id,
+            ),
+        )
+    )
+
+
+def _apply_filters(
+    statement: Any,
+    filters: CurationSessionFilters,
+    *,
+    current_user_id: str | None,
+) -> Any:
+    statement = _apply_inventory_scope(
+        statement,
+        filters,
+        current_user_id=current_user_id,
+    )
+
     if filters.statuses:
         statement = statement.where(ReviewSessionModel.status.in_(filters.statuses))
 
@@ -266,21 +313,30 @@ def _sort_order_clauses(
     return (ReviewSessionModel.prepared_at.desc(), ReviewSessionModel.id.asc())
 
 
-def _filtered_session_id_select(filters: CurationSessionFilters) -> Any:
+def _filtered_session_id_select(
+    filters: CurationSessionFilters,
+    *,
+    current_user_id: str | None,
+) -> Any:
     statement = (
         select(ReviewSessionModel.id)
         .select_from(ReviewSessionModel)
         .join(PDFDocument, PDFDocument.id == ReviewSessionModel.document_id)
     )
-    return _apply_filters(statement, filters)
+    return _apply_filters(statement, filters, current_user_id=current_user_id)
 
 
 def _ordered_session_id_select(
     filters: CurationSessionFilters,
     sort_by: CurationSessionSortField,
     sort_direction: CurationSortDirection,
+    *,
+    current_user_id: str | None,
 ) -> Any:
-    return _filtered_session_id_select(filters).order_by(
+    return _filtered_session_id_select(
+        filters,
+        current_user_id=current_user_id,
+    ).order_by(
         *_sort_order_clauses(sort_by, sort_direction)
     )
 
@@ -289,10 +345,12 @@ def _ordered_session_queue_subquery(
     filters: CurationSessionFilters,
     sort_by: CurationSessionSortField,
     sort_direction: CurationSortDirection,
+    *,
+    current_user_id: str | None,
 ) -> Any:
     order_by = _sort_order_clauses(sort_by, sort_direction)
     return (
-        _filtered_session_id_select(filters)
+        _filtered_session_id_select(filters, current_user_id=current_user_id)
         .add_columns(
             func.row_number().over(order_by=order_by).label("position"),
             func.count().over().label("total_sessions"),
@@ -355,8 +413,15 @@ def _session_context_maps(
     return document_map, user_map
 
 
-def _flow_run_summary_statement(filters: CurationSessionFilters) -> Any:
-    filtered_ids_subquery = _filtered_session_id_select(filters).subquery()
+def _flow_run_summary_statement(
+    filters: CurationSessionFilters,
+    *,
+    current_user_id: str | None,
+) -> Any:
+    filtered_ids_subquery = _filtered_session_id_select(
+        filters,
+        current_user_id=current_user_id,
+    ).subquery()
     last_activity_at = func.max(
         func.coalesce(ReviewSessionModel.last_worked_at, ReviewSessionModel.prepared_at)
     ).label("last_activity_at")
@@ -382,8 +447,15 @@ def _flow_run_summary_statement(filters: CurationSessionFilters) -> Any:
     )
 
 
-def _flow_run_summaries(db: Session, filters: CurationSessionFilters) -> list[CurationFlowRunSummary]:
-    group_rows = db.execute(_flow_run_summary_statement(filters)).mappings().all()
+def _flow_run_summaries(
+    db: Session,
+    filters: CurationSessionFilters,
+    *,
+    current_user_id: str | None,
+) -> list[CurationFlowRunSummary]:
+    group_rows = db.execute(
+        _flow_run_summary_statement(filters, current_user_id=current_user_id)
+    ).mappings().all()
     return [_flow_run_summary_from_row(row) for row in group_rows]
 
 
@@ -399,11 +471,19 @@ def _flow_run_summary_from_row(row: Mapping[str, Any]) -> CurationFlowRunSummary
     )
 
 
-def _flow_run_summary(db: Session, filters: CurationSessionFilters) -> CurationFlowRunSummary | None:
+def _flow_run_summary(
+    db: Session,
+    filters: CurationSessionFilters,
+    *,
+    current_user_id: str | None,
+) -> CurationFlowRunSummary | None:
     if not filters.flow_run_id:
         return None
 
-    filtered_ids_subquery = _filtered_session_id_select(filters).subquery()
+    filtered_ids_subquery = _filtered_session_id_select(
+        filters,
+        current_user_id=current_user_id,
+    ).subquery()
     last_activity_at = func.max(
         func.coalesce(ReviewSessionModel.last_worked_at, ReviewSessionModel.prepared_at)
     ).label("last_activity_at")
@@ -440,12 +520,21 @@ def _list_session_summaries(
     sort_direction: CurationSortDirection,
     page: int,
     page_size: int,
+    current_user_id: str | None,
     total_items: int | None = None,
 ) -> tuple[list[CurationSessionSummary], CurationPageInfo]:
-    filtered_ids_select = _filtered_session_id_select(filters)
+    filtered_ids_select = _filtered_session_id_select(
+        filters,
+        current_user_id=current_user_id,
+    )
     if total_items is None:
         total_items = db.scalar(select(func.count()).select_from(filtered_ids_select.subquery())) or 0
-    ordered_id_select = _ordered_session_id_select(filters, sort_by, sort_direction)
+    ordered_id_select = _ordered_session_id_select(
+        filters,
+        sort_by,
+        sort_direction,
+        current_user_id=current_user_id,
+    )
     offset = (page - 1) * page_size
     session_ids = list(db.scalars(ordered_id_select.offset(offset).limit(page_size)).all())
     sessions = _load_sessions_by_ids(db, session_ids, detailed=False)
@@ -454,7 +543,12 @@ def _list_session_summaries(
     return summaries, _page_info(page=page, page_size=page_size, total_items=total_items)
 
 
-def list_sessions(db: Session, request: CurationSessionListRequest) -> CurationSessionListResponse:
+def list_sessions(
+    db: Session,
+    request: CurationSessionListRequest,
+    *,
+    current_user_id: str | None = None,
+) -> CurationSessionListResponse:
     summaries, page_info = _list_session_summaries(
         db,
         filters=request.filters,
@@ -462,11 +556,16 @@ def list_sessions(db: Session, request: CurationSessionListRequest) -> CurationS
         sort_direction=request.sort_direction,
         page=request.page,
         page_size=request.page_size,
+        current_user_id=current_user_id,
     )
 
     flow_run_groups: list[CurationFlowRunSummary] = []
     if request.group_by_flow_run:
-        flow_run_groups = _flow_run_summaries(db, request.filters)
+        flow_run_groups = _flow_run_summaries(
+            db,
+            request.filters,
+            current_user_id=current_user_id,
+        )
 
     return CurationSessionListResponse(
         sessions=summaries,
@@ -478,9 +577,18 @@ def list_sessions(db: Session, request: CurationSessionListRequest) -> CurationS
     )
 
 
-def list_flow_runs(db: Session, request: CurationFlowRunListRequest) -> CurationFlowRunListResponse:
+def list_flow_runs(
+    db: Session,
+    request: CurationFlowRunListRequest,
+    *,
+    current_user_id: str | None = None,
+) -> CurationFlowRunListResponse:
     return CurationFlowRunListResponse(
-        flow_runs=_flow_run_summaries(db, request.filters),
+        flow_runs=_flow_run_summaries(
+            db,
+            request.filters,
+            current_user_id=current_user_id,
+        ),
         applied_filters=request.filters,
     )
 
@@ -488,9 +596,11 @@ def list_flow_runs(db: Session, request: CurationFlowRunListRequest) -> Curation
 def list_flow_run_sessions(
     db: Session,
     request: CurationFlowRunSessionsRequest,
+    *,
+    current_user_id: str | None = None,
 ) -> CurationFlowRunSessionsResponse:
     filters = request.filters.model_copy(update={"flow_run_id": request.flow_run_id})
-    flow_run = _flow_run_summary(db, filters)
+    flow_run = _flow_run_summary(db, filters, current_user_id=current_user_id)
     if flow_run is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -504,6 +614,7 @@ def list_flow_run_sessions(
         sort_direction=CurationSortDirection.DESC,
         page=request.page,
         page_size=request.page_size,
+        current_user_id=current_user_id,
         total_items=flow_run.session_count,
     )
 
@@ -678,7 +789,10 @@ def get_session_stats(
     *,
     current_user_id: str | None,
 ) -> CurationSessionStatsResponse:
-    filtered_ids_subquery = _filtered_session_id_select(request.filters).subquery()
+    filtered_ids_subquery = _filtered_session_id_select(
+        request.filters,
+        current_user_id=current_user_id,
+    ).subquery()
 
     count_row = db.execute(
         select(
@@ -735,11 +849,17 @@ def get_session_stats(
     )
 
 
-def get_next_session(db: Session, request: CurationNextSessionRequest) -> CurationNextSessionResponse:
+def get_next_session(
+    db: Session,
+    request: CurationNextSessionRequest,
+    *,
+    current_user_id: str | None = None,
+) -> CurationNextSessionResponse:
     ordered_sessions = _ordered_session_queue_subquery(
         request.filters,
         request.sort_by,
         request.sort_direction,
+        current_user_id=current_user_id,
     )
     queue_row_select = select(
         ordered_sessions.c.id,

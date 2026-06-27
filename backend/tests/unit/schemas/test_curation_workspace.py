@@ -7,6 +7,8 @@ from src.schemas.curation_workspace import (
     CurationCandidateStatus,
     CurationEntityTagDbValidationStatus,
     CurationEntityTagSource,
+    CurationInventoryScope,
+    CurationSessionFilters,
     CurationSessionListRequest,
     CurationSessionSortField,
     CurationSessionStatus,
@@ -42,6 +44,27 @@ def make_anchor_payload() -> dict:
         "figure_reference": "Fig. 2",
         "chunk_ids": ["chunk-1", "chunk-2"],
     }
+
+
+def test_curation_session_filters_default_and_validate_inventory_scope():
+    default_filters = CurationSessionFilters()
+
+    assert default_filters.inventory_scope == CurationInventoryScope.MY_INVENTORY
+    assert (
+        CurationSessionFilters.model_validate(
+            {"inventory_scope": "show_all"}
+        ).inventory_scope
+        == CurationInventoryScope.SHOW_ALL
+    )
+    assert (
+        CurationSessionFilters.model_validate(
+            {"inventory_scope": "my_organization"}
+        ).inventory_scope
+        == CurationInventoryScope.MY_ORGANIZATION
+    )
+
+    with pytest.raises(ValidationError):
+        CurationSessionFilters.model_validate({"inventory_scope": "global"})
 
 
 def make_workspace_response_payload() -> dict:

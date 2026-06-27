@@ -74,10 +74,12 @@ export default function CurationInventoryPage() {
           adapterKeys={inventory.adapterKeys}
           adapterOptions={inventory.adapterOptions}
           hasActiveFilters={inventory.hasActiveFilters}
+          inventoryScope={inventory.inventoryScope}
           isRefreshing={inventory.listQuery.isFetching || inventory.statsQuery.isFetching}
           onClearAdapterKeys={inventory.clearAdapterKeys}
           onClearAllFilters={inventory.clearAllFilters}
           onClearStatuses={inventory.clearStatuses}
+          onInventoryScopeChange={inventory.handleInventoryScopeChange}
           onSearchChange={inventory.handleSearchChange}
           onToggleAdapterKey={inventory.toggleAdapterKey}
           onToggleStatus={inventory.toggleStatus}
