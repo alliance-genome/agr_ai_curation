@@ -1,5 +1,6 @@
 """Unit tests for the document pipeline orchestrator."""
 
+import logging
 import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -59,6 +60,7 @@ async def test_process_pdf_document_success(orchestrator, sample_pdf):
     mock_parser.assert_awaited_once()
     mock_chunk.assert_awaited_once()
     mock_store.assert_awaited_once()
+    assert mock_store.await_args is not None
     args, kwargs = mock_store.await_args
     assert args[0] == [{"chunk_index": 0, "content": "Foo"}]
     assert args[1] == document_id
@@ -77,8 +79,14 @@ async def test_process_pdf_document_validation_failure(orchestrator, sample_pdf)
 
 
 @pytest.mark.asyncio
-async def test_process_pdf_document_parsing_error(orchestrator, sample_pdf):
+async def test_process_pdf_document_parsing_error(orchestrator, sample_pdf, monkeypatch, caplog):
     orchestrator._sync_sql_document_status = AsyncMock()
+    runtime_reports = []
+    monkeypatch.setattr(
+        "src.lib.pipeline.orchestrator.report_runtime_exception",
+        lambda exc, **kwargs: runtime_reports.append((exc, kwargs)) or True,
+    )
+    caplog.set_level(logging.WARNING, logger="src.lib.pipeline.orchestrator")
 
     with patch("src.lib.pipeline.pdfx_parser.parse_pdf_document", new=AsyncMock(side_effect=RuntimeError("boom"))):
         result = await orchestrator.process_pdf_document(sample_pdf, "doc-1", "test_user", validate_first=False)
@@ -91,6 +99,27 @@ async def test_process_pdf_document_parsing_error(orchestrator, sample_pdf):
         status="failed",
         error_message="boom",
     )
+    assert len(runtime_reports) == 1
+    reported_exc, report_kwargs = runtime_reports[0]
+    assert isinstance(reported_exc, RuntimeError)
+    assert str(reported_exc) == "boom"
+    assert report_kwargs == {
+        "component": "document_pipeline",
+        "operation": "process_pdf_document_failed",
+        "context": {
+            "document_id": "doc-1",
+            "stages_completed_count": 0,
+            "stages_completed": [],
+            "validate_first": False,
+            "extraction_strategy": "auto",
+        },
+    }
+    failure_logs = [
+        record for record in caplog.records if record.message.startswith("Pipeline failed")
+    ]
+    assert len(failure_logs) == 1
+    assert failure_logs[0].levelno == logging.WARNING
+    assert failure_logs[0].exc_info is not None
 
 
 def test_validate_pipeline_requirements(orchestrator):
