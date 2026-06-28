@@ -1,29 +1,16 @@
-import React, { Suspense, lazy, useState, useEffect, useMemo, useRef } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useMemo } from 'react';
 import { Alert, Box, Button, Paper, Snackbar, Typography } from '@mui/material';
 import { PlaylistPlay as BatchIcon } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
-import {
-  cancelPdfJob,
-  fetchPdfJobs,
-  normalizeDocumentSourceProvenance,
-} from '../../services/weaviate';
-import { emitGlobalToast } from '../../lib/globalNotifications';
-import { buildPdfTerminalNotification } from '@/features/documents/pdfTerminalNotifications';
+import { normalizeDocumentSourceProvenance } from '../../services/weaviate';
 import type {
   DocumentSummary,
   DocumentListResponse,
   DocumentFilter,
-  PdfProcessingJob,
 } from '../../services/weaviate';
 
 const DocumentList = lazy(() => import('../../components/weaviate/DocumentList'));
-const PdfJobsPanel = lazy(() => import('../../components/weaviate/PdfJobsPanel'));
 const InlineFilterBar = lazy(() => import('../../components/weaviate/InlineFilterBar'));
-
-type PipelineState = {
-  busy: boolean;
-  message?: string;
-};
 
 const readString = (value: unknown, defaultValue: string): string => (
   typeof value === 'string' && value.trim() ? value : defaultValue
@@ -51,110 +38,18 @@ function DocumentsPageSectionFallback() {
   );
 }
 
-const areJobsEquivalent = (previous: PdfProcessingJob[], next: PdfProcessingJob[]): boolean => {
-  if (previous === next) {
-    return true;
-  }
-  if (previous.length !== next.length) {
-    return false;
-  }
-
-  for (let index = 0; index < previous.length; index += 1) {
-    const prevJob = previous[index];
-    const nextJob = next[index];
-
-    if (
-      prevJob.job_id !== nextJob.job_id ||
-      prevJob.status !== nextJob.status ||
-      prevJob.progress_percentage !== nextJob.progress_percentage ||
-      prevJob.current_stage !== nextJob.current_stage ||
-      prevJob.message !== nextJob.message ||
-      prevJob.error_message !== nextJob.error_message ||
-      prevJob.cancel_requested !== nextJob.cancel_requested ||
-      prevJob.updated_at !== nextJob.updated_at ||
-      prevJob.completed_at !== nextJob.completed_at
-    ) {
-      return false;
-    }
-  }
-
-  return true;
-};
-
 const DocumentsPage: React.FC = () => {
   const navigate = useNavigate();
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [, setTotalCount] = useState(0);
-  const [pipelineState, setPipelineState] = useState<PipelineState>({ busy: false });
   const [filters, setFilters] = useState<DocumentFilter>({});
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<string[]>([]);
-  const [jobs, setJobs] = useState<PdfProcessingJob[]>([]);
-  const [jobsLoading, setJobsLoading] = useState(false);
   const [snackbar, setSnackbar] = useState<{
     open: boolean;
     message: string;
     severity: 'success' | 'error' | 'info';
   }>({ open: false, message: '', severity: 'info' });
-  const [pendingDocumentRefresh, setPendingDocumentRefresh] = useState(false);
-
-  const jobsEventSourceRef = useRef<EventSource | null>(null);
-  const jobsPollingRef = useRef<number | null>(null);
-  const seenTerminalNotificationsRef = useRef<Set<string>>(new Set());
-  const seededTerminalNotificationsRef = useRef(false);
-
-  const notifyTerminalJobTransitions = React.useCallback((nextJobs: PdfProcessingJob[]) => {
-    const seedOnly = !seededTerminalNotificationsRef.current;
-
-    for (const job of nextJobs) {
-      const notification = buildPdfTerminalNotification(job);
-      if (!notification) {
-        continue;
-      }
-
-      const key = notification.key;
-      if (seenTerminalNotificationsRef.current.has(key)) {
-        continue;
-      }
-      seenTerminalNotificationsRef.current.add(key);
-      if (seedOnly) {
-        continue;
-      }
-
-      emitGlobalToast({ message: notification.message, severity: notification.severity });
-
-      setPendingDocumentRefresh(true);
-    }
-
-    if (!seededTerminalNotificationsRef.current) {
-      seededTerminalNotificationsRef.current = true;
-    }
-  }, []);
-
-  const applyJobsUpdate = React.useCallback(
-    (nextJobs: PdfProcessingJob[]) => {
-      setJobs((previousJobs) => (areJobsEquivalent(previousJobs, nextJobs) ? previousJobs : nextJobs));
-      notifyTerminalJobTransitions(nextJobs);
-    },
-    [notifyTerminalJobTransitions]
-  );
-
-  const refreshJobs = React.useCallback(async (silent = false) => {
-    if (!silent) {
-      setJobsLoading(true);
-    }
-
-    try {
-      const payload = await fetchPdfJobs({ windowDays: 7, limit: 50, offset: 0 });
-      applyJobsUpdate(payload.jobs);
-    } catch (error) {
-      console.error('Error fetching PDF jobs:', error);
-    } finally {
-      if (!silent) {
-        setJobsLoading(false);
-      }
-    }
-  }, [applyJobsUpdate]);
 
   const handleRefresh = React.useCallback(async () => {
     setLoading(true);
@@ -207,98 +102,21 @@ const DocumentsPage: React.FC = () => {
       const totalItems =
         data.pagination?.totalItems ?? (data.pagination as Record<string, unknown> | undefined)?.total_items as number ?? docs.length;
       setTotalCount(totalItems);
-      setPipelineState((prev) => (prev.busy ? prev : { busy: false }));
-      await refreshJobs(true);
       console.log('[DocumentsPage] Refresh success', { count: normalizedDocs.length });
     } catch (error) {
       console.error('Error fetching documents:', error);
       // For now, just set empty data to prevent errors
       setDocuments([]);
       setTotalCount(0);
-      setPipelineState({ busy: false });
     } finally {
       setLoading(false);
     }
-  }, [refreshJobs]);
+  }, []);
 
   useEffect(() => {
     console.log('[DocumentsPage] Mounted – triggering initial refresh');
     void handleRefresh();
   }, [handleRefresh]);
-
-  useEffect(() => {
-    if (!pendingDocumentRefresh) {
-      return;
-    }
-
-    setPendingDocumentRefresh(false);
-    void handleRefresh();
-  }, [handleRefresh, pendingDocumentRefresh]);
-
-  useEffect(() => {
-    const startJobsPolling = () => {
-      if (jobsPollingRef.current !== null) {
-        return;
-      }
-      jobsPollingRef.current = window.setInterval(() => {
-        void refreshJobs(true);
-      }, 5000);
-    };
-
-    try {
-      const source = new EventSource('/api/weaviate/pdf-jobs/stream?window_days=7&limit=50');
-      jobsEventSourceRef.current = source;
-
-      source.onmessage = (event) => {
-        try {
-          const payload = JSON.parse(event.data) as { jobs?: PdfProcessingJob[]; final?: boolean };
-          if (payload.final) {
-            return;
-          }
-          if (Array.isArray(payload.jobs)) {
-            applyJobsUpdate(payload.jobs);
-          }
-        } catch (parseError) {
-          console.error('Failed to parse PDF jobs stream payload:', parseError);
-        }
-      };
-
-      source.onerror = () => {
-        source.close();
-        jobsEventSourceRef.current = null;
-        startJobsPolling();
-      };
-    } catch (error) {
-      console.error('Failed to open PDF jobs stream:', error);
-      startJobsPolling();
-    }
-
-    return () => {
-      if (jobsEventSourceRef.current) {
-        jobsEventSourceRef.current.close();
-        jobsEventSourceRef.current = null;
-      }
-      if (jobsPollingRef.current !== null) {
-        window.clearInterval(jobsPollingRef.current);
-        jobsPollingRef.current = null;
-      }
-    };
-  }, [applyJobsUpdate, refreshJobs]);
-
-  const handleCancelJob = React.useCallback(async (jobId: string) => {
-    try {
-      const response = await cancelPdfJob(jobId);
-      setSnackbar({ open: true, message: response.message, severity: 'info' });
-      await refreshJobs(true);
-    } catch (error) {
-      console.error('Failed to cancel PDF job:', error);
-      setSnackbar({
-        open: true,
-        message: error instanceof Error ? error.message : 'Failed to cancel job',
-        severity: 'error',
-      });
-    }
-  }, [refreshJobs]);
 
   const buildActionErrorMessage = React.useCallback(async (response: Response, fallback: string) => {
     try {
@@ -310,7 +128,7 @@ const DocumentsPage: React.FC = () => {
       if (detail && typeof detail === 'object' && typeof detail.message === 'string' && detail.message.trim()) {
         return detail.message;
       }
-    } catch (_error) {
+    } catch {
       // Fall through to status-based fallback message.
     }
     return `${fallback} (${response.status})`;
@@ -444,10 +262,6 @@ const DocumentsPage: React.FC = () => {
     });
   }, [documents, navigate, selectedDocumentIds]);
 
-  const handlePipelineStateChange = React.useCallback((busy: boolean, message?: string) => {
-    setPipelineState({ busy, message });
-  }, []);
-
   const handleSelectionChange = React.useCallback((ids: string[]) => {
     if (ids.length <= MAX_BATCH_DOCUMENT_SELECTION) {
       setSelectedDocumentIds(ids);
@@ -541,7 +355,6 @@ const DocumentsPage: React.FC = () => {
         }}
       >
         <Suspense fallback={<DocumentsPageSectionFallback />}>
-          <PdfJobsPanel jobs={jobs} loading={jobsLoading} onCancelJob={handleCancelJob} />
           <DocumentList
             documents={filteredDocuments}
             loading={loading}
@@ -550,9 +363,7 @@ const DocumentsPage: React.FC = () => {
             onReembed={handleReembed}
             onRefresh={handleRefresh}
             onTitleUpdate={handleTitleUpdate}
-            pipelineBusy={pipelineState.busy}
-            pipelineMessage={pipelineState.message}
-            onPipelineStateChange={handlePipelineStateChange}
+            showUploadControls={false}
             checkboxSelection={true}
             selectedIds={selectedDocumentIds}
             onSelectionChange={handleSelectionChange}

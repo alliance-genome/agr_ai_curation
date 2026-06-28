@@ -53,7 +53,7 @@ describe('Sidebar', () => {
     renderWithTheme(<Sidebar />);
 
     expect(screen.getByRole('heading', { name: 'Documents' })).toBeInTheDocument();
-    expect(getNavButton('Documents')).toBeInTheDocument();
+    expect(getNavButton('Library')).toBeInTheDocument();
     expect(getNavButton('Add Literature')).toBeInTheDocument();
     expect(screen.queryByText('Dashboard')).not.toBeInTheDocument();
     expect(screen.queryByText('Settings')).not.toBeInTheDocument();
@@ -63,7 +63,7 @@ describe('Sidebar', () => {
   it('navigates to documents page', () => {
     renderWithTheme(<Sidebar />);
 
-    fireEvent.click(getNavButton('Documents'));
+    fireEvent.click(getNavButton('Library'));
 
     expect(mockNavigate).toHaveBeenCalledWith('/weaviate/documents');
   });
@@ -76,11 +76,11 @@ describe('Sidebar', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/weaviate/add-literature');
   });
 
-  it('highlights nested document routes as Documents', () => {
+  it('highlights nested document routes as Library', () => {
     mockLocation.pathname = '/weaviate/documents/123';
     renderWithTheme(<Sidebar />);
 
-    expect(getNavButton('Documents')).toHaveClass('Mui-selected');
+    expect(getNavButton('Library')).toHaveClass('Mui-selected');
   });
 
   it('highlights add literature route', () => {
@@ -95,7 +95,7 @@ describe('Sidebar', () => {
     renderWithTheme(<Sidebar />);
 
     expect(getNavButton('Add Literature')).toHaveClass('Mui-selected');
-    expect(getNavButton('Documents')).not.toHaveClass('Mui-selected');
+    expect(getNavButton('Library')).not.toHaveClass('Mui-selected');
   });
 
   it('collapses and expands the sidebar with labeled controls', async () => {
@@ -107,7 +107,7 @@ describe('Sidebar', () => {
       expect(screen.queryByRole('heading', { name: 'Documents' })).not.toBeInTheDocument();
     });
 
-    expect(screen.getByRole('button', { name: 'Documents' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Library' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add Literature' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Expand Documents navigation' }));
@@ -132,7 +132,7 @@ describe('Sidebar', () => {
 
     renderWithTheme(<Sidebar open={true} onToggle={onToggle} />);
 
-    fireEvent.click(getNavButton('Documents'));
+    fireEvent.click(getNavButton('Library'));
 
     expect(mockNavigate).toHaveBeenCalledWith('/weaviate/documents');
     expect(onToggle).toHaveBeenCalled();
@@ -144,7 +144,7 @@ describe('Sidebar', () => {
 
     renderWithTheme(<Sidebar open={true} onToggle={onToggle} />);
 
-    fireEvent.click(getNavButton('Documents'));
+    fireEvent.click(getNavButton('Library'));
 
     expect(mockNavigate).toHaveBeenCalledWith('/weaviate/documents');
     expect(onToggle).not.toHaveBeenCalled();

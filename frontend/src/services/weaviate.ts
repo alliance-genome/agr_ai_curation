@@ -698,7 +698,10 @@ export const wakePdfExtractionWorker = async (): Promise<PdfExtractionWakeRespon
 };
 
 export const usePdfExtractionHealth = (
-  options?: UseQueryOptions<PdfExtractionHealthStatus>
+  options?: Omit<
+    UseQueryOptions<PdfExtractionHealthStatus, Error, PdfExtractionHealthStatus, QueryKey>,
+    'queryKey' | 'queryFn'
+  >
 ) =>
   useQuery<PdfExtractionHealthStatus>({
     queryKey: ['pdf-extraction-health'],

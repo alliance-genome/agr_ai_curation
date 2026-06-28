@@ -34,6 +34,11 @@ const okJson = (payload: unknown) => new Response(JSON.stringify(payload), {
   headers: { 'Content-Type': 'application/json' },
 });
 
+const emptyPdfJobsResponse = {
+  jobs: [],
+  pagination: { total: 0, limit: 50, offset: 0 },
+};
+
 const SOURCE_MD5 = ['000c0dd769dd7326', '8e3c752102337c96'].join('');
 
 const defaultImportResponse = {
@@ -58,11 +63,40 @@ const defaultImportResponse = {
   ],
 };
 
+class MockEventSource {
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onerror: (() => void) | null = null;
+
+  constructor(public readonly url: string) {}
+
+  close = vi.fn();
+}
+
+const stubRoutedFetch = (
+  identifierResponses: Array<unknown | Response | Promise<Response>> = [defaultImportResponse],
+) => {
+  const responses = [...identifierResponses];
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes('/api/weaviate/pdf-jobs')) {
+      return okJson(emptyPdfJobsResponse);
+    }
+
+    const nextResponse = responses.length > 0 ? responses.shift() : defaultImportResponse;
+    const resolvedResponse = await nextResponse;
+    if (resolvedResponse instanceof Response) {
+      return resolvedResponse;
+    }
+    return okJson(resolvedResponse);
+  }));
+};
+
 describe('AddLiteraturePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(uploadPdfDocument).mockResolvedValue('mock-doc-uploaded');
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(okJson(defaultImportResponse)));
+    vi.stubGlobal('EventSource', MockEventSource);
+    stubRoutedFetch();
   });
 
   it('renders production Add Literature controls with an empty shared results table', () => {
@@ -73,14 +107,16 @@ describe('AddLiteraturePage', () => {
     expect(screen.getByText('Add Publication by Identifiers')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Resolve' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Resolve and Import' })).toBeDisabled();
+    expect(screen.getByText('PDF Jobs')).toBeInTheDocument();
     expect(screen.getByRole('table', { name: 'Literature import results' })).toBeInTheDocument();
     expect(screen.getByText('No import results yet.')).toBeInTheDocument();
+    expect(screen.queryByText(/Successful source retrievals/i)).not.toBeInTheDocument();
     expect(screen.queryByText('Review states')).not.toBeInTheDocument();
   });
 
   it('resolves identifiers through the dry-run backend endpoint', async () => {
     const user = userEvent.setup();
-    vi.mocked(fetch).mockResolvedValueOnce(okJson({
+    stubRoutedFetch([{
       imported_count: 0,
       results: [
         {
@@ -98,7 +134,7 @@ describe('AddLiteraturePage', () => {
           },
         },
       ],
-    }));
+    }]);
     render(<AddLiteraturePage />);
 
     fireEvent.change(screen.getByLabelText('Source identifiers'), { target: { value: 'PMID:23970418' } });
@@ -118,7 +154,7 @@ describe('AddLiteraturePage', () => {
 
   it('labels provider source-only results without implying converted Markdown is pending', async () => {
     const user = userEvent.setup();
-    vi.mocked(fetch).mockResolvedValueOnce(okJson({
+    stubRoutedFetch([{
       imported_count: 0,
       results: [
         {
@@ -135,7 +171,7 @@ describe('AddLiteraturePage', () => {
           },
         },
       ],
-    }));
+    }]);
     render(<AddLiteraturePage />);
 
     fireEvent.change(screen.getByLabelText('Source identifiers'), { target: { value: 'PMID:23970418' } });
@@ -147,8 +183,8 @@ describe('AddLiteraturePage', () => {
 
   it('clears stale dry-run results when identifiers change before import', async () => {
     const user = userEvent.setup();
-    vi.mocked(fetch)
-      .mockResolvedValueOnce(okJson({
+    stubRoutedFetch([
+      {
         imported_count: 0,
         results: [
           {
@@ -165,8 +201,8 @@ describe('AddLiteraturePage', () => {
             },
           },
         ],
-      }))
-      .mockResolvedValueOnce(okJson({
+      },
+      {
         imported_count: 1,
         results: [
           {
@@ -185,7 +221,8 @@ describe('AddLiteraturePage', () => {
             },
           },
         ],
-      }));
+      },
+    ]);
     render(<AddLiteraturePage />);
 
     fireEvent.change(screen.getByLabelText('Source identifiers'), { target: { value: 'PMID:23970418' } });
@@ -200,7 +237,7 @@ describe('AddLiteraturePage', () => {
     await user.click(screen.getByRole('button', { name: 'Resolve and Import' }));
 
     expect(await screen.findByText('new-paper.pdf')).toBeInTheDocument();
-    expect(fetch).toHaveBeenLastCalledWith('/api/weaviate/documents/import/source-identifiers', expect.objectContaining({
+    expect(fetch).toHaveBeenCalledWith('/api/weaviate/documents/import/source-identifiers', expect.objectContaining({
       body: JSON.stringify({ identifiers: 'PMID:1' }),
     }));
   });
@@ -208,9 +245,9 @@ describe('AddLiteraturePage', () => {
   it('ignores in-flight resolve results after identifiers change', async () => {
     const user = userEvent.setup();
     let resolveFetch: ((response: Response) => void) | undefined;
-    vi.mocked(fetch).mockReturnValueOnce(new Promise<Response>((resolve) => {
+    stubRoutedFetch([new Promise<Response>((resolve) => {
       resolveFetch = resolve;
-    }));
+    })]);
     render(<AddLiteraturePage />);
 
     fireEvent.change(screen.getByLabelText('Source identifiers'), { target: { value: 'PMID:23970418' } });
@@ -246,9 +283,9 @@ describe('AddLiteraturePage', () => {
   it('keeps upload results when an older identifier request resolves later', async () => {
     const user = userEvent.setup();
     let resolveFetch: ((response: Response) => void) | undefined;
-    vi.mocked(fetch).mockReturnValueOnce(new Promise<Response>((resolve) => {
+    stubRoutedFetch([new Promise<Response>((resolve) => {
       resolveFetch = resolve;
-    }));
+    })]);
     render(<AddLiteraturePage />);
 
     fireEvent.change(screen.getByLabelText('Source identifiers'), { target: { value: 'PMID:23970418' } });
@@ -306,7 +343,7 @@ describe('AddLiteraturePage', () => {
 
   it('maps backend namespaced error codes to production status chips', async () => {
     const user = userEvent.setup();
-    vi.mocked(fetch).mockResolvedValueOnce(okJson({
+    stubRoutedFetch([{
       imported_count: 0,
       results: [
         {
@@ -352,7 +389,7 @@ describe('AddLiteraturePage', () => {
           message: 'Provider conversion failed.',
         },
       ],
-    }));
+    }]);
     render(<AddLiteraturePage />);
 
     fireEvent.change(screen.getByLabelText('Source identifiers'), { target: { value: 'PMID:1\nPMID:2\nPMID:3' } });
@@ -405,13 +442,13 @@ describe('AddLiteraturePage', () => {
     expect(screen.queryByText('Existing document')).not.toBeInTheDocument();
   });
 
-  it('returns a PDF-backed row to the Documents inventory', async () => {
+  it('returns a PDF-backed row to the Library inventory', async () => {
     const user = userEvent.setup();
     render(<AddLiteraturePage />);
 
     fireEvent.change(screen.getByLabelText('Source identifiers'), { target: { value: 'PMID:23970418' } });
     await user.click(screen.getByRole('button', { name: 'Resolve and Import' }));
-    await user.click(await screen.findByRole('button', { name: 'View paper-from-api.pdf in Documents' }));
+    await user.click(await screen.findByRole('button', { name: 'View paper-from-api.pdf in Library' }));
 
     expect(mockNavigate).toHaveBeenCalledWith('/weaviate/documents');
   });

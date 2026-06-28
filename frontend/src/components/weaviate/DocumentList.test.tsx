@@ -10,6 +10,16 @@ import {
 const refetchHealthMock = vi.fn();
 const emitGlobalToastMock = vi.fn();
 const openCurationWorkspaceMock = vi.fn();
+const usePdfExtractionHealthMock = vi.fn((_options?: unknown) => ({
+  data: {
+    status: 'healthy',
+    last_checked: '2026-03-05T00:00:00Z',
+  },
+  isLoading: false,
+  isError: false,
+  isFetching: false,
+  refetch: refetchHealthMock,
+}));
 
 const createTestDocument = (overrides: Partial<DocumentSummary> = {}): DocumentSummary => ({
   id: '1',
@@ -51,16 +61,7 @@ vi.mock('../../services/weaviate', async () => {
   const actual = await vi.importActual<typeof import('../../services/weaviate')>('../../services/weaviate');
   return {
     ...actual,
-    usePdfExtractionHealth: () => ({
-      data: {
-        status: 'healthy',
-        last_checked: '2026-03-05T00:00:00Z',
-      },
-      isLoading: false,
-      isError: false,
-      isFetching: false,
-      refetch: refetchHealthMock,
-    }),
+    usePdfExtractionHealth: (options: unknown) => usePdfExtractionHealthMock(options),
   };
 });
 
@@ -245,6 +246,7 @@ describe('DocumentList', () => {
     vi.clearAllMocks();
     sessionStorage.clear();
     refetchHealthMock.mockReset();
+    usePdfExtractionHealthMock.mockClear();
     emitGlobalToastMock.mockReset();
     openCurationWorkspaceMock.mockReset();
   });
@@ -590,6 +592,18 @@ describe('DocumentList', () => {
     expect(screen.getByText('No documents yet. Upload a PDF to get started.')).toBeInTheDocument();
     const grid = document.querySelector('.MuiDataGrid-root');
     expect(grid).not.toBeInTheDocument();
+  });
+
+  it('hides upload controls when rendered as the Library table', () => {
+    const { container } = render(
+      <DocumentList {...defaultProps} documents={[]} totalCount={0} showUploadControls={false} />
+    );
+
+    expect(screen.getByText('No library documents yet.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'UPLOAD DOCUMENT(S)' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/PDF extraction service/i)).not.toBeInTheDocument();
+    expect(container.querySelector('input[type="file"]')).not.toBeInTheDocument();
+    expect(usePdfExtractionHealthMock).toHaveBeenCalledWith({ enabled: false });
   });
 
   it('allows selecting multiple files for upload', () => {

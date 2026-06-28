@@ -41,7 +41,7 @@ interface NavigationItem {
 const NAVIGATION_ITEMS: NavigationItem[] = [
   {
     id: 'documents',
-    label: 'Documents',
+    label: 'Library',
     icon: <Description />,
     path: '/weaviate/documents',
   },

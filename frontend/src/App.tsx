@@ -430,13 +430,10 @@ export function AppContent() {
 
     const pollNotifications = async () => {
       const currentPathname = location.pathname.replace(/\/+$/, '');
-      const onDocumentsPage =
-        currentPathname === '/weaviate/documents' ||
-        (currentPathname.startsWith('/weaviate/documents/') &&
-          currentPathname !== '/weaviate/documents/import-mock');
+      const onPdfJobsPage = currentPathname === '/weaviate/add-literature';
       const onBatchPage = location.pathname.startsWith('/batch');
 
-      if (!onDocumentsPage) {
+      if (!onPdfJobsPage) {
         try {
           const response = await fetch('/api/weaviate/pdf-jobs?window_days=7&limit=50&offset=0', {
             credentials: 'include',

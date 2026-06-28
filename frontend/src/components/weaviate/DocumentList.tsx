@@ -74,6 +74,8 @@ interface DocumentListProps {
   onTitleUpdate?: (documentId: string, title: string) => Promise<void>;
   /** Optional filter bar component to render above the table */
   filterBar?: React.ReactNode;
+  /** Show PDF upload and extraction-health controls above the inventory table */
+  showUploadControls?: boolean;
 }
 
 const PDF_BACKGROUND_PROCESSING_TOAST =
@@ -201,8 +203,9 @@ const DocumentList: React.FC<DocumentListProps> = ({
   onSelectionChange,
   onTitleUpdate,
   filterBar,
+  showUploadControls = true,
 }) => {
-  const extractionHealthQuery = usePdfExtractionHealth();
+  const extractionHealthQuery = usePdfExtractionHealth({ enabled: showUploadControls });
   const extractionHealth = extractionHealthQuery.data;
   const navigate = useNavigate();
 
@@ -231,8 +234,10 @@ const DocumentList: React.FC<DocumentListProps> = ({
 
   const extractionHealthy = extractionHealth?.status === 'healthy';
   const uploadBlockedByExtraction =
-    extractionHealthQuery.isError ||
-    (extractionHealth != null && !extractionHealthy);
+    showUploadControls && (
+      extractionHealthQuery.isError ||
+      (extractionHealth != null && !extractionHealthy)
+    );
 
   const uploadBlockedReason =
     extractionHealthQuery.isError
@@ -656,76 +661,82 @@ const DocumentList: React.FC<DocumentListProps> = ({
         position: 'relative',
       }}
     >
-      <Stack
-        direction={{ xs: 'column', sm: 'row' }}
-        spacing={1}
-        alignItems={{ xs: 'stretch', sm: 'center' }}
-        justifyContent="space-between"
-        sx={{ mb: 2 }}
-      >
-        {extractionHealthQuery.isLoading ? (
-          <Alert severity="info" sx={{ flex: 1 }}>
-            Checking PDF extraction service health…
-          </Alert>
-        ) : extractionHealthQuery.isError ? (
-          <Alert severity="error" sx={{ flex: 1 }}>
-            Unable to reach PDF extraction service: {(extractionHealthQuery.error as Error).message}
-          </Alert>
-        ) : extractionHealth ? (
-          <Alert
-            severity={
-              extractionHealth.status === 'healthy'
-                ? 'success'
-                : extractionHealth.status === 'degraded'
-                  ? 'warning'
-                  : 'error'
-            }
-            sx={{ flex: 1 }}
+      {showUploadControls && (
+        <>
+          <Stack
+            direction={{ xs: 'column', sm: 'row' }}
+            spacing={1}
+            alignItems={{ xs: 'stretch', sm: 'center' }}
+            justifyContent="space-between"
+            sx={{ mb: 2 }}
           >
-            PDF extraction service: {extractionHealth.status}
-            {extractionHealth.last_checked && (
-              <Typography component="span" variant="caption" sx={{ ml: 1 }}>
-                · Checked {new Date(extractionHealth.last_checked).toLocaleTimeString()}
-              </Typography>
+            {extractionHealthQuery.isLoading ? (
+              <Alert severity="info" sx={{ flex: 1 }}>
+                Checking PDF extraction service health…
+              </Alert>
+            ) : extractionHealthQuery.isError ? (
+              <Alert severity="error" sx={{ flex: 1 }}>
+                Unable to reach PDF extraction service: {(extractionHealthQuery.error as Error).message}
+              </Alert>
+            ) : extractionHealth ? (
+              <Alert
+                severity={
+                  extractionHealth.status === 'healthy'
+                    ? 'success'
+                    : extractionHealth.status === 'degraded'
+                      ? 'warning'
+                      : 'error'
+                }
+                sx={{ flex: 1 }}
+              >
+                PDF extraction service: {extractionHealth.status}
+                {extractionHealth.last_checked && (
+                  <Typography component="span" variant="caption" sx={{ ml: 1 }}>
+                    · Checked {new Date(extractionHealth.last_checked).toLocaleTimeString()}
+                  </Typography>
+                )}
+                {extractionHealth.error && extractionHealth.status !== 'healthy' && (
+                  <Typography component="span" variant="caption" sx={{ ml: 1 }}>
+                    ({extractionHealth.error})
+                  </Typography>
+                )}
+              </Alert>
+            ) : (
+              <Alert severity="warning" sx={{ flex: 1 }}>
+                PDF extraction service status unavailable.
+              </Alert>
             )}
-            {extractionHealth.error && extractionHealth.status !== 'healthy' && (
-              <Typography component="span" variant="caption" sx={{ ml: 1 }}>
-                ({extractionHealth.error})
-              </Typography>
-            )}
-          </Alert>
-        ) : (
-          <Alert severity="warning" sx={{ flex: 1 }}>
-            PDF extraction service status unavailable.
-          </Alert>
-        )}
 
-        <Button
-          size="small"
-          variant="outlined"
-          onClick={() => extractionHealthQuery.refetch()}
-          disabled={extractionHealthQuery.isFetching}
-          startIcon={extractionHealthQuery.isFetching ? <CircularProgress size={14} /> : undefined}
-        >
-          Refresh Status
-        </Button>
-      </Stack>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => extractionHealthQuery.refetch()}
+              disabled={extractionHealthQuery.isFetching}
+              startIcon={extractionHealthQuery.isFetching ? <CircularProgress size={14} /> : undefined}
+            >
+              Refresh Status
+            </Button>
+          </Stack>
 
-      {uploadBlockedReason && (
-        <Alert severity="error" sx={{ mb: 2 }}>
-          {uploadBlockedReason}
-        </Alert>
+          {uploadBlockedReason && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              {uploadBlockedReason}
+            </Alert>
+          )}
+        </>
       )}
 
       <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
-        <Button
-          variant="contained"
-          startIcon={<CloudUpload />}
-          onClick={handleUploadClick}
-          disabled={loading || pipelineBusy || uploadBlockedByExtraction}
-        >
-          UPLOAD DOCUMENT(S)
-        </Button>
+        {showUploadControls && (
+          <Button
+            variant="contained"
+            startIcon={<CloudUpload />}
+            onClick={handleUploadClick}
+            disabled={loading || pipelineBusy || uploadBlockedByExtraction}
+          >
+            UPLOAD DOCUMENT(S)
+          </Button>
+        )}
         <Button
           variant="outlined"
           startIcon={<Refresh />}
@@ -743,14 +754,16 @@ const DocumentList: React.FC<DocumentListProps> = ({
             </Typography>
           </Stack>
         )}
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".pdf"
-          multiple
-          style={{ display: 'none' }}
-          onChange={handleFileSelect}
-        />
+        {showUploadControls && (
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf"
+            multiple
+            style={{ display: 'none' }}
+            onChange={handleFileSelect}
+          />
+        )}
       </Stack>
 
       {/* Optional filter bar */}
@@ -795,7 +808,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
                     <Stack direction="row" spacing={1} alignItems="center" justifyContent="center">
                       {loading && <CircularProgress size={16} />}
                       <Typography variant="body2" color="text.secondary">
-                        {loading ? 'Loading documents…' : 'No documents yet. Upload a PDF to get started.'}
+                        {loading ? 'Loading documents…' : showUploadControls ? 'No documents yet. Upload a PDF to get started.' : 'No library documents yet.'}
                       </Typography>
                     </Stack>
                   </TableCell>

@@ -246,7 +246,7 @@ describe('AppContent global notifications', () => {
     expect(screen.getByText('PDF processing completed: new.pdf')).toBeInTheDocument();
   });
 
-  it('continues PDF job polling on the add literature route after work starts there', async () => {
+  it('leaves PDF job polling to Add Literature on the add literature route', async () => {
     vi.useFakeTimers();
 
     let pdfPoll = 0;
@@ -254,11 +254,6 @@ describe('AppContent global notifications', () => {
       const url = String(input);
       if (url.includes('/api/weaviate/pdf-jobs')) {
         pdfPoll += 1;
-        if (pdfPoll === 1) {
-          return jsonResponse({
-            jobs: [{ job_id: 'active-add-literature', status: 'running', filename: 'queued-from-add-literature.pdf', document_id: 'doc-add-lit' }],
-          });
-        }
         return jsonResponse({
           jobs: [{ job_id: 'active-add-literature', status: 'completed', filename: 'queued-from-add-literature.pdf', document_id: 'doc-add-lit' }],
         });
@@ -275,6 +270,7 @@ describe('AppContent global notifications', () => {
       await Promise.resolve();
     });
     expect(screen.getByText('Add Literature Page')).toBeInTheDocument();
+    expect(pdfPoll).toBe(0);
     expect(screen.queryByText('PDF processing completed: queued-from-add-literature.pdf')).not.toBeInTheDocument();
 
     await act(async () => {
@@ -282,7 +278,8 @@ describe('AppContent global notifications', () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByText('PDF processing completed: queued-from-add-literature.pdf')).toBeInTheDocument();
+    expect(pdfPoll).toBe(0);
+    expect(screen.queryByText('PDF processing completed: queued-from-add-literature.pdf')).not.toBeInTheDocument();
   });
 
   it('ignores failed PDF snapshots when cancellation has been requested', async () => {
@@ -326,7 +323,7 @@ describe('AppContent global notifications', () => {
     expect(screen.getByText('PDF processing cancelled: cancel-me.pdf')).toBeInTheDocument();
   });
 
-  it('skips PDF job polling on documents route and skips batch polling on batch route', async () => {
+  it('skips PDF job polling on Add Literature and skips batch polling on batch route', async () => {
     vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/api/weaviate/pdf-jobs')) {
@@ -338,10 +335,19 @@ describe('AppContent global notifications', () => {
       return jsonResponse({});
     });
 
-    renderAppContent('/weaviate/documents');
+    renderAppContent('/weaviate/add-literature');
     await waitFor(() => {
       const urls = vi.mocked(global.fetch).mock.calls.map(([url]) => String(url));
       expect(urls.some((url) => url.includes('/api/weaviate/pdf-jobs'))).toBe(false);
+      expect(urls.some((url) => url.includes('/api/batches'))).toBe(true);
+    });
+
+    vi.clearAllMocks();
+
+    renderAppContent('/weaviate/documents');
+    await waitFor(() => {
+      const urls = vi.mocked(global.fetch).mock.calls.map(([url]) => String(url));
+      expect(urls.some((url) => url.includes('/api/weaviate/pdf-jobs'))).toBe(true);
       expect(urls.some((url) => url.includes('/api/batches'))).toBe(true);
     });
 
