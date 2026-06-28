@@ -108,10 +108,14 @@ def valid_session_id():
 @pytest.fixture(scope="module")
 def client(temp_storage_dir):
     """Create test client with storage path set before app import."""
-    os.environ["FILE_OUTPUT_STORAGE_PATH"] = str(temp_storage_dir)
-    os.environ["OPENAI_API_KEY"] = "test-key"
-    os.environ["TESTING_API_KEY"] = "test-key"
-    os.environ["DEV_MODE"] = "true"
+    env_overrides = {
+        "FILE_OUTPUT_STORAGE_PATH": str(temp_storage_dir),
+        "OPENAI_API_KEY": "test-key",
+        "TESTING_API_KEY": "test-key",
+        "DEV_MODE": "true",
+    }
+    previous_env = {key: os.environ.get(key) for key in env_overrides}
+    os.environ.update(env_overrides)
 
     from main import create_app
 
@@ -141,6 +145,11 @@ def client(temp_storage_dir):
     finally:
         app.dependency_overrides.pop(get_db, None)
         Base.metadata.drop_all(bind=engine, tables=[FileOutput.__table__])
+        for key, value in previous_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 class TestRecordFileEndpoint:
