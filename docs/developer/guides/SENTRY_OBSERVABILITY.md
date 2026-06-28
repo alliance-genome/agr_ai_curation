@@ -31,6 +31,19 @@ Use `SENTRY_RELEASE` for every deployed candidate so events can be tied back to
 the exact commit. Leave tracing and profiling blank unless transport and
 redaction have been explicitly validated for that environment.
 
+Use separate Sentry projects/DSNs for dev and production. `SENTRY_ENVIRONMENT`
+is still required, but it is a label/filter, not the isolation boundary.
+Current backend routing uses:
+
+- dev: `ai-curation-backend-dev`;
+- production: `ai-curation-backend-prod`;
+- legacy: `ai-curation-backend` only for historical events or an explicit
+  migration decision.
+
+The runtime secret `ai-curation/sentry/runtime` stores the project metadata.
+Application hosts should use the private VPC DSN field for their environment;
+do not point dev at the production DSN or production at the dev DSN.
+
 If `SENTRY_ENVIRONMENT` is blank, backend setup falls back to `APP_ENV`, then
 `ENVIRONMENT`, then `local`. If `SENTRY_RELEASE` is blank, setup falls back to
 `GIT_SHA`.
