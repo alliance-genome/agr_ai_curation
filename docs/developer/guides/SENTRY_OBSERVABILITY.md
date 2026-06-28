@@ -36,9 +36,7 @@ is still required, but it is a label/filter, not the isolation boundary.
 Current backend routing uses:
 
 - dev: `ai-curation-backend-dev`;
-- production: `ai-curation-backend-prod`;
-- legacy: `ai-curation-backend` only for historical events or an explicit
-  migration decision.
+- production: `ai-curation-backend-prod`.
 
 The runtime secret `ai-curation/sentry/runtime` stores the project metadata.
 Application hosts should use the private VPC DSN field for their environment;
