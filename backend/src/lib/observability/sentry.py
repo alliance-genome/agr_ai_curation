@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import importlib
@@ -63,6 +64,7 @@ _TRACE_CONTEXT_KEYS = {
 }
 _TRACE_ID_PATTERN = re.compile(r"^[0-9a-fA-F]{32}$")
 _SPAN_ID_PATTERN = re.compile(r"^[0-9a-fA-F]{16}$")
+_HASHED_IDENTIFIER_PATTERN = re.compile(r"^sha256:[0-9a-f]{16}$")
 _SAFE_TRACE_TEXT_PATTERN = re.compile(r"^[A-Za-z0-9_.:/-]{1,100}$")
 _SAFE_GEN_AI_TEXT_PATTERN = re.compile(r"^[A-Za-z0-9_.:/() -]{1,160}$")
 _TRACE_TEXT_KEYS = {"op", "origin", "status", "type"}
@@ -445,11 +447,68 @@ def _hash_identifier(value: Any) -> str | None:
     text = value.strip()
     if not text:
         return None
+    if _HASHED_IDENTIFIER_PATTERN.fullmatch(text):
+        return text
     if _scrub_string(text) != text:
         return _REDACTED
 
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
     return f"sha256:{digest}"
+
+
+@contextmanager
+def gen_ai_conversation_scope(conversation_id: str | None):
+    """Attach a stable Sentry AI conversation ID for spans emitted in this scope."""
+
+    hashed_conversation_id = _hash_identifier(conversation_id)
+    if hashed_conversation_id in {None, _REDACTED}:
+        yield
+        return
+
+    settings = get_sentry_settings()
+    if not settings.ai_agents_monitoring_enabled:
+        yield
+        return
+
+    scope = None
+    sentry_ai = None
+    previous_conversation_id = None
+    conversation_bound = False
+    try:
+        sentry_sdk = importlib.import_module("sentry_sdk")
+        sentry_ai = importlib.import_module("sentry_sdk.ai")
+        get_current_scope = getattr(sentry_sdk, "get_current_scope", None)
+        if callable(get_current_scope):
+            scope = get_current_scope()
+            get_conversation_id = getattr(scope, "get_conversation_id", None)
+            if callable(get_conversation_id):
+                previous_conversation_id = get_conversation_id()
+        sentry_ai.set_conversation_id(hashed_conversation_id)
+        conversation_bound = True
+    except Exception as exc:
+        logger.debug("Sentry AI conversation scope unavailable: %s", exc)
+
+    try:
+        yield
+    finally:
+        if not conversation_bound or sentry_ai is None:
+            return
+        try:
+            if previous_conversation_id:
+                setter = getattr(scope, "set_conversation_id", None) if scope is not None else None
+                if callable(setter):
+                    setter(previous_conversation_id)
+                else:
+                    sentry_ai.set_conversation_id(previous_conversation_id)
+                return
+
+            remover = getattr(scope, "remove_conversation_id", None) if scope is not None else None
+            if callable(remover):
+                remover()
+            else:
+                sentry_ai.set_conversation_id(None)
+        except Exception as exc:
+            logger.debug("Sentry AI conversation scope cleanup failed: %s", exc)
 
 
 def _redact_runtime_exception_context(context: Mapping[str, Any]) -> dict[str, Any]:

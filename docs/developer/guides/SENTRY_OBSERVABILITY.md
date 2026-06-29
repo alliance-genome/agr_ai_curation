@@ -87,6 +87,14 @@ SENTRY_OPENAI_AGENTS_INTEGRATION_ENABLED=true
 SENTRY_TRACES_SAMPLE_RATE=1.0
 ```
 
+Chat and agent runs bind Sentry Conversations with
+`sentry_sdk.ai.set_conversation_id(...)` through
+`gen_ai_conversation_scope()`. The value is a stable hash of the AI Curation
+chat `session_id`, so Sentry can group related `gen_ai.*` spans without storing
+the raw session identifier. Keep this backend-only; do not copy Sentry's
+browser/OpenAI examples into frontend code or expose OpenAI API keys in the
+browser.
+
 Only enable the lower-level OpenAI integration if a dev smoke proves it is
 needed and does not duplicate spans:
 

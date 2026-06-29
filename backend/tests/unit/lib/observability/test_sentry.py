@@ -392,6 +392,96 @@ def test_before_send_transaction_preserves_safe_gen_ai_metadata_without_content(
     assert scrubbed["spans"][0]["description"] == "[Filtered]"
 
 
+def test_hash_identifier_preserves_existing_hashed_identifier():
+    assert sentry._hash_identifier("sha256:0123456789abcdef") == "sha256:0123456789abcdef"
+
+
+def test_gen_ai_conversation_scope_sets_hashed_conversation_id(monkeypatch):
+    calls = []
+
+    class FakeScope:
+        def get_conversation_id(self):
+            calls.append(("get", None))
+            return None
+
+        def remove_conversation_id(self):
+            calls.append(("remove", None))
+
+    fake_scope = FakeScope()
+    fake_sentry_sdk = SimpleNamespace(get_current_scope=lambda: fake_scope)
+    fake_sentry_ai = SimpleNamespace(
+        set_conversation_id=lambda conversation_id: calls.append(
+            ("set", conversation_id)
+        )
+    )
+    fake_modules = {
+        "sentry_sdk": fake_sentry_sdk,
+        "sentry_sdk.ai": fake_sentry_ai,
+    }
+
+    monkeypatch.setenv("SENTRY_AI_AGENTS_MONITORING_ENABLED", "true")
+    monkeypatch.setattr(sentry.importlib, "import_module", lambda name: fake_modules[name])
+
+    with sentry.gen_ai_conversation_scope("session-123"):
+        calls.append(("inside", None))
+
+    assert calls == [
+        ("get", None),
+        ("set", sentry._hash_identifier("session-123")),
+        ("inside", None),
+        ("remove", None),
+    ]
+
+
+def test_gen_ai_conversation_scope_restores_previous_id(monkeypatch):
+    calls = []
+
+    class FakeScope:
+        def get_conversation_id(self):
+            return "sha256:previous123456"
+
+        def set_conversation_id(self, conversation_id):
+            calls.append(("restore", conversation_id))
+
+    fake_scope = FakeScope()
+    fake_sentry_sdk = SimpleNamespace(get_current_scope=lambda: fake_scope)
+    fake_sentry_ai = SimpleNamespace(
+        set_conversation_id=lambda conversation_id: calls.append(
+            ("set", conversation_id)
+        )
+    )
+    fake_modules = {
+        "sentry_sdk": fake_sentry_sdk,
+        "sentry_sdk.ai": fake_sentry_ai,
+    }
+
+    monkeypatch.setenv("SENTRY_AI_AGENTS_MONITORING_ENABLED", "true")
+    monkeypatch.setattr(sentry.importlib, "import_module", lambda name: fake_modules[name])
+
+    with sentry.gen_ai_conversation_scope("session-456"):
+        pass
+
+    assert calls == [
+        ("set", sentry._hash_identifier("session-456")),
+        ("restore", "sha256:previous123456"),
+    ]
+
+
+def test_gen_ai_conversation_scope_skips_when_ai_monitoring_disabled(monkeypatch):
+    imported = []
+
+    def fake_import(name: str):
+        imported.append(name)
+        raise AssertionError("Sentry SDK should not be imported")
+
+    monkeypatch.setattr(sentry.importlib, "import_module", fake_import)
+
+    with sentry.gen_ai_conversation_scope("session-123"):
+        pass
+
+    assert imported == []
+
+
 def test_before_send_transaction_can_opt_into_gen_ai_content(monkeypatch):
     monkeypatch.setenv("SENTRY_OPENAI_INCLUDE_PROMPTS", "true")
     fake_secret = "sk-" + "test" + "secret" + "0123456789"
