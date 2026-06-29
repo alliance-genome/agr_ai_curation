@@ -32,7 +32,7 @@ SENTRY_OPENAI_INCLUDE_PROMPTS=false
 SENTRY_AI_CONTENT_CAPTURE_TIER=2
 SENTRY_AI_CONTENT_TIER1_PREVIEW_MAX_CHARS=2000
 SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS=2000
-SENTRY_TRANSACTION_RETAINED_SPANS_MAX=300
+SENTRY_TRANSACTION_RETAINED_SPANS_MAX=50
 RUNTIME_OBSERVABILITY_TAG_VALUE_MAX_CHARS=200
 RUNTIME_OBSERVABILITY_CONTEXT_VALUE_MAX_CHARS=500
 ```
@@ -84,7 +84,7 @@ SENTRY_OPENAI_INCLUDE_PROMPTS=false
 SENTRY_AI_CONTENT_CAPTURE_TIER=2
 SENTRY_AI_CONTENT_TIER1_PREVIEW_MAX_CHARS=2000
 SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS=2000
-SENTRY_TRANSACTION_RETAINED_SPANS_MAX=300
+SENTRY_TRANSACTION_RETAINED_SPANS_MAX=50
 ```
 
 Use manual AI Curation spans first:
@@ -142,7 +142,9 @@ one transaction after redaction. When a busy stream-chat run exceeds the cap,
 the redactor keeps GenAI spans and errored spans before lower-value HTTP, DB, or
 subprocess spans, then records retained/dropped span counts in transaction trace
 data. Langfuse remains the full trace source when Sentry receives a compacted
-transaction.
+transaction. The default is `50`, which is the cap that allowed a 390-second
+dev `/api/chat/stream` run with 50 GenAI spans to survive self-hosted Sentry
+ingest after a 300-span cap still produced `too_large:event`.
 
 `SENTRY_OPENAI_INCLUDE_PROMPTS=true` remains a separate compatibility flag for
 upstream Sentry/OpenAI integration fields such as `gen_ai.request.messages` and

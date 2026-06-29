@@ -242,7 +242,7 @@ def get_sentry_settings() -> SentrySettings:
         ),
         transaction_retained_spans_max=_get_env_int(
             "SENTRY_TRANSACTION_RETAINED_SPANS_MAX",
-            300,
+            50,
             minimum=50,
             maximum=1000,
         ),

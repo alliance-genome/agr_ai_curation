@@ -61,7 +61,7 @@ def test_get_sentry_settings_defaults_to_disabled():
     assert settings.ai_content_capture_tier == 2
     assert settings.ai_content_tier1_preview_max_chars == 2000
     assert settings.ai_content_preview_max_chars == 2000
-    assert settings.transaction_retained_spans_max == 300
+    assert settings.transaction_retained_spans_max == 50
 
 
 def test_get_sentry_settings_parses_env(monkeypatch):
