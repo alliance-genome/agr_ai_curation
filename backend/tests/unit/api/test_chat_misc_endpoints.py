@@ -23,6 +23,7 @@ from src.lib.chat_history_repository import (
 )
 from src.lib import http_errors
 from src.lib.curation_workspace import extraction_results as extraction_results_module
+from src.lib.observability import sentry
 from tests.chat_api_test_support import patch_chat_impl_for
 
 
@@ -879,6 +880,84 @@ async def test_chat_endpoint_success(monkeypatch):
     assert repository.append_calls[1]["trace_id"] == "trace-1"
     assert captured_run_kwargs[0]["context_messages"] == [{"role": "user", "content": "hello"}]
     assert captured_run_kwargs[0]["turn_id"] == "turn-1"
+
+
+@pytest.mark.asyncio
+async def test_chat_endpoint_keeps_sentry_transaction_open_for_non_stream(monkeypatch):
+    calls = []
+    commits: list[str] = []
+    repository = FakeChatHistoryRepository()
+
+    class FakeTransaction:
+        def set_data(self, key, value):
+            calls.append(("data", key, value))
+
+        def set_status(self, status):
+            calls.append(("status", status))
+
+    class FakeTransactionContext:
+        def __enter__(self):
+            calls.append(("enter", None))
+            return FakeTransaction()
+
+        def __exit__(self, exc_type, exc, tb):
+            calls.append(("exit", exc_type))
+
+    def _fake_transaction(**kwargs):
+        calls.append(("transaction", kwargs))
+        return FakeTransactionContext()
+
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _sid: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
+    _patch_chat_impl(
+        monkeypatch,
+        "document_state",
+        SimpleNamespace(get_document=lambda _uid: {"id": "doc-non-stream", "filename": "paper.pdf"}),
+    )
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "gen_ai_workflow_transaction", _fake_transaction)
+
+    async def _stream(**_kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-non-stream"}}
+        yield {"type": "RUN_FINISHED", "data": {"response": "final answer"}}
+
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _stream)
+
+    result = await chat.chat_endpoint(
+        chat.ChatMessage(
+            message="What genes are involved?",
+            session_id="session-non-stream-sentry",
+            turn_id="turn-non-stream-sentry",
+        ),
+        {"sub": "user-1", "cognito:groups": []},
+        db=_db_stub(commits=commits),
+    )
+
+    assert result.response == "final answer"
+    assert calls[0] == (
+        "transaction",
+        {
+            "name": "/api/chat",
+            "workflow": "assistant_chat",
+            "conversation_id": "session-non-stream-sentry",
+            "document_id": "doc-non-stream",
+            "document_present": True,
+            "input_preview": "What genes are involved?",
+        },
+    )
+    assert (
+        "data",
+        "ai_curation.trace.id_hash",
+        sentry._hash_identifier("trace-non-stream"),
+    ) in calls
+    assert ("data", "ai_curation.error.event_count", 0) in calls
+    assert ("data", "ai_curation.finalization.status", "completed") in calls
+    assert ("data", "ai_curation.agent.output", "final answer") in calls
+    assert ("status", "ok") in calls
+    assert calls[-1] == ("exit", None)
+    assert commits == ["commit", "commit"]
 
 
 @pytest.mark.asyncio

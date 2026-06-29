@@ -52,6 +52,7 @@ _CONTENT_KEY_MARKERS = (
 
 _TRACE_CONTEXT_KEYS = {
     "client_sample_rate",
+    "data",
     "exclusive_time",
     "op",
     "origin",
@@ -412,6 +413,7 @@ _AI_CURATION_NUMERIC_DATA_KEYS = {
     "ai_curation.agent.events_collected",
     "ai_curation.candidate.count",
     "ai_curation.content.capture_tier",
+    "ai_curation.error.event_count",
     "ai_curation.finalization.attempt",
     "ai_curation.finalization.max_attempts",
     "ai_curation.flow.total_steps",
@@ -531,6 +533,30 @@ def set_redacted_ai_span_data(span: Any, key: str, value: Any) -> None:
     set_data = getattr(span, "set_data", None)
     if callable(set_data):
         _set_redacted_span_data(set_data, key, value)
+
+
+def hash_sentry_identifier(value: Any) -> str | None:
+    """Return the stable Sentry-safe hash used for runtime identifiers."""
+
+    hashed = _hash_identifier(value)
+    if hashed in {None, _REDACTED}:
+        return None
+    return hashed
+
+
+def set_sentry_span_status(span: Any, status: str) -> None:
+    """Best-effort status setter for Sentry spans/transactions."""
+
+    safe_status = _safe_trace_text(status)
+    if safe_status is None:
+        return
+
+    set_status = getattr(span, "set_status", None)
+    if callable(set_status):
+        try:
+            set_status(safe_status)
+        except Exception as exc:
+            logger.debug("Sentry span status update failed: %s", exc)
 
 
 def _redact_span_data(data: Any) -> Any:
@@ -667,6 +693,10 @@ def _redact_trace_fields(trace_context: Mapping[str, Any]) -> dict[str, Any]:
 
         if key in _TRACE_NUMERIC_KEYS and _is_real_number(child_value):
             redacted[key] = child_value
+            continue
+
+        if key == "data" and isinstance(child_value, Mapping):
+            redacted[key] = _redact_span_data(child_value)
 
     return redacted
 
@@ -871,6 +901,104 @@ def gen_ai_invoke_agent_span(
                 span_context.__exit__(None, None, None)
             except Exception as exc:
                 logger.debug("Sentry AI invoke-agent span cleanup failed: %s", exc)
+
+
+@contextmanager
+def gen_ai_workflow_transaction(
+    *,
+    name: str,
+    workflow: str,
+    conversation_id: str | None,
+    operation: str = "http.server",
+    document_id: str | None = None,
+    document_present: bool | None = None,
+    trace_id: str | None = None,
+    input_preview: Any | None = None,
+    span_data: Mapping[str, Any] | None = None,
+):
+    """Create a transaction that can parent GenAI spans beyond framework request scope."""
+
+    settings = get_sentry_settings()
+    if not settings.ai_agents_monitoring_enabled:
+        yield None
+        return
+
+    safe_name = _safe_trace_text(name) or "ai_curation.chat"
+    safe_operation = _safe_trace_text(operation) or "http.server"
+    safe_workflow = _safe_gen_ai_text(workflow)
+    hashed_conversation_id = _hash_identifier(conversation_id)
+    if hashed_conversation_id == _REDACTED:
+        hashed_conversation_id = None
+
+    transaction_context: Any | None = None
+    transaction = None
+    try:
+        sentry_sdk = importlib.import_module("sentry_sdk")
+        start_transaction = getattr(sentry_sdk, "start_transaction", None)
+        if not callable(start_transaction):
+            yield None
+            return
+
+        transaction_context = start_transaction(op=safe_operation, name=safe_name)
+        transaction = transaction_context.__enter__()
+        set_data = getattr(transaction, "set_data", None)
+        if callable(set_data):
+            def safe_set(key: str, value: Any) -> None:
+                _set_redacted_span_data(set_data, key, value)
+
+            safe_set("gen_ai.operation.name", "chat")
+            safe_set("gen_ai.provider.name", "openai")
+            safe_set("gen_ai.response.streaming", True)
+            safe_set("ai_curation.content.capture_tier", settings.ai_content_capture_tier)
+            if safe_workflow:
+                safe_set("ai_curation.workflow", safe_workflow)
+            if hashed_conversation_id:
+                safe_set("gen_ai.conversation.id", hashed_conversation_id)
+                safe_set("ai_curation.chat.session_id_hash", hashed_conversation_id)
+            if trace_id:
+                hashed_trace_id = hash_sentry_identifier(trace_id)
+                if hashed_trace_id:
+                    safe_set("ai_curation.trace.id_hash", hashed_trace_id)
+            if document_id:
+                hashed_document_id = hash_sentry_identifier(document_id)
+                if hashed_document_id:
+                    safe_set("ai_curation.document.id_hash", hashed_document_id)
+            if document_present is not None:
+                safe_set("ai_curation.document.present", document_present)
+            if input_preview is not None:
+                safe_set("ai_curation.agent.input", input_preview)
+            if span_data:
+                for key, value in span_data.items():
+                    if str(key).startswith(("ai_curation.", "gen_ai.")):
+                        safe_set(str(key), value)
+    except Exception as exc:
+        logger.debug("Sentry AI workflow transaction unavailable: %s", exc)
+        transaction_context = None
+
+    try:
+        yield transaction
+    except BaseException as exc:
+        if transaction is not None:
+            set_sentry_span_status(
+                transaction,
+                "cancelled" if type(exc).__name__ == "CancelledError" else "internal_error",
+            )
+            set_redacted_ai_span_data(
+                transaction,
+                "ai_curation.error.detail",
+                {
+                    "message": str(exc),
+                    "error_type": type(exc).__name__,
+                    "phase": "workflow_transaction",
+                },
+            )
+        raise
+    finally:
+        if transaction_context is not None:
+            try:
+                transaction_context.__exit__(None, None, None)
+            except Exception as exc:
+                logger.debug("Sentry AI workflow transaction cleanup failed: %s", exc)
 
 
 def _redact_runtime_exception_context(context: Mapping[str, Any]) -> dict[str, Any]:

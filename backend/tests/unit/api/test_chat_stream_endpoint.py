@@ -15,6 +15,7 @@ from src.api import chat, chat_common, chat_stream
 from src.lib import http_errors
 from src.lib.curation_workspace import extraction_results as extraction_results_module
 from src.lib.executable_runs import ExecutableRun
+from src.lib.observability import sentry
 from src.lib.openai_agents.evidence_summary import build_evidence_record_id
 from tests.chat_api_test_support import patch_chat_impl_for
 
@@ -216,6 +217,118 @@ def test_chat_stream_endpoint_cleans_up_after_stream_is_consumed(monkeypatch):
     assert calls["clear"] == ["session-chat-stream"]
     assert "session-chat-stream" not in chat._LOCAL_CANCEL_EVENTS
     assert "session-chat-stream" not in chat._LOCAL_SESSION_OWNERS
+
+
+def test_chat_stream_endpoint_keeps_sentry_transaction_open_for_stream(monkeypatch):
+    calls = []
+
+    class FakeTransaction:
+        def set_data(self, key, value):
+            calls.append(("data", key, value))
+
+        def set_status(self, status):
+            calls.append(("status", status))
+
+    class FakeTransactionContext:
+        def __enter__(self):
+            calls.append(("enter", None))
+            return FakeTransaction()
+
+        def __exit__(self, exc_type, exc, tb):
+            calls.append(("exit", exc_type))
+
+    def _fake_transaction(**kwargs):
+        calls.append(("transaction", kwargs))
+        return FakeTransactionContext()
+
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(
+        monkeypatch,
+        "document_state",
+        SimpleNamespace(get_document=lambda _uid: {"id": "doc-sentry", "filename": "paper.pdf"}),
+    )
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "gen_ai_workflow_transaction", _fake_transaction)
+
+    async def _register_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return True
+
+    async def _unregister_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return None
+
+    async def _clear_cancel_signal(_session_id: str):
+        return None
+
+    async def _check_cancel_signal(_session_id: str) -> bool:
+        return False
+
+    async def _run_agent_streamed(**_kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-sentry-stream"}}
+        yield {
+            "type": "SPECIALIST_ERROR",
+            "details": {
+                "specialist": "Gene Extraction",
+                "reason": "domain_validator_dispatch_error",
+                "fatal": False,
+            },
+        }
+        yield {"type": "RUN_FINISHED", "data": {"response": "stream complete"}}
+
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _check_cancel_signal)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _run_agent_streamed)
+
+    response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(
+                message="What genes are involved?",
+                session_id="session-sentry-stream",
+            ),
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+
+    assert [event["type"] for event in events] == [
+        "RUN_STARTED",
+        "SPECIALIST_ERROR",
+        "turn_completed",
+    ]
+    assert calls[0] == (
+        "transaction",
+        {
+            "name": "/api/chat/stream",
+            "workflow": "assistant_chat_stream",
+            "conversation_id": "session-sentry-stream",
+            "document_id": "doc-sentry",
+            "document_present": True,
+            "input_preview": "What genes are involved?",
+        },
+    )
+    assert (
+        "data",
+        "ai_curation.trace.id_hash",
+        sentry._hash_identifier("trace-sentry-stream"),
+    ) in calls
+    assert ("data", "ai_curation.validation.status", "warning") in calls
+    assert ("data", "ai_curation.error.event_count", 1) in calls
+    assert ("data", "ai_curation.finalization.status", "completed_with_warnings") in calls
+    assert ("data", "ai_curation.agent.output", "stream complete") in calls
+    assert ("status", "ok") in calls
+    assert calls[-1] == ("exit", None)
 
 
 def test_chat_stream_endpoint_sanitizes_prepare_turn_validation_error(monkeypatch, caplog):

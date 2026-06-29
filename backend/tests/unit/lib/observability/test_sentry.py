@@ -317,6 +317,18 @@ def test_before_send_transaction_uses_same_redaction_policy():
                 "op": "http.server",
                 "status": "ok",
                 "type": "trace",
+                "data": {
+                    "gen_ai.operation.name": "chat",
+                    "gen_ai.provider.name": "openai",
+                    "gen_ai.conversation.id": "session-123",
+                    "gen_ai.response.streaming": True,
+                    "ai_curation.workflow": "assistant_chat",
+                    "ai_curation.trace.id_hash": "sha256:0123456789abcdef",
+                    "ai_curation.document.id_hash": "sha256:abcdef0123456789",
+                    "ai_curation.agent.input": "What genes are involved? sk-workflowsecret0123456789",
+                    "ai_curation.error.event_count": 1,
+                    "ai_curation.unreviewed.raw": "should not survive",
+                },
             }
         },
         "spans": [
@@ -342,6 +354,17 @@ def test_before_send_transaction_uses_same_redaction_policy():
     assert scrubbed["extra"]["payload"] == "[Filtered]"
     assert scrubbed["extra"]["attempt"] == 2
     assert scrubbed["contexts"]["trace"]["trace_id"] == "0123456789abcdef0123456789abcdef"
+    trace_data = scrubbed["contexts"]["trace"]["data"]
+    assert trace_data["gen_ai.operation.name"] == "chat"
+    assert trace_data["gen_ai.provider.name"] == "openai"
+    assert trace_data["gen_ai.conversation.id"].startswith("sha256:")
+    assert trace_data["gen_ai.response.streaming"] is True
+    assert trace_data["ai_curation.workflow"] == "assistant_chat"
+    assert trace_data["ai_curation.trace.id_hash"] == "sha256:0123456789abcdef"
+    assert trace_data["ai_curation.document.id_hash"] == "sha256:abcdef0123456789"
+    assert trace_data["ai_curation.agent.input"] == "What genes are involved? [Filtered]"
+    assert trace_data["ai_curation.error.event_count"] == 1
+    assert "ai_curation.unreviewed.raw" not in trace_data
     assert scrubbed["spans"][0] == {
         "trace_id": "0123456789abcdef0123456789abcdef",
         "span_id": "fedcba9876543210",
@@ -843,7 +866,7 @@ def test_gen_ai_invoke_agent_span_pre_scrubs_ai_curation_content(monkeypatch):
     ):
         pass
 
-    data = {key: value for marker, key, value in calls if marker == "data"}
+    data = {call[1]: call[2] for call in calls if call[0] == "data"}
 
     assert data["ai_curation.agent.input"] == {
         "prompt": "Find genes [Filtered]",
@@ -879,6 +902,71 @@ def test_gen_ai_invoke_agent_span_skips_when_ai_monitoring_disabled(monkeypatch)
         pass
 
     assert imported == []
+
+
+def test_gen_ai_workflow_transaction_sets_parent_metadata(monkeypatch):
+    calls = []
+    fake_secret = "sk-" + "workflow" + "secret" + "0123456789"
+
+    class FakeTransaction:
+        def set_data(self, key, value):
+            calls.append(("data", key, value))
+
+        def set_status(self, status):
+            calls.append(("status", status))
+
+    class FakeTransactionContext:
+        def __enter__(self):
+            calls.append(("enter", None))
+            return FakeTransaction()
+
+        def __exit__(self, exc_type, exc, tb):
+            calls.append(("exit", exc_type))
+
+    def fake_start_transaction(**kwargs):
+        calls.append(("start", kwargs))
+        return FakeTransactionContext()
+
+    fake_sentry_sdk = SimpleNamespace(start_transaction=fake_start_transaction)
+
+    monkeypatch.setenv("SENTRY_AI_AGENTS_MONITORING_ENABLED", "true")
+    monkeypatch.setenv("SENTRY_AI_CONTENT_CAPTURE_TIER", "2")
+    monkeypatch.setattr(
+        sentry.importlib,
+        "import_module",
+        lambda name: fake_sentry_sdk if name == "sentry_sdk" else None,
+    )
+
+    with sentry.gen_ai_workflow_transaction(
+        name="/api/chat/stream",
+        workflow="assistant_chat_stream",
+        conversation_id="session-123",
+        document_id="document-123",
+        document_present=True,
+        trace_id="trace-123",
+        input_preview={"message": f"What genes? {fake_secret}"},
+        span_data={"ai_curation.validation.status": "warning"},
+    ) as transaction:
+        sentry.set_sentry_span_status(transaction, "ok")
+
+    data = {call[1]: call[2] for call in calls if call[0] == "data"}
+
+    assert calls[0] == ("start", {"op": "http.server", "name": "/api/chat/stream"})
+    assert data["gen_ai.operation.name"] == "chat"
+    assert data["gen_ai.provider.name"] == "openai"
+    assert data["gen_ai.response.streaming"] is True
+    assert data["ai_curation.content.capture_tier"] == 2
+    assert data["ai_curation.workflow"] == "assistant_chat_stream"
+    assert data["gen_ai.conversation.id"] == sentry._hash_identifier("session-123")
+    assert data["ai_curation.chat.session_id_hash"] == sentry._hash_identifier("session-123")
+    assert data["ai_curation.document.id_hash"] == sentry._hash_identifier("document-123")
+    assert data["ai_curation.document.present"] is True
+    assert data["ai_curation.trace.id_hash"] == sentry._hash_identifier("trace-123")
+    assert data["ai_curation.agent.input"] == {"message": "What genes? [Filtered]"}
+    assert data["ai_curation.validation.status"] == "warning"
+    assert ("status", "ok") in calls
+    assert calls[-1] == ("exit", None)
+    assert fake_secret not in str(data)
 
 
 def test_before_send_transaction_can_opt_into_gen_ai_content(monkeypatch):
