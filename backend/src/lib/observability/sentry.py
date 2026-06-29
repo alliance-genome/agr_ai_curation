@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import importlib
+import json
 import logging
 import os
 import re
@@ -471,11 +472,17 @@ def _truncate_ai_content(value: Any, *, max_chars: int, depth: int = 0) -> Any:
 
 
 def _scrub_ai_content(value: Any, *, max_chars: int | None = None) -> Any:
+    limit = max_chars if max_chars is not None else _ai_content_preview_max_chars()
     scrubbed = _scrub_value(value, allow_content=True)
-    return _truncate_ai_content(
-        scrubbed,
-        max_chars=max_chars if max_chars is not None else _ai_content_preview_max_chars(),
-    )
+    truncated = _truncate_ai_content(scrubbed, max_chars=limit)
+    if isinstance(truncated, (Mapping, list, tuple)):
+        try:
+            serialized = json.dumps(truncated, default=str, sort_keys=True)
+        except Exception:
+            serialized = str(truncated)
+        if len(serialized) > limit:
+            return serialized[:limit] + f"...[truncated {len(serialized) - limit} chars]"
+    return truncated
 
 
 def _redact_ai_curation_span_data(key: str, value: Any, *, content_tier: int) -> Any:

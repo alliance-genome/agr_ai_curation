@@ -567,6 +567,39 @@ def test_before_send_transaction_tier2_preserves_ai_curation_content_with_secret
     assert fake_secret not in str(data)
 
 
+def test_before_send_transaction_bounds_large_nested_ai_curation_content(monkeypatch):
+    monkeypatch.setenv("SENTRY_AI_CONTENT_CAPTURE_TIER", "2")
+    monkeypatch.setenv("SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS", "300")
+    fake_secret = "sk-" + "nested" + "secret" + "0123456789"
+    event = {
+        "spans": [
+            {
+                "trace_id": "0123456789abcdef0123456789abcdef",
+                "span_id": "fedcba9876543210",
+                "op": "gen_ai.invoke_agent",
+                "data": {
+                    "ai_curation.agent.input": [
+                        {
+                            "role": "user",
+                            "content": f"Find genes {fake_secret} " + ("paper text " * 200),
+                        }
+                        for _ in range(6)
+                    ],
+                },
+            }
+        ],
+    }
+
+    scrubbed = sentry.before_send_transaction(event)
+    preview = scrubbed["spans"][0]["data"]["ai_curation.agent.input"]
+
+    assert isinstance(preview, str)
+    assert len(preview) < 360
+    assert "[truncated " in preview
+    assert fake_secret not in preview
+    assert "[Filtered]" in preview
+
+
 def test_before_send_transaction_tier1_uses_reduced_content_preview(monkeypatch):
     monkeypatch.setenv("SENTRY_AI_CONTENT_CAPTURE_TIER", "1")
     monkeypatch.setenv("SENTRY_AI_CONTENT_TIER1_PREVIEW_MAX_CHARS", "256")
