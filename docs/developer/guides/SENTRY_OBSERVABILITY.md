@@ -163,6 +163,40 @@ verify all of the following:
 - TraceReview can load/export/analyze the same Langfuse trace;
 - no dev trial data lands in the production Sentry project.
 
+### Deterministic Curation Prep And Handoff Spans
+
+Not every AI Curation "agent" path is an OpenAI model call. Curation prep and
+curation handoff are deterministic orchestration surfaces, but they still need
+Sentry timeline coverage because they are where extracted candidates become
+curator review sessions.
+
+Use `gen_ai_invoke_agent_span()` for these paths with:
+
+- `gen_ai.provider.name=ai_curation`
+- `gen_ai.response.streaming=false`
+- deterministic model labels such as `deterministic_programmatic_mapper_v1`
+  and `deterministic_curation_handoff_v1`
+- `ai_curation.agent.source=deterministic`
+- hashed conversation, document, trace, and flow identifiers
+- bounded status/count fields such as prep review-row count, envelope-ref
+  count, handoff adapter count, and handoff review-session count.
+
+Current dev proof from release `e455936c`:
+
+- `/api/curation-workspace/prep` event
+  `a3c36013-3ac2-491c-9088-e4c8e8fa1b4b` stored a `Curation Prep`
+  `gen_ai.invoke_agent` span with `ai_curation.workflow=curation_prep_chat`,
+  source kind `chat`, status `success`, and one review row.
+- `/api/chat/execute-flow` event
+  `8771c351-d44f-4fc4-ad59-1044f066afab` stored both `Curation Handoff` and
+  nested `Curation Prep` spans with `ai_curation.workflow=curation_handoff`,
+  status `success`, one adapter, and one review session.
+
+The matching Langfuse/TraceReview traces were
+`69f0431d79d61dfceb5ec15bfc139e46` for chat prep and
+`0a87824c70af0c741181a10158c093e3` for flow handoff; both loaded in
+TraceReview with no trace errors.
+
 ## Initialization
 
 Backend initialization lives in `backend/src/lib/observability/sentry.py` and is
