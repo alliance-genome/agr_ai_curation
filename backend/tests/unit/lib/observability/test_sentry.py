@@ -33,6 +33,7 @@ def reset_sentry(monkeypatch):
         "SENTRY_AI_CONTENT_CAPTURE_TIER",
         "SENTRY_AI_CONTENT_TIER1_PREVIEW_MAX_CHARS",
         "SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS",
+        "SENTRY_TRANSACTION_RETAINED_SPANS_MAX",
         "APP_ENV",
         "ENVIRONMENT",
         "GIT_SHA",
@@ -59,7 +60,8 @@ def test_get_sentry_settings_defaults_to_disabled():
     assert settings.openai_include_prompts is False
     assert settings.ai_content_capture_tier == 2
     assert settings.ai_content_tier1_preview_max_chars == 2000
-    assert settings.ai_content_preview_max_chars == 20000
+    assert settings.ai_content_preview_max_chars == 2000
+    assert settings.transaction_retained_spans_max == 300
 
 
 def test_get_sentry_settings_parses_env(monkeypatch):
@@ -78,6 +80,7 @@ def test_get_sentry_settings_parses_env(monkeypatch):
     monkeypatch.setenv("SENTRY_AI_CONTENT_CAPTURE_TIER", "1")
     monkeypatch.setenv("SENTRY_AI_CONTENT_TIER1_PREVIEW_MAX_CHARS", "1024")
     monkeypatch.setenv("SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS", "4096")
+    monkeypatch.setenv("SENTRY_TRANSACTION_RETAINED_SPANS_MAX", "512")
 
     settings = sentry.get_sentry_settings()
 
@@ -96,6 +99,7 @@ def test_get_sentry_settings_parses_env(monkeypatch):
     assert settings.ai_content_capture_tier == 1
     assert settings.ai_content_tier1_preview_max_chars == 1024
     assert settings.ai_content_preview_max_chars == 4096
+    assert settings.transaction_retained_spans_max == 512
 
 
 def test_before_send_redacts_sensitive_and_document_content():
@@ -378,6 +382,72 @@ def test_before_send_transaction_uses_same_redaction_policy():
         "timestamp": 1.75,
     }
     assert len(scrubbed["spans"]) == 1
+
+
+def test_before_send_transaction_limits_spans_while_preserving_gen_ai(monkeypatch):
+    monkeypatch.setenv("SENTRY_TRANSACTION_RETAINED_SPANS_MAX", "50")
+    spans = [
+        {
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "span_id": f"{index:016x}",
+            "parent_span_id": "0123456789abcdef",
+            "op": "http.client",
+            "status": "ok",
+            "description": f"request {index}",
+            "start_timestamp": float(index),
+            "timestamp": float(index) + 0.1,
+        }
+        for index in range(53)
+    ]
+    spans.extend(
+        [
+            {
+                "trace_id": "0123456789abcdef0123456789abcdef",
+                "span_id": "aaaaaaaaaaaaaaaa",
+                "parent_span_id": "0123456789abcdef",
+                "op": "db.query",
+                "status": "internal_error",
+                "description": "failed query",
+                "start_timestamp": 53.0,
+                "timestamp": 53.1,
+            },
+            {
+                "trace_id": "0123456789abcdef0123456789abcdef",
+                "span_id": "bbbbbbbbbbbbbbbb",
+                "parent_span_id": "0123456789abcdef",
+                "op": "gen_ai.invoke_agent",
+                "description": "invoke_agent Gene Extractor",
+                "data": {"gen_ai.agent.name": "Gene Extractor"},
+                "start_timestamp": 54.0,
+                "timestamp": 54.1,
+            },
+        ]
+    )
+    event = {
+        "contexts": {
+            "trace": {
+                "trace_id": "0123456789abcdef0123456789abcdef",
+                "span_id": "0123456789abcdef",
+                "op": "http.server",
+                "status": "ok",
+                "type": "trace",
+            }
+        },
+        "spans": spans,
+    }
+
+    scrubbed = sentry.before_send_transaction(event)
+    retained_spans = scrubbed["spans"]
+    retained_ids = {span["span_id"] for span in retained_spans}
+    trace_data = scrubbed["contexts"]["trace"]["data"]
+
+    assert len(retained_spans) == 50
+    assert "aaaaaaaaaaaaaaaa" in retained_ids
+    assert "bbbbbbbbbbbbbbbb" in retained_ids
+    assert "0000000000000034" not in retained_ids
+    assert trace_data["ai_curation.sentry.spans.total_before_redactor"] == 55
+    assert trace_data["ai_curation.sentry.spans.retained_by_redactor"] == 50
+    assert trace_data["ai_curation.sentry.spans.dropped_by_redactor"] == 5
 
 
 def test_before_send_transaction_preserves_safe_gen_ai_metadata_without_content(monkeypatch):

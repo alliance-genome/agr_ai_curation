@@ -31,7 +31,8 @@ SENTRY_SEND_DEFAULT_PII=false
 SENTRY_OPENAI_INCLUDE_PROMPTS=false
 SENTRY_AI_CONTENT_CAPTURE_TIER=2
 SENTRY_AI_CONTENT_TIER1_PREVIEW_MAX_CHARS=2000
-SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS=20000
+SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS=2000
+SENTRY_TRANSACTION_RETAINED_SPANS_MAX=300
 RUNTIME_OBSERVABILITY_TAG_VALUE_MAX_CHARS=200
 RUNTIME_OBSERVABILITY_CONTEXT_VALUE_MAX_CHARS=500
 ```
@@ -82,7 +83,8 @@ SENTRY_SEND_DEFAULT_PII=false
 SENTRY_OPENAI_INCLUDE_PROMPTS=false
 SENTRY_AI_CONTENT_CAPTURE_TIER=2
 SENTRY_AI_CONTENT_TIER1_PREVIEW_MAX_CHARS=2000
-SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS=20000
+SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS=2000
+SENTRY_TRANSACTION_RETAINED_SPANS_MAX=300
 ```
 
 Use manual AI Curation spans first:
@@ -130,7 +132,17 @@ Sentry UI is useful during development and production debugging. The redactor st
 credential-like keys and values such as auth headers, cookies, tokens, API
 keys, DSNs, and bearer/basic credentials. Tier 1 exists as a smaller
 reduced-capture rollback mode and defaults to `2000` characters per individual
-content string. Tier 2 defaults to `20000`.
+content string. Tier 2 defaults to `2000` characters per individual content
+string or whole nested preview. This default comes from dev smoke evidence: the
+larger 20000-character cap made long chat transactions vulnerable to
+`too_large:event` drops on self-hosted Sentry.
+
+`SENTRY_TRANSACTION_RETAINED_SPANS_MAX` bounds the number of child spans kept on
+one transaction after redaction. When a busy stream-chat run exceeds the cap,
+the redactor keeps GenAI spans and errored spans before lower-value HTTP, DB, or
+subprocess spans, then records retained/dropped span counts in transaction trace
+data. Langfuse remains the full trace source when Sentry receives a compacted
+transaction.
 
 `SENTRY_OPENAI_INCLUDE_PROMPTS=true` remains a separate compatibility flag for
 upstream Sentry/OpenAI integration fields such as `gen_ai.request.messages` and
@@ -189,7 +201,7 @@ document content:
 The AI Curation manual `ai_curation.*` span fields are the reviewed exception:
 `SENTRY_AI_CONTENT_CAPTURE_TIER=2` intentionally keeps rich internal
 prompt/tool/output context for debugging after mechanical credential scrubbing
-and bounded per-string truncation. This exception does not enable upstream
+and bounded truncation. This exception does not enable upstream
 Sentry/OpenAI `gen_ai.*` prompt fields; those remain controlled by
 `SENTRY_OPENAI_INCLUDE_PROMPTS`.
 
@@ -324,7 +336,10 @@ Langfuse is for canonical LLM traces, model calls, token/cost analysis, and
 TraceReview. Sentry's Tier 2 manual `ai_curation.*` spans may duplicate bounded,
 scrubbed prompt/tool/output context for fast internal debugging, but upstream
 Sentry/OpenAI prompt capture must stay off unless a private dev trial explicitly
-enables it and confirms dev/prod project separation.
+enables it and confirms dev/prod project separation. Very busy Sentry
+transactions may also compact non-GenAI child spans according to
+`SENTRY_TRANSACTION_RETAINED_SPANS_MAX`; use Langfuse/TraceReview when every
+single low-level runtime span is needed.
 
 The current CloudWatch-to-Sentry bridge is intentionally deferred. Until that
 ticket is implemented, do not try to convert every log line into a Sentry event.

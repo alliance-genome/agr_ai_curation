@@ -123,6 +123,7 @@ class SentrySettings:
     ai_content_capture_tier: int
     ai_content_preview_max_chars: int
     ai_content_tier1_preview_max_chars: int
+    transaction_retained_spans_max: int
 
 
 def _get_env_bool(key: str, default: bool) -> bool:
@@ -229,7 +230,7 @@ def get_sentry_settings() -> SentrySettings:
         ),
         ai_content_preview_max_chars=_get_env_int(
             "SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS",
-            20000,
+            2000,
             minimum=256,
             maximum=200000,
         ),
@@ -238,6 +239,12 @@ def get_sentry_settings() -> SentrySettings:
             2000,
             minimum=256,
             maximum=20000,
+        ),
+        transaction_retained_spans_max=_get_env_int(
+            "SENTRY_TRANSACTION_RETAINED_SPANS_MAX",
+            300,
+            minimum=50,
+            maximum=1000,
         ),
     )
 
@@ -421,6 +428,9 @@ _AI_CURATION_NUMERIC_DATA_KEYS = {
     "ai_curation.validator.batch_size",
     "ai_curation.tool_call.count",
     "ai_curation.validation.error_count",
+    "ai_curation.sentry.spans.dropped_by_redactor",
+    "ai_curation.sentry.spans.retained_by_redactor",
+    "ai_curation.sentry.spans.total_before_redactor",
 }
 
 _AI_CURATION_BOOLEAN_DATA_KEYS = {
@@ -1128,6 +1138,78 @@ def _redact_spans(spans: list[Any]) -> list[Any]:
     return redacted
 
 
+def _span_priority(span: Mapping[str, Any]) -> int:
+    op = str(span.get("op") or "")
+    status = str(span.get("status") or "")
+    if op.startswith("gen_ai."):
+        return 0
+    if status and status not in {"ok", "unknown", "unset"}:
+        return 1
+    return 2
+
+
+def _limit_transaction_spans(
+    spans: list[Any],
+    *,
+    max_spans: int | None = None,
+) -> tuple[list[Any], int]:
+    """Keep transaction events under Sentry ingest limits while preserving GenAI spans."""
+
+    if max_spans is None:
+        max_spans = get_sentry_settings().transaction_retained_spans_max
+    if len(spans) <= max_spans:
+        return spans, 0
+
+    indexed_spans = [
+        (index, span)
+        for index, span in enumerate(spans)
+        if isinstance(span, Mapping)
+    ]
+    selected_indexes: set[int] = set()
+    for priority in (0, 1, 2):
+        for index, span in indexed_spans:
+            if len(selected_indexes) >= max_spans:
+                break
+            if index in selected_indexes:
+                continue
+            if _span_priority(span) == priority:
+                selected_indexes.add(index)
+        if len(selected_indexes) >= max_spans:
+            break
+
+    retained = [
+        span
+        for index, span in enumerate(spans)
+        if index in selected_indexes
+    ]
+    return retained, len(spans) - len(retained)
+
+
+def _record_span_redaction_counts(
+    event: dict[str, Any],
+    *,
+    total_before: int,
+    retained: int,
+    dropped: int,
+) -> None:
+    if dropped <= 0:
+        return
+
+    contexts = event.setdefault("contexts", {})
+    if not isinstance(contexts, dict):
+        return
+    trace_context = contexts.setdefault("trace", {})
+    if not isinstance(trace_context, dict):
+        return
+    trace_data = trace_context.setdefault("data", {})
+    if not isinstance(trace_data, dict):
+        return
+
+    trace_data["ai_curation.sentry.spans.total_before_redactor"] = total_before
+    trace_data["ai_curation.sentry.spans.retained_by_redactor"] = retained
+    trace_data["ai_curation.sentry.spans.dropped_by_redactor"] = dropped
+
+
 def _remove_stack_frame_vars(container: dict[str, Any]) -> None:
     """Drop stack-frame locals if an event already contains them."""
 
@@ -1175,7 +1257,15 @@ def _redact_event(event: dict[str, Any]) -> dict[str, Any]:
     if isinstance(raw_contexts, dict):
         scrubbed["contexts"] = _redact_contexts(raw_contexts)
     if isinstance(raw_spans, list):
-        scrubbed["spans"] = _redact_spans(raw_spans)
+        redacted_spans = _redact_spans(raw_spans)
+        limited_spans, dropped_spans = _limit_transaction_spans(redacted_spans)
+        scrubbed["spans"] = limited_spans
+        _record_span_redaction_counts(
+            scrubbed,
+            total_before=len(redacted_spans),
+            retained=len(limited_spans),
+            dropped=dropped_spans,
+        )
 
     breadcrumbs = scrubbed.get("breadcrumbs")
     if isinstance(breadcrumbs, dict) and isinstance(breadcrumbs.get("values"), list):
