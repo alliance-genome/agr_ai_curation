@@ -131,7 +131,7 @@ from src.models.sql.database import SessionLocal
 # Request-scoped context for tools (trace_id captured via closure)
 from src.lib.context import set_current_trace_id, set_current_run_config, reset_current_run_config
 from src.lib.alerts.tool_failure_notifier import notify_tool_failure
-from src.lib.observability.sentry import gen_ai_conversation_scope
+from src.lib.observability.sentry import gen_ai_conversation_scope, gen_ai_invoke_agent_span
 
 if TYPE_CHECKING:
     from src.lib.document_context import DocumentContext
@@ -1029,10 +1029,19 @@ async def _run_agent_with_tracing(
         )
         await sdk_session.run_compaction({"compaction_mode": "input"})
     llm_run_start = time.monotonic()
-    conversation_context_manager = gen_ai_conversation_scope(
-        chat_session_id or getattr(get_current_extraction_trace_run(), "session_id", None)
+    sentry_conversation_id = chat_session_id or getattr(
+        get_current_extraction_trace_run(),
+        "session_id",
+        None,
+    )
+    conversation_context_manager = gen_ai_conversation_scope(sentry_conversation_id)
+    sentry_span_context_manager = gen_ai_invoke_agent_span(
+        agent_name=current_agent,
+        model=str(getattr(agent, "model", "") or ""),
+        conversation_id=sentry_conversation_id,
     )
     conversation_context_manager.__enter__()
+    sentry_span_context_manager.__enter__()
     try:
         result = Runner.run_streamed(
             agent,
@@ -1042,6 +1051,7 @@ async def _run_agent_with_tracing(
             session=sdk_session,
         )
     except BaseException:
+        sentry_span_context_manager.__exit__(None, None, None)
         conversation_context_manager.__exit__(None, None, None)
         raise
     write_extraction_trace_event(
@@ -1597,6 +1607,7 @@ async def _run_agent_with_tracing(
             trace_id=trace_id,
             user_id=user_id,
         )
+        sentry_span_context_manager.__exit__(None, None, None)
         conversation_context_manager.__exit__(None, None, None)
         # Close the per-request provider's warm websocket connection once the stream
         # is fully drained. Guarded so a close failure cannot mask the real outcome.

@@ -106,7 +106,7 @@ from src.lib.context import (
     get_current_trace_id,
     get_current_user_id,
 )
-from src.lib.observability.sentry import gen_ai_conversation_scope
+from src.lib.observability.sentry import gen_ai_conversation_scope, gen_ai_invoke_agent_span
 from src.lib.curation_workspace.extraction_results import (
     InlineExtractionPersistenceResult,
     persist_inline_validated_extraction_result,
@@ -4574,8 +4574,15 @@ async def run_specialist_with_events(
 
     # Run with streaming to capture internal events
     runner_create_started_at = time.monotonic()
-    conversation_context_manager = gen_ai_conversation_scope(get_current_session_id())
+    sentry_conversation_id = get_current_session_id()
+    conversation_context_manager = gen_ai_conversation_scope(sentry_conversation_id)
+    sentry_span_context_manager = gen_ai_invoke_agent_span(
+        agent_name=specialist_name,
+        model=str(getattr(runtime_agent, "model", "") or ""),
+        conversation_id=sentry_conversation_id,
+    )
     conversation_context_manager.__enter__()
+    sentry_span_context_manager.__enter__()
     try:
         result = Runner.run_streamed(
             runtime_agent,
@@ -4584,6 +4591,7 @@ async def run_specialist_with_events(
             run_config=effective_config
         )
     except BaseException:
+        sentry_span_context_manager.__exit__(None, None, None)
         conversation_context_manager.__exit__(None, None, None)
         raise
     phase_timings_ms["runner_create_ms"] = _elapsed_ms(runner_create_started_at)
@@ -5088,6 +5096,7 @@ async def run_specialist_with_events(
         builder_workspace.mark_aborted(reason=f"{type(e).__name__}: {e}")
         raise
     finally:
+        sentry_span_context_manager.__exit__(None, None, None)
         conversation_context_manager.__exit__(None, None, None)
         reset_active_evidence_records(evidence_workspace_token)
         reset_active_resolver_call_ledger(resolver_call_ledger_token)

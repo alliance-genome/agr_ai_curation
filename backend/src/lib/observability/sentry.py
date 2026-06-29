@@ -511,6 +511,64 @@ def gen_ai_conversation_scope(conversation_id: str | None):
             logger.debug("Sentry AI conversation scope cleanup failed: %s", exc)
 
 
+@contextmanager
+def gen_ai_invoke_agent_span(
+    *,
+    agent_name: str | None,
+    model: str | None,
+    conversation_id: str | None,
+):
+    """Create a minimal manual Sentry AI span for an agent invocation."""
+
+    settings = get_sentry_settings()
+    if not settings.ai_agents_monitoring_enabled:
+        yield
+        return
+
+    safe_agent_name = _safe_gen_ai_text(agent_name) or "agent"
+    safe_model = _safe_gen_ai_text(model) if model else None
+    hashed_conversation_id = _hash_identifier(conversation_id)
+    if hashed_conversation_id == _REDACTED:
+        hashed_conversation_id = None
+
+    span_context: Any | None = None
+    span = None
+    try:
+        sentry_sdk = importlib.import_module("sentry_sdk")
+        start_span = getattr(sentry_sdk, "start_span", None)
+        if not callable(start_span):
+            yield
+            return
+
+        span_context = start_span(
+            op="gen_ai.invoke_agent",
+            name=f"invoke_agent {safe_agent_name}",
+        )
+        span = span_context.__enter__()
+        set_data = getattr(span, "set_data", None)
+        if callable(set_data):
+            set_data("gen_ai.operation.name", "invoke_agent")
+            set_data("gen_ai.agent.name", safe_agent_name)
+            set_data("gen_ai.provider.name", "openai")
+            set_data("gen_ai.response.streaming", True)
+            if safe_model:
+                set_data("gen_ai.request.model", safe_model)
+            if hashed_conversation_id:
+                set_data("gen_ai.conversation.id", hashed_conversation_id)
+    except Exception as exc:
+        logger.debug("Sentry AI invoke-agent span unavailable: %s", exc)
+        span_context = None
+
+    try:
+        yield
+    finally:
+        if span_context is not None:
+            try:
+                span_context.__exit__(None, None, None)
+            except Exception as exc:
+                logger.debug("Sentry AI invoke-agent span cleanup failed: %s", exc)
+
+
 def _redact_runtime_exception_context(context: Mapping[str, Any]) -> dict[str, Any]:
     """Preserve bounded runtime diagnostics without exposing raw identifiers."""
 
@@ -584,6 +642,12 @@ def _redact_spans(spans: list[Any]) -> list[Any]:
                 safe_span[normalized_key] = value
             elif normalized_key == "data":
                 safe_span[normalized_key] = _redact_span_data(value)
+            elif (
+                normalized_key == "description"
+                and str(span.get("op", "")).startswith("gen_ai.")
+                and (safe_text := _safe_gen_ai_text(value)) is not None
+            ):
+                safe_span[normalized_key] = safe_text
             elif normalized_key in {"description", "tags"}:
                 safe_span[normalized_key] = _redact_untrusted_strings(value)
 

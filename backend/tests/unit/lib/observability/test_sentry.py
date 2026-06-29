@@ -351,7 +351,7 @@ def test_before_send_transaction_preserves_safe_gen_ai_metadata_without_content(
                 "trace_id": "trace-for-ai-test",
                 "span_id": "fedcba9876543210",
                 "op": "gen_ai.invoke_agent",
-                "description": "Supervisor Agent prompt should not survive",
+                "description": "invoke_agent Supervisor Agent",
                 "data": {
                     "gen_ai.agent.name": "Supervisor Agent",
                     "gen_ai.operation.name": "invoke_agent",
@@ -389,7 +389,7 @@ def test_before_send_transaction_preserves_safe_gen_ai_metadata_without_content(
     assert data["gen_ai.tool.input"] == "[Filtered]"
     assert data["gen_ai.tool.output"] == "[Filtered]"
     assert data["untrusted_note"] == "[Filtered]"
-    assert scrubbed["spans"][0]["description"] == "[Filtered]"
+    assert scrubbed["spans"][0]["description"] == "invoke_agent Supervisor Agent"
 
 
 def test_hash_identifier_preserves_existing_hashed_identifier():
@@ -477,6 +477,78 @@ def test_gen_ai_conversation_scope_skips_when_ai_monitoring_disabled(monkeypatch
     monkeypatch.setattr(sentry.importlib, "import_module", fake_import)
 
     with sentry.gen_ai_conversation_scope("session-123"):
+        pass
+
+    assert imported == []
+
+
+def test_gen_ai_invoke_agent_span_sets_minimal_metadata(monkeypatch):
+    calls = []
+
+    class FakeSpan:
+        def set_data(self, key, value):
+            calls.append(("data", key, value))
+
+    class FakeSpanContext:
+        def __enter__(self):
+            calls.append(("enter", None, None))
+            return FakeSpan()
+
+        def __exit__(self, exc_type, exc, tb):
+            calls.append(("exit", exc_type, exc))
+
+    def fake_start_span(**kwargs):
+        calls.append(("start", kwargs, None))
+        return FakeSpanContext()
+
+    fake_sentry_sdk = SimpleNamespace(start_span=fake_start_span)
+
+    monkeypatch.setenv("SENTRY_AI_AGENTS_MONITORING_ENABLED", "true")
+    monkeypatch.setattr(
+        sentry.importlib,
+        "import_module",
+        lambda name: fake_sentry_sdk if name == "sentry_sdk" else None,
+    )
+
+    with sentry.gen_ai_invoke_agent_span(
+        agent_name="Supervisor Agent",
+        model="gpt-5.5",
+        conversation_id="session-123",
+    ):
+        calls.append(("inside", None, None))
+
+    assert calls[0] == (
+        "start",
+        {"op": "gen_ai.invoke_agent", "name": "invoke_agent Supervisor Agent"},
+        None,
+    )
+    assert ("data", "gen_ai.operation.name", "invoke_agent") in calls
+    assert ("data", "gen_ai.agent.name", "Supervisor Agent") in calls
+    assert ("data", "gen_ai.provider.name", "openai") in calls
+    assert ("data", "gen_ai.request.model", "gpt-5.5") in calls
+    assert ("data", "gen_ai.response.streaming", True) in calls
+    assert (
+        "data",
+        "gen_ai.conversation.id",
+        sentry._hash_identifier("session-123"),
+    ) in calls
+    assert calls[-1] == ("exit", None, None)
+
+
+def test_gen_ai_invoke_agent_span_skips_when_ai_monitoring_disabled(monkeypatch):
+    imported = []
+
+    def fake_import(name: str):
+        imported.append(name)
+        raise AssertionError("Sentry SDK should not be imported")
+
+    monkeypatch.setattr(sentry.importlib, "import_module", fake_import)
+
+    with sentry.gen_ai_invoke_agent_span(
+        agent_name="Supervisor Agent",
+        model="gpt-5.5",
+        conversation_id="session-123",
+    ):
         pass
 
     assert imported == []
