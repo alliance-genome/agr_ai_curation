@@ -969,6 +969,49 @@ def test_gen_ai_workflow_transaction_sets_parent_metadata(monkeypatch):
     assert fake_secret not in str(data)
 
 
+def test_gen_ai_workflow_transaction_reuses_active_sentry_span(monkeypatch):
+    calls = []
+
+    class FakeActiveSpan:
+        def set_data(self, key, value):
+            calls.append(("data", key, value))
+
+        def set_status(self, status):
+            calls.append(("status", status))
+
+    active_span = FakeActiveSpan()
+
+    def fake_start_transaction(**_kwargs):
+        raise AssertionError("Existing Sentry HTTP transaction should be reused")
+
+    fake_sentry_sdk = SimpleNamespace(
+        get_current_scope=lambda: SimpleNamespace(span=active_span),
+        start_transaction=fake_start_transaction,
+    )
+
+    monkeypatch.setenv("SENTRY_AI_AGENTS_MONITORING_ENABLED", "true")
+    monkeypatch.setattr(
+        sentry.importlib,
+        "import_module",
+        lambda name: fake_sentry_sdk if name == "sentry_sdk" else None,
+    )
+
+    with sentry.gen_ai_workflow_transaction(
+        name="/api/chat",
+        workflow="assistant_chat",
+        conversation_id="session-123",
+    ) as transaction:
+        sentry.set_sentry_span_status(transaction, "ok")
+
+    data = {call[1]: call[2] for call in calls if call[0] == "data"}
+
+    assert transaction is active_span
+    assert data["gen_ai.operation.name"] == "chat"
+    assert data["ai_curation.workflow"] == "assistant_chat"
+    assert data["gen_ai.conversation.id"] == sentry._hash_identifier("session-123")
+    assert ("status", "ok") in calls
+
+
 def test_before_send_transaction_can_opt_into_gen_ai_content(monkeypatch):
     monkeypatch.setenv("SENTRY_OPENAI_INCLUDE_PROMPTS", "true")
     fake_secret = "sk-" + "test" + "secret" + "0123456789"

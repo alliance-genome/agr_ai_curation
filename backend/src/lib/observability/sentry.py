@@ -934,13 +934,20 @@ def gen_ai_workflow_transaction(
     transaction = None
     try:
         sentry_sdk = importlib.import_module("sentry_sdk")
-        start_transaction = getattr(sentry_sdk, "start_transaction", None)
-        if not callable(start_transaction):
-            yield None
-            return
+        get_current_scope = getattr(sentry_sdk, "get_current_scope", None)
+        if callable(get_current_scope):
+            scope = get_current_scope()
+            transaction = getattr(scope, "span", None)
 
-        transaction_context = start_transaction(op=safe_operation, name=safe_name)
-        transaction = transaction_context.__enter__()
+        if transaction is None:
+            start_transaction = getattr(sentry_sdk, "start_transaction", None)
+            if not callable(start_transaction):
+                yield None
+                return
+
+            transaction_context = start_transaction(op=safe_operation, name=safe_name)
+            transaction = transaction_context.__enter__()
+
         set_data = getattr(transaction, "set_data", None)
         if callable(set_data):
             def safe_set(key: str, value: Any) -> None:
