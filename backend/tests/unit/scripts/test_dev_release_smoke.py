@@ -625,6 +625,221 @@ def test_ask_streaming_chat_question_accepts_structured_evidence_summary(monkeyp
     assert checks[-1]["step"] == "chat_stream"
 
 
+def test_ask_streaming_chat_question_accepts_nonfatal_validator_warning(monkeypatch):
+    smoke = _load_smoke_module()
+    checks: list[dict] = []
+    warning_event = {
+        "type": "SPECIALIST_ERROR",
+        "details": {
+            "specialist": "Gene Extraction",
+            "reason": "domain_validator_dispatch_error",
+            "severity": "warning",
+            "fatal": False,
+            "error": "Validator dispatch recorded validator_error findings.",
+        },
+    }
+    sse_body = (
+        'data: {"type":"RUN_STARTED","trace_id":"trace-warning","model":"gpt-5.5"}\n'
+        "\n"
+        'data: {"type":"evidence_summary","evidence_records":[{"record_id":"evidence-1","quote":"Crb organizes the rhabdomere.","chunk_id":"chunk-1"}]}\n'
+        "\n"
+        f"data: {json.dumps(warning_event)}\n"
+        "\n"
+        'data: {"type":"TEXT_MESSAGE_CONTENT","content":"The paper focuses on crb/Crumbs."}\n'
+        "\n"
+        'data: {"type":"turn_completed","trace_id":"trace-warning","message":"Chat turn completed."}\n'
+        "\n"
+    )
+
+    def _fake_http_request(method, url, **kwargs):
+        del method, url, kwargs
+        return smoke.Response(
+            status_code=200,
+            body=sse_body.encode("utf-8"),
+            text=sse_body,
+            json_body=None,
+        )
+
+    monkeypatch.setattr(smoke, "http_request", _fake_http_request)
+
+    summary = smoke.ask_streaming_chat_question(
+        base_url="http://example.test",
+        headers={"X-API-Key": "test-key"},
+        session_id="session-stream-warning",
+        message="What genes are the focus of the publication?",
+        chat_model=None,
+        specialist_model=None,
+        expected_model="gpt-5.5",
+        chat_timeout_seconds=5.0,
+        checks=checks,
+    )
+
+    assert summary["trace_id"] == "trace-warning"
+    assert summary["nonfatal_error_events"] == [warning_event]
+    assert smoke.collect_fatal_error_events([warning_event]) == []
+    assert smoke.error_event_is_nonfatal({
+        "type": "SPECIALIST_ERROR",
+        "details": {"reason": "unexpected_warning", "severity": "warning"},
+    }) is False
+    assert checks[-1]["payload"]["nonfatal_error_events"] == [warning_event]
+
+
+def test_ask_streaming_chat_question_rejects_fatal_specialist_error(monkeypatch):
+    smoke = _load_smoke_module()
+    checks: list[dict] = []
+    fatal_event = {
+        "type": "SPECIALIST_ERROR",
+        "details": {
+            "specialist": "Gene Extraction",
+            "reason": "structured_finalization_missing",
+            "severity": "error",
+            "error": "Gene Extraction did not call mandatory finalization.",
+        },
+    }
+    sse_body = (
+        'data: {"type":"RUN_STARTED","trace_id":"trace-fatal","model":"gpt-5.5"}\n'
+        "\n"
+        'data: {"type":"CHUNK_PROVENANCE","chunk_id":"chunk-1"}\n'
+        "\n"
+        f"data: {json.dumps(fatal_event)}\n"
+        "\n"
+        'data: {"type":"TEXT_MESSAGE_CONTENT","content":"The paper focuses on crb/Crumbs."}\n'
+        "\n"
+        'data: {"type":"turn_completed","trace_id":"trace-fatal","message":"Chat turn completed."}\n'
+        "\n"
+    )
+
+    def _fake_http_request(method, url, **kwargs):
+        del method, url, kwargs
+        return smoke.Response(
+            status_code=200,
+            body=sse_body.encode("utf-8"),
+            text=sse_body,
+            json_body=None,
+        )
+
+    monkeypatch.setattr(smoke, "http_request", _fake_http_request)
+
+    with pytest.raises(smoke.SmokeFailure, match="fatal error events"):
+        smoke.ask_streaming_chat_question(
+            base_url="http://example.test",
+            headers={"X-API-Key": "test-key"},
+            session_id="session-stream-fatal",
+            message="What genes are the focus of the publication?",
+            chat_model=None,
+            specialist_model=None,
+            expected_model="gpt-5.5",
+            chat_timeout_seconds=5.0,
+            checks=checks,
+        )
+
+
+def test_execute_flow_accepts_nonfatal_validator_warning(monkeypatch):
+    smoke = _load_smoke_module()
+    checks: list[dict] = []
+    warning_event = {
+        "type": "SPECIALIST_ERROR",
+        "details": {
+            "specialist": "Gene Extraction",
+            "reason": "domain_validator_dispatch_error",
+            "severity": "warning",
+            "fatal": False,
+            "error": "Validator dispatch recorded validator_error findings.",
+        },
+    }
+    sse_body = (
+        'data: {"type":"FLOW_STARTED","flow_id":"flow-1"}\n'
+        "\n"
+        'data: {"type":"RUN_STARTED","trace_id":"trace-flow","model":"gpt-5.5"}\n'
+        "\n"
+        f"data: {json.dumps(warning_event)}\n"
+        "\n"
+        'data: {"type":"FLOW_STEP_EVIDENCE","evidence_count":1}\n'
+        "\n"
+        'data: {"type":"RUN_FINISHED","response":"Extracted crb with one evidence record."}\n'
+        "\n"
+        'data: {"type":"FLOW_FINISHED","status":"completed","flow_run_id":"run-1","total_evidence_records":1}\n'
+        "\n"
+    )
+
+    def _fake_http_request(method, url, **kwargs):
+        del method, url, kwargs
+        return smoke.Response(
+            status_code=200,
+            body=sse_body.encode("utf-8"),
+            text=sse_body,
+            json_body=None,
+        )
+
+    monkeypatch.setattr(smoke, "http_request", _fake_http_request)
+
+    summary = smoke.execute_flow(
+        base_url="http://example.test",
+        headers={"X-API-Key": "test-key"},
+        flow_id="flow-1",
+        document_id="doc-1",
+        user_query="Extract crb.",
+        flow_timeout_seconds=5.0,
+        checks=checks,
+    )
+
+    assert summary["flow_run_id"] == "run-1"
+    assert summary["total_evidence_records"] == 1
+    assert summary["nonfatal_error_events"] == [warning_event]
+    assert checks[-1]["step"] == "execute_flow"
+    assert checks[-1]["payload"]["nonfatal_error_events"] == [warning_event]
+
+
+def test_execute_flow_rejects_fatal_specialist_error(monkeypatch):
+    smoke = _load_smoke_module()
+    checks: list[dict] = []
+    fatal_event = {
+        "type": "SPECIALIST_ERROR",
+        "details": {
+            "specialist": "Gene Extraction",
+            "reason": "structured_finalization_missing",
+            "severity": "error",
+            "error": "Gene Extraction did not call mandatory finalization.",
+        },
+    }
+    sse_body = (
+        'data: {"type":"FLOW_STARTED","flow_id":"flow-1"}\n'
+        "\n"
+        'data: {"type":"RUN_STARTED","trace_id":"trace-flow","model":"gpt-5.5"}\n'
+        "\n"
+        f"data: {json.dumps(fatal_event)}\n"
+        "\n"
+        'data: {"type":"FLOW_STEP_EVIDENCE","evidence_count":1}\n'
+        "\n"
+        'data: {"type":"RUN_FINISHED","response":"Extracted crb with one evidence record."}\n'
+        "\n"
+        'data: {"type":"FLOW_FINISHED","status":"completed","flow_run_id":"run-1","total_evidence_records":1}\n'
+        "\n"
+    )
+
+    def _fake_http_request(method, url, **kwargs):
+        del method, url, kwargs
+        return smoke.Response(
+            status_code=200,
+            body=sse_body.encode("utf-8"),
+            text=sse_body,
+            json_body=None,
+        )
+
+    monkeypatch.setattr(smoke, "http_request", _fake_http_request)
+
+    with pytest.raises(smoke.SmokeFailure, match="fatal error events"):
+        smoke.execute_flow(
+            base_url="http://example.test",
+            headers={"X-API-Key": "test-key"},
+            flow_id="flow-1",
+            document_id="doc-1",
+            user_query="Extract crb.",
+            flow_timeout_seconds=5.0,
+            checks=checks,
+        )
+
+
 def test_ask_streaming_chat_question_rejects_weak_evidence_summary(monkeypatch):
     smoke = _load_smoke_module()
     checks: list[dict] = []

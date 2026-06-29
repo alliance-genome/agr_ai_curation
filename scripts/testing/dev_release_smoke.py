@@ -508,6 +508,28 @@ def collect_error_events(events: Iterable[Dict[str, Any]]) -> list[Dict[str, Any
     ]
 
 
+def error_event_is_nonfatal(event: Dict[str, Any]) -> bool:
+    event_type = str(event.get("type") or "").strip()
+    if event_type != "SPECIALIST_ERROR":
+        return False
+    details = event.get("details")
+    if not isinstance(details, dict):
+        details = {}
+    reason = str(details.get("reason") or "").strip()
+    if reason != "domain_validator_dispatch_error":
+        return False
+    severity = str(details.get("severity") or "").strip().lower()
+    return details.get("fatal") is False and severity == "warning"
+
+
+def collect_fatal_error_events(events: Iterable[Dict[str, Any]]) -> list[Dict[str, Any]]:
+    return [
+        event
+        for event in collect_error_events(events)
+        if not error_event_is_nonfatal(event)
+    ]
+
+
 def has_grounding_evidence_event(events: Iterable[Dict[str, Any]]) -> bool:
     for event in events:
         event_type = str(event.get("type", ""))
@@ -1298,7 +1320,8 @@ def ask_streaming_chat_question(
     )
 
     error_events = collect_error_events(events)
-    require(not error_events, f"Streaming chat emitted error events: {error_events}")
+    fatal_error_events = collect_fatal_error_events(events)
+    require(not fatal_error_events, f"Streaming chat emitted fatal error events: {fatal_error_events}")
 
     run_started = next(event for event in events if event.get("type") == "RUN_STARTED")
     trace_id = str(event_field(run_started, "trace_id")).strip()
@@ -1332,6 +1355,9 @@ def ask_streaming_chat_question(
         "event_types": event_types,
         "terminal_event": str(raw_terminal_details.get("type", "")),
         "response_preview": answer[:500],
+        "nonfatal_error_events": [
+            event for event in error_events if error_event_is_nonfatal(event)
+        ],
     }
     append_check(
         checks,
@@ -1688,7 +1714,8 @@ def execute_flow(
     )
 
     error_events = collect_error_events(events)
-    require(not error_events, f"Flow execution emitted error events: {error_events}")
+    fatal_error_events = collect_fatal_error_events(events)
+    require(not fatal_error_events, f"Flow execution emitted fatal error events: {fatal_error_events}")
 
     flow_finished = next(event for event in events if event.get("type") == "FLOW_FINISHED")
     flow_finished_data = flow_finished.get("data") if isinstance(flow_finished, dict) else None
@@ -1725,6 +1752,9 @@ def execute_flow(
             "run_finished": run_finished,
             "flow_finished": flow_finished,
             "flow_step_evidence_events": flow_step_evidence_events,
+            "nonfatal_error_events": [
+                event for event in error_events if error_event_is_nonfatal(event)
+            ],
         },
     )
     return {
@@ -1734,6 +1764,9 @@ def execute_flow(
         "flow_finished": flow_finished,
         "flow_run_id": flow_run_id,
         "total_evidence_records": total_evidence_records,
+        "nonfatal_error_events": [
+            event for event in error_events if error_event_is_nonfatal(event)
+        ],
     }
 
 
