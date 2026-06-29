@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Any
 
 import pytest
@@ -353,6 +354,103 @@ async def test_run_curation_prep_selects_envelope_refs_and_persists_output(monke
 
 
 @pytest.mark.asyncio
+async def test_run_curation_prep_records_sentry_success_metadata(monkeypatch):
+    extraction_result = _make_domain_envelope_extraction_result()
+    captured: dict[str, Any] = {"span_data": {}, "statuses": []}
+
+    class FakeSpan:
+        def set_data(self, key, value):
+            captured["span_data"][key] = value
+
+        def set_status(self, status):
+            captured["statuses"].append(status)
+
+    @contextmanager
+    def _fake_sentry_span(**kwargs):
+        captured["span_kwargs"] = kwargs
+        yield FakeSpan()
+
+    monkeypatch.setattr(module, "gen_ai_invoke_agent_span", _fake_sentry_span)
+    monkeypatch.setattr(
+        module,
+        "ensure_domain_envelope_materialization",
+        lambda *_args, **_kwargs: CurationPrepEnvelopeRef(
+            envelope_id="env-gene-1",
+            envelope_revision=1,
+            source_extraction_result_id="extract-domain-1",
+            domain_pack_id="gene",
+            review_row_count=2,
+        ),
+    )
+    monkeypatch.setattr(module, "persist_extraction_result", lambda *_args, **_kwargs: None)
+
+    prep_output = await module.run_curation_prep(
+        [extraction_result],
+        scope_confirmation=_make_scope_confirmation(),
+        persistence_context=module.CurationPrepPersistenceContext(
+            source_kind=CurationExtractionSourceKind.CHAT,
+            origin_session_id="chat-session-1",
+            trace_id="trace-upstream",
+            user_id="user-upstream",
+            workflow="curation_prep_chat",
+        ),
+    )
+
+    assert prep_output.review_row_count == 2
+    assert captured["span_kwargs"]["agent_key"] == "curation_prep"
+    assert captured["span_kwargs"]["provider_name"] == "ai_curation"
+    assert captured["span_kwargs"]["response_streaming"] is False
+    assert captured["span_kwargs"]["workflow"] == "curation_prep_chat"
+    assert captured["span_kwargs"]["conversation_id"] == "chat-session-1"
+    assert captured["span_kwargs"]["trace_id"] == "trace-upstream"
+    assert captured["statuses"] == ["ok"]
+    assert captured["span_data"]["ai_curation.curation_prep.status"] == "success"
+    assert captured["span_data"]["ai_curation.curation_prep.envelope_ref_count"] == 1
+    assert captured["span_data"]["ai_curation.curation_prep.review_row_count"] == 2
+    assert captured["span_data"]["ai_curation.curation_prep.warning_count"] == 0
+    assert captured["span_data"]["ai_curation.agent.output"]["review_row_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_run_curation_prep_records_sentry_error_metadata(monkeypatch):
+    captured: dict[str, Any] = {"span_data": {}, "statuses": []}
+
+    class FakeSpan:
+        def set_data(self, key, value):
+            captured["span_data"][key] = value
+
+        def set_status(self, status):
+            captured["statuses"].append(status)
+
+    @contextmanager
+    def _fake_sentry_span(**kwargs):
+        captured["span_kwargs"] = kwargs
+        yield FakeSpan()
+
+    monkeypatch.setattr(module, "gen_ai_invoke_agent_span", _fake_sentry_span)
+
+    with pytest.raises(ValueError, match="No extraction results matched"):
+        await module.run_curation_prep(
+            [],
+            scope_confirmation=_make_scope_confirmation(),
+            persistence_context=module.CurationPrepPersistenceContext(
+                source_kind=CurationExtractionSourceKind.CHAT,
+                origin_session_id="chat-session-1",
+                workflow="curation_prep_chat",
+            ),
+        )
+
+    assert captured["span_kwargs"]["workflow"] == "curation_prep_chat"
+    assert captured["statuses"] == ["invalid_argument"]
+    assert captured["span_data"]["ai_curation.curation_prep.status"] == "error"
+    assert captured["span_data"]["ai_curation.error.detail"] == {
+        "phase": "curation_prep",
+        "error_type": "ValueError",
+        "message": "No extraction results matched the confirmed prep scope.",
+    }
+
+
+@pytest.mark.asyncio
 async def test_run_curation_prep_rejects_legacy_items_as_semantic_source(monkeypatch):
     extraction_result = _make_extraction_result(adapter_key="gene")
 
@@ -439,11 +537,13 @@ def test_curation_prep_persistence_context_keeps_optional_fields():
         flow_run_id="flow-1",
         user_id="user-1",
         conversation_summary="Conversation summary.",
+        workflow="curation_prep_chat",
     )
 
     assert context.document_id == "document-1"
     assert context.source_kind is CurationExtractionSourceKind.CHAT
     assert context.flow_run_id == "flow-1"
+    assert context.workflow == "curation_prep_chat"
 
 
 @pytest.mark.asyncio

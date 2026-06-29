@@ -695,6 +695,59 @@ def test_before_send_transaction_tier1_uses_reduced_content_preview(monkeypatch)
     assert retained.endswith("...[truncated 44 chars]")
 
 
+def test_before_send_transaction_preserves_curation_prep_handoff_metadata(monkeypatch):
+    monkeypatch.setenv("SENTRY_AI_CONTENT_CAPTURE_TIER", "2")
+    monkeypatch.setenv("SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS", "256")
+    fake_secret = "sk-" + "prep" + "secret" + "0123456789"
+    event = {
+        "spans": [
+            {
+                "trace_id": "0123456789abcdef0123456789abcdef",
+                "span_id": "fedcba9876543210",
+                "op": "gen_ai.invoke_agent",
+                "data": {
+                    "ai_curation.workflow": "curation_handoff",
+                    "ai_curation.curation_prep.source_kind": "flow",
+                    "ai_curation.curation_prep.status": "success",
+                    "ai_curation.curation_handoff.status": "success",
+                    "ai_curation.curation_prep.envelope_ref_count": 2,
+                    "ai_curation.curation_prep.extraction_result_count": 3,
+                    "ai_curation.curation_prep.review_row_count": 5,
+                    "ai_curation.curation_prep.warning_count": 1,
+                    "ai_curation.curation_handoff.adapter_count": 2,
+                    "ai_curation.curation_handoff.review_session_count": 2,
+                    "ai_curation.agent.output": {
+                        "review_session_count": 2,
+                        "adapter_keys": ["gene", "allele"],
+                        "api_key": fake_secret,
+                        "note": "handoff ready " + ("details " * 80),
+                    },
+                    "ai_curation.curation_prep.unreviewed_raw": "drop me",
+                },
+            }
+        ],
+    }
+
+    scrubbed = sentry.before_send_transaction(event)
+    data = scrubbed["spans"][0]["data"]
+
+    assert data["ai_curation.workflow"] == "curation_handoff"
+    assert data["ai_curation.curation_prep.source_kind"] == "flow"
+    assert data["ai_curation.curation_prep.status"] == "success"
+    assert data["ai_curation.curation_handoff.status"] == "success"
+    assert data["ai_curation.curation_prep.envelope_ref_count"] == 2
+    assert data["ai_curation.curation_prep.extraction_result_count"] == 3
+    assert data["ai_curation.curation_prep.review_row_count"] == 5
+    assert data["ai_curation.curation_prep.warning_count"] == 1
+    assert data["ai_curation.curation_handoff.adapter_count"] == 2
+    assert data["ai_curation.curation_handoff.review_session_count"] == 2
+    assert isinstance(data["ai_curation.agent.output"], str)
+    assert "[truncated " in data["ai_curation.agent.output"]
+    assert fake_secret not in data["ai_curation.agent.output"]
+    assert "[Filtered]" in data["ai_curation.agent.output"]
+    assert "ai_curation.curation_prep.unreviewed_raw" not in data
+
+
 def test_hash_identifier_preserves_existing_hashed_identifier():
     assert sentry._hash_identifier("sha256:0123456789abcdef") == "sha256:0123456789abcdef"
 
@@ -866,6 +919,8 @@ def test_gen_ai_invoke_agent_span_sets_ai_curation_metadata(monkeypatch):
         agent_name="Gene Extractor",
         model="gpt-5.5",
         conversation_id="session-123",
+        provider_name="ai_curation",
+        response_streaming=False,
         workflow="specialist_tool",
         tool_name="ask_gene_extractor_specialist",
         agent_key="gene_extractor",
@@ -888,6 +943,8 @@ def test_gen_ai_invoke_agent_span_sets_ai_curation_metadata(monkeypatch):
     ):
         pass
 
+    assert ("data", "gen_ai.provider.name", "ai_curation") in calls
+    assert ("data", "gen_ai.response.streaming", False) in calls
     assert ("data", "ai_curation.workflow", "specialist_tool") in calls
     assert ("data", "ai_curation.tool.name", "ask_gene_extractor_specialist") in calls
     assert ("data", "ai_curation.agent.key", "gene_extractor") in calls

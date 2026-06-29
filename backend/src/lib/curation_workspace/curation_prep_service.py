@@ -21,6 +21,11 @@ from src.lib.domain_envelopes.persistence import (
     write_domain_envelope_checkpoint,
 )
 from src.lib.domain_packs.materialization import DomainEnvelopeMaterializationError
+from src.lib.observability.sentry import (
+    gen_ai_invoke_agent_span,
+    set_redacted_ai_span_data,
+    set_sentry_span_status,
+)
 from src.models.sql.database import SessionLocal
 from src.schemas.curation_prep import (
     CurationPrepAgentOutput,
@@ -53,6 +58,7 @@ class CurationPrepPersistenceContext:
     flow_run_id: str | None = None
     user_id: str | None = None
     conversation_summary: str | None = None
+    workflow: str | None = None
 
 
 @dataclass(frozen=True)
@@ -82,6 +88,120 @@ async def run_curation_prep(
     """Build deterministic prep candidates from persisted extraction results."""
 
     persistence_context = persistence_context or CurationPrepPersistenceContext()
+    initial_document_id = (
+        persistence_context.document_id
+        or next(
+            (
+                record.document_id
+                for record in extraction_results
+                if normalized_optional_string(record.document_id) is not None
+            ),
+            None,
+        )
+    )
+    source_kind = (
+        persistence_context.source_kind.value
+        if persistence_context.source_kind is not None
+        else None
+    )
+
+    with gen_ai_invoke_agent_span(
+        agent_name="Curation Prep",
+        model=_DETERMINISTIC_PREP_MODEL_NAME,
+        conversation_id=(
+            persistence_context.origin_session_id
+            or persistence_context.flow_run_id
+            or persistence_context.trace_id
+            or initial_document_id
+        ),
+        provider_name="ai_curation",
+        response_streaming=False,
+        workflow=persistence_context.workflow or "curation_prep",
+        agent_key=CURATION_PREP_AGENT_ID,
+        agent_source="deterministic",
+        trace_id=persistence_context.trace_id,
+        flow_run_id=persistence_context.flow_run_id,
+        document_id=initial_document_id,
+        document_present=initial_document_id is not None,
+        candidate_count=sum(
+            max(int(record.candidate_count), 0) for record in extraction_results
+        ),
+        span_data={
+            "ai_curation.curation_prep.extraction_result_count": len(extraction_results),
+            "ai_curation.curation_prep.source_kind": source_kind,
+        },
+    ) as sentry_span:
+        try:
+            prep_output = await _run_curation_prep_impl(
+                extraction_results,
+                scope_confirmation=scope_confirmation,
+                db=db,
+                persistence_context=persistence_context,
+            )
+        except Exception as exc:
+            if sentry_span is not None:
+                set_sentry_span_status(
+                    sentry_span,
+                    "invalid_argument" if isinstance(exc, ValueError) else "internal_error",
+                )
+                set_redacted_ai_span_data(
+                    sentry_span,
+                    "ai_curation.curation_prep.status",
+                    "error",
+                )
+                set_redacted_ai_span_data(
+                    sentry_span,
+                    "ai_curation.error.detail",
+                    {
+                        "phase": "curation_prep",
+                        "error_type": type(exc).__name__,
+                        "message": str(exc),
+                    },
+                )
+            raise
+
+        if sentry_span is not None:
+            set_sentry_span_status(sentry_span, "ok")
+            set_redacted_ai_span_data(
+                sentry_span,
+                "ai_curation.curation_prep.status",
+                "success",
+            )
+            set_redacted_ai_span_data(
+                sentry_span,
+                "ai_curation.curation_prep.envelope_ref_count",
+                len(prep_output.envelope_refs),
+            )
+            set_redacted_ai_span_data(
+                sentry_span,
+                "ai_curation.curation_prep.review_row_count",
+                prep_output.review_row_count,
+            )
+            set_redacted_ai_span_data(
+                sentry_span,
+                "ai_curation.curation_prep.warning_count",
+                len(prep_output.run_metadata.warnings),
+            )
+            set_redacted_ai_span_data(
+                sentry_span,
+                "ai_curation.agent.output",
+                {
+                    "review_row_count": prep_output.review_row_count,
+                    "envelope_ref_count": len(prep_output.envelope_refs),
+                    "warnings": prep_output.run_metadata.warnings,
+                    "processing_notes": prep_output.run_metadata.processing_notes,
+                },
+            )
+        return prep_output
+
+
+async def _run_curation_prep_impl(
+    extraction_results: Sequence[CurationExtractionResultRecord],
+    *,
+    scope_confirmation: CurationPrepScopeConfirmation,
+    db: Session | None = None,
+    persistence_context: CurationPrepPersistenceContext,
+) -> CurationPrepAgentOutput:
     scoped_results, scope_notes = _filter_extraction_results_for_scope(
         extraction_results,
         scope_confirmation,

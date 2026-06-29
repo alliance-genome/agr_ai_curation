@@ -404,6 +404,9 @@ _AI_CURATION_SAFE_TEXT_DATA_KEYS = {
     "ai_curation.validator.agent_id",
     "ai_curation.validator.binding_id",
     "ai_curation.validator.package_id",
+    "ai_curation.curation_prep.source_kind",
+    "ai_curation.curation_prep.status",
+    "ai_curation.curation_handoff.status",
     "ai_curation.workflow",
 }
 
@@ -421,6 +424,12 @@ _AI_CURATION_NUMERIC_DATA_KEYS = {
     "ai_curation.agent.events_collected",
     "ai_curation.candidate.count",
     "ai_curation.content.capture_tier",
+    "ai_curation.curation_prep.envelope_ref_count",
+    "ai_curation.curation_prep.extraction_result_count",
+    "ai_curation.curation_prep.review_row_count",
+    "ai_curation.curation_prep.warning_count",
+    "ai_curation.curation_handoff.adapter_count",
+    "ai_curation.curation_handoff.review_session_count",
     "ai_curation.error.event_count",
     "ai_curation.finalization.attempt",
     "ai_curation.finalization.max_attempts",
@@ -808,6 +817,8 @@ def gen_ai_invoke_agent_span(
     agent_name: str | None,
     model: str | None,
     conversation_id: str | None,
+    provider_name: str = "openai",
+    response_streaming: bool = True,
     workflow: str | None = None,
     tool_name: str | None = None,
     agent_key: str | None = None,
@@ -838,6 +849,7 @@ def gen_ai_invoke_agent_span(
 
     safe_agent_name = _safe_gen_ai_text(agent_name) or "agent"
     safe_model = _safe_gen_ai_text(model) if model else None
+    safe_provider_name = _safe_gen_ai_text(provider_name) or "openai"
     hashed_conversation_id = _hash_identifier(conversation_id)
     if hashed_conversation_id == _REDACTED:
         hashed_conversation_id = None
@@ -863,8 +875,8 @@ def gen_ai_invoke_agent_span(
 
             safe_set("gen_ai.operation.name", "invoke_agent")
             safe_set("gen_ai.agent.name", safe_agent_name)
-            safe_set("gen_ai.provider.name", "openai")
-            safe_set("gen_ai.response.streaming", True)
+            safe_set("gen_ai.provider.name", safe_provider_name)
+            safe_set("gen_ai.response.streaming", response_streaming)
             safe_set("ai_curation.content.capture_tier", settings.ai_content_capture_tier)
             if safe_model:
                 safe_set("gen_ai.request.model", safe_model)

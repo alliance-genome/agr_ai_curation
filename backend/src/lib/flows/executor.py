@@ -2791,6 +2791,7 @@ def get_all_agent_tools(
                             flow_run_id=flow_run_id,
                             user_id=user_id,
                             conversation_summary=flow_conversation_summary,
+                            workflow="curation_prep_flow",
                         ),
                     )
                     return prep_output.model_dump_json()

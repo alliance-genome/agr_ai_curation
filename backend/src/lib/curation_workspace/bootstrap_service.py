@@ -39,6 +39,11 @@ from src.lib.curation_workspace.session_service import (
     upsert_prepared_session,
 )
 from src.lib.context import get_current_trace_id
+from src.lib.observability.sentry import (
+    gen_ai_invoke_agent_span,
+    set_redacted_ai_span_data,
+    set_sentry_span_status,
+)
 from src.models.sql.pdf_document import PDFDocument
 from src.schemas.curation_prep import (
     CurationPrepAgentOutput,
@@ -163,10 +168,103 @@ async def run_flow_curation_handoff(
 ) -> FlowCurationHandoffResult:
     """Run curation prep and bootstrap one runner-owned session per adapter."""
 
+    adapter_keys = _handoff_adapter_keys(extraction_results)
+    trace_id = get_current_trace_id()
+    with gen_ai_invoke_agent_span(
+        agent_name="Curation Handoff",
+        model="deterministic_curation_handoff_v1",
+        conversation_id=origin_session_id or flow_run_id or trace_id or document_id,
+        provider_name="ai_curation",
+        response_streaming=False,
+        workflow="curation_handoff",
+        agent_key="curation_handoff",
+        agent_source="deterministic",
+        trace_id=trace_id,
+        flow_run_id=flow_run_id,
+        document_id=document_id,
+        document_present=True,
+        candidate_count=sum(
+            max(int(record.candidate_count), 0) for record in extraction_results
+        ),
+        span_data={
+            "ai_curation.curation_handoff.adapter_count": len(adapter_keys),
+            "ai_curation.curation_prep.extraction_result_count": len(extraction_results),
+        },
+    ) as sentry_span:
+        try:
+            result = await _run_flow_curation_handoff_impl(
+                extraction_results=extraction_results,
+                document_id=document_id,
+                runner_user_id=runner_user_id,
+                flow_run_id=flow_run_id,
+                origin_session_id=origin_session_id,
+                conversation_summary=conversation_summary,
+                db=db,
+                adapter_keys=adapter_keys,
+                trace_id=trace_id,
+            )
+        except Exception as exc:
+            if sentry_span is not None:
+                set_sentry_span_status(
+                    sentry_span,
+                    "invalid_argument" if isinstance(exc, ValueError) else "internal_error",
+                )
+                set_redacted_ai_span_data(
+                    sentry_span,
+                    "ai_curation.curation_handoff.status",
+                    "error",
+                )
+                set_redacted_ai_span_data(
+                    sentry_span,
+                    "ai_curation.error.detail",
+                    {
+                        "phase": "curation_handoff",
+                        "error_type": type(exc).__name__,
+                        "message": str(exc),
+                    },
+                )
+            raise
+
+        if sentry_span is not None:
+            set_sentry_span_status(sentry_span, "ok")
+            set_redacted_ai_span_data(
+                sentry_span,
+                "ai_curation.curation_handoff.status",
+                "success",
+            )
+            set_redacted_ai_span_data(
+                sentry_span,
+                "ai_curation.curation_handoff.review_session_count",
+                len(result.review_session_ids),
+            )
+            set_redacted_ai_span_data(
+                sentry_span,
+                "ai_curation.agent.output",
+                {
+                    "review_session_count": len(result.review_session_ids),
+                    "adapter_keys": result.adapter_keys,
+                },
+            )
+        return result
+
+
+async def _run_flow_curation_handoff_impl(
+    *,
+    extraction_results: Sequence[CurationExtractionResultRecord],
+    document_id: str,
+    runner_user_id: str,
+    flow_run_id: str | None,
+    origin_session_id: str | None,
+    conversation_summary: str | None,
+    db: Session,
+    adapter_keys: Sequence[str],
+    trace_id: str | None,
+) -> FlowCurationHandoffResult:
     try:
-        adapter_keys = _handoff_adapter_keys(extraction_results)
         if not adapter_keys:
-            raise ValueError("Curation handoff requires extraction results for at least one adapter key.")
+            raise ValueError(
+                "Curation handoff requires extraction results for at least one adapter key."
+            )
 
         for adapter_key in adapter_keys:
             adapter_records = [
@@ -182,10 +280,11 @@ async def run_flow_curation_handoff(
                     document_id=document_id,
                     source_kind=CurationExtractionSourceKind.FLOW,
                     origin_session_id=origin_session_id,
-                    trace_id=get_current_trace_id(),
+                    trace_id=trace_id,
                     flow_run_id=flow_run_id,
                     user_id=runner_user_id,
                     conversation_summary=conversation_summary,
+                    workflow="curation_handoff",
                 ),
                 db=db,
             )
@@ -210,7 +309,7 @@ async def run_flow_curation_handoff(
         db.commit()
         return FlowCurationHandoffResult(
             review_session_ids=review_session_ids,
-            adapter_keys=adapter_keys,
+            adapter_keys=list(adapter_keys),
         )
     except Exception:
         if db.in_transaction():
