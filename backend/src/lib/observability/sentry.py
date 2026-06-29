@@ -118,6 +118,9 @@ class SentrySettings:
     openai_integration_enabled: bool
     gen_ai_stream_spans_enabled: bool
     openai_include_prompts: bool
+    ai_content_capture_tier: int
+    ai_content_preview_max_chars: int
+    ai_content_tier1_preview_max_chars: int
 
 
 def _get_env_bool(key: str, default: bool) -> bool:
@@ -147,6 +150,30 @@ def _get_env_float(key: str, default: float) -> float:
         return default
 
     return min(max(value, 0.0), 1.0)
+
+
+def _get_env_int(
+    key: str,
+    default: int,
+    *,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> int:
+    raw = os.getenv(key)
+    if raw is None or raw.strip() == "":
+        return default
+
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("Invalid integer value for %s: %s, using default %s", key, raw, default)
+        return default
+
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
 
 
 def get_sentry_settings() -> SentrySettings:
@@ -192,6 +219,24 @@ def get_sentry_settings() -> SentrySettings:
             False,
         ),
         openai_include_prompts=_get_env_bool("SENTRY_OPENAI_INCLUDE_PROMPTS", False),
+        ai_content_capture_tier=_get_env_int(
+            "SENTRY_AI_CONTENT_CAPTURE_TIER",
+            2,
+            minimum=0,
+            maximum=2,
+        ),
+        ai_content_preview_max_chars=_get_env_int(
+            "SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS",
+            20000,
+            minimum=256,
+            maximum=200000,
+        ),
+        ai_content_tier1_preview_max_chars=_get_env_int(
+            "SENTRY_AI_CONTENT_TIER1_PREVIEW_MAX_CHARS",
+            2000,
+            minimum=256,
+            maximum=20000,
+        ),
     )
 
 
@@ -320,9 +365,172 @@ _GEN_AI_NUMERIC_DATA_PREFIXES = (
     "gen_ai.usage.",
 )
 
+_AI_CURATION_IDENTIFIER_DATA_KEYS = {
+    "ai_curation.chat.session_id",
+    "ai_curation.document.id",
+    "ai_curation.flow.id",
+    "ai_curation.flow.run_id",
+    "ai_curation.trace.id",
+    "ai_curation.validator.request_id",
+}
+
+_AI_CURATION_SAFE_TEXT_DATA_KEYS = {
+    "ai_curation.adapter.key",
+    "ai_curation.agent.key",
+    "ai_curation.agent.output_type",
+    "ai_curation.agent.source",
+    "ai_curation.chat.session_id_hash",
+    "ai_curation.domain_pack.id",
+    "ai_curation.document.id_hash",
+    "ai_curation.finalization.status",
+    "ai_curation.finalization.tool",
+    "ai_curation.flow.id_hash",
+    "ai_curation.flow.name",
+    "ai_curation.flow.run_id_hash",
+    "ai_curation.specialist.name",
+    "ai_curation.tool.kind",
+    "ai_curation.tool.name",
+    "ai_curation.trace.id_hash",
+    "ai_curation.validation.status",
+    "ai_curation.validator.agent_id",
+    "ai_curation.validator.binding_id",
+    "ai_curation.validator.package_id",
+    "ai_curation.workflow",
+}
+
+_AI_CURATION_CONTENT_DATA_KEYS = {
+    "ai_curation.agent.input",
+    "ai_curation.agent.output",
+    "ai_curation.error.detail",
+    "ai_curation.finalization.detail",
+    "ai_curation.tool.input",
+    "ai_curation.tool.output",
+    "ai_curation.validation.detail",
+}
+
+_AI_CURATION_NUMERIC_DATA_KEYS = {
+    "ai_curation.agent.events_collected",
+    "ai_curation.candidate.count",
+    "ai_curation.content.capture_tier",
+    "ai_curation.finalization.attempt",
+    "ai_curation.finalization.max_attempts",
+    "ai_curation.flow.total_steps",
+    "ai_curation.validator.batch_size",
+    "ai_curation.tool_call.count",
+    "ai_curation.validation.error_count",
+}
+
+_AI_CURATION_BOOLEAN_DATA_KEYS = {
+    "ai_curation.document.present",
+    "ai_curation.finalization.required",
+}
+
+
+def _ai_content_capture_tier() -> int:
+    return get_sentry_settings().ai_content_capture_tier
+
+
+def _ai_content_preview_max_chars() -> int:
+    return get_sentry_settings().ai_content_preview_max_chars
+
 
 def _gen_ai_content_capture_enabled() -> bool:
     return _get_env_bool("SENTRY_OPENAI_INCLUDE_PROMPTS", False)
+
+
+def _truncate_ai_content(value: Any, *, max_chars: int, depth: int = 0) -> Any:
+    if depth > _MAX_REDACTION_DEPTH:
+        return _REDACTED
+    if isinstance(value, Mapping):
+        return {
+            str(child_key): _truncate_ai_content(
+                child_value,
+                max_chars=max_chars,
+                depth=depth + 1,
+            )
+            for child_key, child_value in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _truncate_ai_content(item, max_chars=max_chars, depth=depth + 1)
+            for item in value
+        ]
+    if isinstance(value, tuple):
+        return tuple(
+            _truncate_ai_content(item, max_chars=max_chars, depth=depth + 1)
+            for item in value
+        )
+    if isinstance(value, str):
+        scrubbed = _scrub_string(value)
+        if len(scrubbed) <= max_chars:
+            return scrubbed
+        return scrubbed[:max_chars] + f"...[truncated {len(scrubbed) - max_chars} chars]"
+    return value
+
+
+def _scrub_ai_content(value: Any, *, max_chars: int | None = None) -> Any:
+    scrubbed = _scrub_value(value, allow_content=True)
+    return _truncate_ai_content(
+        scrubbed,
+        max_chars=max_chars if max_chars is not None else _ai_content_preview_max_chars(),
+    )
+
+
+def _redact_ai_curation_span_data(key: str, value: Any, *, content_tier: int) -> Any:
+    if key in _AI_CURATION_IDENTIFIER_DATA_KEYS:
+        hashed = _hash_identifier(value)
+        return hashed if hashed is not None else None
+
+    if key in _AI_CURATION_SAFE_TEXT_DATA_KEYS:
+        if isinstance(value, list):
+            return [
+                safe_text
+                for item in value
+                if (safe_text := _safe_gen_ai_text(item)) is not None
+            ]
+        return _safe_gen_ai_text(value)
+
+    if key in _AI_CURATION_NUMERIC_DATA_KEYS and _is_real_number(value):
+        return value
+
+    if key in _AI_CURATION_BOOLEAN_DATA_KEYS and isinstance(value, bool):
+        return value
+
+    if key in _AI_CURATION_CONTENT_DATA_KEYS:
+        if content_tier >= 2:
+            return _scrub_ai_content(value)
+        if content_tier == 1:
+            return _scrub_ai_content(
+                value,
+                max_chars=get_sentry_settings().ai_content_tier1_preview_max_chars,
+            )
+        return _redact_untrusted_strings(value)
+
+    if key.startswith("ai_curation."):
+        return None
+
+    return None
+
+
+def _redact_single_span_data(key: str, value: Any) -> Any:
+    redacted = _redact_span_data({key: value})
+    if isinstance(redacted, Mapping):
+        return redacted.get(key)
+    return None
+
+
+def _set_redacted_span_data(set_data: Any, key: str, value: Any) -> None:
+    redacted_value = _redact_single_span_data(key, value)
+    if redacted_value is not None:
+        set_data(key, redacted_value)
+
+
+def set_redacted_ai_span_data(span: Any, key: str, value: Any) -> None:
+    """Set AI span data through the same redaction path used at span creation."""
+
+    set_data = getattr(span, "set_data", None)
+    if callable(set_data):
+        _set_redacted_span_data(set_data, key, value)
 
 
 def _redact_span_data(data: Any) -> Any:
@@ -333,13 +541,24 @@ def _redact_span_data(data: Any) -> Any:
 
     redacted: dict[str, Any] = {}
     include_content = _gen_ai_content_capture_enabled()
+    content_tier = _ai_content_capture_tier()
     for raw_key, value in data.items():
         key = str(raw_key)
 
         if key in _GEN_AI_CONTENT_DATA_KEYS:
             redacted[key] = (
-                _scrub_value(value, allow_content=True) if include_content else _REDACTED
+                _scrub_ai_content(value) if include_content else _REDACTED
             )
+            continue
+
+        if key.startswith("ai_curation."):
+            redacted_value = _redact_ai_curation_span_data(
+                key,
+                value,
+                content_tier=content_tier,
+            )
+            if redacted_value is not None:
+                redacted[key] = redacted_value
             continue
 
         if key in _GEN_AI_SAFE_TEXT_DATA_KEYS:
@@ -529,12 +748,32 @@ def gen_ai_invoke_agent_span(
     agent_name: str | None,
     model: str | None,
     conversation_id: str | None,
+    workflow: str | None = None,
+    tool_name: str | None = None,
+    agent_key: str | None = None,
+    agent_source: str | None = None,
+    specialist_name: str | None = None,
+    trace_id: str | None = None,
+    flow_run_id: str | None = None,
+    document_id: str | None = None,
+    document_present: bool | None = None,
+    finalization_required: bool | None = None,
+    finalization_tool: str | None = None,
+    finalization_attempt: int | None = None,
+    finalization_status: str | None = None,
+    validation_status: str | None = None,
+    validation_error_count: int | None = None,
+    tool_call_count: int | None = None,
+    candidate_count: int | None = None,
+    input_preview: Any | None = None,
+    output_preview: Any | None = None,
+    span_data: Mapping[str, Any] | None = None,
 ):
     """Create a minimal manual Sentry AI span for an agent invocation."""
 
     settings = get_sentry_settings()
     if not settings.ai_agents_monitoring_enabled:
-        yield
+        yield None
         return
 
     safe_agent_name = _safe_gen_ai_text(agent_name) or "agent"
@@ -549,7 +788,7 @@ def gen_ai_invoke_agent_span(
         sentry_sdk = importlib.import_module("sentry_sdk")
         start_span = getattr(sentry_sdk, "start_span", None)
         if not callable(start_span):
-            yield
+            yield None
             return
 
         span_context = start_span(
@@ -559,20 +798,73 @@ def gen_ai_invoke_agent_span(
         span = span_context.__enter__()
         set_data = getattr(span, "set_data", None)
         if callable(set_data):
-            set_data("gen_ai.operation.name", "invoke_agent")
-            set_data("gen_ai.agent.name", safe_agent_name)
-            set_data("gen_ai.provider.name", "openai")
-            set_data("gen_ai.response.streaming", True)
+            def safe_set(key: str, value: Any) -> None:
+                _set_redacted_span_data(set_data, key, value)
+
+            safe_set("gen_ai.operation.name", "invoke_agent")
+            safe_set("gen_ai.agent.name", safe_agent_name)
+            safe_set("gen_ai.provider.name", "openai")
+            safe_set("gen_ai.response.streaming", True)
+            safe_set("ai_curation.content.capture_tier", settings.ai_content_capture_tier)
             if safe_model:
-                set_data("gen_ai.request.model", safe_model)
+                safe_set("gen_ai.request.model", safe_model)
             if hashed_conversation_id:
-                set_data("gen_ai.conversation.id", hashed_conversation_id)
+                safe_set("gen_ai.conversation.id", hashed_conversation_id)
+                safe_set("ai_curation.chat.session_id_hash", hashed_conversation_id)
+            if workflow:
+                safe_set("ai_curation.workflow", workflow)
+            if tool_name:
+                safe_set("ai_curation.tool.name", tool_name)
+            if agent_key:
+                safe_set("ai_curation.agent.key", agent_key)
+            if agent_source:
+                safe_set("ai_curation.agent.source", agent_source)
+            if specialist_name:
+                safe_set("ai_curation.specialist.name", specialist_name)
+            if trace_id:
+                hashed_trace_id = _hash_identifier(trace_id)
+                if hashed_trace_id not in {None, _REDACTED}:
+                    safe_set("ai_curation.trace.id_hash", hashed_trace_id)
+            if flow_run_id:
+                hashed_flow_run_id = _hash_identifier(flow_run_id)
+                if hashed_flow_run_id not in {None, _REDACTED}:
+                    safe_set("ai_curation.flow.run_id_hash", hashed_flow_run_id)
+            if document_id:
+                hashed_document_id = _hash_identifier(document_id)
+                if hashed_document_id not in {None, _REDACTED}:
+                    safe_set("ai_curation.document.id_hash", hashed_document_id)
+            if document_present is not None:
+                safe_set("ai_curation.document.present", document_present)
+            if finalization_required is not None:
+                safe_set("ai_curation.finalization.required", finalization_required)
+            if finalization_tool:
+                safe_set("ai_curation.finalization.tool", finalization_tool)
+            if finalization_attempt is not None:
+                safe_set("ai_curation.finalization.attempt", finalization_attempt)
+            if finalization_status:
+                safe_set("ai_curation.finalization.status", finalization_status)
+            if validation_status:
+                safe_set("ai_curation.validation.status", validation_status)
+            if validation_error_count is not None:
+                safe_set("ai_curation.validation.error_count", validation_error_count)
+            if tool_call_count is not None:
+                safe_set("ai_curation.tool_call.count", tool_call_count)
+            if candidate_count is not None:
+                safe_set("ai_curation.candidate.count", candidate_count)
+            if input_preview is not None:
+                safe_set("ai_curation.agent.input", input_preview)
+            if output_preview is not None:
+                safe_set("ai_curation.agent.output", output_preview)
+            if span_data:
+                for key, value in span_data.items():
+                    if str(key).startswith(("ai_curation.", "gen_ai.")):
+                        safe_set(str(key), value)
     except Exception as exc:
         logger.debug("Sentry AI invoke-agent span unavailable: %s", exc)
         span_context = None
 
     try:
-        yield
+        yield span
     finally:
         if span_context is not None:
             try:

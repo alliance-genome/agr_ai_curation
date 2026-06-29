@@ -106,7 +106,11 @@ from src.lib.context import (
     get_current_trace_id,
     get_current_user_id,
 )
-from src.lib.observability.sentry import gen_ai_conversation_scope, gen_ai_invoke_agent_span
+from src.lib.observability.sentry import (
+    gen_ai_conversation_scope,
+    gen_ai_invoke_agent_span,
+    set_redacted_ai_span_data,
+)
 from src.lib.curation_workspace.extraction_results import (
     InlineExtractionPersistenceResult,
     persist_inline_validated_extraction_result,
@@ -4580,9 +4584,95 @@ async def run_specialist_with_events(
         agent_name=specialist_name,
         model=str(getattr(runtime_agent, "model", "") or ""),
         conversation_id=sentry_conversation_id,
+        workflow="specialist_tool",
+        tool_name=tool_name,
+        agent_key=runtime_canonical_agent_key,
+        agent_source="runtime",
+        specialist_name=specialist_name,
+        trace_id=get_current_trace_id() or builder_workspace.run_id,
+        document_id=builder_workspace.document_id,
+        document_present=bool(builder_workspace.document_id),
+        finalization_required=structured_finalization_state.required,
+        finalization_tool=structured_finalization_state.tool_name,
+        input_preview=input_text,
+        span_data={
+            "ai_curation.adapter.key": runtime_curation_adapter_key,
+            "ai_curation.domain_pack.id": builder_workspace.domain_pack_id,
+            "ai_curation.agent.output_type": structured_finalization_state.output_type_name,
+            "ai_curation.finalization.max_attempts": structured_finalization_state.max_attempts,
+            "ai_curation.tool.kind": (
+                "builder_materializer" if builder_materializer_agent else "specialist"
+            ),
+        },
     )
     conversation_context_manager.__enter__()
-    sentry_span_context_manager.__enter__()
+    sentry_span = sentry_span_context_manager.__enter__()
+    sentry_stream_finalization_status = "stream_finished"
+
+    def _record_sentry_post_stream_outcome(
+        *,
+        status: str,
+        output: Any | None = None,
+        error_detail: Any | None = None,
+        retained_evidence_count: int | None = None,
+        inline_persistence_result: InlineExtractionPersistenceResult | None = None,
+    ) -> None:
+        with gen_ai_conversation_scope(sentry_conversation_id):
+            with gen_ai_invoke_agent_span(
+                agent_name=specialist_name,
+                model=str(getattr(runtime_agent, "model", "") or ""),
+                conversation_id=sentry_conversation_id,
+                workflow="specialist_tool_post_stream",
+                tool_name=tool_name,
+                agent_key=runtime_canonical_agent_key,
+                agent_source="runtime",
+                specialist_name=specialist_name,
+                trace_id=get_current_trace_id() or builder_workspace.run_id,
+                document_id=builder_workspace.document_id,
+                document_present=bool(builder_workspace.document_id),
+                finalization_required=structured_finalization_state.required,
+                finalization_tool=structured_finalization_state.tool_name,
+                finalization_status=status,
+                validation_status=builder_workspace.state,
+                validation_error_count=len(builder_workspace.validation_errors),
+                tool_call_count=len(tool_calls),
+                candidate_count=len(builder_workspace.candidates),
+                output_preview=output,
+                span_data={
+                    "ai_curation.adapter.key": runtime_curation_adapter_key,
+                    "ai_curation.domain_pack.id": builder_workspace.domain_pack_id,
+                    "ai_curation.agent.events_collected": total_event_count,
+                    "ai_curation.finalization.detail": {
+                        "phase_timings_ms": dict(phase_timings_ms),
+                        "event_type_counts": dict(event_type_counts),
+                        "structured_finalization_call_count": len(
+                            structured_finalization_state.calls
+                        ),
+                        "retained_evidence_count": retained_evidence_count,
+                        "inline_persistence": (
+                            {
+                                "extraction_result_id": inline_persistence_result.extraction_result_id,
+                                "result_ref": inline_persistence_result.result_ref,
+                                "created_new": inline_persistence_result.created_new,
+                            }
+                            if inline_persistence_result is not None
+                            else None
+                        ),
+                        "tool_calls": [
+                            {
+                                "name": tc.tool_name,
+                                "args": tc.tool_args,
+                                "duration_ms": tc.duration_ms,
+                                "output_preview": tc.output_preview,
+                                "output_summary": tc.output_summary,
+                            }
+                            for tc in tool_calls
+                        ],
+                    },
+                    **({"ai_curation.error.detail": error_detail} if error_detail else {}),
+                },
+            ):
+                pass
     try:
         result = Runner.run_streamed(
             runtime_agent,
@@ -5061,12 +5151,22 @@ async def run_specialist_with_events(
         )
 
     except asyncio.CancelledError:
+        sentry_stream_finalization_status = "cancelled"
         phase_timings_ms["stream_consume_ms"] = _elapsed_ms(
             stream_consume_started_at
+        )
+        _record_sentry_post_stream_outcome(
+            status="cancelled",
+            error_detail={
+                "message": "specialist stream cancelled",
+                "error_type": "CancelledError",
+                "phase": "specialist_stream",
+            },
         )
         builder_workspace.mark_cancelled(reason="specialist stream cancelled")
         raise
     except Exception as e:
+        sentry_stream_finalization_status = "error"
         phase_timings_ms["stream_consume_ms"] = _elapsed_ms(
             stream_consume_started_at
         )
@@ -5085,6 +5185,14 @@ async def run_specialist_with_events(
                     "severity": "error",
                 }
             })
+        _record_sentry_post_stream_outcome(
+            status="error",
+            error_detail={
+                "message": str(e),
+                "error_type": type(e).__name__,
+                "phase": "specialist_stream",
+            },
+        )
         logger.error(
             "%s stream error: %s: %s. Events before error: %s, Event types: %s",
             specialist_name,
@@ -5096,6 +5204,51 @@ async def run_specialist_with_events(
         builder_workspace.mark_aborted(reason=f"{type(e).__name__}: {e}")
         raise
     finally:
+        if sentry_span is not None:
+            set_redacted_ai_span_data(sentry_span, "ai_curation.tool_call.count", len(tool_calls))
+            set_redacted_ai_span_data(
+                sentry_span,
+                "ai_curation.agent.events_collected",
+                total_event_count,
+            )
+            set_redacted_ai_span_data(
+                sentry_span,
+                "ai_curation.validation.status",
+                builder_workspace.state,
+            )
+            set_redacted_ai_span_data(
+                sentry_span,
+                "ai_curation.validation.error_count",
+                len(builder_workspace.validation_errors),
+            )
+            set_redacted_ai_span_data(
+                sentry_span,
+                "ai_curation.candidate.count",
+                len(builder_workspace.candidates),
+            )
+            set_redacted_ai_span_data(
+                sentry_span,
+                "ai_curation.finalization.status",
+                sentry_stream_finalization_status,
+            )
+            set_redacted_ai_span_data(
+                sentry_span,
+                "ai_curation.finalization.detail",
+                {
+                    "phase_timings_ms": dict(phase_timings_ms),
+                    "event_type_counts": dict(event_type_counts),
+                    "tool_calls": [
+                        {
+                            "name": tc.tool_name,
+                            "args": tc.tool_args,
+                            "duration_ms": tc.duration_ms,
+                            "output_preview": tc.output_preview,
+                            "output_summary": tc.output_summary,
+                        }
+                        for tc in tool_calls
+                    ],
+                },
+            )
         sentry_span_context_manager.__exit__(None, None, None)
         conversation_context_manager.__exit__(None, None, None)
         reset_active_evidence_records(evidence_workspace_token)
@@ -5139,6 +5292,13 @@ async def run_specialist_with_events(
             message=required_tool_error,
             candidate_id=builder_candidate_id,
         )
+        _record_sentry_post_stream_outcome(
+            status="rejected",
+            error_detail={
+                "message": required_tool_error,
+                "reason": "required_tool_not_called",
+            },
+        )
         raise SpecialistOutputError(
             specialist_name=specialist_name,
             output_type_name=output_type_name,
@@ -5164,6 +5324,16 @@ async def run_specialist_with_events(
             structured_finalization_state.tool_name,
         )
     elif structured_finalization_state.required:
+        _record_sentry_post_stream_outcome(
+            status="rejected",
+            error_detail={
+                "message": (
+                    f"{specialist_name} did not complete mandatory "
+                    f"{structured_finalization_state.tool_name} with status accepted."
+                ),
+                "reason": "structured_finalization_missing",
+            },
+        )
         _raise_missing_structured_specialist_finalization(
             state=structured_finalization_state,
             specialist_name=specialist_name,
@@ -5962,6 +6132,12 @@ async def run_specialist_with_events(
         len(tool_calls),
         total_duration_ms,
         len(final_output),
+    )
+    _record_sentry_post_stream_outcome(
+        status="accepted" if not builder_workspace.validation_errors else "rejected",
+        output=final_output,
+        retained_evidence_count=len(retained_evidence_records),
+        inline_persistence_result=inline_persistence,
     )
 
     # Inject batching nudge if threshold was hit (exactly at threshold, not after)

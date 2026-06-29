@@ -42,6 +42,17 @@ class _FakeFailingRunResult:
         raise TimeoutError("Responses websocket connect timed out after 5.0 seconds.")
 
 
+class _FakeContextManager:
+    def __init__(self, value=None):
+        self.value = value
+
+    def __enter__(self):
+        return self.value
+
+    def __exit__(self, exc_type, exc, tb):
+        return None
+
+
 class _FakeTextDelta:
     def __init__(self, delta):
         self.delta = delta
@@ -753,13 +764,130 @@ async def test_runner_traces_impossible_top_level_curation_shaped_output(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_runner_propagates_sdk_stream_errors(monkeypatch):
+async def test_run_agent_with_tracing_skips_sentry_span_for_unlabeled_custom_agent(monkeypatch):
     monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
     monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
     monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
     monkeypatch.setattr(runner, "get_collected_events", lambda: [])
     monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
     monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
+    monkeypatch.setattr(
+        runner,
+        "gen_ai_conversation_scope",
+        lambda _conversation_id: pytest.fail("custom Agent Studio-style runs must not bind Sentry conversations"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "gen_ai_invoke_agent_span",
+        lambda **_kwargs: pytest.fail("custom Agent Studio-style runs must not start Sentry AI spans"),
+    )
+    monkeypatch.setattr(
+        runner.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult([], final_output="ok"),
+    )
+
+    emitted_events = [
+        event
+        async for event in runner._run_agent_with_tracing(
+            agent=SimpleNamespace(
+                name="Agent Studio Custom Agent",
+                tools=[],
+                model="gpt-5.5",
+                output_type=None,
+            ),
+            input_items=[{"role": "user", "content": "hello"}],
+            user_id="user-1",
+            document_id=None,
+            document_name=None,
+            user_message="hello",
+            trace_id="trace-custom-agent",
+        )
+    ]
+
+    assert any(event.get("type") == "RUN_FINISHED" for event in emitted_events)
+
+
+@pytest.mark.asyncio
+async def test_run_agent_with_tracing_starts_sentry_span_for_explicit_workflow(monkeypatch):
+    calls = []
+
+    class FakeSpan:
+        def set_data(self, key, value):
+            calls.append(("data", key, value))
+
+    def _fake_sentry_span(**kwargs):
+        calls.append(("span", kwargs))
+        return _FakeContextManager(FakeSpan())
+
+    monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "get_collected_events", lambda: [])
+    monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
+    monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
+    monkeypatch.setattr(runner, "gen_ai_conversation_scope", lambda _conversation_id: _FakeContextManager())
+    monkeypatch.setattr(runner, "gen_ai_invoke_agent_span", _fake_sentry_span)
+    monkeypatch.setattr(
+        runner.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult([], final_output="ok"),
+    )
+
+    emitted_events = [
+        event
+        async for event in runner._run_agent_with_tracing(
+            agent=SimpleNamespace(
+                name="Flow Supervisor",
+                tools=[],
+                model="gpt-5.5",
+                output_type=None,
+            ),
+            input_items=[{"role": "user", "content": "run flow"}],
+            user_id="user-1",
+            document_id="doc-1",
+            document_name="paper.pdf",
+            user_message="run flow",
+            trace_id="trace-flow",
+            sentry_workflow="execute_flow",
+            sentry_span_data={"ai_curation.flow.total_steps": 2},
+        )
+    ]
+
+    assert any(event.get("type") == "RUN_FINISHED" for event in emitted_events)
+    assert calls[0][0] == "span"
+    assert calls[0][1]["workflow"] == "execute_flow"
+    assert calls[0][1]["span_data"]["ai_curation.flow.total_steps"] == 2
+    assert ("data", "ai_curation.tool_call.count", 0) in calls
+    post_stream_span = next(
+        call
+        for call in calls
+        if call[0] == "span" and call[1]["workflow"] == "execute_flow_post_stream"
+    )
+    assert post_stream_span[1]["output_preview"] == "ok"
+    assert post_stream_span[1]["finalization_status"] == "accepted"
+
+
+@pytest.mark.asyncio
+async def test_runner_propagates_sdk_stream_errors(monkeypatch):
+    sentry_calls = []
+
+    class FakeSentrySpan:
+        def set_data(self, key, value):
+            sentry_calls.append(("data", key, value))
+
+    def _fake_sentry_span(**kwargs):
+        sentry_calls.append(("span", kwargs))
+        return _FakeContextManager(FakeSentrySpan())
+
+    monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "OpenAIProvider", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "get_collected_events", lambda: [])
+    monkeypatch.setattr(runner, "set_live_event_list", lambda _events: None)
+    monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
+    monkeypatch.setattr(runner, "gen_ai_conversation_scope", lambda _conversation_id: _FakeContextManager())
+    monkeypatch.setattr(runner, "gen_ai_invoke_agent_span", _fake_sentry_span)
     monkeypatch.setattr(
         runner.Runner,
         "run_streamed",
@@ -783,8 +911,20 @@ async def test_runner_propagates_sdk_stream_errors(monkeypatch):
             document_name=None,
             user_message="run flow",
             trace_id="trace-sdk-timeout",
+            sentry_workflow="execute_flow",
         ):
             pass
+
+    error_span = next(
+        call
+        for call in sentry_calls
+        if call[0] == "span" and call[1]["workflow"] == "execute_flow_post_stream"
+    )
+    assert error_span[1]["finalization_status"] == "error"
+    assert error_span[1]["validation_status"] == "error"
+    assert error_span[1]["span_data"]["ai_curation.error.detail"]["error_type"] == "TimeoutError"
+    assert error_span[1]["span_data"]["ai_curation.error.detail"]["phase"] == "runner_stream"
+    assert ("data", "ai_curation.finalization.status", "error") in sentry_calls
 
 
 @pytest.mark.asyncio

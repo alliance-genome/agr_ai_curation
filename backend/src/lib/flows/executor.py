@@ -3864,6 +3864,13 @@ async def execute_flow(
         agent=supervisor,  # Pass the flow supervisor
         doc_context=doc_context,  # Pass pre-fetched context (optimization)
         trace_context=trace_context,
+        sentry_workflow="execute_flow",
+        sentry_span_data={
+            "ai_curation.flow.id": str(flow.id),
+            "ai_curation.flow.name": flow.name,
+            "ai_curation.flow.run_id": flow_run_id,
+            "ai_curation.flow.total_steps": total_steps,
+        },
     ):
         event_type = event.get("type")
         event_data = event.get("data", {}) or {}

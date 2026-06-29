@@ -22,6 +22,10 @@ from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 
 from src.lib.config.env import require_env, require_env_choice
+from src.lib.observability.sentry import (
+    gen_ai_invoke_agent_span,
+    set_redacted_ai_span_data,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -365,11 +369,65 @@ Common abstract locations when not explicitly labeled:
         )
 
         # Run the agent
-        result = await Runner.run(
-            hierarchy_agent,
-            user_prompt,
-            max_turns=get_hierarchy_resolution_max_turns(),
-        )
+        with gen_ai_invoke_agent_span(
+            agent_name=hierarchy_agent.name,
+            model=model_name,
+            conversation_id=None,
+            workflow="hierarchy_resolution",
+            agent_key="hierarchy_classifier",
+            agent_source="runtime",
+            input_preview={
+                "section_count": len(section_info_list),
+                "sections": section_info_list,
+            },
+            finalization_required=False,
+        ) as sentry_span:
+            try:
+                result = await Runner.run(
+                    hierarchy_agent,
+                    user_prompt,
+                    max_turns=get_hierarchy_resolution_max_turns(),
+                )
+            except Exception as exc:
+                set_redacted_ai_span_data(
+                    sentry_span,
+                    "ai_curation.validation.status",
+                    "error",
+                )
+                set_redacted_ai_span_data(
+                    sentry_span,
+                    "ai_curation.error.detail",
+                    {
+                        "message": str(exc),
+                        "error_type": type(exc).__name__,
+                        "phase": "hierarchy_resolution",
+                    },
+                )
+                raise
+
+            # Extract structured output while the Sentry span is still active so
+            # Tier 2 captures the classifier result details on the span.
+            if not result.final_output:
+                hierarchy_output = None
+            else:
+                hierarchy_output = result.final_output
+                set_redacted_ai_span_data(
+                    sentry_span,
+                    "ai_curation.validation.status",
+                    "accepted",
+                )
+                set_redacted_ai_span_data(
+                    sentry_span,
+                    "ai_curation.agent.output",
+                    {
+                        "sections_count": len(hierarchy_output.sections),
+                        "abstract_section_title": hierarchy_output.abstract_section_title,
+                        "sections": [
+                            section.model_dump()
+                            for section in hierarchy_output.sections
+                        ],
+                    },
+                )
 
         # Store raw response for debugging
         raw_response = {
@@ -378,13 +436,13 @@ Common abstract locations when not explicitly labeled:
         }
 
         # Extract the structured output
-        if not result.final_output:
+        if not hierarchy_output:
             logger.warning("[HIERARCHY] LLM returned empty output.")
             return [], None, raw_response
 
         # Extract sections and abstract_section_title from structured output
-        sections = result.final_output.sections
-        abstract_section_title = result.final_output.abstract_section_title
+        sections = hierarchy_output.sections
+        abstract_section_title = hierarchy_output.abstract_section_title
         raw_response["sections_count"] = len(sections)
         raw_response["abstract_section_title"] = abstract_section_title
 

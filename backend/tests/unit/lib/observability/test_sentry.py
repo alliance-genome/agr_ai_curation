@@ -30,6 +30,9 @@ def reset_sentry(monkeypatch):
         "SENTRY_OPENAI_INTEGRATION_ENABLED",
         "SENTRY_GEN_AI_STREAM_SPANS_ENABLED",
         "SENTRY_OPENAI_INCLUDE_PROMPTS",
+        "SENTRY_AI_CONTENT_CAPTURE_TIER",
+        "SENTRY_AI_CONTENT_TIER1_PREVIEW_MAX_CHARS",
+        "SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS",
         "APP_ENV",
         "ENVIRONMENT",
         "GIT_SHA",
@@ -54,6 +57,9 @@ def test_get_sentry_settings_defaults_to_disabled():
     assert settings.openai_integration_enabled is False
     assert settings.gen_ai_stream_spans_enabled is False
     assert settings.openai_include_prompts is False
+    assert settings.ai_content_capture_tier == 2
+    assert settings.ai_content_tier1_preview_max_chars == 2000
+    assert settings.ai_content_preview_max_chars == 20000
 
 
 def test_get_sentry_settings_parses_env(monkeypatch):
@@ -69,6 +75,9 @@ def test_get_sentry_settings_parses_env(monkeypatch):
     monkeypatch.setenv("SENTRY_OPENAI_INTEGRATION_ENABLED", "true")
     monkeypatch.setenv("SENTRY_GEN_AI_STREAM_SPANS_ENABLED", "true")
     monkeypatch.setenv("SENTRY_OPENAI_INCLUDE_PROMPTS", "true")
+    monkeypatch.setenv("SENTRY_AI_CONTENT_CAPTURE_TIER", "1")
+    monkeypatch.setenv("SENTRY_AI_CONTENT_TIER1_PREVIEW_MAX_CHARS", "1024")
+    monkeypatch.setenv("SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS", "4096")
 
     settings = sentry.get_sentry_settings()
 
@@ -84,11 +93,15 @@ def test_get_sentry_settings_parses_env(monkeypatch):
     assert settings.openai_integration_enabled is True
     assert settings.gen_ai_stream_spans_enabled is True
     assert settings.openai_include_prompts is True
+    assert settings.ai_content_capture_tier == 1
+    assert settings.ai_content_tier1_preview_max_chars == 1024
+    assert settings.ai_content_preview_max_chars == 4096
 
 
 def test_before_send_redacts_sensitive_and_document_content():
+    fake_api_key = "sk-" + "testsecret" + "0123456789"
     event = {
-        "message": "raw prompt leaked sk-testsecret0123456789",
+        "message": f"raw prompt leaked {fake_api_key}",
         "request": {
             "url": "https://example.org/api/chat?token=secret&query=paper",
             "query_string": "token=secret&query=paper",
@@ -104,7 +117,7 @@ def test_before_send_redacts_sensitive_and_document_content():
             "note": "unknown curator free text",
             "query": "paper search string",
             "safe_count": 3,
-            "nested": {"api_key": "sk-abcdefghijklmnopqrstuvwxyz"},
+            "nested": {"api_key": "sk-" + "abcdefghijklmnopqrstuvwxyz"},
         },
         "contexts": {"runtime": {"name": "python"}, "custom": {"payload": "free text"}},
         "breadcrumbs": {"values": [{"message": "search query", "data": {"q": "term"}}]},
@@ -344,7 +357,8 @@ def test_before_send_transaction_uses_same_redaction_policy():
     assert len(scrubbed["spans"]) == 1
 
 
-def test_before_send_transaction_preserves_safe_gen_ai_metadata_without_content():
+def test_before_send_transaction_preserves_safe_gen_ai_metadata_without_content(monkeypatch):
+    monkeypatch.setenv("SENTRY_AI_CONTENT_CAPTURE_TIER", "0")
     event = {
         "spans": [
             {
@@ -399,6 +413,160 @@ def test_before_send_transaction_preserves_safe_gen_ai_metadata_without_content(
     assert scrubbed["spans"][0]["timestamp"] == "2026-06-29T17:26:17.287383Z"
     assert scrubbed["spans"][0]["same_process_as_parent"] is True
     assert scrubbed["spans"][0]["origin"] == "manual"
+
+
+def test_before_send_transaction_default_tier2_still_filters_upstream_gen_ai_content():
+    event = {
+        "spans": [
+            {
+                "trace_id": "0123456789abcdef0123456789abcdef",
+                "span_id": "fedcba9876543210",
+                "op": "gen_ai.invoke_agent",
+                "data": {
+                    "gen_ai.request.messages": [
+                        {"role": "user", "content": "curator paper text"}
+                    ],
+                    "gen_ai.response.text": "model output text",
+                    "ai_curation.agent.input": "manual AI Curation input",
+                },
+            }
+        ],
+    }
+
+    scrubbed = sentry.before_send_transaction(event)
+    data = scrubbed["spans"][0]["data"]
+
+    assert data["gen_ai.request.messages"] == "[Filtered]"
+    assert data["gen_ai.response.text"] == "[Filtered]"
+    assert data["ai_curation.agent.input"] == "manual AI Curation input"
+
+
+def test_before_send_transaction_drops_unknown_ai_curation_span_keys():
+    event = {
+        "spans": [
+            {
+                "trace_id": "0123456789abcdef0123456789abcdef",
+                "span_id": "fedcba9876543210",
+                "op": "gen_ai.invoke_agent",
+                "data": {
+                    "ai_curation.workflow": "specialist_tool",
+                    "ai_curation.unreviewed.new_shape": "should not survive",
+                },
+            }
+        ],
+    }
+
+    scrubbed = sentry.before_send_transaction(event)
+    data = scrubbed["spans"][0]["data"]
+
+    assert data["ai_curation.workflow"] == "specialist_tool"
+    assert "ai_curation.unreviewed.new_shape" not in data
+
+
+def test_before_send_transaction_tier2_preserves_ai_curation_content_with_secret_scrubbing(monkeypatch):
+    monkeypatch.setenv("SENTRY_AI_CONTENT_CAPTURE_TIER", "2")
+    monkeypatch.setenv("SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS", "256")
+    fake_secret = "sk-" + "test" + "secret" + "0123456789"
+    event = {
+        "spans": [
+            {
+                "trace_id": "0123456789abcdef0123456789abcdef",
+                "span_id": "fedcba9876543210",
+                "parent_span_id": "0123456789abcdef",
+                "op": "gen_ai.invoke_agent",
+                "description": "invoke_agent Gene Extractor",
+                "data": {
+                    "gen_ai.agent.name": "Gene Extractor",
+                    "gen_ai.request.messages": [
+                        {"role": "user", "content": f"What genes are involved? {fake_secret}"}
+                    ],
+                    "gen_ai.tool.input": {"query": "find genes", "api_key": fake_secret},
+                    "ai_curation.workflow": "specialist_tool",
+                    "ai_curation.agent.key": "gene_extractor",
+                    "ai_curation.tool.name": "ask_gene_extractor_specialist",
+                    "ai_curation.document.present": True,
+                    "ai_curation.document.id_hash": "sha256:0123456789abcdef",
+                    "ai_curation.finalization.required": True,
+                    "ai_curation.finalization.detail": {
+                        "tool_calls": [
+                            {
+                                "name": "record_evidence",
+                                "args": {
+                                    "query": f"gene {fake_secret}",
+                                    "api_key": fake_secret,
+                                    "authorization": "Bearer abcdefghijklmnop",
+                                    "cookie": "sentry_session=secret",
+                                    "dsn": "https://example.invalid/project/1",
+                                },
+                            }
+                        ]
+                    },
+                    "ai_curation.agent.input": {
+                        "prompt": f"Extract genes from this paper {fake_secret}",
+                        "token": "secret-token",
+                        "headers": {"Authorization": "Basic abcdefghijklmnop"},
+                    },
+                },
+            }
+        ],
+    }
+
+    scrubbed = sentry.before_send_transaction(event)
+    data = scrubbed["spans"][0]["data"]
+
+    assert data["gen_ai.request.messages"] == "[Filtered]"
+    assert data["gen_ai.tool.input"] == "[Filtered]"
+    assert data["ai_curation.workflow"] == "specialist_tool"
+    assert data["ai_curation.agent.key"] == "gene_extractor"
+    assert data["ai_curation.tool.name"] == "ask_gene_extractor_specialist"
+    assert data["ai_curation.document.present"] is True
+    assert data["ai_curation.document.id_hash"] == "sha256:0123456789abcdef"
+    assert data["ai_curation.finalization.required"] is True
+    assert data["ai_curation.finalization.detail"] == {
+        "tool_calls": [
+            {
+                "name": "record_evidence",
+                "args": {
+                    "query": "gene [Filtered]",
+                    "api_key": "[Filtered]",
+                    "authorization": "[Filtered]",
+                    "cookie": "[Filtered]",
+                    "dsn": "[Filtered]",
+                },
+            }
+        ]
+    }
+    assert data["ai_curation.agent.input"] == {
+        "prompt": "Extract genes from this paper [Filtered]",
+        "token": "[Filtered]",
+        "headers": {"Authorization": "[Filtered]"},
+    }
+    assert fake_secret not in str(data)
+
+
+def test_before_send_transaction_tier1_uses_reduced_content_preview(monkeypatch):
+    monkeypatch.setenv("SENTRY_AI_CONTENT_CAPTURE_TIER", "1")
+    monkeypatch.setenv("SENTRY_AI_CONTENT_TIER1_PREVIEW_MAX_CHARS", "256")
+    monkeypatch.setenv("SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS", "4096")
+    long_text = "x" * 300
+    event = {
+        "spans": [
+            {
+                "trace_id": "0123456789abcdef0123456789abcdef",
+                "span_id": "fedcba9876543210",
+                "op": "gen_ai.invoke_agent",
+                "data": {
+                    "ai_curation.agent.input": long_text,
+                },
+            }
+        ],
+    }
+
+    scrubbed = sentry.before_send_transaction(event)
+    retained = scrubbed["spans"][0]["data"]["ai_curation.agent.input"]
+
+    assert retained.startswith("x" * 256)
+    assert retained.endswith("...[truncated 44 chars]")
 
 
 def test_hash_identifier_preserves_existing_hashed_identifier():
@@ -536,12 +704,162 @@ def test_gen_ai_invoke_agent_span_sets_minimal_metadata(monkeypatch):
     assert ("data", "gen_ai.provider.name", "openai") in calls
     assert ("data", "gen_ai.request.model", "gpt-5.5") in calls
     assert ("data", "gen_ai.response.streaming", True) in calls
+    assert ("data", "ai_curation.content.capture_tier", 2) in calls
     assert (
         "data",
         "gen_ai.conversation.id",
         sentry._hash_identifier("session-123"),
     ) in calls
     assert calls[-1] == ("exit", None, None)
+
+
+def test_gen_ai_invoke_agent_span_sets_ai_curation_metadata(monkeypatch):
+    calls = []
+
+    class FakeSpan:
+        def set_data(self, key, value):
+            calls.append(("data", key, value))
+
+    class FakeSpanContext:
+        def __enter__(self):
+            return FakeSpan()
+
+        def __exit__(self, exc_type, exc, tb):
+            calls.append(("exit", exc_type, exc))
+
+    fake_sentry_sdk = SimpleNamespace(start_span=lambda **_kwargs: FakeSpanContext())
+
+    monkeypatch.setenv("SENTRY_AI_AGENTS_MONITORING_ENABLED", "true")
+    monkeypatch.setattr(
+        sentry.importlib,
+        "import_module",
+        lambda name: fake_sentry_sdk if name == "sentry_sdk" else None,
+    )
+
+    with sentry.gen_ai_invoke_agent_span(
+        agent_name="Gene Extractor",
+        model="gpt-5.5",
+        conversation_id="session-123",
+        workflow="specialist_tool",
+        tool_name="ask_gene_extractor_specialist",
+        agent_key="gene_extractor",
+        agent_source="runtime",
+        specialist_name="Gene Extractor",
+        trace_id="trace-123",
+        flow_run_id="flow-run-123",
+        document_id="document-123",
+        document_present=True,
+        finalization_required=True,
+        finalization_tool="finalize_gene_extraction",
+        finalization_attempt=2,
+        finalization_status="accepted",
+        validation_status="valid",
+        validation_error_count=0,
+        tool_call_count=3,
+        candidate_count=4,
+        input_preview="What genes are involved?",
+        span_data={"ai_curation.domain_pack.id": "alliance"},
+    ):
+        pass
+
+    assert ("data", "ai_curation.workflow", "specialist_tool") in calls
+    assert ("data", "ai_curation.tool.name", "ask_gene_extractor_specialist") in calls
+    assert ("data", "ai_curation.agent.key", "gene_extractor") in calls
+    assert ("data", "ai_curation.agent.source", "runtime") in calls
+    assert ("data", "ai_curation.specialist.name", "Gene Extractor") in calls
+    assert (
+        "data",
+        "ai_curation.trace.id_hash",
+        sentry._hash_identifier("trace-123"),
+    ) in calls
+    assert (
+        "data",
+        "ai_curation.flow.run_id_hash",
+        sentry._hash_identifier("flow-run-123"),
+    ) in calls
+    assert (
+        "data",
+        "ai_curation.document.id_hash",
+        sentry._hash_identifier("document-123"),
+    ) in calls
+    assert ("data", "ai_curation.document.present", True) in calls
+    assert ("data", "ai_curation.finalization.required", True) in calls
+    assert ("data", "ai_curation.finalization.tool", "finalize_gene_extraction") in calls
+    assert ("data", "ai_curation.finalization.attempt", 2) in calls
+    assert ("data", "ai_curation.finalization.status", "accepted") in calls
+    assert ("data", "ai_curation.validation.status", "valid") in calls
+    assert ("data", "ai_curation.validation.error_count", 0) in calls
+    assert ("data", "ai_curation.tool_call.count", 3) in calls
+    assert ("data", "ai_curation.candidate.count", 4) in calls
+    assert ("data", "ai_curation.agent.input", "What genes are involved?") in calls
+    assert ("data", "ai_curation.domain_pack.id", "alliance") in calls
+
+
+def test_gen_ai_invoke_agent_span_pre_scrubs_ai_curation_content(monkeypatch):
+    calls = []
+    fake_secret = "sk-" + "test" + "secret" + "0123456789"
+
+    class FakeSpan:
+        def set_data(self, key, value):
+            calls.append(("data", key, value))
+
+    class FakeSpanContext:
+        def __enter__(self):
+            return FakeSpan()
+
+        def __exit__(self, exc_type, exc, tb):
+            calls.append(("exit", exc_type, exc))
+
+    fake_sentry_sdk = SimpleNamespace(start_span=lambda **_kwargs: FakeSpanContext())
+
+    monkeypatch.setenv("SENTRY_AI_AGENTS_MONITORING_ENABLED", "true")
+    monkeypatch.setenv("SENTRY_AI_CONTENT_CAPTURE_TIER", "2")
+    monkeypatch.setattr(
+        sentry.importlib,
+        "import_module",
+        lambda name: fake_sentry_sdk if name == "sentry_sdk" else None,
+    )
+
+    with sentry.gen_ai_invoke_agent_span(
+        agent_name="Gene Extractor",
+        model="gpt-5.5",
+        conversation_id="session-123",
+        input_preview={
+            "prompt": f"Find genes {fake_secret}",
+            "authorization": "Bearer abcdefghijklmnop",
+        },
+        output_preview={
+            "answer": f"Found gene. token {fake_secret}",
+            "cookie": "session=secret",
+        },
+        span_data={
+            "ai_curation.finalization.detail": {
+                "api_key": fake_secret,
+                "dsn": "https://example.invalid/project/1",
+                "tool_calls": [{"args": {"query": f"gene {fake_secret}"}}],
+            },
+            "ai_curation.unreviewed.raw": fake_secret,
+        },
+    ):
+        pass
+
+    data = {key: value for marker, key, value in calls if marker == "data"}
+
+    assert data["ai_curation.agent.input"] == {
+        "prompt": "Find genes [Filtered]",
+        "authorization": "[Filtered]",
+    }
+    assert data["ai_curation.agent.output"] == {
+        "answer": "Found gene. token [Filtered]",
+        "cookie": "[Filtered]",
+    }
+    assert data["ai_curation.finalization.detail"] == {
+        "api_key": "[Filtered]",
+        "dsn": "[Filtered]",
+        "tool_calls": [{"args": {"query": "gene [Filtered]"}}],
+    }
+    assert "ai_curation.unreviewed.raw" not in data
+    assert fake_secret not in str(data)
 
 
 def test_gen_ai_invoke_agent_span_skips_when_ai_monitoring_disabled(monkeypatch):

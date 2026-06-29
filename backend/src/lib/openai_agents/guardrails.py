@@ -34,6 +34,10 @@ from agents import (
 
 from .config import get_guardrail_single_shot_max_turns
 from .models import Answer
+from src.lib.observability.sentry import (
+    gen_ai_invoke_agent_span,
+    set_redacted_ai_span_data,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -185,14 +189,47 @@ async def llm_safety_guardrail(
     More accurate than pattern matching but adds latency.
     """
     # Run the safety check agent
-    result = await Runner.run(
-        _safety_guardrail_agent,
-        input_data,
-        context=ctx.context,
-        max_turns=get_guardrail_single_shot_max_turns(),
-    )
+    with gen_ai_invoke_agent_span(
+        agent_name=_safety_guardrail_agent.name,
+        model=str(getattr(_safety_guardrail_agent, "model", "") or ""),
+        conversation_id=None,
+        workflow="guardrail",
+        agent_key="safety_guardrail",
+        agent_source="runtime",
+        input_preview=input_data,
+        finalization_required=False,
+    ) as sentry_span:
+        try:
+            result = await Runner.run(
+                _safety_guardrail_agent,
+                input_data,
+                context=ctx.context,
+                max_turns=get_guardrail_single_shot_max_turns(),
+            )
+        except Exception as exc:
+            set_redacted_ai_span_data(
+                sentry_span,
+                "ai_curation.validation.status",
+                "error",
+            )
+            set_redacted_ai_span_data(
+                sentry_span,
+                "ai_curation.error.detail",
+                {
+                    "message": str(exc),
+                    "error_type": type(exc).__name__,
+                    "phase": "guardrail_safety",
+                },
+            )
+            raise
+        output = result.final_output
+        set_redacted_ai_span_data(
+            sentry_span,
+            "ai_curation.validation.status",
+            "accepted" if output.is_safe else "rejected",
+        )
+        set_redacted_ai_span_data(sentry_span, "ai_curation.agent.output", output.model_dump())
 
-    output = result.final_output
     if not output.is_safe:
         logger.warning('[Guardrail] Safety check failed: %s', output.reasoning)
 
@@ -265,14 +302,48 @@ Scientific questions are ALWAYS on-topic even if not directly about the allowed 
         input_data: str | List[TResponseInputItem]
     ) -> GuardrailFunctionOutput:
         """Check if input is on-topic for this system."""
-        result = await Runner.run(
-            topic_agent,
-            input_data,
-            context=ctx.context,
-            max_turns=get_guardrail_single_shot_max_turns(),
-        )
+        with gen_ai_invoke_agent_span(
+            agent_name=topic_agent.name,
+            model=str(getattr(topic_agent, "model", "") or ""),
+            conversation_id=None,
+            workflow="guardrail",
+            agent_key="topic_guardrail",
+            agent_source="runtime",
+            input_preview=input_data,
+            finalization_required=False,
+            span_data={"ai_curation.validation.detail": {"allowed_topics": allowed_topics}},
+        ) as sentry_span:
+            try:
+                result = await Runner.run(
+                    topic_agent,
+                    input_data,
+                    context=ctx.context,
+                    max_turns=get_guardrail_single_shot_max_turns(),
+                )
+            except Exception as exc:
+                set_redacted_ai_span_data(
+                    sentry_span,
+                    "ai_curation.validation.status",
+                    "error",
+                )
+                set_redacted_ai_span_data(
+                    sentry_span,
+                    "ai_curation.error.detail",
+                    {
+                        "message": str(exc),
+                        "error_type": type(exc).__name__,
+                        "phase": "guardrail_topic",
+                    },
+                )
+                raise
+            output = result.final_output
+            set_redacted_ai_span_data(
+                sentry_span,
+                "ai_curation.validation.status",
+                "accepted" if output.is_on_topic else "rejected",
+            )
+            set_redacted_ai_span_data(sentry_span, "ai_curation.agent.output", output.model_dump())
 
-        output = result.final_output
         if not output.is_on_topic:
             logger.info('[Guardrail] Off-topic query: %s', output.reasoning)
 

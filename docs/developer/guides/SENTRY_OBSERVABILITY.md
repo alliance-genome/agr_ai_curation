@@ -29,6 +29,9 @@ SENTRY_OPENAI_INTEGRATION_ENABLED=false
 SENTRY_GEN_AI_STREAM_SPANS_ENABLED=false
 SENTRY_SEND_DEFAULT_PII=false
 SENTRY_OPENAI_INCLUDE_PROMPTS=false
+SENTRY_AI_CONTENT_CAPTURE_TIER=2
+SENTRY_AI_CONTENT_TIER1_PREVIEW_MAX_CHARS=2000
+SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS=20000
 RUNTIME_OBSERVABILITY_TAG_VALUE_MAX_CHARS=200
 RUNTIME_OBSERVABILITY_CONTEXT_VALUE_MAX_CHARS=500
 ```
@@ -77,13 +80,16 @@ SENTRY_OPENAI_INTEGRATION_ENABLED=false
 SENTRY_GEN_AI_STREAM_SPANS_ENABLED=false
 SENTRY_SEND_DEFAULT_PII=false
 SENTRY_OPENAI_INCLUDE_PROMPTS=false
+SENTRY_AI_CONTENT_CAPTURE_TIER=2
+SENTRY_AI_CONTENT_TIER1_PREVIEW_MAX_CHARS=2000
+SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS=20000
 ```
 
-Use the OpenAI Agents integration first:
+Use manual AI Curation spans first:
 
 ```bash
 SENTRY_AI_AGENTS_MONITORING_ENABLED=true
-SENTRY_OPENAI_AGENTS_INTEGRATION_ENABLED=true
+SENTRY_OPENAI_AGENTS_INTEGRATION_ENABLED=false
 SENTRY_TRACES_SAMPLE_RATE=1.0
 ```
 
@@ -95,10 +101,12 @@ the raw session identifier. Keep this backend-only; do not copy Sentry's
 browser/OpenAI examples into frontend code or expose OpenAI API keys in the
 browser.
 
-Only enable the lower-level OpenAI integration if a dev smoke proves it is
-needed and does not duplicate spans:
+Only enable Sentry's OpenAI Agents integration or lower-level OpenAI integration
+if a dev smoke proves it is needed and does not conflict with Langfuse
+OpenInference tracing or duplicate spans:
 
 ```bash
+SENTRY_OPENAI_AGENTS_INTEGRATION_ENABLED=true
 SENTRY_OPENAI_INTEGRATION_ENABLED=true
 ```
 
@@ -109,13 +117,29 @@ disabled so `gen_ai.*` spans are sent as part of the transaction. In the
 2026-06-29 dev trial, enabling it caused standalone span/EAP items to be
 accepted at the HTTP envelope layer but dropped internally.
 
-`SENTRY_SEND_DEFAULT_PII=true` and `SENTRY_OPENAI_INCLUDE_PROMPTS=true` are
-private-dev experiment flags. With prompt capture disabled, the transaction
-redactor may still preserve low-risk `gen_ai.*` metadata such as agent name,
-model name, tool name, operation name, streaming state, and token counts, while
-filtering prompts, messages, tool input, and tool output. With prompt capture
-enabled, content-like AI span fields are allowed through the Sentry hook after
-secret-like values and sensitive keys are scrubbed.
+AI content capture uses `SENTRY_AI_CONTENT_CAPTURE_TIER`:
+
+- `0`: metadata only.
+- `1`: reduced bounded/redacted previews, capped by
+  `SENTRY_AI_CONTENT_TIER1_PREVIEW_MAX_CHARS`.
+- `2`: internal-heavy prompt/tool/output capture for development debugging,
+  capped by `SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS`.
+
+Tier 2 is the default for internal AI Curation Sentry agent monitoring so the
+Sentry UI is useful during development and production debugging. The redactor still mechanically scrubs
+credential-like keys and values such as auth headers, cookies, tokens, API
+keys, DSNs, and bearer/basic credentials. Tier 1 exists as a smaller
+reduced-capture rollback mode and defaults to `2000` characters per individual
+content string. Tier 2 defaults to `20000`.
+
+`SENTRY_OPENAI_INCLUDE_PROMPTS=true` remains a separate compatibility flag for
+upstream Sentry/OpenAI integration fields such as `gen_ai.request.messages` and
+`gen_ai.response.text`. Tier 2 does not enable those upstream SDK fields by
+itself; prefer the tier setting for AI Curation manual `ai_curation.*` spans.
+With upstream prompt capture disabled, the transaction redactor still preserves
+low-risk metadata such as agent name, workflow, model name, tool name,
+operation name, streaming state, token counts, and hashed IDs while filtering
+upstream prompts, messages, tool input, and tool output.
 
 Before enabling AI monitoring by default, run a real dev paper/query smoke and
 verify all of the following:
@@ -152,7 +176,8 @@ Allowed low-risk context:
 - hashed identifiers for documents, sessions, runs, jobs, turns, flows, and
   batches.
 
-Never send raw curator or document content:
+Outside the explicit AI-agent content tier controls, never send raw curator or
+document content:
 
 - prompts, messages, transcripts, raw text, chunks, abstracts, PDF content, or
   verified quotes;
@@ -160,6 +185,13 @@ Never send raw curator or document content:
   credentials;
 - raw SQLAlchemy exceptions when their statement or params may contain prompt,
   custom-agent, flow-definition, feedback, or document text.
+
+The AI Curation manual `ai_curation.*` span fields are the reviewed exception:
+`SENTRY_AI_CONTENT_CAPTURE_TIER=2` intentionally keeps rich internal
+prompt/tool/output context for debugging after mechanical credential scrubbing
+and bounded per-string truncation. This exception does not enable upstream
+Sentry/OpenAI `gen_ai.*` prompt fields; those remain controlled by
+`SENTRY_OPENAI_INCLUDE_PROMPTS`.
 
 Global redaction filters sensitive keys, content-like keys, common secret
 patterns, request query strings, cookies, request bodies, exception values,
@@ -288,10 +320,11 @@ Sentry is for actionable application error events:
 - caught runtime/background failures that would otherwise disappear in logs;
 - enough bounded context to locate the affected component and release.
 
-Langfuse is for LLM traces, model calls, token/cost analysis, and TraceReview.
-Do not duplicate full prompt/message/transcript payloads into Sentry unless a
-private dev trial explicitly enables prompt capture and confirms dev/prod
-project separation.
+Langfuse is for canonical LLM traces, model calls, token/cost analysis, and
+TraceReview. Sentry's Tier 2 manual `ai_curation.*` spans may duplicate bounded,
+scrubbed prompt/tool/output context for fast internal debugging, but upstream
+Sentry/OpenAI prompt capture must stay off unless a private dev trial explicitly
+enables it and confirms dev/prod project separation.
 
 The current CloudWatch-to-Sentry bridge is intentionally deferred. Until that
 ticket is implemented, do not try to convert every log line into a Sentry event.

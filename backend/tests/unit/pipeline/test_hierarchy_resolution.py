@@ -133,6 +133,8 @@ def _install_fake_agent_modules(monkeypatch, final_output, raise_error=False):
     class FakeAgent:
         def __init__(self, **kwargs):
             captured["agent_kwargs"] = kwargs
+            self.name = kwargs.get("name")
+            self.model = kwargs.get("model")
 
     class FakeRunner:
         @staticmethod
@@ -161,6 +163,21 @@ def _install_fake_agent_modules(monkeypatch, final_output, raise_error=False):
     return captured, FakeReasoning
 
 
+class _FakeContextManager:
+    def __init__(self, value=None):
+        self.value = value
+
+    def __enter__(self):
+        if hasattr(self.value, "active"):
+            self.value.active = True
+        return self.value
+
+    def __exit__(self, exc_type, exc, tb):
+        if hasattr(self.value, "active"):
+            self.value.active = False
+        return None
+
+
 @pytest.mark.asyncio
 async def test_call_llm_for_hierarchy_success_with_structured_output(monkeypatch):
     output = hierarchy.HierarchyOutput(
@@ -175,6 +192,20 @@ async def test_call_llm_for_hierarchy_success_with_structured_output(monkeypatch
         abstract_section_title="Intro",
     )
     captured, fake_reasoning_cls = _install_fake_agent_modules(monkeypatch, final_output=output)
+    sentry_calls = []
+
+    class FakeSentrySpan:
+        active = False
+
+        def set_data(self, key, value):
+            assert self.active, "Sentry span data must be written before span exit"
+            sentry_calls.append(("data", key, value))
+
+    def _fake_sentry_span(**kwargs):
+        sentry_calls.append(("span", kwargs))
+        return _FakeContextManager(FakeSentrySpan())
+
+    monkeypatch.setattr(hierarchy, "gen_ai_invoke_agent_span", _fake_sentry_span)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-5.4-mini")
     monkeypatch.setenv("HIERARCHY_LLM_REASONING", "medium")
@@ -194,6 +225,11 @@ async def test_call_llm_for_hierarchy_success_with_structured_output(monkeypatch
     assert isinstance(captured["reasoning"], fake_reasoning_cls)
     assert captured["reasoning"].effort == "medium"
     assert "Intro" in captured["user_prompt"]
+    span_call = next(call for call in sentry_calls if call[0] == "span")
+    assert span_call[1]["workflow"] == "hierarchy_resolution"
+    assert span_call[1]["agent_key"] == "hierarchy_classifier"
+    assert span_call[1]["input_preview"]["section_count"] == 1
+    assert ("data", "ai_curation.validation.status", "accepted") in sentry_calls
 
 
 @pytest.mark.asyncio
@@ -217,6 +253,20 @@ async def test_call_llm_for_hierarchy_handles_empty_final_output(monkeypatch):
 @pytest.mark.asyncio
 async def test_call_llm_for_hierarchy_handles_runtime_exception(monkeypatch):
     _install_fake_agent_modules(monkeypatch, final_output=None, raise_error=True)
+    sentry_calls = []
+
+    class FakeSentrySpan:
+        active = False
+
+        def set_data(self, key, value):
+            assert self.active, "Sentry span data must be written before span exit"
+            sentry_calls.append(("data", key, value))
+
+    def _fake_sentry_span(**kwargs):
+        sentry_calls.append(("span", kwargs))
+        return _FakeContextManager(FakeSentrySpan())
+
+    monkeypatch.setattr(hierarchy, "gen_ai_invoke_agent_span", _fake_sentry_span)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
 
     sections, abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
@@ -226,3 +276,13 @@ async def test_call_llm_for_hierarchy_handles_runtime_exception(monkeypatch):
     assert sections == []
     assert abstract_title is None
     assert raw is None
+    assert ("data", "ai_curation.validation.status", "error") in sentry_calls
+    assert (
+        "data",
+        "ai_curation.error.detail",
+        {
+            "message": "llm failed",
+            "error_type": "RuntimeError",
+            "phase": "hierarchy_resolution",
+        },
+    ) in sentry_calls

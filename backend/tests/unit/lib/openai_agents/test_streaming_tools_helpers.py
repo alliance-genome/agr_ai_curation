@@ -51,6 +51,30 @@ class _FakeRunResult:
         return [{"role": "user", "content": "prior query"}]
 
 
+class _FakeFailingRunResult:
+    final_output = None
+    new_items = []
+
+    async def stream_events(self):
+        if False:
+            yield None
+        raise TimeoutError("Responses websocket connect timed out after 5.0 seconds.")
+
+    def to_input_list(self):
+        return [{"role": "user", "content": "prior query"}]
+
+
+class _FakeContextManager:
+    def __init__(self, value=None):
+        self.value = value
+
+    def __enter__(self):
+        return self.value
+
+    def __exit__(self, exc_type, exc, tb):
+        return None
+
+
 def test_agent_runtime_curation_adapter_key_reads_attached_metadata():
     agent = SimpleNamespace(curation_metadata={"adapter_key": "gene", "launchable": True})
 
@@ -112,6 +136,11 @@ def test_extract_model_identifier_handles_string_and_object():
 @pytest.mark.asyncio
 async def test_run_specialist_preserves_parent_tracing_and_enables_sensitive_data(monkeypatch):
     captured = {}
+    sentry_calls = []
+
+    class FakeSentrySpan:
+        def set_data(self, key, value):
+            sentry_calls.append(("data", key, value))
 
     def _run_streamed(_agent, *args, **kwargs):
         captured["run_config"] = kwargs["run_config"]
@@ -119,6 +148,17 @@ async def test_run_specialist_preserves_parent_tracing_and_enables_sensitive_dat
 
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent: None)
     monkeypatch.setattr(streaming_tools.Runner, "run_streamed", _run_streamed)
+    monkeypatch.setattr(
+        streaming_tools,
+        "gen_ai_conversation_scope",
+        lambda _conversation_id: _FakeContextManager(),
+    )
+
+    def _fake_sentry_span(**kwargs):
+        sentry_calls.append(("span", kwargs))
+        return _FakeContextManager(FakeSentrySpan())
+
+    monkeypatch.setattr(streaming_tools, "gen_ai_invoke_agent_span", _fake_sentry_span)
 
     parent_config = streaming_tools.RunConfig(
         tracing_disabled=False,
@@ -148,6 +188,67 @@ async def test_run_specialist_preserves_parent_tracing_and_enables_sensitive_dat
     assert captured["run_config"].trace_include_sensitive_data is True
     assert captured["run_config"].workflow_name == "parent workflow"
     assert captured["run_config"].group_id == "session-1"
+    post_stream_span = next(
+        call
+        for call in sentry_calls
+        if call[0] == "span" and call[1]["workflow"] == "specialist_tool_post_stream"
+    )
+    assert post_stream_span[1]["output_preview"] == "specialist output"
+    assert post_stream_span[1]["finalization_status"] == "accepted"
+
+
+@pytest.mark.asyncio
+async def test_run_specialist_records_sentry_error_for_stream_failure(monkeypatch):
+    sentry_calls = []
+
+    class FakeSentrySpan:
+        def set_data(self, key, value):
+            sentry_calls.append(("data", key, value))
+
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent: None)
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeFailingRunResult(),
+    )
+    monkeypatch.setattr(
+        streaming_tools,
+        "gen_ai_conversation_scope",
+        lambda _conversation_id: _FakeContextManager(),
+    )
+
+    def _fake_sentry_span(**kwargs):
+        sentry_calls.append(("span", kwargs))
+        return _FakeContextManager(FakeSentrySpan())
+
+    monkeypatch.setattr(streaming_tools, "gen_ai_invoke_agent_span", _fake_sentry_span)
+
+    agent = SimpleNamespace(
+        name="Plain Text Specialist",
+        tools=[],
+        output_type=None,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    with pytest.raises(TimeoutError, match="Responses websocket connect timed out"):
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="summarize findings",
+            specialist_name="Plain Text Specialist",
+            max_turns=3,
+            tool_name=None,
+        )
+
+    error_span = next(
+        call
+        for call in sentry_calls
+        if call[0] == "span" and call[1]["workflow"] == "specialist_tool_post_stream"
+    )
+    assert error_span[1]["finalization_status"] == "error"
+    assert error_span[1]["span_data"]["ai_curation.error.detail"]["error_type"] == "TimeoutError"
+    assert error_span[1]["span_data"]["ai_curation.error.detail"]["phase"] == "specialist_stream"
+    assert ("data", "ai_curation.finalization.status", "error") in sentry_calls
 
 
 @pytest.mark.asyncio

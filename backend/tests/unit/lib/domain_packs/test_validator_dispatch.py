@@ -39,6 +39,17 @@ from src.schemas.domain_validator import (
 )
 
 
+class _FakeContextManager:
+    def __init__(self, value: Any = None):
+        self.value = value
+
+    def __enter__(self):
+        return self.value
+
+    def __exit__(self, exc_type, exc, tb):
+        return None
+
+
 def _pack_text(
     *,
     max_tool_calls: int | None = 3,
@@ -2186,6 +2197,7 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
     )
     captured = {}
     captured_preflight = {}
+    sentry_calls = []
 
     monkeypatch.setattr(
         "src.lib.config.agent_loader.get_agent_definition_for_package",
@@ -2207,6 +2219,23 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
     monkeypatch.setattr(
         "src.lib.domain_packs.validator_dispatch.provider_context_preflight",
         lambda **kwargs: captured_preflight.update(kwargs) or {},
+    )
+    monkeypatch.setattr(
+        "src.lib.domain_packs.validator_dispatch.gen_ai_conversation_scope",
+        lambda conversation_id: sentry_calls.append(("conversation", conversation_id)) or _FakeContextManager(),
+    )
+
+    class FakeSentrySpan:
+        def set_data(self, key, value):
+            sentry_calls.append(("data", key, value))
+
+    def _fake_sentry_span(**kwargs):
+        sentry_calls.append(("span", kwargs))
+        return _FakeContextManager(FakeSentrySpan())
+
+    monkeypatch.setattr(
+        "src.lib.domain_packs.validator_dispatch.gen_ai_invoke_agent_span",
+        _fake_sentry_span,
     )
 
     def _fake_run_sync(agent, **kwargs):
@@ -2243,6 +2272,15 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
     assert captured["kwargs"]["max_turns"] == 6
     assert captured_preflight["provider"] == "anthropic"
     assert captured_preflight["model"] == "validator-model"
+    assert ("conversation", request.request_id) in sentry_calls
+    span_call = next(call for call in sentry_calls if call[0] == "span")
+    assert span_call[1]["workflow"] == "domain_validator"
+    assert span_call[1]["agent_key"] == request.validator_agent.agent_id
+    assert span_call[1]["span_data"]["ai_curation.validator.binding_id"] == (
+        request.validator_binding_id
+    )
+    assert span_call[1]["span_data"]["ai_curation.validator.request_id"] == request.request_id
+    assert ("data", "ai_curation.validation.status", "accepted") in sentry_calls
 
 
 def test_validator_finalization_feedback_accepts_valid_result():

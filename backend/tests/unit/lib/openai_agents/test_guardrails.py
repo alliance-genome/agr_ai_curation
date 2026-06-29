@@ -7,6 +7,21 @@ import pytest
 from src.lib.openai_agents import guardrails
 
 
+class _FakeContextManager:
+    def __init__(self, value=None):
+        self.value = value
+
+    def __enter__(self):
+        if hasattr(self.value, "active"):
+            self.value.active = True
+        return self.value
+
+    def __exit__(self, exc_type, exc, tb):
+        if hasattr(self.value, "active"):
+            self.value.active = False
+        return None
+
+
 def test_check_for_pii_detects_email_and_returns_none_when_clean():
     assert guardrails.check_for_pii("contact me at curator@example.org") == "email"
     assert guardrails.check_for_pii("gene daf-16 regulates stress response") is None
@@ -89,6 +104,18 @@ async def test_pii_pattern_guardrail_passes_clean_user_message_list():
 @pytest.mark.asyncio
 async def test_llm_safety_guardrail_maps_runner_result(monkeypatch):
     monkeypatch.setenv("GUARDRAIL_SINGLE_SHOT_MAX_TURNS", "3")
+    sentry_calls = []
+
+    class FakeSentrySpan:
+        active = False
+
+        def set_data(self, key, value):
+            assert self.active, "Sentry span data must be written before span exit"
+            sentry_calls.append(("data", key, value))
+
+    def _fake_sentry_span(**kwargs):
+        sentry_calls.append(("span", kwargs))
+        return _FakeContextManager(FakeSentrySpan())
 
     async def _fake_run(_guardrail_agent, _input_data, context, max_turns):
         assert context == {"trace_id": "trace-1"}
@@ -102,6 +129,7 @@ async def test_llm_safety_guardrail_maps_runner_result(monkeypatch):
         )
 
     monkeypatch.setattr(guardrails.Runner, "run", _fake_run)
+    monkeypatch.setattr(guardrails, "gen_ai_invoke_agent_span", _fake_sentry_span)
 
     output = await guardrails.llm_safety_guardrail.guardrail_function(
         ctx=SimpleNamespace(context={"trace_id": "trace-1"}),
@@ -111,11 +139,67 @@ async def test_llm_safety_guardrail_maps_runner_result(monkeypatch):
 
     assert output.tripwire_triggered is True
     assert output.output_info.reasoning == "PII detected by LLM"
+    span_call = next(call for call in sentry_calls if call[0] == "span")
+    assert span_call[1]["workflow"] == "guardrail"
+    assert span_call[1]["agent_key"] == "safety_guardrail"
+    assert ("data", "ai_curation.validation.status", "rejected") in sentry_calls
+
+
+@pytest.mark.asyncio
+async def test_llm_safety_guardrail_records_sentry_error_before_reraising(monkeypatch):
+    sentry_calls = []
+
+    class FakeSentrySpan:
+        active = False
+
+        def set_data(self, key, value):
+            assert self.active, "Sentry span data must be written before span exit"
+            sentry_calls.append(("data", key, value))
+
+    def _fake_sentry_span(**kwargs):
+        sentry_calls.append(("span", kwargs))
+        return _FakeContextManager(FakeSentrySpan())
+
+    async def _fake_run(*_args, **_kwargs):
+        raise TimeoutError("guardrail timed out")
+
+    monkeypatch.setattr(guardrails.Runner, "run", _fake_run)
+    monkeypatch.setattr(guardrails, "gen_ai_invoke_agent_span", _fake_sentry_span)
+
+    with pytest.raises(TimeoutError, match="guardrail timed out"):
+        await guardrails.llm_safety_guardrail.guardrail_function(
+            ctx=SimpleNamespace(context={"trace_id": "trace-err"}),
+            agent=SimpleNamespace(name="guarded-agent"),
+            input_data="hello",
+        )
+
+    assert ("data", "ai_curation.validation.status", "error") in sentry_calls
+    assert (
+        "data",
+        "ai_curation.error.detail",
+        {
+            "message": "guardrail timed out",
+            "error_type": "TimeoutError",
+            "phase": "guardrail_safety",
+        },
+    ) in sentry_calls
 
 
 @pytest.mark.asyncio
 async def test_create_topic_guardrail_trips_for_off_topic_query(monkeypatch):
     monkeypatch.setenv("GUARDRAIL_SINGLE_SHOT_MAX_TURNS", "4")
+    sentry_calls = []
+
+    class FakeSentrySpan:
+        active = False
+
+        def set_data(self, key, value):
+            assert self.active, "Sentry span data must be written before span exit"
+            sentry_calls.append(("data", key, value))
+
+    def _fake_sentry_span(**kwargs):
+        sentry_calls.append(("span", kwargs))
+        return _FakeContextManager(FakeSentrySpan())
 
     async def _fake_run(_topic_agent, _input_data, context, max_turns):
         assert context == {"trace_id": "trace-2"}
@@ -129,6 +213,7 @@ async def test_create_topic_guardrail_trips_for_off_topic_query(monkeypatch):
         )
 
     monkeypatch.setattr(guardrails.Runner, "run", _fake_run)
+    monkeypatch.setattr(guardrails, "gen_ai_invoke_agent_span", _fake_sentry_span)
     topic_guardrail = guardrails.create_topic_guardrail(["biology"], guardrail_name="Bio Check")
 
     output = await topic_guardrail.guardrail_function(
@@ -138,6 +223,13 @@ async def test_create_topic_guardrail_trips_for_off_topic_query(monkeypatch):
     )
 
     assert output.tripwire_triggered is True
+    span_call = next(call for call in sentry_calls if call[0] == "span")
+    assert span_call[1]["workflow"] == "guardrail"
+    assert span_call[1]["agent_key"] == "topic_guardrail"
+    assert span_call[1]["span_data"]["ai_curation.validation.detail"] == {
+        "allowed_topics": ["biology"]
+    }
+    assert ("data", "ai_curation.validation.status", "rejected") in sentry_calls
     assert output.output_info.is_on_topic is False
 
 
