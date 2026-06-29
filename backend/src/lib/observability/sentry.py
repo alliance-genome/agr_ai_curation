@@ -70,7 +70,9 @@ _SAFE_GEN_AI_TEXT_PATTERN = re.compile(r"^[A-Za-z0-9_.:/() -]{1,160}$")
 _TRACE_TEXT_KEYS = {"op", "origin", "status", "type"}
 _TRACE_NUMERIC_KEYS = {"client_sample_rate", "exclusive_time"}
 _TRACE_BOOLEAN_KEYS = {"sampled"}
-_SPAN_NUMERIC_KEYS = {"client_sample_rate", "exclusive_time", "start_timestamp", "timestamp"}
+_SPAN_NUMERIC_KEYS = {"client_sample_rate", "exclusive_time"}
+_SPAN_TIMESTAMP_KEYS = {"start_timestamp", "timestamp"}
+_SENTRY_TIMESTAMP_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T[0-9:.+-]+Z?$")
 _RUNTIME_IDENTIFIER_CONTEXT_KEYS = {
     "batch_id",
     "document_id",
@@ -378,6 +380,16 @@ def _is_real_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def _safe_sentry_timestamp(value: Any) -> int | float | str | None:
+    if _is_real_number(value):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if _SENTRY_TIMESTAMP_PATTERN.fullmatch(text):
+            return text
+    return None
+
+
 def _safe_trace_text(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
@@ -639,6 +651,12 @@ def _redact_spans(spans: list[Any]) -> list[Any]:
             if normalized_key in safe_span:
                 continue
             if normalized_key in _SPAN_NUMERIC_KEYS and _is_real_number(value):
+                safe_span[normalized_key] = value
+            elif normalized_key in _SPAN_TIMESTAMP_KEYS:
+                safe_timestamp = _safe_sentry_timestamp(value)
+                if safe_timestamp is not None:
+                    safe_span[normalized_key] = safe_timestamp
+            elif normalized_key == "same_process_as_parent" and isinstance(value, bool):
                 safe_span[normalized_key] = value
             elif normalized_key == "data":
                 safe_span[normalized_key] = _redact_span_data(value)

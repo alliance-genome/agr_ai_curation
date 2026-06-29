@@ -348,10 +348,15 @@ def test_before_send_transaction_preserves_safe_gen_ai_metadata_without_content(
     event = {
         "spans": [
             {
-                "trace_id": "trace-for-ai-test",
+                "trace_id": "0123456789abcdef0123456789abcdef",
                 "span_id": "fedcba9876543210",
+                "parent_span_id": "0123456789abcdef",
                 "op": "gen_ai.invoke_agent",
+                "origin": "manual",
                 "description": "invoke_agent Supervisor Agent",
+                "start_timestamp": "2026-06-29T17:26:17.287356Z",
+                "timestamp": "2026-06-29T17:26:17.287383Z",
+                "same_process_as_parent": True,
                 "data": {
                     "gen_ai.agent.name": "Supervisor Agent",
                     "gen_ai.operation.name": "invoke_agent",
@@ -390,6 +395,10 @@ def test_before_send_transaction_preserves_safe_gen_ai_metadata_without_content(
     assert data["gen_ai.tool.output"] == "[Filtered]"
     assert data["untrusted_note"] == "[Filtered]"
     assert scrubbed["spans"][0]["description"] == "invoke_agent Supervisor Agent"
+    assert scrubbed["spans"][0]["start_timestamp"] == "2026-06-29T17:26:17.287356Z"
+    assert scrubbed["spans"][0]["timestamp"] == "2026-06-29T17:26:17.287383Z"
+    assert scrubbed["spans"][0]["same_process_as_parent"] is True
+    assert scrubbed["spans"][0]["origin"] == "manual"
 
 
 def test_hash_identifier_preserves_existing_hashed_identifier():

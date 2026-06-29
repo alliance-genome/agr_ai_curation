@@ -102,9 +102,12 @@ needed and does not duplicate spans:
 SENTRY_OPENAI_INTEGRATION_ENABLED=true
 ```
 
-`SENTRY_GEN_AI_STREAM_SPANS_ENABLED=true` streams AI span updates to Sentry and
-can increase span volume. Use it only for bounded dev tests until the output is
-understood.
+Keep `SENTRY_GEN_AI_STREAM_SPANS_ENABLED=false` for self-hosted Sentry unless a
+dev smoke proves standalone streamed GenAI spans are supported by that instance.
+Sentry's SDK docs note that self-hosted instances may need streamed GenAI spans
+disabled so `gen_ai.*` spans are sent as part of the transaction. In the
+2026-06-29 dev trial, enabling it caused standalone span/EAP items to be
+accepted at the HTTP envelope layer but dropped internally.
 
 `SENTRY_SEND_DEFAULT_PII=true` and `SENTRY_OPENAI_INCLUDE_PROMPTS=true` are
 private-dev experiment flags. With prompt capture disabled, the transaction
