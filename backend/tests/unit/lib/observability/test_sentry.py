@@ -24,6 +24,12 @@ def reset_sentry(monkeypatch):
         "SENTRY_TRACES_SAMPLE_RATE",
         "SENTRY_PROFILES_SAMPLE_RATE",
         "SENTRY_ALLOW_INSECURE_DSN",
+        "SENTRY_SEND_DEFAULT_PII",
+        "SENTRY_AI_AGENTS_MONITORING_ENABLED",
+        "SENTRY_OPENAI_AGENTS_INTEGRATION_ENABLED",
+        "SENTRY_OPENAI_INTEGRATION_ENABLED",
+        "SENTRY_GEN_AI_STREAM_SPANS_ENABLED",
+        "SENTRY_OPENAI_INCLUDE_PROMPTS",
         "APP_ENV",
         "ENVIRONMENT",
         "GIT_SHA",
@@ -42,6 +48,12 @@ def test_get_sentry_settings_defaults_to_disabled():
     assert settings.traces_sample_rate is None
     assert settings.profiles_sample_rate is None
     assert settings.allow_insecure_dsn is False
+    assert settings.send_default_pii is False
+    assert settings.ai_agents_monitoring_enabled is False
+    assert settings.openai_agents_integration_enabled is False
+    assert settings.openai_integration_enabled is False
+    assert settings.gen_ai_stream_spans_enabled is False
+    assert settings.openai_include_prompts is False
 
 
 def test_get_sentry_settings_parses_env(monkeypatch):
@@ -51,6 +63,12 @@ def test_get_sentry_settings_parses_env(monkeypatch):
     monkeypatch.setenv("SENTRY_TRACES_SAMPLE_RATE", "0.25")
     monkeypatch.setenv("SENTRY_PROFILES_SAMPLE_RATE", "0.5")
     monkeypatch.setenv("SENTRY_ALLOW_INSECURE_DSN", "true")
+    monkeypatch.setenv("SENTRY_SEND_DEFAULT_PII", "true")
+    monkeypatch.setenv("SENTRY_AI_AGENTS_MONITORING_ENABLED", "true")
+    monkeypatch.setenv("SENTRY_OPENAI_AGENTS_INTEGRATION_ENABLED", "true")
+    monkeypatch.setenv("SENTRY_OPENAI_INTEGRATION_ENABLED", "true")
+    monkeypatch.setenv("SENTRY_GEN_AI_STREAM_SPANS_ENABLED", "true")
+    monkeypatch.setenv("SENTRY_OPENAI_INCLUDE_PROMPTS", "true")
 
     settings = sentry.get_sentry_settings()
 
@@ -60,6 +78,12 @@ def test_get_sentry_settings_parses_env(monkeypatch):
     assert settings.traces_sample_rate == 0.25
     assert settings.profiles_sample_rate == 0.5
     assert settings.allow_insecure_dsn is True
+    assert settings.send_default_pii is True
+    assert settings.ai_agents_monitoring_enabled is True
+    assert settings.openai_agents_integration_enabled is True
+    assert settings.openai_integration_enabled is True
+    assert settings.gen_ai_stream_spans_enabled is True
+    assert settings.openai_include_prompts is True
 
 
 def test_before_send_redacts_sensitive_and_document_content():
@@ -320,6 +344,84 @@ def test_before_send_transaction_uses_same_redaction_policy():
     assert len(scrubbed["spans"]) == 1
 
 
+def test_before_send_transaction_preserves_safe_gen_ai_metadata_without_content():
+    event = {
+        "spans": [
+            {
+                "trace_id": "trace-for-ai-test",
+                "span_id": "fedcba9876543210",
+                "op": "gen_ai.invoke_agent",
+                "description": "Supervisor Agent prompt should not survive",
+                "data": {
+                    "gen_ai.agent.name": "Supervisor Agent",
+                    "gen_ai.operation.name": "invoke_agent",
+                    "gen_ai.request.model": "gpt-5.5",
+                    "gen_ai.response.model": "gpt-5.5-2026-06-01",
+                    "gen_ai.tool.name": "lookup_gene",
+                    "gen_ai.conversation.id": "conversation-123",
+                    "gen_ai.usage.input_tokens": 123,
+                    "gen_ai.usage.output_tokens": 45,
+                    "gen_ai.response.streaming": True,
+                    "gen_ai.request.messages": [{"content": "curator paper text"}],
+                    "gen_ai.response.text": "model output text",
+                    "gen_ai.tool.input": {"query": "raw curator query"},
+                    "gen_ai.tool.output": {"body": "raw tool body"},
+                    "untrusted_note": "free text",
+                },
+            }
+        ],
+    }
+
+    scrubbed = sentry.before_send_transaction(event)
+    data = scrubbed["spans"][0]["data"]
+
+    assert data["gen_ai.agent.name"] == "Supervisor Agent"
+    assert data["gen_ai.operation.name"] == "invoke_agent"
+    assert data["gen_ai.request.model"] == "gpt-5.5"
+    assert data["gen_ai.response.model"] == "gpt-5.5-2026-06-01"
+    assert data["gen_ai.tool.name"] == "lookup_gene"
+    assert data["gen_ai.conversation.id"].startswith("sha256:")
+    assert data["gen_ai.usage.input_tokens"] == 123
+    assert data["gen_ai.usage.output_tokens"] == 45
+    assert data["gen_ai.response.streaming"] is True
+    assert data["gen_ai.request.messages"] == "[Filtered]"
+    assert data["gen_ai.response.text"] == "[Filtered]"
+    assert data["gen_ai.tool.input"] == "[Filtered]"
+    assert data["gen_ai.tool.output"] == "[Filtered]"
+    assert data["untrusted_note"] == "[Filtered]"
+    assert scrubbed["spans"][0]["description"] == "[Filtered]"
+
+
+def test_before_send_transaction_can_opt_into_gen_ai_content(monkeypatch):
+    monkeypatch.setenv("SENTRY_OPENAI_INCLUDE_PROMPTS", "true")
+    fake_secret = "sk-" + "test" + "secret" + "0123456789"
+    event = {
+        "spans": [
+            {
+                "trace_id": "trace-for-ai-test",
+                "span_id": "fedcba9876543210",
+                "data": {
+                    "gen_ai.request.messages": [
+                        {
+                            "role": "user",
+                            "content": f"curator paper text {fake_secret}",
+                        }
+                    ],
+                    "gen_ai.tool.input": {"api" + "_key": fake_secret},
+                },
+            }
+        ],
+    }
+
+    scrubbed = sentry.before_send_transaction(event)
+    data = scrubbed["spans"][0]["data"]
+
+    assert data["gen_ai.request.messages"] == [
+        {"role": "user", "content": "curator paper text [Filtered]"}
+    ]
+    assert data["gen_ai.tool.input"]["api_key"] == "[Filtered]"
+
+
 def test_initialize_sentry_skips_without_dsn(monkeypatch):
     imported = []
 
@@ -395,6 +497,7 @@ def test_initialize_sentry_calls_sdk_with_safe_options(monkeypatch):
     assert init["include_local_variables"] is False
     assert init["send_default_pii"] is False
     assert len(init["integrations"]) == 3
+    assert "stream_gen_ai_spans" not in init
     assert calls["starlette_integration"] == {
         "failed_request_status_codes": set(),
     }
@@ -434,6 +537,127 @@ def test_initialize_sentry_omits_tracing_when_unset(monkeypatch):
     assert sentry.initialize_sentry_if_configured() is True
     assert "traces_sample_rate" not in calls["init"]
     assert "profiles_sample_rate" not in calls["init"]
+
+
+def test_initialize_sentry_adds_ai_integrations_when_enabled(monkeypatch):
+    calls = {}
+
+    class FakeSentrySdk:
+        def init(self, **kwargs):
+            calls["init"] = kwargs
+
+        def set_tag(self, key, value):
+            calls.setdefault("tags", {})[key] = value
+
+    class FakeIntegration:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeOpenAIAgentsIntegration:
+        def __init__(self, **kwargs):
+            calls["openai_agents_integration"] = kwargs
+
+    class FakeOpenAIIntegration:
+        def __init__(self, **kwargs):
+            calls["openai_integration"] = kwargs
+
+    fake_modules = {
+        "sentry_sdk": FakeSentrySdk(),
+        "sentry_sdk.integrations.fastapi": SimpleNamespace(FastApiIntegration=FakeIntegration),
+        "sentry_sdk.integrations.logging": SimpleNamespace(LoggingIntegration=FakeIntegration),
+        "sentry_sdk.integrations.starlette": SimpleNamespace(StarletteIntegration=FakeIntegration),
+        "sentry_sdk.integrations.openai_agents": SimpleNamespace(
+            OpenAIAgentsIntegration=FakeOpenAIAgentsIntegration,
+        ),
+        "sentry_sdk.integrations.openai": SimpleNamespace(
+            OpenAIIntegration=FakeOpenAIIntegration,
+        ),
+    }
+    monkeypatch.setattr(sentry.importlib, "import_module", lambda name: fake_modules[name])
+    monkeypatch.setenv("SENTRY_DSN", "https://public@example.invalid/1")
+    monkeypatch.setenv("SENTRY_SEND_DEFAULT_PII", "true")
+    monkeypatch.setenv("SENTRY_AI_AGENTS_MONITORING_ENABLED", "true")
+    monkeypatch.setenv("SENTRY_OPENAI_AGENTS_INTEGRATION_ENABLED", "true")
+    monkeypatch.setenv("SENTRY_OPENAI_INTEGRATION_ENABLED", "true")
+    monkeypatch.setenv("SENTRY_GEN_AI_STREAM_SPANS_ENABLED", "true")
+    monkeypatch.setenv("SENTRY_OPENAI_INCLUDE_PROMPTS", "true")
+
+    assert sentry.initialize_sentry_if_configured() is True
+
+    init = calls["init"]
+    assert init["send_default_pii"] is True
+    assert init["stream_gen_ai_spans"] is True
+    assert len(init["integrations"]) == 5
+    assert calls["openai_agents_integration"] == {}
+    assert calls["openai_integration"] == {"include_prompts": True}
+
+
+def test_initialize_sentry_streaming_requires_ai_monitoring_master_flag(monkeypatch):
+    calls = {}
+
+    class FakeSentrySdk:
+        def init(self, **kwargs):
+            calls["init"] = kwargs
+
+        def set_tag(self, key, value):
+            calls.setdefault("tags", {})[key] = value
+
+    class FakeIntegration:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    fake_modules = {
+        "sentry_sdk": FakeSentrySdk(),
+        "sentry_sdk.integrations.fastapi": SimpleNamespace(FastApiIntegration=FakeIntegration),
+        "sentry_sdk.integrations.logging": SimpleNamespace(LoggingIntegration=FakeIntegration),
+        "sentry_sdk.integrations.starlette": SimpleNamespace(StarletteIntegration=FakeIntegration),
+    }
+    monkeypatch.setattr(sentry.importlib, "import_module", lambda name: fake_modules[name])
+    monkeypatch.setenv("SENTRY_DSN", "https://public@example.invalid/1")
+    monkeypatch.setenv("SENTRY_GEN_AI_STREAM_SPANS_ENABLED", "true")
+
+    assert sentry.initialize_sentry_if_configured() is True
+    assert "stream_gen_ai_spans" not in calls["init"]
+
+
+def test_initialize_sentry_optional_ai_integration_failure_is_non_fatal(
+    monkeypatch,
+    caplog,
+):
+    calls = {}
+
+    class FakeSentrySdk:
+        def init(self, **kwargs):
+            calls["init"] = kwargs
+
+        def set_tag(self, key, value):
+            calls.setdefault("tags", {})[key] = value
+
+    class FakeIntegration:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    fake_modules = {
+        "sentry_sdk": FakeSentrySdk(),
+        "sentry_sdk.integrations.fastapi": SimpleNamespace(FastApiIntegration=FakeIntegration),
+        "sentry_sdk.integrations.logging": SimpleNamespace(LoggingIntegration=FakeIntegration),
+        "sentry_sdk.integrations.starlette": SimpleNamespace(StarletteIntegration=FakeIntegration),
+    }
+
+    def fake_import(name: str):
+        if name == "sentry_sdk.integrations.openai_agents":
+            raise ImportError("missing optional integration")
+        return fake_modules[name]
+
+    monkeypatch.setattr(sentry.importlib, "import_module", fake_import)
+    monkeypatch.setenv("SENTRY_DSN", "https://public@example.invalid/1")
+    monkeypatch.setenv("SENTRY_AI_AGENTS_MONITORING_ENABLED", "true")
+    monkeypatch.setenv("SENTRY_OPENAI_AGENTS_INTEGRATION_ENABLED", "true")
+    caplog.set_level(logging.WARNING)
+
+    assert sentry.initialize_sentry_if_configured() is True
+    assert len(calls["init"]["integrations"]) == 3
+    assert "Optional Sentry integration" in caplog.text
 
 
 def test_initialize_sentry_sdk_init_failure_is_non_fatal(monkeypatch):

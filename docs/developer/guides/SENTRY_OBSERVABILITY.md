@@ -23,6 +23,12 @@ SENTRY_ALLOW_INSECURE_DSN=false
 SENTRY_SYNTHETIC_TEST_ENDPOINTS_ENABLED=false
 SENTRY_TRACES_SAMPLE_RATE=
 SENTRY_PROFILES_SAMPLE_RATE=
+SENTRY_AI_AGENTS_MONITORING_ENABLED=false
+SENTRY_OPENAI_AGENTS_INTEGRATION_ENABLED=false
+SENTRY_OPENAI_INTEGRATION_ENABLED=false
+SENTRY_GEN_AI_STREAM_SPANS_ENABLED=false
+SENTRY_SEND_DEFAULT_PII=false
+SENTRY_OPENAI_INCLUDE_PROMPTS=false
 RUNTIME_OBSERVABILITY_TAG_VALUE_MAX_CHARS=200
 RUNTIME_OBSERVABILITY_CONTEXT_VALUE_MAX_CHARS=500
 ```
@@ -54,6 +60,59 @@ path is being finished.
 `RUNTIME_OBSERVABILITY_CONTEXT_VALUE_MAX_CHARS` apply to
 `report_runtime_exception()`. Background-task and tool-failure reporting use
 their own conservative caps.
+
+## AI Agents Monitoring Trial
+
+Langfuse remains the canonical LLM trace, token-analysis, prompt/tool debugging,
+and TraceReview backend. Sentry AI Agents Monitoring is an optional operational
+view for agent latency, tool spans, model metadata, and Sentry issue context; it
+must not replace Langfuse observations or TraceReview evidence.
+
+The trial wiring is disabled by default:
+
+```bash
+SENTRY_AI_AGENTS_MONITORING_ENABLED=false
+SENTRY_OPENAI_AGENTS_INTEGRATION_ENABLED=false
+SENTRY_OPENAI_INTEGRATION_ENABLED=false
+SENTRY_GEN_AI_STREAM_SPANS_ENABLED=false
+SENTRY_SEND_DEFAULT_PII=false
+SENTRY_OPENAI_INCLUDE_PROMPTS=false
+```
+
+Use the OpenAI Agents integration first:
+
+```bash
+SENTRY_AI_AGENTS_MONITORING_ENABLED=true
+SENTRY_OPENAI_AGENTS_INTEGRATION_ENABLED=true
+SENTRY_TRACES_SAMPLE_RATE=1.0
+```
+
+Only enable the lower-level OpenAI integration if a dev smoke proves it is
+needed and does not duplicate spans:
+
+```bash
+SENTRY_OPENAI_INTEGRATION_ENABLED=true
+```
+
+`SENTRY_GEN_AI_STREAM_SPANS_ENABLED=true` streams AI span updates to Sentry and
+can increase span volume. Use it only for bounded dev tests until the output is
+understood.
+
+`SENTRY_SEND_DEFAULT_PII=true` and `SENTRY_OPENAI_INCLUDE_PROMPTS=true` are
+private-dev experiment flags. With prompt capture disabled, the transaction
+redactor may still preserve low-risk `gen_ai.*` metadata such as agent name,
+model name, tool name, operation name, streaming state, and token counts, while
+filtering prompts, messages, tool input, and tool output. With prompt capture
+enabled, content-like AI span fields are allowed through the Sentry hook after
+secret-like values and sensitive keys are scrubbed.
+
+Before enabling AI monitoring by default, run a real dev paper/query smoke and
+verify all of the following:
+
+- the run appears usefully in the Sentry AI Agents UI;
+- the same run still has the expected Langfuse trace/model/tool observations;
+- TraceReview can load/export/analyze the same Langfuse trace;
+- no dev trial data lands in the production Sentry project.
 
 ## Initialization
 
@@ -219,7 +278,9 @@ Sentry is for actionable application error events:
 - enough bounded context to locate the affected component and release.
 
 Langfuse is for LLM traces, model calls, token/cost analysis, and TraceReview.
-Do not duplicate full prompt/message/transcript payloads into Sentry.
+Do not duplicate full prompt/message/transcript payloads into Sentry unless a
+private dev trial explicitly enables prompt capture and confirms dev/prod
+project separation.
 
 The current CloudWatch-to-Sentry bridge is intentionally deferred. Until that
 ticket is implemented, do not try to convert every log line into a Sentry event.
