@@ -1001,14 +1001,11 @@ def test_gen_ai_workflow_transaction_reuses_active_sentry_span(monkeypatch):
         workflow="assistant_chat",
         conversation_id="session-123",
     ) as transaction:
+        sentry.set_redacted_ai_span_data(transaction, "ai_curation.agent.input", "compact")
         sentry.set_sentry_span_status(transaction, "ok")
 
-    data = {call[1]: call[2] for call in calls if call[0] == "data"}
-
-    assert transaction is active_span
-    assert data["gen_ai.operation.name"] == "chat"
-    assert data["ai_curation.workflow"] == "assistant_chat"
-    assert data["gen_ai.conversation.id"] == sentry._hash_identifier("session-123")
+    assert transaction is not active_span
+    assert [call for call in calls if call[0] == "data"] == []
     assert ("status", "ok") in calls
 
 

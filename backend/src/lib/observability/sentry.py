@@ -559,6 +559,19 @@ def set_sentry_span_status(span: Any, status: str) -> None:
             logger.debug("Sentry span status update failed: %s", exc)
 
 
+class _SentryParentOnlySpan:
+    """Delegate status to an active parent while keeping transaction data compact."""
+
+    def __init__(self, span: Any) -> None:
+        self._span = span
+
+    def set_data(self, key: str, value: Any) -> None:
+        return None
+
+    def set_status(self, status: str) -> None:
+        set_sentry_span_status(self._span, status)
+
+
 def _redact_span_data(data: Any) -> Any:
     """Preserve AI monitoring metadata while keeping content capture opt-in."""
 
@@ -932,12 +945,16 @@ def gen_ai_workflow_transaction(
 
     transaction_context: Any | None = None
     transaction = None
+    transaction_handle = None
+    capture_transaction_data = True
     try:
         sentry_sdk = importlib.import_module("sentry_sdk")
         get_current_scope = getattr(sentry_sdk, "get_current_scope", None)
         if callable(get_current_scope):
             scope = get_current_scope()
             transaction = getattr(scope, "span", None)
+            if transaction is not None:
+                capture_transaction_data = False
 
         if transaction is None:
             start_transaction = getattr(sentry_sdk, "start_transaction", None)
@@ -948,7 +965,10 @@ def gen_ai_workflow_transaction(
             transaction_context = start_transaction(op=safe_operation, name=safe_name)
             transaction = transaction_context.__enter__()
 
-        set_data = getattr(transaction, "set_data", None)
+        transaction_handle = (
+            transaction if capture_transaction_data else _SentryParentOnlySpan(transaction)
+        )
+        set_data = getattr(transaction_handle, "set_data", None)
         if callable(set_data):
             def safe_set(key: str, value: Any) -> None:
                 _set_redacted_span_data(set_data, key, value)
@@ -983,15 +1003,15 @@ def gen_ai_workflow_transaction(
         transaction_context = None
 
     try:
-        yield transaction
+        yield transaction_handle
     except BaseException as exc:
-        if transaction is not None:
+        if transaction_handle is not None:
             set_sentry_span_status(
-                transaction,
+                transaction_handle,
                 "cancelled" if type(exc).__name__ == "CancelledError" else "internal_error",
             )
             set_redacted_ai_span_data(
-                transaction,
+                transaction_handle,
                 "ai_curation.error.detail",
                 {
                     "message": str(exc),
