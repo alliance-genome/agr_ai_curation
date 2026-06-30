@@ -36,6 +36,10 @@ import {
 import { POPUP_CHANGELOG_ENTRY } from './content/changelog'
 import ChangelogDialog from './components/ChangelogDialog'
 import { buildPdfTerminalNotification } from './features/documents/pdfTerminalNotifications'
+import {
+  CHAT_RUN_TERMINAL_EVENT,
+  type ChatRunTerminalEventDetail,
+} from './hooks/useChatStream'
 import './App.css'
 
 export const queryClient = new QueryClient()
@@ -300,11 +304,14 @@ export function AppContent() {
       horizontal: 'left' | 'center' | 'right';
     };
     showStorageRecoveryAction?: boolean;
+    actionLabel?: string;
+    actionPath?: string;
   }>({ open: false, message: '', severity: 'info' });
   const seededPdfJobsRef = React.useRef(false);
   const seededBatchesRef = React.useRef(false);
   const seenPdfTerminalRef = React.useRef<Set<string>>(new Set());
   const seenBatchTerminalRef = React.useRef<Set<string>>(new Set());
+  const lastRunCompletionToastKeyRef = React.useRef<string | null>(null);
   const changelogStorageKey = user?.uid ? `changelog:last-seen:${user.uid}` : null;
 
   /**
@@ -367,6 +374,8 @@ export function AppContent() {
         autoHideDurationMs: detail.autoHideDurationMs,
         anchorOrigin: detail.anchorOrigin,
         showStorageRecoveryAction: false,
+        actionLabel: detail.actionLabel,
+        actionPath: detail.actionPath,
       });
     };
 
@@ -390,6 +399,8 @@ export function AppContent() {
         autoHideDurationMs: null,
         anchorOrigin: DEFAULT_GLOBAL_SNACKBAR_ANCHOR,
         showStorageRecoveryAction: true,
+        actionLabel: undefined,
+        actionPath: undefined,
       });
     };
 
@@ -406,8 +417,49 @@ export function AppContent() {
       message: 'AI Curation local cache was cleared. Uploaded PDFs and server-side chat history were not deleted.',
       severity: 'success',
       showStorageRecoveryAction: false,
+      actionLabel: undefined,
+      actionPath: undefined,
     });
   }, []);
+
+  useEffect(() => {
+    const onChatRunTerminal = (event: Event) => {
+      if (normalizedPathname === '') {
+        return;
+      }
+
+      const detail = (event as CustomEvent<ChatRunTerminalEventDetail>).detail;
+      if (!detail?.sessionId) {
+        return;
+      }
+
+      if (detail.status !== 'completed') {
+        return;
+      }
+
+      const completionToastKey = `${detail.runKind}:${detail.sessionId}:${detail.eventStreamVersion}:${detail.status}`;
+      if (lastRunCompletionToastKeyRef.current === completionToastKey) {
+        return;
+      }
+      lastRunCompletionToastKeyRef.current = completionToastKey;
+
+      setGlobalSnackbar({
+        open: true,
+        message: 'Curation chat finished.',
+        severity: 'success',
+        autoHideDurationMs: 6000,
+        anchorOrigin: DEFAULT_GLOBAL_SNACKBAR_ANCHOR,
+        showStorageRecoveryAction: false,
+        actionLabel: 'Open chat',
+        actionPath: `/?session=${encodeURIComponent(detail.sessionId)}`,
+      });
+    };
+
+    window.addEventListener(CHAT_RUN_TERMINAL_EVENT, onChatRunTerminal as EventListener);
+    return () => {
+      window.removeEventListener(CHAT_RUN_TERMINAL_EVENT, onChatRunTerminal as EventListener);
+    };
+  }, [normalizedPathname]);
 
   useEffect(() => {
     const currentUserId = isAuthenticated ? user?.uid ?? null : null
@@ -838,6 +890,20 @@ export function AppContent() {
               onClick={handleClearLocalCache}
             >
               Clear local cache
+            </Button>
+          ) : globalSnackbar.actionLabel && globalSnackbar.actionPath ? (
+            <Button
+              color="inherit"
+              size="small"
+              onClick={() => {
+                const actionPath = globalSnackbar.actionPath;
+                setGlobalSnackbar((prev) => ({ ...prev, open: false }));
+                if (actionPath) {
+                  navigate(actionPath);
+                }
+              }}
+            >
+              {globalSnackbar.actionLabel}
             </Button>
           ) : undefined}
           sx={{ width: '100%' }}

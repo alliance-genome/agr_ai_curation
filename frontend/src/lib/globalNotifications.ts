@@ -10,6 +10,8 @@ export interface GlobalToastEventDetail {
     vertical: GlobalToastVerticalAnchor;
     horizontal: GlobalToastHorizontalAnchor;
   };
+  actionLabel?: string;
+  actionPath?: string;
 }
 
 export const GLOBAL_TOAST_EVENT = 'agr-global-toast';

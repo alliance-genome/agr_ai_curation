@@ -1,11 +1,12 @@
 import React from 'react';
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
-import { MemoryRouter, Outlet } from 'react-router-dom';
+import { MemoryRouter, Outlet, useLocation } from 'react-router-dom';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AppContent, ProtectedRoutes, queryClient } from './App';
 import { ThemeModeProvider, THEME_MODE_STORAGE_KEY } from './contexts/ThemeModeContext';
 import { GLOBAL_TOAST_EVENT } from './lib/globalNotifications';
+import { CHAT_RUN_TERMINAL_EVENT } from './hooks/useChatStream';
 import { POPUP_CHANGELOG_ENTRY } from './content/changelog';
 
 const mockUseAuth = vi.hoisted(() => vi.fn());
@@ -49,7 +50,12 @@ vi.mock('./pages/weaviate/settings/EmbeddingsSettings', () => ({ default: () => 
 vi.mock('./pages/weaviate/settings/DatabaseSettings', () => ({ default: () => <div>Database</div> }));
 vi.mock('./pages/weaviate/settings/SchemaSettings', () => ({ default: () => <div>Schema</div> }));
 vi.mock('./pages/weaviate/settings/ChunkingSettings', () => ({ default: () => <div>Chunking</div> }));
-vi.mock('./pages/HomePage', () => ({ default: () => <div>Home</div> }));
+vi.mock('./pages/HomePage', () => ({
+  default: () => {
+    const location = useLocation();
+    return <div data-testid="home-page">Home{location.search}</div>;
+  },
+}));
 vi.mock('./pages/ViewerSettings', () => ({ default: () => <div>Viewer</div> }));
 vi.mock('./pages/AgentStudioPage', () => ({ default: () => <div>Agent Studio</div> }));
 vi.mock('./pages/BatchPage', () => ({ default: () => <div>Batch</div> }));
@@ -130,6 +136,129 @@ describe('AppContent global notifications', () => {
     );
 
     expect(await screen.findByText('Global toast arrived')).toBeInTheDocument();
+  });
+
+  it('shows a chat completion toast with a return action when a run finishes off the chat page', async () => {
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/weaviate/pdf-jobs')) {
+        return jsonResponse({ jobs: [] });
+      }
+      if (url.includes('/api/batches')) {
+        return jsonResponse({ batches: [] });
+      }
+      return jsonResponse({});
+    });
+
+    const view = renderAppContent('/weaviate/documents');
+    expect(await screen.findByText('Documents Page')).toBeInTheDocument();
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(CHAT_RUN_TERMINAL_EVENT, {
+          detail: {
+            sessionId: 'session-finished',
+            runKind: 'chat',
+            status: 'completed',
+            eventStreamVersion: 7,
+          },
+        },
+      ));
+    });
+    view.rerender(
+      <ThemeModeProvider>
+        <MemoryRouter initialEntries={['/weaviate/documents']}>
+          <AppContent />
+        </MemoryRouter>
+      </ThemeModeProvider>
+    );
+
+    expect(await screen.findByText('Curation chat finished.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open chat' }));
+    expect(await screen.findByTestId('persistent-pdf-workspace-layout')).toBeInTheDocument();
+    expect(screen.getByTestId('home-page')).toHaveTextContent('Home?session=session-finished');
+  });
+
+  it('does not show a chat completion toast when the curator is already on the chat page', async () => {
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/weaviate/pdf-jobs')) {
+        return jsonResponse({ jobs: [] });
+      }
+      if (url.includes('/api/batches')) {
+        return jsonResponse({ batches: [] });
+      }
+      return jsonResponse({});
+    });
+
+    const view = renderAppContent('/');
+    expect(await screen.findByTestId('persistent-pdf-workspace-layout')).toBeInTheDocument();
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(CHAT_RUN_TERMINAL_EVENT, {
+          detail: {
+            sessionId: 'session-visible',
+            runKind: 'chat',
+            status: 'completed',
+            eventStreamVersion: 8,
+          },
+        },
+      ));
+    });
+    view.rerender(
+      <ThemeModeProvider>
+        <MemoryRouter initialEntries={['/']}>
+          <AppContent />
+        </MemoryRouter>
+      </ThemeModeProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByText('Curation chat finished.')).not.toBeInTheDocument();
+    });
+  });
+
+  it('does not show a chat completion toast for terminal error events', async () => {
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/weaviate/pdf-jobs')) {
+        return jsonResponse({ jobs: [] });
+      }
+      if (url.includes('/api/batches')) {
+        return jsonResponse({ batches: [] });
+      }
+      return jsonResponse({});
+    });
+
+    const view = renderAppContent('/weaviate/documents');
+    expect(await screen.findByText('Documents Page')).toBeInTheDocument();
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(CHAT_RUN_TERMINAL_EVENT, {
+          detail: {
+            sessionId: 'session-error',
+            runKind: 'chat',
+            status: 'error',
+            eventStreamVersion: 9,
+          },
+        },
+      ));
+    });
+    view.rerender(
+      <ThemeModeProvider>
+        <MemoryRouter initialEntries={['/weaviate/documents']}>
+          <AppContent />
+        </MemoryRouter>
+      </ThemeModeProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByText('Curation chat finished.')).not.toBeInTheDocument();
+      expect(screen.queryByText('Curation chat finished with errors.')).not.toBeInTheDocument();
+    });
   });
 
   it('shows changelog once per user and persists dismissal', async () => {

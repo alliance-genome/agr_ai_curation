@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { useChatStream } from './useChatStream'
+import { CHAT_RUN_TERMINAL_EVENT, useChatStream } from './useChatStream'
 
 describe('useChatStream shared lifecycle', () => {
   beforeEach(() => {
@@ -122,5 +122,77 @@ describe('useChatStream shared lifecycle', () => {
     result.current.clearEvents()
     unmount()
     randomUUIDSpy.mockRestore()
+  })
+
+  it('emits one terminal browser event when a chat stream completes', async () => {
+    const terminalEvents: CustomEvent[] = []
+    const listener = (event: Event) => terminalEvents.push(event as CustomEvent)
+    window.addEventListener(CHAT_RUN_TERMINAL_EVENT, listener)
+
+    vi.mocked(global.fetch).mockResolvedValue(new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.close()
+        },
+      }),
+      { status: 200 },
+    ))
+
+    const { result, unmount } = renderHook(() => useChatStream())
+
+    await act(async () => {
+      await result.current.sendMessage('hello', 'session-terminal', { turnId: 'turn-terminal' })
+    })
+
+    expect(terminalEvents).toHaveLength(1)
+    expect(terminalEvents[0].detail).toEqual(
+      expect.objectContaining({
+        sessionId: 'session-terminal',
+        runKind: 'chat',
+        status: 'completed',
+      }),
+    )
+
+    result.current.clearEvents()
+    unmount()
+    window.removeEventListener(CHAT_RUN_TERMINAL_EVENT, listener)
+  })
+
+  it('marks streamed error events as terminal errors', async () => {
+    const terminalEvents: CustomEvent[] = []
+    const listener = (event: Event) => terminalEvents.push(event as CustomEvent)
+    window.addEventListener(CHAT_RUN_TERMINAL_EVENT, listener)
+    const encoder = new TextEncoder()
+
+    vi.mocked(global.fetch).mockResolvedValue(new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(
+            'data: {"type":"SUPERVISOR_ERROR","session_id":"session-error","timestamp":"2026-06-30T00:00:00.000Z","details":{"message":"failed"}}\n\n',
+          ))
+          controller.close()
+        },
+      }),
+      { status: 200 },
+    ))
+
+    const { result, unmount } = renderHook(() => useChatStream())
+
+    await act(async () => {
+      await result.current.sendMessage('hello', 'session-error', { turnId: 'turn-error' })
+    })
+
+    expect(terminalEvents).toHaveLength(1)
+    expect(terminalEvents[0].detail).toEqual(
+      expect.objectContaining({
+        sessionId: 'session-error',
+        runKind: 'chat',
+        status: 'error',
+      }),
+    )
+
+    result.current.clearEvents()
+    unmount()
+    window.removeEventListener(CHAT_RUN_TERMINAL_EVENT, listener)
   })
 })
