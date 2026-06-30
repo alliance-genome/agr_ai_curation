@@ -611,6 +611,7 @@ class UploadExecutionService:
             (
                 *_figure_metadata_artifact_ids_from_conversion_result(conversion_result),
                 *_figure_metadata_artifact_ids_from_artifacts(
+                    provider=provider,
                     artifacts=artifacts,
                     source_artifact_id=request.source_artifact_id,
                 ),
@@ -1161,38 +1162,32 @@ def _source_provenance_with_converted_artifact(
 
 def _figure_metadata_artifact_ids_from_artifacts(
     *,
+    provider: DocumentSourceProvider,
     artifacts: list[SourceArtifact],
     source_artifact_id: str,
 ) -> tuple[str, ...]:
-    try:
-        from src.lib.document_sources.import_selection import (
-            provider_metadata_artifacts_for_source,
-        )
+    from src.lib.document_sources.import_selection import (
+        provider_metadata_artifacts_for_source,
+    )
 
-        source_artifact = next(
-            (
-                artifact
-                for artifact in artifacts
-                if artifact.artifact_id == source_artifact_id
-            ),
-            None,
-        )
-        if source_artifact is None:
-            return ()
-        return tuple(
-            artifact.artifact_id
-            for artifact in provider_metadata_artifacts_for_source(
-                source_artifact=source_artifact,
-                artifacts=artifacts,
-            )
-        )
-    except Exception as exc:
-        logger.warning(
-            "Failed to discover provider figure metadata artifacts for source %s: %s",
-            source_artifact_id,
-            exc,
-        )
+    source_artifact = next(
+        (
+            artifact
+            for artifact in artifacts
+            if artifact.artifact_id == source_artifact_id
+        ),
+        None,
+    )
+    if source_artifact is None:
         return ()
+    return tuple(
+        artifact.artifact_id
+        for artifact in provider_metadata_artifacts_for_source(
+            provider=provider,
+            source_artifact=source_artifact,
+            artifacts=artifacts,
+        )
+    )
 
 
 def _figure_metadata_artifact_ids_from_conversion_result(
@@ -1256,21 +1251,14 @@ async def _download_provider_figure_metadata_entries(
 
     entries: list[Mapping[str, Any]] = []
     for artifact_id in artifact_ids:
-        try:
-            raw = await provider.download_artifact(
-                artifact_id,
-                request_bearer_token=request_bearer_token,
-            )
-            entry = normalize_provider_figure_metadata_sidecar(
+        raw = await provider.download_artifact(
+            artifact_id,
+            request_bearer_token=request_bearer_token,
+        )
+        entries.append(
+            normalize_provider_figure_metadata_sidecar(
                 raw,
                 metadata_artifact_id=artifact_id,
             )
-            if entry is not None:
-                entries.append(entry)
-        except Exception as exc:
-            logger.warning(
-                "Skipping provider figure metadata artifact %s after download/parse failure: %s",
-                artifact_id,
-                exc,
-            )
+        )
     return tuple(entries)

@@ -14,6 +14,7 @@ from src.lib.document_sources.ingestion import (
     ingest_provider_markdown_document,
 )
 from src.lib.document_sources.figure_metadata import (
+    normalize_provider_figure_metadata_sidecar,
     render_provider_figure_metadata_appendix,
 )
 import src.lib.document_sources.ingestion as ingestion
@@ -210,6 +211,22 @@ def test_render_provider_figure_metadata_escapes_markdown_control_lines() -> Non
 
     assert "Legend:\n\\## Abstract\nFig. 3A shows expression." in appendix
     assert "Nearby text:\n\\<!-- page: 1 -->\nFig. 3B nearby." in appendix
+
+
+def test_normalize_provider_figure_metadata_sidecar_rejects_invalid_json() -> None:
+    with pytest.raises(ValueError, match="not valid UTF-8 JSON"):
+        normalize_provider_figure_metadata_sidecar(
+            b"{not-json",
+            metadata_artifact_id="bad-meta",
+        )
+
+
+def test_normalize_provider_figure_metadata_sidecar_rejects_empty_payload() -> None:
+    with pytest.raises(ValueError, match="no indexable figure metadata"):
+        normalize_provider_figure_metadata_sidecar(
+            b'{"display_name":"   ","caption_text":" "}',
+            metadata_artifact_id="empty-meta",
+        )
 
 
 @pytest.mark.asyncio

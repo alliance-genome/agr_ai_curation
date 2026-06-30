@@ -26,6 +26,7 @@ from src.lib.document_sources.models import (
     SourceConversionResult,
     SourceConversionStatus,
 )
+from src.models.document import ProcessingStatus
 from src.models.pipeline import ProcessingStage
 from src.models.sql.pdf_processing_job import PdfJobStatus
 
@@ -688,15 +689,25 @@ async def test_execute_provider_conversion_polls_then_ingests_main_markdown(monk
 
 
 @pytest.mark.asyncio
-async def test_execute_provider_markdown_skips_failed_figure_metadata_download(monkeypatch, caplog):
+async def test_execute_provider_markdown_fails_failed_figure_metadata_download(monkeypatch):
     tracker = _Tracker()
     provider = _Provider()
     provider.payloads = {"markdown-1": b"# Results\n\nNative result."}
     provider.download_errors = {"meta-bad": RuntimeError("missing sidecar")}
     ingestion_calls = []
+    status_updates = []
 
     async def _ingest(request, *, weaviate_client):
         ingestion_calls.append({"request": request, "weaviate_client": weaviate_client})
+
+    async def _update_document_status(document_id, user_id, status):
+        status_updates.append(
+            {
+                "document_id": document_id,
+                "user_id": user_id,
+                "status": status,
+            }
+        )
 
     service = UploadExecutionService(
         pipeline_tracker=tracker,
@@ -708,6 +719,7 @@ async def test_execute_provider_markdown_skips_failed_figure_metadata_download(m
     monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_kwargs: None)
     monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_kwargs: False)
     monkeypatch.setattr(service_module.pdf_job_service, "update_progress", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module, "update_document_status", _update_document_status)
     completed_events = []
     failed_events = []
     monkeypatch.setattr(
@@ -722,29 +734,40 @@ async def test_execute_provider_markdown_skips_failed_figure_metadata_download(m
     )
     monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **_kwargs: None)
 
-    with caplog.at_level("WARNING"):
-        await service.execute_provider_markdown(
-            ProviderMarkdownExecutionRequest(
-                document_id="doc-provider",
-                job_id="job-provider",
-                user_id="user-provider",
-                owner_user_id=42,
-                filename="paper.pdf",
-                converted_artifact_id="markdown-1",
-                curator_token="curator-token",
-                source_provenance={"provider": "fake_provider"},
-                figure_metadata_artifact_ids=("meta-bad",),
-            )
+    await service.execute_provider_markdown(
+        ProviderMarkdownExecutionRequest(
+            document_id="doc-provider",
+            job_id="job-provider",
+            user_id="user-provider",
+            owner_user_id=42,
+            filename="paper.pdf",
+            converted_artifact_id="markdown-1",
+            curator_token="curator-token",
+            source_provenance={"provider": "fake_provider"},
+            figure_metadata_artifact_ids=("meta-bad",),
         )
+    )
 
     assert provider.downloads == [
         {"artifact_id": "markdown-1", "request_bearer_token": "curator-token"},
         {"artifact_id": "meta-bad", "request_bearer_token": "curator-token"},
     ]
-    assert ingestion_calls[0]["request"].provider_figure_metadata == ()
-    assert completed_events == [{"job_id": "job-provider", "message": "Processing completed"}]
-    assert failed_events == []
-    assert "Skipping provider figure metadata artifact meta-bad" in caplog.text
+    assert ingestion_calls == []
+    assert completed_events == []
+    assert failed_events == [
+        {
+            "job_id": "job-provider",
+            "message": "missing sidecar",
+            "stage": ProcessingStage.FAILED.value,
+        }
+    ]
+    assert status_updates == [
+        {
+            "document_id": "doc-provider",
+            "user_id": "user-provider",
+            "status": ProcessingStatus.FAILED.value,
+        }
+    ]
 
 
 def test_select_preferred_main_markdown_skips_abc_tei_only_artifact():

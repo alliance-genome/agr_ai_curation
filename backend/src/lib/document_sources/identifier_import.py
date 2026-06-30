@@ -315,6 +315,7 @@ async def select_reference_import_candidate(
             message="No source PDF artifact is accessible to this curator",
         )
     provider_metadata_artifacts = provider_metadata_artifacts_for_source(
+        provider=provider,
         source_artifact=source_artifact,
         artifacts=artifacts,
     )
@@ -418,6 +419,7 @@ async def select_reference_import_candidate(
                 artifacts=refreshed_artifacts,
             )
             refreshed_metadata_artifacts = provider_metadata_artifacts_for_source(
+                provider=provider,
                 source_artifact=source_artifact,
                 artifacts=refreshed_artifacts,
             )

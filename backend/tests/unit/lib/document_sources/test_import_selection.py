@@ -23,6 +23,9 @@ from src.lib.document_sources.models import (
     SourceConversionStatus,
     SourceReference,
 )
+from src.lib.document_sources.providers.abc_literature import (
+    ABCLiteratureDocumentSourceProvider,
+)
 
 
 class FakeChecksumProvider:
@@ -94,6 +97,18 @@ class FakeChecksumProvider:
 
     def conversion_exposes_main_text(self, result: SourceConversionResult) -> bool:
         return _fake_conversion_exposes_main_text(result, provider_id=self.provider_id)
+
+    def provider_metadata_artifacts_for_source(
+        self,
+        source_artifact: SourceArtifact,
+        artifacts: list[SourceArtifact] | tuple[SourceArtifact, ...],
+    ) -> tuple[SourceArtifact, ...]:
+        return tuple(
+            artifact
+            for artifact in artifacts
+            if artifact.role is SourceArtifactRole.PROVIDER_METADATA
+            and artifact.reference_curie == source_artifact.reference_curie
+        )
 
 
 class FakeConversionProvider(FakeChecksumProvider):
@@ -262,6 +277,7 @@ def _provider_metadata(
 
 
 def test_provider_metadata_artifacts_for_source_filters_by_class_and_display_prefix():
+    provider = ABCLiteratureDocumentSourceProvider(client=None)  # type: ignore[arg-type]
     source = _source("paper", provider="abc_literature")
     main_metadata = _provider_metadata(
         "main-meta",
@@ -275,12 +291,14 @@ def test_provider_metadata_artifacts_for_source_filters_by_class_and_display_pre
     )
 
     assert provider_metadata_artifacts_for_source(
+        provider=provider,
         source_artifact=source,
         artifacts=[source, supplement_metadata, main_metadata],
     ) == (main_metadata,)
 
 
 def test_provider_metadata_artifacts_for_source_prefers_exact_png_sidecar_match():
+    provider = ABCLiteratureDocumentSourceProvider(client=None)  # type: ignore[arg-type]
     source = _source("paper", provider="abc_literature")
     figure_png = SourceArtifact(
         provider="abc_literature",
@@ -303,6 +321,7 @@ def test_provider_metadata_artifacts_for_source_prefers_exact_png_sidecar_match(
     )
 
     assert provider_metadata_artifacts_for_source(
+        provider=provider,
         source_artifact=source,
         artifacts=[source, figure_png, prefix_only_metadata, matching_metadata],
     ) == (matching_metadata,)

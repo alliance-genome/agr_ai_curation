@@ -132,6 +132,7 @@ async def select_checksum_import_candidate(
 
     source_artifact = authorized_source_list[0]
     provider_metadata_artifacts = provider_metadata_artifacts_for_source(
+        provider=provider,
         source_artifact=source_artifact,
         artifacts=artifacts,
     )
@@ -235,6 +236,7 @@ async def select_checksum_import_candidate(
                 artifacts=refreshed_artifacts,
             )
             refreshed_metadata_artifacts = provider_metadata_artifacts_for_source(
+                provider=provider,
                 source_artifact=source_artifact,
                 artifacts=refreshed_artifacts,
             )
@@ -333,56 +335,30 @@ def source_artifact_is_authorized(
 
 def provider_metadata_artifacts_for_source(
     *,
+    provider: DocumentSourceProvider,
     source_artifact: SourceArtifact,
     artifacts: list[SourceArtifact] | tuple[SourceArtifact, ...],
 ) -> tuple[SourceArtifact, ...]:
-    """Return provider JSON metadata sidecars associated with a source PDF."""
+    """Return provider-declared metadata sidecars associated with a source PDF."""
 
-    metadata_candidates = [
-        artifact
-        for artifact in artifacts
-        if artifact.role is SourceArtifactRole.PROVIDER_METADATA
-        and artifact.artifact_format is SourceArtifactFormat.JSON
-        and artifact.status in {
-            SourceArtifactStatus.AVAILABLE,
-            SourceArtifactStatus.UNKNOWN,
-        }
-        and _same_reference(source_artifact, artifact)
-    ]
-    if not metadata_candidates:
-        return ()
-
-    expected_class = _expected_figure_metadata_file_class(source_artifact)
-    if expected_class:
-        class_matched = [
-            artifact
-            for artifact in metadata_candidates
-            if _artifact_file_class(artifact) == expected_class
-        ]
-        if class_matched:
-            metadata_candidates = class_matched
-
-    exact_display_names = _figure_artifact_display_names_for_source(
-        source_artifact=source_artifact,
-        artifacts=artifacts,
+    metadata_artifacts_for_source = getattr(
+        provider,
+        "provider_metadata_artifacts_for_source",
+        None,
     )
-    if exact_display_names:
-        metadata_candidates = [
-            artifact
-            for artifact in metadata_candidates
-            if str(artifact.display_name or "").strip() in exact_display_names
-        ]
-    else:
-        display_prefixes = _source_display_prefixes(source_artifact)
-        if display_prefixes:
-            display_matched = [
-                artifact
-                for artifact in metadata_candidates
-                if _artifact_display_name_matches_prefix(artifact, display_prefixes)
-            ]
-            if display_matched:
-                metadata_candidates = display_matched
-
+    if not callable(metadata_artifacts_for_source):
+        return ()
+    typed_metadata_artifacts_for_source = cast(
+        Callable[
+            [SourceArtifact, list[SourceArtifact] | tuple[SourceArtifact, ...]],
+            tuple[SourceArtifact, ...] | list[SourceArtifact],
+        ],
+        metadata_artifacts_for_source,
+    )
+    metadata_candidates = typed_metadata_artifacts_for_source(
+        source_artifact,
+        artifacts,
+    )
     return tuple(
         sorted(
             metadata_candidates,
@@ -415,83 +391,6 @@ def _source_artifacts(artifacts: list[SourceArtifact]) -> tuple[SourceArtifact, 
         for artifact in artifacts
         if artifact.role is SourceArtifactRole.SOURCE_PDF
     )
-
-
-def _artifact_file_class(artifact: SourceArtifact) -> str:
-    return str(artifact.metadata.get("file_class") or "").strip().lower()
-
-
-def _expected_figure_metadata_file_class(
-    source_artifact: SourceArtifact,
-) -> str | None:
-    source_class = _artifact_file_class(source_artifact)
-    if source_class == "main":
-        return "converted_main_figure_metadata"
-    if source_class == "supplement":
-        return "converted_supplement_figure_metadata"
-    return None
-
-
-def _expected_figure_file_class(source_artifact: SourceArtifact) -> str | None:
-    source_class = _artifact_file_class(source_artifact)
-    if source_class == "main":
-        return "converted_main_figure"
-    if source_class == "supplement":
-        return "converted_supplement_figure"
-    return None
-
-
-def _figure_artifact_display_names_for_source(
-    *,
-    source_artifact: SourceArtifact,
-    artifacts: list[SourceArtifact] | tuple[SourceArtifact, ...],
-) -> set[str]:
-    expected_class = _expected_figure_file_class(source_artifact)
-    prefixes = _source_display_prefixes(source_artifact)
-    display_names: set[str] = set()
-    for artifact in artifacts:
-        artifact_class = _artifact_file_class(artifact)
-        if expected_class and artifact_class != expected_class:
-            continue
-        if not expected_class and artifact_class not in {
-            "converted_main_figure",
-            "converted_supplement_figure",
-        }:
-            continue
-        if artifact.status not in {
-            SourceArtifactStatus.AVAILABLE,
-            SourceArtifactStatus.UNKNOWN,
-        }:
-            continue
-        if not _same_reference(source_artifact, artifact):
-            continue
-        display_name = str(artifact.display_name or "").strip()
-        if not display_name:
-            continue
-        if prefixes and not any(display_name.startswith(prefix) for prefix in prefixes):
-            continue
-        display_names.add(display_name)
-    return display_names
-
-
-def _source_display_prefixes(source_artifact: SourceArtifact) -> tuple[str, ...]:
-    display_name = str(source_artifact.display_name or "").strip()
-    if not display_name:
-        return ()
-    prefixes = [f"{display_name}_image_"]
-    if "." in display_name:
-        stem = display_name.rsplit(".", 1)[0]
-        if stem and stem != display_name:
-            prefixes.append(f"{stem}_image_")
-    return tuple(dict.fromkeys(prefixes))
-
-
-def _artifact_display_name_matches_prefix(
-    artifact: SourceArtifact,
-    prefixes: tuple[str, ...],
-) -> bool:
-    display_name = str(artifact.display_name or "").strip()
-    return any(display_name.startswith(prefix) for prefix in prefixes)
 
 
 def _converted_artifacts_for_source(

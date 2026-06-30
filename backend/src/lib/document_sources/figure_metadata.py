@@ -20,19 +20,28 @@ def normalize_provider_figure_metadata_sidecar(
     raw: bytes,
     *,
     metadata_artifact_id: str,
-) -> dict[str, Any] | None:
+) -> dict[str, Any]:
     """Parse and normalize one provider figure-metadata JSON sidecar."""
 
     try:
         payload = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
-        return None
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
+        raise ValueError(
+            f"Provider figure metadata artifact {metadata_artifact_id} is not valid UTF-8 JSON"
+        ) from exc
     if not isinstance(payload, Mapping):
-        return None
-    return normalize_provider_figure_metadata_payload(
+        raise ValueError(
+            f"Provider figure metadata artifact {metadata_artifact_id} must contain a JSON object"
+        )
+    normalized = normalize_provider_figure_metadata_payload(
         payload,
         metadata_artifact_id=metadata_artifact_id,
     )
+    if normalized is None:
+        raise ValueError(
+            f"Provider figure metadata artifact {metadata_artifact_id} has no indexable figure metadata"
+        )
+    return normalized
 
 
 def normalize_provider_figure_metadata_payload(
