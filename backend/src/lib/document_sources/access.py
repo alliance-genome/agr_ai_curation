@@ -13,6 +13,10 @@ from src.lib.config.groups_loader import (
     get_group_claim_key,
     get_groups_for_provider_groups,
 )
+from src.lib.document_sources.models import DocumentSourceConfigError
+from src.lib.document_sources.registry import (
+    get_configured_document_source_provider,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +81,8 @@ def _extract_curator_token(
 ) -> str | None:
     if request is None:
         return None
+    if is_dev_mode():
+        return _extract_dev_mode_static_curator_token()
     if not _claims_allow_cookie_token(user_claims):
         return None
     token = request.cookies.get("auth_token") or request.cookies.get("cognito_token")
@@ -85,8 +91,22 @@ def _extract_curator_token(
     return token
 
 
+def _extract_dev_mode_static_curator_token() -> str | None:
+    """Allow provider-owned dev-auth demos to use a server-side curator token."""
+
+    try:
+        provider = get_configured_document_source_provider()
+    except DocumentSourceConfigError:
+        return None
+    hook = getattr(provider, "dev_mode_static_curator_token", None)
+    if not callable(hook):
+        return None
+    token = hook()
+    if not isinstance(token, str):
+        return None
+    return token.strip() or None
+
+
 def _claims_allow_cookie_token(user_claims: Mapping[str, Any]) -> bool:
-    if is_dev_mode():
-        return False
     subject = str(user_claims.get("sub") or user_claims.get("uid") or "")
     return not subject.startswith("api-key-")

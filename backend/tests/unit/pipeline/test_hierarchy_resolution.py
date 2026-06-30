@@ -85,6 +85,60 @@ async def test_resolve_document_hierarchy_falls_back_on_empty_llm_result(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_resolve_document_hierarchy_handles_provider_figure_metadata_deterministically(
+    monkeypatch,
+) -> None:
+    llm_inputs = []
+
+    async def _fake_llm(section_info):
+        llm_inputs.append(section_info)
+        return (
+            [
+                hierarchy.SectionItem(
+                    header="Results",
+                    parent_section="Results",
+                    subsection=None,
+                    is_top_level=True,
+                ),
+            ],
+            None,
+            {"model": "stub"},
+        )
+
+    monkeypatch.setattr(hierarchy, "_call_llm_for_hierarchy", _fake_llm)
+    monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-5.4-mini")
+
+    elements = [
+        {"metadata": {"section_title": "Results"}, "text": "Native result"},
+        {
+            "metadata": {"section_title": "Provider Figure Metadata"},
+            "text": "Provider Figure Metadata",
+        },
+        {
+            "metadata": {"section_title": "Provider Figure: Figure 1"},
+            "text": "Fig. 1A shows wg expression.",
+        },
+    ]
+
+    updated, metadata = await hierarchy.resolve_document_hierarchy(elements)
+
+    assert llm_inputs == [[{"title": "Results", "preview": "Native result"}]]
+    assert updated[1]["section_title"] == "Provider Figure Metadata"
+    assert updated[1]["parent_section"] == "Provider Figure Metadata"
+    assert updated[1]["subsection"] is None
+    assert updated[2]["section_title"] == (
+        "Provider Figure Metadata > Provider Figure: Figure 1"
+    )
+    assert updated[2]["parent_section"] == "Provider Figure Metadata"
+    assert updated[2]["subsection"] == "Provider Figure: Figure 1"
+    assert metadata is not None
+    assert metadata.top_level_sections == ["Results", "Provider Figure Metadata"]
+    assert "Provider Figure Metadata" in {
+        item["parent_section"] for item in metadata.sections
+    }
+
+
+@pytest.mark.asyncio
 async def test_resolve_document_hierarchy_can_skip_metadata_storage(monkeypatch):
     async def _fake_llm(_section_info):
         return (

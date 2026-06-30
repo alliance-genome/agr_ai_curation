@@ -176,6 +176,34 @@ def provider_from_fake(
     return ABCLiteratureDocumentSourceProvider(fake_client)  # type: ignore[arg-type]
 
 
+def test_dev_mode_static_curator_token_uses_static_bearer_config(monkeypatch) -> None:
+    provider = provider_from_fake(FakeABCLiteratureClient())
+    monkeypatch.setattr(
+        "src.lib.document_sources.providers.abc_literature.get_abc_literature_auth_mode",
+        lambda: "static_bearer",
+    )
+    monkeypatch.setattr(
+        "src.lib.document_sources.providers.abc_literature.get_abc_literature_bearer_token",
+        lambda: " abc-dev-token ",
+    )
+
+    assert provider.dev_mode_static_curator_token() == "abc-dev-token"
+
+
+def test_dev_mode_static_curator_token_ignores_non_static_auth_mode(monkeypatch) -> None:
+    provider = provider_from_fake(FakeABCLiteratureClient())
+    monkeypatch.setattr(
+        "src.lib.document_sources.providers.abc_literature.get_abc_literature_auth_mode",
+        lambda: "passthrough",
+    )
+    monkeypatch.setattr(
+        "src.lib.document_sources.providers.abc_literature.get_abc_literature_bearer_token",
+        lambda: "abc-dev-token",
+    )
+
+    assert provider.dev_mode_static_curator_token() is None
+
+
 @pytest.mark.asyncio
 async def test_resolve_numeric_identifier_as_pmid() -> None:
     fake_client = FakeABCLiteratureClient()
@@ -326,6 +354,35 @@ async def test_list_artifacts_expands_converted_referencefile_children() -> None
     assert converted_artifact.access_policy.scope is SourceAccessScope.RESTRICTED
     assert converted_artifact.access_policy.mods == ("FB",)
     assert converted_artifact.status is SourceArtifactStatus.AVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_list_artifacts_maps_figure_metadata_sidecars_as_provider_metadata() -> None:
+    fake_client = FakeABCLiteratureClient()
+    fake_client.show_referencefiles_payload = {
+        "referencefiles": [
+            {
+                "referencefile_id": 110,
+                "reference_id": 101,
+                "reference_curie": "AGRKB:101",
+                "display_name": "paper_image_001",
+                "file_class": "converted_main_figure_metadata",
+                "file_extension": "json",
+                "file_publication_status": "final",
+            }
+        ]
+    }
+    provider = provider_from_fake(fake_client)
+
+    artifacts = await provider.list_artifacts("AGRKB:101")
+
+    assert len(artifacts) == 1
+    artifact = artifacts[0]
+    assert artifact.artifact_id == "110"
+    assert artifact.role is SourceArtifactRole.PROVIDER_METADATA
+    assert artifact.artifact_format is SourceArtifactFormat.JSON
+    assert artifact.status is SourceArtifactStatus.AVAILABLE
+    assert artifact.metadata["file_class"] == "converted_main_figure_metadata"
 
 
 @pytest.mark.asyncio

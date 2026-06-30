@@ -6,6 +6,7 @@ import pytest
 
 from src.lib.document_sources.import_selection import (
     ChecksumImportDecisionStatus,
+    provider_metadata_artifacts_for_source,
     select_checksum_import_candidate,
     source_artifact_is_authorized,
 )
@@ -21,6 +22,9 @@ from src.lib.document_sources.models import (
     SourceConversionResult,
     SourceConversionStatus,
     SourceReference,
+)
+from src.lib.document_sources.providers.abc_literature import (
+    ABCLiteratureDocumentSourceProvider,
 )
 
 
@@ -93,6 +97,18 @@ class FakeChecksumProvider:
 
     def conversion_exposes_main_text(self, result: SourceConversionResult) -> bool:
         return _fake_conversion_exposes_main_text(result, provider_id=self.provider_id)
+
+    def provider_metadata_artifacts_for_source(
+        self,
+        source_artifact: SourceArtifact,
+        artifacts: list[SourceArtifact] | tuple[SourceArtifact, ...],
+    ) -> tuple[SourceArtifact, ...]:
+        return tuple(
+            artifact
+            for artifact in artifacts
+            if artifact.role is SourceArtifactRole.PROVIDER_METADATA
+            and artifact.reference_curie == source_artifact.reference_curie
+        )
 
 
 class FakeConversionProvider(FakeChecksumProvider):
@@ -239,6 +255,78 @@ def _converted(
     )
 
 
+def _provider_metadata(
+    artifact_id: str,
+    *,
+    provider: str = "abc_literature",
+    display_name: str = "source-1_image_001",
+    file_class: str = "converted_main_figure_metadata",
+    status: SourceArtifactStatus = SourceArtifactStatus.AVAILABLE,
+) -> SourceArtifact:
+    return SourceArtifact(
+        provider=provider,
+        artifact_id=artifact_id,
+        role=SourceArtifactRole.PROVIDER_METADATA,
+        artifact_format=SourceArtifactFormat.JSON,
+        status=status,
+        reference_id="101",
+        reference_curie="AGRKB:101",
+        display_name=display_name,
+        metadata={"file_class": file_class, "file_extension": "json"},
+    )
+
+
+def test_provider_metadata_artifacts_for_source_filters_by_class_and_display_prefix():
+    provider = ABCLiteratureDocumentSourceProvider(client=None)  # type: ignore[arg-type]
+    source = _source("paper", provider="abc_literature")
+    main_metadata = _provider_metadata(
+        "main-meta",
+        display_name="paper_image_001",
+        file_class="converted_main_figure_metadata",
+    )
+    supplement_metadata = _provider_metadata(
+        "supp-meta",
+        display_name="supplement_image_001",
+        file_class="converted_supplement_figure_metadata",
+    )
+
+    assert provider_metadata_artifacts_for_source(
+        provider=provider,
+        source_artifact=source,
+        artifacts=[source, supplement_metadata, main_metadata],
+    ) == (main_metadata,)
+
+
+def test_provider_metadata_artifacts_for_source_prefers_exact_png_sidecar_match():
+    provider = ABCLiteratureDocumentSourceProvider(client=None)  # type: ignore[arg-type]
+    source = _source("paper", provider="abc_literature")
+    figure_png = SourceArtifact(
+        provider="abc_literature",
+        artifact_id="fig-png-1",
+        role=SourceArtifactRole.CONVERTED_TEXT,
+        artifact_format=SourceArtifactFormat.UNKNOWN,
+        status=SourceArtifactStatus.AVAILABLE,
+        reference_id="101",
+        reference_curie="AGRKB:101",
+        display_name="paper_image_001",
+        metadata={"file_class": "converted_main_figure", "file_extension": "png"},
+    )
+    matching_metadata = _provider_metadata(
+        "matching-meta",
+        display_name="paper_image_001",
+    )
+    prefix_only_metadata = _provider_metadata(
+        "prefix-only-meta",
+        display_name="paper_image_002",
+    )
+
+    assert provider_metadata_artifacts_for_source(
+        provider=provider,
+        source_artifact=source,
+        artifacts=[source, figure_png, prefix_only_metadata, matching_metadata],
+    ) == (matching_metadata,)
+
+
 @pytest.mark.asyncio
 async def test_select_checksum_import_candidate_returns_ready_for_single_authorized_match():
     provider = FakeChecksumProvider([_source("source-1"), _converted("md-1", "source-1")])
@@ -255,6 +343,46 @@ async def test_select_checksum_import_candidate_returns_ready_for_single_authori
     assert decision.selected is not None
     assert decision.selected.source_artifact.artifact_id == "source-1"
     assert decision.selected.converted_artifact.artifact_id == "md-1"
+
+
+@pytest.mark.asyncio
+async def test_select_checksum_import_candidate_carries_provider_metadata_sidecars():
+    source = _source("source-1", provider="abc_literature")
+    markdown = _converted("md-1", "source-1", provider="abc_literature")
+    metadata = _provider_metadata("fig-meta-1")
+    provider = FakeChecksumProvider([source, markdown, metadata])
+    provider.provider_id = "abc_literature"
+
+    decision = await select_checksum_import_candidate(
+        provider=provider,
+        checksum="abc123",
+        authorized_group_ids=(),
+    )
+
+    assert decision.status is ChecksumImportDecisionStatus.READY
+    assert decision.selected is not None
+    assert decision.selected.converted_artifact is markdown
+    assert decision.selected.provider_metadata_artifacts == (metadata,)
+
+
+@pytest.mark.asyncio
+async def test_select_checksum_import_candidate_does_not_select_metadata_json_as_markdown():
+    source = _source("source-1", provider="abc_literature")
+    metadata = _provider_metadata("fig-meta-1")
+    provider = FakeChecksumProvider([source, metadata])
+    provider.provider_id = "abc_literature"
+
+    decision = await select_checksum_import_candidate(
+        provider=provider,
+        checksum="abc123",
+        authorized_group_ids=(),
+        allow_conversion_request=False,
+    )
+
+    assert decision.status is ChecksumImportDecisionStatus.READY
+    assert decision.selected is not None
+    assert decision.selected.converted_artifact is None
+    assert decision.selected.provider_metadata_artifacts == (metadata,)
 
 
 @pytest.mark.asyncio

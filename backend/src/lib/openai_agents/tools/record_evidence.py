@@ -12,6 +12,10 @@ from typing import TYPE_CHECKING, Any, Optional
 from agents import function_tool
 
 from src.lib.openai_agents.config import get_record_evidence_preview_chars
+from src.lib.document_sources.figure_metadata import (
+    PROVIDER_FIGURE_METADATA_SECTION,
+    is_provider_figure_subsection,
+)
 from src.lib.openai_agents.evidence_spans import (
     EvidenceSpan,
     EvidenceSpanResolutionError,
@@ -213,7 +217,11 @@ def _resolve_exact_chunk_text(chunk: dict[str, Any]) -> str | None:
     return text if isinstance(text, str) else None
 
 
-def _extract_figure_reference(chunk: dict[str, Any], chunk_text: str) -> str | None:
+def _extract_figure_reference(
+    chunk: dict[str, Any],
+    chunk_text: str,
+    span_text: str | None = None,
+) -> str | None:
     metadata = _metadata_dict(chunk)
     candidates: list[str | None] = [
         _first_non_empty(
@@ -222,7 +230,18 @@ def _extract_figure_reference(chunk: dict[str, Any], chunk_text: str) -> str | N
         ),
     ]
 
-    for source_text in (chunk_text, _resolve_chunk_section(chunk), _resolve_chunk_subsection(chunk)):
+    if _is_provider_figure_metadata_chunk(chunk):
+        source_texts = (
+            _strip_provider_figure_metadata_wrapper(span_text or chunk_text),
+        )
+    else:
+        source_texts = (
+            span_text or chunk_text,
+            _resolve_chunk_section(chunk),
+            _resolve_chunk_subsection(chunk),
+        )
+
+    for source_text in source_texts:
         if not source_text:
             continue
         candidates.extend(_FIGURE_REFERENCE_PATTERN.findall(source_text))
@@ -245,6 +264,45 @@ def _extract_figure_reference(chunk: dict[str, Any], chunk_text: str) -> str | N
     if len(unique_candidates) == 1:
         return unique_candidates[0]
     return None
+
+
+def _is_provider_figure_metadata_chunk(chunk: dict[str, Any]) -> bool:
+    section = _resolve_chunk_section(chunk)
+    subsection = _resolve_chunk_subsection(chunk)
+    return (
+        section == PROVIDER_FIGURE_METADATA_SECTION
+        or subsection == PROVIDER_FIGURE_METADATA_SECTION
+        or is_provider_figure_subsection(subsection)
+    )
+
+
+def _strip_provider_figure_metadata_wrapper(text: str) -> str:
+    stripped_lines = []
+    for line in text.splitlines():
+        normalized = line.strip()
+        if not normalized:
+            continue
+        if (
+            normalized == PROVIDER_FIGURE_METADATA_SECTION
+            or is_provider_figure_subsection(normalized)
+            or normalized.startswith(
+                (
+                    "Figure label:",
+                    "Figure number:",
+                    "Source figure artifact:",
+                    "Metadata artifact:",
+                    "Source display name:",
+                    "Source file class:",
+                    "PDFX page_index:",
+                    "PDFX bbox:",
+                    "PDFX polygon:",
+                    "Filename:",
+                )
+            )
+        ):
+            continue
+        stripped_lines.append(line)
+    return "\n".join(stripped_lines)
 
 
 def _optional_output_string(value: Any) -> str | None:
@@ -926,7 +984,11 @@ def create_record_evidence_tool(
                     page=page,
                     section=section,
                     subsection=subsection,
-                    figure_reference=_extract_figure_reference(chunk, chunk_text),
+                    figure_reference=_extract_figure_reference(
+                        chunk,
+                        chunk_text,
+                        span.text,
+                    ),
                 )
             )
 

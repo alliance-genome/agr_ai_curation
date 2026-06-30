@@ -13,6 +13,10 @@ from src.lib.document_sources.ingestion import (
     ProviderMarkdownIngestionRequest,
     ingest_provider_markdown_document,
 )
+from src.lib.document_sources.figure_metadata import (
+    normalize_provider_figure_metadata_sidecar,
+    render_provider_figure_metadata_appendix,
+)
 import src.lib.document_sources.ingestion as ingestion
 from src.models.pipeline import ProcessingStage
 
@@ -151,6 +155,150 @@ def test_provider_markdown_ingestion_allows_global_without_mods() -> None:
     )
 
     assert provenance["access_scope"] == "global"
+
+
+def test_render_provider_figure_metadata_appendix_uses_caption_as_legend() -> None:
+    appendix = render_provider_figure_metadata_appendix(
+        [
+            {
+                "metadata_artifact_id": "110",
+                "display_name": "paper_image_001",
+                "figure_label": "Figure 1",
+                "figure_number": "1",
+                "caption_text": "Fig. 1A shows wg expression in the wing disc.",
+                "nearby_text": "Nearby result text.",
+                "page_index": 2,
+            }
+        ]
+    )
+
+    assert "## Provider Figure Metadata" in appendix
+    assert "### Provider Figure: Figure 1" in appendix
+    assert "Metadata artifact: 110" in appendix
+    assert "Legend:\nFig. 1A shows wg expression in the wing disc." in appendix
+    assert "Nearby text:\nNearby result text." in appendix
+
+
+def test_render_provider_figure_metadata_appendix_falls_back_to_nearby_text() -> None:
+    appendix = render_provider_figure_metadata_appendix(
+        [
+            {
+                "metadata_artifact_id": "111",
+                "display_name": "paper_image_002",
+                "figure_label": "Figure 2",
+                "nearby_text": "Fig. 2 shows eve expression.",
+            }
+        ]
+    )
+
+    assert "### Provider Figure: Figure 2" in appendix
+    assert "Legend:" not in appendix
+    assert "Nearby text:\nFig. 2 shows eve expression." in appendix
+
+
+def test_render_provider_figure_metadata_escapes_markdown_control_lines() -> None:
+    appendix = render_provider_figure_metadata_appendix(
+        [
+            {
+                "metadata_artifact_id": "112",
+                "display_name": "paper_image_003",
+                "figure_label": "Figure 3",
+                "caption_text": "## Abstract\nFig. 3A shows expression.",
+                "nearby_text": "<!-- page: 1 -->\nFig. 3B nearby.",
+            }
+        ]
+    )
+
+    assert "Legend:\n\\## Abstract\nFig. 3A shows expression." in appendix
+    assert "Nearby text:\n\\<!-- page: 1 -->\nFig. 3B nearby." in appendix
+
+
+def test_normalize_provider_figure_metadata_sidecar_rejects_invalid_json() -> None:
+    with pytest.raises(ValueError, match="not valid UTF-8 JSON"):
+        normalize_provider_figure_metadata_sidecar(
+            b"{not-json",
+            metadata_artifact_id="bad-meta",
+        )
+
+
+def test_normalize_provider_figure_metadata_sidecar_rejects_empty_payload() -> None:
+    with pytest.raises(ValueError, match="no indexable figure metadata"):
+        normalize_provider_figure_metadata_sidecar(
+            b'{"display_name":"   ","caption_text":" "}',
+            metadata_artifact_id="empty-meta",
+        )
+
+
+@pytest.mark.asyncio
+async def test_ingest_provider_markdown_document_indexes_provider_figure_metadata(
+    monkeypatch,
+) -> None:
+    saved_markdown = {}
+
+    async def fake_save_source_markdown(**kwargs):
+        saved_markdown.update(kwargs)
+        return "user-1/source_markdown/doc-1.md"
+
+    monkeypatch.setattr(
+        ingestion,
+        "_save_source_markdown",
+        fake_save_source_markdown,
+    )
+    monkeypatch.setattr(
+        ingestion,
+        "_save_processed_json",
+        AsyncMock(return_value="user-1/processed_json/doc-1.json"),
+    )
+    monkeypatch.setattr(ingestion, "_persist_ingestion_metadata", AsyncMock())
+    monkeypatch.setattr(ingestion, "_store_hierarchy_metadata", AsyncMock())
+    monkeypatch.setattr(ingestion, "_sync_sql_document_status", AsyncMock())
+    monkeypatch.setattr(ingestion, "_require_owned_document", AsyncMock())
+
+    captured_elements = {}
+
+    async def fake_resolve(elements):
+        captured_elements["before_hierarchy"] = elements
+        return elements, SimpleNamespace(model_dump=lambda: {"sections": []})
+
+    async def fake_chunk(elements, strategy, document_id):
+        del strategy, document_id
+        captured_elements["chunked"] = elements
+        return [{"chunk_index": 0, "content": "ok", "metadata": {}}]
+
+    monkeypatch.setattr(
+        "src.lib.pipeline.hierarchy_resolution.resolve_document_hierarchy",
+        fake_resolve,
+    )
+    monkeypatch.setattr("src.lib.pipeline.chunk.chunk_parsed_document", fake_chunk)
+    monkeypatch.setattr("src.lib.pipeline.store.store_to_weaviate", AsyncMock())
+
+    result = await ingest_provider_markdown_document(
+        ProviderMarkdownIngestionRequest(
+            document_id="doc-1",
+            user_id="user-1",
+            document_owner_user_id=42,
+            markdown="# Results\n\nNative result text.\n",
+            source_provenance=_source_provenance(access_scope="Restricted"),
+            provider_figure_metadata=(
+                {
+                    "metadata_artifact_id": "110",
+                    "display_name": "paper_image_001",
+                    "figure_label": "Figure 1",
+                    "caption_text": "Fig. 1A shows wg expression in the wing disc.",
+                },
+            ),
+        ),
+        weaviate_client=object(),
+    )
+
+    assert result.processing_result.success is True
+    assert saved_markdown["markdown"] == "# Results\n\nNative result text.\n"
+    indexed_text = "\n".join(
+        element["text"] for element in captured_elements["before_hierarchy"]
+    )
+    assert "Provider Figure Metadata" in indexed_text
+    assert "Provider Figure: Figure 1" in indexed_text
+    assert "Fig. 1A shows wg expression in the wing disc." in indexed_text
 
 
 @pytest.mark.asyncio

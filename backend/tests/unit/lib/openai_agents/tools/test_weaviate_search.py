@@ -2,6 +2,10 @@
 
 import pytest
 
+from src.lib.document_sources.figure_metadata import (
+    PROVIDER_FIGURE_METADATA_SECTION,
+    PROVIDER_FIGURE_SUBSECTION_PREFIX,
+)
 import src.lib.openai_agents.tools.weaviate_search as weaviate_search
 
 
@@ -411,6 +415,35 @@ async def test_read_section_tool_combines_content_pages_and_doc_items(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_read_section_tool_retrieves_provider_figure_metadata(monkeypatch):
+    async def _chunks(**kwargs):
+        assert kwargs["parent_section"] == PROVIDER_FIGURE_METADATA_SECTION
+        return [
+            {
+                "id": "chunk-provider-figure-1",
+                "text": (
+                    "Figure label: Figure 1\n\n"
+                    "Legend:\n"
+                    "Fig. 1A shows wg expression in the embryo."
+                ),
+                "page_number": 12,
+                "section_title": PROVIDER_FIGURE_METADATA_SECTION,
+                "subsection": f"{PROVIDER_FIGURE_SUBSECTION_PREFIX} Figure 1",
+            }
+        ]
+
+    monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section", _chunks)
+    tool = weaviate_search.create_read_section_tool("doc-12345678", "user-1")
+    result = await tool(PROVIDER_FIGURE_METADATA_SECTION)
+
+    assert result.section is not None
+    assert result.section.section_title == PROVIDER_FIGURE_METADATA_SECTION
+    assert "Fig. 1A shows wg expression" in result.section.content
+    assert result.section.source_chunks is not None
+    assert result.section.source_chunks[0].subsection == f"{PROVIDER_FIGURE_SUBSECTION_PREFIX} Figure 1"
+
+
+@pytest.mark.asyncio
 async def test_read_section_tool_returns_error_summary_on_exception(monkeypatch):
     async def _boom(**_kwargs):
         raise RuntimeError("section read failed")
@@ -487,6 +520,39 @@ async def test_read_subsection_tool_no_content_and_success(monkeypatch):
     assert not hasattr(success_result.subsection.source_chunks[0], "evidence_spans")
     assert success_result.subsection.doc_items == [{"id": "bbox-1"}]
     assert not hasattr(success_result.subsection, "evidence_spans")
+
+
+@pytest.mark.asyncio
+async def test_read_subsection_tool_retrieves_provider_figure_entry(monkeypatch):
+    provider_subsection = f"{PROVIDER_FIGURE_SUBSECTION_PREFIX} Figure 2"
+
+    async def _chunks(**kwargs):
+        assert kwargs["parent_section"] == PROVIDER_FIGURE_METADATA_SECTION
+        assert kwargs["subsection"] == provider_subsection
+        return [
+            {
+                "id": "chunk-provider-figure-2",
+                "text": (
+                    "Figure label: Figure 2\n\n"
+                    "Legend:\n"
+                    "Fig. 2B shows eve expression in stripes."
+                ),
+                "page_number": 13,
+                "section_title": PROVIDER_FIGURE_METADATA_SECTION,
+                "subsection": provider_subsection,
+            }
+        ]
+
+    monkeypatch.setattr(weaviate_search, "get_chunks_by_subsection", _chunks)
+    tool = weaviate_search.create_read_subsection_tool("doc-12345678", "user-1")
+    result = await tool(PROVIDER_FIGURE_METADATA_SECTION, provider_subsection)
+
+    assert result.subsection is not None
+    assert result.subsection.parent_section == PROVIDER_FIGURE_METADATA_SECTION
+    assert result.subsection.subsection == provider_subsection
+    assert "Fig. 2B shows eve expression" in result.subsection.content
+    assert result.subsection.source_chunks is not None
+    assert result.subsection.source_chunks[0].chunk_id == "chunk-provider-figure-2"
 
 
 @pytest.mark.asyncio

@@ -26,9 +26,18 @@ from src.lib.literature.client import (
     ABCLiteratureClientError,
     ABCLiteratureHTTPError,
 )
+from src.lib.openai_agents.config import (
+    get_abc_literature_auth_mode,
+    get_abc_literature_bearer_token,
+)
 
 
 ABC_LITERATURE_PROVIDER_ID = "abc_literature"
+
+_FIGURE_METADATA_FILE_CLASSES = {
+    "converted_main_figure_metadata",
+    "converted_supplement_figure_metadata",
+}
 
 _ARTIFACT_STATUS_KEYS = (
     "status",
@@ -174,6 +183,76 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
             if converted.get("file_class") == "converted_merged_main":
                 return True
         return False
+
+    def dev_mode_static_curator_token(self) -> str | None:
+        """Return the configured static bearer only for the explicit ABC dev mode."""
+
+        if get_abc_literature_auth_mode().strip().lower() != "static_bearer":
+            return None
+        token = (get_abc_literature_bearer_token() or "").strip()
+        return token or None
+
+    def provider_metadata_artifacts_for_source(
+        self,
+        source_artifact: SourceArtifact,
+        artifacts: list[SourceArtifact] | tuple[SourceArtifact, ...],
+    ) -> tuple[SourceArtifact, ...]:
+        """Return ABC figure-metadata JSON sidecars for a source PDF."""
+
+        metadata_candidates = [
+            artifact
+            for artifact in artifacts
+            if artifact.role is SourceArtifactRole.PROVIDER_METADATA
+            and artifact.artifact_format is SourceArtifactFormat.JSON
+            and artifact.status in {
+                SourceArtifactStatus.AVAILABLE,
+                SourceArtifactStatus.UNKNOWN,
+            }
+            and _same_reference(source_artifact, artifact)
+        ]
+        if not metadata_candidates:
+            return ()
+
+        expected_class = _expected_figure_metadata_file_class(source_artifact)
+        if expected_class:
+            class_matched = [
+                artifact
+                for artifact in metadata_candidates
+                if _artifact_file_class(artifact) == expected_class
+            ]
+            if class_matched:
+                metadata_candidates = class_matched
+
+        exact_display_names = _figure_artifact_display_names_for_source(
+            source_artifact=source_artifact,
+            artifacts=artifacts,
+        )
+        if exact_display_names:
+            metadata_candidates = [
+                artifact
+                for artifact in metadata_candidates
+                if str(artifact.display_name or "").strip() in exact_display_names
+            ]
+        else:
+            display_prefixes = _source_display_prefixes(source_artifact)
+            if display_prefixes:
+                display_matched = [
+                    artifact
+                    for artifact in metadata_candidates
+                    if _artifact_display_name_matches_prefix(artifact, display_prefixes)
+                ]
+                if display_matched:
+                    metadata_candidates = display_matched
+
+        return tuple(
+            sorted(
+                metadata_candidates,
+                key=lambda artifact: (
+                    str(artifact.display_name or "").strip().lower(),
+                    artifact.artifact_id,
+                ),
+            )
+        )
 
     async def list_artifacts(
         self,
@@ -600,6 +679,91 @@ def _has_null_mod_entry(payload: Mapping[str, Any]) -> bool:
     return False
 
 
+def _same_reference(source_artifact: SourceArtifact, artifact: SourceArtifact) -> bool:
+    if source_artifact.reference_id and artifact.reference_id:
+        return source_artifact.reference_id == artifact.reference_id
+    if source_artifact.reference_curie and artifact.reference_curie:
+        return source_artifact.reference_curie == artifact.reference_curie
+    return not artifact.reference_id and not artifact.reference_curie
+
+
+def _artifact_file_class(artifact: SourceArtifact) -> str:
+    return str(artifact.metadata.get("file_class") or "").strip().lower()
+
+
+def _expected_figure_metadata_file_class(
+    source_artifact: SourceArtifact,
+) -> str | None:
+    source_class = _artifact_file_class(source_artifact)
+    if source_class == "main":
+        return "converted_main_figure_metadata"
+    if source_class == "supplement":
+        return "converted_supplement_figure_metadata"
+    return None
+
+
+def _expected_figure_file_class(source_artifact: SourceArtifact) -> str | None:
+    source_class = _artifact_file_class(source_artifact)
+    if source_class == "main":
+        return "converted_main_figure"
+    if source_class == "supplement":
+        return "converted_supplement_figure"
+    return None
+
+
+def _figure_artifact_display_names_for_source(
+    *,
+    source_artifact: SourceArtifact,
+    artifacts: list[SourceArtifact] | tuple[SourceArtifact, ...],
+) -> set[str]:
+    expected_class = _expected_figure_file_class(source_artifact)
+    prefixes = _source_display_prefixes(source_artifact)
+    display_names: set[str] = set()
+    for artifact in artifacts:
+        artifact_class = _artifact_file_class(artifact)
+        if expected_class and artifact_class != expected_class:
+            continue
+        if not expected_class and artifact_class not in {
+            "converted_main_figure",
+            "converted_supplement_figure",
+        }:
+            continue
+        if artifact.status not in {
+            SourceArtifactStatus.AVAILABLE,
+            SourceArtifactStatus.UNKNOWN,
+        }:
+            continue
+        if not _same_reference(source_artifact, artifact):
+            continue
+        display_name = str(artifact.display_name or "").strip()
+        if not display_name:
+            continue
+        if prefixes and not any(display_name.startswith(prefix) for prefix in prefixes):
+            continue
+        display_names.add(display_name)
+    return display_names
+
+
+def _source_display_prefixes(source_artifact: SourceArtifact) -> tuple[str, ...]:
+    display_name = str(source_artifact.display_name or "").strip()
+    if not display_name:
+        return ()
+    prefixes = [f"{display_name}_image_"]
+    if "." in display_name:
+        stem = display_name.rsplit(".", 1)[0]
+        if stem and stem != display_name:
+            prefixes.append(f"{stem}_image_")
+    return tuple(dict.fromkeys(prefixes))
+
+
+def _artifact_display_name_matches_prefix(
+    artifact: SourceArtifact,
+    prefixes: tuple[str, ...],
+) -> bool:
+    display_name = str(artifact.display_name or "").strip()
+    return any(display_name.startswith(prefix) for prefix in prefixes)
+
+
 def _map_artifact_role(*, file_class: str, extension: str) -> SourceArtifactRole:
     normalized_class = file_class.strip().lower()
     normalized_extension = extension.strip().lower()
@@ -609,6 +773,11 @@ def _map_artifact_role(*, file_class: str, extension: str) -> SourceArtifactRole
         "pdf",
     }:
         return SourceArtifactRole.SOURCE_PDF
+    if (
+        normalized_class in _FIGURE_METADATA_FILE_CLASSES
+        and normalized_extension == "json"
+    ):
+        return SourceArtifactRole.PROVIDER_METADATA
     if normalized_class.startswith("converted") or normalized_extension in {
         "md",
         "xml",

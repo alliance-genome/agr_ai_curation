@@ -146,6 +146,7 @@ class ProviderChecksumImportPlan:
     source_provenance: Dict[str, Any]
     curator_token: str = field(repr=False)
     wait_for_conversion: bool = False
+    figure_metadata_artifact_ids: tuple[str, ...] = ()
 
 
 class UploadIntakeValidationError(ValueError):
@@ -452,6 +453,7 @@ class UploadIntakeService:
                 converted_artifact_id=provider_import_plan.converted_artifact.artifact_id,
                 curator_token=provider_import_plan.curator_token,
                 source_provenance=provider_import_plan.source_provenance,
+                figure_metadata_artifact_ids=provider_import_plan.figure_metadata_artifact_ids,
             )
             await self.upload_execution_service.dispatch_provider_markdown_execution(
                 background_tasks=background_tasks,
@@ -472,6 +474,7 @@ class UploadIntakeService:
                     source_artifact_id=provider_import_plan.source_artifact.artifact_id,
                     curator_token=provider_import_plan.curator_token,
                     source_provenance=provider_import_plan.source_provenance,
+                    figure_metadata_artifact_ids=provider_import_plan.figure_metadata_artifact_ids,
                 ),
             )
         else:
@@ -657,6 +660,10 @@ class UploadIntakeService:
             source_provenance=source_provenance,
             curator_token=curator_token,
             wait_for_conversion=wait_for_conversion,
+            figure_metadata_artifact_ids=tuple(
+                artifact.artifact_id
+                for artifact in decision.selected.provider_metadata_artifacts
+            ),
         )
 
     @staticmethod

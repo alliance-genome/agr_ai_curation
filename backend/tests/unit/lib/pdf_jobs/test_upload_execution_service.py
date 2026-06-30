@@ -26,6 +26,7 @@ from src.lib.document_sources.models import (
     SourceConversionResult,
     SourceConversionStatus,
 )
+from src.models.document import ProcessingStatus
 from src.models.pipeline import ProcessingStage
 from src.models.sql.pdf_processing_job import PdfJobStatus
 
@@ -76,6 +77,8 @@ class _Provider:
 
     def __init__(self, payload=b"# Title\n\nBody"):
         self.payload = payload
+        self.payloads = {}
+        self.download_errors = {}
         self.downloads = []
         self.conversion_requests = []
         self.list_artifact_calls = []
@@ -111,7 +114,23 @@ class _Provider:
                 "request_bearer_token": request_bearer_token,
             }
         )
-        return self.payload
+        if artifact_id in self.download_errors:
+            raise self.download_errors[artifact_id]
+        return self.payloads.get(artifact_id, self.payload)
+
+    def provider_metadata_artifacts_for_source(self, source_artifact, artifacts):
+        return tuple(
+            artifact
+            for artifact in artifacts
+            if artifact.role is SourceArtifactRole.PROVIDER_METADATA
+            and (
+                artifact.parent_artifact_id == source_artifact.artifact_id
+                or (
+                    artifact.parent_artifact_id is None
+                    and artifact.reference_curie == source_artifact.reference_curie
+                )
+            )
+        )
 
     async def aclose(self):
         self.closed = True
@@ -449,6 +468,178 @@ async def test_execute_provider_markdown_downloads_with_curator_token_and_marks_
             "message": "Processing completed",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_execute_provider_markdown_passes_downloaded_figure_metadata_to_ingestion(monkeypatch):
+    tracker = _Tracker()
+    provider = _Provider()
+    provider.payloads = {
+        "markdown-1": b"# Results\n\nNative result.",
+        "meta-1": (
+            b'{"display_name":"paper_image_001","figure_label":"Figure 1",'
+            b'"caption_text":"Fig. 1A shows wg expression."}'
+        ),
+    }
+    ingestion_calls = []
+
+    async def _ingest(request, *, weaviate_client):
+        ingestion_calls.append({"request": request, "weaviate_client": weaviate_client})
+
+    service = UploadExecutionService(
+        pipeline_tracker=tracker,
+        document_source_provider_factory=lambda: provider,
+        provider_markdown_ingestion_fn=_ingest,
+    )
+
+    monkeypatch.setattr(service_module, "get_connection", lambda: "weaviate-client")
+    monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_kwargs: False)
+    monkeypatch.setattr(service_module.pdf_job_service, "update_progress", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "mark_completed", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "mark_failed", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **_kwargs: None)
+
+    await service.execute_provider_markdown(
+        ProviderMarkdownExecutionRequest(
+            document_id="doc-provider",
+            job_id="job-provider",
+            user_id="user-provider",
+            owner_user_id=42,
+            filename="paper.pdf",
+            converted_artifact_id="markdown-1",
+            curator_token="curator-token",
+            source_provenance={
+                "provider": "fake_provider",
+                "access_scope": "global",
+            },
+            figure_metadata_artifact_ids=("meta-1",),
+        )
+    )
+
+    assert provider.downloads[:2] == [
+        {
+            "artifact_id": "markdown-1",
+            "request_bearer_token": "curator-token",
+        },
+        {
+            "artifact_id": "meta-1",
+            "request_bearer_token": "curator-token",
+        },
+    ]
+    ingestion_request = ingestion_calls[0]["request"]
+    assert ingestion_request.markdown == "# Results\n\nNative result."
+    assert ingestion_request.provider_figure_metadata == (
+        {
+            "metadata_artifact_id": "meta-1",
+            "display_name": "paper_image_001",
+            "figure_label": "Figure 1",
+            "caption_text": "Fig. 1A shows wg expression.",
+        },
+    )
+    assert tracker.calls[-1]["stage"] == ProcessingStage.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_execute_provider_markdown_discovers_figure_metadata_from_source_provenance(monkeypatch):
+    tracker = _Tracker()
+    provider = _Provider()
+    provider.payloads = {
+        "markdown-1": b"# Results\n\nNative result.",
+        "meta-discovered": (
+            b'{"display_name":"paper_image_001","figure_label":"Figure 1",'
+            b'"caption_text":"Fig. 1A shows wg expression."}'
+        ),
+    }
+    provider.artifacts = [
+        SourceArtifact(
+            provider="fake_provider",
+            artifact_id="source-pdf-1",
+            role=SourceArtifactRole.SOURCE_PDF,
+            artifact_format=SourceArtifactFormat.PDF,
+            status=SourceArtifactStatus.AVAILABLE,
+            reference_curie="AGRKB:101",
+            display_name="paper",
+            access_policy=SourceAccessPolicy(scope=SourceAccessScope.GLOBAL),
+            metadata={"file_class": "main", "file_extension": "pdf"},
+        ),
+        SourceArtifact(
+            provider="fake_provider",
+            artifact_id="meta-discovered",
+            role=SourceArtifactRole.PROVIDER_METADATA,
+            artifact_format=SourceArtifactFormat.JSON,
+            status=SourceArtifactStatus.AVAILABLE,
+            reference_curie="AGRKB:101",
+            display_name="paper_image_001",
+            parent_artifact_id="source-pdf-1",
+            access_policy=SourceAccessPolicy(scope=SourceAccessScope.GLOBAL),
+            metadata={
+                "file_class": "converted_main_figure_metadata",
+                "file_extension": "json",
+            },
+        ),
+    ]
+    ingestion_calls = []
+
+    async def _ingest(request, *, weaviate_client):
+        ingestion_calls.append({"request": request, "weaviate_client": weaviate_client})
+
+    service = UploadExecutionService(
+        pipeline_tracker=tracker,
+        document_source_provider_factory=lambda: provider,
+        provider_markdown_ingestion_fn=_ingest,
+    )
+
+    monkeypatch.setattr(service_module, "get_connection", lambda: "weaviate-client")
+    monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_kwargs: False)
+    monkeypatch.setattr(service_module.pdf_job_service, "update_progress", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "mark_completed", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "mark_failed", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **_kwargs: None)
+
+    await service.execute_provider_markdown(
+        ProviderMarkdownExecutionRequest(
+            document_id="doc-provider",
+            job_id="job-provider",
+            user_id="user-provider",
+            owner_user_id=42,
+            filename="paper.pdf",
+            converted_artifact_id="markdown-1",
+            curator_token="curator-token",
+            source_provenance={
+                "provider": "fake_provider",
+                "reference_curie": "   ",
+                "reference_id": "AGRKB:101",
+                "pdf_artifact_id": "   ",
+                "source_file_id": "source-pdf-1",
+                "access_scope": "global",
+            },
+        )
+    )
+
+    assert provider.list_artifact_calls == [
+        {"reference": "AGRKB:101", "request_bearer_token": "curator-token"}
+    ]
+    assert provider.downloads[:2] == [
+        {
+            "artifact_id": "markdown-1",
+            "request_bearer_token": "curator-token",
+        },
+        {
+            "artifact_id": "meta-discovered",
+            "request_bearer_token": "curator-token",
+        },
+    ]
+    ingestion_request = ingestion_calls[0]["request"]
+    assert ingestion_request.provider_figure_metadata == (
+        {
+            "metadata_artifact_id": "meta-discovered",
+            "display_name": "paper_image_001",
+            "figure_label": "Figure 1",
+            "caption_text": "Fig. 1A shows wg expression.",
+        },
+    )
     assert tracker.calls[-1]["stage"] == ProcessingStage.COMPLETED
 
 
@@ -471,12 +662,29 @@ async def test_execute_provider_conversion_polls_then_ingests_main_markdown(monk
                         "file_class": "converted_merged_main",
                         "referencefile_id": 88,
                     },
+                    "figures": [
+                        {
+                            "display_name": "paper_image_001",
+                            "referencefile_id": 109,
+                            "metadata_referencefile_id": 110,
+                        }
+                    ],
                     "status": "success",
                     "error": None,
                 },
             ),
         )
     ]
+    provider.payloads = {
+        "109": (
+            b'{"display_name":"paper_image_000","figure_label":"Figure 0",'
+            b'"caption_text":"Fig. 0 shows controls."}'
+        ),
+        "110": (
+            b'{"display_name":"paper_image_001","figure_label":"Figure 1",'
+            b'"caption_text":"Fig. 1A shows wg expression."}'
+        ),
+    }
     provider.artifacts = [
         SourceArtifact(
             provider="fake_provider",
@@ -556,6 +764,7 @@ async def test_execute_provider_conversion_polls_then_ingests_main_markdown(monk
                 "pdf_artifact_id": "source-pdf-1",
                 "viewer_mode": "local_pdf",
             },
+            figure_metadata_artifact_ids=("109",),
         )
     )
 
@@ -571,13 +780,111 @@ async def test_execute_provider_conversion_polls_then_ingests_main_markdown(monk
     ]
     assert sql_selections == [("doc-conversion", "markdown-88")]
     assert provider.downloads == [
-        {"artifact_id": "markdown-88", "request_bearer_token": "curator-token"}
+        {"artifact_id": "markdown-88", "request_bearer_token": "curator-token"},
+        {"artifact_id": "109", "request_bearer_token": "curator-token"},
+        {"artifact_id": "110", "request_bearer_token": "curator-token"},
     ]
     assert len(job_statuses) == 1
     assert ingested[0]["request"].source_provenance["converted_artifact_id"] == "markdown-88"
+    assert ingested[0]["request"].provider_figure_metadata == (
+        {
+            "metadata_artifact_id": "109",
+            "display_name": "paper_image_000",
+            "figure_label": "Figure 0",
+            "caption_text": "Fig. 0 shows controls.",
+        },
+        {
+            "metadata_artifact_id": "110",
+            "display_name": "paper_image_001",
+            "figure_label": "Figure 1",
+            "caption_text": "Fig. 1A shows wg expression.",
+        },
+    )
     assert progress_updates[0]["stage"] == "provider_conversion"
     assert progress_updates[0]["metadata"]["document_source"]["conversion_job_id"] == "abc-job-1"
     assert completed_events == [{"job_id": "job-conversion", "message": "Processing completed"}]
+
+
+@pytest.mark.asyncio
+async def test_execute_provider_markdown_fails_failed_figure_metadata_download(monkeypatch):
+    tracker = _Tracker()
+    provider = _Provider()
+    provider.payloads = {"markdown-1": b"# Results\n\nNative result."}
+    provider.download_errors = {"meta-bad": RuntimeError("missing sidecar")}
+    ingestion_calls = []
+    status_updates = []
+
+    async def _ingest(request, *, weaviate_client):
+        ingestion_calls.append({"request": request, "weaviate_client": weaviate_client})
+
+    async def _update_document_status(document_id, user_id, status):
+        status_updates.append(
+            {
+                "document_id": document_id,
+                "user_id": user_id,
+                "status": status,
+            }
+        )
+
+    service = UploadExecutionService(
+        pipeline_tracker=tracker,
+        document_source_provider_factory=lambda: provider,
+        provider_markdown_ingestion_fn=_ingest,
+    )
+
+    monkeypatch.setattr(service_module, "get_connection", lambda: "weaviate-client")
+    monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_kwargs: False)
+    monkeypatch.setattr(service_module.pdf_job_service, "update_progress", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module, "update_document_status", _update_document_status)
+    completed_events = []
+    failed_events = []
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_completed",
+        lambda **kwargs: completed_events.append(kwargs),
+    )
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "mark_failed",
+        lambda **kwargs: failed_events.append(kwargs),
+    )
+    monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **_kwargs: None)
+
+    await service.execute_provider_markdown(
+        ProviderMarkdownExecutionRequest(
+            document_id="doc-provider",
+            job_id="job-provider",
+            user_id="user-provider",
+            owner_user_id=42,
+            filename="paper.pdf",
+            converted_artifact_id="markdown-1",
+            curator_token="curator-token",
+            source_provenance={"provider": "fake_provider"},
+            figure_metadata_artifact_ids=("meta-bad",),
+        )
+    )
+
+    assert provider.downloads == [
+        {"artifact_id": "markdown-1", "request_bearer_token": "curator-token"},
+        {"artifact_id": "meta-bad", "request_bearer_token": "curator-token"},
+    ]
+    assert ingestion_calls == []
+    assert completed_events == []
+    assert failed_events == [
+        {
+            "job_id": "job-provider",
+            "message": "missing sidecar",
+            "stage": ProcessingStage.FAILED.value,
+        }
+    ]
+    assert status_updates == [
+        {
+            "document_id": "doc-provider",
+            "user_id": "user-provider",
+            "status": ProcessingStatus.FAILED.value,
+        }
+    ]
 
 
 def test_select_preferred_main_markdown_skips_abc_tei_only_artifact():

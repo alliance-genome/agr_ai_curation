@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 
 from src.lib.document_sources.models import (
     DocumentSourceError,
@@ -39,6 +40,7 @@ class ChecksumImportCandidate:
 
     source_artifact: SourceArtifact
     converted_artifact: SourceArtifact | None = None
+    provider_metadata_artifacts: tuple[SourceArtifact, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +131,11 @@ async def select_checksum_import_candidate(
         )
 
     source_artifact = authorized_source_list[0]
+    provider_metadata_artifacts = provider_metadata_artifacts_for_source(
+        provider=provider,
+        source_artifact=source_artifact,
+        artifacts=artifacts,
+    )
     converted_artifacts = _converted_artifacts_for_source(
         source_artifact=source_artifact,
         artifacts=artifacts,
@@ -168,6 +175,7 @@ async def select_checksum_import_candidate(
         candidate = ChecksumImportCandidate(
             source_artifact=source_artifact,
             converted_artifact=selected_ready_artifact,
+            provider_metadata_artifacts=provider_metadata_artifacts,
         )
         return _decision(
             provider=provider.provider_id,
@@ -227,6 +235,11 @@ async def select_checksum_import_candidate(
                 source_artifact=source_artifact,
                 artifacts=refreshed_artifacts,
             )
+            refreshed_metadata_artifacts = provider_metadata_artifacts_for_source(
+                provider=provider,
+                source_artifact=source_artifact,
+                artifacts=refreshed_artifacts,
+            )
             if ambiguous_count > 1:
                 return _decision(
                     provider=provider.provider_id,
@@ -240,6 +253,7 @@ async def select_checksum_import_candidate(
                 candidate = ChecksumImportCandidate(
                     source_artifact=source_artifact,
                     converted_artifact=converted_artifact,
+                    provider_metadata_artifacts=refreshed_metadata_artifacts,
                 )
                 return _decision(
                     provider=provider.provider_id,
@@ -291,7 +305,10 @@ async def select_checksum_import_candidate(
             metadata=conversion_metadata,
         )
 
-    source_only_candidate = ChecksumImportCandidate(source_artifact=source_artifact)
+    source_only_candidate = ChecksumImportCandidate(
+        source_artifact=source_artifact,
+        provider_metadata_artifacts=provider_metadata_artifacts,
+    )
     return _decision(
         provider=provider.provider_id,
         checksum=normalized_checksum,
@@ -313,6 +330,43 @@ def source_artifact_is_authorized(
     return _access_policy_is_authorized(
         source_artifact.access_policy,
         authorized_group_ids=authorized_group_ids,
+    )
+
+
+def provider_metadata_artifacts_for_source(
+    *,
+    provider: DocumentSourceProvider,
+    source_artifact: SourceArtifact,
+    artifacts: list[SourceArtifact] | tuple[SourceArtifact, ...],
+) -> tuple[SourceArtifact, ...]:
+    """Return provider-declared metadata sidecars associated with a source PDF."""
+
+    metadata_artifacts_for_source = getattr(
+        provider,
+        "provider_metadata_artifacts_for_source",
+        None,
+    )
+    if not callable(metadata_artifacts_for_source):
+        return ()
+    typed_metadata_artifacts_for_source = cast(
+        Callable[
+            [SourceArtifact, list[SourceArtifact] | tuple[SourceArtifact, ...]],
+            tuple[SourceArtifact, ...] | list[SourceArtifact],
+        ],
+        metadata_artifacts_for_source,
+    )
+    metadata_candidates = typed_metadata_artifacts_for_source(
+        source_artifact,
+        artifacts,
+    )
+    return tuple(
+        sorted(
+            metadata_candidates,
+            key=lambda artifact: (
+                str(artifact.display_name or "").strip().lower(),
+                artifact.artifact_id,
+            ),
+        )
     )
 
 
@@ -369,7 +423,11 @@ async def _request_conversion_if_supported(
         return None
     if not _reference_lookup_value(source_artifact):
         return None
-    return await request_conversion(
+    typed_request_conversion = cast(
+        Callable[..., Awaitable[SourceConversionResult]],
+        request_conversion,
+    )
+    return await typed_request_conversion(
         source_artifact,
         wait=False,
         request_bearer_token=request_bearer_token,
@@ -382,7 +440,11 @@ def _conversion_has_usable_main_text(
 ) -> bool:
     conversion_exposes_main_text = getattr(provider, "conversion_exposes_main_text", None)
     if callable(conversion_exposes_main_text):
-        return bool(conversion_exposes_main_text(result))
+        typed_conversion_exposes_main_text = cast(
+            Callable[[SourceConversionResult], bool],
+            conversion_exposes_main_text,
+        )
+        return bool(typed_conversion_exposes_main_text(result))
     return (
         result.status in {
             SourceConversionStatus.CONVERTED,
@@ -447,7 +509,11 @@ def _provider_is_main_text_artifact(
 ) -> bool:
     is_main_text_artifact = getattr(provider, "is_main_text_artifact", None)
     if callable(is_main_text_artifact):
-        return bool(is_main_text_artifact(artifact))
+        typed_is_main_text_artifact = cast(
+            Callable[[SourceArtifact], bool],
+            is_main_text_artifact,
+        )
+        return bool(typed_is_main_text_artifact(artifact))
     return True
 
 
@@ -457,7 +523,11 @@ def _provider_main_text_sort_key(
 ) -> tuple[int, ...]:
     main_text_artifact_sort_key = getattr(provider, "main_text_artifact_sort_key", None)
     if callable(main_text_artifact_sort_key):
-        return tuple(main_text_artifact_sort_key(artifact))
+        typed_main_text_artifact_sort_key = cast(
+            Callable[[SourceArtifact], Iterable[int]],
+            main_text_artifact_sort_key,
+        )
+        return tuple(typed_main_text_artifact_sort_key(artifact))
     return (0,)
 
 
