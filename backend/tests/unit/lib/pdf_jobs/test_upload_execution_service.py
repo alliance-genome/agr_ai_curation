@@ -118,6 +118,20 @@ class _Provider:
             raise self.download_errors[artifact_id]
         return self.payloads.get(artifact_id, self.payload)
 
+    def provider_metadata_artifacts_for_source(self, source_artifact, artifacts):
+        return tuple(
+            artifact
+            for artifact in artifacts
+            if artifact.role is SourceArtifactRole.PROVIDER_METADATA
+            and (
+                artifact.parent_artifact_id == source_artifact.artifact_id
+                or (
+                    artifact.parent_artifact_id is None
+                    and artifact.reference_curie == source_artifact.reference_curie
+                )
+            )
+        )
+
     async def aclose(self):
         self.closed = True
 
@@ -518,6 +532,109 @@ async def test_execute_provider_markdown_passes_downloaded_figure_metadata_to_in
     assert ingestion_request.provider_figure_metadata == (
         {
             "metadata_artifact_id": "meta-1",
+            "display_name": "paper_image_001",
+            "figure_label": "Figure 1",
+            "caption_text": "Fig. 1A shows wg expression.",
+        },
+    )
+    assert tracker.calls[-1]["stage"] == ProcessingStage.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_execute_provider_markdown_discovers_figure_metadata_from_source_provenance(monkeypatch):
+    tracker = _Tracker()
+    provider = _Provider()
+    provider.payloads = {
+        "markdown-1": b"# Results\n\nNative result.",
+        "meta-discovered": (
+            b'{"display_name":"paper_image_001","figure_label":"Figure 1",'
+            b'"caption_text":"Fig. 1A shows wg expression."}'
+        ),
+    }
+    provider.artifacts = [
+        SourceArtifact(
+            provider="fake_provider",
+            artifact_id="source-pdf-1",
+            role=SourceArtifactRole.SOURCE_PDF,
+            artifact_format=SourceArtifactFormat.PDF,
+            status=SourceArtifactStatus.AVAILABLE,
+            reference_curie="AGRKB:101",
+            display_name="paper",
+            access_policy=SourceAccessPolicy(scope=SourceAccessScope.GLOBAL),
+            metadata={"file_class": "main", "file_extension": "pdf"},
+        ),
+        SourceArtifact(
+            provider="fake_provider",
+            artifact_id="meta-discovered",
+            role=SourceArtifactRole.PROVIDER_METADATA,
+            artifact_format=SourceArtifactFormat.JSON,
+            status=SourceArtifactStatus.AVAILABLE,
+            reference_curie="AGRKB:101",
+            display_name="paper_image_001",
+            parent_artifact_id="source-pdf-1",
+            access_policy=SourceAccessPolicy(scope=SourceAccessScope.GLOBAL),
+            metadata={
+                "file_class": "converted_main_figure_metadata",
+                "file_extension": "json",
+            },
+        ),
+    ]
+    ingestion_calls = []
+
+    async def _ingest(request, *, weaviate_client):
+        ingestion_calls.append({"request": request, "weaviate_client": weaviate_client})
+
+    service = UploadExecutionService(
+        pipeline_tracker=tracker,
+        document_source_provider_factory=lambda: provider,
+        provider_markdown_ingestion_fn=_ingest,
+    )
+
+    monkeypatch.setattr(service_module, "get_connection", lambda: "weaviate-client")
+    monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_kwargs: False)
+    monkeypatch.setattr(service_module.pdf_job_service, "update_progress", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "mark_completed", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "mark_failed", lambda **_kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **_kwargs: None)
+
+    await service.execute_provider_markdown(
+        ProviderMarkdownExecutionRequest(
+            document_id="doc-provider",
+            job_id="job-provider",
+            user_id="user-provider",
+            owner_user_id=42,
+            filename="paper.pdf",
+            converted_artifact_id="markdown-1",
+            curator_token="curator-token",
+            source_provenance={
+                "provider": "fake_provider",
+                "reference_curie": "   ",
+                "reference_id": "AGRKB:101",
+                "pdf_artifact_id": "   ",
+                "source_file_id": "source-pdf-1",
+                "access_scope": "global",
+            },
+        )
+    )
+
+    assert provider.list_artifact_calls == [
+        {"reference": "AGRKB:101", "request_bearer_token": "curator-token"}
+    ]
+    assert provider.downloads[:2] == [
+        {
+            "artifact_id": "markdown-1",
+            "request_bearer_token": "curator-token",
+        },
+        {
+            "artifact_id": "meta-discovered",
+            "request_bearer_token": "curator-token",
+        },
+    ]
+    ingestion_request = ingestion_calls[0]["request"]
+    assert ingestion_request.provider_figure_metadata == (
+        {
+            "metadata_artifact_id": "meta-discovered",
             "display_name": "paper_image_001",
             "figure_label": "Figure 1",
             "caption_text": "Fig. 1A shows wg expression.",

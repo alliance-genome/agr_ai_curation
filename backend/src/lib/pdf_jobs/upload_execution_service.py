@@ -664,9 +664,14 @@ class UploadExecutionService:
             if pdf_job_service.is_cancel_requested(job_id=request.job_id):
                 raise PDFCancellationError("Processing cancelled by user request")
             markdown = markdown_bytes.decode("utf-8")
+            figure_metadata_artifact_ids = await _figure_metadata_artifact_ids_for_markdown_request(
+                provider=provider,
+                request=request,
+                request_bearer_token=curator_token,
+            )
             figure_metadata_entries = await _download_provider_figure_metadata_entries(
                 provider=provider,
-                artifact_ids=request.figure_metadata_artifact_ids,
+                artifact_ids=figure_metadata_artifact_ids,
                 request_bearer_token=curator_token,
             )
 
@@ -1190,6 +1195,51 @@ def _figure_metadata_artifact_ids_from_artifacts(
     )
 
 
+async def _figure_metadata_artifact_ids_for_markdown_request(
+    *,
+    provider: DocumentSourceProvider,
+    request: ProviderMarkdownExecutionRequest,
+    request_bearer_token: str,
+) -> tuple[str, ...]:
+    artifact_ids = list(request.figure_metadata_artifact_ids)
+    source_provenance = request.source_provenance
+    source_artifact_id = _first_non_empty_string(
+        source_provenance.get("pdf_artifact_id"),
+        source_provenance.get("source_file_id"),
+    )
+    reference = _first_non_empty_string(
+        source_provenance.get("reference_curie"),
+        source_provenance.get("reference_id"),
+    )
+    if source_artifact_id is None or reference is None:
+        return _dedupe_strings(artifact_ids)
+
+    if artifact_ids:
+        return _dedupe_strings(artifact_ids)
+
+    if not callable(getattr(provider, "provider_metadata_artifacts_for_source", None)):
+        return _dedupe_strings(artifact_ids)
+
+    try:
+        artifacts = await provider.list_artifacts(
+            reference,
+            request_bearer_token=request_bearer_token,
+        )
+    except Exception as exc:
+        raise RuntimeError("Provider figure metadata discovery failed") from exc
+
+    return _dedupe_strings(
+        (
+            *artifact_ids,
+            *_figure_metadata_artifact_ids_from_artifacts(
+                provider=provider,
+                artifacts=artifacts,
+                source_artifact_id=source_artifact_id,
+            ),
+        )
+    )
+
+
 def _figure_metadata_artifact_ids_from_conversion_result(
     result: SourceConversionResult,
 ) -> tuple[str, ...]:
@@ -1233,6 +1283,14 @@ def _dedupe_strings(values: tuple[str, ...] | list[str]) -> tuple[str, ...]:
 def _non_empty_string(value: object) -> str | None:
     if isinstance(value, str | int) and str(value).strip():
         return str(value).strip()
+    return None
+
+
+def _first_non_empty_string(*values: object) -> str | None:
+    for value in values:
+        normalized = _non_empty_string(value)
+        if normalized is not None:
+            return normalized
     return None
 
 
