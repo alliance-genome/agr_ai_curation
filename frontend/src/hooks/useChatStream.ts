@@ -12,8 +12,9 @@
  * Note: Uses POST fetch with ReadableStream, NOT EventSource API
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { debug } from '@/utils/env'
+import { getStreamEventSessionId } from '../lib/streamEventSession'
 
 export interface SSEEvent {
   type: string
@@ -92,6 +93,16 @@ export interface UseChatStreamReturn {
   stopStream: (sessionId: string) => Promise<void>
 }
 
+export type ChatRunTerminalStatus = 'idle' | 'finished' | 'stopped' | 'error'
+
+export interface ChatRunActivitySummary {
+  isLoading: boolean
+  error: Error | null
+  latestSessionId: string | null
+  terminalStatus: ChatRunTerminalStatus
+  eventStreamVersion: number
+}
+
 interface SharedChatStreamState {
   events: SSEEvent[]
   eventStreamVersion: number
@@ -109,6 +120,11 @@ let sharedState: SharedChatStreamState = {
   error: null,
 }
 let sharedAbortController: AbortController | null = null
+const CHAT_RUN_TERMINAL_ERROR_EVENT_TYPES = new Set([
+  'RUN_ERROR',
+  'SUPERVISOR_ERROR',
+  'FLOW_ERROR',
+])
 
 function emitSharedState(nextState: Partial<SharedChatStreamState>) {
   sharedState = { ...sharedState, ...nextState }
@@ -129,6 +145,56 @@ function replaceSharedEvents(events: SSEEvent[]) {
 
 function buildClientTurnId(): string {
   return globalThis.crypto.randomUUID()
+}
+
+function getLatestStreamSessionId(events: SSEEvent[]): string | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const sessionId = getStreamEventSessionId(events[index])
+    if (sessionId) {
+      return sessionId
+    }
+  }
+
+  return null
+}
+
+function hasStoppedRunEvent(events: SSEEvent[]): boolean {
+  return events.some((event) => event.type === 'STOP_CONFIRMED')
+}
+
+function hasTerminalErrorRunEvent(events: SSEEvent[]): boolean {
+  return events.some((event) => CHAT_RUN_TERMINAL_ERROR_EVENT_TYPES.has(event.type))
+}
+
+function buildChatRunActivitySummary(state: SharedChatStreamState): ChatRunActivitySummary {
+  const stopped = hasStoppedRunEvent(state.events)
+  const errored = Boolean(state.error) || hasTerminalErrorRunEvent(state.events)
+  const terminalStatus: ChatRunTerminalStatus = stopped
+    ? 'stopped'
+    : errored
+      ? 'error'
+      : state.events.length > 0 && !state.isLoading
+        ? 'finished'
+        : 'idle'
+
+  return {
+    isLoading: state.isLoading,
+    error: state.error,
+    latestSessionId: getLatestStreamSessionId(state.events),
+    terminalStatus,
+    eventStreamVersion: state.eventStreamVersion,
+  }
+}
+
+function areChatRunActivitySummariesEqual(
+  current: ChatRunActivitySummary,
+  next: ChatRunActivitySummary,
+): boolean {
+  return current.isLoading === next.isLoading
+    && current.error === next.error
+    && current.latestSessionId === next.latestSessionId
+    && current.terminalStatus === next.terminalStatus
+    && current.eventStreamVersion === next.eventStreamVersion
 }
 
 /**
@@ -442,4 +508,30 @@ export function useChatStream(): UseChatStreamReturn {
     markEventsProcessed,
     stopStream
   }
+}
+
+export function useChatRunActivitySummary(): ChatRunActivitySummary {
+  const [summary, setSummary] = useState<ChatRunActivitySummary>(() => (
+    buildChatRunActivitySummary(sharedState)
+  ))
+  const summaryRef = useRef(summary)
+
+  useEffect(() => {
+    const listener = () => {
+      const nextSummary = buildChatRunActivitySummary(sharedState)
+      if (areChatRunActivitySummariesEqual(summaryRef.current, nextSummary)) {
+        return
+      }
+
+      summaryRef.current = nextSummary
+      setSummary(nextSummary)
+    }
+
+    sharedListeners.add(listener)
+    return () => {
+      sharedListeners.delete(listener)
+    }
+  }, [])
+
+  return summary
 }

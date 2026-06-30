@@ -9,7 +9,7 @@ import { GLOBAL_TOAST_EVENT } from './lib/globalNotifications';
 import { POPUP_CHANGELOG_ENTRY } from './content/changelog';
 
 const mockUseAuth = vi.hoisted(() => vi.fn());
-const mockUseChatStream = vi.hoisted(() => vi.fn());
+const mockUseChatRunActivitySummary = vi.hoisted(() => vi.fn());
 
 vi.mock('./contexts/AuthContext', () => ({
   useAuth: () => mockUseAuth(),
@@ -17,7 +17,7 @@ vi.mock('./contexts/AuthContext', () => ({
 }));
 
 vi.mock('./hooks/useChatStream', () => ({
-  useChatStream: () => mockUseChatStream(),
+  useChatRunActivitySummary: () => mockUseChatRunActivitySummary(),
 }));
 
 vi.mock('./config/version', () => ({
@@ -95,17 +95,12 @@ const jsonResponse = (payload: unknown): Response =>
     headers: { 'Content-Type': 'application/json' },
   });
 
-const buildChatStreamState = (overrides: Record<string, unknown> = {}) => ({
-  events: [],
-  eventStreamVersion: 0,
-  processedEventCount: 0,
+const buildChatRunActivitySummary = (overrides: Record<string, unknown> = {}) => ({
   isLoading: false,
-  sendMessage: vi.fn(),
-  executeFlow: vi.fn(),
   error: null,
-  clearEvents: vi.fn(),
-  markEventsProcessed: vi.fn(),
-  stopStream: vi.fn(),
+  latestSessionId: null,
+  terminalStatus: 'idle',
+  eventStreamVersion: 0,
   ...overrides,
 });
 
@@ -121,7 +116,7 @@ describe('AppContent global notifications', () => {
       logout: vi.fn().mockResolvedValue(undefined),
       isAuthenticated: true,
     });
-    mockUseChatStream.mockReturnValue(buildChatStreamState());
+    mockUseChatRunActivitySummary.mockReturnValue(buildChatRunActivitySummary());
   });
 
   afterEach(() => {
@@ -164,37 +159,20 @@ describe('AppContent global notifications', () => {
       return jsonResponse({});
     });
 
-    mockUseChatStream.mockReturnValue(buildChatStreamState({
+    mockUseChatRunActivitySummary.mockReturnValue(buildChatRunActivitySummary({
       isLoading: true,
-      events: [
-        {
-          type: 'AGENT_GENERATING',
-          timestamp: '2026-06-30T17:00:00.000Z',
-          session_id: 'session-finished',
-          details: { message: 'Starting' },
-        },
-      ],
+      latestSessionId: 'session-finished',
+      eventStreamVersion: 1,
     }));
 
     const view = renderAppContent('/weaviate/documents');
     expect(screen.queryByText('Curation chat finished')).not.toBeInTheDocument();
 
-    mockUseChatStream.mockReturnValue(buildChatStreamState({
+    mockUseChatRunActivitySummary.mockReturnValue(buildChatRunActivitySummary({
       isLoading: false,
-      events: [
-        {
-          type: 'AGENT_GENERATING',
-          timestamp: '2026-06-30T17:00:00.000Z',
-          session_id: 'session-finished',
-          details: { message: 'Starting' },
-        },
-        {
-          type: 'SUPERVISOR_COMPLETE',
-          timestamp: '2026-06-30T17:00:01.000Z',
-          session_id: 'session-finished',
-          details: { message: 'Done' },
-        },
-      ],
+      latestSessionId: 'session-finished',
+      terminalStatus: 'finished',
+      eventStreamVersion: 1,
     }));
 
     await act(async () => {
@@ -224,30 +202,19 @@ describe('AppContent global notifications', () => {
       return jsonResponse({});
     });
 
-    mockUseChatStream.mockReturnValue(buildChatStreamState({
+    mockUseChatRunActivitySummary.mockReturnValue(buildChatRunActivitySummary({
       isLoading: true,
-      events: [
-        {
-          type: 'AGENT_GENERATING',
-          timestamp: '2026-06-30T17:00:00.000Z',
-          session_id: 'session-on-chat',
-          details: { message: 'Starting' },
-        },
-      ],
+      latestSessionId: 'session-on-chat',
+      eventStreamVersion: 1,
     }));
 
     const view = renderAppContent('/');
 
-    mockUseChatStream.mockReturnValue(buildChatStreamState({
+    mockUseChatRunActivitySummary.mockReturnValue(buildChatRunActivitySummary({
       isLoading: false,
-      events: [
-        {
-          type: 'SUPERVISOR_COMPLETE',
-          timestamp: '2026-06-30T17:00:01.000Z',
-          session_id: 'session-on-chat',
-          details: { message: 'Done' },
-        },
-      ],
+      latestSessionId: 'session-on-chat',
+      terminalStatus: 'finished',
+      eventStreamVersion: 1,
     }));
 
     await act(async () => {

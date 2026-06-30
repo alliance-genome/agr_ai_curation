@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { useChatStream } from './useChatStream'
+import { useChatRunActivitySummary, useChatStream } from './useChatStream'
 
 describe('useChatStream shared lifecycle', () => {
   beforeEach(() => {
@@ -122,5 +122,83 @@ describe('useChatStream shared lifecycle', () => {
     result.current.clearEvents()
     unmount()
     randomUUIDSpy.mockRestore()
+  })
+
+  it('keeps activity summary stable across non-terminal stream deltas', async () => {
+    let streamController: ReadableStreamDefaultController<Uint8Array> | null = null
+    const encoder = new TextEncoder()
+    let summaryRenderCount = 0
+
+    vi.mocked(global.fetch).mockResolvedValue(new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          streamController = controller
+        },
+      }),
+      { status: 200 },
+    ))
+
+    const summary = renderHook(() => {
+      summaryRenderCount += 1
+      return useChatRunActivitySummary()
+    })
+    const stream = renderHook(() => useChatStream())
+
+    act(() => {
+      void stream.result.current.sendMessage('hello', 'session-summary', { turnId: 'turn-summary' })
+    })
+
+    await waitFor(() => {
+      expect(summary.result.current.isLoading).toBe(true)
+      expect(summary.result.current.latestSessionId).toBe('session-summary')
+    })
+
+    const renderCountAfterStart = summaryRenderCount
+
+    act(() => {
+      streamController?.enqueue(encoder.encode(
+        'data: {"type":"TEXT_MESSAGE_CONTENT","session_id":"session-summary","turn_id":"turn-summary","content":"hi"}\n\n',
+      ))
+    })
+
+    await waitFor(() => {
+      expect(stream.result.current.events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'TEXT_MESSAGE_CONTENT',
+            session_id: 'session-summary',
+            turn_id: 'turn-summary',
+            content: 'hi',
+          }),
+        ]),
+      )
+    })
+    expect(summary.result.current.terminalStatus).toBe('idle')
+    expect(summaryRenderCount).toBe(renderCountAfterStart)
+
+    act(() => {
+      streamController?.enqueue(encoder.encode(
+        'data: {"type":"RUN_ERROR","session_id":"session-summary","turn_id":"turn-summary","message":"failed"}\n\n',
+      ))
+    })
+
+    await waitFor(() => {
+      expect(summary.result.current.terminalStatus).toBe('error')
+    })
+    expect(summaryRenderCount).toBeGreaterThan(renderCountAfterStart)
+
+    act(() => {
+      streamController?.close()
+    })
+
+    await waitFor(() => {
+      expect(summary.result.current.isLoading).toBe(false)
+    })
+
+    act(() => {
+      stream.result.current.clearEvents()
+    })
+    summary.unmount()
+    stream.unmount()
   })
 })

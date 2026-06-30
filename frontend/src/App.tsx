@@ -36,8 +36,7 @@ import {
 import { POPUP_CHANGELOG_ENTRY } from './content/changelog'
 import ChangelogDialog from './components/ChangelogDialog'
 import { buildPdfTerminalNotification } from './features/documents/pdfTerminalNotifications'
-import { useChatStream, type SSEEvent } from './hooks/useChatStream'
-import { getStreamEventSessionId } from './lib/streamEventSession'
+import { useChatRunActivitySummary } from './hooks/useChatStream'
 import './App.css'
 
 export const queryClient = new QueryClient()
@@ -46,25 +45,6 @@ const DEFAULT_GLOBAL_SNACKBAR_ANCHOR = { vertical: 'bottom', horizontal: 'right'
 
 function isChatRoutePath(pathname: string): boolean {
   return (pathname.replace(/\/+$/, '') || '/') === '/'
-}
-
-function getLatestStreamSessionId(events: SSEEvent[]): string | null {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const sessionId = getStreamEventSessionId(events[index])
-    if (sessionId) {
-      return sessionId
-    }
-  }
-
-  return null
-}
-
-function hasStoppedRunEvent(events: SSEEvent[]): boolean {
-  return events.some((event) => event.type === 'STOP_CONFIRMED')
-}
-
-function hasErrorRunEvent(events: SSEEvent[]): boolean {
-  return events.some((event) => event.type.includes('ERROR'))
 }
 
 const APP_THEME_GLOBAL_ALPHA = {
@@ -307,10 +287,11 @@ export function ProtectedRoutes({ children }: { children: React.ReactNode }) {
 export function AppContent() {
   const { user, logout, isAuthenticated } = useAuth();
   const {
-    events: chatStreamEvents,
     isLoading: chatRunActive,
-    error: chatRunError,
-  } = useChatStream();
+    latestSessionId: latestChatRunSessionId,
+    terminalStatus: chatRunTerminalStatus,
+    eventStreamVersion: chatRunEventStreamVersion,
+  } = useChatRunActivitySummary();
   const navigate = useNavigate();
   const location = useLocation();
   const normalizedPathname = location.pathname.replace(/\/+$/, '');
@@ -333,7 +314,7 @@ export function AppContent() {
     chatReturnPath?: string;
   }>({ open: false, message: '', severity: 'info' });
   const wasChatRunActiveRef = React.useRef(chatRunActive);
-  const activeRunSessionIdRef = React.useRef<string | null>(getLatestStreamSessionId(chatStreamEvents));
+  const activeRunSessionIdRef = React.useRef<string | null>(latestChatRunSessionId);
   const seededPdfJobsRef = React.useRef(false);
   const seededBatchesRef = React.useRef(false);
   const seenPdfTerminalRef = React.useRef<Set<string>>(new Set());
@@ -446,9 +427,8 @@ export function AppContent() {
   }, []);
 
   useEffect(() => {
-    const latestSessionId = getLatestStreamSessionId(chatStreamEvents);
-    if (chatRunActive && latestSessionId) {
-      activeRunSessionIdRef.current = latestSessionId;
+    if (chatRunActive && latestChatRunSessionId) {
+      activeRunSessionIdRef.current = latestChatRunSessionId;
     }
 
     const wasChatRunActive = wasChatRunActiveRef.current;
@@ -458,14 +438,13 @@ export function AppContent() {
       return;
     }
 
-    const stopped = hasStoppedRunEvent(chatStreamEvents);
-    if (stopped) {
+    if (chatRunTerminalStatus === 'stopped') {
       activeRunSessionIdRef.current = null;
       return;
     }
 
-    const errored = Boolean(chatRunError) || hasErrorRunEvent(chatStreamEvents);
-    const returnSessionId = latestSessionId ?? activeRunSessionIdRef.current;
+    const errored = chatRunTerminalStatus === 'error';
+    const returnSessionId = latestChatRunSessionId ?? activeRunSessionIdRef.current;
     const chatReturnPath = returnSessionId
       ? `/?session=${encodeURIComponent(returnSessionId)}`
       : '/';
@@ -478,7 +457,13 @@ export function AppContent() {
       chatReturnPath,
     });
     activeRunSessionIdRef.current = null;
-  }, [chatRunActive, chatRunError, chatStreamEvents, location.pathname]);
+  }, [
+    chatRunActive,
+    chatRunTerminalStatus,
+    latestChatRunSessionId,
+    chatRunEventStreamVersion,
+    location.pathname,
+  ]);
 
   useEffect(() => {
     const currentUserId = isAuthenticated ? user?.uid ?? null : null
