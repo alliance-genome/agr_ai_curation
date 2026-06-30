@@ -30,6 +30,18 @@ export interface ExecuteFlowOptions {
   turnId?: string
 }
 
+export type ChatRunTerminalStatus = 'completed' | 'error'
+export type ChatRunKind = 'chat' | 'flow'
+
+export interface ChatRunTerminalEventDetail {
+  sessionId: string
+  runKind: ChatRunKind
+  status: ChatRunTerminalStatus
+  eventStreamVersion: number
+}
+
+export const CHAT_RUN_TERMINAL_EVENT = 'agr-chat-run-terminal'
+
 export interface UseChatStreamReturn {
   /**
    * All SSE events received in this session
@@ -129,6 +141,18 @@ function replaceSharedEvents(events: SSEEvent[]) {
 
 function buildClientTurnId(): string {
   return globalThis.crypto.randomUUID()
+}
+
+function getRunTerminalStatus(events: SSEEvent[]): ChatRunTerminalStatus {
+  return events.some((event) => event.type.toUpperCase().includes('ERROR'))
+    ? 'error'
+    : 'completed'
+}
+
+function emitChatRunTerminal(detail: ChatRunTerminalEventDetail) {
+  window.dispatchEvent(new CustomEvent<ChatRunTerminalEventDetail>(CHAT_RUN_TERMINAL_EVENT, {
+    detail,
+  }))
 }
 
 /**
@@ -299,8 +323,15 @@ export function useChatStream(): UseChatStreamReturn {
         }
       }
 
+      const terminalStatus = getRunTerminalStatus(sharedState.events)
       sharedAbortController = null
       emitSharedState({ isLoading: false })
+      emitChatRunTerminal({
+        sessionId,
+        runKind: 'chat',
+        status: terminalStatus,
+        eventStreamVersion: sharedState.eventStreamVersion,
+      })
     } catch (err) {
       // Ignore abort errors (user cancelled)
       if (err instanceof Error && err.name === 'AbortError') {
@@ -414,8 +445,15 @@ export function useChatStream(): UseChatStreamReturn {
         }
       }
 
+      const terminalStatus = getRunTerminalStatus(sharedState.events)
       sharedAbortController = null
       emitSharedState({ isLoading: false })
+      emitChatRunTerminal({
+        sessionId,
+        runKind: 'flow',
+        status: terminalStatus,
+        eventStreamVersion: sharedState.eventStreamVersion,
+      })
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
         debug.log('Flow execution aborted by user')
