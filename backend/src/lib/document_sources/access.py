@@ -13,10 +13,9 @@ from src.lib.config.groups_loader import (
     get_group_claim_key,
     get_groups_for_provider_groups,
 )
-from src.lib.openai_agents.config import (
-    get_abc_literature_auth_mode,
-    get_abc_literature_bearer_token,
-    get_document_source_provider,
+from src.lib.document_sources.models import DocumentSourceConfigError
+from src.lib.document_sources.registry import (
+    get_configured_document_source_provider,
 )
 
 
@@ -93,18 +92,21 @@ def _extract_curator_token(
 
 
 def _extract_dev_mode_static_curator_token() -> str | None:
-    """Allow dev-auth demos to use a server-side ABC Literature bearer token."""
+    """Allow provider-owned dev-auth demos to use a server-side curator token."""
 
-    if get_document_source_provider().strip().lower() != "abc_literature":
+    try:
+        provider = get_configured_document_source_provider()
+    except DocumentSourceConfigError:
         return None
-    if get_abc_literature_auth_mode().strip().lower() != "static_bearer":
+    hook = getattr(provider, "dev_mode_static_curator_token", None)
+    if not callable(hook):
         return None
-    token = (get_abc_literature_bearer_token() or "").strip()
-    return token or None
+    token = hook()
+    if not isinstance(token, str):
+        return None
+    return token.strip() or None
 
 
 def _claims_allow_cookie_token(user_claims: Mapping[str, Any]) -> bool:
-    if is_dev_mode():
-        return False
     subject = str(user_claims.get("sub") or user_claims.get("uid") or "")
     return not subject.startswith("api-key-")

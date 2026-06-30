@@ -77,9 +77,13 @@ def test_build_document_source_request_context_ignores_cookie_in_dev_mode(
 ) -> None:
     request = request_with_cookies({"auth_token": "dev-cookie-token"})
     monkeypatch.setattr("src.lib.document_sources.access.is_dev_mode", lambda: True)
+
+    def raise_config_error():
+        raise DocumentSourceConfigError("local_pdf has no external provider")
+
     monkeypatch.setattr(
-        "src.lib.document_sources.access.get_document_source_provider",
-        lambda: "local_pdf",
+        "src.lib.document_sources.access.get_configured_document_source_provider",
+        raise_config_error,
     )
 
     context = build_document_source_request_context(
@@ -99,17 +103,14 @@ def test_build_document_source_request_context_uses_static_abc_token_in_dev_mode
 ) -> None:
     request = request_with_cookies({"auth_token": "ignored-dev-cookie-token"})
     monkeypatch.setattr("src.lib.document_sources.access.is_dev_mode", lambda: True)
+
+    class ProviderWithDevToken:
+        def dev_mode_static_curator_token(self) -> str:
+            return " static-dev-token "
+
     monkeypatch.setattr(
-        "src.lib.document_sources.access.get_document_source_provider",
-        lambda: "abc_literature",
-    )
-    monkeypatch.setattr(
-        "src.lib.document_sources.access.get_abc_literature_auth_mode",
-        lambda: "static_bearer",
-    )
-    monkeypatch.setattr(
-        "src.lib.document_sources.access.get_abc_literature_bearer_token",
-        lambda: " static-dev-token ",
+        "src.lib.document_sources.access.get_configured_document_source_provider",
+        lambda: ProviderWithDevToken(),
     )
 
     context = build_document_source_request_context(

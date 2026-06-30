@@ -26,6 +26,10 @@ from src.lib.literature.client import (
     ABCLiteratureClientError,
     ABCLiteratureHTTPError,
 )
+from src.lib.openai_agents.config import (
+    get_abc_literature_auth_mode,
+    get_abc_literature_bearer_token,
+)
 
 
 ABC_LITERATURE_PROVIDER_ID = "abc_literature"
@@ -179,6 +183,14 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
             if converted.get("file_class") == "converted_merged_main":
                 return True
         return False
+
+    def dev_mode_static_curator_token(self) -> str | None:
+        """Return the configured static bearer only for the explicit ABC dev mode."""
+
+        if get_abc_literature_auth_mode().strip().lower() != "static_bearer":
+            return None
+        token = (get_abc_literature_bearer_token() or "").strip()
+        return token or None
 
     def provider_metadata_artifacts_for_source(
         self,

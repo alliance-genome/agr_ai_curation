@@ -176,6 +176,34 @@ def provider_from_fake(
     return ABCLiteratureDocumentSourceProvider(fake_client)  # type: ignore[arg-type]
 
 
+def test_dev_mode_static_curator_token_uses_static_bearer_config(monkeypatch) -> None:
+    provider = provider_from_fake(FakeABCLiteratureClient())
+    monkeypatch.setattr(
+        "src.lib.document_sources.providers.abc_literature.get_abc_literature_auth_mode",
+        lambda: "static_bearer",
+    )
+    monkeypatch.setattr(
+        "src.lib.document_sources.providers.abc_literature.get_abc_literature_bearer_token",
+        lambda: " abc-dev-token ",
+    )
+
+    assert provider.dev_mode_static_curator_token() == "abc-dev-token"
+
+
+def test_dev_mode_static_curator_token_ignores_non_static_auth_mode(monkeypatch) -> None:
+    provider = provider_from_fake(FakeABCLiteratureClient())
+    monkeypatch.setattr(
+        "src.lib.document_sources.providers.abc_literature.get_abc_literature_auth_mode",
+        lambda: "passthrough",
+    )
+    monkeypatch.setattr(
+        "src.lib.document_sources.providers.abc_literature.get_abc_literature_bearer_token",
+        lambda: "abc-dev-token",
+    )
+
+    assert provider.dev_mode_static_curator_token() is None
+
+
 @pytest.mark.asyncio
 async def test_resolve_numeric_identifier_as_pmid() -> None:
     fake_client = FakeABCLiteratureClient()
