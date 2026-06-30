@@ -9,10 +9,15 @@ import { GLOBAL_TOAST_EVENT } from './lib/globalNotifications';
 import { POPUP_CHANGELOG_ENTRY } from './content/changelog';
 
 const mockUseAuth = vi.hoisted(() => vi.fn());
+const mockUseChatRunActivitySummary = vi.hoisted(() => vi.fn());
 
 vi.mock('./contexts/AuthContext', () => ({
   useAuth: () => mockUseAuth(),
   AuthProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+vi.mock('./hooks/useChatStream', () => ({
+  useChatRunActivitySummary: () => mockUseChatRunActivitySummary(),
 }));
 
 vi.mock('./config/version', () => ({
@@ -90,6 +95,15 @@ const jsonResponse = (payload: unknown): Response =>
     headers: { 'Content-Type': 'application/json' },
   });
 
+const buildChatRunActivitySummary = (overrides: Record<string, unknown> = {}) => ({
+  isLoading: false,
+  error: null,
+  latestSessionId: null,
+  terminalStatus: 'idle',
+  eventStreamVersion: 0,
+  ...overrides,
+});
+
 describe('AppContent global notifications', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -102,6 +116,7 @@ describe('AppContent global notifications', () => {
       logout: vi.fn().mockResolvedValue(undefined),
       isAuthenticated: true,
     });
+    mockUseChatRunActivitySummary.mockReturnValue(buildChatRunActivitySummary());
   });
 
   afterEach(() => {
@@ -130,6 +145,91 @@ describe('AppContent global notifications', () => {
     );
 
     expect(await screen.findByText('Global toast arrived')).toBeInTheDocument();
+  });
+
+  it('shows a chat completion toast with a return action when a run finishes off the chat route', async () => {
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/weaviate/pdf-jobs')) {
+        return jsonResponse({ jobs: [] });
+      }
+      if (url.includes('/api/batches')) {
+        return jsonResponse({ batches: [] });
+      }
+      return jsonResponse({});
+    });
+
+    mockUseChatRunActivitySummary.mockReturnValue(buildChatRunActivitySummary({
+      isLoading: true,
+      latestSessionId: 'session-finished',
+      eventStreamVersion: 1,
+    }));
+
+    const view = renderAppContent('/weaviate/documents');
+    expect(screen.queryByText('Curation chat finished')).not.toBeInTheDocument();
+
+    mockUseChatRunActivitySummary.mockReturnValue(buildChatRunActivitySummary({
+      isLoading: false,
+      latestSessionId: 'session-finished',
+      terminalStatus: 'finished',
+      eventStreamVersion: 1,
+    }));
+
+    await act(async () => {
+      view.rerender(
+        <ThemeModeProvider>
+          <MemoryRouter initialEntries={['/weaviate/documents']}>
+            <AppContent />
+          </MemoryRouter>
+        </ThemeModeProvider>
+      );
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByText('Curation chat finished')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open chat' })).toHaveAttribute('href', '/?session=session-finished');
+  });
+
+  it('does not show a chat completion toast when a run finishes on the chat route', async () => {
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/weaviate/pdf-jobs')) {
+        return jsonResponse({ jobs: [] });
+      }
+      if (url.includes('/api/batches')) {
+        return jsonResponse({ batches: [] });
+      }
+      return jsonResponse({});
+    });
+
+    mockUseChatRunActivitySummary.mockReturnValue(buildChatRunActivitySummary({
+      isLoading: true,
+      latestSessionId: 'session-on-chat',
+      eventStreamVersion: 1,
+    }));
+
+    const view = renderAppContent('/');
+
+    mockUseChatRunActivitySummary.mockReturnValue(buildChatRunActivitySummary({
+      isLoading: false,
+      latestSessionId: 'session-on-chat',
+      terminalStatus: 'finished',
+      eventStreamVersion: 1,
+    }));
+
+    await act(async () => {
+      view.rerender(
+        <ThemeModeProvider>
+          <MemoryRouter initialEntries={['/']}>
+            <AppContent />
+          </MemoryRouter>
+        </ThemeModeProvider>
+      );
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText('Curation chat finished')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Open chat' })).not.toBeInTheDocument();
   });
 
   it('shows changelog once per user and persists dismissal', async () => {

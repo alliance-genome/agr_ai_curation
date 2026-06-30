@@ -605,6 +605,27 @@ describe('AuditPanel - Clear Button (T018)', () => {
 })
 
 // ===================================================================
+// Active Run Indicator Tests
+// ===================================================================
+describe('AuditPanel - Active Run Indicator', () => {
+  it('shows the running indicator only while a run is streaming', () => {
+    const { rerender } = render(
+      <AuditPanel sessionId="session123" sseEvents={[]} isStreaming={false} />
+    )
+
+    expect(screen.queryByTestId('run-status-indicator')).not.toBeInTheDocument()
+
+    rerender(<AuditPanel sessionId="session123" sseEvents={[]} isStreaming />)
+
+    expect(screen.getByTestId('run-status-indicator')).toHaveTextContent('Running')
+
+    rerender(<AuditPanel sessionId="session123" sseEvents={[]} isStreaming={false} />)
+
+    expect(screen.queryByTestId('run-status-indicator')).not.toBeInTheDocument()
+  })
+})
+
+// ===================================================================
 // Edge Cases
 // ===================================================================
 describe('AuditPanel - Edge Cases (T018)', () => {
