@@ -77,6 +77,10 @@ def test_build_document_source_request_context_ignores_cookie_in_dev_mode(
 ) -> None:
     request = request_with_cookies({"auth_token": "dev-cookie-token"})
     monkeypatch.setattr("src.lib.document_sources.access.is_dev_mode", lambda: True)
+    monkeypatch.setattr(
+        "src.lib.document_sources.access.get_document_source_provider",
+        lambda: "local_pdf",
+    )
 
     context = build_document_source_request_context(
         request=request,  # type: ignore[arg-type]
@@ -88,6 +92,38 @@ def test_build_document_source_request_context_ignores_cookie_in_dev_mode(
 
     assert context.authorized_group_ids == ("MGI",)
     assert context.curator_token is None
+
+
+def test_build_document_source_request_context_uses_static_abc_token_in_dev_mode(
+    monkeypatch,
+) -> None:
+    request = request_with_cookies({"auth_token": "ignored-dev-cookie-token"})
+    monkeypatch.setattr("src.lib.document_sources.access.is_dev_mode", lambda: True)
+    monkeypatch.setattr(
+        "src.lib.document_sources.access.get_document_source_provider",
+        lambda: "abc_literature",
+    )
+    monkeypatch.setattr(
+        "src.lib.document_sources.access.get_abc_literature_auth_mode",
+        lambda: "static_bearer",
+    )
+    monkeypatch.setattr(
+        "src.lib.document_sources.access.get_abc_literature_bearer_token",
+        lambda: " static-dev-token ",
+    )
+
+    context = build_document_source_request_context(
+        request=request,  # type: ignore[arg-type]
+        user_claims={
+            "sub": "dev-user-123",
+            "groups": ["zfin-curators"],
+        },
+    )
+
+    assert context.authorized_group_ids == ("ZFIN",)
+    assert context.curator_token == "static-dev-token"
+    assert context.has_curator_token is True
+    assert "static-dev-token" not in repr(context)
 
 
 def test_build_document_source_request_context_accepts_comma_group_string() -> None:
