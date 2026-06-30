@@ -329,6 +329,35 @@ async def test_list_artifacts_expands_converted_referencefile_children() -> None
 
 
 @pytest.mark.asyncio
+async def test_list_artifacts_maps_figure_metadata_sidecars_as_provider_metadata() -> None:
+    fake_client = FakeABCLiteratureClient()
+    fake_client.show_referencefiles_payload = {
+        "referencefiles": [
+            {
+                "referencefile_id": 110,
+                "reference_id": 101,
+                "reference_curie": "AGRKB:101",
+                "display_name": "paper_image_001",
+                "file_class": "converted_main_figure_metadata",
+                "file_extension": "json",
+                "file_publication_status": "final",
+            }
+        ]
+    }
+    provider = provider_from_fake(fake_client)
+
+    artifacts = await provider.list_artifacts("AGRKB:101")
+
+    assert len(artifacts) == 1
+    artifact = artifacts[0]
+    assert artifact.artifact_id == "110"
+    assert artifact.role is SourceArtifactRole.PROVIDER_METADATA
+    assert artifact.artifact_format is SourceArtifactFormat.JSON
+    assert artifact.status is SourceArtifactStatus.AVAILABLE
+    assert artifact.metadata["file_class"] == "converted_main_figure_metadata"
+
+
+@pytest.mark.asyncio
 async def test_list_artifacts_forwards_request_bearer_token() -> None:
     fake_client = FakeABCLiteratureClient()
     fake_client.show_referencefiles_payload = {"referencefiles": []}

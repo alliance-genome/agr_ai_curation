@@ -30,6 +30,11 @@ from src.lib.literature.client import (
 
 ABC_LITERATURE_PROVIDER_ID = "abc_literature"
 
+_FIGURE_METADATA_FILE_CLASSES = {
+    "converted_main_figure_metadata",
+    "converted_supplement_figure_metadata",
+}
+
 _ARTIFACT_STATUS_KEYS = (
     "status",
     "conversion_status",
@@ -609,6 +614,11 @@ def _map_artifact_role(*, file_class: str, extension: str) -> SourceArtifactRole
         "pdf",
     }:
         return SourceArtifactRole.SOURCE_PDF
+    if (
+        normalized_class in _FIGURE_METADATA_FILE_CLASSES
+        and normalized_extension == "json"
+    ):
+        return SourceArtifactRole.PROVIDER_METADATA
     if normalized_class.startswith("converted") or normalized_extension in {
         "md",
         "xml",

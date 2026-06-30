@@ -175,6 +175,7 @@ class ProviderMarkdownExecutionRequest:
     converted_artifact_id: str
     curator_token: str = field(repr=False)
     source_provenance: Mapping[str, Any]
+    figure_metadata_artifact_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -190,6 +191,7 @@ class ProviderConversionExecutionRequest:
     source_artifact_id: str
     curator_token: str = field(repr=False)
     source_provenance: Mapping[str, Any]
+    figure_metadata_artifact_ids: tuple[str, ...] = ()
 
 
 class UploadExecutionService:
@@ -466,7 +468,10 @@ class UploadExecutionService:
                     wait=False,
                     request_bearer_token=curator_token,
                 )
-                selected_artifact = await self._select_converted_main_artifact(
+                (
+                    selected_artifact,
+                    selected_figure_metadata_artifact_ids,
+                ) = await self._select_converted_main_artifact(
                     provider=provider,
                     request=request,
                     conversion_result=last_result,
@@ -489,6 +494,12 @@ class UploadExecutionService:
                         request.source_provenance,
                         selected_artifact,
                     )
+                    figure_metadata_artifact_ids = _dedupe_strings(
+                        (
+                            *request.figure_metadata_artifact_ids,
+                            *selected_figure_metadata_artifact_ids,
+                        )
+                    )
                     await self._sync_provider_conversion_sql_selection(
                         request,
                         selected_artifact,
@@ -503,6 +514,7 @@ class UploadExecutionService:
                             converted_artifact_id=selected_artifact.artifact_id,
                             curator_token=curator_token,
                             source_provenance=source_provenance,
+                            figure_metadata_artifact_ids=figure_metadata_artifact_ids,
                         ),
                         skip_replay_guard=True,
                     )
@@ -579,12 +591,12 @@ class UploadExecutionService:
         request: ProviderConversionExecutionRequest,
         conversion_result: SourceConversionResult,
         curator_token: str,
-    ) -> SourceArtifact | None:
+    ) -> tuple[SourceArtifact | None, tuple[str, ...]]:
         if not _conversion_result_has_main_text(
             conversion_result,
             provider_id=str(request.source_provenance.get("provider") or ""),
         ):
-            return None
+            return None, ()
         artifacts = await provider.list_artifacts(
             request.reference,
             request_bearer_token=curator_token,
@@ -595,7 +607,15 @@ class UploadExecutionService:
         )
         if ambiguous_count > 1:
             raise RuntimeError("Provider conversion produced multiple equally preferred Markdown artifacts")
-        return selected
+        return selected, _dedupe_strings(
+            (
+                *_figure_metadata_artifact_ids_from_conversion_result(conversion_result),
+                *_figure_metadata_artifact_ids_from_artifacts(
+                    artifacts=artifacts,
+                    source_artifact_id=request.source_artifact_id,
+                ),
+            )
+        )
 
     async def _execute_provider_markdown_unbounded(
         self,
@@ -643,6 +663,11 @@ class UploadExecutionService:
             if pdf_job_service.is_cancel_requested(job_id=request.job_id):
                 raise PDFCancellationError("Processing cancelled by user request")
             markdown = markdown_bytes.decode("utf-8")
+            figure_metadata_entries = await _download_provider_figure_metadata_entries(
+                provider=provider,
+                artifact_ids=request.figure_metadata_artifact_ids,
+                request_bearer_token=curator_token,
+            )
 
             pdf_job_service.update_progress(
                 job_id=request.job_id,
@@ -662,6 +687,7 @@ class UploadExecutionService:
                     markdown=markdown,
                     source_provenance=request.source_provenance,
                     filename=request.filename,
+                    provider_figure_metadata=figure_metadata_entries,
                 ),
                 weaviate_client=connection,
             )
@@ -1131,3 +1157,120 @@ def _source_provenance_with_converted_artifact(
         str(converted_artifact.status),
     )
     return updated
+
+
+def _figure_metadata_artifact_ids_from_artifacts(
+    *,
+    artifacts: list[SourceArtifact],
+    source_artifact_id: str,
+) -> tuple[str, ...]:
+    try:
+        from src.lib.document_sources.import_selection import (
+            provider_metadata_artifacts_for_source,
+        )
+
+        source_artifact = next(
+            (
+                artifact
+                for artifact in artifacts
+                if artifact.artifact_id == source_artifact_id
+            ),
+            None,
+        )
+        if source_artifact is None:
+            return ()
+        return tuple(
+            artifact.artifact_id
+            for artifact in provider_metadata_artifacts_for_source(
+                source_artifact=source_artifact,
+                artifacts=artifacts,
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to discover provider figure metadata artifacts for source %s: %s",
+            source_artifact_id,
+            exc,
+        )
+        return ()
+
+
+def _figure_metadata_artifact_ids_from_conversion_result(
+    result: SourceConversionResult,
+) -> tuple[str, ...]:
+    artifact_ids: list[str] = []
+    for progress in result.per_file_progress:
+        artifact_ids.extend(_metadata_referencefile_ids_from_mapping(progress))
+    for status in result.per_mod_status:
+        artifact_ids.extend(_metadata_referencefile_ids_from_mapping(status))
+    return _dedupe_strings(artifact_ids)
+
+
+def _metadata_referencefile_ids_from_mapping(payload: Mapping[str, Any]) -> list[str]:
+    artifact_ids: list[str] = []
+    value = payload.get("metadata_referencefile_id")
+    normalized = _non_empty_string(value)
+    if normalized is not None:
+        artifact_ids.append(normalized)
+
+    for nested_value in payload.values():
+        if isinstance(nested_value, Mapping):
+            artifact_ids.extend(_metadata_referencefile_ids_from_mapping(nested_value))
+        elif isinstance(nested_value, list | tuple):
+            for item in nested_value:
+                if isinstance(item, Mapping):
+                    artifact_ids.extend(_metadata_referencefile_ids_from_mapping(item))
+    return artifact_ids
+
+
+def _dedupe_strings(values: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = _non_empty_string(value)
+        if normalized is None or normalized in seen:
+            continue
+        deduped.append(normalized)
+        seen.add(normalized)
+    return tuple(deduped)
+
+
+def _non_empty_string(value: object) -> str | None:
+    if isinstance(value, str | int) and str(value).strip():
+        return str(value).strip()
+    return None
+
+
+async def _download_provider_figure_metadata_entries(
+    *,
+    provider: DocumentSourceProvider,
+    artifact_ids: tuple[str, ...],
+    request_bearer_token: str,
+) -> tuple[Mapping[str, Any], ...]:
+    if not artifact_ids:
+        return ()
+
+    from src.lib.document_sources.figure_metadata import (
+        normalize_provider_figure_metadata_sidecar,
+    )
+
+    entries: list[Mapping[str, Any]] = []
+    for artifact_id in artifact_ids:
+        try:
+            raw = await provider.download_artifact(
+                artifact_id,
+                request_bearer_token=request_bearer_token,
+            )
+            entry = normalize_provider_figure_metadata_sidecar(
+                raw,
+                metadata_artifact_id=artifact_id,
+            )
+            if entry is not None:
+                entries.append(entry)
+        except Exception as exc:
+            logger.warning(
+                "Skipping provider figure metadata artifact %s after download/parse failure: %s",
+                artifact_id,
+                exc,
+            )
+    return tuple(entries)

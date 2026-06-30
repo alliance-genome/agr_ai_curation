@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Mapping
+from typing import Any, Awaitable, Callable, Iterable, Mapping, cast
 
 from fastapi import BackgroundTasks
 from sqlalchemy import or_, select
@@ -19,7 +19,10 @@ from sqlalchemy.orm import Session
 from src.config import get_pdf_storage_path
 from src.lib.document_cleanup import cleanup_document_curation_dependencies
 from src.lib.document_sources.access import DocumentSourceRequestContext
-from src.lib.document_sources.import_selection import source_artifact_is_authorized
+from src.lib.document_sources.import_selection import (
+    provider_metadata_artifacts_for_source,
+    source_artifact_is_authorized,
+)
 from src.lib.document_sources.models import (
     DocumentSourceConfigError,
     DocumentSourceError,
@@ -89,6 +92,7 @@ class ReferenceImportCandidate:
     reference: SourceReference
     source_artifact: SourceArtifact
     converted_artifact: SourceArtifact | None = None
+    provider_metadata_artifacts: tuple[SourceArtifact, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,7 +221,11 @@ def normalize_source_identifier(
 
     normalize_identifier = getattr(provider, "normalize_identifier", None)
     if callable(normalize_identifier):
-        return normalize_identifier(original)
+        typed_normalize_identifier = cast(
+            Callable[[str], NormalizedSourceIdentifier],
+            normalize_identifier,
+        )
+        return typed_normalize_identifier(original)
 
     if original.isdigit():
         return NormalizedSourceIdentifier(original=original, normalized=f"PMID:{original}")
@@ -306,6 +314,10 @@ async def select_reference_import_candidate(
             status=ReferenceImportDecisionStatus.ACCESS_DENIED,
             message="No source PDF artifact is accessible to this curator",
         )
+    provider_metadata_artifacts = provider_metadata_artifacts_for_source(
+        source_artifact=source_artifact,
+        artifacts=artifacts,
+    )
     markdown_artifacts = _converted_markdown_artifacts_for_source(
         source_artifact=source_artifact,
         artifacts=artifacts,
@@ -338,6 +350,7 @@ async def select_reference_import_candidate(
             reference=reference,
             source_artifact=source_artifact,
             converted_artifact=selected_artifact,
+            provider_metadata_artifacts=provider_metadata_artifacts,
         )
         return _reference_decision(
             provider=provider.provider_id,
@@ -404,6 +417,10 @@ async def select_reference_import_candidate(
                 source_artifact=source_artifact,
                 artifacts=refreshed_artifacts,
             )
+            refreshed_metadata_artifacts = provider_metadata_artifacts_for_source(
+                source_artifact=source_artifact,
+                artifacts=refreshed_artifacts,
+            )
             if ambiguous_count > 1:
                 return _reference_decision(
                     provider=provider.provider_id,
@@ -418,6 +435,7 @@ async def select_reference_import_candidate(
                     reference=reference,
                     source_artifact=source_artifact,
                     converted_artifact=converted_artifact,
+                    provider_metadata_artifacts=refreshed_metadata_artifacts,
                 )
                 return _reference_decision(
                     provider=provider.provider_id,
@@ -484,6 +502,7 @@ async def select_reference_import_candidate(
     source_only_candidate = ReferenceImportCandidate(
         reference=reference,
         source_artifact=source_artifact,
+        provider_metadata_artifacts=provider_metadata_artifacts,
     )
     return _reference_decision(
         provider=provider.provider_id,
@@ -1036,6 +1055,10 @@ class IdentifierImportService:
                         converted_artifact_id=decision.selected.converted_artifact.artifact_id,
                         curator_token=curator_token,
                         source_provenance=source_provenance,
+                        figure_metadata_artifact_ids=tuple(
+                            artifact.artifact_id
+                            for artifact in decision.selected.provider_metadata_artifacts
+                        ),
                     ),
                 )
             elif wait_for_conversion:
@@ -1051,6 +1074,10 @@ class IdentifierImportService:
                         source_artifact_id=decision.selected.source_artifact.artifact_id,
                         curator_token=curator_token,
                         source_provenance=source_provenance,
+                        figure_metadata_artifact_ids=tuple(
+                            artifact.artifact_id
+                            for artifact in decision.selected.provider_metadata_artifacts
+                        ),
                     ),
                 )
             else:
@@ -1280,7 +1307,11 @@ def _provider_is_main_text_artifact(
 ) -> bool:
     is_main_text_artifact = getattr(provider, "is_main_text_artifact", None)
     if callable(is_main_text_artifact):
-        return bool(is_main_text_artifact(artifact))
+        typed_is_main_text_artifact = cast(
+            Callable[[SourceArtifact], bool],
+            is_main_text_artifact,
+        )
+        return bool(typed_is_main_text_artifact(artifact))
     return True
 
 
@@ -1290,7 +1321,11 @@ def _provider_main_text_sort_key(
 ) -> tuple[int, ...]:
     main_text_artifact_sort_key = getattr(provider, "main_text_artifact_sort_key", None)
     if callable(main_text_artifact_sort_key):
-        return tuple(main_text_artifact_sort_key(artifact))
+        typed_main_text_artifact_sort_key = cast(
+            Callable[[SourceArtifact], Iterable[int]],
+            main_text_artifact_sort_key,
+        )
+        return tuple(typed_main_text_artifact_sort_key(artifact))
     return (0,)
 
 
@@ -1324,7 +1359,11 @@ def _reference_conversion_has_main_text(
 ) -> bool:
     conversion_exposes_main_text = getattr(provider, "conversion_exposes_main_text", None)
     if callable(conversion_exposes_main_text):
-        return bool(conversion_exposes_main_text(result))
+        typed_conversion_exposes_main_text = cast(
+            Callable[[SourceConversionResult], bool],
+            conversion_exposes_main_text,
+        )
+        return bool(typed_conversion_exposes_main_text(result))
     return (
         result.status in {
             SourceConversionStatus.CONVERTED,

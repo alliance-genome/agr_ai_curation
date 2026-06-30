@@ -13,6 +13,9 @@ from typing import Any, Mapping
 from uuid import UUID
 
 from src.lib.document_sources.models import DocumentSourceError
+from src.lib.document_sources.figure_metadata import (
+    append_provider_figure_metadata_markdown,
+)
 from src.lib.document_sources.provenance import sanitize_document_source_provenance
 from src.lib.pipeline.orchestrator import ProcessingResult
 from src.lib.storage_permissions import ensure_writable_directory
@@ -42,6 +45,7 @@ class ProviderMarkdownIngestionRequest:
     filename: str | None = None
     strategy: ChunkingStrategy | None = None
     viewer_mode: str = "local_pdf"
+    provider_figure_metadata: tuple[Mapping[str, Any], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +87,11 @@ async def ingest_provider_markdown_document(
             status="processing",
         )
         warnings = _validate_provider_markdown(markdown)
-        element_markdown = _strip_markdown_image_assets(markdown)
+        enriched_markdown = append_provider_figure_metadata_markdown(
+            markdown,
+            request.provider_figure_metadata,
+        )
+        element_markdown = _strip_markdown_image_assets(enriched_markdown)
 
         from src.lib.pipeline.pdfx_parser import markdown_to_pipeline_elements
 

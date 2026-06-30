@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 
 from src.lib.document_sources.models import (
     DocumentSourceError,
@@ -39,6 +40,7 @@ class ChecksumImportCandidate:
 
     source_artifact: SourceArtifact
     converted_artifact: SourceArtifact | None = None
+    provider_metadata_artifacts: tuple[SourceArtifact, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +131,10 @@ async def select_checksum_import_candidate(
         )
 
     source_artifact = authorized_source_list[0]
+    provider_metadata_artifacts = provider_metadata_artifacts_for_source(
+        source_artifact=source_artifact,
+        artifacts=artifacts,
+    )
     converted_artifacts = _converted_artifacts_for_source(
         source_artifact=source_artifact,
         artifacts=artifacts,
@@ -168,6 +174,7 @@ async def select_checksum_import_candidate(
         candidate = ChecksumImportCandidate(
             source_artifact=source_artifact,
             converted_artifact=selected_ready_artifact,
+            provider_metadata_artifacts=provider_metadata_artifacts,
         )
         return _decision(
             provider=provider.provider_id,
@@ -227,6 +234,10 @@ async def select_checksum_import_candidate(
                 source_artifact=source_artifact,
                 artifacts=refreshed_artifacts,
             )
+            refreshed_metadata_artifacts = provider_metadata_artifacts_for_source(
+                source_artifact=source_artifact,
+                artifacts=refreshed_artifacts,
+            )
             if ambiguous_count > 1:
                 return _decision(
                     provider=provider.provider_id,
@@ -240,6 +251,7 @@ async def select_checksum_import_candidate(
                 candidate = ChecksumImportCandidate(
                     source_artifact=source_artifact,
                     converted_artifact=converted_artifact,
+                    provider_metadata_artifacts=refreshed_metadata_artifacts,
                 )
                 return _decision(
                     provider=provider.provider_id,
@@ -291,7 +303,10 @@ async def select_checksum_import_candidate(
             metadata=conversion_metadata,
         )
 
-    source_only_candidate = ChecksumImportCandidate(source_artifact=source_artifact)
+    source_only_candidate = ChecksumImportCandidate(
+        source_artifact=source_artifact,
+        provider_metadata_artifacts=provider_metadata_artifacts,
+    )
     return _decision(
         provider=provider.provider_id,
         checksum=normalized_checksum,
@@ -316,6 +331,69 @@ def source_artifact_is_authorized(
     )
 
 
+def provider_metadata_artifacts_for_source(
+    *,
+    source_artifact: SourceArtifact,
+    artifacts: list[SourceArtifact] | tuple[SourceArtifact, ...],
+) -> tuple[SourceArtifact, ...]:
+    """Return provider JSON metadata sidecars associated with a source PDF."""
+
+    metadata_candidates = [
+        artifact
+        for artifact in artifacts
+        if artifact.role is SourceArtifactRole.PROVIDER_METADATA
+        and artifact.artifact_format is SourceArtifactFormat.JSON
+        and artifact.status in {
+            SourceArtifactStatus.AVAILABLE,
+            SourceArtifactStatus.UNKNOWN,
+        }
+        and _same_reference(source_artifact, artifact)
+    ]
+    if not metadata_candidates:
+        return ()
+
+    expected_class = _expected_figure_metadata_file_class(source_artifact)
+    if expected_class:
+        class_matched = [
+            artifact
+            for artifact in metadata_candidates
+            if _artifact_file_class(artifact) == expected_class
+        ]
+        if class_matched:
+            metadata_candidates = class_matched
+
+    exact_display_names = _figure_artifact_display_names_for_source(
+        source_artifact=source_artifact,
+        artifacts=artifacts,
+    )
+    if exact_display_names:
+        metadata_candidates = [
+            artifact
+            for artifact in metadata_candidates
+            if str(artifact.display_name or "").strip() in exact_display_names
+        ]
+    else:
+        display_prefixes = _source_display_prefixes(source_artifact)
+        if display_prefixes:
+            display_matched = [
+                artifact
+                for artifact in metadata_candidates
+                if _artifact_display_name_matches_prefix(artifact, display_prefixes)
+            ]
+            if display_matched:
+                metadata_candidates = display_matched
+
+    return tuple(
+        sorted(
+            metadata_candidates,
+            key=lambda artifact: (
+                str(artifact.display_name or "").strip().lower(),
+                artifact.artifact_id,
+            ),
+        )
+    )
+
+
 def _access_policy_is_authorized(
     access_policy: SourceAccessPolicy,
     *,
@@ -337,6 +415,83 @@ def _source_artifacts(artifacts: list[SourceArtifact]) -> tuple[SourceArtifact, 
         for artifact in artifacts
         if artifact.role is SourceArtifactRole.SOURCE_PDF
     )
+
+
+def _artifact_file_class(artifact: SourceArtifact) -> str:
+    return str(artifact.metadata.get("file_class") or "").strip().lower()
+
+
+def _expected_figure_metadata_file_class(
+    source_artifact: SourceArtifact,
+) -> str | None:
+    source_class = _artifact_file_class(source_artifact)
+    if source_class == "main":
+        return "converted_main_figure_metadata"
+    if source_class == "supplement":
+        return "converted_supplement_figure_metadata"
+    return None
+
+
+def _expected_figure_file_class(source_artifact: SourceArtifact) -> str | None:
+    source_class = _artifact_file_class(source_artifact)
+    if source_class == "main":
+        return "converted_main_figure"
+    if source_class == "supplement":
+        return "converted_supplement_figure"
+    return None
+
+
+def _figure_artifact_display_names_for_source(
+    *,
+    source_artifact: SourceArtifact,
+    artifacts: list[SourceArtifact] | tuple[SourceArtifact, ...],
+) -> set[str]:
+    expected_class = _expected_figure_file_class(source_artifact)
+    prefixes = _source_display_prefixes(source_artifact)
+    display_names: set[str] = set()
+    for artifact in artifacts:
+        artifact_class = _artifact_file_class(artifact)
+        if expected_class and artifact_class != expected_class:
+            continue
+        if not expected_class and artifact_class not in {
+            "converted_main_figure",
+            "converted_supplement_figure",
+        }:
+            continue
+        if artifact.status not in {
+            SourceArtifactStatus.AVAILABLE,
+            SourceArtifactStatus.UNKNOWN,
+        }:
+            continue
+        if not _same_reference(source_artifact, artifact):
+            continue
+        display_name = str(artifact.display_name or "").strip()
+        if not display_name:
+            continue
+        if prefixes and not any(display_name.startswith(prefix) for prefix in prefixes):
+            continue
+        display_names.add(display_name)
+    return display_names
+
+
+def _source_display_prefixes(source_artifact: SourceArtifact) -> tuple[str, ...]:
+    display_name = str(source_artifact.display_name or "").strip()
+    if not display_name:
+        return ()
+    prefixes = [f"{display_name}_image_"]
+    if "." in display_name:
+        stem = display_name.rsplit(".", 1)[0]
+        if stem and stem != display_name:
+            prefixes.append(f"{stem}_image_")
+    return tuple(dict.fromkeys(prefixes))
+
+
+def _artifact_display_name_matches_prefix(
+    artifact: SourceArtifact,
+    prefixes: tuple[str, ...],
+) -> bool:
+    display_name = str(artifact.display_name or "").strip()
+    return any(display_name.startswith(prefix) for prefix in prefixes)
 
 
 def _converted_artifacts_for_source(
@@ -369,7 +524,11 @@ async def _request_conversion_if_supported(
         return None
     if not _reference_lookup_value(source_artifact):
         return None
-    return await request_conversion(
+    typed_request_conversion = cast(
+        Callable[..., Awaitable[SourceConversionResult]],
+        request_conversion,
+    )
+    return await typed_request_conversion(
         source_artifact,
         wait=False,
         request_bearer_token=request_bearer_token,
@@ -382,7 +541,11 @@ def _conversion_has_usable_main_text(
 ) -> bool:
     conversion_exposes_main_text = getattr(provider, "conversion_exposes_main_text", None)
     if callable(conversion_exposes_main_text):
-        return bool(conversion_exposes_main_text(result))
+        typed_conversion_exposes_main_text = cast(
+            Callable[[SourceConversionResult], bool],
+            conversion_exposes_main_text,
+        )
+        return bool(typed_conversion_exposes_main_text(result))
     return (
         result.status in {
             SourceConversionStatus.CONVERTED,
@@ -447,7 +610,11 @@ def _provider_is_main_text_artifact(
 ) -> bool:
     is_main_text_artifact = getattr(provider, "is_main_text_artifact", None)
     if callable(is_main_text_artifact):
-        return bool(is_main_text_artifact(artifact))
+        typed_is_main_text_artifact = cast(
+            Callable[[SourceArtifact], bool],
+            is_main_text_artifact,
+        )
+        return bool(typed_is_main_text_artifact(artifact))
     return True
 
 
@@ -457,7 +624,11 @@ def _provider_main_text_sort_key(
 ) -> tuple[int, ...]:
     main_text_artifact_sort_key = getattr(provider, "main_text_artifact_sort_key", None)
     if callable(main_text_artifact_sort_key):
-        return tuple(main_text_artifact_sort_key(artifact))
+        typed_main_text_artifact_sort_key = cast(
+            Callable[[SourceArtifact], Iterable[int]],
+            main_text_artifact_sort_key,
+        )
+        return tuple(typed_main_text_artifact_sort_key(artifact))
     return (0,)
 
 

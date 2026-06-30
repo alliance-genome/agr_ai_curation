@@ -21,6 +21,11 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 
+from src.lib.document_sources.figure_metadata import (
+    PROVIDER_FIGURE_METADATA_SECTION,
+    is_provider_figure_metadata_section,
+    is_provider_figure_subsection,
+)
 from src.lib.config.env import require_env, require_env_choice
 from src.lib.observability.sentry import (
     gen_ai_invoke_agent_span,
@@ -141,13 +146,37 @@ async def resolve_document_hierarchy(
         logger.info("[HIERARCHY] No section_titles found in elements.")
         return elements, None
 
-    # Extract just the titles for the LLM call
-    section_titles = [s["title"] for s in section_info_list]
+    deterministic_sections = _deterministic_provider_figure_sections(
+        section_info_list
+    )
+    llm_section_info_list = [
+        info
+        for info in section_info_list
+        if info["title"] not in deterministic_sections
+    ]
 
-    logger.info('[HIERARCHY] Found %s unique section titles. Calling LLM...', len(section_titles))
+    logger.info(
+        '[HIERARCHY] Found %s unique section titles (%s deterministic provider metadata). Calling LLM for %s...',
+        len(section_info_list),
+        len(deterministic_sections),
+        len(llm_section_info_list),
+    )
 
     # 2. Call LLM to resolve hierarchy (pass section info with previews)
-    hierarchy_result, abstract_section_title, raw_response = await _call_llm_for_hierarchy(section_info_list)
+    if llm_section_info_list:
+        hierarchy_result, abstract_section_title, raw_response = await _call_llm_for_hierarchy(llm_section_info_list)
+    else:
+        hierarchy_result, abstract_section_title, raw_response = [], None, {
+            "model": "deterministic_provider_metadata_only",
+            "sections_count": 0,
+            "abstract_section_title": None,
+        }
+
+    hierarchy_result = _merge_deterministic_sections_in_document_order(
+        section_info_list,
+        hierarchy_result,
+        deterministic_sections,
+    )
 
     if not hierarchy_result:
         logger.warning("[HIERARCHY] LLM returned empty hierarchy. Using fallback.")
@@ -457,3 +486,56 @@ Common abstract locations when not explicitly labeled:
     except Exception as e:
         logger.error('[HIERARCHY] LLM hierarchy resolution failed: %s', e, exc_info=True)
         return [], None, None
+
+
+def _deterministic_provider_figure_sections(
+    section_info_list: List[Dict[str, str]],
+) -> Dict[str, SectionItem]:
+    section_titles = [info["title"] for info in section_info_list]
+    if not any(is_provider_figure_metadata_section(title) for title in section_titles):
+        return {}
+
+    deterministic: Dict[str, SectionItem] = {}
+    for title in section_titles:
+        if is_provider_figure_metadata_section(title):
+            deterministic[title] = SectionItem(
+                header=title,
+                parent_section=PROVIDER_FIGURE_METADATA_SECTION,
+                subsection=None,
+                is_top_level=True,
+            )
+        elif is_provider_figure_subsection(title):
+            deterministic[title] = SectionItem(
+                header=title,
+                parent_section=PROVIDER_FIGURE_METADATA_SECTION,
+                subsection=title,
+                is_top_level=False,
+            )
+    return deterministic
+
+
+def _merge_deterministic_sections_in_document_order(
+    section_info_list: List[Dict[str, str]],
+    hierarchy_result: List[SectionItem],
+    deterministic_sections: Dict[str, SectionItem],
+) -> List[SectionItem]:
+    if not deterministic_sections:
+        return hierarchy_result
+
+    llm_by_header: Dict[str, SectionItem] = {
+        item.header.strip(): item for item in hierarchy_result
+    }
+    merged: List[SectionItem] = []
+    seen: set[str] = set()
+    for info in section_info_list:
+        title = info["title"].strip()
+        item = deterministic_sections.get(title) or llm_by_header.get(title)
+        if item is None or item.header in seen:
+            continue
+        merged.append(item)
+        seen.add(item.header)
+    for item in hierarchy_result:
+        if item.header not in seen:
+            merged.append(item)
+            seen.add(item.header)
+    return merged
