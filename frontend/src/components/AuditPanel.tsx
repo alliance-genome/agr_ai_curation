@@ -10,6 +10,7 @@ import { Box, Button, Typography } from '@mui/material'
 import { alpha, useTheme } from '@mui/material/styles'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import ClearIcon from '@mui/icons-material/Clear'
+import BoltIcon from '@mui/icons-material/Bolt'
 import type { AuditEvent, AuditEventType } from '../types/AuditEvent'
 import AuditEventItem from './AuditEventItem'
 import { copyText } from './Chat/copyText'
@@ -531,6 +532,56 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
         >
           Clear
         </Button>
+
+        {isStreaming && (
+          <Box
+            data-testid="run-status-indicator"
+            role="status"
+            aria-live="polite"
+            sx={{
+              ...actionButtonSx,
+              minWidth: '104px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 0.6,
+              border: `1px solid ${alpha(theme.palette.info.main, 0.46)}`,
+              borderRadius: '4px',
+              backgroundColor: alpha(theme.palette.info.main, 0.08),
+              color: theme.palette.info.main,
+              fontWeight: 600,
+              lineHeight: 1.75,
+              '@keyframes auditRunPulse': {
+                '0%': {
+                  opacity: 0.45,
+                  transform: 'scale(0.82)',
+                },
+                '50%': {
+                  opacity: 1,
+                  transform: 'scale(1)',
+                },
+                '100%': {
+                  opacity: 0.45,
+                  transform: 'scale(0.82)',
+                },
+              },
+            }}
+          >
+            <BoltIcon sx={{ fontSize: '0.95rem' }} />
+            <Box
+              component="span"
+              sx={{
+                width: 7,
+                height: 7,
+                borderRadius: '50%',
+                backgroundColor: theme.palette.info.main,
+                animation: 'auditRunPulse 1.1s ease-in-out infinite',
+                flexShrink: 0,
+              }}
+            />
+            Running
+          </Box>
+        )}
 
         {/* Stop button (aligned with Copy/Clear) */}
         <Button

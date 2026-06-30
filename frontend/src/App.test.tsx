@@ -9,10 +9,15 @@ import { GLOBAL_TOAST_EVENT } from './lib/globalNotifications';
 import { POPUP_CHANGELOG_ENTRY } from './content/changelog';
 
 const mockUseAuth = vi.hoisted(() => vi.fn());
+const mockUseChatStream = vi.hoisted(() => vi.fn());
 
 vi.mock('./contexts/AuthContext', () => ({
   useAuth: () => mockUseAuth(),
   AuthProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+vi.mock('./hooks/useChatStream', () => ({
+  useChatStream: () => mockUseChatStream(),
 }));
 
 vi.mock('./config/version', () => ({
@@ -90,6 +95,20 @@ const jsonResponse = (payload: unknown): Response =>
     headers: { 'Content-Type': 'application/json' },
   });
 
+const buildChatStreamState = (overrides: Record<string, unknown> = {}) => ({
+  events: [],
+  eventStreamVersion: 0,
+  processedEventCount: 0,
+  isLoading: false,
+  sendMessage: vi.fn(),
+  executeFlow: vi.fn(),
+  error: null,
+  clearEvents: vi.fn(),
+  markEventsProcessed: vi.fn(),
+  stopStream: vi.fn(),
+  ...overrides,
+});
+
 describe('AppContent global notifications', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -102,6 +121,7 @@ describe('AppContent global notifications', () => {
       logout: vi.fn().mockResolvedValue(undefined),
       isAuthenticated: true,
     });
+    mockUseChatStream.mockReturnValue(buildChatStreamState());
   });
 
   afterEach(() => {
@@ -130,6 +150,119 @@ describe('AppContent global notifications', () => {
     );
 
     expect(await screen.findByText('Global toast arrived')).toBeInTheDocument();
+  });
+
+  it('shows a chat completion toast with a return action when a run finishes off the chat route', async () => {
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/weaviate/pdf-jobs')) {
+        return jsonResponse({ jobs: [] });
+      }
+      if (url.includes('/api/batches')) {
+        return jsonResponse({ batches: [] });
+      }
+      return jsonResponse({});
+    });
+
+    mockUseChatStream.mockReturnValue(buildChatStreamState({
+      isLoading: true,
+      events: [
+        {
+          type: 'AGENT_GENERATING',
+          timestamp: '2026-06-30T17:00:00.000Z',
+          session_id: 'session-finished',
+          details: { message: 'Starting' },
+        },
+      ],
+    }));
+
+    const view = renderAppContent('/weaviate/documents');
+    expect(screen.queryByText('Curation chat finished')).not.toBeInTheDocument();
+
+    mockUseChatStream.mockReturnValue(buildChatStreamState({
+      isLoading: false,
+      events: [
+        {
+          type: 'AGENT_GENERATING',
+          timestamp: '2026-06-30T17:00:00.000Z',
+          session_id: 'session-finished',
+          details: { message: 'Starting' },
+        },
+        {
+          type: 'SUPERVISOR_COMPLETE',
+          timestamp: '2026-06-30T17:00:01.000Z',
+          session_id: 'session-finished',
+          details: { message: 'Done' },
+        },
+      ],
+    }));
+
+    await act(async () => {
+      view.rerender(
+        <ThemeModeProvider>
+          <MemoryRouter initialEntries={['/weaviate/documents']}>
+            <AppContent />
+          </MemoryRouter>
+        </ThemeModeProvider>
+      );
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByText('Curation chat finished')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open chat' })).toHaveAttribute('href', '/?session=session-finished');
+  });
+
+  it('does not show a chat completion toast when a run finishes on the chat route', async () => {
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/weaviate/pdf-jobs')) {
+        return jsonResponse({ jobs: [] });
+      }
+      if (url.includes('/api/batches')) {
+        return jsonResponse({ batches: [] });
+      }
+      return jsonResponse({});
+    });
+
+    mockUseChatStream.mockReturnValue(buildChatStreamState({
+      isLoading: true,
+      events: [
+        {
+          type: 'AGENT_GENERATING',
+          timestamp: '2026-06-30T17:00:00.000Z',
+          session_id: 'session-on-chat',
+          details: { message: 'Starting' },
+        },
+      ],
+    }));
+
+    const view = renderAppContent('/');
+
+    mockUseChatStream.mockReturnValue(buildChatStreamState({
+      isLoading: false,
+      events: [
+        {
+          type: 'SUPERVISOR_COMPLETE',
+          timestamp: '2026-06-30T17:00:01.000Z',
+          session_id: 'session-on-chat',
+          details: { message: 'Done' },
+        },
+      ],
+    }));
+
+    await act(async () => {
+      view.rerender(
+        <ThemeModeProvider>
+          <MemoryRouter initialEntries={['/']}>
+            <AppContent />
+          </MemoryRouter>
+        </ThemeModeProvider>
+      );
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText('Curation chat finished')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Open chat' })).not.toBeInTheDocument();
   });
 
   it('shows changelog once per user and persists dismissal', async () => {

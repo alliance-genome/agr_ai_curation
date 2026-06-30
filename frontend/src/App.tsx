@@ -36,11 +36,36 @@ import {
 import { POPUP_CHANGELOG_ENTRY } from './content/changelog'
 import ChangelogDialog from './components/ChangelogDialog'
 import { buildPdfTerminalNotification } from './features/documents/pdfTerminalNotifications'
+import { useChatStream, type SSEEvent } from './hooks/useChatStream'
+import { getStreamEventSessionId } from './lib/streamEventSession'
 import './App.css'
 
 export const queryClient = new QueryClient()
 const DEFAULT_GLOBAL_SNACKBAR_AUTO_HIDE_MS = 4000
 const DEFAULT_GLOBAL_SNACKBAR_ANCHOR = { vertical: 'bottom', horizontal: 'right' } as const
+
+function isChatRoutePath(pathname: string): boolean {
+  return (pathname.replace(/\/+$/, '') || '/') === '/'
+}
+
+function getLatestStreamSessionId(events: SSEEvent[]): string | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const sessionId = getStreamEventSessionId(events[index])
+    if (sessionId) {
+      return sessionId
+    }
+  }
+
+  return null
+}
+
+function hasStoppedRunEvent(events: SSEEvent[]): boolean {
+  return events.some((event) => event.type === 'STOP_CONFIRMED')
+}
+
+function hasErrorRunEvent(events: SSEEvent[]): boolean {
+  return events.some((event) => event.type.includes('ERROR'))
+}
 
 const APP_THEME_GLOBAL_ALPHA = {
   dark: {
@@ -281,6 +306,11 @@ export function ProtectedRoutes({ children }: { children: React.ReactNode }) {
 
 export function AppContent() {
   const { user, logout, isAuthenticated } = useAuth();
+  const {
+    events: chatStreamEvents,
+    isLoading: chatRunActive,
+    error: chatRunError,
+  } = useChatStream();
   const navigate = useNavigate();
   const location = useLocation();
   const normalizedPathname = location.pathname.replace(/\/+$/, '');
@@ -300,7 +330,10 @@ export function AppContent() {
       horizontal: 'left' | 'center' | 'right';
     };
     showStorageRecoveryAction?: boolean;
+    chatReturnPath?: string;
   }>({ open: false, message: '', severity: 'info' });
+  const wasChatRunActiveRef = React.useRef(chatRunActive);
+  const activeRunSessionIdRef = React.useRef<string | null>(getLatestStreamSessionId(chatStreamEvents));
   const seededPdfJobsRef = React.useRef(false);
   const seededBatchesRef = React.useRef(false);
   const seenPdfTerminalRef = React.useRef<Set<string>>(new Set());
@@ -367,6 +400,7 @@ export function AppContent() {
         autoHideDurationMs: detail.autoHideDurationMs,
         anchorOrigin: detail.anchorOrigin,
         showStorageRecoveryAction: false,
+        chatReturnPath: undefined,
       });
     };
 
@@ -390,6 +424,7 @@ export function AppContent() {
         autoHideDurationMs: null,
         anchorOrigin: DEFAULT_GLOBAL_SNACKBAR_ANCHOR,
         showStorageRecoveryAction: true,
+        chatReturnPath: undefined,
       });
     };
 
@@ -406,8 +441,44 @@ export function AppContent() {
       message: 'AI Curation local cache was cleared. Uploaded PDFs and server-side chat history were not deleted.',
       severity: 'success',
       showStorageRecoveryAction: false,
+      chatReturnPath: undefined,
     });
   }, []);
+
+  useEffect(() => {
+    const latestSessionId = getLatestStreamSessionId(chatStreamEvents);
+    if (chatRunActive && latestSessionId) {
+      activeRunSessionIdRef.current = latestSessionId;
+    }
+
+    const wasChatRunActive = wasChatRunActiveRef.current;
+    wasChatRunActiveRef.current = chatRunActive;
+
+    if (!wasChatRunActive || chatRunActive || isChatRoutePath(location.pathname)) {
+      return;
+    }
+
+    const stopped = hasStoppedRunEvent(chatStreamEvents);
+    if (stopped) {
+      activeRunSessionIdRef.current = null;
+      return;
+    }
+
+    const errored = Boolean(chatRunError) || hasErrorRunEvent(chatStreamEvents);
+    const returnSessionId = latestSessionId ?? activeRunSessionIdRef.current;
+    const chatReturnPath = returnSessionId
+      ? `/?session=${encodeURIComponent(returnSessionId)}`
+      : '/';
+
+    setGlobalSnackbar({
+      open: true,
+      message: errored ? 'Curation chat needs attention' : 'Curation chat finished',
+      severity: errored ? 'error' : 'success',
+      showStorageRecoveryAction: false,
+      chatReturnPath,
+    });
+    activeRunSessionIdRef.current = null;
+  }, [chatRunActive, chatRunError, chatStreamEvents, location.pathname]);
 
   useEffect(() => {
     const currentUserId = isAuthenticated ? user?.uid ?? null : null
@@ -838,6 +909,16 @@ export function AppContent() {
               onClick={handleClearLocalCache}
             >
               Clear local cache
+            </Button>
+          ) : globalSnackbar.chatReturnPath ? (
+            <Button
+              color="inherit"
+              component={Link}
+              size="small"
+              to={globalSnackbar.chatReturnPath}
+              onClick={() => setGlobalSnackbar((prev) => ({ ...prev, open: false }))}
+            >
+              Open chat
             </Button>
           ) : undefined}
           sx={{ width: '100%' }}
