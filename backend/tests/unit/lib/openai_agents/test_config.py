@@ -409,10 +409,10 @@ def test_openai_responses_websocket_ping_timeout_invalid_env_uses_default(monkey
     assert get_openai_responses_websocket_ping_timeout_seconds() is None
 
 
-def test_pdf_max_file_size_default_is_150mb(monkeypatch):
+def test_pdf_max_file_size_default_is_500mb(monkeypatch):
     monkeypatch.delenv("PDF_MAX_FILE_SIZE_BYTES", raising=False)
 
-    assert get_pdf_max_file_size_bytes() == 150 * 1024 * 1024
+    assert get_pdf_max_file_size_bytes() == 500 * 1024 * 1024
 
 
 def test_pdf_max_file_size_env_override(monkeypatch):
