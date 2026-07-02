@@ -1039,7 +1039,7 @@ def _select_preferred_main_markdown(
 def _is_canonical_main_markdown_artifact(artifact: SourceArtifact) -> bool:
     file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
     if artifact.provider == "abc_literature":
-        return file_class == "converted_merged_main" and not _artifact_looks_tei(artifact)
+        return file_class == "converted_merged_main"
     return True
 
 

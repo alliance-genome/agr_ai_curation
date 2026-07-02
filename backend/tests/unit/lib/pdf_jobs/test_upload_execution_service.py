@@ -887,7 +887,7 @@ async def test_execute_provider_markdown_fails_failed_figure_metadata_download(m
     ]
 
 
-def test_select_preferred_main_markdown_skips_abc_tei_only_artifact():
+def test_select_preferred_main_markdown_accepts_abc_tei_only_artifact():
     artifact = SourceArtifact(
         provider="abc_literature",
         artifact_id="tei-markdown-1",
@@ -905,8 +905,8 @@ def test_select_preferred_main_markdown_skips_abc_tei_only_artifact():
         reference="AGRKB:101",
     )
 
-    assert selected is None
-    assert ambiguous_count == 0
+    assert selected is artifact
+    assert ambiguous_count == 1
 
 
 def test_select_preferred_main_markdown_reports_ambiguous_equal_candidates():
@@ -960,7 +960,7 @@ async def test_execute_provider_conversion_fails_when_completed_without_canonica
             reference_curie="AGRKB:101",
             display_name="paper_tei.md",
             access_policy=SourceAccessPolicy(scope=SourceAccessScope.GLOBAL),
-            metadata={"file_class": "converted_merged_main", "file_extension": "md"},
+            metadata={"file_class": "converted_tei_main", "file_extension": "md"},
         )
     ]
     progress_updates = []
