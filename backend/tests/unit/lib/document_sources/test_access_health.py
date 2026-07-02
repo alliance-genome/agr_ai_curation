@@ -72,7 +72,7 @@ def test_build_document_source_request_context_ignores_cookie_for_api_key_claims
     assert context.has_curator_token is False
 
 
-def test_build_document_source_request_context_ignores_cookie_in_dev_mode(
+def test_build_document_source_request_context_uses_real_cookie_in_dev_mode(
     monkeypatch,
 ) -> None:
     request = request_with_cookies({"auth_token": "dev-cookie-token"})
@@ -95,13 +95,14 @@ def test_build_document_source_request_context_ignores_cookie_in_dev_mode(
     )
 
     assert context.authorized_group_ids == ("MGI",)
-    assert context.curator_token is None
+    assert context.curator_token == "dev-cookie-token"
+    assert context.has_curator_token is True
 
 
 def test_build_document_source_request_context_uses_static_abc_token_in_dev_mode(
     monkeypatch,
 ) -> None:
-    request = request_with_cookies({"auth_token": "ignored-dev-cookie-token"})
+    request = request_with_cookies({})
     monkeypatch.setattr("src.lib.document_sources.access.is_dev_mode", lambda: True)
 
     class ProviderWithDevToken:
