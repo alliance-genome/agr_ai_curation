@@ -125,6 +125,33 @@ def _cross_domain_builder_events() -> list[dict]:
     ]
 
 
+def test_parse_args_accepts_curator_cookie_auth_mode():
+    corpus = _load_corpus_module()
+
+    args = corpus.parse_args(
+        [
+            "--auth-mode",
+            "curator-cookie",
+            "--curator-id-token",
+            "unit-token",
+            "--authorized-groups",
+            "FBStaff,FlyBaseCurator",
+        ]
+    )
+
+    assert args.auth_mode == "curator-cookie"
+    assert args.curator_id_token == "unit-token"
+    assert args.authorized_groups == "FBStaff,FlyBaseCurator"
+
+
+def test_parse_args_accepts_salted_uploads():
+    corpus = _load_corpus_module()
+
+    args = corpus.parse_args(["--salt-upload-pdfs"])
+
+    assert args.salt_upload_pdfs is True
+
+
 def test_tightened_trial_gate_requires_expected_validator_audit_events():
     corpus = _load_corpus_module()
     checks: list[dict] = []
@@ -244,6 +271,79 @@ def test_tightened_trial_gate_requires_all_cross_domain_builder_finalizers():
     assert checks[-1]["payload"]["expected_builder_finalizations"] == 2
     assert checks[-1]["payload"]["builder_observations"]["finalize_tool_complete_count"] == 1
     assert checks[-1]["ok"] is False
+
+
+def test_tightened_trial_gate_accepts_flow_finished_handoff_audits():
+    corpus = _load_corpus_module()
+    checks: list[dict] = []
+
+    payload = corpus.validate_tightened_trial_gate(
+        trial=corpus.TRIALS[0],
+        flow_result={
+            "events": [
+                _validator_lookup_event("alliance_gene_reference_lookup"),
+                {
+                    "type": "FLOW_FINISHED",
+                    "total_evidence_records": 1,
+                    "extraction_handoff_audits": [
+                        {
+                            "builderFinalizationSeen": True,
+                            "candidateBuilt": True,
+                            "evidenceCount": 1,
+                            "persistedResultCount": 1,
+                            "persistenceStatus": "success",
+                        }
+                    ],
+                    "extraction_result_refs": [
+                        {
+                            "adapter_key": "gene",
+                            "candidate_count": 1,
+                            "extraction_result_id": "result-1",
+                        }
+                    ],
+                },
+            ]
+        },
+        checks=checks,
+        allow_specialist_text_fallback=False,
+    )
+
+    assert payload["request_lifecycle_ok"] is True
+    assert payload["builder_ok"] is True
+    assert checks[-1]["ok"] is True
+
+
+def test_tightened_trial_gate_rejects_unpersisted_handoff_audit():
+    corpus = _load_corpus_module()
+    checks: list[dict] = []
+
+    with pytest.raises(corpus.smoke.SmokeFailure, match="builder gate failed"):
+        corpus.validate_tightened_trial_gate(
+            trial=corpus.TRIALS[0],
+            flow_result={
+                "events": [
+                    _validator_lookup_event("alliance_gene_reference_lookup"),
+                    {
+                        "type": "FLOW_FINISHED",
+                        "total_evidence_records": 1,
+                        "extraction_handoff_audits": [
+                            {
+                                "builderFinalizationSeen": True,
+                                "candidateBuilt": True,
+                                "evidenceCount": 1,
+                                "persistedResultCount": 0,
+                                "persistenceStatus": "failed",
+                            }
+                        ],
+                        "extraction_result_refs": [],
+                    },
+                ]
+            },
+            checks=checks,
+            allow_specialist_text_fallback=False,
+        )
+
+    assert checks[-1]["payload"]["builder_ok"] is False
 
 
 def test_tightened_trial_gate_rejects_stage_finalized_count_mismatch():

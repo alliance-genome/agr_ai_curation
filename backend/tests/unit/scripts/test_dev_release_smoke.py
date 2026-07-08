@@ -68,6 +68,7 @@ def test_parse_args_keeps_rerank_provider_smoke_opt_in_by_default():
 
     args = smoke.parse_args([])
 
+    assert args.auth_mode == "api-key"
     assert args.skip_sdk_pin_check is False
     assert args.include_rerank_provider_smoke is False
     assert args.rerank_provider_smoke_base_url == "http://localhost:8000"
@@ -78,6 +79,15 @@ def test_parse_args_keeps_rerank_provider_smoke_opt_in_by_default():
     assert "focus of the publication" in args.stream_chat_message
 
 
+def test_parse_args_accepts_auth_mode_env_default(monkeypatch):
+    monkeypatch.setenv("DEV_RELEASE_SMOKE_AUTH_MODE", "curator-cookie")
+    smoke = _load_smoke_module()
+
+    args = smoke.parse_args([])
+
+    assert args.auth_mode == "curator-cookie"
+
+
 def test_parse_args_allows_stream_chat_message_override():
     smoke = _load_smoke_module()
 
@@ -85,6 +95,133 @@ def test_parse_args_allows_stream_chat_message_override():
 
     assert args.chat_message == smoke.DEFAULT_CHAT_MESSAGE
     assert args.stream_chat_message == "Stream this exact prompt."
+
+
+def test_resolve_auth_context_accepts_curator_id_token(tmp_path):
+    smoke = _load_smoke_module()
+    args = smoke.parse_args(
+        [
+            "--auth-mode",
+            "curator-cookie",
+            "--curator-id-token",
+            "unit-curator-token",
+            "--curator-username",
+            "smoke-curator@example.org",
+        ]
+    )
+
+    auth_context = smoke.resolve_auth_context(args, tmp_path / "missing.env")
+
+    assert auth_context.mode == "curator-cookie"
+    assert auth_context.used_api_key_auth is False
+    assert auth_context.headers["Cookie"] == "auth_token=unit-curator-token"
+    assert "X-API-Key" not in auth_context.headers
+    assert auth_context.evidence == {
+        "mode": "curator-cookie",
+        "auth_source": "curator_id_token",
+        "username": "smoke-curator@example.org",
+        "expected_provider_groups": ["FBStaff", "FlyBaseCurator"],
+    }
+
+
+def test_check_current_user_accepts_curator_cookie_principal(monkeypatch):
+    smoke = _load_smoke_module()
+    checks: list[dict] = []
+
+    def _fake_http_request(method, url, **kwargs):
+        assert method == "GET"
+        assert url == "http://backend.test/api/users/me"
+        assert kwargs["headers"]["Cookie"] == "auth_token=unit-curator-token"
+        return smoke.Response(
+            status_code=200,
+            body=b"{}",
+            text="{}",
+            json_body={
+                "auth_sub": "cognito-user-123",
+                "email": "smoke-curator@example.org",
+                "provider_groups": ["FBStaff"],
+            },
+        )
+
+    monkeypatch.setattr(smoke, "http_request", _fake_http_request)
+
+    payload = smoke.check_current_user(
+        base_url="http://backend.test",
+        headers={"Cookie": "auth_token=unit-curator-token"},
+        checks=checks,
+        expected_auth_sub=None,
+        expected_email=None,
+        expected_auth_mode="curator-cookie",
+        expected_provider_groups=("FBStaff",),
+    )
+
+    assert payload["auth_sub"] == "cognito-user-123"
+    assert checks[0]["step"] == "current_user"
+
+
+def test_check_current_user_accepts_dev_mode_curator_cookie_group_context(monkeypatch):
+    smoke = _load_smoke_module()
+    checks: list[dict] = []
+
+    def _fake_http_request(method, url, **kwargs):
+        assert method == "GET"
+        assert url == "http://backend.test/api/users/me"
+        assert kwargs["headers"]["Cookie"] == "auth_token=unit-curator-token"
+        return smoke.Response(
+            status_code=200,
+            body=b"{}",
+            text="{}",
+            json_body={
+                "auth_sub": "dev-user-123",
+                "email": "dev@localhost",
+                "provider_groups": ["FBStaff"],
+            },
+        )
+
+    monkeypatch.setattr(smoke, "http_request", _fake_http_request)
+
+    payload = smoke.check_current_user(
+        base_url="http://backend.test",
+        headers={"Cookie": "auth_token=unit-curator-token"},
+        checks=checks,
+        expected_auth_sub=None,
+        expected_email=None,
+        expected_auth_mode="curator-cookie",
+        expected_provider_groups=("FBStaff",),
+    )
+
+    assert payload["auth_sub"] == "dev-user-123"
+    assert checks[0]["step"] == "current_user"
+
+
+def test_check_current_user_rejects_api_key_when_curator_cookie_expected(monkeypatch):
+    smoke = _load_smoke_module()
+
+    def _fake_http_request(method, url, **kwargs):
+        del method, url, kwargs
+        return smoke.Response(
+            status_code=200,
+            body=b"{}",
+            text="{}",
+            json_body={
+                "auth_sub": "api-key-testuser",
+                "email": "testuser@example.org",
+                "provider_groups": ["FBStaff"],
+            },
+        )
+
+    monkeypatch.setattr(smoke, "http_request", _fake_http_request)
+
+    with pytest.raises(smoke.SmokeFailure, match="real curator principal"):
+        smoke.check_current_user(
+            base_url="http://backend.test",
+            headers={"Cookie": "auth_token=unit-curator-token"},
+            checks=[],
+            expected_auth_sub=None,
+            expected_email=None,
+            expected_auth_mode="curator-cookie",
+            expected_provider_groups=("FBStaff",),
+        )
 
 
 def _write_openai_agents_lockfile(repo_root: Path, version: str) -> Path:

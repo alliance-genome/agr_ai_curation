@@ -16,6 +16,29 @@ behavior against the deployed backend. Record the passing evidence in the PR bod
 as `SDK-Smoke-Evidence: dev_release_smoke PASS <evidence-link-or-path>` so the
 Agent PR Gate can enforce the upgrade policy.
 
+Release skill alignment: if a change adds, removes, or materially changes a
+dev-release smoke, live integration gate, domain-corpus/evidence runner,
+TraceReview/Langfuse preflight, ABC/Literature smoke, or LLM-assisted evidence
+review requirement, update `$ai-curation-release` in the same change. The
+release skill is the operational checklist agents use during release sessions;
+this strategy document explains why the gate exists, but the skill must name
+what actually runs before production.
+
+Auth mode split: `scripts/testing/dev_release_smoke.py` is the generic deployed
+backend smoke for chat, flow, batch, export/download, and artifact behavior. On
+ABC-backed dev stacks, run it with `--auth-mode curator-cookie` and a local
+secret-bearing env file so document upload can forward a real curator bearer to
+ABC Literature. Keep ABC-specific provenance/source-Markdown/identifier-import
+assertions in `abc_literature_ready_upload_smoke.py`,
+`abc_literature_identifier_import_smoke.py`, and
+`add_literature_upload_smoke.py`.
+The domain-envelope corpus runner also accepts the same `--auth-mode
+curator-cookie` path because it uploads real PDFs before exercising the
+agent/validator corpus. On ABC-backed dev stacks, run the corpus with
+`--salt-upload-pdfs` so public corpus fixtures avoid source-document checksum
+matches and MOD-specific ABC access policy. ABC provenance/source-document
+behavior is covered separately by the scoped ABC smokes.
+
 ## 1) Why this document exists
 
 This document is the durable source of truth for the dev-release smoke effort.
