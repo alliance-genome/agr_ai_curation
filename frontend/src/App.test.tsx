@@ -180,6 +180,48 @@ describe('AppContent global notifications', () => {
     expect(screen.getByTestId('home-page')).toHaveTextContent('Home?session=session-finished');
   });
 
+  it('shows a flow completion toast with a return action when a flow finishes off the chat page', async () => {
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/weaviate/pdf-jobs')) {
+        return jsonResponse({ jobs: [] });
+      }
+      if (url.includes('/api/batches')) {
+        return jsonResponse({ batches: [] });
+      }
+      return jsonResponse({});
+    });
+
+    const view = renderAppContent('/weaviate/documents');
+    expect(await screen.findByText('Documents Page')).toBeInTheDocument();
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(CHAT_RUN_TERMINAL_EVENT, {
+          detail: {
+            sessionId: 'flow-session-finished',
+            runKind: 'flow',
+            status: 'completed',
+            eventStreamVersion: 3,
+          },
+        },
+      ));
+    });
+    view.rerender(
+      <ThemeModeProvider>
+        <MemoryRouter initialEntries={['/weaviate/documents']}>
+          <AppContent />
+        </MemoryRouter>
+      </ThemeModeProvider>
+    );
+
+    expect(await screen.findByText('Curation flow finished.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open flow' }));
+    expect(await screen.findByTestId('persistent-pdf-workspace-layout')).toBeInTheDocument();
+    expect(screen.getByTestId('home-page')).toHaveTextContent('Home?session=flow-session-finished');
+  });
+
   it('does not show a chat completion toast when the curator is already on the chat page', async () => {
     vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);

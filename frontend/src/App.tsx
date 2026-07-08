@@ -311,7 +311,7 @@ export function AppContent() {
   const seededBatchesRef = React.useRef(false);
   const seenPdfTerminalRef = React.useRef<Set<string>>(new Set());
   const seenBatchTerminalRef = React.useRef<Set<string>>(new Set());
-  const lastRunCompletionToastKeyRef = React.useRef<string | null>(null);
+  const seenRunCompletionToastKeysRef = React.useRef<Set<string>>(new Set());
   const changelogStorageKey = user?.uid ? `changelog:last-seen:${user.uid}` : null;
 
   /**
@@ -438,19 +438,20 @@ export function AppContent() {
       }
 
       const completionToastKey = `${detail.runKind}:${detail.sessionId}:${detail.eventStreamVersion}:${detail.status}`;
-      if (lastRunCompletionToastKeyRef.current === completionToastKey) {
+      if (seenRunCompletionToastKeysRef.current.has(completionToastKey)) {
         return;
       }
-      lastRunCompletionToastKeyRef.current = completionToastKey;
+      seenRunCompletionToastKeysRef.current.add(completionToastKey);
 
+      const isFlowRun = detail.runKind === 'flow';
       setGlobalSnackbar({
         open: true,
-        message: 'Curation chat finished.',
+        message: isFlowRun ? 'Curation flow finished.' : 'Curation chat finished.',
         severity: 'success',
         autoHideDurationMs: 6000,
         anchorOrigin: DEFAULT_GLOBAL_SNACKBAR_ANCHOR,
         showStorageRecoveryAction: false,
-        actionLabel: 'Open chat',
+        actionLabel: isFlowRun ? 'Open flow' : 'Open chat',
         actionPath: `/?session=${encodeURIComponent(detail.sessionId)}`,
       });
     };
