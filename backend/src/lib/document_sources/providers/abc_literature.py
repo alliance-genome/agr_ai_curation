@@ -148,7 +148,7 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
 
     def is_main_text_artifact(self, artifact: SourceArtifact) -> bool:
         file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
-        return file_class == "converted_merged_main" and not _artifact_looks_tei(artifact)
+        return file_class == "converted_merged_main"
 
     def main_text_artifact_sort_key(self, artifact: SourceArtifact) -> tuple[int, ...]:
         file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
@@ -581,12 +581,6 @@ def _is_converted_payload(payload: Mapping[str, Any]) -> bool:
         file_class=file_class,
         extension=extension,
     ) is SourceArtifactRole.CONVERTED_TEXT
-
-
-def _artifact_looks_tei(artifact: SourceArtifact) -> bool:
-    file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
-    display_name = str(artifact.display_name or "").strip().lower()
-    return "tei" in file_class or "_tei" in display_name or display_name.endswith("tei.md")
 
 
 def _looks_like_provider_cross_reference(identifier: str) -> bool:

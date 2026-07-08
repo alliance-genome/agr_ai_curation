@@ -27,16 +27,23 @@ import mimetypes
 import os
 import re
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 from uuid import uuid4
+
+_SCRIPT_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_SCRIPT_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_REPO_ROOT))
+
+from scripts.testing import abc_literature_live_smoke as live_smoke  # noqa: E402
 
 
 DEFAULT_CHAT_MESSAGE = (
@@ -64,9 +71,9 @@ OPENAI_AGENTS_LOCKFILE_RELATIVE_PATH = Path("backend/requirements.lock.txt")
 # evidence-record reference -- rather than an exact deterministic payload.
 EXPECTED_BATCH_PLUMBING_COLUMN_KEYS = ("item", "evidence_record_ids")
 DEFAULT_WORKSPACE_ADAPTER_KEY = "gene"
-DEFAULT_SHARED_SAMPLE_PDF = Path(
-    "/home/ctabone/analysis/alliance/ai_curation_new/agr_ai_curation/sample_fly_publication.pdf"
-)
+DEFAULT_AUTH_MODE = "api-key"
+SUPPORTED_AUTH_MODES = ("api-key", "curator-cookie")
+DEFAULT_SHARED_SAMPLE_PDF = Path(__file__).resolve().parents[2] / "sample_fly_publication.pdf"
 KNOWN_CHAT_FAILURE_SNIPPETS = (
     "no document is currently loaded",
     "i don't have access to the document",
@@ -99,6 +106,17 @@ class Response:
     body: bytes
     text: str
     json_body: Optional[Any]
+
+
+@dataclass
+class AuthContext:
+    mode: str
+    headers: Dict[str, str]
+    used_api_key_auth: bool
+    expected_auth_sub: Optional[str]
+    expected_email: Optional[str]
+    expected_provider_groups: tuple[str, ...]
+    evidence: Dict[str, Any]
 
 
 def _now_iso() -> str:
@@ -294,6 +312,38 @@ def compute_scope_limitations(args: argparse.Namespace) -> list[str]:
         if enabled:
             limitations.append(name)
     return limitations
+
+
+def env_first(
+    env_file: Path,
+    *names: str,
+    default: str = "",
+) -> str:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    for name in names:
+        value = load_dotenv_value(env_file, name)
+        if value and value.strip():
+            return value.strip()
+    return default
+
+
+def parse_groups(value: str) -> tuple[str, ...]:
+    return tuple(group.strip() for group in value.split(",") if group.strip())
+
+
+def default_auth_mode_from_env() -> str:
+    auth_mode = os.getenv("DEV_RELEASE_SMOKE_AUTH_MODE", "").strip()
+    if not auth_mode:
+        return DEFAULT_AUTH_MODE
+    if auth_mode in SUPPORTED_AUTH_MODES:
+        return auth_mode
+    raise SmokeFailure(
+        "DEV_RELEASE_SMOKE_AUTH_MODE must be one of "
+        f"{', '.join(SUPPORTED_AUTH_MODES)}; got {auth_mode!r}."
+    )
 
 
 def parse_openai_agents_lockfile_pin(lockfile_path: Path) -> str:
@@ -708,6 +758,188 @@ def resolve_env_value(key: str, env_file: Path) -> Optional[str]:
     return load_dotenv_value(env_file, key)
 
 
+def resolve_curator_cookie_token(args: argparse.Namespace, env_file: Path) -> tuple[str, Dict[str, Any]]:
+    token = (args.curator_id_token or "").strip() or env_first(
+        env_file,
+        "DEV_RELEASE_SMOKE_CURATOR_ID_TOKEN",
+        "ABC_LITERATURE_READY_UPLOAD_SMOKE_CURATOR_ID_TOKEN",
+    )
+    username = (args.curator_username or "").strip() or env_first(
+        env_file,
+        "DEV_RELEASE_SMOKE_CURATOR_USERNAME",
+        "ABC_LITERATURE_READY_UPLOAD_SMOKE_CURATOR_USERNAME",
+    )
+    authorized_groups = parse_groups(
+        (args.authorized_groups or "").strip()
+        or env_first(
+            env_file,
+            "DEV_RELEASE_SMOKE_AUTHORIZED_GROUPS",
+            "ABC_LITERATURE_READY_UPLOAD_SMOKE_AUTHORIZED_GROUPS",
+            "ABC_LITERATURE_SMOKE_AUTHORIZED_GROUPS",
+            default=",".join(live_smoke.DEFAULT_AUTHORIZED_GROUPS),
+        )
+    )
+    if token:
+        return token, {
+            "mode": "curator-cookie",
+            "auth_source": "curator_id_token",
+            "username": username or None,
+            "expected_provider_groups": list(authorized_groups),
+        }
+
+    password = (args.curator_password or "").strip() or env_first(
+        env_file,
+        "DEV_RELEASE_SMOKE_CURATOR_PASSWORD",
+        "ABC_LITERATURE_READY_UPLOAD_SMOKE_CURATOR_PASSWORD",
+    )
+    if not username or not password:
+        raise SmokeFailure(
+            "--auth-mode curator-cookie requires an existing test curator. Set "
+            "DEV_RELEASE_SMOKE_CURATOR_ID_TOKEN, or set "
+            "DEV_RELEASE_SMOKE_CURATOR_USERNAME and DEV_RELEASE_SMOKE_CURATOR_PASSWORD "
+            "in the smoke env file. The ABC_LITERATURE_READY_UPLOAD_SMOKE_* names "
+            "are also accepted so the ABC smoke credential can be reused."
+        )
+
+    aws_profile = (args.aws_profile or "").strip() or env_first(
+        env_file,
+        "DEV_RELEASE_SMOKE_AWS_PROFILE",
+        "ABC_LITERATURE_READY_UPLOAD_SMOKE_AWS_PROFILE",
+        "ABC_LITERATURE_SMOKE_AWS_PROFILE",
+        "AWS_PROFILE",
+    )
+    region = (args.aws_region or "").strip() or env_first(
+        env_file,
+        "DEV_RELEASE_SMOKE_AWS_REGION",
+        "ABC_LITERATURE_READY_UPLOAD_SMOKE_AWS_REGION",
+        "ABC_LITERATURE_SMOKE_AWS_REGION",
+        default=live_smoke.DEFAULT_AWS_REGION,
+    )
+    user_pool_id = (args.user_pool_id or "").strip() or env_first(
+        env_file,
+        "DEV_RELEASE_SMOKE_USER_POOL_ID",
+        "ABC_LITERATURE_READY_UPLOAD_SMOKE_USER_POOL_ID",
+        "ABC_LITERATURE_SMOKE_USER_POOL_ID",
+        default=live_smoke.DEFAULT_USER_POOL_ID,
+    )
+    client_id = (args.client_id or "").strip() or env_first(
+        env_file,
+        "DEV_RELEASE_SMOKE_CLIENT_ID",
+        "ABC_LITERATURE_READY_UPLOAD_SMOKE_CLIENT_ID",
+        "ABC_LITERATURE_SMOKE_CLIENT_ID",
+        "COGNITO_CLIENT_ID",
+    )
+    client_secret = (args.client_secret or "").strip() or env_first(
+        env_file,
+        "DEV_RELEASE_SMOKE_CLIENT_SECRET",
+        "ABC_LITERATURE_READY_UPLOAD_SMOKE_CLIENT_SECRET",
+        "ABC_LITERATURE_SMOKE_CLIENT_SECRET",
+    )
+    if not client_id:
+        raise SmokeFailure(
+            "--auth-mode curator-cookie requires DEV_RELEASE_SMOKE_CLIENT_ID "
+            "or ABC_LITERATURE_READY_UPLOAD_SMOKE_CLIENT_ID."
+        )
+
+    live_config = live_smoke.SmokeConfig(
+        repo_root=_SCRIPT_REPO_ROOT,
+        aws_profile=aws_profile.strip() or None,
+        region=region,
+        user_pool_id=user_pool_id,
+        client_id=client_id,
+        client_secret=client_secret or None,
+        base_url="",
+        authorized_groups=authorized_groups or live_smoke.DEFAULT_AUTHORIZED_GROUPS,
+        evidence_dir=Path(getattr(args, "evidence_dir", ".")),
+        pytest_timeout_seconds=live_smoke.DEFAULT_PYTEST_TIMEOUT_SECONDS,
+        literature_timeout_seconds=live_smoke.DEFAULT_TIMEOUT_SECONDS,
+        aws_api_timeout_seconds=float(args.aws_api_timeout_seconds),
+        evidence_tail_limit=live_smoke.DEFAULT_EVIDENCE_TAIL_LIMIT,
+        keep_users=False,
+        user_prefix="unused-dev-release-smoke",
+        unknown_md5=live_smoke.DEFAULT_UNKNOWN_MD5,
+        known_md5=live_smoke.DEFAULT_KNOWN_MD5,
+        restricted_md5=live_smoke.DEFAULT_RESTRICTED_MD5,
+        pmid=live_smoke.DEFAULT_PMID,
+        reference=live_smoke.DEFAULT_REFERENCE,
+        source_referencefile_id=live_smoke.DEFAULT_SOURCE_REFERENCEFILE_ID,
+        converted_referencefile_id=live_smoke.DEFAULT_CONVERTED_REFERENCEFILE_ID,
+        python_executable=sys.executable,
+    )
+    aws_client = live_smoke.Boto3AwsSmokeClient(live_config)
+    caller_identity = aws_client.caller_identity()
+    client_secret_source = "provided" if live_config.client_secret else "not_available"
+    if not live_config.client_secret:
+        discovered_secret = aws_client.discover_client_secret()
+        if discovered_secret:
+            live_config = replace(live_config, client_secret=discovered_secret)
+            client_secret_source = "describe-user-pool-client"
+
+    token = live_smoke.token_for_user(
+        live_config,
+        username=username,
+        password=password,
+        aws_client=aws_client,
+    )
+    return token, {
+        "mode": "curator-cookie",
+        "auth_source": "curator_username_password",
+        "username": username,
+        "aws": {
+            "profile": aws_profile,
+            "region": region,
+            "user_pool_id": user_pool_id,
+            "client_id": client_id,
+            "client_secret_source": client_secret_source,
+            "caller_identity": {
+                "account": caller_identity.get("Account"),
+                "arn": caller_identity.get("Arn"),
+                "user_id": caller_identity.get("UserId"),
+            }
+            if isinstance(caller_identity, dict)
+            else None,
+        },
+        "expected_provider_groups": list(authorized_groups),
+    }
+
+
+def resolve_auth_context(args: argparse.Namespace, env_file: Path) -> AuthContext:
+    if args.auth_mode == "api-key":
+        api_key = resolve_api_key(args.api_key, env_file)
+        verify_api_key_mode(api_key, allow_dev_mode_fallback=args.allow_dev_mode_fallback)
+        expected_api_user = resolve_env_value("TESTING_API_KEY_USER", env_file)
+        expected_api_email = resolve_env_value("TESTING_API_KEY_EMAIL", env_file)
+        expected_auth_sub = f"api-key-{expected_api_user}" if expected_api_user else None
+        return AuthContext(
+            mode="api-key" if api_key else "dev-mode-fallback",
+            headers=build_headers(api_key),
+            used_api_key_auth=bool(api_key),
+            expected_auth_sub=expected_auth_sub,
+            expected_email=expected_api_email,
+            expected_provider_groups=(),
+            evidence={
+                "mode": "api-key" if api_key else "dev-mode-fallback",
+                "expected_api_principal": {
+                    "auth_sub": expected_auth_sub,
+                    "email": expected_api_email,
+                },
+            },
+        )
+
+    token, auth_evidence = resolve_curator_cookie_token(args, env_file)
+    headers = build_headers(None)
+    headers["Cookie"] = f"auth_token={token}"
+    return AuthContext(
+        mode="curator-cookie",
+        headers=headers,
+        used_api_key_auth=False,
+        expected_auth_sub=None,
+        expected_email=None,
+        expected_provider_groups=tuple(auth_evidence.get("expected_provider_groups") or ()),
+        evidence=auth_evidence,
+    )
+
+
 def verify_api_key_mode(api_key: Optional[str], *, allow_dev_mode_fallback: bool) -> None:
     if api_key:
         return
@@ -759,6 +991,8 @@ def check_current_user(
     checks: list[Dict[str, Any]],
     expected_auth_sub: Optional[str],
     expected_email: Optional[str],
+    expected_auth_mode: str,
+    expected_provider_groups: tuple[str, ...] = (),
 ) -> Dict[str, Any]:
     response = http_request("GET", f"{base_url}/api/users/me", headers=headers, timeout=20.0)
     require(
@@ -767,38 +1001,71 @@ def check_current_user(
     )
     actual_auth_sub = str(response.json_body.get("auth_sub", "")).strip()
     actual_email = str(response.json_body.get("email", "")).strip()
-    require(
-        actual_auth_sub.startswith("api-key-"),
-        (
-            "Current-user auth_sub does not look like an API-key principal. "
-            f"Got {actual_auth_sub!r}. This can indicate a DEV_MODE fallback false-pass."
-        ),
-    )
-    require(
-        actual_email and actual_email != "dev@localhost",
-        (
-            "Current-user email does not look like an API-key principal. "
-            f"Got {actual_email!r}. This can indicate a DEV_MODE fallback false-pass."
-        ),
-    )
-    if expected_auth_sub:
+    if expected_auth_mode == "api-key":
         require(
-            actual_auth_sub == expected_auth_sub,
+            actual_auth_sub.startswith("api-key-"),
             (
-                "Current-user auth_sub did not match the API-key principal. "
-                f"Expected {expected_auth_sub!r}, got {actual_auth_sub!r}. "
-                "This can indicate a DEV_MODE fallback false-pass."
+                "Current-user auth_sub does not look like an API-key principal. "
+                f"Got {actual_auth_sub!r}. This can indicate a DEV_MODE fallback false-pass."
             ),
         )
-    if expected_email:
         require(
-            actual_email == expected_email,
+            actual_email and actual_email != "dev@localhost",
             (
-                "Current-user email did not match the API-key principal. "
-                f"Expected {expected_email!r}, got {actual_email!r}. "
-                "This can indicate a DEV_MODE fallback false-pass."
+                "Current-user email does not look like an API-key principal. "
+                f"Got {actual_email!r}. This can indicate a DEV_MODE fallback false-pass."
             ),
         )
+        if expected_auth_sub:
+            require(
+                actual_auth_sub == expected_auth_sub,
+                (
+                    "Current-user auth_sub did not match the API-key principal. "
+                    f"Expected {expected_auth_sub!r}, got {actual_auth_sub!r}. "
+                    "This can indicate a DEV_MODE fallback false-pass."
+                ),
+            )
+        if expected_email:
+            require(
+                actual_email == expected_email,
+                (
+                    "Current-user email did not match the API-key principal. "
+                    f"Expected {expected_email!r}, got {actual_email!r}. "
+                    "This can indicate a DEV_MODE fallback false-pass."
+                ),
+            )
+    elif expected_auth_mode == "curator-cookie":
+        provider_groups = response.json_body.get("provider_groups") or []
+        if isinstance(provider_groups, str):
+            provider_groups = [provider_groups]
+        active_groups = response.json_body.get("active_groups") or []
+        if isinstance(active_groups, str):
+            active_groups = [active_groups]
+        if actual_email == "dev@localhost":
+            require(
+                actual_auth_sub == "dev-user-123" and (provider_groups or active_groups),
+                (
+                    "Curator-cookie smoke is running under DEV_MODE, but the dev user "
+                    f"payload did not expose any usable group context: {response.json_body}"
+                ),
+            )
+        else:
+            require(
+                actual_auth_sub and not actual_auth_sub.startswith("api-key-"),
+                f"Current-user auth_sub did not look like a real curator principal: {response.json_body}",
+            )
+            require(
+                actual_email,
+                f"Current-user email did not look like a real curator principal: {response.json_body}",
+            )
+        if expected_provider_groups and actual_email != "dev@localhost":
+            require(
+                any(group in set(provider_groups) for group in expected_provider_groups),
+                (
+                    "Current-user provider groups did not include an expected ABC/Literature "
+                    f"group. Expected one of {expected_provider_groups!r}, got {provider_groups!r}"
+                ),
+            )
     append_check(
         checks,
         step="current_user",
@@ -2428,10 +2695,7 @@ def attempt_cleanup(
 def run(args: argparse.Namespace) -> Dict[str, Any]:
     base_url = args.base_url.rstrip("/")
     env_file = Path(args.env_file).expanduser()
-    api_key = resolve_api_key(args.api_key, env_file)
-    expected_api_user = resolve_env_value("TESTING_API_KEY_USER", env_file)
-    expected_api_email = resolve_env_value("TESTING_API_KEY_EMAIL", env_file)
-    expected_auth_sub = f"api-key-{expected_api_user}" if expected_api_user else None
+    auth_context = resolve_auth_context(args, env_file)
 
     scope_limitations = compute_scope_limitations(args)
 
@@ -2447,7 +2711,8 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
         "expected_runtime_specialist_model": args.specialist_model,
         "runtime_default_specialist_model_directly_validated": False,
         "flow_model": args.flow_model,
-        "used_api_key_auth": bool(api_key),
+        "auth": auth_context.evidence,
+        "used_api_key_auth": auth_context.used_api_key_auth,
         "checks": [],
         "resources": {
             "primary_document_id": None,
@@ -2480,14 +2745,14 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
         "preflight": {},
         "document_artifacts": {},
         "expected_api_principal": {
-            "auth_sub": expected_auth_sub,
-            "email": expected_api_email,
+            "auth_sub": auth_context.expected_auth_sub,
+            "email": auth_context.expected_email,
         },
         "run_scope": "full" if not scope_limitations else "partial",
         "skipped_stages": scope_limitations,
     }
     checks: list[Dict[str, Any]] = evidence["checks"]
-    headers = build_headers(api_key)
+    headers = auth_context.headers
     created_documents: list[str] = []
     loaded_document = False
     custom_agent_id: Optional[str] = None
@@ -2504,11 +2769,10 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
             print_step("Checking installed OpenAI Agents SDK against lockfile pin")
             evidence["preflight"]["sdk_version_pin"] = check_sdk_version_pin(checks=checks)
 
-        verify_api_key_mode(api_key, allow_dev_mode_fallback=args.allow_dev_mode_fallback)
         if args.skip_user_info and not args.allow_dev_mode_fallback:
             raise SmokeFailure(
                 "--skip-user-info is only allowed when --allow-dev-mode-fallback is enabled. "
-                "Release validation must verify the API-key principal."
+                "Release validation must verify the authenticated principal."
             )
         if args.skip_chat and not args.skip_workspace:
             raise SmokeFailure(
@@ -2555,8 +2819,10 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
                 base_url=base_url,
                 headers=headers,
                 checks=checks,
-                expected_auth_sub=expected_auth_sub,
-                expected_email=expected_api_email,
+                expected_auth_sub=auth_context.expected_auth_sub,
+                expected_email=auth_context.expected_email,
+                expected_auth_mode=auth_context.mode,
+                expected_provider_groups=auth_context.expected_provider_groups,
             )
             evidence["preflight"]["current_user"] = current_user
             if args.delete_existing_sample_documents:
@@ -3142,11 +3408,62 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://localhost:8000", help="Backend base URL")
+    parser.add_argument(
+        "--auth-mode",
+        choices=SUPPORTED_AUTH_MODES,
+        default=default_auth_mode_from_env(),
+        help=(
+            "Authentication mode for backend requests. Use curator-cookie when "
+            "the deployed stack uses ABC Literature and upload/import paths need "
+            "a real Cognito bearer forwarded to the document-source provider."
+        ),
+    )
     parser.add_argument("--api-key", default=None, help="Override TESTING_API_KEY for API-key auth")
+    parser.add_argument(
+        "--curator-id-token",
+        default="",
+        help=(
+            "Existing Cognito IdToken for --auth-mode curator-cookie. Prefer the "
+            "DEV_RELEASE_SMOKE_CURATOR_ID_TOKEN env-file value for repeatable runs."
+        ),
+    )
+    parser.add_argument(
+        "--curator-username",
+        default="",
+        help="Existing test curator username for --auth-mode curator-cookie.",
+    )
+    parser.add_argument(
+        "--curator-password",
+        default="",
+        help="Existing test curator password for --auth-mode curator-cookie. Never written to evidence.",
+    )
+    parser.add_argument(
+        "--aws-profile",
+        default="",
+        help="AWS profile used to authenticate the existing curator when username/password are supplied.",
+    )
+    parser.add_argument("--aws-region", default=live_smoke.DEFAULT_AWS_REGION)
+    parser.add_argument("--aws-api-timeout-seconds", type=float, default=live_smoke.DEFAULT_AWS_API_TIMEOUT_SECONDS)
+    parser.add_argument("--user-pool-id", default=live_smoke.DEFAULT_USER_POOL_ID)
+    parser.add_argument("--client-id", default="")
+    parser.add_argument(
+        "--client-secret",
+        default="",
+        help="Optional Cognito app client secret. Never written to evidence.",
+    )
+    parser.add_argument(
+        "--authorized-groups",
+        default=",".join(live_smoke.DEFAULT_AUTHORIZED_GROUPS),
+        help="Comma-separated provider groups expected for --auth-mode curator-cookie.",
+    )
     parser.add_argument(
         "--env-file",
         default=".env",
-        help="Optional env file used to auto-load TESTING_API_KEY when not already exported",
+        help=(
+            "Optional env file used to auto-load TESTING_API_KEY, or the "
+            "DEV_RELEASE_SMOKE_* / ABC_LITERATURE_READY_UPLOAD_SMOKE_* curator "
+            "credential values for --auth-mode curator-cookie."
+        ),
     )
     parser.add_argument("--sample-pdf", default=None, help="Path to the primary sample PDF to upload")
     parser.add_argument("--secondary-pdf", default=None, help="Path to a second sample PDF for batch coverage")

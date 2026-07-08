@@ -167,7 +167,7 @@ def _fake_is_main_text_artifact(
     display_name = str(artifact.display_name or "").strip().lower()
     combined = f"{file_class} {display_name}"
     if provider_id == "abc_literature":
-        return file_class == "converted_merged_main" and "tei" not in combined
+        return file_class == "converted_merged_main"
     return "supplement" not in combined
 
 
@@ -595,7 +595,7 @@ async def test_select_checksum_import_candidate_blocks_ambiguous_equal_nxml_mark
 
 
 @pytest.mark.asyncio
-async def test_select_checksum_import_candidate_does_not_select_abc_tei_only_markdown():
+async def test_select_checksum_import_candidate_accepts_abc_tei_only_main_markdown():
     source = _source("source-1", provider="abc_literature")
     provider = FakeConversionProvider(
         [
@@ -623,17 +623,11 @@ async def test_select_checksum_import_candidate_does_not_select_abc_tei_only_mar
         authorized_group_ids=(),
     )
 
-    assert decision.status is ChecksumImportDecisionStatus.CONVERSION_RUNNING
+    assert decision.status is ChecksumImportDecisionStatus.READY
     assert decision.selected is not None
-    assert decision.selected.converted_artifact is None
-    assert provider.calls == [
-        {"checksum": "abc123", "request_bearer_token": None},
-        {
-            "request_conversion": "AGRKB:101",
-            "wait": "False",
-            "request_bearer_token": None,
-        },
-    ]
+    assert decision.selected.converted_artifact is not None
+    assert decision.selected.converted_artifact.artifact_id == "md-tei"
+    assert provider.calls == [{"checksum": "abc123", "request_bearer_token": None}]
 
 
 @pytest.mark.asyncio

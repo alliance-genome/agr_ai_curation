@@ -198,7 +198,7 @@ def _fake_is_main_text_artifact(
     display_name = str(artifact.display_name or "").strip().lower()
     combined = f"{file_class} {display_name}"
     if provider_id == "abc_literature":
-        return file_class == "converted_merged_main" and "tei" not in combined
+        return file_class == "converted_merged_main"
     return "supplement" not in combined
 
 
@@ -499,7 +499,7 @@ async def test_select_reference_import_candidate_prefers_canonical_nxml_markdown
 
 
 @pytest.mark.asyncio
-async def test_select_reference_import_candidate_does_not_select_abc_tei_only_markdown():
+async def test_select_reference_import_candidate_accepts_abc_tei_only_main_markdown():
     source = _source_artifact(artifact_id="pdf-1", provider="abc_literature")
     provider = _FakeConversionProvider(
         artifacts=(
@@ -526,16 +526,11 @@ async def test_select_reference_import_candidate_does_not_select_abc_tei_only_ma
         authorized_group_ids=("FB",),
     )
 
-    assert decision.status == ReferenceImportDecisionStatus.CONVERSION_RUNNING
+    assert decision.status == ReferenceImportDecisionStatus.READY
     assert decision.selected is not None
-    assert decision.selected.converted_artifact is None
-    assert provider.request_conversion_calls == [
-        {
-            "reference": decision.reference,
-            "wait": False,
-            "request_bearer_token": None,
-        }
-    ]
+    assert decision.selected.converted_artifact is not None
+    assert decision.selected.converted_artifact.artifact_id == "md-tei"
+    assert provider.request_conversion_calls == []
 
 
 @pytest.mark.asyncio

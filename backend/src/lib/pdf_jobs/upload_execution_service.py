@@ -1039,14 +1039,8 @@ def _select_preferred_main_markdown(
 def _is_canonical_main_markdown_artifact(artifact: SourceArtifact) -> bool:
     file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
     if artifact.provider == "abc_literature":
-        return file_class == "converted_merged_main" and not _artifact_looks_tei(artifact)
+        return file_class == "converted_merged_main"
     return True
-
-
-def _artifact_looks_tei(artifact: SourceArtifact) -> bool:
-    file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
-    display_name = str(artifact.display_name or "").strip().lower()
-    return "tei" in file_class or "_tei" in display_name or display_name.endswith("tei.md")
 
 
 def _main_markdown_sort_key(artifact: SourceArtifact) -> tuple[int]:

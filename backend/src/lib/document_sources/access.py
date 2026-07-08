@@ -81,14 +81,13 @@ def _extract_curator_token(
 ) -> str | None:
     if request is None:
         return None
+    if _claims_allow_cookie_token(user_claims):
+        token = request.cookies.get("auth_token") or request.cookies.get("cognito_token")
+        if token:
+            return token
     if is_dev_mode():
         return _extract_dev_mode_static_curator_token()
-    if not _claims_allow_cookie_token(user_claims):
-        return None
-    token = request.cookies.get("auth_token") or request.cookies.get("cognito_token")
-    if not token:
-        return None
-    return token
+    return None
 
 
 def _extract_dev_mode_static_curator_token() -> str | None:

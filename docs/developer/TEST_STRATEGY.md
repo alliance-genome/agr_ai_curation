@@ -93,6 +93,26 @@ docker compose -f docker-compose.test.yml run --rm backend-unit-tests \
   bash -lc "python -m pytest tests/unit/test_guardrail_catalog.py -v --tb=short"
 ```
 
+## Release Gate and Skill Alignment
+
+When adding or changing tests, smoke scripts, evidence runners, or guardrails
+that affect dev-release readiness, update the release skill in the same change
+or record why it does not apply. In practice, this means checking
+`$ai-curation-release`, especially its `references/dev-validation.md`, whenever
+the new coverage should be required before production release.
+
+Examples that should trigger a release-skill update:
+
+- a new deployed-backend smoke or live integration gate,
+- new required coverage for flows, batch, export/download artifacts, TraceReview,
+  Langfuse, ABC Literature, Add Literature, or agent evidence quality,
+- new required release evidence JSON or PR evidence marker,
+- any change to the order of full backend/frontend gates, deployed smoke,
+  agent evidence review, or browser/manual approval.
+
+Keep the skill, this document, `scripts/README.md`, and any release/runbook docs
+consistent so future agents run the same release gate humans expect.
+
 ## LinkML and Domain-Pack Fixtures
 
 Alliance domain packs pin LinkML provider refs in package metadata. Tests should
