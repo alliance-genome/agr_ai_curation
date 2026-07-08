@@ -1005,6 +1005,13 @@ def _builder_observation_summary(events: list[dict[str, Any]]) -> dict[str, Any]
                 "builder_finalized_total": summary["handoff_evidence_count_total"],
                 "builder_finalized_object_total": finalized_object_total,
                 "builder_validator_target_total": validator_target_total,
+                # Handoff-audit representation: staged/finalized counts are
+                # reconstructed from the same evidenceCount source above, so
+                # these cross-checks hold by construction -- there is no
+                # independent staged-vs-finalized mismatch signal on this path.
+                # The real gate here is the handoff_persistence_success_count
+                # >= expected_builder_finalizations guard in
+                # validate_tightened_trial_gate.
                 "builder_count_metrics_complete": True,
                 "builder_stage_finalized_count_match": True,
                 "builder_stage_tool_complete_count_match": True,

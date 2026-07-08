@@ -583,12 +583,6 @@ def _is_converted_payload(payload: Mapping[str, Any]) -> bool:
     ) is SourceArtifactRole.CONVERTED_TEXT
 
 
-def _artifact_looks_tei(artifact: SourceArtifact) -> bool:
-    file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
-    display_name = str(artifact.display_name or "").strip().lower()
-    return "tei" in file_class or "_tei" in display_name or display_name.endswith("tei.md")
-
-
 def _looks_like_provider_cross_reference(identifier: str) -> bool:
     normalized = identifier.strip()
     if not normalized or any(char.isspace() for char in normalized):

@@ -1043,12 +1043,6 @@ def _is_canonical_main_markdown_artifact(artifact: SourceArtifact) -> bool:
     return True
 
 
-def _artifact_looks_tei(artifact: SourceArtifact) -> bool:
-    file_class = str(artifact.metadata.get("file_class") or "").strip().lower()
-    display_name = str(artifact.display_name or "").strip().lower()
-    return "tei" in file_class or "_tei" in display_name or display_name.endswith("tei.md")
-
-
 def _main_markdown_sort_key(artifact: SourceArtifact) -> tuple[int]:
     display_name = str(artifact.display_name or "").strip().lower()
     is_nxml = display_name.endswith("_nxml") or display_name.endswith("_nxml.md")

@@ -73,9 +73,7 @@ EXPECTED_BATCH_PLUMBING_COLUMN_KEYS = ("item", "evidence_record_ids")
 DEFAULT_WORKSPACE_ADAPTER_KEY = "gene"
 DEFAULT_AUTH_MODE = "api-key"
 SUPPORTED_AUTH_MODES = ("api-key", "curator-cookie")
-DEFAULT_SHARED_SAMPLE_PDF = Path(
-    "/home/ctabone/analysis/alliance/ai_curation_new/agr_ai_curation/sample_fly_publication.pdf"
-)
+DEFAULT_SHARED_SAMPLE_PDF = Path(__file__).resolve().parents[2] / "sample_fly_publication.pdf"
 KNOWN_CHAT_FAILURE_SNIPPETS = (
     "no document is currently loaded",
     "i don't have access to the document",
@@ -809,7 +807,6 @@ def resolve_curator_cookie_token(args: argparse.Namespace, env_file: Path) -> tu
         "ABC_LITERATURE_READY_UPLOAD_SMOKE_AWS_PROFILE",
         "ABC_LITERATURE_SMOKE_AWS_PROFILE",
         "AWS_PROFILE",
-        default="ctabone",
     )
     region = (args.aws_region or "").strip() or env_first(
         env_file,
