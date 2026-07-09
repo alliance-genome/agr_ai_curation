@@ -188,6 +188,9 @@ docs/superpowers/
 # This is intentionally not a submodule/subtree of the application repo.
 /agr_ai_curation_observability/
 
+# Local-only ABC Literature dev-mode setup note (token-minting details; do not commit)
+docs/developer/integrations/abc_literature/*.local.md
+
 # Local planning docs (private - not for public repo)
 docs/plans/
 !docs/plans/
