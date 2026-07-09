@@ -117,9 +117,9 @@ structured_finalization:
       - component_validations[].resolved_values.taxon_id
 
 model_config:
-  model: "${AGENT_EXPERIMENTAL_CONDITION_MODEL:-gpt-5.4-mini}"
+  model: "${AGENT_EXPERIMENTAL_CONDITION_MODEL:-gpt-5.6-terra}"
   temperature: 0.1
-  reasoning: "high"
+  reasoning: "medium"
 
 requires_document: false
 required_params: []

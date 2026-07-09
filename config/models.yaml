@@ -1,4 +1,55 @@
 models:
+  - model_id: gpt-5.6-sol
+    name: GPT-5.6 Sol
+    provider: openai
+    description: Highest-quality model for complex curation reasoning, document extraction, and nuanced judgment calls.
+    guidance: Default for extraction, routing, and high-stakes curation. Use medium reasoning by default; low is faster, while high and xhigh are slower but best for truly difficult reasoning.
+    default: true
+    supports_reasoning: true
+    supports_temperature: false
+    reasoning_options:
+      - low
+      - medium
+      - high
+      - xhigh
+    default_reasoning: medium
+    reasoning_descriptions:
+      low: Fastest GPT-5.6 Sol mode. Good for quick checks and straightforward extraction.
+      medium: Recommended default for extraction and curation. Strong balance of depth, reliability, and speed.
+      high: Deep reasoning for hard ambiguity.
+      xhigh: Deepest reasoning but slowest. Use sparingly for hard ambiguity, not routine DB lookups.
+    recommended_for:
+      - Complex evidence synthesis and conflict resolution
+      - Document extraction and high-stakes interpretation where instruction fidelity matters
+      - Prompt architecture or policy refinement
+    avoid_for:
+      - Simple database retrieval tasks where latency is the priority
+
+  - model_id: gpt-5.6-terra
+    name: GPT-5.6 Terra
+    provider: openai
+    description: Faster, lower-cost reasoning model for validation and lightweight tasks.
+    guidance: Use for validation and utility agents where speed matters but reasoning still helps. GPT-5.6 Sol remains more reliable for nuanced or high-stakes extraction decisions.
+    default: false
+    supports_reasoning: true
+    supports_temperature: false
+    reasoning_options:
+      - low
+      - medium
+      - high
+      - xhigh
+    default_reasoning: medium
+    reasoning_descriptions:
+      low: Fastest GPT-5.6 Terra mode. Good for simple lookups.
+      medium: Balanced Terra reasoning for routine validation.
+      high: Deeper Terra reasoning for validation ambiguity.
+      xhigh: Maximum Terra reasoning for difficult validation ambiguity while staying lower cost than GPT-5.6 Sol.
+    recommended_for:
+      - Validation and lightweight extraction
+      - Follow-up checks after using search/read tools
+    avoid_for:
+      - Deep multi-step adjudication with conflicting evidence
+
   - model_id: gpt-5.4-mini
     name: GPT-5.4 Mini
     provider: openai
@@ -29,8 +80,8 @@ models:
     name: GPT-5.5
     provider: openai
     description: Highest-quality model for complex curation reasoning and nuanced judgment calls.
-    guidance: Start here for most tasks. Use medium reasoning by default; low is faster, while high and xhigh are slower but best for truly difficult reasoning.
-    default: true
+    guidance: Superseded by GPT-5.6 Sol. Kept registered for compatibility; prefer gpt-5.6-sol for new work.
+    default: false
     supports_reasoning: true
     supports_temperature: false
     reasoning_options:

@@ -53,7 +53,7 @@ agent_discovery:
 # Model Configuration
 # -----------------------------------------------------------------------------
 model_config:
-  model: "${SUPERVISOR_MODEL:-gpt-5.5}"
+  model: "${SUPERVISOR_MODEL:-gpt-5.6-sol}"
   reasoning: "${AGENT_SUPERVISOR_REASONING:-medium}"
   temperature: 0.1
 
