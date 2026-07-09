@@ -1,8 +1,8 @@
 import type { ChangelogEntry } from '../types';
 
 const entry: ChangelogEntry = {
-  id: '2026-07-09-v0.8.0',
-  version: '0.8.0',
+  id: '2026-07-09-v0.8.1',
+  version: '0.8.1',
   date: 'July 9, 2026',
   title: 'Literature Import, Live Run Status, and Curation Fixes',
   releaseUrl: 'https://agr-jira.atlassian.net/projects/KANBAN/versions/10740',
@@ -44,6 +44,7 @@ const entry: ChangelogEntry = {
     {
       heading: 'Reliability',
       bullets: [
+        'Larger PDF uploads are supported — the size cap is now 500 MB.',
         'Browser storage and PDF viewer restore are hardened against running out of local storage space, so the viewer recovers instead of breaking.',
         'Flows handle PDF extraction failures and empty-result ambiguity more gracefully.',
       ],

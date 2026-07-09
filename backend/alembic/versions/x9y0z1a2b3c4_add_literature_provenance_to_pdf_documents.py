@@ -1,7 +1,7 @@
 """Add ABC Literature provenance columns to PDF documents.
 
 Revision ID: x9y0z1a2b3c4
-Revises: w8x9y0z1a2b3
+Revises: x0y1z2a3b4c5
 Create Date: 2026-06-24 00:00:00.000000
 """
 
@@ -15,7 +15,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "x9y0z1a2b3c4"
-down_revision: Union[str, Sequence[str], None] = "w8x9y0z1a2b3"
+down_revision: Union[str, Sequence[str], None] = "x0y1z2a3b4c5"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
