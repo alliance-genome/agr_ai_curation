@@ -6,6 +6,7 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  Link,
   Typography,
 } from '@mui/material';
 import type { ChangelogEntry } from '../content/changelog';
@@ -31,9 +32,16 @@ const ChangelogDialog: React.FC<ChangelogDialogProps> = ({ open, entry, onClose,
         </Typography>
       </DialogTitle>
       <DialogContent dividers>
-        <Typography variant="h6" sx={{ mb: 2 }}>
+        <Typography variant="h6" sx={{ mb: entry.releaseUrl ? 1 : 2 }}>
           {entry.title}
         </Typography>
+        {entry.releaseUrl && (
+          <Typography variant="body2" sx={{ mb: 2 }}>
+            <Link href={entry.releaseUrl} target="_blank" rel="noopener noreferrer">
+              View release tickets
+            </Link>
+          </Typography>
+        )}
 
         {entry.sections.map((section) => (
           <Box key={section.heading} sx={{ mb: 2 }}>
