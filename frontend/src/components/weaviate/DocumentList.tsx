@@ -5,7 +5,6 @@ import {
   GridColDef,
   GridRenderCellParams,
   GridSortModel,
-  GridFilterModel,
   GridPaginationModel,
   GridRowSelectionModel,
 } from '@mui/x-data-grid';
@@ -76,6 +75,14 @@ interface DocumentListProps {
   filterBar?: React.ReactNode;
   /** Show PDF upload and extraction-health controls above the inventory table */
   showUploadControls?: boolean;
+  /** Server-backed page state for large document libraries. */
+  paginationModel?: GridPaginationModel;
+  /** Called when the user requests another page or page size. */
+  onPaginationModelChange?: (model: GridPaginationModel) => void;
+  /** Server-backed sort state for document fields supported by the API. */
+  sortModel?: GridSortModel;
+  /** Called when the user changes sort order. */
+  onSortModelChange?: (model: GridSortModel) => void;
 }
 
 const PDF_BACKGROUND_PROCESSING_TOAST =
@@ -204,18 +211,21 @@ const DocumentList: React.FC<DocumentListProps> = ({
   onTitleUpdate,
   filterBar,
   showUploadControls = true,
+  paginationModel: controlledPaginationModel,
+  onPaginationModelChange,
+  sortModel: controlledSortModel,
+  onSortModelChange,
 }) => {
   const extractionHealthQuery = usePdfExtractionHealth({ enabled: showUploadControls });
   const extractionHealth = extractionHealthQuery.data;
   const navigate = useNavigate();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [paginationModel, setPaginationModel] = useState<GridPaginationModel>({
+  const [internalPaginationModel, setInternalPaginationModel] = useState<GridPaginationModel>({
     page: 0,
     pageSize: 20,
   });
-  const [sortModel, setSortModel] = useState<GridSortModel>([]);
-  const [filterModel, setFilterModel] = useState<GridFilterModel>({ items: [] });
+  const [internalSortModel, setInternalSortModel] = useState<GridSortModel>([]);
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
   const [selectedDocument, setSelectedDocument] = useState<DocumentSummary | null>(null);
@@ -223,6 +233,12 @@ const DocumentList: React.FC<DocumentListProps> = ({
   const [downloadDocumentId, setDownloadDocumentId] = useState<string | null>(null);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editDocument, setEditDocument] = useState<DocumentSummary | null>(null);
+
+  const paginationModel = controlledPaginationModel ?? internalPaginationModel;
+  const sortModel = controlledSortModel ?? internalSortModel;
+  const handlePaginationModelChange = onPaginationModelChange ?? setInternalPaginationModel;
+  const handleSortModelChange = onSortModelChange ?? setInternalSortModel;
+  const serverSorting = onSortModelChange !== undefined;
 
   React.useEffect(() => {
     if (!selectedDocumentId) {
@@ -445,9 +461,8 @@ const DocumentList: React.FC<DocumentListProps> = ({
       headerName: 'Title',
       flex: 1.5,
       minWidth: 120,
-      sortable: true,
-      filterable: true,
-      sortComparator: compareTextValues,
+      sortable: false,
+      filterable: false,
       valueFormatter: (params) => params.value || '—',
     },
     {
@@ -517,8 +532,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
       headerName: 'Accessed',
       flex: 1,
       minWidth: 120,
-      sortable: true,
-      sortComparator: compareDateValues,
+      sortable: false,
       valueFormatter: (params) => {
         const value = params.value as string | null;
         return value ? new Date(value).toLocaleDateString() : '—';
@@ -528,9 +542,8 @@ const DocumentList: React.FC<DocumentListProps> = ({
       field: 'embeddingStatus',
       headerName: 'Status',
       width: 120,
-      sortable: true,
+      sortable: false,
       filterable: true,
-      sortComparator: compareTextValues,
       renderCell: (params: GridRenderCellParams) => (
         <Chip
           label={params.value}
@@ -552,9 +565,8 @@ const DocumentList: React.FC<DocumentListProps> = ({
       field: 'chunkCount',
       headerName: 'Chunks',
       width: 80,
-      sortable: true,
+      sortable: false,
       type: 'number',
-      sortComparator: compareNumberValues,
     },
     {
       field: 'actions',
@@ -824,14 +836,14 @@ const DocumentList: React.FC<DocumentListProps> = ({
             loading={loading}
             pageSizeOptions={[10, 20, 50, 100]}
             paginationModel={paginationModel}
-            onPaginationModelChange={setPaginationModel}
+            onPaginationModelChange={handlePaginationModelChange}
             sortModel={sortModel}
-            onSortModelChange={setSortModel}
+            onSortModelChange={handleSortModelChange}
             sortingOrder={['asc', 'desc']}
-            filterModel={filterModel}
-            onFilterModelChange={setFilterModel}
-            filterMode="server"
             paginationMode="server"
+            sortingMode={serverSorting ? 'server' : 'client'}
+            filterMode="server"
+            disableColumnFilter
             disableRowSelectionOnClick
             checkboxSelection={checkboxSelection}
             rowSelectionModel={selectedIds}

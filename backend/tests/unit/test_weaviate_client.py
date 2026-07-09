@@ -3,6 +3,7 @@
 import asyncio
 import importlib
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import UUID
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -348,3 +349,65 @@ async def test_async_list_documents_filters_to_owned_docs_and_applies_defaults()
     count_call = pdf_collection.aggregate.over_all.call_args.kwargs
     assert count_call["filters"] is fetch_call["filters"]
     assert count_call["total_count"] is True
+
+
+@pytest.mark.asyncio
+async def test_async_list_documents_applies_date_filters():
+    mock_uuid = UUID("00000000-0000-0000-0000-000000000333")
+    fetch_result = SimpleNamespace(
+        objects=[SimpleNamespace(uuid=mock_uuid, properties={"filename": "dated-paper.pdf"})]
+    )
+    pdf_collection = DummyCollection(fetch_result, SimpleNamespace(total_count=1))
+    mock_client = MagicMock()
+
+    @contextmanager
+    def fake_session():
+        yield mock_client
+
+    mock_connection = MagicMock()
+    mock_connection.session.side_effect = fake_session
+    mock_db_user = SimpleNamespace(id=42)
+    mock_pg_doc = SimpleNamespace(
+        id=mock_uuid,
+        upload_timestamp=None,
+        file_size=5120,
+        source_provider=None,
+        source_provider_reference_id=None,
+        source_provider_reference_curie=None,
+        source_provider_source_file_id=None,
+        source_provider_converted_artifact_id=None,
+        source_provider_pdf_artifact_id=None,
+        source_md5=None,
+        source_access_scope=None,
+        viewer_mode=None,
+    )
+    user_lookup_result = MagicMock()
+    user_lookup_result.scalar_one_or_none.return_value = mock_db_user
+    ownership_lookup_result = MagicMock()
+    ownership_lookup_result.scalars.return_value.all.return_value = [mock_pg_doc]
+    mock_db_session = MagicMock()
+    mock_db_session.execute.side_effect = [user_lookup_result, ownership_lookup_result]
+
+    def mock_get_db():
+        yield mock_db_session
+
+    event_loop = MagicMock()
+    event_loop.run_in_executor.side_effect = lambda _, func: asyncio.sleep(0, result=func())
+
+    from src.models.api_schemas import DocumentFilter
+
+    with patch("src.lib.weaviate_client.documents.get_connection", return_value=mock_connection), \
+         patch("src.lib.weaviate_client.documents.get_db", mock_get_db), \
+         patch("src.lib.weaviate_client.documents.get_user_collections", return_value=(MagicMock(), pdf_collection)), \
+         patch("src.lib.weaviate_client.documents.asyncio.get_event_loop", return_value=event_loop), \
+         patch("src.lib.weaviate_helpers.get_tenant_name", return_value="tenant-owned"):
+        await _documents_module().async_list_documents(
+            "auth-sub-1",
+            DocumentFilter(
+                date_from=datetime(2026, 3, 1, tzinfo=timezone.utc),
+                date_to=datetime(2026, 3, 31, tzinfo=timezone.utc),
+            ),
+            {"page": 1, "page_size": 20, "sort_by": "creationDate", "sort_order": "desc"},
+        )
+
+    assert pdf_collection.query.fetch_objects.call_args.kwargs["filters"] is not None

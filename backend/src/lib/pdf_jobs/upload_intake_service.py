@@ -319,8 +319,8 @@ class UploadIntakeService:
                         "existing_document_id": str(existing.id),
                         "uploaded_at": existing.upload_timestamp.isoformat(),
                         "suggestion": (
-                            "If you want to re-process this file, delete the existing document "
-                            "first and then upload again."
+                            "The existing document is still available in Documents. Search by filename "
+                            "to load it instead of deleting and re-uploading it."
                         ),
                     }
                 )
@@ -411,7 +411,7 @@ class UploadIntakeService:
                     {
                         "error": "duplicate_file",
                         "message": "This file appears to have already been uploaded for your account.",
-                        "suggestion": "Refresh the document list. If needed, delete the existing document and upload again.",
+                        "suggestion": "Refresh Documents and search by filename to load the existing document instead of deleting and re-uploading it.",
                     }
                 ) from integrity_error
             raise

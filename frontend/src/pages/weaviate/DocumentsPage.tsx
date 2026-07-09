@@ -1,7 +1,8 @@
-import React, { Suspense, lazy, useState, useEffect, useMemo } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useMemo, useRef } from 'react';
 import { Alert, Box, Button, Paper, Snackbar, Typography } from '@mui/material';
 import { PlaylistPlay as BatchIcon } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
+import type { GridPaginationModel, GridSortModel } from '@mui/x-data-grid';
 import { normalizeDocumentSourceProvenance } from '../../services/weaviate';
 import type {
   DocumentSummary,
@@ -27,6 +28,80 @@ const readNullableString = (value: unknown): string | null => {
 };
 
 const MAX_BATCH_DOCUMENT_SELECTION = 10;
+const DOCUMENTS_PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const;
+
+const configuredDocumentsPageSize = Number(import.meta.env.VITE_DOCUMENTS_LIBRARY_DEFAULT_PAGE_SIZE ?? 20);
+const DEFAULT_DOCUMENTS_PAGE_SIZE = DOCUMENTS_PAGE_SIZE_OPTIONS.includes(
+  configuredDocumentsPageSize as (typeof DOCUMENTS_PAGE_SIZE_OPTIONS)[number],
+)
+  ? configuredDocumentsPageSize
+  : 20;
+const configuredDocumentsSearchDebounceMs = Number(
+  import.meta.env.VITE_DOCUMENTS_LIBRARY_SEARCH_DEBOUNCE_MS ?? 300,
+);
+const DOCUMENTS_SEARCH_DEBOUNCE_MS = Number.isFinite(configuredDocumentsSearchDebounceMs)
+  ? Math.max(0, configuredDocumentsSearchDebounceMs)
+  : 300;
+
+const sortFieldForApi = (field: string | undefined): string => {
+  switch (field) {
+    case 'filename':
+    case 'fileSize':
+    case 'vectorCount':
+      return field;
+    case 'creationDate':
+    default:
+      return 'creationDate';
+  }
+};
+
+export const buildDocumentListSearchParams = (
+  paginationModel: GridPaginationModel,
+  sortModel: GridSortModel,
+  filters: DocumentFilter,
+): URLSearchParams => {
+  const params = new URLSearchParams({
+    page: String(paginationModel.page + 1),
+    page_size: String(paginationModel.pageSize),
+    sort_by: sortFieldForApi(sortModel[0]?.field),
+    sort_order: sortModel[0]?.sort === 'asc' ? 'asc' : 'desc',
+  });
+  if (filters.searchTerm) {
+    params.set('search', filters.searchTerm);
+  }
+  filters.embeddingStatus?.forEach((status) => params.append('embedding_status', status));
+  if (filters.dateFrom) {
+    params.set('date_from', filters.dateFrom.toISOString());
+  }
+  if (filters.dateTo) {
+    params.set('date_to', filters.dateTo.toISOString());
+  }
+  if (filters.minVectorCount !== undefined) {
+    params.set('min_vector_count', String(filters.minVectorCount));
+  }
+  if (filters.maxVectorCount !== undefined) {
+    params.set('max_vector_count', String(filters.maxVectorCount));
+  }
+  return params;
+};
+
+export const lastDocumentPage = (totalDocuments: number, pageSize: number): number => (
+  Math.max(0, Math.ceil(totalDocuments / pageSize) - 1)
+);
+
+const useDebouncedDocumentSearchTerm = (searchTerm: string): string => {
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState(searchTerm);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(
+      () => setDebouncedSearchTerm(searchTerm),
+      DOCUMENTS_SEARCH_DEBOUNCE_MS,
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [searchTerm]);
+
+  return debouncedSearchTerm;
+};
 
 function DocumentsPageSectionFallback() {
   return (
@@ -42,26 +117,58 @@ const DocumentsPage: React.FC = () => {
   const navigate = useNavigate();
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [loading, setLoading] = useState(false);
-  const [, setTotalCount] = useState(0);
+  const [totalCount, setTotalCount] = useState(0);
   const [filters, setFilters] = useState<DocumentFilter>({});
+  const [paginationModel, setPaginationModel] = useState<GridPaginationModel>({
+    page: 0,
+    pageSize: DEFAULT_DOCUMENTS_PAGE_SIZE,
+  });
+  const [sortModel, setSortModel] = useState<GridSortModel>([
+    { field: 'creationDate', sort: 'desc' },
+  ]);
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<string[]>([]);
   const [snackbar, setSnackbar] = useState<{
     open: boolean;
     message: string;
     severity: 'success' | 'error' | 'info';
   }>({ open: false, message: '', severity: 'info' });
+  const requestControllerRef = useRef<AbortController | null>(null);
+  const documentRequestIdRef = useRef(0);
+  const debouncedSearchTerm = useDebouncedDocumentSearchTerm(filters.searchTerm ?? '');
+
+  const queryFilters = useMemo(
+    () => ({
+      searchTerm: debouncedSearchTerm || undefined,
+      embeddingStatus: filters.embeddingStatus,
+      dateFrom: filters.dateFrom,
+      dateTo: filters.dateTo,
+      minVectorCount: filters.minVectorCount,
+      maxVectorCount: filters.maxVectorCount,
+    }),
+    [
+      debouncedSearchTerm,
+      filters.dateFrom,
+      filters.dateTo,
+      filters.embeddingStatus,
+      filters.maxVectorCount,
+      filters.minVectorCount,
+    ],
+  );
 
   const handleRefresh = React.useCallback(async () => {
+    requestControllerRef.current?.abort();
+    const requestController = new AbortController();
+    requestControllerRef.current = requestController;
+    const requestId = documentRequestIdRef.current + 1;
+    documentRequestIdRef.current = requestId;
     setLoading(true);
     try {
       console.log('[DocumentsPage] Refresh start');
-      const params = new URLSearchParams({
-        page: '1',
-        page_size: '100',
-      });
+      const params = buildDocumentListSearchParams(paginationModel, sortModel, queryFilters);
 
       const response = await fetch(`/api/weaviate/documents?${params.toString()}`, {
         credentials: 'include', // Include httpOnly cookies for authentication
+        signal: requestController.signal,
         headers: {
           Accept: 'application/json',
         },
@@ -72,6 +179,9 @@ const DocumentsPage: React.FC = () => {
       }
 
       const data = (await response.json()) as DocumentListResponse;
+      if (requestId !== documentRequestIdRef.current) {
+        return;
+      }
       const docs = (data.documents || []) as unknown as Array<Record<string, unknown>>;
       const normalizedDocs: DocumentSummary[] = docs.map((doc) => {
         const processingStatus = readString(
@@ -98,25 +208,37 @@ const DocumentsPage: React.FC = () => {
           ),
         };
       });
-      setDocuments(normalizedDocs);
       const totalItems =
-        data.pagination?.totalItems ?? (data.pagination as Record<string, unknown> | undefined)?.total_items as number ?? docs.length;
+        data.total ?? data.pagination?.totalItems ?? (data.pagination as Record<string, unknown> | undefined)?.total_items as number ?? docs.length;
+      const lastPage = lastDocumentPage(totalItems, paginationModel.pageSize);
+      if (paginationModel.page > lastPage) {
+        setPaginationModel((previous) => ({ ...previous, page: lastPage }));
+        return;
+      }
+      setDocuments(normalizedDocs);
       setTotalCount(totalItems);
       console.log('[DocumentsPage] Refresh success', { count: normalizedDocs.length });
     } catch (error) {
+      if (requestController.signal.aborted || requestId !== documentRequestIdRef.current) {
+        return;
+      }
       console.error('Error fetching documents:', error);
       // For now, just set empty data to prevent errors
       setDocuments([]);
       setTotalCount(0);
     } finally {
-      setLoading(false);
+      if (requestId === documentRequestIdRef.current) {
+        setLoading(false);
+      }
     }
-  }, []);
+  }, [paginationModel, queryFilters, sortModel]);
 
   useEffect(() => {
     console.log('[DocumentsPage] Mounted – triggering initial refresh');
     void handleRefresh();
   }, [handleRefresh]);
+
+  useEffect(() => () => requestControllerRef.current?.abort(), []);
 
   const buildActionErrorMessage = React.useCallback(async (response: Response, fallback: string) => {
     try {
@@ -191,60 +313,27 @@ const DocumentsPage: React.FC = () => {
     }
   }, []);
 
-  // Client-side filtering
-  const filteredDocuments = useMemo(() => {
-    let result = documents;
-
-    // Filter by search term (filename or title)
-    if (filters.searchTerm) {
-      const searchLower = filters.searchTerm.toLowerCase();
-      result = result.filter(
-        (doc) =>
-          doc.filename.toLowerCase().includes(searchLower) ||
-          (doc.title && doc.title.toLowerCase().includes(searchLower))
-      );
-    }
-
-    // Filter by embedding status
-    if (filters.embeddingStatus && filters.embeddingStatus.length > 0) {
-      result = result.filter((doc) =>
-        filters.embeddingStatus!.includes(doc.embeddingStatus ?? 'pending')
-      );
-    }
-
-    // Filter by date range
-    if (filters.dateFrom) {
-      const fromDate = filters.dateFrom.getTime();
-      result = result.filter((doc) => {
-        if (!doc.creationDate) return false;
-        return new Date(doc.creationDate).getTime() >= fromDate;
-      });
-    }
-    if (filters.dateTo) {
-      const toDate = filters.dateTo.getTime();
-      result = result.filter((doc) => {
-        if (!doc.creationDate) return false;
-        return new Date(doc.creationDate).getTime() <= toDate;
-      });
-    }
-
-    // Filter by chunk count (UI shows "Chunks", filter params still named vectorCount for compatibility)
-    if (filters.minVectorCount !== undefined) {
-      result = result.filter((doc) => (doc.chunkCount ?? 0) >= filters.minVectorCount!);
-    }
-    if (filters.maxVectorCount !== undefined) {
-      result = result.filter((doc) => (doc.chunkCount ?? 0) <= filters.maxVectorCount!);
-    }
-
-    return result;
-  }, [documents, filters]);
-
   const handleFilterChange = React.useCallback((newFilters: DocumentFilter) => {
-    setFilters((prev) => ({ ...prev, ...newFilters }));
+    setFilters(newFilters);
+    setPaginationModel((previous) => ({ ...previous, page: 0 }));
+    setSelectedDocumentIds([]);
   }, []);
 
   const handleClearFilters = React.useCallback(() => {
     setFilters({});
+    setPaginationModel((previous) => ({ ...previous, page: 0 }));
+    setSelectedDocumentIds([]);
+  }, []);
+
+  const handlePaginationModelChange = React.useCallback((nextPaginationModel: GridPaginationModel) => {
+    setPaginationModel(nextPaginationModel);
+    setSelectedDocumentIds([]);
+  }, []);
+
+  const handleSortModelChange = React.useCallback((nextSortModel: GridSortModel) => {
+    setSortModel(nextSortModel);
+    setPaginationModel((previous) => ({ ...previous, page: 0 }));
+    setSelectedDocumentIds([]);
   }, []);
 
   // Navigate to batch page with selected documents
@@ -356,9 +445,9 @@ const DocumentsPage: React.FC = () => {
       >
         <Suspense fallback={<DocumentsPageSectionFallback />}>
           <DocumentList
-            documents={filteredDocuments}
+            documents={documents}
             loading={loading}
-            totalCount={filteredDocuments.length}
+            totalCount={totalCount}
             onDelete={handleDelete}
             onReembed={handleReembed}
             onRefresh={handleRefresh}
@@ -368,6 +457,10 @@ const DocumentsPage: React.FC = () => {
             selectedIds={selectedDocumentIds}
             onSelectionChange={handleSelectionChange}
             filterBar={filterBar}
+            paginationModel={paginationModel}
+            onPaginationModelChange={handlePaginationModelChange}
+            sortModel={sortModel}
+            onSortModelChange={handleSortModelChange}
           />
         </Suspense>
       </Box>

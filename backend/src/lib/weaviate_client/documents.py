@@ -92,11 +92,19 @@ async def async_list_documents(
 
             # Build where filter if needed
             where_filter = None
+            search_term = getattr(filter_obj, "search_term", None)
+            embedding_status = getattr(filter_obj, "embedding_status", None)
+            date_from = getattr(filter_obj, "date_from", None)
+            date_to = getattr(filter_obj, "date_to", None)
+            min_vector_count = getattr(filter_obj, "min_vector_count", None)
+            max_vector_count = getattr(filter_obj, "max_vector_count", None)
             has_filters = filter_obj and (
-                filter_obj.search_term or
-                filter_obj.embedding_status or
-                filter_obj.min_vector_count is not None or
-                filter_obj.max_vector_count is not None
+                search_term or
+                embedding_status or
+                date_from is not None or
+                date_to is not None or
+                min_vector_count is not None or
+                max_vector_count is not None
             )
             logger.debug(
                 "Filter check: has_filters=%s, min_vector_count=%s, max_vector_count=%s",
@@ -107,16 +115,16 @@ async def async_list_documents(
             if has_filters:
                 conditions = []
 
-                if filter_obj.search_term:
+                if search_term:
                     conditions.append(
-                        Filter.by_property("filename").like(f"*{filter_obj.search_term}*")
+                        Filter.by_property("filename").like(f"*{search_term}*")
                     )
 
-                if filter_obj.embedding_status:
+                if embedding_status:
                     # Build OR condition for multiple statuses
                     status_filters = [
                         Filter.by_property("embeddingStatus").equal(status)
-                        for status in filter_obj.embedding_status
+                        for status in embedding_status
                     ]
                     if len(status_filters) > 1:
                         conditions.append(Filter.any_of(status_filters))
@@ -124,13 +132,26 @@ async def async_list_documents(
                         conditions.append(status_filters[0])
 
                 # Filter by chunk count (UI shows "Chunks" but params still use vector naming)
-                if filter_obj.min_vector_count is not None:
+                if min_vector_count is not None:
                     conditions.append(
-                        Filter.by_property("chunkCount").greater_or_equal(filter_obj.min_vector_count)
+                        Filter.by_property("chunkCount").greater_or_equal(min_vector_count)
                     )
-                if filter_obj.max_vector_count is not None:
+                if max_vector_count is not None:
                     conditions.append(
-                        Filter.by_property("chunkCount").less_or_equal(filter_obj.max_vector_count)
+                        Filter.by_property("chunkCount").less_or_equal(max_vector_count)
+                    )
+
+                if date_from is not None:
+                    conditions.append(
+                        Filter.by_property("creationDate").greater_or_equal(
+                            date_from.isoformat()
+                        )
+                    )
+                if date_to is not None:
+                    conditions.append(
+                        Filter.by_property("creationDate").less_or_equal(
+                            date_to.isoformat()
+                        )
                     )
 
                 if len(conditions) == 1:

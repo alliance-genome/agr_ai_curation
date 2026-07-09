@@ -61,7 +61,10 @@ interface DocumentChunk {
 
 export interface DocumentListResponse {
   documents: PDFDocument[];
-  pagination: {
+  total?: number;
+  limit?: number;
+  offset?: number;
+  pagination?: {
     currentPage: number;
     totalPages: number;
     totalItems: number;
