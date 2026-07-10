@@ -1413,6 +1413,48 @@ const buildRectsFromTextRange = (
   }, [])
 }
 
+export const findEvidenceOccurrenceIndexForRange = (
+  rawText: string,
+  query: string,
+  expectedRange: { rawStart: number; rawEndExclusive: number },
+): number | null => {
+  const normalizedQuery = normalizeEvidenceSpikeText(query).toLocaleLowerCase()
+  const sourceMap = buildNormalizedTextSourceMap(rawText)
+  const normalizedText = sourceMap.text.toLocaleLowerCase()
+  if (!normalizedQuery || !normalizedText) {
+    return null
+  }
+
+  let occurrenceIndex = 0
+  let searchStart = 0
+  let bestIndex: number | null = null
+  let bestOverlap = 0
+  while (searchStart <= normalizedText.length - normalizedQuery.length) {
+    const matchIndex = normalizedText.indexOf(normalizedQuery, searchStart)
+    if (matchIndex < 0) {
+      break
+    }
+    const rawStart = sourceMap.sourceIndices[matchIndex]
+    const rawEnd = sourceMap.sourceIndices[matchIndex + normalizedQuery.length - 1]
+    if (rawStart !== undefined && rawEnd !== undefined) {
+      const rawEndExclusive = rawEnd + getSourceCodeUnitLength(rawText, rawEnd)
+      const overlap = Math.max(
+        0,
+        Math.min(rawEndExclusive, expectedRange.rawEndExclusive)
+          - Math.max(rawStart, expectedRange.rawStart),
+      )
+      if (overlap > bestOverlap) {
+        bestOverlap = overlap
+        bestIndex = occurrenceIndex
+      }
+    }
+    occurrenceIndex += 1
+    searchStart = matchIndex + normalizedQuery.length
+  }
+
+  return bestOverlap > 0 ? bestIndex : null
+}
+
 export const findTextLayerMatchRects = (
   iframeDoc: Document,
   pageNumber: number,

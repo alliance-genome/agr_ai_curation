@@ -45,6 +45,7 @@ import {
   createPdfJsQuoteSearchAdapter,
   dispatchEvidenceSpikeFind,
   findPdfJsSelectedHighlightRects,
+  findEvidenceOccurrenceIndexForRange,
   findTextLayerMatchRects,
   getEvidenceHighlightRectStyles,
   getNavigationBannerMessage,
@@ -656,6 +657,54 @@ export function PdfViewer({
           matchedSync,
         })
         clearPdfJsFindHighlights(pdfApp)
+
+        const pageCorpusText = getCachedEvidencePageText(matchedTarget.pageNumber)
+        const trustedOccurrenceIndex = pageCorpusText
+          ? findEvidenceOccurrenceIndexForRange(
+            pageCorpusText,
+            matchedTarget.query,
+            matchedTarget.expectedRange,
+          )
+          : null
+        const textLayerRects = matchedSync.occurrence && trustedOccurrenceIndex !== null
+          ? findTextLayerMatchRects(
+            iframeDoc,
+            matchedTarget.pageNumber,
+            matchedTarget.query,
+            trustedOccurrenceIndex,
+          )
+          : []
+        if (textLayerRects.length > 0) {
+          setEvidenceHighlight({
+            anchorId: command.anchorId,
+            kind: 'quote',
+            mode: command.mode,
+            pageNumber: matchedTarget.pageNumber,
+            query: matchedTarget.query,
+            pageMatchIndex: trustedOccurrenceIndex,
+            rects: textLayerRects,
+            renderOverlay: true,
+            nativeTarget: null,
+          })
+          logPdfEvidenceDebug('Used the RapidFuzz-localized text-layer range after native PDF.js occurrence verification failed', {
+            anchorId: command.anchorId,
+            quoteSearchText,
+            matchedTarget,
+            rectCount: textLayerRects.length,
+          })
+          return {
+            ...baseResult,
+            status: 'matched',
+            strategy: fuzzyMatch.strategy,
+            locatorQuality,
+            degraded: fuzzyMatch.crossPage,
+            matchedQuery: matchedTarget.query,
+            matchedPage: matchedTarget.pageNumber,
+            matchesTotal: 1,
+            currentMatch: 1,
+            note: 'Localized the quote with RapidFuzz and highlighted the independently matched PDF text layer span.',
+          }
+        }
       }
     }
 

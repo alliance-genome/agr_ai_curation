@@ -262,6 +262,35 @@ def test_get_document_bootstrap_availability_returns_false_when_no_matching_resu
     assert availability.eligible is False
 
 
+def test_get_document_bootstrap_availability_returns_true_for_scoped_flow_result(monkeypatch):
+    monkeypatch.setattr(module, "_require_document", lambda db, document_id: object())
+    monkeypatch.setattr(
+        module,
+        "_select_bootstrap_extraction_result",
+        lambda db, *, document_id, request: (_ for _ in ()).throw(
+            module.HTTPException(status_code=404, detail="missing")
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "_list_flow_bootstrap_extraction_results",
+        lambda *args, **kwargs: [SimpleNamespace(adapter_key="allele")],
+    )
+
+    availability = module.get_document_bootstrap_availability(
+        "document-1",
+        CurationDocumentBootstrapRequest(
+            origin_session_id="chat-session-1",
+            flow_run_id="flow-1",
+            adapter_key="allele",
+        ),
+        current_user_id="user-1",
+        db=object(),
+    )
+
+    assert availability.eligible is True
+
+
 def test_get_document_bootstrap_availability_returns_true_when_chat_prep_can_run(monkeypatch):
     monkeypatch.setattr(module, "_require_document", lambda db, document_id: object())
 
@@ -866,6 +895,81 @@ async def test_ensure_bootstrap_extraction_result_runs_chat_prep_when_missing(mo
     assert captured["request"].session_id == "chat-session-1"
     assert captured["request"].adapter_keys == ["gene"]
     assert captured["user_id"] == "user-1"
+
+
+@pytest.mark.asyncio
+async def test_ensure_bootstrap_extraction_result_prepares_scoped_flow_result(monkeypatch):
+    selection_calls = {"count": 0}
+    prepared_record = SimpleNamespace(id=uuid4(), adapter_key="allele")
+    flow_result = SimpleNamespace(
+        adapter_key="allele",
+        trace_id="trace-flow-1",
+        conversation_summary="Flow extracted five alleles.",
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_select_bootstrap_extraction_result(db, *, document_id, request):
+        selection_calls["count"] += 1
+        if selection_calls["count"] == 1:
+            raise module.HTTPException(status_code=404, detail="missing")
+        return prepared_record
+
+    def _fake_list_extraction_results(**kwargs):
+        captured["list_kwargs"] = kwargs
+        return [flow_result]
+
+    async def _fake_run_curation_prep(results, *, scope_confirmation, persistence_context, db):
+        captured["results"] = results
+        captured["scope_confirmation"] = scope_confirmation
+        captured["persistence_context"] = persistence_context
+        captured["db"] = db
+
+    monkeypatch.setattr(
+        module,
+        "_select_bootstrap_extraction_result",
+        _fake_select_bootstrap_extraction_result,
+    )
+    monkeypatch.setattr(module, "list_extraction_results", _fake_list_extraction_results)
+    monkeypatch.setattr(module, "run_curation_prep", _fake_run_curation_prep)
+    monkeypatch.setattr(
+        module,
+        "build_flow_scope_confirmation",
+        lambda results, *, flow_name: (results, flow_name),
+    )
+
+    db = object()
+    result = await module._ensure_bootstrap_extraction_result(
+        db,
+        document_id="document-1",
+        request=CurationDocumentBootstrapRequest(
+            origin_session_id="chat-session-1",
+            flow_run_id="flow-1",
+            adapter_key="allele",
+        ),
+        current_user_id="user-1",
+    )
+
+    assert result is prepared_record
+    assert selection_calls["count"] == 2
+    assert captured["list_kwargs"] == {
+        "db": db,
+        "document_id": "document-1",
+        "flow_run_id": "flow-1",
+        "origin_session_id": "chat-session-1",
+        "user_id": "user-1",
+        "source_kind": CurationExtractionSourceKind.FLOW,
+        "exclude_agent_keys": [module.CURATION_PREP_AGENT_ID],
+    }
+    assert captured["results"] == [flow_result]
+    assert captured["scope_confirmation"] == ([flow_result], "Review & Curate")
+    persistence_context = captured["persistence_context"]
+    assert isinstance(persistence_context, module.CurationPrepPersistenceContext)
+    assert persistence_context.source_kind == CurationExtractionSourceKind.FLOW
+    assert persistence_context.origin_session_id == "chat-session-1"
+    assert persistence_context.flow_run_id == "flow-1"
+    assert persistence_context.trace_id == "trace-flow-1"
+    assert persistence_context.user_id == "user-1"
+    assert persistence_context.workflow == "curation_bootstrap_flow"
 
 
 @pytest.mark.asyncio

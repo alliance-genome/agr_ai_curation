@@ -23,6 +23,7 @@ from src.lib.curation_workspace.curation_prep_service import (
     build_flow_scope_confirmation,
     run_curation_prep,
 )
+from src.lib.curation_workspace.extraction_results import list_extraction_results
 from src.lib.curation_workspace.models import (
     CurationExtractionResultRecord as ExtractionResultModel,
 )
@@ -414,6 +415,19 @@ def get_document_bootstrap_availability(
         )
     except HTTPException as exc:
         if exc.status_code == status.HTTP_404_NOT_FOUND:
+            flow_run_id = _normalized_optional_str(request.flow_run_id)
+            if flow_run_id is not None:
+                flow_results = _list_flow_bootstrap_extraction_results(
+                    db,
+                    document_id=document_id,
+                    request=request,
+                    current_user_id=current_user_id,
+                )
+                distinct_adapter_keys = _handoff_adapter_keys(flow_results)
+                return CurationDocumentBootstrapAvailabilityResponse(
+                    eligible=bool(flow_results) and len(distinct_adapter_keys) == 1,
+                )
+
             origin_session_id = _normalized_optional_str(request.origin_session_id)
             if origin_session_id is None:
                 return CurationDocumentBootstrapAvailabilityResponse(eligible=False)
@@ -452,6 +466,28 @@ def _handoff_adapter_keys(
             if str(record.adapter_key or "").strip()
         }
     )
+
+
+def _list_flow_bootstrap_extraction_results(
+    db: Session,
+    *,
+    document_id: str,
+    request: CurationDocumentBootstrapRequest,
+    current_user_id: str,
+) -> list[CurationExtractionResultRecord]:
+    adapter_key = _normalized_optional_str(request.adapter_key)
+    results = list_extraction_results(
+        db=db,
+        document_id=document_id,
+        flow_run_id=_normalized_optional_str(request.flow_run_id),
+        origin_session_id=_normalized_optional_str(request.origin_session_id),
+        user_id=current_user_id,
+        source_kind=CurationExtractionSourceKind.FLOW,
+        exclude_agent_keys=[CURATION_PREP_AGENT_ID],
+    )
+    if adapter_key is not None:
+        return [result for result in results if result.adapter_key == adapter_key]
+    return results
 
 
 def _require_document(db: Session, document_id: str) -> PDFDocument:
@@ -554,6 +590,57 @@ async def _ensure_bootstrap_extraction_result(
     except HTTPException as exc:
         if exc.status_code != status.HTTP_404_NOT_FOUND:
             raise
+
+    flow_run_id = _normalized_optional_str(request.flow_run_id)
+    if flow_run_id is not None:
+        adapter_key = _normalized_optional_str(request.adapter_key)
+        flow_results = _list_flow_bootstrap_extraction_results(
+            db,
+            document_id=document_id,
+            request=request,
+            current_user_id=current_user_id,
+        )
+
+        if not flow_results:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=(
+                    "No persisted flow extraction results were found for "
+                    f"document {document_id} and flow run {flow_run_id}"
+                ),
+            )
+        if adapter_key is None and len(_handoff_adapter_keys(flow_results)) > 1:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Multiple flow extraction adapters are available for this document. "
+                    "Choose an adapter-specific entry point."
+                ),
+            )
+
+        await run_curation_prep(
+            flow_results,
+            scope_confirmation=build_flow_scope_confirmation(
+                flow_results,
+                flow_name="Review & Curate",
+            ),
+            persistence_context=CurationPrepPersistenceContext(
+                document_id=document_id,
+                source_kind=CurationExtractionSourceKind.FLOW,
+                origin_session_id=_normalized_optional_str(request.origin_session_id),
+                trace_id=flow_results[0].trace_id,
+                flow_run_id=flow_run_id,
+                user_id=current_user_id,
+                conversation_summary=flow_results[0].conversation_summary,
+                workflow="curation_bootstrap_flow",
+            ),
+            db=db,
+        )
+        return _select_bootstrap_extraction_result(
+            db,
+            document_id=document_id,
+            request=request,
+        )
 
     origin_session_id = _normalized_optional_str(request.origin_session_id)
     if origin_session_id is None:

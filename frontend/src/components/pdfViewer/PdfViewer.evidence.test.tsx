@@ -2524,20 +2524,35 @@ describe('PdfViewer evidence navigation', () => {
     expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
   })
 
-  it('rejects a same-page native highlight when PDF.js selects the wrong passage for the matched quote', async () => {
+  it('uses the independently matched text-layer span when PDF.js selects the wrong native passage', async () => {
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
 
     const onNavigationComplete = vi.fn()
     const onNavigationStateChange = vi.fn()
     const sectionHeading = '2.3. The Molar Abundance of Actins, Opsin, and Crumbs in Fly Eyes'
     const quote = 'Decreased levels of Rh1 induced by mutating the ninaE gene or by removal of Vitamin A precursors from the diet resulted in substantially smaller rhabdomeres'
-    const pageText = `${sectionHeading} ${quote}`
+    const pageText = `${sectionHeading} ${quote} Unrelated intervening text. ${quote}`
+    const corpusText = `NFKC-normalized-prefix-with-different-length ${quote} Unrelated intervening text. ${quote}`
+    const expectedStart = corpusText.lastIndexOf(quote)
 
-    vi.mocked(fuzzyMatchPdfEvidenceQuote).mockResolvedValueOnce(
-      createSinglePageFuzzyMatchResult(3, pageText, quote, {
+    vi.mocked(fuzzyMatchPdfEvidenceQuote).mockResolvedValueOnce({
+      ...createSinglePageFuzzyMatchResult(3, corpusText, quote, {
         score: 98,
       }),
-    )
+      matchedQuery: quote,
+      matchedRange: {
+        pageNumber: 3,
+        rawStart: expectedStart,
+        rawEndExclusive: expectedStart + quote.length,
+        query: quote,
+      },
+      pageRanges: [{
+        pageNumber: 3,
+        rawStart: expectedStart,
+        rawEndExclusive: expectedStart + quote.length,
+        query: quote,
+      }],
+    })
 
     render(
       <PdfViewer
@@ -2585,7 +2600,7 @@ describe('PdfViewer evidence navigation', () => {
       pages: [
         { pageNumber: 1, textSegments: ['Introduction'] },
         { pageNumber: 2, textSegments: ['Background'] },
-        { pageNumber: 3, textSegments: [sectionHeading, quote] },
+        { pageNumber: 3, textSegments: [pageText], pageContents: corpusText },
       ],
     })
 
@@ -2616,17 +2631,23 @@ describe('PdfViewer evidence navigation', () => {
       expect(onNavigationComplete).toHaveBeenCalledTimes(1)
     })
 
-    expect(eventBus.findQueries).toEqual([quote, sectionHeading])
+    expect(eventBus.findQueries).toEqual([quote])
     expect(onNavigationStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
-      status: 'section-fallback',
-      locatorQuality: 'section_only',
-      degraded: true,
+      status: 'matched',
+      strategy: 'rapidfuzz-single-page',
+      locatorQuality: 'exact_quote',
+      degraded: false,
       matchedPage: 3,
-      matchedQuery: sectionHeading,
+      matchedQuery: quote,
+      note: 'Localized the quote with RapidFuzz and highlighted the independently matched PDF text layer span.',
     }))
-    expect(
-      screen.getAllByText('Evidence context highlighted from the nearest section heading. The quote itself was not matched.'),
-    ).toHaveLength(2)
+    expect(screen.queryByText('Evidence context highlighted from the nearest section heading. The quote itself was not matched.')).not.toBeInTheDocument()
+    expect(getNativeSelectedHighlights(iframe)).toHaveLength(0)
+    await waitFor(() => {
+      expect(getEvidenceHighlightRects(iframe).length).toBeGreaterThan(0)
+    })
+    const overlay = getEvidenceHighlightRects(iframe)[0]
+    expect(Number.parseFloat(overlay.style.left)).toBeGreaterThan(300)
   })
 
   it('recovers the best matching PDF quote span when the stored quote drifts from the page text', async () => {
