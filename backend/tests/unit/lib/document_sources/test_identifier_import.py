@@ -153,6 +153,17 @@ class _FakeProvider:
     def main_text_artifact_sort_key(self, artifact: SourceArtifact) -> tuple[int, ...]:
         return _fake_main_text_artifact_sort_key(artifact, provider_id=self.provider_id)
 
+    def reference_source_artifact_sort_key(
+        self,
+        artifact: SourceArtifact,
+        authorized_group_ids: tuple[str, ...] | list[str] | set[str],
+    ) -> tuple[int, ...]:
+        return _fake_reference_source_artifact_sort_key(
+            artifact,
+            provider_id=self.provider_id,
+            authorized_group_ids=authorized_group_ids,
+        )
+
     def conversion_exposes_main_text(self, result: SourceConversionResult) -> bool:
         return _fake_conversion_exposes_main_text(result, provider_id=self.provider_id)
 
@@ -221,6 +232,32 @@ def _fake_main_text_artifact_sort_key(
     return (10,)
 
 
+def _fake_reference_source_artifact_sort_key(
+    artifact: SourceArtifact,
+    *,
+    provider_id: str,
+    authorized_group_ids: tuple[str, ...] | list[str] | set[str],
+) -> tuple[int, ...]:
+    if provider_id != "abc_literature":
+        return (0,)
+    if not (
+        artifact.metadata.get("file_class") == "main"
+        and artifact.metadata.get("file_publication_status") == "final"
+        and artifact.metadata.get("pdf_type") == "pdf"
+    ):
+        return (20,)
+    authorized = {str(group_id).strip().casefold() for group_id in authorized_group_ids}
+    artifact_mods = {mod.strip().casefold() for mod in artifact.access_policy.mods}
+    if (
+        artifact.access_policy.scope is SourceAccessScope.RESTRICTED
+        and authorized.intersection(artifact_mods)
+    ):
+        return (0,)
+    if artifact.access_policy.scope is SourceAccessScope.GLOBAL:
+        return (1,)
+    return (10,)
+
+
 def _fake_conversion_exposes_main_text(
     result: SourceConversionResult,
     *,
@@ -277,6 +314,9 @@ def _source_artifact(
     provider="fake_provider",
     access_scope=SourceAccessScope.RESTRICTED,
     mods=("FB",),
+    display_name="provider-paper.pdf",
+    md5sum="source-md5",
+    metadata=None,
 ):
     return SourceArtifact(
         provider=provider,
@@ -286,9 +326,10 @@ def _source_artifact(
         status=SourceArtifactStatus.AVAILABLE,
         reference_id="ref-123",
         reference_curie="AGRKB:123",
-        display_name="provider-paper.pdf",
-        md5sum="source-md5",
+        display_name=display_name,
+        md5sum=md5sum,
         access_policy=SourceAccessPolicy(scope=access_scope, mods=mods),
+        metadata=metadata or {},
     )
 
 
@@ -296,7 +337,7 @@ def _converted_artifact(
     *,
     artifact_id,
     provider="fake_provider",
-    parent_artifact_id="pdf-1",
+    parent_artifact_id: str | None = "pdf-1",
     display_name="provider-paper.md",
     file_class="converted_merged_main",
     status=SourceArtifactStatus.AVAILABLE,
@@ -372,6 +413,161 @@ async def test_select_reference_import_candidate_rejects_inaccessible_pdf():
 
     assert decision.status == ReferenceImportDecisionStatus.ACCESS_DENIED
     assert decision.selected is None
+
+
+@pytest.mark.parametrize(
+    ("pmid", "mod_pdf_id", "shared_pdf_id", "converted_id", "pmc_stem"),
+    (
+        ("41902664", "5013742", "5015962", "5020781", "PMC13232752.1"),
+        ("41902692", "5013740", "5018839", "5020796", "PMC13232516.1"),
+    ),
+)
+@pytest.mark.asyncio
+async def test_select_reference_import_candidate_prefers_abc_mod_pdf_over_shared_pmc(
+    pmid: str,
+    mod_pdf_id: str,
+    shared_pdf_id: str,
+    converted_id: str,
+    pmc_stem: str,
+):
+    provider = _FakeProvider(
+        artifacts=(
+            _source_artifact(
+                artifact_id=mod_pdf_id,
+                provider="abc_literature",
+                mods=("FB",),
+                display_name=pmid,
+                md5sum="fb-pdf-md5",
+                metadata={
+                    "file_class": "main",
+                    "file_publication_status": "final",
+                    "pdf_type": "pdf",
+                },
+            ),
+            _source_artifact(
+                artifact_id=shared_pdf_id,
+                provider="abc_literature",
+                access_scope=SourceAccessScope.GLOBAL,
+                mods=(),
+                display_name=pmc_stem,
+                md5sum="pmc-pdf-md5",
+                metadata={
+                    "file_class": "main",
+                    "file_publication_status": "final",
+                    "pdf_type": "pdf",
+                },
+            ),
+            _converted_artifact(
+                artifact_id=converted_id,
+                provider="abc_literature",
+                parent_artifact_id=None,
+                display_name=f"{pmc_stem}_nxml",
+                file_class="converted_merged_main",
+            ),
+        )
+    )
+    provider.provider_id = "abc_literature"
+
+    decision = await select_reference_import_candidate(
+        provider=provider,
+        identifier=f"PMID:{pmid}",
+        authorized_group_ids=("FB",),
+    )
+
+    assert decision.status == ReferenceImportDecisionStatus.READY
+    selected = decision.selected
+    assert selected is not None
+    assert selected.source_artifact.artifact_id == mod_pdf_id
+    converted = selected.converted_artifact
+    assert converted is not None
+    assert converted.artifact_id == converted_id
+
+
+@pytest.mark.asyncio
+async def test_select_reference_import_candidate_keeps_true_abc_mod_tie_ambiguous():
+    provider = _FakeProvider(
+        artifacts=(
+            _source_artifact(
+                artifact_id="fb-pdf",
+                provider="abc_literature",
+                mods=("FB",),
+                display_name="flybase-paper",
+                md5sum="fb-pdf-md5",
+                metadata={
+                    "file_class": "main",
+                    "file_publication_status": "final",
+                    "pdf_type": "pdf",
+                },
+            ),
+            _source_artifact(
+                artifact_id="wb-pdf",
+                provider="abc_literature",
+                mods=("WB",),
+                display_name="wormbase-paper",
+                md5sum="wb-pdf-md5",
+                metadata={
+                    "file_class": "main",
+                    "file_publication_status": "final",
+                    "pdf_type": "pdf",
+                },
+            ),
+            _source_artifact(
+                artifact_id="pmc-pdf",
+                provider="abc_literature",
+                access_scope=SourceAccessScope.GLOBAL,
+                mods=(),
+                display_name="PMC-paper",
+                md5sum="pmc-pdf-md5",
+                metadata={
+                    "file_class": "main",
+                    "file_publication_status": "final",
+                    "pdf_type": "pdf",
+                },
+            ),
+        )
+    )
+    provider.provider_id = "abc_literature"
+
+    decision = await select_reference_import_candidate(
+        provider=provider,
+        identifier="PMID:123",
+        authorized_group_ids=("FB", "WB"),
+    )
+
+    assert decision.status == ReferenceImportDecisionStatus.AMBIGUOUS_MATCH
+    assert decision.selected is None
+    assert decision.metadata == {"match_count": 2}
+
+
+@pytest.mark.asyncio
+async def test_select_reference_import_candidate_without_provider_preference_stays_ambiguous():
+    class _ProviderWithoutSourcePreference:
+        provider_id = "provider_without_preference"
+
+        async def resolve_reference(self, identifier, *, request_bearer_token=None):
+            _ = identifier, request_bearer_token
+            return SourceReference(
+                provider=self.provider_id,
+                reference_id="ref-123",
+                reference_curie="AGRKB:123",
+            )
+
+        async def list_artifacts(self, reference, *, request_bearer_token=None):
+            _ = reference, request_bearer_token
+            return [
+                _source_artifact(artifact_id="pdf-1", provider=self.provider_id),
+                _source_artifact(artifact_id="pdf-2", provider=self.provider_id),
+            ]
+
+    decision = await select_reference_import_candidate(
+        provider=_ProviderWithoutSourcePreference(),  # type: ignore[arg-type]
+        identifier="PMID:123",
+        authorized_group_ids=("FB",),
+    )
+
+    assert decision.status is ReferenceImportDecisionStatus.AMBIGUOUS_MATCH
+    assert decision.selected is None
+    assert decision.metadata == {"match_count": 2}
 
 
 @pytest.mark.asyncio

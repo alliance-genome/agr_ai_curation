@@ -295,17 +295,21 @@ async def select_reference_import_candidate(
             status=ReferenceImportDecisionStatus.ACCESS_DENIED,
             message="No source PDF artifact is accessible to this curator",
         )
-    if len(authorized_sources) > 1:
+    source_artifact, ambiguous_source_count = _select_preferred_reference_source_artifact(
+        provider=provider,
+        artifacts=authorized_sources,
+        authorized_group_ids=authorized_group_ids,
+    )
+    if ambiguous_source_count > 1:
         return _reference_decision(
             provider=provider.provider_id,
             identifier=identifier,
             reference=reference,
             status=ReferenceImportDecisionStatus.AMBIGUOUS_MATCH,
             message="Multiple source PDFs require curator selection",
-            metadata={"match_count": len(authorized_sources)},
+            metadata={"match_count": ambiguous_source_count},
         )
 
-    source_artifact = next(iter(authorized_sources), None)
     if source_artifact is None:
         return _reference_decision(
             provider=provider.provider_id,
@@ -1272,6 +1276,55 @@ def _converted_markdown_artifacts_for_source(
         if _same_reference(source_artifact, artifact):
             converted.append(artifact)
     return tuple(converted)
+
+
+def _select_preferred_reference_source_artifact(
+    *,
+    provider: DocumentSourceProvider,
+    artifacts: tuple[SourceArtifact, ...],
+    authorized_group_ids: tuple[str, ...] | list[str] | set[str],
+) -> tuple[SourceArtifact | None, int]:
+    """Select a provider-ranked source PDF without guessing on equal ranks."""
+
+    if not artifacts:
+        return None, 0
+    if len(artifacts) == 1:
+        return artifacts[0], 1
+
+    source_artifact_sort_key = getattr(
+        provider,
+        "reference_source_artifact_sort_key",
+        None,
+    )
+    if not callable(source_artifact_sort_key):
+        return None, len(artifacts)
+    typed_source_artifact_sort_key = cast(
+        Callable[
+            [SourceArtifact, tuple[str, ...] | list[str] | set[str]],
+            Iterable[int],
+        ],
+        source_artifact_sort_key,
+    )
+    ranked = sorted(
+        (
+            (
+                tuple(
+                    typed_source_artifact_sort_key(
+                        artifact,
+                        authorized_group_ids,
+                    )
+                ),
+                artifact,
+            )
+            for artifact in artifacts
+        ),
+        key=lambda item: (item[0], item[1].artifact_id),
+    )
+    best_rank = ranked[0][0]
+    best = [artifact for rank, artifact in ranked if rank == best_rank]
+    if len(best) > 1:
+        return None, len(best)
+    return best[0], 1
 
 
 def _same_reference(source_artifact: SourceArtifact, artifact: SourceArtifact) -> bool:

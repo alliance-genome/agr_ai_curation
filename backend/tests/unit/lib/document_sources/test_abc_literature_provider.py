@@ -6,10 +6,16 @@ from typing import Any
 
 import pytest
 
+from src.lib.document_sources.identifier_import import (
+    ReferenceImportDecisionStatus,
+    select_reference_import_candidate,
+)
 from src.lib.document_sources.models import (
     DocumentSourceConfigError,
     DocumentSourceError,
+    SourceAccessPolicy,
     SourceAccessScope,
+    SourceArtifact,
     SourceArtifactFormat,
     SourceArtifactRole,
     SourceArtifactStatus,
@@ -175,6 +181,120 @@ def provider_from_fake(
 ) -> ABCLiteratureDocumentSourceProvider:
     return ABCLiteratureDocumentSourceProvider(fake_client)  # type: ignore[arg-type]
 
+
+def test_reference_source_artifact_sort_key_prefers_curator_mod_over_global() -> None:
+    provider = provider_from_fake(FakeABCLiteratureClient())
+    mod_pdf = SourceArtifact(
+        provider="abc_literature",
+        artifact_id="mod-pdf",
+        role=SourceArtifactRole.SOURCE_PDF,
+        artifact_format=SourceArtifactFormat.PDF,
+        access_policy=SourceAccessPolicy(
+            scope=SourceAccessScope.RESTRICTED,
+            mods=("FB",),
+        ),
+        metadata={
+            "file_class": "main",
+            "file_publication_status": "final",
+            "pdf_type": "pdf",
+        },
+    )
+    shared_pdf = SourceArtifact(
+        provider="abc_literature",
+        artifact_id="shared-pdf",
+        role=SourceArtifactRole.SOURCE_PDF,
+        artifact_format=SourceArtifactFormat.PDF,
+        access_policy=SourceAccessPolicy(scope=SourceAccessScope.GLOBAL),
+        metadata={
+            "file_class": "main",
+            "file_publication_status": "final",
+            "pdf_type": "pdf",
+        },
+    )
+
+    assert provider.reference_source_artifact_sort_key(
+        mod_pdf,
+        ("fb",),
+    ) < provider.reference_source_artifact_sort_key(
+        shared_pdf,
+        ("fb",),
+    )
+
+
+@pytest.mark.asyncio
+async def test_reference_import_uses_actual_abc_main_pdf_precedence() -> None:
+    fake_client = FakeABCLiteratureClient()
+    fake_client.external_lookup_payload = {
+        "reference_id": 101,
+        "reference_curie": "AGRKB:101",
+        "title": "Production-shaped ABC paper",
+        "pmid": "41902664",
+    }
+    fake_client.show_referencefiles_payload = {
+        "referencefiles": [
+            {
+                "referencefile_id": 9001,
+                "reference_id": 101,
+                "file_class": "supplement",
+                "file_extension": "pdf",
+                "file_publication_status": "final",
+                "pdf_type": "pdf",
+                "referencefile_mods": [{"mod_abbreviation": "FB"}],
+            },
+            {
+                "referencefile_id": 9002,
+                "reference_id": 101,
+                "file_class": "main",
+                "file_extension": "pdf",
+                "file_publication_status": "obsolete",
+                "pdf_type": "pdf",
+                "referencefile_mods": [{"mod_abbreviation": "FB"}],
+            },
+            {
+                "referencefile_id": 5015962,
+                "reference_id": 101,
+                "display_name": "PMC13232752.1",
+                "file_class": "main",
+                "file_extension": "pdf",
+                "file_publication_status": "final",
+                "pdf_type": "pdf",
+                "referencefile_mods": [{"mod_abbreviation": None}],
+            },
+            {
+                "referencefile_id": 5013742,
+                "reference_id": 101,
+                "display_name": "41902664",
+                "file_class": "main",
+                "file_extension": "pdf",
+                "file_publication_status": "final",
+                "pdf_type": "pdf",
+                "referencefile_mods": [{"mod_abbreviation": "FB"}],
+            },
+            {
+                "referencefile_id": 5020781,
+                "reference_id": 101,
+                "display_name": "PMC13232752.1_nxml",
+                "file_class": "converted_merged_main",
+                "file_extension": "md",
+                "file_publication_status": "final",
+                "referencefile_mods": [{"mod_abbreviation": None}],
+            },
+        ]
+    }
+    provider = provider_from_fake(fake_client)
+
+    decision = await select_reference_import_candidate(
+        provider=provider,
+        identifier="PMID:41902664",
+        authorized_group_ids=("FB",),
+        allow_conversion_request=False,
+    )
+
+    assert decision.status is ReferenceImportDecisionStatus.READY
+    assert decision.selected is not None
+    assert decision.selected.source_artifact.artifact_id == "5013742"
+    assert decision.selected.converted_artifact is not None
+    assert decision.selected.converted_artifact.artifact_id == "5020781"
 
 def test_dev_mode_static_curator_token_uses_static_bearer_config(monkeypatch) -> None:
     provider = provider_from_fake(FakeABCLiteratureClient())

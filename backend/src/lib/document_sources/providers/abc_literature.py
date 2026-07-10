@@ -173,6 +173,52 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
         status_rank = 0 if artifact.status is SourceArtifactStatus.AVAILABLE else 1
         return (class_rank, source_rank, status_rank)
 
+    def reference_source_artifact_sort_key(
+        self,
+        artifact: SourceArtifact,
+        authorized_group_ids: tuple[str, ...] | list[str] | set[str],
+    ) -> tuple[int, ...]:
+        """Prefer a curator's MOD PDF over ABC's shared PMC fallback.
+
+        ABC intentionally keeps one final main PDF per MOD plus at most one
+        shared/null-MOD PMC PDF. Its own main-PDF lookup first restricts the
+        candidates to final main PDFs whose PDF type is ``pdf``, then applies
+        this precedence for a requested MOD. Equal MOD-specific ranks remain
+        tied so callers do not guess when a curator genuinely spans multiple
+        MODs. Supplements and non-final PDFs never outrank a canonical main.
+        """
+
+        file_class = str(artifact.metadata.get("file_class") or "").strip().casefold()
+        publication_status = str(
+            artifact.metadata.get("file_publication_status") or ""
+        ).strip().casefold()
+        pdf_type = str(artifact.metadata.get("pdf_type") or "").strip().casefold()
+        if not (
+            file_class == "main"
+            and publication_status == "final"
+            and pdf_type == "pdf"
+        ):
+            return (20,)
+
+        authorized = {
+            str(group_id).strip().casefold()
+            for group_id in authorized_group_ids
+            if str(group_id).strip()
+        }
+        artifact_mods = {
+            mod.strip().casefold()
+            for mod in artifact.access_policy.mods
+            if mod.strip()
+        }
+        if (
+            artifact.access_policy.scope is SourceAccessScope.RESTRICTED
+            and authorized.intersection(artifact_mods)
+        ):
+            return (0,)
+        if artifact.access_policy.scope is SourceAccessScope.GLOBAL:
+            return (1,)
+        return (10,)
+
     def conversion_exposes_main_text(self, result: SourceConversionResult) -> bool:
         if "converted_merged_main" in result.converted_classes:
             return True
