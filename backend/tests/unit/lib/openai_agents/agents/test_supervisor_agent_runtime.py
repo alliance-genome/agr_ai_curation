@@ -165,7 +165,7 @@ def test_supervisor_prompt_explains_result_inspection_boundaries():
     assert "inspect_results(action=\"search\"" in prompt_text
     assert "extraction-result:<uuid>" in prompt_text
     assert (
-        "Do not silently export the latest result when the curator asked for an older one."
+        "Do not silently export a different result than the curator requested."
         in normalized_prompt
     )
     assert "do not call another extractor just to summarize" in normalized_prompt
@@ -1054,14 +1054,14 @@ def test_create_supervisor_agent_exposes_formatter_with_saved_chat_bundle(monkey
     assert "export_to_file" not in tool_names
     assert "EXPORT/DOWNLOAD ROUTING" in created.instructions
     assert "including results saved earlier in this same supervisor turn" in created.instructions
-    assert "first use inspect_results action=\"search\"" in created.instructions
+    assert "select only a result_ref listed in the runtime formatter bundle" in created.instructions
     assert "pass that exact source_ref into projection planning" in created.instructions
     assert "Formatter specialists are the only supported export path" in created.instructions
     assert captured_bundle["extraction_results"] == [fake_record]
     assert captured_langfuse["metadata"]["specialist_count"] == len(created.tools)
 
 
-def test_build_formatter_bundle_includes_active_document_prior_results(monkeypatch):
+def test_build_formatter_bundle_uses_only_active_session_document_results(monkeypatch):
     captured_bundle: dict[str, Any] = {}
     list_calls: list[dict[str, Any]] = []
     fake_bundle = SimpleNamespace(flow_name="Chat Extraction Results")
@@ -1085,6 +1085,16 @@ def test_build_formatter_bundle_includes_active_document_prior_results(monkeypat
         document_id="doc-1",
         flow_run_id=None,
     )
+    flow_record = SimpleNamespace(
+        extraction_result_id="00000000-0000-4000-8000-000000000789",
+        created_at=datetime(2026, 6, 16, tzinfo=timezone.utc),
+        agent_key="flow_extractor",
+        adapter_key="generic",
+        source_kind=SimpleNamespace(value="flow"),
+        candidate_count=2,
+        document_id="doc-1",
+        flow_run_id="flow-run-1",
+    )
 
     monkeypatch.setattr(supervisor_agent, "get_current_session_id", lambda: "session-1")
     monkeypatch.setattr(supervisor_agent, "get_current_user_id", lambda: "user-1")
@@ -1094,6 +1104,10 @@ def test_build_formatter_bundle_includes_active_document_prior_results(monkeypat
         source_kind = kwargs.get("source_kind")
         if getattr(source_kind, "value", None) == "chat":
             return [chat_record]
+        if getattr(source_kind, "value", None) == "flow":
+            return [flow_record]
+        if source_kind is not None:
+            return []
         if kwargs.get("document_id") == "doc-1":
             return [document_record, chat_record]
         return []
@@ -1112,26 +1126,155 @@ def test_build_formatter_bundle_includes_active_document_prior_results(monkeypat
         "src.lib.flows.output_projection.build_extraction_result_artifact_bundle",
         _fake_build_bundle,
     )
-
     bundle, runtime_context, unavailable_note = supervisor_agent._build_chat_formatter_bundle(
         user_id="user-1",
         document_id="doc-1",
     )
 
     assert bundle is fake_bundle
+    assert bundle is not None
     assert unavailable_note == ""
-    assert captured_bundle["extraction_results"] == [chat_record, document_record]
+    assert captured_bundle["extraction_results"] == [chat_record, flow_record]
     assert captured_bundle["document_id"] == "doc-1"
-    assert {
-        "document_id": "doc-1",
-        "user_id": "user-1",
-    } in list_calls
+    assert bundle.default_source_extraction_result_id == chat_record.extraction_result_id
+    assert len(list_calls) == 2
+    assert all(call["origin_session_id"] == "session-1" for call in list_calls)
+    assert all(call["document_id"] == "doc-1" for call in list_calls)
+    assert all(call["user_id"] == "user-1" for call in list_calls)
+    assert all(
+        call["exclude_agent_keys"] == (supervisor_agent.CURATION_PREP_AGENT_ID,)
+        for call in list_calls
+    )
     assert (
         'source_ref="extraction-result:00000000-0000-4000-8000-000000000123"'
         in runtime_context
     )
-    assert "extraction-result:00000000-0000-4000-8000-000000000456" in runtime_context
-    assert "active document" in runtime_context
+    assert "extraction-result:00000000-0000-4000-8000-000000000456" not in runtime_context
+    assert flow_record.extraction_result_id in runtime_context
+    assert "active session and loaded document" in runtime_context
+
+
+def test_build_formatter_bundle_fails_closed_without_loaded_document(monkeypatch):
+    monkeypatch.setattr(supervisor_agent, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_agent, "get_current_user_id", lambda: "user-1")
+
+    def _unexpected_list_extraction_results(**_kwargs):
+        raise AssertionError("missing document scope must not issue an extraction query")
+
+    monkeypatch.setattr(
+        supervisor_agent,
+        "list_extraction_results",
+        _unexpected_list_extraction_results,
+    )
+
+    bundle, runtime_context, unavailable_note = supervisor_agent._build_chat_formatter_bundle(
+        user_id="user-1",
+        document_id=None,
+    )
+
+    assert bundle is None
+    assert runtime_context == ""
+    assert "no document is loaded in this active session" in unavailable_note
+
+
+def test_build_formatter_bundle_ignores_legacy_results_from_prior_sessions(monkeypatch):
+    current_record = SimpleNamespace(
+        extraction_result_id="e00f32a1-4f9a-409b-abd9-a2b72e6c9f92",
+        created_at=datetime(2026, 7, 10, tzinfo=timezone.utc),
+        agent_key="pdf_extraction",
+        adapter_key="generic",
+        source_kind=SimpleNamespace(value="chat"),
+        candidate_count=1,
+        document_id="doc-1",
+        flow_run_id=None,
+        conversation_summary="Extracted one fly strain.",
+        metadata={},
+        payload_json={
+            "envelope_id": "generic-envelope-current",
+            "domain_pack_id": "generic",
+            "domain_pack_version": "0.1.0",
+            "status": "extracted",
+            "extracted_objects": [
+                {
+                    "object_type": "generic_object",
+                    "pending_ref_id": "generic-object-1",
+                    "payload": {
+                        "class_key": "generic:generic_object",
+                        "label": "Oregon R",
+                        "attributes": {"strain_name": "Oregon R"},
+                    },
+                }
+            ],
+            "history": [],
+            "validation_findings": [],
+            "metadata": {},
+        },
+    )
+    legacy_record = SimpleNamespace(
+        extraction_result_id="209ab952-e02a-4b66-9197-b9441047cbed",
+        created_at=datetime(2026, 5, 20, tzinfo=timezone.utc),
+        agent_key="gene_extractor",
+        adapter_key="gene",
+        source_kind=SimpleNamespace(value="chat"),
+        candidate_count=1,
+        document_id="doc-1",
+        flow_run_id=None,
+        conversation_summary="Legacy gene extraction.",
+        metadata={},
+        payload_json={
+            "summary": "Legacy gene extraction",
+            "genes": [{"mention": "crb"}],
+            "items": [{"mention": "crb"}],
+            "raw_mentions": [],
+            "exclusions": [],
+            "ambiguities": [],
+            "normalization_notes": [],
+            "run_summary": {},
+        },
+    )
+
+    monkeypatch.setattr(supervisor_agent, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_agent, "get_current_user_id", lambda: "user-1")
+
+    list_calls: list[dict[str, Any]] = []
+
+    def _fake_list_extraction_results(**kwargs):
+        list_calls.append(kwargs)
+        source_kind = kwargs.get("source_kind")
+        if (
+            kwargs.get("origin_session_id") == "session-1"
+            and kwargs.get("document_id") == "doc-1"
+            and getattr(source_kind, "value", None) == "chat"
+        ):
+            return [current_record]
+        if source_kind is not None:
+            return []
+        if kwargs.get("document_id") == "doc-1":
+            return [current_record, legacy_record]
+        return []
+
+    monkeypatch.setattr(
+        supervisor_agent,
+        "list_extraction_results",
+        _fake_list_extraction_results,
+    )
+
+    bundle, runtime_context, unavailable_note = supervisor_agent._build_chat_formatter_bundle(
+        user_id="user-1",
+        document_id="doc-1",
+    )
+
+    assert bundle is not None
+    assert unavailable_note == ""
+    assert [artifact.extraction_result_id for artifact in bundle.artifacts] == [
+        current_record.extraction_result_id
+    ]
+    assert bundle.rows_for_source("object")[0]["object.attribute.strain_name"] == "Oregon R"
+    assert bundle.warnings == []
+    assert len(list_calls) == 2
+    assert all(call.get("origin_session_id") == "session-1" for call in list_calls)
+    assert current_record.extraction_result_id in runtime_context
+    assert legacy_record.extraction_result_id not in runtime_context
 
 
 def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(monkeypatch):

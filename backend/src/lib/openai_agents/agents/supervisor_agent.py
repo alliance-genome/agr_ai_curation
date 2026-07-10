@@ -247,24 +247,31 @@ def _source_kind_value(record: Any) -> str:
     return getattr(record, "source_kind").value
 
 
-def _current_chat_extraction_results(
+def _current_session_extraction_results(
     *,
     session_id: str,
     user_id: str,
+    document_id: str,
 ) -> list[Any]:
-    """Load current-chat extraction results using the same scope as inspect_results."""
+    """Load extraction results owned by the active session and document."""
+
+    scope = {
+        "origin_session_id": session_id,
+        "user_id": user_id,
+        "document_id": document_id,
+    }
 
     return _dedupe_extraction_results(
         [
             *list_extraction_results(
-                origin_session_id=session_id,
-                user_id=user_id,
+                **scope,
                 source_kind=CurationExtractionSourceKind.CHAT,
+                exclude_agent_keys=(CURATION_PREP_AGENT_ID,),
             ),
             *list_extraction_results(
-                origin_session_id=session_id,
-                user_id=user_id,
+                **scope,
                 source_kind=CurationExtractionSourceKind.FLOW,
+                exclude_agent_keys=(CURATION_PREP_AGENT_ID,),
             ),
         ]
     )
@@ -274,24 +281,15 @@ def _formatter_source_extraction_results(
     *,
     session_id: str,
     user_id: str,
-    document_id: Optional[str],
-) -> tuple[list[Any], list[Any]]:
-    """Load extraction results available to formatter export routing."""
+    document_id: str,
+) -> list[Any]:
+    """Load formatter sources from only the active session/document boundary."""
 
-    current_chat_records = _current_chat_extraction_results(
+    return _current_session_extraction_results(
         session_id=session_id,
         user_id=user_id,
+        document_id=document_id,
     )
-    records: list[Any] = list(current_chat_records)
-    resolved_document_id = str(document_id or "").strip()
-    if resolved_document_id:
-        records.extend(
-            list_extraction_results(
-                document_id=resolved_document_id,
-                user_id=user_id,
-            )
-        )
-    return _dedupe_extraction_results(records), current_chat_records
 
 
 def _latest_extraction_result(records: Sequence[Any]) -> Any | None:
@@ -306,26 +304,21 @@ def _latest_extraction_result(records: Sequence[Any]) -> Any | None:
     )
 
 
-def _formatter_runtime_context_for_records(
-    records: Sequence[Any],
-    *,
-    default_records: Sequence[Any] | None = None,
-) -> str:
+def _formatter_runtime_context_for_records(records: Sequence[Any]) -> str:
     """Build formatter-only runtime guidance for the bound result bundle."""
 
-    default_candidates = default_records if default_records else records
-    latest = _latest_extraction_result(default_candidates)
+    latest = _latest_extraction_result(records)
     latest_ref = _record_result_ref(latest) if latest is not None else ""
     lines = [
         "FORMATTER SOURCE BUNDLE:",
-        "You are bound to saved extraction results from this chat and the active document. Use only the formatter projection tools to inspect, plan, validate, preview, finalize, or report that the requested file cannot be produced.",
+        "This bundle contains saved extraction results from the active session and loaded document. Use only the formatter projection tools to inspect, plan, validate, preview, finalize, or report that the requested file cannot be produced.",
     ]
     if latest_ref:
         lines.append(
-            f'For an ordinary export request with no explicit result choice, use source_ref="{latest_ref}" when building the default projection plan. Prefer the latest current-chat saved result when one is available. Export multiple/all saved results only when the curator explicitly asks for that scope.'
+            f'For an ordinary export request with no explicit result choice, use source_ref="{latest_ref}" when building the default projection plan. Prefer the latest active-session saved result when one is available. Export multiple/all saved results from this session only when the curator explicitly asks for that scope.'
         )
         lines.append(
-            'For a prior, older, earlier, or otherwise specific export request, preserve the selected source by passing that exact source_ref="extraction-result:<uuid>" into build_default_projection_plan or the final projection plan.'
+            'For another specific result available in this bundle, preserve the selected source by passing that exact source_ref="extraction-result:<uuid>" into build_default_projection_plan or the final projection plan.'
         )
     lines.append("Available extraction result refs:")
     for record in sorted(
@@ -370,26 +363,33 @@ def _build_chat_formatter_bundle(
             "",
             "CSV/TSV/JSON formatter tools are unavailable because this turn has no active chat session/user context. If the curator asks for a download, explain that an extraction result must exist in the active chat first.",
         )
+    resolved_document_id = str(document_id or "").strip()
+    if not resolved_document_id:
+        return (
+            None,
+            "",
+            "CSV/TSV/JSON formatter tools are unavailable because no document is loaded in this active session. If the curator asks for a download, explain that they must load a document and run extraction in this session first.",
+        )
 
     try:
-        records, current_chat_records = _formatter_source_extraction_results(
+        records = _formatter_source_extraction_results(
             session_id=session_id,
             user_id=resolved_user_id,
-            document_id=document_id,
+            document_id=resolved_document_id,
         )
     except Exception:
         logger.exception("Failed to load extraction results for formatter dispatch")
         return (
             None,
             "",
-            "CSV/TSV/JSON formatter tools are unavailable because saved extraction results could not be loaded for this chat or active document. Do not use any raw export fallback; explain that export is blocked and ask the curator to retry after the saved results are available.",
+            "CSV/TSV/JSON formatter tools are unavailable because saved extraction results could not be loaded for this active session and document. Do not use any raw export fallback; explain that export is blocked and ask the curator to retry after the saved results are available.",
         )
 
     if not records:
         return (
             None,
             "",
-            "CSV/TSV/JSON formatter tools are unavailable because this chat has no saved extraction results yet. If the curator asks for a download, explain that extraction must run first.",
+            "CSV/TSV/JSON formatter tools are unavailable because this active session has no saved extraction results yet. If the curator asks for a download, explain that extraction must run first in this session.",
         )
 
     try:
@@ -398,8 +398,12 @@ def _build_chat_formatter_bundle(
         bundle = build_extraction_result_artifact_bundle(
             extraction_results=records,
             bundle_name="Chat Extraction Results",
-            document_id=document_id,
+            document_id=resolved_document_id,
         )
+        latest_record = _latest_extraction_result(records)
+        bundle.default_source_extraction_result_id = str(
+            getattr(latest_record, "extraction_result_id", "") or ""
+        ) or None
     except Exception:
         logger.exception("Failed to build chat formatter artifact bundle")
         return (
@@ -410,10 +414,7 @@ def _build_chat_formatter_bundle(
 
     return (
         bundle,
-        _formatter_runtime_context_for_records(
-            records,
-            default_records=current_chat_records,
-        ),
+        _formatter_runtime_context_for_records(records),
         "",
     )
 
@@ -1258,9 +1259,9 @@ def _build_runtime_tool_availability_note(
             "call the matching formatter specialist tool from this list: "
             f"{', '.join(available_formatter_tools)}. These tools bind to the latest "
             "saved extraction results at call time, including results saved earlier "
-            "in this same supervisor turn. If the curator asks to export a prior, older, "
-            "earlier, or specific result, first use inspect_results action=\"search\" "
-            "or action=\"list\" to identify the intended result_ref, then tell the "
+            "in this same supervisor turn. If the curator asks to export a specific "
+            "result, select only a result_ref listed in the runtime formatter bundle, "
+            "then tell the "
             "formatter specialist to pass that exact source_ref into projection planning. "
             "If the curator asked for an export/download "
             "and an extractor returns a non-empty manifest or result reference, call "

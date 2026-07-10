@@ -725,7 +725,7 @@ def _rows_for_source_ref(
     *,
     row_source: FlowOutputRowSource,
     source_ref: str | None,
-) -> tuple[list[Mapping[str, Any]], dict[str, list[str]]]:
+) -> tuple[list[dict[str, Any]], dict[str, list[str]]]:
     normalized = str(source_ref or "").strip()
     rows = list(bundle.rows_for_source(row_source))
     if not normalized:
@@ -797,7 +797,17 @@ def _default_projection_plan_for_formatter(
     row_strategy: FlowOutputRowStrategy | None,
     source_ref: str | None,
 ) -> FlowOutputProjectionPlan:
-    if not str(source_ref or "").strip():
+    resolved_source_ref = str(source_ref or "").strip()
+    if (
+        not resolved_source_ref
+        and row_source == "object"
+        and bundle.default_source_extraction_result_id
+    ):
+        resolved_source_ref = (
+            f"extraction-result:{bundle.default_source_extraction_result_id}"
+        )
+
+    if not resolved_source_ref:
         plan = default_projection_plan(
             bundle,
             output_format=output_format,
@@ -819,7 +829,7 @@ def _default_projection_plan_for_formatter(
     rows, source_update = _rows_for_source_ref(
         bundle,
         row_source=row_source,
-        source_ref=source_ref,
+        source_ref=resolved_source_ref,
     )
     selected_strategy = row_strategy or _default_row_strategy_for_formatter_rows(
         rows=rows,
@@ -838,7 +848,31 @@ def _default_projection_plan_for_formatter(
             available_refs=available_refs,
             rows=rows,
         ),
-        **source_update,
+        source_extraction_result_ids=source_update.get(
+            "source_extraction_result_ids", []
+        ),
+        source_keys=source_update.get("source_keys", []),
+    )
+
+
+def _apply_bundle_default_source(
+    bundle: FlowOutputArtifactBundle,
+    plan: FlowOutputProjectionPlan,
+) -> FlowOutputProjectionPlan:
+    """Bind an otherwise unscoped object plan to the bundle's default result."""
+
+    default_source_id = str(
+        bundle.default_source_extraction_result_id or ""
+    ).strip()
+    if (
+        plan.row_source != "object"
+        or plan.source_extraction_result_ids
+        or plan.source_keys
+        or not default_source_id
+    ):
+        return plan
+    return plan.model_copy(
+        update={"source_extraction_result_ids": [default_source_id]}
     )
 
 
@@ -1153,6 +1187,7 @@ def build_output_formatter_tools(
                 plan_json,
                 output_format=resolved_output_format,
             )
+            plan = _apply_bundle_default_source(bundle, plan)
             return _tool_json(_validate_plan_payload(bundle, plan))
         except Exception as exc:
             return _tool_json({"status": "invalid", "errors": [str(exc)]})
@@ -1171,6 +1206,7 @@ def build_output_formatter_tools(
                 plan_json,
                 output_format=resolved_output_format,
             )
+            plan = _apply_bundle_default_source(bundle, plan)
             errors, warnings, columns = validate_projection_plan(bundle, plan)
             if not errors:
                 errors.extend(_formatter_plan_constraint_errors(plan, columns))
@@ -1238,10 +1274,14 @@ def build_output_formatter_tools(
                         plan_json,
                         output_format=resolved_output_format,
                     )
+                    plan = _apply_bundle_default_source(bundle, plan)
                 else:
-                    plan = default_projection_plan(
+                    plan = _default_projection_plan_for_formatter(
                         bundle,
                         output_format=resolved_output_format,
+                        row_source=bundle.default_row_source,
+                        row_strategy=None,
+                        source_ref=None,
                     )
                 errors, warnings, columns = validate_projection_plan(bundle, plan)
                 if not errors:

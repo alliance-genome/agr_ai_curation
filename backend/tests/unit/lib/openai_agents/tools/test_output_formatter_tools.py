@@ -460,6 +460,75 @@ async def test_default_plan_preserves_selected_older_result_source_ref():
 
 
 @pytest.mark.asyncio
+async def test_bundle_default_source_binds_default_custom_and_blank_finalize_paths():
+    older_step = _completed_generic_attribute_step_for_result(
+        "extract-older-1",
+        label="Older session observation",
+        tumor_term="older tumor",
+    )
+    newer_step = _completed_generic_attribute_step_for_result(
+        "extract-newer-1",
+        label="Latest session observation",
+        tumor_term="latest tumor",
+    )
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[older_step, newer_step],
+        flow_name="Session Formatter Bundle",
+        output_format="tsv",
+    )
+    bundle.default_source_extraction_result_id = "extract-newer-1"
+    saved = []
+
+    async def _fake_save(output_format, projection, filename_hint, formatter_agent_id):
+        saved.append(projection)
+        return {
+            "file_id": "file-latest",
+            "filename": f"{filename_hint}.{output_format}",
+            "format": output_format,
+            "size_bytes": 123,
+            "download_url": "/download/file-latest",
+        }
+
+    tools = build_output_formatter_tools(
+        bundle=bundle,
+        output_format="tsv",
+        formatter_agent_id="tsv_formatter",
+        save_projected_output=_fake_save,
+    )
+    default_plan = await _invoke(
+        _tool_by_name(tools, "build_default_projection_plan"),
+        {"row_source": "object"},
+    )
+
+    assert default_plan["status"] == "ok"
+    assert default_plan["plan"]["source_extraction_result_ids"] == [
+        "extract-newer-1"
+    ]
+
+    unscoped_custom_plan = dict(default_plan["plan"])
+    unscoped_custom_plan["source_extraction_result_ids"] = []
+    validated = await _invoke(
+        _tool_by_name(tools, "validate_output_projection"),
+        {"plan_json": json.dumps(unscoped_custom_plan)},
+    )
+    assert validated["status"] == "ok"
+    assert validated["plan"]["source_extraction_result_ids"] == [
+        "extract-newer-1"
+    ]
+
+    finalized = await _invoke(
+        _tool_by_name(tools, "finalize_and_save"),
+        {"plan_json": "", "filename_hint": "latest-session-result"},
+    )
+    assert finalized["status"] == "ok"
+    assert finalized["projection_summary"]["total_count"] == 1
+    assert len(saved) == 1
+    serialized_rows = json.dumps(saved[0].rows)
+    assert "latest tumor" in serialized_rows
+    assert "older tumor" not in serialized_rows
+
+
+@pytest.mark.asyncio
 async def test_inspection_tools_read_bounded_saved_bundle_rows_and_values():
     tools = build_output_formatter_tools(
         bundle=_bundle(),

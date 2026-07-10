@@ -297,6 +297,7 @@ class FlowOutputArtifactBundle(BaseModel):
     artifacts: list[FlowOutputArtifact] = Field(default_factory=list)
     field_catalog: list[FlowOutputField] = Field(default_factory=list)
     default_row_source: FlowOutputRowSource = "artifact"
+    default_source_extraction_result_id: str | None = None
     warnings: list[str] = Field(default_factory=list)
 
     def rows_for_source(self, row_source: FlowOutputRowSource) -> list[dict[str, Any]]:
