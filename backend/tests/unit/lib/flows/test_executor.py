@@ -4634,6 +4634,127 @@ class TestExecuteFlowTermination:
         assert flow_finished["data"]["status"] == "completed"
 
     @pytest.mark.asyncio
+    async def test_defers_chat_output_until_later_required_handoff_completes(
+        self, monkeypatch
+    ):
+        """A chat formatter may precede required downstream steps in a saved flow."""
+
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene", step_goal="Extract genes"),
+            _agent_node("n2", "chat_output", step_goal="Summarize findings"),
+            _agent_node("n3", "curation_handoff", step_goal="Prepare review sessions"),
+        ])
+        gene_step = _make_completed_step(
+            agent_id="gene",
+            agent_name="Gene",
+            tool_name="ask_gene_specialist",
+            step=1,
+            adapter_key="gene",
+            payload=_structured_step_output("TP53", actor="gene", destination="gene"),
+        )
+        chat_step = {
+            "step": 2,
+            "agent_id": "chat_output",
+            "agent_name": "Chat Output",
+            "tool_name": "ask_chat_output_specialist",
+            "output": "Found one supported gene.",
+            "projected_chat_output": "Found one supported gene.",
+            "candidate": None,
+            "evidence_records": [],
+            "evidence_count": 0,
+        }
+        handoff_step = {
+            "step": 3,
+            "agent_id": "curation_handoff",
+            "agent_name": "Curation Handoff",
+            "tool_name": "ask_curation_handoff_specialist",
+            "output": json.dumps(
+                {"review_session_ids": ["session-gene"], "adapter_keys": ["gene"]}
+            ),
+            "candidate": None,
+            "evidence_records": [],
+            "evidence_count": 0,
+        }
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(
+            gene_step,
+            chat_step,
+            ordered_tool_names=[
+                "ask_gene_specialist",
+                "ask_chat_output_specialist",
+                "ask_curation_handoff_specialist",
+            ],
+        )
+        persisted_requests = []
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.DocumentContext.fetch",
+            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.persist_extraction_results",
+            _recording_persist_extraction_results(persisted_requests),
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            yield {
+                "type": "TOOL_COMPLETE",
+                "details": {"toolName": "ask_chat_output_specialist"},
+            }
+            supervisor._flow_execution_state["completed_steps"].append(handoff_step)
+            supervisor._flow_execution_state["curation_handoff"] = {
+                "review_session_ids": ["session-gene"],
+                "adapter_keys": ["gene"],
+            }
+            yield {
+                "type": "TOOL_COMPLETE",
+                "details": {"toolName": "ask_curation_handoff_specialist"},
+            }
+            yield {"type": "RUN_FINISHED", "data": {"response": "should not leak"}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [
+            event
+            async for event in execute_flow(
+                flow,
+                user_id="u1",
+                session_id="s1",
+                document_id="doc-1",
+            )
+        ]
+        event_types = [event.get("type") for event in events]
+
+        assert "FLOW_ERROR" not in event_types
+        assert event_types.count("CHAT_OUTPUT_READY") == 1
+        assert event_types.count("CURATION_HANDOFF_READY") == 1
+        assert event_types.index("CURATION_HANDOFF_READY") < event_types.index(
+            "CHAT_OUTPUT_READY"
+        )
+        assert "RUN_FINISHED" not in event_types
+        chat_ready = next(e for e in events if e.get("type") == "CHAT_OUTPUT_READY")
+        assert chat_ready["details"]["output"] == "Found one supported gene."
+        flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
+        assert flow_finished["data"]["status"] == "completed"
+        assert flow_finished["data"]["review_session_ids"] == ["session-gene"]
+        assert len(persisted_requests) == 1
+        assert persisted_requests[0].agent_key == "gene"
+
+    @pytest.mark.asyncio
     async def test_fails_when_expected_extraction_step_has_no_candidate(self, monkeypatch):
         flow = _make_flow([
             _task_input_node(),

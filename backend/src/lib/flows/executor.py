@@ -3935,6 +3935,29 @@ async def execute_flow(
                     yield flow_validator_audit_event
                 if flow_step_evidence_event is not None:
                     yield flow_step_evidence_event
+                curation_handoff_state = flow_execution_state.get("curation_handoff")
+                if (
+                    not curation_handoff_emitted
+                    and isinstance(curation_handoff_state, Mapping)
+                ):
+                    curation_handoff_emitted = True
+                    yield {
+                        "type": CURATION_HANDOFF_READY_EVENT,
+                        "timestamp": _now_iso(),
+                        "details": {
+                            "review_session_ids": list(
+                                curation_handoff_state.get("review_session_ids") or []
+                            ),
+                            "adapter_keys": list(
+                                curation_handoff_state.get("adapter_keys") or []
+                            ),
+                            "document_id": document_id,
+                        },
+                    }
+                    logger.info(
+                        "[Flow Executor] Curation handoff produced for flow '%s'",
+                        flow.name,
+                    )
                 event = pending_terminal_output_event
                 event_type = str(event.get("type") or "")
                 event_data = event.get("data", {}) or {}
@@ -4021,22 +4044,15 @@ async def execute_flow(
         if event_type in {"FILE_READY", "CHAT_OUTPUT_READY"}:
             missing_steps = _missing_required_flow_steps(flow_execution_state)
             if missing_steps:
-                if event_type == "FILE_READY":
-                    pending_terminal_output_event = event
-                    logger.info(
-                        "[Flow Executor] Deferring terminal FILE_READY for flow '%s' "
-                        "until required step state catches up; missing=%s",
-                        flow.name,
-                        missing_steps,
-                    )
-                    continue
-                failure_reason, flow_error_event = _flow_incomplete_error_event(
-                    flow_name=flow.name,
-                    missing_steps=missing_steps,
+                pending_terminal_output_event = event
+                logger.info(
+                    "[Flow Executor] Deferring terminal %s for flow '%s' until all "
+                    "required steps complete; missing=%s",
+                    event_type,
+                    flow.name,
+                    missing_steps,
                 )
-                flow_status = "failed"
-                yield flow_error_event
-                break
+                continue
 
             handoff_failures = _flow_expected_extraction_handoff_failures(completed_steps)
             if handoff_failures:
