@@ -5,6 +5,10 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from src.lib.batch.service import BatchService
+from src.lib.batch.status import (
+    require_batch_document_status_transition,
+    require_batch_status_transition,
+)
 from src.models.sql.batch import BatchDocument, BatchStatus, BatchDocumentStatus
 
 
@@ -48,6 +52,7 @@ class TestBatchService:
         mock_db = Mock()
         service = BatchService(mock_db)
 
+        mock_db.execute.return_value.scalar_one_or_none.return_value = None
         with patch.object(service, 'get_batch', return_value=None):
             result = service.cancel_batch(uuid4(), user_id=1)
 
@@ -90,8 +95,42 @@ class TestBatchStatusValues:
         assert BatchDocumentStatus.FAILED.value == "failed"
 
 
+class TestBatchStatusTransitions:
+    """Canonical transition rules reject terminal-state resurrection."""
+
+    def test_cancelled_batch_cannot_return_to_running(self):
+        with pytest.raises(ValueError, match="cancelled -> running"):
+            require_batch_status_transition(BatchStatus.CANCELLED, BatchStatus.RUNNING)
+
+    def test_completed_document_cannot_return_to_processing(self):
+        with pytest.raises(ValueError, match="completed -> processing"):
+            require_batch_document_status_transition(
+                BatchDocumentStatus.COMPLETED,
+                BatchDocumentStatus.PROCESSING,
+            )
+
+
 class TestBatchServiceMocked:
     """Tests for BatchService using mocks to avoid DB constraints."""
+
+    def test_claim_pending_batch_returns_none_when_conditional_update_loses(self):
+        mock_db = Mock()
+        mock_db.execute.return_value.scalar_one_or_none.return_value = None
+
+        result = BatchService(mock_db).claim_pending_batch(uuid4())
+
+        assert result is None
+        mock_db.commit.assert_called_once()
+        mock_db.scalars.assert_not_called()
+
+    def test_complete_running_batch_returns_false_after_cancellation(self):
+        mock_db = Mock()
+        mock_db.execute.return_value.scalar_one_or_none.return_value = None
+
+        result = BatchService(mock_db).complete_running_batch(uuid4())
+
+        assert result is False
+        mock_db.commit.assert_called_once()
 
     def test_cancel_batch_validates_cancellable_status(self):
         """Cancel batch should only work for pending/running batches."""
@@ -102,6 +141,7 @@ class TestBatchServiceMocked:
         # Create a mock batch that's already completed
         mock_batch = Mock()
         mock_batch.status = BatchStatus.COMPLETED
+        mock_db.execute.return_value.scalar_one_or_none.return_value = None
 
         # Mock get_batch to return our mock batch
         with patch.object(service, 'get_batch', return_value=mock_batch):
@@ -116,15 +156,14 @@ class TestBatchServiceMocked:
         # Create a mock batch that's running
         mock_batch = Mock()
         mock_batch.status = BatchStatus.RUNNING
+        batch_id = uuid4()
+        mock_db.execute.return_value.scalar_one_or_none.return_value = batch_id
+        mock_db.scalars.return_value.first.return_value = mock_batch
 
-        # Mock get_batch to return our mock batch
-        with patch.object(service, 'get_batch', return_value=mock_batch):
-            result = service.cancel_batch(uuid4(), user_id=1)
+        result = service.cancel_batch(batch_id, user_id=1)
 
-            assert result.status == BatchStatus.CANCELLED
-            assert result.completed_at is not None
-            mock_db.commit.assert_called_once()
-            mock_db.refresh.assert_called_once_with(mock_batch)
+        assert result is mock_batch
+        mock_db.commit.assert_called_once()
 
     def test_increment_batch_completed(self):
         """Increment batch completed should increase count by 1."""
@@ -185,12 +224,12 @@ class TestBatchServiceMocked:
 
         service.update_document_status(
             uuid4(),
-            status=BatchDocumentStatus.COMPLETED,
+            status=BatchDocumentStatus.PROCESSING,
             result_file_path="/path/to/result.json",
             processing_time_ms=1500,
         )
 
-        assert mock_doc.status == BatchDocumentStatus.COMPLETED
+        assert mock_doc.status == BatchDocumentStatus.PROCESSING
         assert mock_doc.result_file_path == "/path/to/result.json"
         assert mock_doc.processing_time_ms == 1500
         mock_db.commit.assert_called_once()
@@ -228,14 +267,14 @@ class TestBatchServiceMocked:
         # Create a mock batch that's pending
         mock_batch = Mock()
         mock_batch.status = BatchStatus.PENDING
+        batch_id = uuid4()
+        mock_db.execute.return_value.scalar_one_or_none.return_value = batch_id
+        mock_db.scalars.return_value.first.return_value = mock_batch
 
-        # Mock get_batch to return our mock batch
-        with patch.object(service, 'get_batch', return_value=mock_batch):
-            result = service.cancel_batch(uuid4(), user_id=1)
+        result = service.cancel_batch(batch_id, user_id=1)
 
-            assert result.status == BatchStatus.CANCELLED
-            assert result.completed_at is not None
-            mock_db.commit.assert_called_once()
+        assert result is mock_batch
+        mock_db.commit.assert_called_once()
 
     # CR-10: Test that processed_at is set for completed/failed status
     def test_update_document_status_sets_processed_at_for_completed(self):
@@ -244,7 +283,7 @@ class TestBatchServiceMocked:
         service = BatchService(mock_db)
 
         mock_doc = Mock()
-        mock_doc.status = BatchDocumentStatus.PENDING
+        mock_doc.status = BatchDocumentStatus.PROCESSING
         mock_doc.processed_at = None
         mock_db.query.return_value.filter.return_value.first.return_value = mock_doc
 

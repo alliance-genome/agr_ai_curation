@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import logging
 from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4
 from unittest.mock import Mock
 
@@ -14,10 +15,11 @@ from src.lib.batch import processor
 from src.models.sql.batch import BatchDocumentStatus, BatchStatus
 
 
-def _build_batch_context():
+def _build_batch_context() -> tuple[Any, Any, Any]:
     batch = SimpleNamespace(
         id=uuid4(),
         user_id=7,
+        status=BatchStatus.RUNNING,
         total_documents=1,
         completed_documents=0,
         failed_documents=0,
@@ -26,7 +28,7 @@ def _build_batch_context():
         id=uuid4(),
         document_id=uuid4(),
         position=0,
-        status=None,
+        status=BatchDocumentStatus.PENDING,
         result_file_path=None,
         review_session_ids=None,
         processing_time_ms=None,
@@ -133,6 +135,33 @@ def test_batch_processor_succeeds_on_curation_handoff(monkeypatch):
     assert batch_doc.review_session_ids == ["session-gene", "session-gene_expression"]
 
 
+def test_batch_processor_does_not_persist_success_when_cancelled_during_flow(monkeypatch):
+    db = Mock()
+    batch, batch_doc, flow = _build_batch_context()
+
+    async def _cancel_during_flow(**_kwargs):
+        batch.status = BatchStatus.CANCELLED
+        return ("/api/weaviate/documents/download/cancelled", ["cancelled-session"])
+
+    monkeypatch.setattr(processor, "_execute_flow_for_document", _cancel_during_flow)
+
+    with pytest.raises(processor.BatchCancelled):
+        processor._process_single_document(
+            db=db,
+            batch=batch,
+            batch_doc=batch_doc,
+            flow=flow,
+            cognito_sub="auth-sub",
+        )
+
+    assert batch.status == BatchStatus.CANCELLED
+    assert batch.completed_documents == 0
+    assert batch.failed_documents == 0
+    assert batch_doc.status == BatchDocumentStatus.PROCESSING
+    assert batch_doc.result_file_path is None
+    assert batch_doc.review_session_ids is None
+
+
 class _DummyScalarResult:
     def __init__(self, batch):
         self._batch = batch
@@ -169,6 +198,20 @@ class _DummyDB:
         self.user = user
         self.commit_calls = 0
         self.rollback_calls = 0
+        self.execute_calls = 0
+
+    def execute(self, _stmt):
+        self.execute_calls += 1
+        claimed_id = None
+        if self.batch.status == BatchStatus.PENDING:
+            self.batch.status = BatchStatus.RUNNING
+            self.batch.started_at = datetime.now(timezone.utc)
+            claimed_id = self.batch.id
+        elif self.batch.status == BatchStatus.RUNNING:
+            self.batch.status = BatchStatus.COMPLETED
+            self.batch.completed_at = datetime.now(timezone.utc)
+            claimed_id = self.batch.id
+        return SimpleNamespace(scalar_one_or_none=lambda: claimed_id)
 
     def scalars(self, _stmt):
         return _DummyScalarResult(self.batch)
@@ -176,7 +219,7 @@ class _DummyDB:
     def query(self, model):
         return _DummyQuery(self, model)
 
-    def refresh(self, _obj):
+    def refresh(self, _obj, **_kwargs):
         return None
 
     def commit(self):
@@ -216,6 +259,43 @@ def test_process_batch_task_does_not_double_count_failed_documents(monkeypatch):
 
     assert batch.failed_documents == 1
     assert batch_doc.status == BatchDocumentStatus.FAILED
+
+
+def test_process_batch_task_skips_all_processing_when_claim_fails(monkeypatch):
+    batch, batch_doc, flow = _build_batch_context()
+    batch.status = BatchStatus.CANCELLED
+    batch.documents = [batch_doc]
+    db = _DummyDB(
+        batch=batch,
+        batch_doc=batch_doc,
+        flow=flow,
+        user=SimpleNamespace(id=batch.user_id, auth_sub="auth-sub"),
+    )
+
+    @contextmanager
+    def _fake_get_db_session():
+        yield db
+
+    process_document = Mock()
+    execute_flow = Mock()
+    validate_file = Mock()
+    broadcaster = Mock()
+    monkeypatch.setattr(processor, "get_db_session", _fake_get_db_session)
+    monkeypatch.setattr(processor, "_process_single_document", process_document)
+    monkeypatch.setattr(processor, "_execute_flow_for_document", execute_flow)
+    monkeypatch.setattr(processor, "_validate_file_ownership", validate_file)
+    monkeypatch.setattr(processor, "get_batch_broadcaster", broadcaster)
+
+    processor.process_batch_task(batch.id)
+
+    assert batch.status == BatchStatus.CANCELLED
+    assert batch.completed_documents == 0
+    assert batch.failed_documents == 0
+    assert batch_doc.status == BatchDocumentStatus.PENDING
+    process_document.assert_not_called()
+    execute_flow.assert_not_called()
+    validate_file.assert_not_called()
+    broadcaster.assert_not_called()
 
 
 def test_process_batch_task_does_not_report_already_reported_flow_failure(monkeypatch, caplog):
