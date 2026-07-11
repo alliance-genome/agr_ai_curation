@@ -927,6 +927,8 @@ def _create_streaming_tool(
     ledger: Optional[SupervisorCallLedger] = None,
     inline_chat_persistence: bool = True,
     isolate_run_config: bool = False,
+    *,
+    propagate_errors: bool,
 ) -> Callable:
     """
     Create a streaming tool wrapper for a specialist agent.
@@ -949,11 +951,13 @@ def _create_streaming_tool(
             provider for this invocation and close it after the specialist stream drains.
             Flow steps use this so each step owns its WebSocket lifecycle, while chat
             keeps warm provider reuse across a single turn.
+        propagate_errors: When True, disable the Agents SDK's default conversion of
+            raised exceptions into tool-output strings. Flow execution uses this so a
+            failed specialist reaches the run error path instead of completing a step.
 
     Returns:
         A function_tool decorated async function
     """
-    @function_tool(name_override=tool_name, description_override=tool_description)
     async def streaming_tool_wrapper(ctx: RunContextWrapper[Any], query: str) -> str:
         """Ask the specialist a question and get a response."""
         return await _run_streaming_specialist_tool(
@@ -968,7 +972,12 @@ def _create_streaming_tool(
             isolate_run_config=isolate_run_config,
         )
 
-    return streaming_tool_wrapper
+    tool_decorator = function_tool(
+        name_override=tool_name,
+        description_override=tool_description,
+        **({"failure_error_function": None} if propagate_errors else {}),
+    )
+    return tool_decorator(streaming_tool_wrapper)
 
 
 def _create_lazy_formatter_streaming_tool(
@@ -1397,6 +1406,8 @@ def _create_dynamic_specialist_tools(
                 specialist_name=specialist_name,
                 ledger=ledger,
                 inline_chat_persistence=True,
+                # Ordinary chat intentionally preserves handled tool errors as output.
+                propagate_errors=False,
             )
             specialist_tools.append(streaming_tool)
 

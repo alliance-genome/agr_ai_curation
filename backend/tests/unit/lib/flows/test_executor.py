@@ -2103,18 +2103,19 @@ class TestGetAllAgentToolsStepOrderRuntime:
             )
             tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
 
-            result = asyncio.run(
-                tools[0].on_invoke_tool(
-                    tool_ctx,
-                    json.dumps({"query": "format"}),
+            with pytest.raises(
+                _executor_module().FlowTerminalOutputProjectionError,
+                match="no completed structured artifacts",
+            ):
+                asyncio.run(
+                    tools[0].on_invoke_tool(
+                        tool_ctx,
+                        json.dumps({"query": "format"}),
+                    )
                 )
-            )
 
-            assert "no completed structured artifacts" in result
-            assert "cannot fall back to raw serializers or model-written file contents" in result
-            assert execution_state["completed_steps"][-1]["agent_id"] == agent_id
-            assert execution_state["completed_steps"][-1]["candidate"] is None
-            assert "no completed structured artifacts" in execution_state["completed_steps"][-1]["output"]
+            assert execution_state["completed_steps"] == []
+            assert execution_state["next_tool_index"] == 0
 
         assert formatter_invocations == []
 
@@ -3555,20 +3556,147 @@ class TestGetAllAgentToolsStepOrderRuntime:
             _agent_node("n2", "curation_prep", step_goal="Prepare candidates for the workspace"),
         ])
 
-        tools, _ = get_all_agent_tools(
+        tools, _, _, execution_state = get_all_agent_tools(
             flow,
             document_id="doc-123",
             user_id="user-123",
             session_id="session-123",
+            include_unavailable=True,
         )
 
         tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
         asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract first"})))
-        prep_output = asyncio.run(
-            tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "prepare for review"}))
+        with pytest.raises(
+            RuntimeError,
+            match="require at least one upstream extraction envelope",
+        ):
+            asyncio.run(
+                tools[1].on_invoke_tool(
+                    tool_ctx,
+                    json.dumps({"query": "prepare for review"}),
+                )
+            )
+
+        assert execution_state["next_tool_index"] == 1
+        assert len(execution_state["completed_steps"]) == 1
+        assert execution_state["completed_steps"][0]["agent_id"] == "gene"
+
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_specialist_exception_does_not_complete_or_advance(
+        self, mock_get_agent, monkeypatch
+    ):
+        """The real SDK FunctionTool path must re-raise a failed flow specialist."""
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+
+        async def _raise_sentinel(**_kwargs):
+            raise RuntimeError("sentinel specialist failure")
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.agents.supervisor_agent._run_streaming_specialist_tool",
+            _raise_sentinel,
+        )
+        flow = _make_flow([
+            _task_input_node("Extract findings."),
+            _agent_node("n1", "gene", step_goal="Extract genes"),
+        ])
+
+        tools, _, _, execution_state = get_all_agent_tools(
+            flow,
+            include_unavailable=True,
+        )
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+
+        with pytest.raises(RuntimeError, match="sentinel specialist failure"):
+            asyncio.run(
+                tools[0].on_invoke_tool(
+                    tool_ctx,
+                    json.dumps({"query": "extract"}),
+                )
+            )
+
+        assert execution_state["completed_steps"] == []
+        assert execution_state["next_tool_index"] == 0
+
+    @patch("src.lib.flows.executor.get_agent_metadata")
+    def test_curation_handoff_without_envelope_does_not_create_ready_state(
+        self, mock_get_agent_metadata
+    ):
+        mock_get_agent_metadata.return_value = {
+            "display_name": "Curation Handoff",
+            "description": "Create review sessions",
+            "requires_document": True,
+            "curation": None,
+        }
+        flow = _make_flow([
+            _task_input_node("Create review sessions."),
+            _agent_node("n1", "curation_handoff", step_goal="Create review sessions"),
+        ])
+        tools, _, _, execution_state = get_all_agent_tools(
+            flow,
+            document_id="doc-123",
+            user_id="user-123",
+            session_id="session-123",
+            include_unavailable=True,
+        )
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+
+        with pytest.raises(
+            RuntimeError,
+            match="require at least one upstream extraction envelope",
+        ):
+            asyncio.run(
+                tools[0].on_invoke_tool(
+                    tool_ctx,
+                    json.dumps({"query": "prepare review"}),
+                )
+            )
+
+        assert execution_state["completed_steps"] == []
+        assert execution_state["next_tool_index"] == 0
+        assert "curation_handoff" not in execution_state
+
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_formatter_exception_does_not_complete_or_advance(
+        self, mock_get_agent, monkeypatch
+    ):
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+
+        async def _specialist_result(*, tool_name, **_kwargs):
+            if tool_name == "ask_gene_specialist":
+                return json.dumps(_structured_step_output("TP53"))
+            raise RuntimeError("sentinel formatter failure")
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.agents.supervisor_agent._run_streaming_specialist_tool",
+            _specialist_result,
+        )
+        flow = _make_flow([
+            _task_input_node("Read and format the document."),
+            _agent_node("n1", "gene", step_goal="Extract genes"),
+            _agent_node("n2", "json_formatter", step_goal="Save JSON"),
+        ])
+        tools, _, _, execution_state = get_all_agent_tools(
+            flow,
+            document_id="doc-123",
+            user_id="user-123",
+            include_unavailable=True,
+        )
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+        asyncio.run(
+            tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "read"}))
         )
 
-        assert "require at least one upstream extraction envelope" in prep_output
+        with pytest.raises(RuntimeError, match="sentinel formatter failure"):
+            asyncio.run(
+                tools[1].on_invoke_tool(
+                    tool_ctx,
+                    json.dumps({"query": "format"}),
+                )
+            )
+
+        assert execution_state["next_tool_index"] == 1
+        assert len(execution_state["completed_steps"]) == 1
+        assert execution_state["completed_steps"][0]["agent_id"] == "gene"
 
 
 # ===========================================================================
