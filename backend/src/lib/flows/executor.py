@@ -1505,6 +1505,8 @@ async def _execute_validation_groups_for_step(
     agent_context: Mapping[str, Any],
     flow_conversation_summary: str,
 ) -> dict[str, Any]:
+    """Run validator groups and commit the session owned by this worker unit of work."""
+
     groups = _validation_groups_from_node_data(node_data)
     grouped = _groups_by_state(groups)
     executable_groups = (
@@ -1698,6 +1700,7 @@ async def _execute_validation_groups_for_step(
                 checkpoint_started_at
             )
 
+        session.commit()
         _emit_validation_group_timing(
             status="success",
             extra_details={
@@ -1727,6 +1730,9 @@ async def _execute_validation_groups_for_step(
                 "conversation_summary": flow_conversation_summary,
             }
         }
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()
 
