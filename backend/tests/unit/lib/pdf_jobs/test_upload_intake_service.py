@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import BackgroundTasks, UploadFile
+from pypdf import PdfWriter
 from sqlalchemy.exc import IntegrityError
 
 from src.lib.document_sources.access import DocumentSourceRequestContext
@@ -117,9 +118,16 @@ class _DispatchRecorder:
 
 
 class _UploadHandler:
-    def __init__(self, *, storage_path: Path, checksum: str = "checksum-1"):
+    def __init__(
+        self,
+        *,
+        storage_path: Path,
+        checksum: str = "checksum-1",
+        page_count: int = 3,
+    ):
         self.storage_path = storage_path
         self.checksum = checksum
+        self.page_count = page_count
 
     async def save_uploaded_pdf(self, file):
         doc_id = str(uuid4())
@@ -130,7 +138,7 @@ class _UploadHandler:
         document = SimpleNamespace(
             id=doc_id,
             filename=file.filename,
-            metadata=SimpleNamespace(checksum=self.checksum, page_count=3),
+            metadata=SimpleNamespace(checksum=self.checksum, page_count=self.page_count),
         )
         return saved_path, document
 
@@ -402,6 +410,168 @@ async def test_intake_upload_rejects_pdf_larger_than_configured_limit_before_db_
 
     assert session.commit_calls == 0
     assert create_document_calls == []
+    assert dispatch.calls == []
+    user_dir = tmp_path / "user-1"
+    assert user_dir.exists()
+    assert not any(user_dir.iterdir())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("page_count", [1, 49, 50, 51, 99, 100])
+async def test_intake_upload_accepts_page_counts_through_default_limit(
+    tmp_path,
+    monkeypatch,
+    page_count,
+):
+    monkeypatch.delenv("PDF_UPLOAD_MAX_PAGE_COUNT", raising=False)
+    session = _FakeSession()
+    dispatch = _DispatchRecorder()
+
+    service = UploadIntakeService(
+        upload_execution_service=dispatch,
+        session_factory=lambda: session,
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(
+            storage_path=storage_path,
+            page_count=page_count,
+        ),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        create_document_fn=lambda *_args, **_kwargs: _async_value(None),
+        get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
+        delete_document_fn=lambda *_args, **_kwargs: _async_value(None),
+        create_job_fn=lambda **_kwargs: SimpleNamespace(job_id="job-1"),
+        tenant_name_resolver=lambda _sub: "tenant-user-1",
+    )
+
+    await service.intake_upload(
+        background_tasks=BackgroundTasks(),
+        file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+        user={"sub": "user-1"},
+    )
+
+    assert session.added[0].page_count == page_count
+    assert session.commit_calls == 1
+    assert len(dispatch.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured_max", "page_count"),
+    [(100, 101), (120, 121)],
+)
+async def test_intake_upload_rejects_page_count_before_durable_side_effects(
+    tmp_path,
+    monkeypatch,
+    configured_max,
+    page_count,
+):
+    monkeypatch.setenv("PDF_UPLOAD_MAX_PAGE_COUNT", str(configured_max))
+    session = _FakeSession()
+    dispatch = _DispatchRecorder()
+    create_document_calls = []
+    create_job_calls = []
+
+    service = UploadIntakeService(
+        upload_execution_service=dispatch,
+        session_factory=lambda: session,
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(
+            storage_path=storage_path,
+            page_count=page_count,
+        ),
+        create_document_fn=lambda *_args, **_kwargs: create_document_calls.append(True),
+        create_job_fn=lambda **_kwargs: create_job_calls.append(True),
+    )
+
+    with pytest.raises(UploadIntakeValidationError) as exc_info:
+        await service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+            user={"sub": "user-1"},
+        )
+
+    assert str(page_count) in str(exc_info.value)
+    assert str(configured_max) in str(exc_info.value)
+    assert exc_info.value.client_detail["actual_page_count"] == page_count
+    assert exc_info.value.client_detail["max_page_count"] == configured_max
+    assert session.commit_calls == 0
+    assert session.added == []
+    assert create_document_calls == []
+    assert create_job_calls == []
+    assert dispatch.calls == []
+    user_dir = tmp_path / "user-1"
+    assert user_dir.exists()
+    assert not any(user_dir.iterdir())
+
+
+@pytest.mark.asyncio
+async def test_intake_upload_accepts_101_pages_with_120_page_override(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("PDF_UPLOAD_MAX_PAGE_COUNT", "120")
+    session = _FakeSession()
+    dispatch = _DispatchRecorder()
+
+    service = UploadIntakeService(
+        upload_execution_service=dispatch,
+        session_factory=lambda: session,
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(
+            storage_path=storage_path,
+            page_count=101,
+        ),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        create_document_fn=lambda *_args, **_kwargs: _async_value(None),
+        get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
+        delete_document_fn=lambda *_args, **_kwargs: _async_value(None),
+        create_job_fn=lambda **_kwargs: SimpleNamespace(job_id="job-1"),
+        tenant_name_resolver=lambda _sub: "tenant-user-1",
+    )
+
+    await service.intake_upload(
+        background_tasks=BackgroundTasks(),
+        file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+        user={"sub": "user-1"},
+    )
+
+    assert session.added[0].page_count == 101
+    assert session.commit_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_default_upload_handler_rejects_real_101_page_pdf_before_session(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("PDF_UPLOAD_MAX_PAGE_COUNT", raising=False)
+    pdf_buffer = BytesIO()
+    writer = PdfWriter()
+    for _ in range(101):
+        writer.add_blank_page(width=612, height=792)
+    writer.write(pdf_buffer)
+    pdf_buffer.seek(0)
+    session_factory_calls = []
+    dispatch = _DispatchRecorder()
+
+    service = UploadIntakeService(
+        upload_execution_service=dispatch,
+        session_factory=lambda: session_factory_calls.append(True),
+        storage_path_provider=lambda: tmp_path,
+    )
+
+    with pytest.raises(UploadIntakeValidationError) as exc_info:
+        await service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="paper.pdf", file=pdf_buffer),
+            user={"sub": "user-1"},
+        )
+
+    assert exc_info.value.client_detail["actual_page_count"] == 101
+    assert exc_info.value.client_detail["max_page_count"] == 100
+    assert session_factory_calls == []
     assert dispatch.calls == []
     user_dir = tmp_path / "user-1"
     assert user_dir.exists()

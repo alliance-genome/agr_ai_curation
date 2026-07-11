@@ -669,6 +669,35 @@ async def test_upload_document_endpoint_rejects_non_pdf(monkeypatch, caplog):
 
 
 @pytest.mark.asyncio
+async def test_upload_document_endpoint_reports_oversized_pdf_page_count(monkeypatch):
+    background_tasks = BackgroundTasks()
+    request = SimpleNamespace(cookies={})
+    upload = UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7"))
+    detail = {
+        "error": "pdf_page_count_exceeded",
+        "message": "PDF page count (101) exceeds the configured maximum (100).",
+        "actual_page_count": 101,
+        "max_page_count": 100,
+    }
+
+    async def _raise_validation(**_kwargs):
+        raise UploadIntakeValidationError(detail["message"], client_detail=detail)
+
+    monkeypatch.setattr(documents.upload_intake_service, "intake_upload", _raise_validation)
+
+    with pytest.raises(HTTPException) as exc:
+        await documents.upload_document_endpoint(
+            background_tasks,
+            request,  # type: ignore[arg-type]
+            upload,
+            {"sub": "user-1"},
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == detail
+
+
+@pytest.mark.asyncio
 async def test_upload_document_endpoint_happy_path(monkeypatch):
     background_tasks = BackgroundTasks()
     request = SimpleNamespace(cookies={"auth_token": "curator-token"})

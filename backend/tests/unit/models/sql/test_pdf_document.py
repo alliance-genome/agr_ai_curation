@@ -51,6 +51,16 @@ class TestPDFDocumentModel:
             f"file_size > 0 AND file_size <= {MAX_PDF_FILE_SIZE_BYTES}"
         )
 
+    def test_model_page_count_constraint_only_requires_positive_count(self):
+        constraint = next(
+            element
+            for element in PDFDocument.__table__.constraints
+            if isinstance(element, CheckConstraint)
+            and element.name == "ck_pdf_documents_page_count"
+        )
+
+        assert str(constraint.sqltext) == "page_count > 0"
+
     def test_literature_provenance_defaults_to_none(self):
         """Local PDF uploads should not require upstream source provenance."""
         doc = PDFDocument(
