@@ -608,16 +608,24 @@ def _materialized_objects_for_result(
     result = item.result
     if result.status != "resolved":
         return [], None
-    if not result.resolved_objects:
-        return [], None
-
     resolved_objects = [
         raw_object
         for raw_object in result.resolved_objects
         if _looks_like_materializable_object(raw_object)
     ]
     if not resolved_objects:
-        return [], None
+        inferred_object, inference_problem = (
+            _materializable_object_from_qualified_resolved_values(
+                item,
+                object_definitions=object_definitions,
+                object_role_key=object_role_key,
+            )
+        )
+        if inference_problem is not None:
+            return [], inference_problem
+        if inferred_object is None:
+            return [], None
+        resolved_objects = [inferred_object]
 
     materialized_objects: list[CuratableObjectEnvelope] = []
     for object_index, raw_object in enumerate(resolved_objects):
@@ -702,6 +710,72 @@ def _materialized_objects_for_result(
         )
 
     return materialized_objects, None
+
+
+def _materializable_object_from_qualified_resolved_values(
+    item: ValidatorResultMaterializationInput,
+    *,
+    object_definitions: Mapping[str, DomainPackObjectDefinition],
+    object_role_key: str,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Build a validated reference when a binding names its target object type.
+
+    Validator prompts define ``resolved_objects`` as database facts, so those objects
+    do not necessarily carry the materializer-only ``canonical_id``/``payload``
+    wrapper. A binding can instead declare qualified result paths such as
+    ``allele.primary_external_id``. When that qualifier unambiguously names a
+    validated-reference object and the resolved scalar values fill its required
+    fields, the domain-pack contract contains enough information to materialize it
+    without relying on the model to invent an internal envelope shape.
+    """
+
+    qualified_prefixes: set[str] = set()
+    for result_field, raw_field_path in item.request.expected_result_fields.items():
+        if missing_resolved_value(item.result.resolved_values.get(result_field)):
+            continue
+        if not isinstance(raw_field_path, str) or "." not in raw_field_path:
+            return None, None
+        prefix, _ = raw_field_path.strip().split(".", 1)
+        if not prefix:
+            return None, None
+        qualified_prefixes.add(prefix.casefold())
+
+    if len(qualified_prefixes) != 1:
+        return None, None
+    qualified_prefix = next(iter(qualified_prefixes))
+    candidates = [
+        definition
+        for definition in object_definitions.values()
+        if definition.object_type.casefold() == qualified_prefix
+        and _definition_object_role(
+            definition,
+            object_role_key=object_role_key,
+        )
+        == "validated_reference"
+    ]
+    if len(candidates) != 1:
+        return None, None
+
+    object_definition = candidates[0]
+    payload, problem = _validated_reference_payload(
+        item,
+        {},
+        object_definition=object_definition,
+    )
+    if problem is not None:
+        return None, problem
+
+    canonical_id = _optional_string(payload.get("primary_external_id"))
+    if canonical_id is None:
+        return None, (
+            "qualified resolved values for validated-reference object "
+            f"{object_definition.object_type!r} do not include primary_external_id"
+        )
+    return {
+        "object_type": object_definition.object_type,
+        "canonical_id": canonical_id,
+        "payload": payload,
+    }, None
 
 
 def _looks_like_materializable_object(raw_object: Any) -> bool:
