@@ -469,7 +469,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
       field: 'sourceProvenance',
       headerName: 'Source',
       flex: 1.2,
-      minWidth: 180,
+      minWidth: 280,
       sortable: false,
       filterable: false,
       renderCell: (params: GridRenderCellParams<DocumentSummary, DocumentSourceProvenance | null>) => {
@@ -486,10 +486,10 @@ const DocumentList: React.FC<DocumentListProps> = ({
                 size="small"
                 variant={source ? 'filled' : 'outlined'}
                 color={source ? 'primary' : 'default'}
-                sx={{ maxWidth: 140 }}
+                sx={{ flexShrink: 0 }}
               />
               {statusLabel && (
-                <Chip label={statusLabel} size="small" variant="outlined" sx={{ maxWidth: 100 }} />
+                <Chip label={statusLabel} size="small" variant="outlined" sx={{ flexShrink: 0 }} />
               )}
             </Stack>
             <Tooltip title={referenceLabel}>
