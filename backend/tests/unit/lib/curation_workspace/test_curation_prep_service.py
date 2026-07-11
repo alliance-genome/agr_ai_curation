@@ -343,6 +343,34 @@ def test_existing_envelope_id_rejects_changed_source_payload():
         )
 
 
+def test_existing_envelope_id_accepts_identical_extraction_retry():
+    extraction_result = _make_domain_envelope_extraction_result()
+    first_envelope = domain_envelope_from_extraction_result(extraction_result)
+    retry_envelope = domain_envelope_from_extraction_result(extraction_result)
+    source_payload_hash = domain_envelope_payload_hash(first_envelope)
+    row = SimpleNamespace(
+        envelope_id=first_envelope.envelope_id,
+        project_key="agr",
+        document_id="document-1",
+        flow_run_id=None,
+        adapter_key="gene",
+        domain_pack_key=first_envelope.domain_pack_id,
+        domain_pack_version=first_envelope.domain_pack_version,
+        source_extraction_result_id="extract-domain-1",
+        source_payload_hash=source_payload_hash,
+    )
+
+    assert domain_envelope_payload_hash(retry_envelope) == source_payload_hash
+    module._validate_existing_materialization_scope(
+        cast(module.DomainEnvelopeModel, row),
+        extraction_result=extraction_result,
+        envelope=retry_envelope,
+        project_key="agr",
+        adapter_key="gene",
+        source_payload_hash=domain_envelope_payload_hash(retry_envelope),
+    )
+
+
 def test_normalized_optional_string_preserves_string_only_behavior():
     assert normalized_optional_string(" gene ") == "gene"
     assert normalized_optional_string(123) is None
