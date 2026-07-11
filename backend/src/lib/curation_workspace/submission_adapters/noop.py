@@ -43,6 +43,7 @@ class NoOpSubmissionAdapter(SubmissionTransportAdapter):
         self,
         *,
         payload: SubmissionPayloadContract,
+        idempotency_key: str,
     ) -> SubmissionTransportResult:
         if self._error is not None:
             raise self._error
@@ -69,7 +70,18 @@ class NoOpSubmissionAdapter(SubmissionTransportAdapter):
             response_message=response_message,
             validation_errors=self._validation_errors,
             warnings=self._warnings,
+            submission_state={"idempotency_key": idempotency_key},
         )
+
+    def _reconcile(
+        self,
+        *,
+        payload: SubmissionPayloadContract,
+        idempotency_key: str,
+    ) -> SubmissionTransportResult:
+        """The deterministic no-op target can always recover its prior result."""
+
+        return self._submit(payload=payload, idempotency_key=idempotency_key)
 
 
 def _default_response_message(
@@ -79,6 +91,7 @@ def _default_response_message(
     target_key: str,
 ) -> str:
     verb = {
+        CurationSubmissionStatus.PENDING: "returned an invalid pending state",
         CurationSubmissionStatus.ACCEPTED: "accepted",
         CurationSubmissionStatus.QUEUED: "queued",
         CurationSubmissionStatus.VALIDATION_ERRORS: "rejected with validation errors",

@@ -35,6 +35,7 @@ class GeneExpressionSubmissionAdapter(SubmissionTransportAdapter):
         self,
         *,
         payload: SubmissionPayloadContract,
+        idempotency_key: str,
     ) -> SubmissionTransportResult:
         payload_json = _payload_mapping(payload.payload_json)
         annotations = _annotation_payloads(payload_json)
@@ -45,6 +46,7 @@ class GeneExpressionSubmissionAdapter(SubmissionTransportAdapter):
                 response_message="Gene-expression target payload failed adapter validation.",
                 validation_errors=validation_errors,
                 submission_state={
+                    "idempotency_key": idempotency_key,
                     "target_status": "validation_errors",
                     "target_key": payload.target_key,
                     "annotation_count": len(annotations),
@@ -64,6 +66,7 @@ class GeneExpressionSubmissionAdapter(SubmissionTransportAdapter):
             f"alliance:gene_expression:{payload.target_key}:{annotation_count}"
         )
         submission_state = {
+            "idempotency_key": idempotency_key,
             "target_status": "manual_review_required",
             "target_key": payload.target_key,
             "target_transport": self.transport_key,

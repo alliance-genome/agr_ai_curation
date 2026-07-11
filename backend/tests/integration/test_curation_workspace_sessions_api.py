@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import os
+from threading import Event, Lock
 from uuid import UUID, uuid4
 
 import pytest
@@ -55,6 +57,7 @@ def _seed_submission_record(
     from src.lib.curation_workspace import session_service
     from src.lib.curation_workspace.models import CurationSubmissionRecord
     from src.schemas.curation_workspace import SubmissionMode, SubmissionPayloadContract
+    from src.schemas.curation_workspace import CurationSubmissionAttemptState
 
     normalized_mode = SubmissionMode(mode)
 
@@ -66,6 +69,13 @@ def _seed_submission_record(
         mode=normalized_mode,
         target_key=target_key,
         status=status,
+        idempotency_key=str(uuid4()) if normalized_mode == SubmissionMode.DIRECT_SUBMIT else None,
+        attempt_state=(
+            CurationSubmissionAttemptState.FAILED
+            if normalized_mode == SubmissionMode.DIRECT_SUBMIT
+            else None
+        ),
+        attempt_state_history=[],
         readiness=[
             {
                 "candidate_id": candidate_id,
@@ -1437,7 +1447,7 @@ def test_post_session_validation_returns_session_and_candidate_snapshots(
     assert payload["candidate_validations"][0]["field_results"]["disease_term"]["status"] == "skipped"
 
 
-def test_post_submission_retry_creates_new_submission_record(
+def test_post_submission_retry_reuses_original_submission_attempt(
     client: TestClient,
     seeded_review_sessions,
     test_db,
@@ -1483,7 +1493,7 @@ def test_post_submission_retry_creates_new_submission_record(
     assert response.status_code == 200, response.text
     payload = response.json()
 
-    assert payload["submission"]["submission_id"] != original_submission_id
+    assert payload["submission"]["submission_id"] == original_submission_id
     assert payload["submission"]["status"] == "accepted"
     assert payload["submission"]["target_key"] == "review_export_bundle"
     assert payload["submission"]["payload"]["candidate_ids"] == [
@@ -1494,8 +1504,7 @@ def test_post_submission_retry_creates_new_submission_record(
 
     original_record = test_db.get(CurationSubmissionRecord, UUID(original_submission_id))
     assert original_record is not None
-    assert original_record.status == CurationSubmissionStatus.FAILED
-    assert original_record.response_message == "Initial submission failed."
+    assert original_record.status == CurationSubmissionStatus.ACCEPTED
 
     retried_record = test_db.get(
         CurationSubmissionRecord,
@@ -1512,10 +1521,9 @@ def test_post_submission_retry_creates_new_submission_record(
         .order_by(CurationSubmissionRecord.requested_at.asc())
         .all()
     )
-    assert len(direct_submit_rows) == 2
+    assert len(direct_submit_rows) == 1
     assert str(direct_submit_rows[0].id) == original_submission_id
-    assert direct_submit_rows[0].status == CurationSubmissionStatus.FAILED
-    assert direct_submit_rows[1].status == CurationSubmissionStatus.ACCEPTED
+    assert direct_submit_rows[0].status == CurationSubmissionStatus.ACCEPTED
 
     action_log_rows = (
         test_db.query(session_service.SessionActionLogModel)
@@ -1530,6 +1538,86 @@ def test_post_submission_retry_creates_new_submission_record(
         .all()
     )
     assert len(action_log_rows) == 1
+
+
+def test_concurrent_duplicate_submission_requests_invoke_mutation_once(
+    client: TestClient,
+    seeded_review_sessions,
+    monkeypatch,
+):
+    from src.lib.curation_workspace.export_adapters import JsonBundleExportAdapter
+    from src.models.sql.database import SessionLocal, get_db
+
+    class CoordinatedAdapter:
+        transport_key = "coordinated_submission"
+
+        def __init__(self) -> None:
+            self.submit_calls = 0
+            self.reconcile_calls = 0
+            self._lock = Lock()
+            self._reconcile_started = Event()
+
+        def submit(self, *, payload, idempotency_key):
+            with self._lock:
+                self.submit_calls += 1
+            self._reconcile_started.wait(timeout=5)
+            return {"status": "accepted", "external_reference": "target:one"}
+
+        def reconcile(self, *, payload, idempotency_key):
+            with self._lock:
+                self.reconcile_calls += 1
+            self._reconcile_started.set()
+            return {"status": "accepted", "external_reference": "target:one"}
+
+    adapter = CoordinatedAdapter()
+    _patch_submission_transport_adapter(monkeypatch, lambda _target_key: adapter)
+    _patch_export_adapter(monkeypatch, JsonBundleExportAdapter(adapter_key="gene"))
+
+    app = client.app
+    previous_override = app.dependency_overrides[get_db]
+
+    def _independent_db_session():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = _independent_db_session
+    session_id = seeded_review_sessions["session_beta_id"]
+    request_json = {
+        "session_id": session_id,
+        "idempotency_key": str(uuid4()),
+        "candidate_ids": [seeded_review_sessions["candidate_beta_id"]],
+        "target_key": "review_export_bundle",
+    }
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(
+                executor.map(
+                    lambda _index: client.post(
+                        f"/api/curation-workspace/sessions/{session_id}/submit",
+                        json=request_json,
+                    ),
+                    range(2),
+                )
+            )
+    finally:
+        app.dependency_overrides[get_db] = previous_override
+
+    assert [response.status_code for response in responses] == [200, 200]
+    submission_ids = {
+        response.json()["submission"]["submission_id"] for response in responses
+    }
+    assert len(submission_ids) == 1
+    assert all(
+        [event["state"] for event in response.json()["submission"]["attempt_state_history"]]
+        == ["pending", "sending", "succeeded"]
+        for response in responses
+    )
+    assert adapter.submit_calls == 1
+    assert adapter.reconcile_calls == 1
 
 
 def test_get_submission_history_returns_single_submission_record(

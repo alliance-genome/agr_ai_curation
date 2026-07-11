@@ -331,7 +331,10 @@ def test_submission_adapters_return_explicit_non_writing_blockers(
         payload_context=_payload_context(candidate),
     )
 
-    result = submit_adapter.submit(payload=submission_payload)
+    result = submit_adapter.submit(
+        payload=submission_payload,
+        idempotency_key="test-submit",
+    )
 
     assert result.status is CurationSubmissionStatus.MANUAL_REVIEW_REQUIRED
     assert result.external_reference is None

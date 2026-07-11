@@ -600,7 +600,10 @@ def test_gene_expression_submission_adapter_records_target_state():
         payload_context=_payload_context(_candidate_from_fixture()),
     )
 
-    result = GeneExpressionSubmissionAdapter().submit(payload=export_payload)
+    result = GeneExpressionSubmissionAdapter().submit(
+        payload=export_payload,
+        idempotency_key="test-submit",
+    )
 
     assert result.status == CurationSubmissionStatus.MANUAL_REVIEW_REQUIRED
     assert result.external_reference == (

@@ -1037,6 +1037,7 @@ async def test_post_submission_execute_delegates_to_service(monkeypatch):
     session_id = uuid4()
     request = CurationSubmissionExecuteRequest(
         session_id=str(session_id),
+        idempotency_key=str(uuid4()),
         target_key="review_export_bundle",
         candidate_ids=[str(uuid4())],
     )
@@ -1073,6 +1074,7 @@ async def test_post_submission_execute_rolls_back_rejected_attempt(monkeypatch):
     session_id = uuid4()
     request = CurationSubmissionExecuteRequest(
         session_id=str(session_id),
+        idempotency_key=str(uuid4()),
         target_key="review_export_bundle",
         candidate_ids=[str(uuid4())],
     )

@@ -102,6 +102,11 @@ def get_batch_recovery_max_concurrency() -> int:
     return max(1, _get_env_int_with_fallback("BATCH_RECOVERY_MAX_CONCURRENCY", 4))
 
 
+def get_submission_attempt_retention_days() -> int:
+    """Days to retain terminal direct-submission attempts for audit and deduplication."""
+    return max(1, _get_env_int_with_fallback("SUBMISSION_ATTEMPT_RETENTION_DAYS", 90))
+
+
 def is_retryable_groq_tool_call_error(exc: Exception) -> bool:
     """Return True when an exception matches known transient Groq tool-call parse failures."""
     text = str(exc or "").lower()

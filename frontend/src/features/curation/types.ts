@@ -172,6 +172,7 @@ export type CurationQueueNavigationDirection =
 export const CURATION_SUBMISSION_STATUSES = [
   'preview_ready',
   'export_ready',
+  'pending',
   'queued',
   'accepted',
   'validation_errors',
@@ -505,6 +506,10 @@ export interface CurationSubmissionRecord {
   mode: SubmissionMode
   target_key: SubmissionTargetKey
   status: CurationSubmissionStatus
+  idempotency_key?: string | null
+  attempt_state?: 'pending' | 'sending' | 'succeeded' | 'failed' | 'unknown' | null
+  attempt_state_history?: Record<string, unknown>[]
+  retention_expires_at?: string | null
   readiness: CurationCandidateSubmissionReadiness[]
   payload?: SubmissionPayloadContract | null
   requested_at: string
@@ -919,6 +924,7 @@ export interface CurationSubmissionPreviewResponse {
 
 export interface CurationSubmissionExecuteRequest {
   session_id: string
+  idempotency_key: string
   target_key: SubmissionTargetKey
   candidate_ids?: string[]
   mode?: SubmissionMode

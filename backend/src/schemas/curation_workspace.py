@@ -411,12 +411,23 @@ class CurationSubmissionStatus(str, Enum):
 
     PREVIEW_READY = "preview_ready"
     EXPORT_READY = "export_ready"
+    PENDING = "pending"
     QUEUED = "queued"
     ACCEPTED = "accepted"
     VALIDATION_ERRORS = "validation_errors"
     CONFLICT = "conflict"
     MANUAL_REVIEW_REQUIRED = "manual_review_required"
     FAILED = "failed"
+
+
+class CurationSubmissionAttemptState(str, Enum):
+    """Durable delivery state for a direct-submission outbox attempt."""
+
+    PENDING = "pending"
+    SENDING = "sending"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    UNKNOWN = "unknown"
 
 
 class CurationExtractionSourceKind(str, Enum):
@@ -1437,6 +1448,22 @@ class CurationSubmissionRecord(CurationWorkspaceBaseModel):
         description="Adapter-owned key naming the downstream target used for this record"
     )
     status: CurationSubmissionStatus = Field(description="Submission lifecycle status")
+    idempotency_key: Optional[str] = Field(
+        default=None,
+        description="Stable request identity used for direct-submission deduplication",
+    )
+    attempt_state: Optional[CurationSubmissionAttemptState] = Field(
+        default=None,
+        description="Durable external-delivery state for direct submissions",
+    )
+    attempt_state_history: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Append-only audit history of durable delivery-state transitions",
+    )
+    retention_expires_at: Optional[datetime] = Field(
+        default=None,
+        description="Earliest time a terminal submission attempt is eligible for cleanup",
+    )
     readiness: list[CurationCandidateSubmissionReadiness] = Field(
         default_factory=list,
         description="Per-candidate readiness used for preview or submission gating",
@@ -2322,6 +2349,10 @@ class CurationSubmissionExecuteRequest(CurationWorkspaceBaseModel):
     """Request contract for executing a direct submission."""
 
     session_id: str = Field(description="Session identifier")
+    idempotency_key: str = Field(
+        min_length=1,
+        description="Stable unique identity that must be reused when this request is retried",
+    )
     target_key: SubmissionTargetKey = Field(
         description="Adapter-owned key naming the downstream submission target"
     )
@@ -2537,6 +2568,7 @@ __all__ = [
     "CurationSubmissionRecord",
     "CurationSubmissionRetryRequest",
     "CurationSubmissionRetryResponse",
+    "CurationSubmissionAttemptState",
     "CurationSubmissionStatus",
     "CurationValidationCounts",
     "CurationValidationScope",
