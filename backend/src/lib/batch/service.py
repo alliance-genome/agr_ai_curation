@@ -200,7 +200,6 @@ class BatchService:
         The conditional update is the claim. A worker that loses to cancellation
         or another worker receives ``None`` and must perform no processing work.
         """
-        require_batch_status_transition(BatchStatus.PENDING, BatchStatus.RUNNING)
         claimed_id = self.db.execute(
             update(Batch)
             .where(Batch.id == batch_id, Batch.status == BatchStatus.PENDING)
@@ -221,7 +220,6 @@ class BatchService:
 
     def complete_running_batch(self, batch_id: UUID) -> bool:
         """Atomically complete a running batch unless cancellation won first."""
-        require_batch_status_transition(BatchStatus.RUNNING, BatchStatus.COMPLETED)
         completed_id = self.db.execute(
             update(Batch)
             .where(Batch.id == batch_id, Batch.status == BatchStatus.RUNNING)
@@ -269,8 +267,6 @@ class BatchService:
                 "Only PENDING or RUNNING batches can be cancelled."
             )
 
-        require_batch_status_transition(BatchStatus.PENDING, BatchStatus.CANCELLED)
-        require_batch_status_transition(BatchStatus.RUNNING, BatchStatus.CANCELLED)
         self.db.commit()
         batch = self.get_batch(cancelled_id, user_id)
 

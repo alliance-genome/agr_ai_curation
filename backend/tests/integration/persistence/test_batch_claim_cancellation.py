@@ -1,24 +1,29 @@
 """Real-transaction coverage for batch cancellation and worker claiming."""
 
 from contextlib import contextmanager
+from pathlib import Path
 from threading import Event, Thread
 from uuid import UUID, uuid4
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import select, update
 
 from src.lib.batch import processor
 from src.lib.batch.service import BatchService
 from src.models.sql.batch import Batch, BatchDocument, BatchDocumentStatus, BatchStatus
-from src.models.sql.database import Base, SessionLocal, engine
+from src.models.sql.database import SessionLocal
+
+
+BACKEND_ROOT = Path(__file__).resolve().parents[3]
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _batch_tables():
-    """Create only the SQL tables exercised by this isolated persistence suite."""
-    tables = [Batch.__table__, BatchDocument.__table__]
-    Base.metadata.create_all(bind=engine, tables=tables)
-    yield
+def migrated_database():
+    """Apply the canonical schema before exercising real batch transactions."""
+    alembic_config = Config(str(BACKEND_ROOT / "alembic.ini"))
+    command.upgrade(alembic_config, "head")
 
 
 def _create_batch(*, user_id: int = 701) -> tuple[UUID, UUID]:
