@@ -108,6 +108,7 @@ from src.lib.openai_agents.config import (
     get_agent_config,
     get_model_for_agent,
     build_model_settings,
+    get_flow_supervisor_parallel_tool_calls_enabled,
     get_flow_step_evidence_preview_limit,
     get_flow_step_output_preview_chars,
     resolve_model_provider,
@@ -3286,7 +3287,7 @@ def create_flow_supervisor(
         temperature=config.temperature,
         reasoning_effort=config.reasoning,
         provider_override=model_provider,
-        parallel_tool_calls=False,
+        parallel_tool_calls=get_flow_supervisor_parallel_tool_calls_enabled(),
     )
 
     # Get all tools with flow-based is_enabled

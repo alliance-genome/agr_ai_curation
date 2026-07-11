@@ -4522,9 +4522,16 @@ class TestCreateFlowSupervisorNoTools:
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
     def test_does_not_raise_when_tools_created(
-        self, mock_get_agent, mock_streaming, mock_config, mock_model, mock_settings
+        self,
+        mock_get_agent,
+        mock_streaming,
+        mock_config,
+        mock_model,
+        mock_settings,
+        monkeypatch,
     ):
         """Should NOT raise when at least one tool is created."""
+        monkeypatch.delenv("FLOW_SUPERVISOR_PARALLEL_TOOL_CALLS_ENABLED", raising=False)
         mock_config.return_value = MagicMock(model="gpt-5.5", temperature=0.0, reasoning=None)
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         mock_streaming.return_value = MagicMock()
@@ -4539,6 +4546,37 @@ class TestCreateFlowSupervisorNoTools:
         supervisor = create_flow_supervisor(flow)
         assert supervisor is not None
         assert mock_settings.call_args.kwargs["parallel_tool_calls"] is False
+
+    @patch("src.lib.flows.executor.build_model_settings")
+    @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-5.5")
+    @patch("src.lib.flows.executor.get_agent_config")
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_parallel_tool_calls_honors_flow_override(
+        self,
+        mock_get_agent,
+        mock_streaming,
+        mock_config,
+        mock_model,
+        mock_settings,
+        monkeypatch,
+    ):
+        """Flow-specific override should be forwarded without affecting chat supervisors."""
+        monkeypatch.setenv("FLOW_SUPERVISOR_PARALLEL_TOOL_CALLS_ENABLED", "true")
+        mock_config.return_value = MagicMock(model="gpt-5.5", temperature=0.0, reasoning=None)
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        mock_streaming.return_value = MagicMock()
+        mock_settings.return_value = ModelSettings()
+
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene", step_goal="Extract genes"),
+        ])
+
+        supervisor = create_flow_supervisor(flow)
+
+        assert supervisor is not None
+        assert mock_settings.call_args.kwargs["parallel_tool_calls"] is True
 
 
 # ===========================================================================
