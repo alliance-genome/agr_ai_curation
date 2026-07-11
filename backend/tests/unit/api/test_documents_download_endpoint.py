@@ -14,14 +14,11 @@ from src.api import documents
 _DOC_ID = "11111111-1111-1111-1111-111111111111"
 
 
-class _FakeQuery:
+class _FakeResult:
     def __init__(self, doc):
         self._doc = doc
 
-    def filter(self, *_args, **_kwargs):
-        return self
-
-    def first(self):
+    def scalar_one_or_none(self):
         return self._doc
 
 
@@ -30,8 +27,8 @@ class _FakeSession:
         self._doc = doc
         self.closed = False
 
-    def query(self, _model):
-        return _FakeQuery(self._doc)
+    def execute(self, _statement):
+        return _FakeResult(self._doc)
 
     def close(self):
         self.closed = True
