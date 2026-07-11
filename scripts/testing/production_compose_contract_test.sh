@@ -11,6 +11,8 @@ trap 'rm -rf "${temp_dir}"' EXIT
 
 env_file="${temp_dir}/production.env"
 rendered_file="${temp_dir}/rendered.json"
+development_env_file="${temp_dir}/development.env"
+development_rendered_file="${temp_dir}/development-rendered.json"
 
 write_test_env() {
   {
@@ -64,6 +66,30 @@ assert_rejected_with() {
 }
 
 write_test_env
+
+# Exercise the environment created by a fresh `make setup` and the effective
+# development Compose interpolation, without starting containers.
+cp "${repo_root}/.env.example" "${development_env_file}"
+docker compose \
+  --env-file "${development_env_file}" \
+  -f "${repo_root}/docker-compose.yml" \
+  config --format json >"${development_rendered_file}"
+python3 - "${development_rendered_file}" <<'PY'
+import json
+import sys
+
+config = json.load(open(sys.argv[1], encoding="utf-8"))
+services = config["services"]
+backend_env = services["backend"]["environment"]
+trace_review = services["trace_review_backend"]
+trace_review_env = trace_review["environment"]
+
+assert trace_review["image"].endswith(":latest")
+assert str(trace_review_env["DEV_MODE"]).lower() == "true"
+assert str(trace_review_env["SECURE_COOKIES"]).lower() == "false"
+assert str(backend_env["HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS"]).lower() == "false"
+assert str(backend_env["HEALTH_CHECK_REQUIRE_LITERATURE_DB"]).lower() == "false"
+PY
 
 # Exercise the exact render-and-validate preflight invoked by `make prod`.
 "${preflight}" --env-file "${env_file}"
