@@ -60,20 +60,102 @@ def test_purge_submission_attempts_once_rolls_back_failure(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_periodic_cleanup_continues_after_a_failed_pass(monkeypatch):
-    to_thread = AsyncMock(side_effect=[RuntimeError("temporary failure"), 0])
+    purge = MagicMock(side_effect=[RuntimeError("temporary failure"), 0])
+
+    async def call_in_thread(function, *args):
+        return function(*args)
+
+    to_thread = AsyncMock(side_effect=call_in_thread)
     sleep = AsyncMock(side_effect=[None, asyncio.CancelledError])
     log_exception = MagicMock()
+    leader_connection = MagicMock()
+    connect = MagicMock()
+    connect.return_value.execution_options.return_value.__enter__.return_value = (
+        leader_connection
+    )
     monkeypatch.setattr(cleanup.asyncio, "to_thread", to_thread)
     monkeypatch.setattr(cleanup.asyncio, "sleep", sleep)
+    monkeypatch.setattr(cleanup.engine, "connect", connect)
+    monkeypatch.setattr(cleanup, "_try_acquire_cleanup_leadership", MagicMock(return_value=True))
+    monkeypatch.setattr(cleanup, "_release_cleanup_leadership", MagicMock())
+    monkeypatch.setattr(cleanup, "_verify_cleanup_leadership_connection", MagicMock())
+    monkeypatch.setattr(cleanup, "purge_submission_attempts_once", purge)
     monkeypatch.setattr(cleanup, "get_submission_attempt_cleanup_interval_seconds", lambda: 17)
     monkeypatch.setattr(cleanup.logger, "exception", log_exception)
 
     with pytest.raises(asyncio.CancelledError):
         await cleanup._run_submission_attempt_cleanup()
 
-    assert to_thread.await_count == 2
+    assert to_thread.await_count == 6
     assert sleep.await_args_list[0].args == (17,)
     log_exception.assert_called_once_with("Submission attempt retention cleanup failed")
+
+
+@pytest.mark.asyncio
+async def test_cleanup_follower_retries_without_purging(monkeypatch):
+    leader_connection = MagicMock()
+    connect = MagicMock()
+    connection_context = connect.return_value.execution_options.return_value
+    connection_context.__enter__.return_value = leader_connection
+    acquire = MagicMock(return_value=False)
+    purge = MagicMock()
+
+    async def cancel_after_connection_returned(_interval_seconds):
+        assert connection_context.__exit__.called
+        raise asyncio.CancelledError
+
+    sleep = AsyncMock(side_effect=cancel_after_connection_returned)
+    monkeypatch.setattr(cleanup.engine, "connect", connect)
+    monkeypatch.setattr(cleanup, "_try_acquire_cleanup_leadership", acquire)
+    monkeypatch.setattr(cleanup, "purge_submission_attempts_once", purge)
+    monkeypatch.setattr(cleanup.asyncio, "sleep", sleep)
+    monkeypatch.setattr(cleanup, "get_submission_attempt_cleanup_interval_seconds", lambda: 23)
+
+    with pytest.raises(asyncio.CancelledError):
+        await cleanup._run_submission_attempt_cleanup()
+
+    acquire.assert_called_once_with(leader_connection)
+    purge.assert_not_called()
+    sleep.assert_awaited_once_with(23)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_relinquishes_leadership_after_connection_loss(monkeypatch):
+    async def call_in_thread(function, *args):
+        return function(*args)
+
+    leader_connection = MagicMock()
+    connect = MagicMock()
+    connect.return_value.execution_options.return_value.__enter__.return_value = (
+        leader_connection
+    )
+    release = MagicMock()
+    purge = MagicMock()
+    sleep = AsyncMock(side_effect=asyncio.CancelledError)
+    log_exception = MagicMock()
+    monkeypatch.setattr(cleanup.engine, "connect", connect)
+    monkeypatch.setattr(cleanup.asyncio, "to_thread", AsyncMock(side_effect=call_in_thread))
+    monkeypatch.setattr(cleanup.asyncio, "sleep", sleep)
+    monkeypatch.setattr(cleanup, "_try_acquire_cleanup_leadership", MagicMock(return_value=True))
+    monkeypatch.setattr(
+        cleanup,
+        "_verify_cleanup_leadership_connection",
+        MagicMock(side_effect=RuntimeError("connection lost")),
+    )
+    monkeypatch.setattr(cleanup, "_release_cleanup_leadership", release)
+    monkeypatch.setattr(cleanup, "purge_submission_attempts_once", purge)
+    monkeypatch.setattr(cleanup, "get_submission_attempt_cleanup_interval_seconds", lambda: 29)
+    monkeypatch.setattr(cleanup.logger, "exception", log_exception)
+
+    with pytest.raises(asyncio.CancelledError):
+        await cleanup._run_submission_attempt_cleanup()
+
+    release.assert_called_once_with(leader_connection)
+    purge.assert_not_called()
+    log_exception.assert_called_once_with(
+        "Submission attempt cleanup leadership coordination failed"
+    )
+    sleep.assert_awaited_once_with(29)
 
 
 @pytest.mark.asyncio

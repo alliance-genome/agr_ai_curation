@@ -267,8 +267,10 @@ repeat an external mutation. Confirmed failures may be retried against the same
 attempt and key. Terminal attempts retain an append-only transition history and
 become cleanup-eligible after `SUBMISSION_ATTEMPT_RETENTION_DAYS`; unresolved
 attempts are never removed by retention cleanup. Backend lifecycle maintenance
-purges eligible attempts outside the submission request path every
-`SUBMISSION_ATTEMPT_CLEANUP_INTERVAL_SECONDS`.
+elects one database-wide cleanup leader and purges eligible attempts outside
+the submission request path every `SUBMISSION_ATTEMPT_CLEANUP_INTERVAL_SECONDS`.
+Follower workers retry leadership on that interval so cleanup continues after
+the current leader stops without multiplying purge scans by worker count.
 
 ## Agent Studio and Flow Builder
 
