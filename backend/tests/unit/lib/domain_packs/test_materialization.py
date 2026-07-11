@@ -1440,16 +1440,15 @@ def test_invalid_resolved_object_materializes_open_finding_without_reference():
     assert "not a validated_reference" in finding.details["materialization_error"]
 
 
-def test_diagnostic_resolved_object_without_canonical_id_is_skipped():
-    """Diagnostic lookup projections in resolved_objects must be skipped, not errored.
+def test_qualified_resolved_values_materialize_when_resolved_object_is_diagnostic():
+    """Qualified scalar results materialize independently of diagnostic objects.
 
-    A scalar validator binding (e.g. gene_expression's subject_gene_validation)
-    resolves scalar values into resolved_values and reports the raw lookup hit in
-    resolved_objects as *diagnostic context only* -- a projection shaped like
+    A scalar validator binding can resolve values into resolved_values while reporting
+    the raw lookup hit in resolved_objects as *diagnostic context only* -- a shape like
     ``{object_type, resolved_id, provider_data, projection_type}`` with no
-    ``canonical_id``/``payload``. The materializer must treat that as diagnostic and
-    skip it, NOT force-materialize it into a spurious validator_materialization_invalid
-    finding ("resolved_objects[0].canonical_id is required").
+    ``canonical_id``/``payload``. When the binding's qualified paths unambiguously
+    name a validated-reference type, the materializer uses resolved_values rather
+    than requiring that internal wrapper from the validator.
     """
     metadata = _validator_metadata()
     envelope = _validator_envelope()
@@ -1476,11 +1475,19 @@ def test_diagnostic_resolved_object_without_canonical_id_is_skipped():
 
     result = materialize_validator_results_into_envelope(envelope, metadata, [item])
 
-    # Diagnostic projection: nothing materialized from resolved_objects, and no
-    # spurious materialization-invalid finding.
-    assert result.materialized_objects == ()
+    assert len(result.materialized_objects) == 1
+    assert result.materialized_objects[0].object_type == "Allele"
+    assert result.materialized_objects[0].payload == {
+        "primary_external_id": "DEMO:Allele0001817",
+        "allele_symbol": "crb<sup>11A22</sup>",
+        "taxon": "NCBITaxon:7227",
+    }
     assert not any(
-        finding.code == "domain_pack.validator_materialization_invalid"
+        finding.code
+        in {
+            "domain_pack.validator_materialization_invalid",
+            "domain_pack.validator_expected_field_unmapped",
+        }
         for finding in result.appended_findings
     )
 
