@@ -770,6 +770,199 @@ describe('useAutosave', () => {
     })
   })
 
+  it('bounds an explicit draft flush and preserves failed work for the next pass', async () => {
+    serviceMocks.autosaveCurationCandidateDraft.mockRejectedValue(
+      new Error('persistent outage'),
+    )
+
+    const { result } = renderHook(
+      () => useAutosave({ debounceMs: 60_000 }),
+      {
+        wrapper: createWrapper(buildWorkspace()),
+      },
+    )
+
+    act(() => {
+      result.current.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA2',
+      })
+    })
+
+    let firstFlushSucceeded = true
+    await act(async () => {
+      firstFlushSucceeded = await result.current.flush()
+    })
+
+    expect(firstFlushSucceeded).toBe(false)
+    expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(2)
+    expect(result.current.isDirty).toBe(true)
+
+    serviceMocks.autosaveCurationCandidateDraft.mockResolvedValueOnce(
+      buildSavedWorkspaceResponse(),
+    )
+    await act(async () => {
+      expect(await result.current.flush()).toBe(true)
+    })
+    expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(3)
+  })
+
+  it('bounds an explicit envelope flush and preserves failed work for the next pass', async () => {
+    const envelopeWorkspace = buildEnvelopeWorkspace()
+    serviceMocks.patchCurationEnvelopeField.mockRejectedValue(
+      new Error('persistent outage'),
+    )
+
+    const { result } = renderHook(
+      () => useAutosave({ debounceMs: 60_000 }),
+      {
+        wrapper: createWrapper(envelopeWorkspace),
+      },
+    )
+
+    act(() => {
+      result.current.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA2',
+      })
+    })
+
+    let firstFlushSucceeded = true
+    await act(async () => {
+      firstFlushSucceeded = await result.current.flush()
+    })
+
+    expect(firstFlushSucceeded).toBe(false)
+    expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledTimes(1)
+    expect(result.current.isDirty).toBe(true)
+
+    serviceMocks.patchCurationEnvelopeField.mockResolvedValueOnce(
+      buildEnvelopePatchResponse({
+        workspace: envelopeWorkspace,
+        value: 'BRCA2',
+        before: 'BRCA1',
+        previousRevision: 7,
+        envelopeRevision: 8,
+      }),
+    )
+    await act(async () => {
+      expect(await result.current.flush()).toBe(true)
+    })
+    expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledTimes(2)
+  })
+
+  it('attempts mixed draft and envelope maps once per candidate in one flush pass', async () => {
+    const draftWorkspace = buildWorkspace()
+    const envelopeWorkspace = buildEnvelopeWorkspace()
+    serviceMocks.autosaveCurationCandidateDraft.mockRejectedValue(
+      new Error('persistent draft outage'),
+    )
+    serviceMocks.patchCurationEnvelopeField.mockRejectedValue(
+      new Error('persistent envelope outage'),
+    )
+
+    const { result } = renderHook(
+      () => ({
+        autosave: useAutosave({ debounceMs: 60_000 }),
+        context: useCurationWorkspaceContext(),
+      }),
+      {
+        wrapper: createWrapper(draftWorkspace),
+      },
+    )
+
+    act(() => {
+      result.current.autosave.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA2',
+      })
+      result.current.context.setWorkspace(envelopeWorkspace)
+    })
+    act(() => {
+      result.current.autosave.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA3',
+      })
+    })
+
+    let firstFlushSucceeded = true
+    await act(async () => {
+      firstFlushSucceeded = await result.current.autosave.flush()
+    })
+
+    expect(firstFlushSucceeded).toBe(false)
+    expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(2)
+    expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledTimes(1)
+
+    serviceMocks.autosaveCurationCandidateDraft.mockResolvedValueOnce(
+      buildSavedWorkspaceResponse(),
+    )
+    serviceMocks.patchCurationEnvelopeField.mockResolvedValueOnce(
+      buildEnvelopePatchResponse({
+        workspace: envelopeWorkspace,
+        value: 'BRCA3',
+        before: 'BRCA1',
+        previousRevision: 7,
+        envelopeRevision: 8,
+      }),
+    )
+    await act(async () => {
+      expect(await result.current.autosave.flush()).toBe(true)
+    })
+    expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(3)
+    expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledTimes(2)
+  })
+
+  it('leaves an edit queued during an explicit flush for a later pass', async () => {
+    const firstAutosave = createDeferred<ReturnType<typeof buildSavedWorkspaceResponse>>()
+    serviceMocks.autosaveCurationCandidateDraft
+      .mockImplementationOnce(() => firstAutosave.promise)
+      .mockResolvedValueOnce(buildSavedWorkspaceResponse({ value: 'BRCA3', version: 3 }))
+
+    const { result } = renderHook(
+      () => useAutosave({ debounceMs: 60_000 }),
+      {
+        wrapper: createWrapper(buildWorkspace()),
+      },
+    )
+
+    act(() => {
+      result.current.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA2',
+      })
+    })
+
+    let firstFlush!: Promise<boolean>
+    act(() => {
+      firstFlush = result.current.flush()
+    })
+    await waitFor(() => {
+      expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(1)
+    })
+
+    act(() => {
+      result.current.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA3',
+      })
+    })
+
+    await act(async () => {
+      firstAutosave.resolve(buildSavedWorkspaceResponse({ value: 'BRCA2', version: 2 }))
+      expect(await firstFlush).toBe(true)
+    })
+
+    expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(1)
+    expect(result.current.isDirty).toBe(true)
+    expect(result.current.dirtyFieldKeys).toEqual(['gene_symbol'])
+
+    await act(async () => {
+      expect(await result.current.flush()).toBe(true)
+    })
+    expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(2)
+  })
+
   it('flushes pending autosave work during unmount', async () => {
     serviceMocks.autosaveCurationCandidateDraft.mockResolvedValue(
       buildSavedWorkspaceResponse(),
@@ -794,6 +987,35 @@ describe('useAutosave', () => {
       await new Promise((resolve) => window.setTimeout(resolve, AUTOSAVE_SETTLE_MS))
     })
     expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(1)
+  })
+
+  it('bounds a persistently failing unmount flush', async () => {
+    serviceMocks.autosaveCurationCandidateDraft.mockRejectedValue(
+      new Error('persistent outage'),
+    )
+
+    const { result, unmount } = renderHook(
+      () => useAutosave({ debounceMs: 60_000 }),
+      {
+        wrapper: createWrapper(buildWorkspace()),
+      },
+    )
+
+    act(() => {
+      result.current.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA2',
+      })
+    })
+
+    act(() => {
+      unmount()
+    })
+    await waitFor(() => {
+      expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(2)
+    })
+    await new Promise((resolve) => window.setTimeout(resolve, AUTOSAVE_SETTLE_MS))
+    expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(2)
   })
 
   it('pauses a new session on unmount after the in-progress transition settles', async () => {
@@ -914,7 +1136,7 @@ describe('useAutosave', () => {
     await act(async () => {
       await new Promise((resolve) => window.setTimeout(resolve, AUTOSAVE_SETTLE_MS))
     })
-    expect(serviceMocks.autosaveCurationCandidateDraft.mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(2)
     expect(result.current.warning).toBe(
       'Autosave could not reach the server. Your draft changes remain local and can be retried.',
     )

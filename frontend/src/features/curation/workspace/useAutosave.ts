@@ -535,12 +535,12 @@ export function useAutosave(
     async (options?: FlushOptions): Promise<boolean> => {
       clearTimer()
 
+      const pendingCandidateIds = new Set([
+        ...pendingDraftsRef.current.keys(),
+        ...pendingEnvelopesRef.current.keys(),
+      ])
       let allSucceeded = true
-      for (const candidateId of pendingDraftsRef.current.keys()) {
-        const candidateSaved = await flushPendingChanges(candidateId, options)
-        allSucceeded = candidateSaved && allSucceeded
-      }
-      for (const candidateId of pendingEnvelopesRef.current.keys()) {
+      for (const candidateId of pendingCandidateIds) {
         const candidateSaved = await flushPendingChanges(candidateId, options)
         allSucceeded = candidateSaved && allSucceeded
       }
