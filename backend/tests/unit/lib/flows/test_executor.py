@@ -1423,6 +1423,201 @@ class TestGetAllAgentToolsDuplicateAgents:
 class TestGetAllAgentToolsStepOrderRuntime:
     """Tests strict step order against real FunctionTool invocation shape."""
 
+    @pytest.mark.asyncio
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    async def test_concurrent_duplicate_claim_invokes_specialist_once(
+        self, mock_get_agent, mock_streaming
+    ):
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        specialist_started = asyncio.Event()
+        release_specialist = asyncio.Event()
+        invocations = []
+
+        def _make_streaming_tool(
+            agent, tool_name, tool_description, specialist_name, **_kwargs
+        ):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                invocations.append(tool_name)
+                specialist_started.set()
+                await release_specialist.wait()
+                return f"ok:{tool_name}"
+
+            return _tool
+
+        mock_streaming.side_effect = _make_streaming_tool
+        tools, _, _, execution_state = get_all_agent_tools(
+            _make_flow([_agent_node("n1", "gene")]),
+            include_unavailable=True,
+        )
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+
+        owner = asyncio.create_task(
+            tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "owner"}))
+        )
+        await specialist_started.wait()
+        duplicate = asyncio.create_task(
+            tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "duplicate"}))
+        )
+        duplicate_result = await duplicate
+        release_specialist.set()
+        owner_result, = await asyncio.gather(owner)
+
+        assert owner_result == "ok:ask_gene_specialist"
+        assert "already in progress" in duplicate_result
+        assert invocations == ["ask_gene_specialist"]
+        assert execution_state["next_tool_index"] == 1
+        assert len(execution_state["completed_steps"]) == 1
+        assert execution_state["in_flight_step"] is None
+
+    @pytest.mark.asyncio
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    async def test_later_step_cannot_enter_while_current_step_is_in_flight(
+        self, mock_get_agent, mock_streaming
+    ):
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        first_started = asyncio.Event()
+        release_first = asyncio.Event()
+        invocations = []
+
+        def _make_streaming_tool(
+            agent, tool_name, tool_description, specialist_name, **_kwargs
+        ):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                invocations.append(tool_name)
+                if tool_name == "ask_gene_specialist":
+                    first_started.set()
+                    await release_first.wait()
+                return f"ok:{tool_name}"
+
+            return _tool
+
+        mock_streaming.side_effect = _make_streaming_tool
+        tools, _, _, execution_state = get_all_agent_tools(
+            _make_flow([
+                _agent_node("n1", "gene"),
+                _agent_node("n2", "disease"),
+            ]),
+            include_unavailable=True,
+        )
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+
+        current = asyncio.create_task(
+            tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "current"}))
+        )
+        await first_started.wait()
+        later = asyncio.create_task(
+            tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "later"}))
+        )
+        later_result = await later
+        release_first.set()
+        await asyncio.gather(current)
+
+        assert "still in progress" in later_result
+        assert invocations == ["ask_gene_specialist"]
+        assert execution_state["next_tool_index"] == 1
+
+        retry_result = await tools[1].on_invoke_tool(
+            tool_ctx, json.dumps({"query": "retry"})
+        )
+        assert retry_result == "ok:ask_disease_specialist"
+        assert invocations == ["ask_gene_specialist", "ask_disease_specialist"]
+
+    @pytest.mark.asyncio
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    async def test_independent_flow_runs_do_not_share_step_claims(
+        self, mock_get_agent, mock_streaming
+    ):
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        both_started = asyncio.Event()
+        release_specialists = asyncio.Event()
+        invocations = 0
+
+        def _make_streaming_tool(
+            agent, tool_name, tool_description, specialist_name, **_kwargs
+        ):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                nonlocal invocations
+                invocations += 1
+                if invocations == 2:
+                    both_started.set()
+                await release_specialists.wait()
+                return f"ok:{query}"
+
+            return _tool
+
+        mock_streaming.side_effect = _make_streaming_tool
+        flow = _make_flow([_agent_node("n1", "gene")])
+        first_tools, _ = get_all_agent_tools(flow)
+        second_tools, _ = get_all_agent_tools(flow)
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+
+        first = asyncio.create_task(
+            first_tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "first"}))
+        )
+        second = asyncio.create_task(
+            second_tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "second"}))
+        )
+        await asyncio.wait_for(both_started.wait(), timeout=1)
+        release_specialists.set()
+        await asyncio.gather(first, second)
+
+        assert invocations == 2
+
+    @pytest.mark.asyncio
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    async def test_cancelled_owner_releases_claim_without_advancing_step(
+        self, mock_get_agent, mock_streaming
+    ):
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        specialist_started = asyncio.Event()
+        block_first_invocation = asyncio.Event()
+        invocations = 0
+
+        def _make_streaming_tool(
+            agent, tool_name, tool_description, specialist_name, **_kwargs
+        ):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                nonlocal invocations
+                invocations += 1
+                if invocations == 1:
+                    specialist_started.set()
+                    await block_first_invocation.wait()
+                return "ok"
+
+            return _tool
+
+        mock_streaming.side_effect = _make_streaming_tool
+        tools, _, _, execution_state = get_all_agent_tools(
+            _make_flow([_agent_node("n1", "gene")]),
+            include_unavailable=True,
+        )
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+
+        owner = asyncio.create_task(
+            tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "owner"}))
+        )
+        await specialist_started.wait()
+        owner.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await owner
+
+        assert execution_state["in_flight_step"] is None
+        assert execution_state["next_tool_index"] == 0
+        assert execution_state["completed_steps"] == []
+
+        assert await tools[0].on_invoke_tool(
+            tool_ctx, json.dumps({"query": "retry"})
+        ) == "ok"
+        assert invocations == 2
+
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
     def test_repeated_first_tool_is_blocked_after_success(self, mock_get_agent, mock_streaming):
@@ -3616,6 +3811,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
         assert execution_state["completed_steps"] == []
         assert execution_state["next_tool_index"] == 0
+        assert execution_state["in_flight_step"] is None
 
     @patch("src.lib.flows.executor.get_agent_metadata")
     def test_curation_handoff_without_envelope_does_not_create_ready_state(
@@ -3654,6 +3850,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert execution_state["completed_steps"] == []
         assert execution_state["next_tool_index"] == 0
         assert "curation_handoff" not in execution_state
+        assert execution_state["in_flight_step"] is None
 
     @patch("src.lib.flows.executor.get_agent_by_id")
     def test_formatter_exception_does_not_complete_or_advance(
@@ -3697,6 +3894,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert execution_state["next_tool_index"] == 1
         assert len(execution_state["completed_steps"]) == 1
         assert execution_state["completed_steps"][0]["agent_id"] == "gene"
+        assert execution_state["in_flight_step"] is None
 
 
 # ===========================================================================
@@ -4340,6 +4538,7 @@ class TestCreateFlowSupervisorNoTools:
         # Should not raise
         supervisor = create_flow_supervisor(flow)
         assert supervisor is not None
+        assert mock_settings.call_args.kwargs["parallel_tool_calls"] is False
 
 
 # ===========================================================================
@@ -4762,10 +4961,10 @@ class TestExecuteFlowTermination:
         assert flow_finished["data"]["status"] == "completed"
 
     @pytest.mark.asyncio
-    async def test_defers_chat_output_until_later_required_handoff_completes(
+    async def test_formatter_and_handoff_events_complete_before_terminal_output(
         self, monkeypatch
     ):
-        """A chat formatter may precede required downstream steps in a saved flow."""
+        """Future handoff state must not overtake its runner completion event."""
 
         flow = _make_flow([
             _task_input_node(),
@@ -4836,14 +5035,16 @@ class TestExecuteFlowTermination:
 
         async def _fake_run_agent_streamed(**_kwargs):
             yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
-            yield {
-                "type": "TOOL_COMPLETE",
-                "details": {"toolName": "ask_chat_output_specialist"},
-            }
+            # The SDK may finish both calls before the executor consumes either
+            # TOOL_COMPLETE event from the runner stream.
             supervisor._flow_execution_state["completed_steps"].append(handoff_step)
             supervisor._flow_execution_state["curation_handoff"] = {
                 "review_session_ids": ["session-gene"],
                 "adapter_keys": ["gene"],
+            }
+            yield {
+                "type": "TOOL_COMPLETE",
+                "details": {"toolName": "ask_chat_output_specialist"},
             }
             yield {
                 "type": "TOOL_COMPLETE",
@@ -4868,11 +5069,17 @@ class TestExecuteFlowTermination:
         event_types = [event.get("type") for event in events]
 
         assert "FLOW_ERROR" not in event_types
+        assert event_types.count("TOOL_COMPLETE") == 2
         assert event_types.count("CHAT_OUTPUT_READY") == 1
         assert event_types.count("CURATION_HANDOFF_READY") == 1
-        assert event_types.index("CURATION_HANDOFF_READY") < event_types.index(
-            "CHAT_OUTPUT_READY"
+        handoff_complete_index = max(
+            index
+            for index, event in enumerate(events)
+            if event.get("type") == "TOOL_COMPLETE"
         )
+        assert handoff_complete_index < event_types.index("CURATION_HANDOFF_READY")
+        assert event_types.index("CURATION_HANDOFF_READY") < event_types.index("CHAT_OUTPUT_READY")
+        assert event_types.index("CHAT_OUTPUT_READY") < event_types.index("FLOW_FINISHED")
         assert "RUN_FINISHED" not in event_types
         chat_ready = next(e for e in events if e.get("type") == "CHAT_OUTPUT_READY")
         assert chat_ready["details"]["output"] == "Found one supported gene."
