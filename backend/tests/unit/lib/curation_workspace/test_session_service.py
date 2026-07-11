@@ -4785,7 +4785,10 @@ def test_build_submission_execute_payload_sanitizes_adapter_errors(caplog, monke
     assert "payload builder exploded" in caplog.text.lower()
 
 
-def test_execute_submission_persists_submission_updates_session_and_logs_action(db_session):
+def test_execute_submission_stages_submission_updates_session_and_logs_action(
+    db_session,
+    monkeypatch,
+):
     seeded = _create_decision_session(
         db_session,
         first_candidate_status=CurationCandidateStatus.ACCEPTED,
@@ -4795,6 +4798,13 @@ def test_execute_submission_persists_submission_updates_session_and_logs_action(
     session_row.adapter_key = REFERENCE_ADAPTER_KEY
     db_session.add(session_row)
     db_session.commit()
+    commit_calls = 0
+
+    def _commit_spy():
+        nonlocal commit_calls
+        commit_calls += 1
+
+    monkeypatch.setattr(db_session, "commit", _commit_spy)
 
     response = module.execute_submission(
         db_session,
@@ -4825,6 +4835,7 @@ def test_execute_submission_persists_submission_updates_session_and_logs_action(
     assert response.action_log_entry.action_type == CurationActionType.SUBMISSION_EXECUTED
     assert response.action_log_entry.new_session_status == CurationSessionStatus.SUBMITTED
     assert response.action_log_entry.metadata["submitted_candidate_count"] == 1
+    assert commit_calls == 0
 
     persisted_submission = db_session.scalars(
         select(SubmissionModel).where(SubmissionModel.session_id == UUID(seeded["session_id"]))
@@ -5148,7 +5159,10 @@ def test_execute_submission_normalizes_transport_errors_to_failed_submission_rec
     )
 
 
-def test_retry_submission_creates_new_submission_row_and_logs_retry_action(db_session):
+def test_retry_submission_stages_new_submission_row_and_logs_retry_action(
+    db_session,
+    monkeypatch,
+):
     seeded = _create_decision_session(
         db_session,
         first_candidate_status=CurationCandidateStatus.ACCEPTED,
@@ -5192,6 +5206,13 @@ def test_retry_submission_creates_new_submission_row_and_logs_retry_action(db_se
     )
     db_session.add(original_submission)
     db_session.commit()
+    commit_calls = 0
+
+    def _commit_spy():
+        nonlocal commit_calls
+        commit_calls += 1
+
+    monkeypatch.setattr(db_session, "commit", _commit_spy)
 
     response = module.retry_submission(
         db_session,
@@ -5217,6 +5238,7 @@ def test_retry_submission_creates_new_submission_row_and_logs_retry_action(db_se
     assert response.action_log_entry.metadata["retry_reason"] == (
         "Retry after transient downstream failure."
     )
+    assert commit_calls == 0
 
     persisted_submissions = db_session.scalars(
         select(SubmissionModel)

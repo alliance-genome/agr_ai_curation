@@ -1041,7 +1041,7 @@ async def test_post_submission_execute_delegates_to_service(monkeypatch):
         candidate_ids=[str(uuid4())],
     )
     user = {"sub": "user-1", "email": "user-1@example.org"}
-    db = object()
+    db = _TransactionSpy()
 
     response = await module.post_submission_execute(
         session_id,
@@ -1057,6 +1057,37 @@ async def test_post_submission_execute_delegates_to_service(monkeypatch):
         "request": request,
         "actor_claims": user,
     }
+    assert db.commit_calls == 1
+    assert db.rollback_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_post_submission_execute_rolls_back_rejected_attempt(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+
+    def _reject_submission(*_args, **_kwargs):
+        raise module.HTTPException(status_code=400, detail="No eligible candidates")
+
+    monkeypatch.setattr(module, "execute_submission", _reject_submission)
+
+    session_id = uuid4()
+    request = CurationSubmissionExecuteRequest(
+        session_id=str(session_id),
+        target_key="review_export_bundle",
+        candidate_ids=[str(uuid4())],
+    )
+    db = _TransactionSpy()
+
+    with pytest.raises(module.HTTPException, match="No eligible candidates"):
+        await module.post_submission_execute(
+            session_id,
+            request,
+            user={"sub": "user-1"},
+            db=db,
+        )
+
+    assert db.commit_calls == 0
+    assert db.rollback_calls == 1
 
 
 @pytest.mark.asyncio
@@ -1082,7 +1113,7 @@ async def test_post_submission_retry_delegates_to_service(monkeypatch):
         reason="Retry after downstream outage.",
     )
     user = {"sub": "user-1", "email": "user-1@example.org"}
-    db = object()
+    db = _TransactionSpy()
 
     response = await module.post_submission_retry(
         session_id,
@@ -1100,6 +1131,8 @@ async def test_post_submission_retry_delegates_to_service(monkeypatch):
         "request": request,
         "actor_claims": user,
     }
+    assert db.commit_calls == 1
+    assert db.rollback_calls == 0
 
 
 @pytest.mark.asyncio

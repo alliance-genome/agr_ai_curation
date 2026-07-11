@@ -834,11 +834,14 @@ async def post_submission_execute(
 ) -> CurationSubmissionExecuteResponse:
     set_global_user_from_cognito(db, user)
     _require_current_user_id(user)
-    return execute_submission(
+    return _run_curation_mutation(
         db,
-        session_id,
-        request,
-        actor_claims=user,
+        lambda: execute_submission(
+            db,
+            session_id,
+            request,
+            actor_claims=user,
+        ),
     )
 
 
@@ -855,12 +858,15 @@ async def post_submission_retry(
 ) -> CurationSubmissionRetryResponse:
     set_global_user_from_cognito(db, user)
     _require_current_user_id(user)
-    return retry_submission(
+    return _run_curation_mutation(
         db,
-        session_id,
-        submission_id,
-        request,
-        actor_claims=user,
+        lambda: retry_submission(
+            db,
+            session_id,
+            submission_id,
+            request,
+            actor_claims=user,
+        ),
     )
 
 
