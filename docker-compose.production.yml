@@ -388,7 +388,7 @@ services:
       AUTHENTICATION_APIKEY_ENABLED: "true"
       AUTHENTICATION_APIKEY_ALLOWED_KEYS: "${WEAVIATE_API_KEY:?set in production env}"
       AUTHORIZATION_ADMINLIST_ENABLED: "true"
-      AUTHORIZATION_ADMINLIST_USERS: "${WEAVIATE_API_KEY_USER:?set in production env}"
+      AUTHORIZATION_ADMINLIST_USERS: "${WEAVIATE_API_KEY_USER:-curation-backend}"
       PERSISTENCE_DATA_PATH: /var/lib/weaviate
       DEFAULT_VECTORIZER_MODULE: text2vec-openai
       ENABLE_MODULES: "text2vec-openai,reranker-transformers"
