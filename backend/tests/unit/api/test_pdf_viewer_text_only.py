@@ -56,7 +56,7 @@ def _authenticated_owner(monkeypatch):
     monkeypatch.setattr(
         pdf_viewer,
         "provision_user",
-        lambda _db, _principal: SimpleNamespace(id=7),
+        lambda _db, principal: SimpleNamespace(id=7, auth_sub=principal["sub"]),
     )
     monkeypatch.setattr(pdf_viewer, "principal_from_claims", lambda claims: claims)
 
