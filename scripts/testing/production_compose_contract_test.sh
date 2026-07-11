@@ -78,6 +78,30 @@ assert str(backend_env["SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS"]) == "2000"
 assert str(backend_env["SENTRY_TRANSACTION_RETAINED_SPANS_MAX"]) == "50"
 PY
 
+python3 - "${repo_root}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+repo_root = Path(sys.argv[1])
+doc_paths = (
+    repo_root / "docs/deployment/independent-deployment.md",
+    repo_root / "docs/deployment/modular-packages.md",
+    repo_root / "docs/developer/guides/ADDING_NEW_AGENT.md",
+    repo_root / "docs/developer/guides/ADDING_NEW_TOOL.md",
+    repo_root / "docs/developer/guides/CONFIG_DRIVEN_ARCHITECTURE.md",
+)
+for doc_path in doc_paths:
+    text = doc_path.read_text(encoding="utf-8")
+    for command_block in re.findall(r"```(?:bash|sh)\s*(.*?)```", text, re.DOTALL):
+        if "docker-compose.production.yml" not in command_block:
+            continue
+        if re.search(r"\b(?:up|start|restart)\b", command_block):
+            raise AssertionError(
+                f"{doc_path} documents an unvalidated production Compose operation"
+            )
+PY
+
 unsafe_environment="${temp_dir}/unsafe-environment.json"
 render_with_override \
   "${fixture_dir}/production-compose-unsafe-environment.yml" \

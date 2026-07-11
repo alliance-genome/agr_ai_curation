@@ -307,7 +307,7 @@ print_summary() {
   else
     echo "Next steps: open the application URL and complete your configured OIDC sign-in flow."
   fi
-  echo "Restart command: docker compose --env-file ${env_output_path} -f ${main_compose_file} up -d"
+  echo "Restart command: ${repo_root}/scripts/install/install.sh --from-stage 6"
 }
 
 start_pdfx_stack_if_configured() {
@@ -394,9 +394,8 @@ main() {
     echo
     echo "  Troubleshooting:"
     echo "    - Check container logs:    docker compose --env-file ${env_output_path} -f ${main_compose_file} logs <service>"
-    echo "    - Restart a single service: docker compose --env-file ${env_output_path} -f ${main_compose_file} restart <service>"
     echo "    - TraceReview diagnostics: scripts/testing/trace_review_preflight.sh --backend-url $(trace_review_url)"
-    echo "    - Re-run this stage:        scripts/install/install.sh --from-stage 6"
+    echo "    - Guarded restart/verify:   scripts/install/install.sh --from-stage 6"
     echo
     log_error "One or more services failed verification"
     exit 1

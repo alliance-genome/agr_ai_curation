@@ -427,3 +427,16 @@ def test_make_prod_is_the_single_source_checkout_production_launch_path():
     assert 'docker compose --env-file "$(ENV_FILE)" -f docker-compose.production.yml up -d' in makefile
     assert "docker-compose.prod.yml" not in makefile
     assert "prod-build:" not in makefile
+
+
+def test_generated_production_launches_cannot_bypass_preflight():
+    start_verify_script = START_VERIFY_PATH.read_text(encoding="utf-8")
+
+    assert (
+        'Restart command: ${repo_root}/scripts/install/install.sh --from-stage 6'
+        in start_verify_script
+    )
+    assert "Restart command: docker compose" not in start_verify_script
+    assert "docker compose --env-file ${env_output_path} -f ${main_compose_file} restart" not in (
+        start_verify_script
+    )

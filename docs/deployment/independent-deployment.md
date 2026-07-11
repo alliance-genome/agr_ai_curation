@@ -246,10 +246,11 @@ To add it later, set either:
 - or `CURATION_DB_CREDENTIALS_SOURCE=aws_secrets` plus the relevant
   `CURATION_DB_AWS_SECRET_ID`, `AWS_PROFILE`, and `AWS_REGION`
 
-Then restart the backend:
+Then rerun the guarded production start-and-verify stage. Compose only recreates
+services whose effective configuration changed:
 
 ```bash
-docker compose --env-file ~/.agr_ai_curation/.env -f docker-compose.production.yml up -d backend
+scripts/install/install.sh --from-stage 6
 ```
 
 On a generic third-party install, `/health` should not be degraded just because
@@ -289,10 +290,10 @@ PDF_EXTRACTION_SERVICE_URL=http://localhost:5000
 PDF_EXTRACTION_SERVICE_URL=http://host.docker.internal:5000
 ```
 
-After changing the URL, restart the backend:
+After changing the URL, rerun the guarded production start-and-verify stage:
 
 ```bash
-docker compose --env-file ~/.agr_ai_curation/.env -f docker-compose.production.yml up -d backend
+scripts/install/install.sh --from-stage 6
 ```
 
 ## Authentication (OIDC)

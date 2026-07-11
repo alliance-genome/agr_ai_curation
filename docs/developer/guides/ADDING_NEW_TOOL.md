@@ -254,9 +254,8 @@ need to override the automatically derived metadata.
 ## Step 5: Restart and Verify
 
 ```bash
-# Restart backend to pick up the updated package
-docker compose --env-file ~/.agr_ai_curation/.env \
-  -f docker-compose.production.yml restart backend
+# Validate the production configuration, restart, and verify the stack
+scripts/install/install.sh --from-stage 6
 
 # Verify tool binding is resolved (check logs for errors)
 docker compose logs backend | grep "my_custom_tool"
