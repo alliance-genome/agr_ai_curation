@@ -405,13 +405,18 @@ def test_get_current_flow_handler_detects_parallel_and_disconnected_nodes():
     result = handler()
 
     assert result["success"] is True
-    assert result["step_count"] == 3
-    assert result["disconnected_count"] == 1
+    # Invalid branches do not get flattened into a pretend sequential order.
+    assert result["step_count"] == 0
+    assert result["disconnected_count"] == 3
     assert result["has_critical_issues"] is True
     assert result["critical_issue_count"] >= 2  # empty task instructions + parallel branching
     assert any(w["type"] == "CRITICAL" for w in result["validation_warnings"])
-    assert any(w["type"] == "WARNING" for w in result["validation_warnings"])
-    assert "Parallel flows not yet supported" in result["execution_order_markdown"]
+    assert {issue["code"] for issue in result["executable_graph"]["issues"]} >= {
+        "branch",
+        "ambiguous_terminal",
+        "disconnected",
+    }
+    assert "Invalid executable flow topology" in result["execution_order_markdown"]
 
 
 def test_get_current_flow_handler_ignores_validation_attachment_sidecar_edges():
@@ -475,11 +480,10 @@ def test_get_current_flow_handler_ignores_validation_attachment_sidecar_edges():
     result = handler()
 
     assert result["success"] is True
-    assert result["step_count"] == 3
+    assert result["step_count"] == 2
     assert result["disconnected_count"] == 0
     assert result["has_critical_issues"] is False
     assert [step["node_id"] for step in result["steps"]] == [
-        "task_input_0",
         "extract_1",
         "output_1",
     ]
@@ -538,7 +542,7 @@ def test_get_current_flow_handler_flags_attachment_only_validator_step(monkeypat
 
     assert result["success"] is True
     assert result["has_critical_issues"] is True
-    assert result["steps"][1]["flow_step_policy_warning"].startswith(
+    assert result["steps"][0]["flow_step_policy_warning"].startswith(
         "Allele Validation is an attachment-only validator"
     )
     assert any(

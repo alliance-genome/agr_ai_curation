@@ -10,14 +10,19 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from src.lib.executable_flow_graph import project_executable_flow_graph
+from src.lib.flow_edge_roles import (
+    CONTROL_FLOW_EDGE_ROLE,
+    FlowEdgeRole,
+    VALIDATION_ATTACHMENT_EDGE_ROLE,
+)
+
 
 # =============================================================================
 # FlowDefinition Schema (JSONB Validation)
 # =============================================================================
 
-FlowEdgeRole = Literal["control_flow", "validation_attachment"]
-DEFAULT_FLOW_EDGE_ROLE: FlowEdgeRole = "control_flow"
-VALIDATION_ATTACHMENT_EDGE_ROLE: FlowEdgeRole = "validation_attachment"
+DEFAULT_FLOW_EDGE_ROLE: FlowEdgeRole = CONTROL_FLOW_EDGE_ROLE
 FLOW_OUTPUT_FILENAME_TEMPLATE_VARIABLES = frozenset(
     {"input_filename", "input_filename_stem", "trace_id", "timestamp"}
 )
@@ -365,30 +370,7 @@ class FlowDefinition(BaseModel):
             raise ValueError("Flow can only have one task_input node")
         return self
 
-    # VALIDATOR 6: task_input must be entry node
-    @model_validator(mode="after")
-    def validate_task_input_is_entry(self) -> "FlowDefinition":
-        """If flow has task_input node, it must be the entry_node_id."""
-        task_input_nodes = [n for n in self.nodes if n.type == "task_input"]
-        if task_input_nodes:
-            task_input_id = task_input_nodes[0].id
-            if self.entry_node_id != task_input_id:
-                raise ValueError("task_input node must be the entry_node_id")
-        return self
-
-    # VALIDATOR 7: task_input cannot have incoming edges
-    @model_validator(mode="after")
-    def validate_task_input_no_incoming_edges(self) -> "FlowDefinition":
-        """Ensure task_input nodes have no incoming edges."""
-        task_input_nodes = [n for n in self.nodes if n.type == "task_input"]
-        if task_input_nodes:
-            task_input_id = task_input_nodes[0].id
-            incoming_edges = [e for e in self.edges if e.target == task_input_id]
-            if incoming_edges:
-                raise ValueError("task_input node cannot have incoming edges")
-        return self
-
-    # VALIDATOR 8: Reject non-executable agents (e.g., supervisor)
+    # Reject non-executable agents (e.g., supervisor)
     _BLOCKED_AGENT_IDS = frozenset({"supervisor"})
 
     @model_validator(mode="after")
@@ -400,6 +382,13 @@ class FlowDefinition(BaseModel):
                     f"Agent '{node.data.agent_id}' cannot be used in flows. "
                     "It is an internal system agent."
                 )
+        return self
+
+    @model_validator(mode="after")
+    def validate_executable_topology(self) -> "FlowDefinition":
+        """Enforce the canonical sequential control-flow contract at save time."""
+
+        project_executable_flow_graph(self)
         return self
 
 

@@ -66,6 +66,7 @@ import TaskInputEditor from './TaskInputEditor'
 import PromptViewer from './PromptViewer'
 import DomainEnvelopeViewer from './DomainEnvelopeViewer'
 import { validationAttachmentForPersistence } from './types'
+import { projectExecutableFlowGraph } from './executableFlowGraph'
 import type {
   FlowBuilderProps,
   FlowState,
@@ -324,7 +325,7 @@ export const rebuildValidationGroupsFromEdges = (
  */
 const computeValidationErrors = (
   currentNodes: AgentNode[],
-  _currentEdges: { source: string; target: string }[],
+  currentEdges: FlowEdge[],
 ): Array<{ nodeId: string; message: string }> => {
   const errors: Array<{ nodeId: string; message: string }> = []
 
@@ -334,6 +335,31 @@ const computeValidationErrors = (
     errors.push({
       nodeId: taskInputNode.id,
       message: 'Initial instructions are required',
+    })
+  }
+
+  if (taskInputNode) {
+    const topology = projectExecutableFlowGraph(
+      currentNodes.map(node => ({
+        id: node.id,
+        type: node.data.agent_id === 'task_input' ? 'task_input' : 'agent',
+        data: node.data,
+      })),
+      currentEdges.map(edge => ({
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        role: edgeRole(edge),
+        satisfies_binding_id: edge.data?.satisfies_binding_id,
+        replaces_attachment_id: edge.data?.replaces_attachment_id,
+      })),
+      taskInputNode.id,
+    )
+    topology.issues.forEach(topologyIssue => {
+      errors.push({
+        nodeId: topologyIssue.node_ids[0] ?? taskInputNode.id,
+        message: `[${topologyIssue.code}] ${topologyIssue.message}`,
+      })
     })
   }
 
@@ -771,10 +797,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
   // Uses setNodes functional update to access current state and avoid stale closures
   const revalidateValidators = useCallback(() => {
     setNodes(currentNodes => {
-      const edgeData = edges.map(e => ({ source: e.source, target: e.target }))
       const errors = computeValidationErrors(
         currentNodes as AgentNode[],
-        edgeData
+        edges as FlowEdge[]
       )
       const errorsByNodeId = new Map(errors.map(e => [e.nodeId, e.message]))
 
@@ -853,29 +878,10 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       return
     }
 
-    // Check for parallel/branching flows (not yet supported)
-    // Count ordinary outgoing control-flow edges per node. Validation attachment
-    // sidecars may fan out from one extractor without creating parallel flow.
-    const outgoingEdgeCounts = new Map<string, number>()
-    edges.forEach(e => {
-      if (edgeRole(e as FlowEdge) !== 'control_flow') return
-      outgoingEdgeCounts.set(e.source, (outgoingEdgeCounts.get(e.source) || 0) + 1)
-    })
-    const parallelNode = nodes.find(n => (outgoingEdgeCounts.get(n.id) || 0) > 1)
-    if (parallelNode) {
-      setSelectedNode(parallelNode as AgentNode)
-      setSnackbar({
-        message: `Parallel flows not yet supported. "${parallelNode.data.agent_display_name}" has multiple outgoing connections. This feature will be available in a future update.`,
-        severity: 'error'
-      })
-      return
-    }
-
     // Compute validation errors fresh (don't rely on stale hasError state)
-    const edgeData = edges.map(e => ({ source: e.source, target: e.target }))
     const validationErrors = computeValidationErrors(
       nodes as AgentNode[],
-      edgeData
+      edges as FlowEdge[]
     )
     if (validationErrors.length > 0) {
       // Find the first error node and select it

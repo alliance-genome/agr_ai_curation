@@ -22,7 +22,7 @@ from contextvars import ContextVar
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from src.schemas.flows import DEFAULT_FLOW_EDGE_ROLE, VALIDATION_ATTACHMENT_EDGE_ROLE
+from src.lib.executable_flow_graph import project_executable_flow_graph
 from src.lib.openai_agents.bounded_list import (
     normalize_page_limit,
     offset_page,
@@ -58,10 +58,6 @@ def _truncate_preview(text: str, max_chars: int) -> str:
     """Return a preview string with ellipsis only when truncation occurred."""
 
     return text[:max_chars] + ("..." if len(text) > max_chars else "")
-
-
-def _is_validation_attachment_edge(edge: Dict[str, Any]) -> bool:
-    return edge.get("role", DEFAULT_FLOW_EDGE_ROLE) == VALIDATION_ATTACHMENT_EDGE_ROLE
 
 
 def set_workflow_user_context(user_id: int, user_email: Optional[str] = None) -> None:
@@ -975,8 +971,6 @@ def _get_current_flow_handler():
         flow_name = flow_context.get("flow_name", "Untitled Flow")
         nodes = flow_context.get("nodes", [])
         edges = flow_context.get("edges", [])
-        entry_node_id = flow_context.get("entry_node_id")
-
         if not nodes:
             domain_envelope_analysis = current_flow_domain_envelope_analysis(
                 flow_context=flow_context,
@@ -992,65 +986,69 @@ def _get_current_flow_handler():
                 "execution_order_markdown": f"# {flow_name}\n\nThis flow has no steps yet."
             }
 
-        # Build lookup structures
+        # Project the same control topology used by save, batch, and runtime.
         node_by_id = {n.get("id"): n for n in nodes}
-        edges_from = {}  # source_id -> list of target_ids
-        edges_to = {}    # target_id -> list of source_ids
-        control_flow_edges = [
-            edge for edge in edges if not _is_validation_attachment_edge(edge)
+        projection = project_executable_flow_graph(flow_context, raise_on_invalid=False)
+        execution_order = [
+            node_by_id[node_id]
+            for node_id in projection.ordered_executable_node_ids
+            if node_id in node_by_id
         ]
-        validation_attachment_target_ids = {
-            edge.get("target")
-            for edge in edges
-            if _is_validation_attachment_edge(edge) and edge.get("target")
+        disconnected_ids = {
+            node_id
+            for issue in projection.issues
+            if issue.code == "disconnected"
+            for node_id in issue.node_ids
         }
-
-        for edge in control_flow_edges:
-            source = edge.get("source")
-            target = edge.get("target")
-            if source and target:
-                edges_from.setdefault(source, []).append(target)
-                edges_to.setdefault(target, []).append(source)
-
-        # Find entry node: either explicitly set, or the node with no incoming edges
-        if entry_node_id and entry_node_id in node_by_id:
-            start_node_id = entry_node_id
-        else:
-            # Find node with no incoming edges
-            nodes_with_incoming = set(edges_to.keys())
-            potential_starts = [n.get("id") for n in nodes if n.get("id") not in nodes_with_incoming]
-            start_node_id = potential_starts[0] if potential_starts else (nodes[0].get("id") if nodes else None)
-
-        # Traverse the flow in execution order (BFS from entry node)
-        execution_order = []
-        visited = set()
-        queue = [start_node_id] if start_node_id else []
-
-        while queue:
-            current_id = queue.pop(0)
-            if current_id in visited:
-                continue
-            visited.add(current_id)
-
-            node = node_by_id.get(current_id)
-            if node:
-                execution_order.append(node)
-                # Add next nodes (targets of outgoing edges)
-                for next_id in edges_from.get(current_id, []):
-                    if next_id not in visited:
-                        queue.append(next_id)
-
-        # Include any disconnected nodes at the end (with warning)
-        disconnected = []
-        for node in nodes:
-            node_id = node.get("id")
-            if node_id not in visited and node_id not in validation_attachment_target_ids:
-                disconnected.append(node)
+        disconnected = [
+            node_by_id[node_id]
+            for node_id in projection.control_node_ids
+            if node_id in disconnected_ids and node_id in node_by_id
+        ]
 
         # Build the response
         steps = []
-        validation_warnings = []  # Collect issues for easy detection
-        markdown_lines = [f"# {flow_name}", "", f"**{len(execution_order)} steps in execution order:**", ""]
+        validation_warnings = [
+            {
+                "type": "CRITICAL",
+                "node_id": issue.node_ids[0] if issue.node_ids else None,
+                "code": issue.code,
+                "message": issue.message,
+            }
+            for issue in projection.issues
+        ]
+        markdown_lines = [
+            f"# {flow_name}",
+            "",
+            f"**{len(execution_order)} executable steps in execution order:**",
+            "",
+        ]
+        task_input_node = next(
+            (
+                node
+                for node in nodes
+                if node.get("type") == "task_input"
+                or node.get("data", node).get("agent_id") == "task_input"
+            ),
+            None,
+        )
+        if task_input_node is not None:
+            task_data = task_input_node.get("data", task_input_node)
+            task_instructions = task_data.get("task_instructions")
+            if task_instructions and task_instructions.strip():
+                markdown_lines.extend(
+                    [
+                        "**Task Input:** " + _truncate_preview(task_instructions, 300),
+                        "",
+                    ]
+                )
+            else:
+                validation_warnings.append({
+                    "type": "CRITICAL",
+                    "node_id": task_input_node.get("id"),
+                    "message": "task_input node has EMPTY task_instructions (this is required content)",
+                })
+                markdown_lines.extend(["**Task Input:** ⚠️ EMPTY (required)", ""])
 
         def _attachment_only_warning_for_node(node: Dict[str, Any]) -> Optional[str]:
             node_data = node.get("data", node)
@@ -1177,34 +1175,12 @@ def _get_current_flow_handler():
             markdown_lines.append(f"- **Output Key:** `{output_key}`")
             markdown_lines.append("")
 
-        # Check for parallel/branching flows (not yet supported)
-        # Count outgoing edges per node
-        outgoing_edge_counts: dict[str, int] = {}
-        for edge in control_flow_edges:
-            source_id = edge.get("source")
-            if source_id:
-                outgoing_edge_counts[source_id] = outgoing_edge_counts.get(source_id, 0) + 1
-
-        parallel_nodes = []
-        for node in nodes:
-            node_id = node.get("id")
-            if outgoing_edge_counts.get(node_id, 0) > 1:
-                node_data = node.get("data", node)
-                node_name = node_data.get("agent_display_name", node_data.get("agent_id", "unknown"))
-                parallel_nodes.append({"node_id": node_id, "name": node_name, "outgoing_count": outgoing_edge_counts[node_id]})
-                validation_warnings.append({
-                    "type": "CRITICAL",
-                    "node_id": node_id,
-                    "message": f"PARALLEL FLOW NOT YET SUPPORTED: '{node_name}' has {outgoing_edge_counts[node_id]} outgoing connections. Only sequential flows are currently supported (each node can connect to at most one next node). Parallel flows will be available in a future update."
-                })
-
-        # Add parallel flow warning to markdown if any
-        if parallel_nodes:
+        topology_issues = list(projection.issues)
+        if topology_issues:
             markdown_lines.append("---")
-            markdown_lines.append(f"🚫 **CRITICAL: Parallel flows not yet supported** ({len(parallel_nodes)} node(s) with multiple outputs):")
-            for pn in parallel_nodes:
-                markdown_lines.append(f"- {pn['name']} has {pn['outgoing_count']} outgoing connections")
-            markdown_lines.append("*Parallel/branching flows will be supported in a future update.*")
+            markdown_lines.append("🚫 **Invalid executable flow topology:**")
+            for issue in topology_issues:
+                markdown_lines.append(f"- `[{issue.code}]` {issue.message}")
             markdown_lines.append("")
 
         # Add disconnected nodes warning if any
@@ -1229,22 +1205,6 @@ def _get_current_flow_handler():
                 source_name = source_node.get("data", source_node).get("agent_display_name", edge.get("source"))
                 target_name = target_node.get("data", target_node).get("agent_display_name", edge.get("target"))
                 markdown_lines.append(f"- {source_name} → {target_name}")
-
-        # Add warnings for disconnected nodes
-        for node in disconnected:
-            node_data = node.get("data", node)
-            flow_step_policy_warning = _attachment_only_warning_for_node(node)
-            if flow_step_policy_warning:
-                validation_warnings.append({
-                    "type": "CRITICAL",
-                    "node_id": node.get("id"),
-                    "message": flow_step_policy_warning,
-                })
-            validation_warnings.append({
-                "type": "WARNING",
-                "node_id": node.get("id"),
-                "message": f"Node '{node_data.get('agent_display_name', node_data.get('agent_id', 'unknown'))}' is disconnected and won't execute"
-            })
 
         domain_envelope_analysis = current_flow_domain_envelope_analysis(
             flow_context=flow_context,
@@ -1294,6 +1254,7 @@ def _get_current_flow_handler():
             "has_critical_issues": critical_count > 0,
             "critical_issue_count": critical_count,
             "domain_envelope_analysis": domain_envelope_analysis,
+            "executable_graph": projection.to_dict(),
             "steps": steps,
             "edges": [{"source": e.get("source"), "target": e.get("target")} for e in edges],
             "execution_order_markdown": "\n".join(markdown_lines),
