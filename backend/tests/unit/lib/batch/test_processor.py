@@ -15,6 +15,8 @@ from src.lib.batch import processor
 from src.lib.batch.service import BatchService
 from src.models.sql.batch import BatchDocumentStatus, BatchStatus
 
+_maintain_batch_lease = processor._maintain_batch_lease
+
 
 def _build_batch_context() -> tuple[Any, Any, Any]:
     batch = SimpleNamespace(
@@ -126,6 +128,57 @@ def test_batch_processor_marks_failed_when_no_file_ready(monkeypatch):
             "timestamp": batch_doc.processed_at.isoformat(),
         }
     ]
+
+
+def test_batch_lease_heartbeat_retries_after_session_error(monkeypatch, caplog):
+    batch_id = uuid4()
+    lease_owner = uuid4()
+    heartbeat_calls = 0
+
+    class FakeEvent:
+        def __init__(self):
+            self.wait_calls = 0
+
+        def wait(self, _seconds):
+            self.wait_calls += 1
+            return self.wait_calls > 2
+
+        def set(self):
+            pass
+
+    class InlineThread:
+        def __init__(self, *, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+        def join(self):
+            pass
+
+    @contextmanager
+    def heartbeat_session():
+        nonlocal heartbeat_calls
+        heartbeat_calls += 1
+        if heartbeat_calls == 1:
+            raise RuntimeError("temporary database outage")
+        yield object()
+
+    monkeypatch.setattr(processor.threading, "Event", FakeEvent)
+    monkeypatch.setattr(processor.threading, "Thread", InlineThread)
+    monkeypatch.setattr(processor, "get_db_session", heartbeat_session)
+    monkeypatch.setattr(
+        BatchService,
+        "heartbeat_batch_lease",
+        lambda *_args, **_kwargs: True,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        with _maintain_batch_lease(batch_id, lease_owner):
+            pass
+
+    assert heartbeat_calls == 2
+    assert "renewal will retry on the next interval" in caplog.text
 
 
 def test_batch_processor_marks_completed_when_file_ready(monkeypatch):

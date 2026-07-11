@@ -113,7 +113,7 @@ class TestBatchStatusTransitions:
 class TestBatchServiceMocked:
     """Tests for BatchService using mocks to avoid DB constraints."""
 
-    def test_claim_pending_batch_returns_none_when_conditional_update_loses(self):
+    def test_claim_recoverable_batch_returns_none_when_conditional_update_loses(self):
         mock_db = Mock()
         mock_db.execute.return_value.scalar_one_or_none.return_value = None
 

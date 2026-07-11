@@ -85,14 +85,24 @@ def _maintain_batch_lease(batch_id: UUID, lease_owner: UUID):
 
     def heartbeat() -> None:
         while not stopped.wait(heartbeat_seconds):
-            with get_db_session() as heartbeat_db:
-                if not BatchService(heartbeat_db).heartbeat_batch_lease(
+            try:
+                with get_db_session() as heartbeat_db:
+                    if not BatchService(heartbeat_db).heartbeat_batch_lease(
+                        batch_id,
+                        lease_owner,
+                        lease_seconds,
+                    ):
+                        logger.info(
+                            "Batch lease heartbeat lost ownership: batch_id=%s", batch_id
+                        )
+                        return
+            except Exception:
+                logger.warning(
+                    "Batch lease heartbeat failed; renewal will retry on the next interval: "
+                    "batch_id=%s",
                     batch_id,
-                    lease_owner,
-                    lease_seconds,
-                ):
-                    logger.info("Batch lease heartbeat lost ownership: batch_id=%s", batch_id)
-                    return
+                    exc_info=True,
+                )
 
     thread = threading.Thread(
         target=heartbeat,

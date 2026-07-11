@@ -8,6 +8,8 @@ simultaneous startup scans are safe because only one owner can claim a row.
 The lease owner heartbeats while flow execution is active. Its duration and
 heartbeat interval are configured by `BATCH_WORKER_LEASE_SECONDS` and
 `BATCH_WORKER_HEARTBEAT_SECONDS`. Cancellation and completion clear the lease.
+Startup recovery processes at most `BATCH_RECOVERY_MAX_CONCURRENCY` batches at
+once so a large stale backlog cannot create unbounded flow execution load.
 An expired owner cannot heartbeat, persist a document result, update counters,
 or complete the batch.
 

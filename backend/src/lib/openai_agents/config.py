@@ -97,6 +97,11 @@ def get_batch_worker_heartbeat_seconds() -> int:
     return max(1, _get_env_int_with_fallback("BATCH_WORKER_HEARTBEAT_SECONDS", 30))
 
 
+def get_batch_recovery_max_concurrency() -> int:
+    """Maximum persisted batches processed concurrently during startup recovery."""
+    return max(1, _get_env_int_with_fallback("BATCH_RECOVERY_MAX_CONCURRENCY", 4))
+
+
 def is_retryable_groq_tool_call_error(exc: Exception) -> bool:
     """Return True when an exception matches known transient Groq tool-call parse failures."""
     text = str(exc or "").lower()
