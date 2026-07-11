@@ -542,10 +542,11 @@ Use `/api/users/me` to confirm env parity before running tests.
 
 ## PDF Viewer Metadata API
 
-All PDF viewer endpoints require authentication and enforce the same
-database-user ownership policy for metadata and PDF bytes. The commands below
-work without explicit credentials only when `DEV_MODE=true`; otherwise, send
-the authenticated `cognito_token` cookie. Endpoints:
+The PDF viewer document list, detail, URL-resolution, and content endpoints
+require authentication and enforce the same database-user ownership policy for
+metadata and PDF bytes. The commands below work without explicit credentials
+only when `DEV_MODE=true`; otherwise, send the authenticated `cognito_token`
+cookie. Endpoints:
 
 ```bash
 curl http://localhost:8000/api/pdf-viewer/documents | jq
