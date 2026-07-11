@@ -109,7 +109,7 @@ class PDFDocument(Base):
             name="ck_pdf_documents_file_size",
         ),
         CheckConstraint(
-            "page_count > 0 AND page_count <= 50",
+            "page_count > 0",
             name="ck_pdf_documents_page_count",
         ),
     )

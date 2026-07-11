@@ -1738,6 +1738,14 @@ def get_pdf_max_file_size_bytes() -> int:
     )
 
 
+def get_pdf_upload_max_page_count() -> int:
+    """Max page count admitted for PDF uploads (PDF_UPLOAD_MAX_PAGE_COUNT).
+
+    Rejects oversized PDFs before durable intake side effects. Default 100.
+    """
+    return max(1, _get_env_int_with_fallback("PDF_UPLOAD_MAX_PAGE_COUNT", 100))
+
+
 def get_evidence_page_only_degraded_ratio_threshold() -> float:
     """Ratio at/above which page-only evidence is flagged degraded (EVIDENCE_PAGE_ONLY_DEGRADED_RATIO_THRESHOLD).
 

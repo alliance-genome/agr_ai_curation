@@ -141,6 +141,7 @@ Pygments==2.20.0
 PyJSG==0.12.4
 PyJWT==2.13.0
 pyparsing==3.3.2
+pypdf==6.14.2
 PyShEx==0.8.1
 PyShExC==0.9.1
 pystow==0.8.15

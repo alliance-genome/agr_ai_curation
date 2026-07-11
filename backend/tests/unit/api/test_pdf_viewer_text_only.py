@@ -112,3 +112,22 @@ def test_get_document_detail_preserves_local_pdf_viewer_url():
 
     assert response.viewer_url == f"/api/pdf-viewer/documents/{_DOC_ID}/content"
     assert response.viewer_mode == "local_pdf"
+
+
+@pytest.mark.parametrize("page_count", [51, 100, 121])
+def test_viewer_response_schema_serializes_stored_page_counts_above_legacy_limit(
+    page_count,
+):
+    response = pdf_viewer.PDFDocumentSummary.model_validate(
+        {
+            "id": _DOC_ID,
+            "filename": "paper.pdf",
+            "page_count": page_count,
+            "file_size": 512,
+            "upload_timestamp": datetime(2026, 6, 25, tzinfo=timezone.utc),
+            "viewer_url": f"/api/pdf-viewer/documents/{_DOC_ID}/content",
+            "viewer_mode": "local_pdf",
+        }
+    )
+
+    assert response.page_count == page_count

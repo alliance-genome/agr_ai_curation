@@ -1382,7 +1382,11 @@ async def upload_document_endpoint(
         raise_sanitized_http_exception(
             logger,
             status_code=400,
-            detail="Invalid document upload request",
+            detail=(
+                validation_error.client_detail
+                if validation_error.client_detail is not None
+                else "Invalid document upload request"
+            ),
             log_message="Document upload validation failed",
             exc=validation_error,
             level=logging.WARNING,

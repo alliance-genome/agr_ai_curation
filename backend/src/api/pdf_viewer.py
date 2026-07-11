@@ -34,7 +34,7 @@ router = APIRouter(prefix="/api/pdf-viewer", tags=["PDF Viewer"])
 class PDFDocumentSummary(BaseModel):
     id: UUID = Field(..., description="Unique identifier for the document")
     filename: str = Field(..., min_length=1, max_length=255)
-    page_count: int = Field(..., ge=1, le=50)
+    page_count: int = Field(..., ge=1)
     file_size: int = Field(
         ...,
         gt=0,

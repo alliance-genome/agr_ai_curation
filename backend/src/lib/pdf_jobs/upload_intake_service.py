@@ -51,6 +51,7 @@ from src.lib.document_sources.registry import (
 from src.lib.openai_agents.config import (
     get_document_source_import_enabled,
     get_document_source_provider,
+    get_pdf_upload_max_page_count,
 )
 from src.lib.pdf_limits import (
     MAX_PDF_FILE_SIZE_BYTES,
@@ -152,6 +153,10 @@ class ProviderChecksumImportPlan:
 class UploadIntakeValidationError(ValueError):
     """Raised when an upload request fails validation checks."""
 
+    def __init__(self, message: str, *, client_detail: object | None = None):
+        super().__init__(message)
+        self.client_detail = client_detail
+
 
 class UploadIntakeDuplicateError(Exception):
     """Raised when upload intake detects a duplicate document."""
@@ -231,6 +236,7 @@ class UploadIntakeService:
             Awaitable[ChecksumImportDecision],
         ] = select_checksum_import_candidate,
         find_existing_source_document_fn: Callable[..., Any] = find_existing_document_by_source,
+        max_page_count_provider: Callable[[], int] = get_pdf_upload_max_page_count,
     ) -> None:
         self.upload_execution_service = upload_execution_service
         self._session_factory = session_factory
@@ -248,6 +254,7 @@ class UploadIntakeService:
         self._document_source_provider_factory = document_source_provider_factory
         self._checksum_import_selector = checksum_import_selector
         self._find_existing_source_document = find_existing_source_document_fn
+        self._max_page_count_provider = max_page_count_provider
 
     @staticmethod
     def _default_upload_handler_factory(storage_path: Path) -> PDFUploadHandler:
@@ -275,6 +282,12 @@ class UploadIntakeService:
             raise UploadIntakeValidationError(str(upload_error)) from upload_error
         file_size_bytes = saved_path.stat().st_size
         self._validate_saved_pdf_size(saved_path, file_size_bytes)
+        page_count = document.metadata.page_count
+        self._validate_pdf_page_count(
+            saved_path,
+            page_count=page_count,
+            max_page_count=self._max_page_count_provider(),
+        )
 
         session = self._session_factory()
         db_user = None
@@ -358,7 +371,7 @@ class UploadIntakeService:
                 file_path=relative_path_string,
                 file_hash=scoped_file_hash,
                 file_size=file_size_bytes,
-                page_count=max(document.metadata.page_count, 1),
+                page_count=page_count,
                 user_id=db_user.id,
                 viewer_mode=viewer_mode,
                 source_provider=source_provenance.get("provider"),
@@ -854,6 +867,32 @@ class UploadIntakeService:
 
         cls._cleanup_saved_file_artifacts(saved_path)
         raise UploadIntakeValidationError(pdf_file_size_limit_message(file_size_bytes))
+
+    @classmethod
+    def _validate_pdf_page_count(
+        cls,
+        saved_path: Path,
+        *,
+        page_count: int,
+        max_page_count: int,
+    ) -> None:
+        if 1 <= page_count <= max_page_count:
+            return
+
+        cls._cleanup_saved_file_artifacts(saved_path)
+        message = (
+            f"PDF page count ({page_count}) exceeds the configured maximum "
+            f"({max_page_count})."
+        )
+        raise UploadIntakeValidationError(
+            message,
+            client_detail={
+                "error": "pdf_page_count_exceeded",
+                "message": message,
+                "actual_page_count": page_count,
+                "max_page_count": max_page_count,
+            },
+        )
 
     @staticmethod
     def _extract_integrity_constraint_name(error: IntegrityError) -> Optional[str]:
