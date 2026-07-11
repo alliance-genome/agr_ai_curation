@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 from alembic import command
 from alembic.config import Config
 import pytest
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, select
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from src.lib.curation_workspace.models import (
@@ -30,6 +30,7 @@ from src.lib.domain_envelopes.persistence import (
     DomainEnvelopeCheckpointRequest,
     DomainEnvelopePersistenceError,
     StaleDomainEnvelopeRevisionError,
+    domain_envelope_payload_hash,
     load_domain_envelope,
     write_domain_envelope_checkpoint,
     _stable_object_id,
@@ -362,14 +363,10 @@ def test_checkpoint_insert_update_stale_rejection_and_index_regeneration(db_sess
     assert envelope_row.revision == 1
     assert envelope_row.domain_pack_key == "fixture.core"
     assert envelope_row.schema_provider == "json-schema"
-    database_payload_hash = db_session.scalar(
-        text(
-            "SELECT encode(digest(convert_to(envelope_json::text, 'UTF8'), "
-            "'sha256'), 'hex') FROM domain_envelopes WHERE envelope_id = :envelope_id"
-        ),
-        {"envelope_id": envelope_row.envelope_id},
+    persisted_envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
+    assert envelope_row.source_payload_hash == domain_envelope_payload_hash(
+        persisted_envelope
     )
-    assert envelope_row.source_payload_hash == database_payload_hash
     assert _legacy_semantic_row_counts(db_session) == legacy_counts_before
 
     object_rows = db_session.scalars(
