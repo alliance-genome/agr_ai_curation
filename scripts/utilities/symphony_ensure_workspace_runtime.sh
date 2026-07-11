@@ -223,6 +223,10 @@ verify_one_or_source_fallback "scripts/utilities/symphony_ready_for_pr_lane.sh" 
 verify_one "scripts/utilities/symphony_claude_review_loop.sh" "required"
 verify_one "scripts/utilities/symphony_in_review.sh" "required"
 verify_one "scripts/utilities/symphony_in_progress.sh" "required"
+# Existing workspaces may be on branches created before this helper was added.
+# AgentRunner can execute it from SYMPHONY_LOCAL_SOURCE_ROOT when the workspace
+# checkout lacks the tracked copy, so do not block pre-existing workspaces here.
+verify_one_or_source_fallback "scripts/utilities/symphony_in_progress_complete.sh" "required"
 verify_one "scripts/utilities/symphony_issue_branch.sh" "required"
 # Existing workspaces may be on branches created before this helper was added.
 # AgentRunner can execute it from SYMPHONY_LOCAL_SOURCE_ROOT when the workspace

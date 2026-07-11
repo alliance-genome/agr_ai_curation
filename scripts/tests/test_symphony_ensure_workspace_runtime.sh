@@ -89,6 +89,7 @@ EOF
     symphony_claude_review_loop.sh \
     symphony_in_review.sh \
     symphony_in_progress.sh \
+    symphony_in_progress_complete.sh \
     symphony_issue_branch.sh \
     symphony_needs_review_claim.sh \
     symphony_finalizing_lane.sh \
@@ -380,6 +381,27 @@ test_missing_feedback_classifier_uses_source_root_fallback_for_existing_workspac
   assert_not_contains "SYNC_ENV_MISSING_OPTIONAL=scripts/utilities/symphony_classify_pr_feedback.sh" "${output}"
 }
 
+test_missing_in_progress_complete_uses_source_root_fallback_for_existing_workspaces() {
+  local temp_root workspace source_root output
+  temp_root="$(mktemp -d)"
+  workspace="${temp_root}/workspace"
+  source_root="${temp_root}/source"
+  mkdir -p "${workspace}"
+  make_source_root "${source_root}"
+  seed_workspace_repo "${source_root}" "${workspace}"
+  rm -f "${workspace}/scripts/utilities/symphony_in_progress_complete.sh"
+
+  output="$(
+    SYMPHONY_LOCAL_SOURCE_ROOT="${source_root}" \
+    SYMPHONY_HOOKS_SOURCE="${source_root}/.git/hooks" \
+    bash "${SCRIPT_PATH}" --workspace-dir "${workspace}" 2>&1
+  )"
+
+  assert_contains "SYNC_ENV_STATUS=ready" "${output}"
+  assert_not_contains "SYNC_ENV_MISSING_REQUIRED=scripts/utilities/symphony_in_progress_complete.sh" "${output}"
+  assert_not_contains "SYNC_ENV_MISSING_OPTIONAL=scripts/utilities/symphony_in_progress_complete.sh" "${output}"
+}
+
 test_missing_todo_lane_helper_without_source_root_fails_closed() {
   local temp_root workspace source_root output status
   temp_root="$(mktemp -d)"
@@ -438,6 +460,7 @@ test_missing_required_git_owned_files_are_reported
 test_missing_no_code_guard_helper_is_optional_for_existing_workspaces
 test_missing_todo_lane_helper_uses_source_root_fallback_for_existing_workspaces
 test_missing_feedback_classifier_uses_source_root_fallback_for_existing_workspaces
+test_missing_in_progress_complete_uses_source_root_fallback_for_existing_workspaces
 test_missing_todo_lane_helper_without_source_root_fails_closed
 test_missing_curation_db_psql_helper_is_optional_for_existing_workspaces
 

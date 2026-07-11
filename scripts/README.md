@@ -328,6 +328,21 @@ unexpected branch, it records the exact blocker context and moves the issue to
   --workspace-dir ~/.symphony/workspaces/agr_ai_curation/ALL-49
 ```
 
+### utilities/symphony_in_progress_complete.sh
+
+In Progress completion guard. It verifies the implementation workspace is clean,
+required git hooks are present and executable, and the branch head is synchronized
+with its remote branch before writing `Review Handoff` and moving the issue to
+`Needs Review`. If any guard fails, it writes the exact dirty, hook, or
+unpushed branch state into `Review Handoff` and keeps the issue in `In Progress`.
+
+```bash
+./scripts/utilities/symphony_in_progress_complete.sh \
+  --issue-identifier ALL-49 \
+  --workspace-dir ~/.symphony/workspaces/agr_ai_curation/ALL-49 \
+  --section-file /tmp/review-handoff.md
+```
+
 ### utilities/symphony_ready_for_pr_lane.sh
 
 Script-only Symphony Ready for PR lane handler. It verifies the workspace is
