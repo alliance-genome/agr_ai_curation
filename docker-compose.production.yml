@@ -308,6 +308,10 @@ services:
         target: /app/config
         read_only: true
       - type: bind
+        source: "${AGR_REPO_CONFIG_HOST_DIR:-./config}/../alliance_config"
+        target: /app/alliance_config
+        read_only: true
+      - type: bind
         source: "${AGR_RUNTIME_PACKAGES_HOST_DIR:-./packages}"
         target: /runtime/packages
         read_only: true

@@ -51,7 +51,9 @@ The standalone installer seeds the modular runtime under
 - Secrets + image tags: `~/.agr_ai_curation/.env`
 - Selected package profile state: `~/.agr_ai_curation/.install_package_profile.env`
 - Runtime config: `~/.agr_ai_curation/runtime/config`
-- Repo config mirror for legacy compatibility: `AGR_REPO_CONFIG_HOST_DIR=/path/to/your/repo/config`
+- Repo config mirror for legacy compatibility: `AGR_REPO_CONFIG_HOST_DIR=/path/to/your/repo/config`.
+  The standalone backend also mounts the sibling `alliance_config/` directory
+  from this repo path as the canonical Agent Studio prompt source.
 - Optional package/tool collision selections: `~/.agr_ai_curation/runtime/config/overrides.yaml`
 - Runtime packages: `~/.agr_ai_curation/runtime/packages`
 - Default shipped package directory: `~/.agr_ai_curation/runtime/packages/core`
