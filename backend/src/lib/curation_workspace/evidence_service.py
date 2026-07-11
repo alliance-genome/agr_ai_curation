@@ -66,6 +66,11 @@ def recompute_evidence(
     actor_claims: dict[str, Any],
     db: Session,
 ) -> CurationEvidenceRecomputeResponse:
+    """Recompute evidence within the transaction owned by the caller.
+
+    The supplied session is flushed but never committed or rolled back here.
+    """
+
     session = _load_session_for_mutation(db, request.session_id)
     target_candidates = _selected_candidates(session, request.candidate_ids)
     now = datetime.now(timezone.utc)
@@ -134,7 +139,6 @@ def recompute_evidence(
         updated_evidence_records=[build_evidence_record(row) for row in updated_rows],
         action_log_entry=build_action_log_entry(action_log_row),
     )
-    db.commit()
     return response
 
 
@@ -144,6 +148,11 @@ def create_manual_evidence(
     actor_claims: dict[str, Any],
     db: Session,
 ) -> CurationManualEvidenceCreateResponse:
+    """Create manual evidence within the transaction owned by the caller.
+
+    The supplied session is flushed but never committed or rolled back here.
+    """
+
     session = _load_session_for_mutation(db, request.session_id)
     candidate = _candidate_in_session(session, request.candidate_id)
     field_keys = _normalized_string_list(request.field_keys, field_name="field_keys")
@@ -219,7 +228,6 @@ def create_manual_evidence(
         candidate=get_candidate_detail(db, candidate.id, session_id=session.id),
         action_log_entry=build_action_log_entry(action_log_row),
     )
-    db.commit()
     return response
 
 
@@ -229,6 +237,11 @@ def resolve_evidence(
     current_user_id: str,
     db: Session,
 ) -> CurationEvidenceResolveResponse:
+    """Resolve evidence within the transaction owned by the caller.
+
+    The supplied session is flushed but never committed or rolled back here.
+    """
+
     session = _load_session_for_mutation(db, request.session_id)
     candidate = _candidate_in_session(session, request.candidate_id)
     field_key = _normalized_optional_string(request.field_key, field_name="field_key")
@@ -307,7 +320,6 @@ def resolve_evidence(
         evidence_record=build_evidence_record(evidence_row),
         candidate=get_candidate_detail(db, candidate.id, session_id=session.id),
     )
-    db.commit()
     return response
 
 

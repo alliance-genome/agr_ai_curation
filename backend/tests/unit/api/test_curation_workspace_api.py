@@ -512,7 +512,7 @@ async def test_post_evidence_recompute_delegates_to_service(monkeypatch):
         candidate_ids=["candidate-1"],
         force=True,
     )
-    db = object()
+    db = MagicMock()
     user = {"sub": "user-1", "email": "user-1@example.org"}
 
     response = await module.post_evidence_recompute(
@@ -528,6 +528,7 @@ async def test_post_evidence_recompute_delegates_to_service(monkeypatch):
         "actor_claims": user,
         "db": db,
     }
+    db.commit.assert_called_once_with()
 
 
 @pytest.mark.asyncio
@@ -621,7 +622,7 @@ async def test_post_manual_evidence_delegates_to_service(monkeypatch):
         anchor=_anchor(),
         is_primary=True,
     )
-    db = object()
+    db = MagicMock()
     user = {"sub": "user-1", "email": "user-1@example.org"}
 
     response = await module.post_manual_evidence(
@@ -636,6 +637,36 @@ async def test_post_manual_evidence_delegates_to_service(monkeypatch):
         "actor_claims": user,
         "db": db,
     }
+    db.commit.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_post_manual_evidence_rolls_back_post_mutation_failure(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(
+        module,
+        "create_manual_evidence",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("fault after evidence mutation")
+        ),
+    )
+    db = _TransactionSpy()
+
+    with pytest.raises(RuntimeError, match="fault after evidence mutation"):
+        await module.post_manual_evidence(
+            CurationManualEvidenceCreateRequest(
+                session_id="session-1",
+                candidate_id="candidate-1",
+                field_keys=["gene.symbol"],
+                anchor=_anchor(),
+                is_primary=True,
+            ),
+            user={"sub": "user-1"},
+            db=db,
+        )
+
+    assert db.commit_calls == 0
+    assert db.rollback_calls == 1
 
 
 @pytest.mark.asyncio
@@ -861,7 +892,7 @@ async def test_post_candidate_validation_delegates_to_service(monkeypatch):
         field_keys=["field_a"],
         force=True,
     )
-    db = object()
+    db = MagicMock()
 
     response = await module.post_candidate_validation(
         candidate_id,
@@ -877,6 +908,36 @@ async def test_post_candidate_validation_delegates_to_service(monkeypatch):
         "request": request,
         "user_id": "user-1",
     }
+    db.commit.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_post_candidate_validation_rolls_back_post_checkpoint_failure(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(
+        module,
+        "validate_candidate",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("fault after validation checkpoint")
+        ),
+    )
+    candidate_id = uuid4()
+    db = _TransactionSpy()
+
+    with pytest.raises(RuntimeError, match="fault after validation checkpoint"):
+        await module.post_candidate_validation(
+            candidate_id,
+            CurationCandidateValidationRequest(
+                session_id=str(uuid4()),
+                candidate_id=str(candidate_id),
+                force=True,
+            ),
+            user={"sub": "user-1"},
+            db=db,
+        )
+
+    assert db.commit_calls == 0
+    assert db.rollback_calls == 1
 
 
 @pytest.mark.asyncio
@@ -900,7 +961,7 @@ async def test_post_session_validation_delegates_to_service(monkeypatch):
         candidate_ids=[str(uuid4())],
         force=True,
     )
-    db = object()
+    db = MagicMock()
 
     response = await module.post_session_validation(
         session_id,
@@ -916,6 +977,7 @@ async def test_post_session_validation_delegates_to_service(monkeypatch):
         "request": request,
         "user_id": "user-1",
     }
+    db.commit.assert_called_once_with()
 
 
 @pytest.mark.asyncio
@@ -939,7 +1001,7 @@ async def test_post_submission_preview_delegates_to_service(monkeypatch):
         candidate_ids=[str(uuid4())],
         include_payload=True,
     )
-    db = object()
+    db = MagicMock()
 
     response = await module.post_submission_preview(
         session_id,
@@ -954,6 +1016,7 @@ async def test_post_submission_preview_delegates_to_service(monkeypatch):
         "session_id": session_id,
         "request": request,
     }
+    db.commit.assert_called_once_with()
 
 
 @pytest.mark.asyncio
@@ -1217,7 +1280,7 @@ async def test_post_evidence_resolve_delegates_to_service(monkeypatch):
         anchor=_anchor(),
         replace_existing=True,
     )
-    db = object()
+    db = MagicMock()
     user = {"sub": "user-1", "email": "user-1@example.org"}
 
     response = await module.post_evidence_resolve(
@@ -1232,6 +1295,7 @@ async def test_post_evidence_resolve_delegates_to_service(monkeypatch):
         "current_user_id": "user-1",
         "db": db,
     }
+    db.commit.assert_called_once_with()
 
 
 @pytest.mark.asyncio
