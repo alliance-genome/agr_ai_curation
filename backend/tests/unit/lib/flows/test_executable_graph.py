@@ -1,10 +1,16 @@
 """Consumer-parity coverage for canonical executable flow topology."""
 
+from datetime import datetime, timezone
+import json
 from types import SimpleNamespace
+from typing import Any, cast
+from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 from pydantic import ValidationError
 
+from src.api import flows as flows_api
 from src.lib.agent_studio import flow_tools
 from src.lib.batch import validation as batch_validation
 from src.lib.flows import executor
@@ -12,7 +18,8 @@ from src.lib.executable_flow_graph import (
     ExecutableFlowTopologyError,
     project_executable_flow_graph,
 )
-from src.schemas.flows import FlowDefinition
+from src.models.sql import CurationFlow
+from src.schemas.flows import CreateFlowRequest, FlowDefinition
 
 
 def _node(node_id: str, agent_id: str, *, node_type: str = "agent") -> dict:
@@ -82,6 +89,18 @@ def _invalid_flow(kind: str) -> dict:
     return flow
 
 
+def _unavailable_step_flow() -> dict:
+    return {
+        "version": "1.0",
+        "entry_node_id": "task",
+        "nodes": [
+            _node("task", "task_input", node_type="task_input"),
+            _node("missing", "unavailable_agent"),
+        ],
+        "edges": [_edge("control_1", "task", "missing")],
+    }
+
+
 def test_multi_sidecar_projection_is_identical_across_consumers(monkeypatch):
     flow = _multi_sidecar_flow()
     projection = project_executable_flow_graph(flow)
@@ -104,10 +123,10 @@ def test_multi_sidecar_projection_is_identical_across_consumers(monkeypatch):
     ]
 
     runtime_nodes = executor._get_ordered_executable_nodes(
-        SimpleNamespace(flow_definition=saved)
+        cast(CurationFlow, SimpleNamespace(flow_definition=saved))
     )
     assert [node["id"] for node in runtime_nodes] == ["extract", "output"]
-    runtime_flow = SimpleNamespace(flow_definition=saved)
+    runtime_flow = cast(CurationFlow, SimpleNamespace(flow_definition=saved))
     assert executor.get_flow_agent_ids(runtime_flow) == {"gene_extractor", "csv_formatter"}
     assert executor._count_agent_ids(runtime_flow) == {
         "gene_extractor": 1,
@@ -139,6 +158,180 @@ def test_multi_sidecar_projection_is_identical_across_consumers(monkeypatch):
     assert batch_validation.validate_flow_for_batch(saved).valid is True
 
 
+@pytest.mark.asyncio
+async def test_multi_sidecar_api_create_load_round_trip_preserves_projection(
+    monkeypatch,
+):
+    """CRUD persistence must retain the same topology and every sidecar binding."""
+
+    class _RoundTripDB:
+        added: Any = None
+        stored: Any = None
+
+        def add(self, obj):
+            self.added = obj
+
+        def commit(self):
+            now = datetime.now(timezone.utc)
+            self.added.id = uuid4()
+            self.added.execution_count = 0
+            self.added.last_executed_at = None
+            self.added.created_at = now
+            self.added.updated_at = now
+            self.stored = SimpleNamespace(
+                id=self.added.id,
+                user_id=self.added.user_id,
+                name=self.added.name,
+                description=self.added.description,
+                flow_definition=json.loads(json.dumps(self.added.flow_definition)),
+                execution_count=0,
+                last_executed_at=None,
+                created_at=now,
+                updated_at=now,
+            )
+
+        def refresh(self, _obj):
+            return None
+
+    db = _RoundTripDB()
+    monkeypatch.setattr(
+        flows_api,
+        "set_global_user_from_cognito",
+        lambda *_args, **_kwargs: SimpleNamespace(id=17),
+    )
+    monkeypatch.setattr(
+        flows_api,
+        "apply_flow_validation_attachment_defaults",
+        lambda flow_definition: flow_definition,
+    )
+    monkeypatch.setattr(
+        flows_api,
+        "_validate_flow_agent_references",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        flows_api,
+        "_validate_flow_agent_step_policy",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        flows_api,
+        "_missing_flow_agent_reference_messages",
+        lambda *_args, **_kwargs: [],
+    )
+
+    created = await flows_api.create_flow(
+        request=CreateFlowRequest(
+            name="Topology parity",
+            flow_definition=_multi_sidecar_flow(),
+        ),
+        user={"sub": "curator-1"},
+        db=db,
+    )
+    monkeypatch.setattr(
+        flows_api,
+        "verify_flow_ownership",
+        lambda *_args, **_kwargs: db.stored,
+    )
+    loaded = await flows_api.get_flow(
+        flow_id=created.id,
+        user={"sub": "curator-1"},
+        db=db,
+    )
+
+    created_projection = project_executable_flow_graph(created.flow_definition)
+    loaded_projection = project_executable_flow_graph(loaded.flow_definition)
+    assert loaded_projection.to_dict() == created_projection.to_dict()
+    assert [
+        sidecar.binding_id for sidecar in loaded_projection.sidecars_for("extract")
+    ] == ["symbol", "identifier"]
+    assert loaded.flow_definition.model_dump() == created.flow_definition.model_dump()
+
+
+def test_unavailable_step_fixture_has_consistent_save_load_runtime_and_batch_diagnostics(
+    monkeypatch,
+):
+    flow = _unavailable_step_flow()
+    definition = FlowDefinition.model_validate(flow)
+    projection = project_executable_flow_graph(definition)
+    assert projection.ordered_executable_node_ids == ("missing",)
+
+    monkeypatch.setattr(
+        flows_api,
+        "apply_flow_validation_attachment_defaults",
+        lambda flow_definition: flow_definition,
+    )
+    monkeypatch.setattr(
+        flows_api,
+        "_flow_agent_policy_entry",
+        lambda *_args, **_kwargs: None,
+    )
+    with pytest.raises(HTTPException, match="unavailable_agent") as exc:
+        flows_api._validated_flow_definition_payload(
+            definition,
+            db_user_id=17,
+            enforce_agent_references=True,
+        )
+    assert exc.value.status_code == 422
+
+    now = datetime.now(timezone.utc)
+    loaded = flows_api._flow_to_response(
+        cast(
+            CurationFlow,
+            SimpleNamespace(
+                id=uuid4(),
+                user_id=17,
+                name="Unavailable step",
+                description=None,
+                flow_definition=definition.model_dump(),
+                execution_count=0,
+                last_executed_at=None,
+                created_at=now,
+                updated_at=now,
+            ),
+        )
+    )
+    assert loaded.has_critical_issues is True
+    assert "unavailable_agent" in loaded.validation_warnings[0].message
+
+    def _unresolvable_agent(*_args, **_kwargs):
+        raise ValueError("agent not found")
+
+    monkeypatch.setattr(executor, "get_agent_metadata", _unresolvable_agent)
+    runtime_flow = cast(
+        CurationFlow,
+        SimpleNamespace(
+            id="flow-1",
+            name="Unavailable step",
+            flow_definition=definition.model_dump(),
+        ),
+    )
+    tools, created_names, unavailable_steps, _execution_state = (
+        executor.get_all_agent_tools(runtime_flow, include_unavailable=True)
+    )
+    assert tools == []
+    assert created_names == set()
+    assert unavailable_steps == [
+        {
+            "step": 1,
+            "agent_id": "unavailable_agent",
+            "agent_name": "unavailable_agent",
+            "reason": "agent could not be resolved from unified registry",
+        }
+    ]
+
+    flow_tools.set_current_flow_context({"flow_name": "Unavailable", **flow})
+    inspected = flow_tools._get_current_flow_handler()()
+    assert [step["node_id"] for step in inspected["steps"]] == ["missing"]
+    assert inspected["executable_graph"] == projection.to_dict()
+
+    monkeypatch.setattr(batch_validation, "AGENT_REGISTRY", {})
+    batch_result = batch_validation.validate_flow_for_batch(flow)
+    assert batch_result.valid is False
+    assert batch_validation.get_entry_nodes(flow) == {"task"}
+    assert batch_validation.get_exit_nodes(flow) == {"missing"}
+
+
 @pytest.mark.parametrize(
     ("kind", "expected_code"),
     [
@@ -158,7 +351,9 @@ def test_invalid_topologies_are_rejected_by_schema_runtime_and_batch(kind, expec
     with pytest.raises(ValidationError, match=expected_code):
         FlowDefinition.model_validate(flow)
     with pytest.raises(ExecutableFlowTopologyError, match=expected_code):
-        executor._get_ordered_executable_nodes(SimpleNamespace(flow_definition=flow))
+        executor._get_ordered_executable_nodes(
+            cast(CurationFlow, SimpleNamespace(flow_definition=flow))
+        )
 
     batch_result = batch_validation.validate_flow_for_batch(flow)
     assert batch_result.valid is False

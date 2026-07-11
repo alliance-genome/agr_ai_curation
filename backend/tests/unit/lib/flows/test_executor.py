@@ -1,5 +1,6 @@
 """Tests for flow executor custom_instructions wiring."""
 import asyncio
+from dataclasses import replace
 import importlib
 import json
 import logging
@@ -3036,8 +3037,10 @@ class TestGetAllAgentToolsStepOrderRuntime:
             }
         ]
 
-    def test_supplemental_validation_group_runs_custom_validator_node(self, monkeypatch):
-        """Supplemental validator attachments should execute against the source revision."""
+    def test_supplemental_validation_groups_run_every_custom_validator_node(
+        self, monkeypatch
+    ):
+        """Distinct supplemental sidecars must all execute against the source revision."""
         executor = _executor_module()
         from src.lib.domain_packs.validation_registry import (
             ValidationBindingState,
@@ -3079,16 +3082,27 @@ class TestGetAllAgentToolsStepOrderRuntime:
             },
             expected_result_fields={"identifier": "gene.identifier"},
         )
-        match = ValidatorBindingMatch(
-            binding=binding,
-            envelope=envelope,
-            object_envelope=envelope.extracted_objects[0],
+        second_binding = replace(
+            binding,
+            binding_id="custom.supplemental.identifier",
+        )
+        matches = (
+            ValidatorBindingMatch(
+                binding=binding,
+                envelope=envelope,
+                object_envelope=envelope.extracted_objects[0],
+            ),
+            ValidatorBindingMatch(
+                binding=second_binding,
+                envelope=envelope,
+                object_envelope=envelope.extracted_objects[0],
+            ),
         )
 
         class _Registry:
             def match_bindings(self, _envelope, *, states):
                 assert states == [ValidationBindingState.ACTIVE]
-                return (match,)
+                return matches
 
         calls = []
 
@@ -3139,9 +3153,15 @@ class TestGetAllAgentToolsStepOrderRuntime:
             "_run_custom_flow_validator_agent",
             _fake_custom_validator,
         )
-        flow = _make_flow([
-            _agent_node("supplemental_validator", "custom_validator"),
-        ])
+        flow = _make_flow(
+            [
+                _agent_node("supplemental_validator", "custom_validator_symbol"),
+                _agent_node(
+                    "supplemental_identifier_validator",
+                    "custom_validator_identifier",
+                ),
+            ]
+        )
 
         materialization_inputs, selector_findings, metadata = asyncio.run(
             executor._collect_flow_validator_materialization_inputs(
@@ -3155,7 +3175,14 @@ class TestGetAllAgentToolsStepOrderRuntime:
                         "binding_id": "custom.supplemental",
                         "edge_id": "validation-1",
                         "validator_node_id": "supplemental_validator",
-                    }
+                    },
+                    {
+                        "group_id": "edge:validation-2",
+                        "state": "supplemental",
+                        "binding_id": "custom.supplemental.identifier",
+                        "edge_id": "validation-2",
+                        "validator_node_id": "supplemental_identifier_validator",
+                    },
                 ],
                 flow=flow,
                 agent_context={"user_id": "curator-1"},
@@ -3163,49 +3190,56 @@ class TestGetAllAgentToolsStepOrderRuntime:
         )
 
         assert selector_findings == []
-        assert len(calls) == 1
-        assert calls[0]["binding_match"] is match
-        assert calls[0]["source_envelope_id"] == "env-supplemental"
-        assert calls[0]["source_envelope_revision"] == 7
-        assert calls[0]["request"].validator_binding_id == "custom.supplemental"
-        assert calls[0]["request"].validator_agent.package_id == "flow"
-        assert calls[0]["request"].validator_agent.agent_id == "custom_validator"
-        assert calls[0]["request"].request_id.endswith(
-            ":flow-validator:custom_validator"
-        )
-        assert len(materialization_inputs) == 1
-        assert materialization_inputs[0].match is match
-        assert materialization_inputs[0].request is calls[0]["request"]
-        assert len(metadata) == 1
-        assert {
-            "group_id": metadata[0]["group_id"],
-            "state": metadata[0]["state"],
-            "validator_binding_id": metadata[0]["validator_binding_id"],
-            "status": metadata[0]["status"],
-            "request_id": metadata[0]["request_id"],
-            "missing_expected_fields": metadata[0]["missing_expected_fields"],
-        } == {
-            "group_id": "edge:validation-1",
-            "state": "supplemental",
-            "validator_binding_id": "custom.supplemental",
-            "status": "resolved",
-            "request_id": calls[0]["request"].request_id,
-            "missing_expected_fields": [],
-        }
-        assert metadata[0]["selected_inputs"] == {"identifier": "AGR:0001"}
-        assert metadata[0]["expected_result_fields"] == {
-            "identifier": "gene.identifier"
-        }
-        assert metadata[0]["lookup_attempts"] == [
-            {
-                "provider": "flow_validator",
-                "method": "non_lookup_validation",
-                "query": {"source_envelope_revision": 7},
-                "result_count": 1,
-                "outcome": "success",
-                "message": None,
-            }
+        assert len(calls) == 2
+        assert [call["binding_match"] for call in calls] == list(matches)
+        assert {call["source_envelope_id"] for call in calls} == {"env-supplemental"}
+        assert {call["source_envelope_revision"] for call in calls} == {7}
+        assert [call["request"].validator_binding_id for call in calls] == [
+            "custom.supplemental",
+            "custom.supplemental.identifier",
         ]
+        assert [call["request"].validator_agent.agent_id for call in calls] == [
+            "custom_validator_symbol",
+            "custom_validator_identifier",
+        ]
+        assert all(call["request"].validator_agent.package_id == "flow" for call in calls)
+        assert len(materialization_inputs) == 2
+        assert [item.match for item in materialization_inputs] == list(matches)
+        assert [item.request for item in materialization_inputs] == [
+            call["request"] for call in calls
+        ]
+        assert [item["group_id"] for item in metadata] == [
+            "edge:validation-1",
+            "edge:validation-2",
+        ]
+        assert [item["validator_binding_id"] for item in metadata] == [
+            "custom.supplemental",
+            "custom.supplemental.identifier",
+        ]
+        assert {item["status"] for item in metadata} == {"resolved"}
+        assert all(item["missing_expected_fields"] == [] for item in metadata)
+        assert all(
+            item["selected_inputs"] == {"identifier": "AGR:0001"}
+            for item in metadata
+        )
+        assert all(
+            item["expected_result_fields"] == {"identifier": "gene.identifier"}
+            for item in metadata
+        )
+        assert all(
+            item["lookup_attempts"]
+            == [
+                {
+                    "provider": "flow_validator",
+                    "method": "non_lookup_validation",
+                    "query": {"source_envelope_revision": 7},
+                    "result_count": 1,
+                    "outcome": "success",
+                    "message": None,
+                }
+            ]
+            for item in metadata
+        )
 
     def test_custom_flow_validator_agent_receives_compact_request_payload(self, monkeypatch):
         executor = _executor_module()
@@ -3312,10 +3346,16 @@ class TestGetAllAgentToolsStepOrderRuntime:
         async def _fake_validation_groups(**kwargs):
             if not kwargs["node_data"].get("validation_groups"):
                 return {}
-            events.append("validators:start")
+            events.append("validators:start:binding-1")
             assert kwargs["candidate"].metadata["step"] == 1
-            assert kwargs["node_data"]["validation_groups"][0]["binding_id"] == "binding-1"
-            events.append("validators:done")
+            groups = kwargs["node_data"]["validation_groups"]
+            assert [group["binding_id"] for group in groups] == [
+                "binding-1",
+                "binding-2",
+            ]
+            events.append("validators:materialized:binding-1")
+            events.append("validators:start:binding-2")
+            events.append("validators:materialized:binding-2")
             return {
                 "validation_group_results": {
                     "source_envelope_id": "env-1",
@@ -3327,7 +3367,13 @@ class TestGetAllAgentToolsStepOrderRuntime:
                             "state": "automatic",
                             "validator_binding_id": "binding-1",
                             "status": "resolved",
-                        }
+                        },
+                        {
+                            "group_id": "supplemental-validator",
+                            "state": "supplemental",
+                            "validator_binding_id": "binding-2",
+                            "status": "resolved",
+                        },
                     ],
                 }
             }
@@ -3347,7 +3393,16 @@ class TestGetAllAgentToolsStepOrderRuntime:
                         "attachment_id": "active-lookup",
                         "required": True,
                         "blocking": True,
-                    }
+                    },
+                    {
+                        "group_id": "supplemental-validator",
+                        "state": "supplemental",
+                        "binding_id": "binding-2",
+                        "edge_id": "validation-2",
+                        "validator_node_id": "validator-2",
+                        "required": True,
+                        "blocking": True,
+                    },
                 ],
             ),
             _agent_node("n2", "disease"),
@@ -3367,13 +3422,19 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
         assert events == [
             "tool:ask_gene_specialist",
-            "validators:start",
-            "validators:done",
+            "validators:start:binding-1",
+            "validators:materialized:binding-1",
+            "validators:start:binding-2",
+            "validators:materialized:binding-2",
             "tool:ask_disease_specialist",
         ]
-        assert execution_state["completed_steps"][0]["validation_group_results"][
-            "source_envelope_revision"
-        ] == 3
+        validation_results = execution_state["completed_steps"][0][
+            "validation_group_results"
+        ]
+        assert validation_results["source_envelope_revision"] == 3
+        assert [
+            group["validator_binding_id"] for group in validation_results["groups"]
+        ] == ["binding-1", "binding-2"]
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
