@@ -8,6 +8,7 @@ WORKDIR /app
 # Build arguments for Vite environment variables (VITE_* prefix)
 ARG VITE_DEV_MODE=true
 ARG VITE_GIT_SHA=unknown
+ARG VITE_AI_CURATION_DRAFT_AUTOSAVE_MAX_ATTEMPTS=2
 
 # Copy package files
 COPY package.json package-lock.json* ./
@@ -23,6 +24,7 @@ COPY . .
 # Version is auto-extracted from package.json; SHA can be passed as build arg
 ENV VITE_DEV_MODE=$VITE_DEV_MODE
 ENV VITE_GIT_SHA=$VITE_GIT_SHA
+ENV VITE_AI_CURATION_DRAFT_AUTOSAVE_MAX_ATTEMPTS=$VITE_AI_CURATION_DRAFT_AUTOSAVE_MAX_ATTEMPTS
 RUN export VITE_APP_VERSION=$(node -p "require('./package.json').version") && \
     echo "Building version: $VITE_APP_VERSION (SHA: $VITE_GIT_SHA)" && \
     npm run build

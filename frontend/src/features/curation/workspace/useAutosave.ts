@@ -12,6 +12,7 @@ import {
   patchCurationEnvelopeField,
   updateCurationSession,
 } from '@/features/curation/services/curationWorkspaceService'
+import { getEnvInt } from '@/utils/env'
 import { useCurationWorkspaceContext } from './CurationWorkspaceContext'
 import {
   applyDraftFieldChangesToWorkspace,
@@ -23,6 +24,17 @@ import {
 } from './workspaceState'
 
 const DEFAULT_AUTOSAVE_DEBOUNCE_MS = 2_500
+const DEFAULT_DRAFT_AUTOSAVE_MAX_ATTEMPTS = 2
+
+function getDraftAutosaveMaxAttempts(): number {
+  return Math.max(
+    1,
+    getEnvInt(
+      'VITE_AI_CURATION_DRAFT_AUTOSAVE_MAX_ATTEMPTS',
+      DEFAULT_DRAFT_AUTOSAVE_MAX_ATTEMPTS,
+    ),
+  )
+}
 
 interface PendingDraftAutosave {
   sessionId: string
@@ -588,19 +600,24 @@ export function useAutosave(
       }
 
       try {
-        let response
+        let response: Awaited<ReturnType<typeof autosaveCurationCandidateDraft>> | undefined
+        const maxAttempts = getDraftAutosaveMaxAttempts()
 
-        try {
-          response = await autosaveCurationCandidateDraft(request, {
-            keepalive: options?.keepalive,
-          })
-        } catch (error) {
-          if (isVersionConflict(error)) {
-            throw error
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+          try {
+            response = await autosaveCurationCandidateDraft(request, {
+              keepalive: options?.keepalive,
+            })
+            break
+          } catch (error) {
+            if (isVersionConflict(error) || attempt === maxAttempts) {
+              throw error
+            }
           }
-          response = await autosaveCurationCandidateDraft(request, {
-            keepalive: options?.keepalive,
-          })
+        }
+
+        if (!response) {
+          throw new Error('Draft autosave completed without a response.')
         }
 
         const nextPendingDraft = pendingDraftsRef.current.get(candidateId)

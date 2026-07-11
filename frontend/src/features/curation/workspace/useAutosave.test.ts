@@ -350,6 +350,7 @@ describe('useAutosave', () => {
 
   afterEach(() => {
     vi.clearAllMocks()
+    vi.unstubAllEnvs()
   })
 
   it('debounces autosave writes and marks a new session in progress on first edit', async () => {
@@ -1437,7 +1438,7 @@ describe('useAutosave', () => {
     })
   })
 
-  it('surfaces a non-blocking warning after the retry also fails', async () => {
+  it('uses the default two draft autosave attempts before preserving local changes', async () => {
     serviceMocks.autosaveCurationCandidateDraft
       .mockRejectedValueOnce(new Error('still unavailable'))
       .mockRejectedValueOnce(new Error('still unavailable'))
@@ -1465,5 +1466,33 @@ describe('useAutosave', () => {
       'Autosave could not reach the server. Your draft changes remain local and can be retried.',
     )
     expect(result.current.isDirty).toBe(true)
+  })
+
+  it('uses the configured draft autosave attempt limit for transient failures', async () => {
+    vi.stubEnv('VITE_AI_CURATION_DRAFT_AUTOSAVE_MAX_ATTEMPTS', '3')
+    serviceMocks.autosaveCurationCandidateDraft
+      .mockRejectedValueOnce(new Error('temporarily unavailable'))
+      .mockRejectedValueOnce(new Error('still temporarily unavailable'))
+      .mockResolvedValueOnce(buildSavedWorkspaceResponse())
+
+    const { result } = renderHook(
+      () => useAutosave({ debounceMs: 10 }),
+      {
+        wrapper: createWrapper(buildWorkspace()),
+      },
+    )
+
+    act(() => {
+      result.current.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA2',
+      })
+    })
+
+    await waitFor(() => {
+      expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(3)
+      expect(result.current.isDirty).toBe(false)
+    })
+    expect(result.current.warning).toBeNull()
   })
 })
