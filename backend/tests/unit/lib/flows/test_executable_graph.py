@@ -153,8 +153,6 @@ def test_multi_sidecar_projection_is_identical_across_consumers(monkeypatch):
         "csv_formatter",
         {"batch_capabilities": ["file_output"]},
     )
-    assert batch_validation.get_entry_nodes(saved) == {"task"}
-    assert batch_validation.get_exit_nodes(saved) == {"output"}
     assert batch_validation.validate_flow_for_batch(saved).valid is True
 
 
@@ -328,8 +326,6 @@ def test_unavailable_step_fixture_has_consistent_save_load_runtime_and_batch_dia
     monkeypatch.setattr(batch_validation, "AGENT_REGISTRY", {})
     batch_result = batch_validation.validate_flow_for_batch(flow)
     assert batch_result.valid is False
-    assert batch_validation.get_entry_nodes(flow) == {"task"}
-    assert batch_validation.get_exit_nodes(flow) == {"missing"}
 
 
 @pytest.mark.parametrize(

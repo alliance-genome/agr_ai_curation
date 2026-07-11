@@ -11,15 +11,18 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from src.lib.executable_flow_graph import project_executable_flow_graph
+from src.lib.flows.edge_roles import (
+    CONTROL_FLOW_EDGE_ROLE,
+    FlowEdgeRole,
+    VALIDATION_ATTACHMENT_EDGE_ROLE,
+)
 
 
 # =============================================================================
 # FlowDefinition Schema (JSONB Validation)
 # =============================================================================
 
-FlowEdgeRole = Literal["control_flow", "validation_attachment"]
-DEFAULT_FLOW_EDGE_ROLE: FlowEdgeRole = "control_flow"
-VALIDATION_ATTACHMENT_EDGE_ROLE: FlowEdgeRole = "validation_attachment"
+DEFAULT_FLOW_EDGE_ROLE: FlowEdgeRole = CONTROL_FLOW_EDGE_ROLE
 FLOW_OUTPUT_FILENAME_TEMPLATE_VARIABLES = frozenset(
     {"input_filename", "input_filename_stem", "trace_id", "timestamp"}
 )

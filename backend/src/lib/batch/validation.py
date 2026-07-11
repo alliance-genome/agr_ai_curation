@@ -1,5 +1,4 @@
 """Flow validation for batch compatibility."""
-from typing import Set
 
 from src.lib.agent_studio.catalog_service import AGENT_REGISTRY
 from src.lib.executable_flow_graph import (
@@ -7,18 +6,6 @@ from src.lib.executable_flow_graph import (
     project_executable_flow_graph,
 )
 from src.schemas.batch import BatchValidationResponse
-
-
-def get_entry_nodes(flow_definition: dict) -> Set[str]:
-    """Return canonical control-flow entry nodes."""
-
-    return set(project_executable_flow_graph(flow_definition).entry_node_ids)
-
-
-def get_exit_nodes(flow_definition: dict) -> Set[str]:
-    """Return canonical control-flow terminal nodes."""
-
-    return set(project_executable_flow_graph(flow_definition).terminal_node_ids)
 
 
 def get_node_agent_id(flow_definition: dict, node_id: str) -> str | None:

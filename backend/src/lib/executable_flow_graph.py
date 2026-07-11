@@ -10,9 +10,10 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Sequence
 
-
-CONTROL_FLOW_EDGE_ROLE = "control_flow"
-VALIDATION_ATTACHMENT_EDGE_ROLE = "validation_attachment"
+from src.lib.flows.edge_roles import (
+    CONTROL_FLOW_EDGE_ROLE,
+    VALIDATION_ATTACHMENT_EDGE_ROLE,
+)
 
 
 @dataclass(frozen=True)
