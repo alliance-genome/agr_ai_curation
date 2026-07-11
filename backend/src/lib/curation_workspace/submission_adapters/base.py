@@ -95,11 +95,34 @@ class SubmissionTransportAdapter(ABC):
         self.transport_key = transport_key
         self.supported_target_keys = tuple(supported_target_keys)
 
-    def submit(self, *, payload: SubmissionPayloadContract) -> SubmissionTransportResult:
-        """Validate the target key and return a normalized submission result."""
+    def submit(
+        self,
+        *,
+        payload: SubmissionPayloadContract,
+        idempotency_key: str,
+    ) -> SubmissionTransportResult:
+        """Deliver one mutation using the caller's stable request identity."""
 
         self._validate_target_key(payload.target_key)
-        return coerce_submission_transport_result(self._submit(payload=payload))
+        return coerce_submission_transport_result(
+            self._submit(payload=payload, idempotency_key=idempotency_key)
+        )
+
+    def reconcile(
+        self,
+        *,
+        payload: SubmissionPayloadContract,
+        idempotency_key: str,
+    ) -> SubmissionTransportResult | None:
+        """Read a prior mutation outcome without issuing another mutation.
+
+        Adapters whose downstream target cannot query by idempotency key return
+        ``None``. The core will retain an unknown outcome instead of resending.
+        """
+
+        self._validate_target_key(payload.target_key)
+        result = self._reconcile(payload=payload, idempotency_key=idempotency_key)
+        return None if result is None else coerce_submission_transport_result(result)
 
     def _validate_target_key(self, target_key: SubmissionTargetKey) -> None:
         if self.supported_target_keys and target_key not in self.supported_target_keys:
@@ -114,8 +137,19 @@ class SubmissionTransportAdapter(ABC):
         self,
         *,
         payload: SubmissionPayloadContract,
+        idempotency_key: str,
     ) -> SubmissionTransportResult | Mapping[str, Any]:
         """Deliver one submission payload to an external system."""
+
+    def _reconcile(
+        self,
+        *,
+        payload: SubmissionPayloadContract,
+        idempotency_key: str,
+    ) -> SubmissionTransportResult | Mapping[str, Any] | None:
+        """Read a prior result by stable key when the target supports it."""
+
+        return None
 
 
 def coerce_submission_transport_result(

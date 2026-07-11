@@ -256,6 +256,22 @@ Export and direct submission payloads include:
 Submission results append `submitted` history rows with target result history,
 external references, warnings, validation errors, and submission state.
 
+Direct submission is a durable idempotent outbox workflow. The execute request
+must supply an `idempotency_key`, and adapters receive that same key with every
+mutation. Core persistence commits the payload-bearing attempt as `pending`,
+atomically claims it as `sending`, and only then invokes transport. Confirmed
+results transition to `succeeded` or `failed`; timeouts and untyped transport
+errors transition to `unknown`. A `sending` or `unknown` attempt may only use
+the adapter's read-only reconciliation hook, so a client retry cannot blindly
+repeat an external mutation. Confirmed failures may be retried against the same
+attempt and key. Terminal attempts retain an append-only transition history and
+become cleanup-eligible after `SUBMISSION_ATTEMPT_RETENTION_DAYS`; unresolved
+attempts are never removed by retention cleanup. Backend lifecycle maintenance
+elects one database-wide cleanup leader and purges eligible attempts outside
+the submission request path every `SUBMISSION_ATTEMPT_CLEANUP_INTERVAL_SECONDS`.
+Follower workers retry leadership on that interval so cleanup continues after
+the current leader stops without multiplying purge scans by worker count.
+
 ## Agent Studio and Flow Builder
 
 Agent Studio exposes domain-envelope metadata through

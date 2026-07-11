@@ -35,6 +35,7 @@ from src.schemas.curation_workspace import (
     CurationSessionSortField,
     CurationSessionStatus,
     CurationSortDirection,
+    CurationSubmissionAttemptState,
     CurationSubmissionStatus,
     CurationValidationScope,
     CurationValidationSnapshotState,
@@ -1089,6 +1090,21 @@ class CurationSubmissionRecord(Base):
         _enum_type(CurationSubmissionStatus),
         nullable=False,
     )
+    idempotency_key: Mapped[str | None] = mapped_column(String(), nullable=True)
+    attempt_state: Mapped[CurationSubmissionAttemptState | None] = mapped_column(
+        _enum_type(CurationSubmissionAttemptState),
+        nullable=True,
+    )
+    attempt_state_history: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=JSONB_EMPTY_ARRAY,
+    )
+    retention_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     readiness: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB,
         nullable=False,
@@ -1131,7 +1147,9 @@ class CurationSubmissionRecord(Base):
     )
 
     __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_curation_submissions_idempotency_key"),
         Index("ix_submissions_session", "session_id", text("requested_at DESC")),
+        Index("ix_submissions_retention", "retention_expires_at"),
     )
 
 

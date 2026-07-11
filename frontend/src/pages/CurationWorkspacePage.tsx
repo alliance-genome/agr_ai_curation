@@ -251,6 +251,7 @@ function CurationWorkspacePageContent({
 
     const response = await executeCurationSubmission({
       session_id: workspace.session.session_id,
+      idempotency_key: previewResponse.submission.submission_id,
       target_key: previewResponse.submission.target_key,
       candidate_ids: submissionPayload.candidate_ids,
       mode: 'direct_submit',

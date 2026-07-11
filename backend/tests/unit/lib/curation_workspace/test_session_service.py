@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import json
 import logging
@@ -15,6 +15,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgresUUID
 from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -23,7 +24,10 @@ from src.lib.curation_workspace.export_adapters import DEFAULT_JSON_BUNDLE_TARGE
 from src.lib.curation_workspace import session_queries as query_module
 from src.lib.curation_workspace import session_serializers as serializer_module
 from src.lib.curation_workspace import session_mutation_service as mutation_module
-from src.lib.curation_workspace.submission_adapters import NoOpSubmissionAdapter
+from src.lib.curation_workspace.submission_adapters import (
+    NoOpSubmissionAdapter,
+    SubmissionTransportError,
+)
 from src.lib.curation_workspace import session_service as module
 from src.lib.curation_workspace import session_submission_service as submission_module
 from src.lib.curation_workspace import session_validation_service as validation_module
@@ -3540,6 +3544,7 @@ def test_execute_submission_rejects_domain_envelope_readiness_blockers(
             seeded["session_id"],
             CurationSubmissionExecuteRequest(
                 session_id=seeded["session_id"],
+                idempotency_key=str(uuid4()),
                 target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
             ),
             actor_claims={"sub": "user-1"},
@@ -3609,6 +3614,7 @@ def test_execute_submission_rejects_adapter_domain_envelope_readiness_blockers(
             seeded["session_id"],
             CurationSubmissionExecuteRequest(
                 session_id=seeded["session_id"],
+                idempotency_key=str(uuid4()),
                 target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
             ),
             actor_claims={"sub": "user-1"},
@@ -3644,9 +3650,10 @@ def test_execute_submission_records_domain_envelope_submission_history(
     response = module.execute_submission(
         db_session,
         seeded["session_id"],
-        CurationSubmissionExecuteRequest(
-            session_id=seeded["session_id"],
-            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+            CurationSubmissionExecuteRequest(
+                session_id=seeded["session_id"],
+                idempotency_key=str(uuid4()),
+                target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
         ),
         actor_claims={"sub": "user-1"},
     )
@@ -3906,6 +3913,7 @@ def test_submission_export_blocks_open_blocking_validation_findings(
             seeded["session_id"],
             CurationSubmissionExecuteRequest(
                 session_id=seeded["session_id"],
+                idempotency_key=str(uuid4()),
                 target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
             ),
             actor_claims={"sub": "curator-1"},
@@ -4817,6 +4825,7 @@ def test_execute_submission_stages_submission_updates_session_and_logs_action(
         seeded["session_id"],
         CurationSubmissionExecuteRequest(
             session_id=seeded["session_id"],
+            idempotency_key=str(uuid4()),
             target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
         ),
         actor_claims={"sub": "user-1", "email": "user-1@example.org"},
@@ -4841,7 +4850,7 @@ def test_execute_submission_stages_submission_updates_session_and_logs_action(
     assert response.action_log_entry.action_type == CurationActionType.SUBMISSION_EXECUTED
     assert response.action_log_entry.new_session_status == CurationSessionStatus.SUBMITTED
     assert response.action_log_entry.metadata["submitted_candidate_count"] == 1
-    assert commit_calls == 0
+    assert commit_calls == 2
 
     persisted_submission = db_session.scalars(
         select(SubmissionModel).where(SubmissionModel.session_id == UUID(seeded["session_id"]))
@@ -4876,6 +4885,279 @@ def test_execute_submission_stages_submission_updates_session_and_logs_action(
     assert session_detail.latest_submission.payload.payload_text is not None
     assert session_detail.latest_submission.payload.content_type == "application/json"
     assert session_detail.latest_submission.payload.filename is not None
+
+
+def test_submission_retry_reconciles_after_local_finalization_rollback_without_resend(
+    db_session,
+    monkeypatch,
+):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    assert session_row is not None
+    session_row.adapter_key = REFERENCE_ADAPTER_KEY
+    db_session.commit()
+
+    class ReconciliableAdapter:
+        transport_key = "reconciliable"
+
+        def __init__(self):
+            self.submit_calls = 0
+            self.reconcile_calls = 0
+
+        def submit(self, *, payload, idempotency_key):
+            self.submit_calls += 1
+            persisted = db_session.scalar(
+                select(SubmissionModel).where(
+                    SubmissionModel.idempotency_key == idempotency_key
+                )
+            )
+            assert persisted is not None
+            assert persisted.attempt_state == "sending"
+            return {"status": "accepted", "external_reference": "target:accepted"}
+
+        def reconcile(self, *, payload, idempotency_key):
+            self.reconcile_calls += 1
+            return {"status": "accepted", "external_reference": "target:accepted"}
+
+    adapter = ReconciliableAdapter()
+    monkeypatch.setattr(
+        submission_module,
+        "_resolve_submission_transport_adapter",
+        lambda _target_key: adapter,
+    )
+    idempotency_key = str(uuid4())
+    request = CurationSubmissionExecuteRequest(
+        session_id=seeded["session_id"],
+        idempotency_key=idempotency_key,
+        target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+    )
+
+    first_response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        request,
+        actor_claims={"sub": "user-1"},
+    )
+    db_session.rollback()  # Inject failure of the caller-owned finalization commit.
+
+    durable_attempt = db_session.scalar(
+        select(SubmissionModel).where(SubmissionModel.idempotency_key == idempotency_key)
+    )
+    assert durable_attempt is not None
+    assert durable_attempt.attempt_state == "sending"
+
+    retried_response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        request,
+        actor_claims={"sub": "user-1"},
+    )
+
+    assert retried_response.submission.submission_id == first_response.submission.submission_id
+    assert retried_response.submission.attempt_state == "succeeded"
+    assert adapter.submit_calls == 1
+    assert adapter.reconcile_calls == 1
+
+
+def test_unknown_submission_outcome_is_not_blindly_resent(db_session, monkeypatch):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    assert session_row is not None
+    session_row.adapter_key = REFERENCE_ADAPTER_KEY
+    db_session.commit()
+
+    class UnknownOutcomeAdapter:
+        transport_key = "unknown_outcome"
+
+        def __init__(self):
+            self.submit_calls = 0
+            self.reconcile_calls = 0
+
+        def submit(self, *, payload, idempotency_key):
+            self.submit_calls += 1
+            raise TimeoutError("outcome unavailable")
+
+        def reconcile(self, *, payload, idempotency_key):
+            self.reconcile_calls += 1
+            return None
+
+    adapter = UnknownOutcomeAdapter()
+    monkeypatch.setattr(
+        submission_module,
+        "_resolve_submission_transport_adapter",
+        lambda _target_key: adapter,
+    )
+    request = CurationSubmissionExecuteRequest(
+        session_id=seeded["session_id"],
+        idempotency_key=str(uuid4()),
+        target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+    )
+
+    first_response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        request,
+        actor_claims={"sub": "user-1"},
+    )
+    db_session.commit()
+    second_response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        request,
+        actor_claims={"sub": "user-1"},
+    )
+
+    assert first_response.submission.attempt_state == "unknown"
+    assert second_response.submission.submission_id == first_response.submission.submission_id
+    assert second_response.submission.attempt_state == "unknown"
+    assert adapter.submit_calls == 1
+    assert adapter.reconcile_calls == 1
+
+
+def test_confirmed_failure_retry_reuses_attempt_and_idempotency_key(db_session, monkeypatch):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    assert session_row is not None
+    session_row.adapter_key = REFERENCE_ADAPTER_KEY
+    db_session.commit()
+
+    class FailThenAcceptAdapter:
+        transport_key = "fail_then_accept"
+
+        def __init__(self):
+            self.keys = []
+
+        def submit(self, *, payload, idempotency_key):
+            self.keys.append(idempotency_key)
+            if len(self.keys) == 1:
+                raise SubmissionTransportError("Confirmed rejection")
+            return {"status": "accepted"}
+
+        def reconcile(self, *, payload, idempotency_key):
+            raise AssertionError("Confirmed failures are safe to retry directly")
+
+    adapter = FailThenAcceptAdapter()
+    monkeypatch.setattr(
+        submission_module,
+        "_resolve_submission_transport_adapter",
+        lambda _target_key: adapter,
+    )
+    idempotency_key = str(uuid4())
+    execute_response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionExecuteRequest(
+            session_id=seeded["session_id"],
+            idempotency_key=idempotency_key,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+        actor_claims={"sub": "user-1"},
+    )
+    db_session.commit()
+
+    retry_response = module.retry_submission(
+        db_session,
+        seeded["session_id"],
+        execute_response.submission.submission_id,
+        CurationSubmissionRetryRequest(
+            submission_id=execute_response.submission.submission_id,
+        ),
+        actor_claims={"sub": "user-1"},
+    )
+
+    assert retry_response.submission.submission_id == execute_response.submission.submission_id
+    assert retry_response.submission.attempt_state == "succeeded"
+    assert adapter.keys == [idempotency_key, idempotency_key]
+
+
+def test_submission_attempt_idempotency_key_is_database_unique(db_session):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+    duplicate_key = str(uuid4())
+
+    def _attempt() -> SubmissionModel:
+        return SubmissionModel(
+            id=uuid4(),
+            session_id=UUID(seeded["session_id"]),
+            adapter_key=REFERENCE_ADAPTER_KEY,
+            mode=SubmissionMode.DIRECT_SUBMIT,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+            status=CurationSubmissionStatus.PENDING,
+            idempotency_key=duplicate_key,
+            attempt_state="pending",
+            attempt_state_history=[],
+            readiness=[],
+            payload={"candidate_ids": [seeded["first_candidate_id"]]},
+            validation_errors=[],
+            warnings=[],
+            submission_state={},
+            target_result_history=[],
+            requested_at=_now(),
+        )
+
+    db_session.add(_attempt())
+    db_session.commit()
+    db_session.add(_attempt())
+
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+
+
+def test_submission_attempt_cleanup_deletes_only_expired_terminal_rows(db_session):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+    now = _now()
+
+    def _attempt(*, state: str, retention_expires_at: datetime) -> SubmissionModel:
+        return SubmissionModel(
+            id=uuid4(),
+            session_id=UUID(seeded["session_id"]),
+            adapter_key=REFERENCE_ADAPTER_KEY,
+            mode=SubmissionMode.DIRECT_SUBMIT,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+            status=(
+                CurationSubmissionStatus.ACCEPTED
+                if state == "succeeded"
+                else CurationSubmissionStatus.PENDING
+            ),
+            idempotency_key=str(uuid4()),
+            attempt_state=state,
+            attempt_state_history=[],
+            retention_expires_at=retention_expires_at,
+            readiness=[],
+            payload={"candidate_ids": [seeded["first_candidate_id"]]},
+            validation_errors=[],
+            warnings=[],
+            submission_state={},
+            target_result_history=[],
+            requested_at=now,
+        )
+
+    db_session.add(_attempt(state="succeeded", retention_expires_at=now - timedelta(days=1)))
+    unresolved = _attempt(state="unknown", retention_expires_at=now - timedelta(days=1))
+    db_session.add(unresolved)
+    db_session.commit()
+
+    deleted_count = submission_module.purge_expired_submission_attempts(
+        db_session,
+        before=now,
+    )
+
+    assert deleted_count == 1
+    assert db_session.get(SubmissionModel, unresolved.id) is not None
 
 
 def test_execute_submission_preserves_payload_warnings_across_reload(db_session, monkeypatch):
@@ -4921,6 +5203,7 @@ def test_execute_submission_preserves_payload_warnings_across_reload(db_session,
         seeded["session_id"],
         CurationSubmissionExecuteRequest(
             session_id=seeded["session_id"],
+            idempotency_key=str(uuid4()),
             target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
         ),
         actor_claims={"sub": "user-1", "email": "user-1@example.org"},
@@ -4989,7 +5272,8 @@ def test_execute_submission_records_target_submission_state_and_history(
     class StatefulSubmissionAdapter:
         transport_key = "stateful_submission"
 
-        def submit(self, *, payload):
+        def submit(self, *, payload, idempotency_key):
+            assert idempotency_key
             assert payload.mode == SubmissionMode.DIRECT_SUBMIT
             return {
                 "status": CurationSubmissionStatus.ACCEPTED,
@@ -5018,6 +5302,7 @@ def test_execute_submission_records_target_submission_state_and_history(
         seeded["session_id"],
         CurationSubmissionExecuteRequest(
             session_id=seeded["session_id"],
+            idempotency_key=str(uuid4()),
             target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
         ),
         actor_claims={"sub": "user-1"},
@@ -5066,7 +5351,8 @@ def test_execute_submission_persists_validation_errors_without_marking_session_s
     class StubSubmissionAdapter:
         transport_key = "stub_submission"
 
-        def submit(self, *, payload):
+        def submit(self, *, payload, idempotency_key):
+            assert idempotency_key
             assert payload.mode == SubmissionMode.DIRECT_SUBMIT
             return {
                 "status": CurationSubmissionStatus.VALIDATION_ERRORS,
@@ -5085,6 +5371,7 @@ def test_execute_submission_persists_validation_errors_without_marking_session_s
         seeded["session_id"],
         CurationSubmissionExecuteRequest(
             session_id=seeded["session_id"],
+            idempotency_key=str(uuid4()),
             target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
         ),
         actor_claims={"sub": "user-1"},
@@ -5103,7 +5390,7 @@ def test_execute_submission_persists_validation_errors_without_marking_session_s
     assert persisted_submission.validation_errors == ["Field A is empty."]
 
 
-def test_execute_submission_normalizes_transport_errors_to_failed_submission_record(
+def test_execute_submission_records_untyped_transport_errors_as_unknown(
     db_session,
     monkeypatch,
     caplog,
@@ -5121,7 +5408,8 @@ def test_execute_submission_normalizes_transport_errors_to_failed_submission_rec
     class ExplodingSubmissionAdapter:
         transport_key = "exploding_submission"
 
-        def submit(self, *, payload):
+        def submit(self, *, payload, idempotency_key):
+            assert idempotency_key
             assert payload.target_key == DEFAULT_JSON_BUNDLE_TARGET_KEY
             raise RuntimeError("timeout talking to downstream submitter")
 
@@ -5138,13 +5426,15 @@ def test_execute_submission_normalizes_transport_errors_to_failed_submission_rec
         seeded["session_id"],
         CurationSubmissionExecuteRequest(
             session_id=seeded["session_id"],
+            idempotency_key=str(uuid4()),
             target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
         ),
         actor_claims={"sub": "user-1"},
     )
 
-    assert response.submission.status == CurationSubmissionStatus.FAILED
-    assert response.submission.response_message == module.SUBMISSION_TRANSPORT_FAILURE_MESSAGE
+    assert response.submission.status == CurationSubmissionStatus.PENDING
+    assert response.submission.attempt_state == "unknown"
+    assert response.submission.response_message is not None
     assert "timeout talking to downstream submitter" not in (
         response.submission.response_message or ""
     )
@@ -5158,8 +5448,9 @@ def test_execute_submission_normalizes_transport_errors_to_failed_submission_rec
     persisted_submission = db_session.scalars(
         select(SubmissionModel).where(SubmissionModel.session_id == UUID(seeded["session_id"]))
     ).one()
-    assert persisted_submission.status == CurationSubmissionStatus.FAILED
-    assert persisted_submission.response_message == module.SUBMISSION_TRANSPORT_FAILURE_MESSAGE
+    assert persisted_submission.status == CurationSubmissionStatus.PENDING
+    assert persisted_submission.attempt_state == "unknown"
+    assert persisted_submission.response_message is not None
     assert "timeout talking to downstream submitter" not in (
         persisted_submission.response_message or ""
     )
@@ -5186,6 +5477,9 @@ def test_retry_submission_stages_new_submission_row_and_logs_retry_action(
         mode=SubmissionMode.DIRECT_SUBMIT,
         target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
         status=CurationSubmissionStatus.FAILED,
+        idempotency_key=str(uuid4()),
+        attempt_state="failed",
+        attempt_state_history=[],
         readiness=[
             {
                 "candidate_id": seeded["first_candidate_id"],
@@ -5231,7 +5525,7 @@ def test_retry_submission_stages_new_submission_row_and_logs_retry_action(
         actor_claims={"sub": "user-1", "email": "user-1@example.org"},
     )
 
-    assert response.submission.submission_id != str(original_submission.id)
+    assert response.submission.submission_id == str(original_submission.id)
     assert response.submission.status == CurationSubmissionStatus.ACCEPTED
     assert response.submission.adapter_key == REFERENCE_ADAPTER_KEY
     assert response.submission.target_key == DEFAULT_JSON_BUNDLE_TARGET_KEY
@@ -5244,18 +5538,17 @@ def test_retry_submission_stages_new_submission_row_and_logs_retry_action(
     assert response.action_log_entry.metadata["retry_reason"] == (
         "Retry after transient downstream failure."
     )
-    assert commit_calls == 0
+    assert commit_calls == 1
 
     persisted_submissions = db_session.scalars(
         select(SubmissionModel)
         .where(SubmissionModel.session_id == UUID(seeded["session_id"]))
         .order_by(SubmissionModel.requested_at.asc(), SubmissionModel.id.asc())
     ).all()
-    assert len(persisted_submissions) == 2
+    assert len(persisted_submissions) == 1
     assert persisted_submissions[0].id == original_submission.id
-    assert persisted_submissions[0].status == CurationSubmissionStatus.FAILED
-    assert persisted_submissions[1].status == CurationSubmissionStatus.ACCEPTED
-    assert persisted_submissions[1].adapter_key == REFERENCE_ADAPTER_KEY
+    assert persisted_submissions[0].status == CurationSubmissionStatus.ACCEPTED
+    assert persisted_submissions[0].adapter_key == REFERENCE_ADAPTER_KEY
 
     action_log_rows = db_session.scalars(
         select(SessionActionLogModel)
@@ -5324,7 +5617,7 @@ def test_retry_submission_rejects_non_failed_original_submission(db_session):
         )
 
     assert exc.value.status_code == 400
-    assert exc.value.detail == "Only failed submissions may be retried"
+    assert exc.value.detail == "Only failed or unresolved submission attempts may be retried"
 
     persisted_submissions = db_session.scalars(
         select(SubmissionModel)

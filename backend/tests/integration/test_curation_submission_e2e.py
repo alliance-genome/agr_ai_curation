@@ -972,6 +972,7 @@ def test_submission_workflow_e2e_with_retry_and_history(
         f"/api/curation-workspace/sessions/{session_id}/submit",
         json={
             "session_id": session_id,
+            "idempotency_key": str(uuid4()),
             "target_key": gate_case["target_key"],
         },
     )
@@ -1011,7 +1012,7 @@ def test_submission_workflow_e2e_with_retry_and_history(
     assert retry_response.status_code == 200, retry_response.text
     retry_payload = retry_response.json()
     retried_submission_id = retry_payload["submission"]["submission_id"]
-    assert retried_submission_id != failed_submission_id
+    assert retried_submission_id == failed_submission_id
     assert retry_payload["submission"]["status"] == "accepted"
     assert retry_payload["action_log_entry"]["action_type"] == "submission_retried"
     assert retry_payload["action_log_entry"]["metadata"]["original_submission_id"] == failed_submission_id
@@ -1037,8 +1038,17 @@ def test_submission_workflow_e2e_with_retry_and_history(
     assert final_workspace_response.status_code == 200, final_workspace_response.text
     final_workspace_payload = final_workspace_response.json()["workspace"]
     assert [entry["status"] for entry in final_workspace_payload["submission_history"]] == [
-        "failed",
         "accepted",
+    ]
+    attempt_states = final_workspace_payload["submission_history"][0][
+        "attempt_state_history"
+    ]
+    assert [event["state"] for event in attempt_states] == [
+        "pending",
+        "sending",
+        "failed",
+        "sending",
+        "succeeded",
     ]
 
     final_session_row = test_db.get(CurationReviewSession, UUID(session_id))
@@ -1263,6 +1273,7 @@ def test_tmem67_gene_expression_e2e_repairs_exports_and_records_submission_histo
         f"/api/curation-workspace/sessions/{session_id}/submit",
         json={
             "session_id": session_id,
+            "idempotency_key": str(uuid4()),
             "candidate_ids": [candidate_id],
             "mode": "direct_submit",
             "target_key": GENE_EXPRESSION_TARGET_KEY,

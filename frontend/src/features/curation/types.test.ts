@@ -42,6 +42,7 @@ describe('curation workspace substrate types', () => {
     expect(CURATION_SUBMISSION_STATUSES).toEqual([
       'preview_ready',
       'export_ready',
+      'pending',
       'queued',
       'accepted',
       'validation_errors',

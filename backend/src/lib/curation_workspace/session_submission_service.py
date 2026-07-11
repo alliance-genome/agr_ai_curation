@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Any, Mapping, Sequence
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.lib.http_errors import raise_sanitized_http_exception
+from src.lib.openai_agents.config import get_submission_attempt_retention_days
 from src.lib.curation_workspace.export_adapters import build_default_export_adapter_registry
 from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
 from src.lib.curation_workspace.models import (
@@ -77,6 +79,7 @@ from src.schemas.curation_workspace import (
     CurationSubmissionPreviewRequest,
     CurationSubmissionPreviewResponse,
     CurationSubmissionRecord,
+    CurationSubmissionAttemptState,
     CurationSubmissionRetryRequest,
     CurationSubmissionRetryResponse,
     CurationSubmissionStatus,
@@ -1821,6 +1824,82 @@ def _submission_attempt_marks_session_submitted(status_value: CurationSubmission
     }
 
 
+def _attempt_state_for_result(
+    result_status: CurationSubmissionStatus,
+) -> CurationSubmissionAttemptState:
+    if _submission_attempt_marks_session_submitted(result_status):
+        return CurationSubmissionAttemptState.SUCCEEDED
+    return CurationSubmissionAttemptState.FAILED
+
+
+def _attempt_history_event(
+    state: CurationSubmissionAttemptState,
+    *,
+    occurred_at: datetime,
+    message: str,
+) -> dict[str, str]:
+    return {
+        "state": state.value,
+        "occurred_at": occurred_at.isoformat(),
+        "message": message,
+    }
+
+
+def _set_attempt_state(
+    submission_row: SubmissionModel,
+    state: CurationSubmissionAttemptState,
+    *,
+    occurred_at: datetime,
+    message: str,
+) -> None:
+    submission_row.attempt_state = state
+    submission_row.attempt_state_history = [
+        *(submission_row.attempt_state_history or []),
+        _attempt_history_event(state, occurred_at=occurred_at, message=message),
+    ]
+    submission_row.retention_expires_at = (
+        occurred_at + timedelta(days=get_submission_attempt_retention_days())
+        if state in {
+            CurationSubmissionAttemptState.SUCCEEDED,
+            CurationSubmissionAttemptState.FAILED,
+        }
+        else None
+    )
+
+
+def _result_from_submission_row(submission_row: SubmissionModel) -> SubmissionTransportResult:
+    return normalize_submission_transport_result(
+        status=submission_row.status,
+        external_reference=submission_row.external_reference,
+        response_message=submission_row.response_message,
+        validation_errors=submission_row.validation_errors or (),
+        warnings=submission_row.warnings or (),
+        completed_at=submission_row.completed_at,
+        submission_state=submission_row.submission_state or {},
+        target_result_history=submission_row.target_result_history or (),
+    )
+
+
+def purge_expired_submission_attempts(db: Session, *, before: datetime) -> int:
+    """Delete only terminal attempts whose configured audit window has elapsed."""
+
+    result = db.execute(
+        delete(SubmissionModel)
+        .where(SubmissionModel.retention_expires_at.is_not(None))
+        .where(SubmissionModel.retention_expires_at <= before)
+        .where(
+            SubmissionModel.attempt_state.in_(
+                (
+                    CurationSubmissionAttemptState.SUCCEEDED,
+                    CurationSubmissionAttemptState.FAILED,
+                )
+            )
+        )
+        .execution_options(synchronize_session=False)
+    )
+    return int(result.rowcount or 0)
+
+
 def _submission_action_message(
     *,
     result_status: CurationSubmissionStatus,
@@ -1880,29 +1959,177 @@ def _execute_direct_submission_attempt(
     domain_context: _DomainEnvelopeSubmissionContext | None = None,
     actor_claims: dict[str, Any],
     action_type: CurationActionType,
+    idempotency_key: str,
+    retry_confirmed_failure: bool = False,
     action_metadata: Mapping[str, Any] | None = None,
 ) -> tuple[CurationSubmissionRecord, CurationActionLogEntry]:
-    """Stage a direct submission attempt without completing the caller's transaction."""
+    """Durably stage, deliver, and reconcile one idempotent submission attempt."""
 
     transport_adapter = _resolve_submission_transport_adapter(target_key)
     requested_at = datetime.now(timezone.utc)
-    try:
-        result = coerce_submission_transport_result(
-            transport_adapter.submit(payload=payload)
-        )
-    except Exception as exc:
-        logger.exception(
-            "Submission transport adapter '%s' failed for session '%s' and target '%s'",
-            transport_adapter.transport_key,
-            str(session_row.id),
-            target_key,
-        )
-        result = _coerce_failed_submission_result(
-            adapter=transport_adapter,
-            error=exc,
-        )
+    serialized_payload = _serialize_submission_payload_contract(payload)
+    submission_row = db.scalar(
+        select(SubmissionModel).where(SubmissionModel.idempotency_key == idempotency_key)
+    )
+    created_attempt = submission_row is None
+    replayed_terminal_attempt = False
 
-    if result.status not in DIRECT_SUBMISSION_RESULT_STATUSES:
+    if submission_row is None:
+        submission_row = SubmissionModel(
+            session_id=session_row.id,
+            adapter_key=adapter_key,
+            mode=mode,
+            target_key=target_key,
+            status=CurationSubmissionStatus.PENDING,
+            idempotency_key=idempotency_key,
+            readiness=[item.model_dump(mode="json") for item in readiness],
+            payload=serialized_payload,
+            validation_errors=[],
+            warnings=list(payload.warnings),
+            submission_state={},
+            target_result_history=[],
+            requested_at=requested_at,
+            completed_at=None,
+        )
+        _set_attempt_state(
+            submission_row,
+            CurationSubmissionAttemptState.PENDING,
+            occurred_at=requested_at,
+            message="Submission intent committed before external delivery.",
+        )
+        db.add(submission_row)
+        try:
+            db.flush()
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            created_attempt = False
+            submission_row = db.scalar(
+                select(SubmissionModel).where(
+                    SubmissionModel.idempotency_key == idempotency_key
+                )
+            )
+            if submission_row is None:
+                raise
+
+    # Claim delivery while holding the database row lock. Concurrent requests
+    # with the same key serialize here; only the request that observes pending
+    # may transition to sending and invoke the external mutation.
+    submission_row = db.scalar(
+        select(SubmissionModel)
+        .where(SubmissionModel.idempotency_key == idempotency_key)
+        .with_for_update()
+    )
+    if submission_row is None:
+        raise RuntimeError("Durable submission attempt disappeared before delivery")
+
+    persisted_payload = _submission_payload(submission_row)
+    if (
+        submission_row.session_id != session_row.id
+        or submission_row.adapter_key != adapter_key
+        or submission_row.mode != mode
+        or submission_row.target_key != target_key
+        or persisted_payload is None
+        or persisted_payload.candidate_ids != payload.candidate_ids
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Idempotency key is already bound to a different submission intent",
+        )
+    if not created_attempt:
+        # Reconciliation and retries must use the exact body durably bound to
+        # the key, even if mutable session metadata changed after first send.
+        payload = persisted_payload
+        serialized_payload = submission_row.payload
+
+    if submission_row.attempt_state in {
+        CurationSubmissionAttemptState.SUCCEEDED,
+        CurationSubmissionAttemptState.FAILED,
+    } and not (
+        retry_confirmed_failure
+        and submission_row.attempt_state == CurationSubmissionAttemptState.FAILED
+    ):
+        result = _result_from_submission_row(submission_row)
+        replayed_terminal_attempt = True
+    else:
+        reconcile_only = submission_row.attempt_state in {
+            CurationSubmissionAttemptState.SENDING,
+            CurationSubmissionAttemptState.UNKNOWN,
+        }
+        if reconcile_only:
+            db.commit()
+        if not reconcile_only:
+            sending_at = datetime.now(timezone.utc)
+            _set_attempt_state(
+                submission_row,
+                CurationSubmissionAttemptState.SENDING,
+                occurred_at=sending_at,
+                message="External delivery started.",
+            )
+            db.add(submission_row)
+            db.commit()
+
+        try:
+            if reconcile_only:
+                result = transport_adapter.reconcile(
+                    payload=payload,
+                    idempotency_key=idempotency_key,
+                )
+                if result is None:
+                    result = normalize_submission_transport_result(
+                        status=CurationSubmissionStatus.PENDING,
+                        response_message=(
+                            "The downstream outcome is unknown and this transport cannot "
+                            "reconcile it safely; no duplicate mutation was sent."
+                        ),
+                    )
+                else:
+                    result = coerce_submission_transport_result(result)
+            else:
+                result = coerce_submission_transport_result(
+                    transport_adapter.submit(
+                        payload=payload,
+                        idempotency_key=idempotency_key,
+                    )
+                )
+        except Exception as exc:
+            logger.exception(
+                "Submission transport adapter '%s' failed for session '%s' and target '%s'",
+                transport_adapter.transport_key,
+                str(session_row.id),
+                target_key,
+            )
+            result = (
+                _coerce_failed_submission_result(adapter=transport_adapter, error=exc)
+                if isinstance(exc, SubmissionTransportError)
+                else normalize_submission_transport_result(
+                    status=CurationSubmissionStatus.PENDING,
+                    response_message=(
+                        "The downstream submission outcome is unknown; retry will reconcile "
+                        "this attempt without issuing a new mutation."
+                    ),
+                )
+            )
+
+        # A concurrent duplicate may have reconciled and finalized while this
+        # request was waiting on transport. Re-lock before local finalization
+        # so only one request records the terminal outcome and audit history.
+        locked_submission_row = db.scalar(
+            select(SubmissionModel)
+            .where(SubmissionModel.idempotency_key == idempotency_key)
+            .with_for_update()
+        )
+        if locked_submission_row is None:
+            raise RuntimeError("Durable submission attempt disappeared during delivery")
+        submission_row = locked_submission_row
+        if submission_row.attempt_state in {
+            CurationSubmissionAttemptState.SUCCEEDED,
+            CurationSubmissionAttemptState.FAILED,
+        }:
+            result = _result_from_submission_row(submission_row)
+            replayed_terminal_attempt = True
+
+    if result.status not in DIRECT_SUBMISSION_RESULT_STATUSES and result.status != CurationSubmissionStatus.PENDING:
         result = normalize_submission_transport_result(
             status=CurationSubmissionStatus.FAILED,
             response_message=(
@@ -1916,35 +2143,41 @@ def _execute_direct_submission_attempt(
 
     completed_at = result.completed_at or requested_at
     combined_warnings = dedupe([*payload.warnings, *result.warnings])
-    submission_row = SubmissionModel(
-        session_id=session_row.id,
-        adapter_key=adapter_key,
-        mode=mode,
-        target_key=target_key,
-        status=result.status,
-        readiness=[item.model_dump(mode="json") for item in readiness],
-        payload=_serialize_submission_payload_contract(payload),
-        external_reference=result.external_reference,
-        response_message=result.response_message,
-        validation_errors=list(result.validation_errors),
-        warnings=combined_warnings,
-        submission_state=dict(result.submission_state or {}),
-        target_result_history=[
-            dict(item)
-            for item in result.target_result_history
-        ],
-        requested_at=requested_at,
-        completed_at=completed_at,
-    )
+    if not replayed_terminal_attempt:
+        submission_row.status = result.status
+        submission_row.external_reference = result.external_reference
+        submission_row.response_message = result.response_message
+        submission_row.validation_errors = list(result.validation_errors)
+        submission_row.warnings = combined_warnings
+        submission_row.submission_state = dict(result.submission_state or {})
+        submission_row.target_result_history = [dict(item) for item in result.target_result_history]
+        submission_row.completed_at = (
+            None if result.status == CurationSubmissionStatus.PENDING else completed_at
+        )
+        _set_attempt_state(
+            submission_row,
+            (
+                CurationSubmissionAttemptState.UNKNOWN
+                if result.status == CurationSubmissionStatus.PENDING
+                else _attempt_state_for_result(result.status)
+            ),
+            occurred_at=completed_at,
+            message=(
+                "Downstream outcome could not be confirmed."
+                if result.status == CurationSubmissionStatus.PENDING
+                else f"Downstream outcome confirmed as '{result.status.value}'."
+            ),
+        )
 
     previous_session_status = session_row.status
     if _submission_attempt_marks_session_submitted(result.status):
         session_row.status = CurationSessionStatus.SUBMITTED
         if session_row.submitted_at is None:
             session_row.submitted_at = completed_at
-    session_row.updated_at = completed_at
-    session_row.last_worked_at = completed_at
-    session_row.session_version += 1
+    if not replayed_terminal_attempt:
+        session_row.updated_at = completed_at
+        session_row.last_worked_at = completed_at
+        session_row.session_version += 1
 
     action_log_payload = {
         "target_key": target_key,
@@ -1956,6 +2189,10 @@ def _execute_direct_submission_attempt(
         "validation_error_count": len(result.validation_errors),
         "submission_state": dict(result.submission_state or {}),
         "target_result_history_count": len(result.target_result_history),
+        "submission_id": str(submission_row.id),
+        "idempotency_key": idempotency_key,
+        "attempt_state": submission_row.attempt_state.value,
+        "idempotent_replay": replayed_terminal_attempt,
     }
     if action_metadata:
         action_log_payload.update(dict(action_metadata))
@@ -1983,14 +2220,15 @@ def _execute_direct_submission_attempt(
     db.add(submission_row)
     db.add(action_log_row)
     db.flush()
-    _append_domain_envelope_submission_history(
-        db=db,
-        domain_context=domain_context,
-        submission_row=submission_row,
-        payload=payload,
-        result=result,
-        completed_at=completed_at,
-    )
+    if not replayed_terminal_attempt and result.status != CurationSubmissionStatus.PENDING:
+        _append_domain_envelope_submission_history(
+            db=db,
+            domain_context=domain_context,
+            submission_row=submission_row,
+            payload=payload,
+            result=result,
+            completed_at=completed_at,
+        )
 
     response_submission = _submission_record(submission_row).model_copy(
         update={
@@ -2133,7 +2371,7 @@ def execute_submission(
     request: CurationSubmissionExecuteRequest,
     actor_claims: dict[str, Any],
 ) -> CurationSubmissionExecuteResponse:
-    """Stage a direct submission; the caller owns commit and rollback."""
+    """Execute a submission after committing its intent and sending state."""
 
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
     request_session_id = _normalize_uuid(request.session_id, field_name="session_id")
@@ -2215,6 +2453,7 @@ def execute_submission(
         domain_context=domain_context,
         actor_claims=actor_claims,
         action_type=CurationActionType.SUBMISSION_EXECUTED,
+        idempotency_key=request.idempotency_key,
     )
     db.expire_all()
 
@@ -2241,7 +2480,7 @@ def retry_submission(
     request: CurationSubmissionRetryRequest,
     actor_claims: dict[str, Any],
 ) -> CurationSubmissionRetryResponse:
-    """Stage a direct-submission retry; the caller owns commit and rollback."""
+    """Safely retry a confirmed failure or reconcile an ambiguous attempt."""
 
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
     normalized_submission_id = _normalize_uuid(submission_id, field_name="submission_id")
@@ -2262,10 +2501,14 @@ def retry_submission(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only direct-submit submissions may be retried",
         )
-    if original_submission.status != CurationSubmissionStatus.FAILED:
+    if original_submission.attempt_state not in {
+        CurationSubmissionAttemptState.FAILED,
+        CurationSubmissionAttemptState.SENDING,
+        CurationSubmissionAttemptState.UNKNOWN,
+    } or not original_submission.idempotency_key:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only failed submissions may be retried",
+            detail="Only failed or unresolved submission attempts may be retried",
         )
 
     target_candidate_ids = _submission_candidate_ids(original_submission)
@@ -2343,6 +2586,10 @@ def retry_submission(
         domain_context=domain_context,
         actor_claims=actor_claims,
         action_type=CurationActionType.SUBMISSION_RETRIED,
+        idempotency_key=original_submission.idempotency_key,
+        retry_confirmed_failure=(
+            original_submission.attempt_state == CurationSubmissionAttemptState.FAILED
+        ),
         action_metadata={
             "original_submission_id": str(original_submission.id),
             "retry_reason": retry_reason,
@@ -2405,7 +2652,8 @@ def _append_domain_envelope_submission_history(
         object_id = _stable_object_id(context.domain_object)
         event = HistoryEvent(
             event_id=(
-                f"submission:{submission_row.id}:{context.candidate_id}:{object_id}"
+                f"submission:{submission_row.id}:{len(submission_row.attempt_state_history)}:"
+                f"{context.candidate_id}:{object_id}"
             ),
             event_type=HistoryEventKind.SUBMITTED,
             timestamp=completed_at,
@@ -2475,6 +2723,7 @@ def _history_object_ref(
 __all__ = [
     "execute_submission",
     "get_submission",
+    "purge_expired_submission_attempts",
     "retry_submission",
     "submission_preview",
 ]
