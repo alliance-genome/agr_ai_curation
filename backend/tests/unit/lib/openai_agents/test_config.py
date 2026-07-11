@@ -12,6 +12,7 @@ from src.lib.openai_agents.config import (
     get_agent_config,
     get_api_key,
     get_base_url,
+    get_flow_supervisor_parallel_tool_calls_enabled,
     get_groq_tool_call_max_retries,
     get_groq_tool_call_retry_delay_seconds,
     get_inspect_results_json_depth_limit,
@@ -28,6 +29,18 @@ from src.lib.openai_agents.config import (
     supports_reasoning,
     supports_temperature,
 )
+
+
+def test_flow_supervisor_parallel_tool_calls_default_disabled(monkeypatch):
+    monkeypatch.delenv("FLOW_SUPERVISOR_PARALLEL_TOOL_CALLS_ENABLED", raising=False)
+
+    assert get_flow_supervisor_parallel_tool_calls_enabled() is False
+
+
+def test_flow_supervisor_parallel_tool_calls_honors_override(monkeypatch):
+    monkeypatch.setenv("FLOW_SUPERVISOR_PARALLEL_TOOL_CALLS_ENABLED", "true")
+
+    assert get_flow_supervisor_parallel_tool_calls_enabled() is True
 
 
 class TestGetAgentConfig:

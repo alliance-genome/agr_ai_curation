@@ -108,6 +108,7 @@ from src.lib.openai_agents.config import (
     get_agent_config,
     get_model_for_agent,
     build_model_settings,
+    get_flow_supervisor_parallel_tool_calls_enabled,
     get_flow_step_evidence_preview_limit,
     get_flow_step_output_preview_chars,
     resolve_model_provider,
@@ -2378,6 +2379,8 @@ def get_all_agent_tools(
         "next_tool_index": 0,
         "ordered_tool_names": ordered_tool_names,
         "completed_steps": [],
+        "step_claim_lock": asyncio.Lock(),
+        "in_flight_step": None,
         "evidence_registry": _EvidenceRegistry(),
         "persisted_extraction_results": [],
     }
@@ -2402,32 +2405,11 @@ def get_all_agent_tools(
         # names (ask_ca_<uuid>_specialist) for TOOL_START/TOOL_COMPLETE labels.
         description_override = f"Ask the {specialist_label}"
 
-        @function_tool(
-            name_override=tool_name,
-            description_override=description_override,
-            failure_error_function=None,
-        )
-        async def _ordered_tool(ctx: RunContextWrapper[Any], query: str) -> str:
+        async def _run_claimed_ordered_tool(
+            ctx: RunContextWrapper[Any], query: str, claimed_step_index: int
+        ) -> str:
             step_started_at = time.monotonic()
             phase_timings_ms: dict[str, int] = {}
-            next_idx = execution_state["next_tool_index"]
-            if next_idx >= len(ordered_tool_names):
-                return (
-                    "All remaining flow steps are already complete. "
-                    "Summarize final output and stop."
-                )
-            expected_tool = ordered_tool_names[next_idx]
-            if tool_name != expected_tool:
-                logger.info(
-                    "[Flow Executor] Step order blocked tool '%s'; expected '%s' next",
-                    tool_name,
-                    expected_tool,
-                )
-                return (
-                    f"Flow step order is strict. The next required step tool is "
-                    f"'{expected_tool}'. Do not call '{tool_name}' yet."
-                )
-
             template_timestamp = _format_flow_template_timestamp()
             template_variables = _build_flow_builtin_template_variables(
                 document_name=document_name,
@@ -2638,7 +2620,7 @@ def get_all_agent_tools(
             if extraction_handoff_audit is not None:
                 completed_step["extraction_handoff_audit"] = extraction_handoff_audit
             execution_state["completed_steps"].append(completed_step)
-            execution_state["next_tool_index"] = next_idx + 1
+            execution_state["next_tool_index"] = claimed_step_index + 1
             phase_timings_ms["state_update_ms"] = _elapsed_ms(
                 state_update_started_at
             )
@@ -2694,6 +2676,73 @@ def get_all_agent_tools(
             if flow_handoff_audit_event is not None:
                 _emit_flow_runtime_event(flow_handoff_audit_event)
             return result
+
+        @function_tool(
+            name_override=tool_name,
+            description_override=description_override,
+            failure_error_function=None,
+        )
+        async def _ordered_tool(ctx: RunContextWrapper[Any], query: str) -> str:
+            claim_token = object()
+            async with execution_state["step_claim_lock"]:
+                next_idx = execution_state["next_tool_index"]
+                if next_idx >= len(ordered_tool_names):
+                    return (
+                        "All remaining flow steps are already complete. "
+                        "Summarize final output and stop."
+                    )
+
+                expected_tool = ordered_tool_names[next_idx]
+                in_flight_step = execution_state["in_flight_step"]
+                if in_flight_step is not None:
+                    active_tool = in_flight_step["tool_name"]
+                    if tool_name == active_tool:
+                        logger.info(
+                            "[Flow Executor] Rejected duplicate in-flight tool '%s'",
+                            tool_name,
+                        )
+                        return (
+                            f"Flow step tool '{tool_name}' is already in progress. "
+                            "Do not call it again."
+                        )
+                    logger.info(
+                        "[Flow Executor] Blocked tool '%s' while '%s' is in flight",
+                        tool_name,
+                        active_tool,
+                    )
+                    return (
+                        f"Flow step order is strict. The current step tool "
+                        f"'{active_tool}' is still in progress. Do not call "
+                        f"'{tool_name}' yet."
+                    )
+
+                if tool_name != expected_tool:
+                    logger.info(
+                        "[Flow Executor] Step order blocked tool '%s'; expected '%s' next",
+                        tool_name,
+                        expected_tool,
+                    )
+                    return (
+                        f"Flow step order is strict. The next required step tool is "
+                        f"'{expected_tool}'. Do not call '{tool_name}' yet."
+                    )
+
+                execution_state["in_flight_step"] = {
+                    "tool_name": tool_name,
+                    "step_index": next_idx,
+                    "claim_token": claim_token,
+                }
+
+            try:
+                return await _run_claimed_ordered_tool(ctx, query, next_idx)
+            finally:
+                async with execution_state["step_claim_lock"]:
+                    in_flight_step = execution_state["in_flight_step"]
+                    if (
+                        in_flight_step is not None
+                        and in_flight_step.get("claim_token") is claim_token
+                    ):
+                        execution_state["in_flight_step"] = None
 
         return _ordered_tool
 
@@ -3238,6 +3287,7 @@ def create_flow_supervisor(
         temperature=config.temperature,
         reasoning_effort=config.reasoning,
         provider_override=model_provider,
+        parallel_tool_calls=get_flow_supervisor_parallel_tool_calls_enabled(),
     )
 
     # Get all tools with flow-based is_enabled
@@ -3877,6 +3927,18 @@ async def execute_flow(
     flow_execution_state = supervisor._flow_execution_state
     completed_steps = flow_execution_state["completed_steps"]
     evidence_registry = flow_execution_state["evidence_registry"]
+    consumed_tool_completions: set[str] = {
+        str(step.get("tool_name") or "").strip()
+        for step in completed_steps
+        if str(step.get("tool_name") or "").strip()
+    }
+
+    def _missing_consumed_tool_completions() -> list[str]:
+        return [
+            tool_name
+            for tool_name in flow_execution_state.get("ordered_tool_names") or []
+            if tool_name not in consumed_tool_completions
+        ]
 
     async for event in run_agent_streamed(
         context_messages=[{"role": "user", "content": prompt}],
@@ -3913,6 +3975,7 @@ async def execute_flow(
             tool_name = str(details.get("toolName") or "").strip()
             completed_step = _find_completed_step_by_tool_name(completed_steps, tool_name)
             if completed_step is not None:
+                consumed_tool_completions.add(tool_name)
                 flow_validator_audit_events = (
                     _build_flow_validator_lookup_audit_events(completed_step)
                 )
@@ -3951,7 +4014,7 @@ async def execute_flow(
                     }
             if (
                 pending_terminal_output_event is not None
-                and not _missing_required_flow_steps(flow_execution_state)
+                and not _missing_consumed_tool_completions()
             ):
                 yield event
                 for flow_validator_audit_event in flow_validator_audit_events:
@@ -4065,7 +4128,7 @@ async def execute_flow(
             }
             break
         if event_type in {"FILE_READY", "CHAT_OUTPUT_READY"}:
-            missing_steps = _missing_required_flow_steps(flow_execution_state)
+            missing_steps = _missing_consumed_tool_completions()
             if missing_steps:
                 pending_terminal_output_event = event
                 logger.info(
@@ -4150,17 +4213,8 @@ async def execute_flow(
         if (
             not curation_handoff_emitted
             and isinstance(curation_handoff_state, Mapping)
+            and not _missing_consumed_tool_completions()
         ):
-            missing_steps = _missing_required_flow_steps(flow_execution_state)
-            if missing_steps:
-                failure_reason, flow_error_event = _flow_incomplete_error_event(
-                    flow_name=flow.name,
-                    missing_steps=missing_steps,
-                )
-                flow_status = "failed"
-                yield flow_error_event
-                break
-
             curation_handoff_emitted = True
             yield {
                 "type": CURATION_HANDOFF_READY_EVENT,

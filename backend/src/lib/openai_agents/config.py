@@ -721,6 +721,11 @@ def get_supervisor_max_calls_per_specialist() -> int:
     return max(1, limit)
 
 
+def get_flow_supervisor_parallel_tool_calls_enabled() -> bool:
+    """Whether flow supervisors may request parallel tool calls from the provider."""
+    return _get_env_bool("FLOW_SUPERVISOR_PARALLEL_TOOL_CALLS_ENABLED", False)
+
+
 # =============================================================================
 # Operational limits (turns, batches, caps, timeouts)
 #
