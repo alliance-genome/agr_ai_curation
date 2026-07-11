@@ -237,6 +237,9 @@ function cleanupOwnedStream(ownerToken: symbol, sessionId?: string | null) {
 /**
  * Hook for managing chat SSE stream
  *
+ * The hook instance owns its stream; unmounting it aborts the run instead of
+ * preserving it across remounts.
+ *
  * @param activeSessionId Session whose owned stream should be cleaned up when it changes.
  * @returns Stream state and control functions
  */
