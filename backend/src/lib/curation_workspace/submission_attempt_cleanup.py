@@ -18,6 +18,38 @@ _cleanup_task: asyncio.Task[None] | None = None
 _CLEANUP_LEADER_LOCK_KEY = "agr_ai_curation_submission_attempt_cleanup"
 
 
+def _open_cleanup_leadership_connection() -> Connection:
+    """Open the dedicated autocommit connection that owns cleanup leadership."""
+
+    connection = engine.connect()
+    try:
+        return connection.execution_options(isolation_level="AUTOCOMMIT")
+    except Exception:
+        connection.close()
+        raise
+
+
+async def _open_cleanup_leadership_connection_in_thread() -> Connection:
+    """Open off-loop and close a late result if task cancellation wins the race."""
+
+    open_task = asyncio.create_task(
+        asyncio.to_thread(_open_cleanup_leadership_connection)
+    )
+    try:
+        return await asyncio.shield(open_task)
+    except asyncio.CancelledError:
+        try:
+            connection = await open_task
+        except Exception:
+            logger.debug(
+                "Submission attempt cleanup connection checkout failed during shutdown",
+                exc_info=True,
+            )
+        else:
+            await asyncio.to_thread(connection.close)
+        raise
+
+
 def _try_acquire_cleanup_leadership(connection: Connection) -> bool:
     """Claim database-wide cleanup leadership on this session's connection."""
 
@@ -78,9 +110,10 @@ async def _run_submission_attempt_cleanup() -> None:
     interval_seconds = get_submission_attempt_cleanup_interval_seconds()
     while True:
         try:
-            with engine.connect().execution_options(
-                isolation_level="AUTOCOMMIT"
-            ) as leader_connection:
+            leader_connection = (
+                await _open_cleanup_leadership_connection_in_thread()
+            )
+            try:
                 is_leader = await asyncio.to_thread(
                     _try_acquire_cleanup_leadership,
                     leader_connection,
@@ -105,6 +138,8 @@ async def _run_submission_attempt_cleanup() -> None:
                             _release_cleanup_leadership,
                             leader_connection,
                         )
+            finally:
+                await asyncio.to_thread(leader_connection.close)
         except Exception:
             logger.exception("Submission attempt cleanup leadership coordination failed")
         await asyncio.sleep(interval_seconds)
