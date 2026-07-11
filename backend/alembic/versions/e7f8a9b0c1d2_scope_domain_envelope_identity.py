@@ -1,7 +1,7 @@
 """Scope domain envelope identity and mutation ownership.
 
-Revision ID: c3d4e5f6a7b8
-Revises: b2c3d4e5f6a7
+Revision ID: e7f8a9b0c1d2
+Revises: c3d4e5f6a7b8
 Create Date: 2026-07-11 16:00:00.000000
 """
 
@@ -14,15 +14,17 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
+from src.lib.domain_envelope_payload_hash import canonical_domain_envelope_payload_hash
+from src.schemas.domain_envelope import DomainEnvelope
 
-revision: str = "c3d4e5f6a7b8"
-down_revision: Union[str, Sequence[str], None] = "b2c3d4e5f6a7"
+
+revision: str = "e7f8a9b0c1d2"
+down_revision: Union[str, Sequence[str], None] = "c3d4e5f6a7b8"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
     op.add_column("domain_envelopes", sa.Column("adapter_key", sa.String(), nullable=True))
     op.add_column(
         "domain_envelopes",
@@ -119,15 +121,28 @@ def upgrade() -> None:
           AND envelope.document_id IS NULL
         """
     )
-    op.execute(
-        """
-        UPDATE domain_envelopes AS envelope
-        SET source_payload_hash = encode(
-          digest(convert_to(envelope.envelope_json::text, 'UTF8'), 'sha256'),
-          'hex'
+    connection = op.get_bind()
+    legacy_envelopes = connection.execute(
+        sa.text("SELECT envelope_id, envelope_json FROM domain_envelopes")
+    ).mappings()
+    for legacy_envelope in legacy_envelopes:
+        connection.execute(
+            sa.text(
+                """
+                UPDATE domain_envelopes
+                SET source_payload_hash = :source_payload_hash
+                WHERE envelope_id = :envelope_id
+                """
+            ),
+            {
+                "envelope_id": legacy_envelope["envelope_id"],
+                "source_payload_hash": canonical_domain_envelope_payload_hash(
+                    DomainEnvelope.model_validate(
+                        legacy_envelope["envelope_json"]
+                    ).model_dump(mode="json")
+                ),
+            },
         )
-        """
-    )
     op.execute(
         """
         DO $$

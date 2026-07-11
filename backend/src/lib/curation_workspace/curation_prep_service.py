@@ -488,7 +488,11 @@ def _validate_existing_materialization_scope(
         "adapter_key": envelope_row.adapter_key,
         "domain_pack_id": envelope_row.domain_pack_key,
         "domain_pack_version": envelope_row.domain_pack_version,
-        "source_extraction_result_id": str(envelope_row.source_extraction_result_id),
+        "source_extraction_result_id": (
+            None
+            if envelope_row.source_extraction_result_id is None
+            else str(envelope_row.source_extraction_result_id)
+        ),
         "source_payload_hash": envelope_row.source_payload_hash,
     }
     expected = {
@@ -498,7 +502,11 @@ def _validate_existing_materialization_scope(
         "adapter_key": adapter_key,
         "domain_pack_id": envelope.domain_pack_id,
         "domain_pack_version": envelope.domain_pack_version,
-        "source_extraction_result_id": extraction_result.extraction_result_id,
+        "source_extraction_result_id": (
+            None
+            if extraction_result.extraction_result_id is None
+            else str(extraction_result.extraction_result_id)
+        ),
         "source_payload_hash": source_payload_hash,
     }
     mismatches = [

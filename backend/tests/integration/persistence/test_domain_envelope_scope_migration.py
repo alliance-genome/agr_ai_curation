@@ -14,12 +14,14 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
+from src.lib.domain_envelopes.persistence import domain_envelope_payload_hash
 from src.models.sql.database import engine
+from src.schemas.domain_envelope import DomainEnvelope
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
-PARENT_REVISION = "b2c3d4e5f6a7"
-SCOPED_REVISION = "c3d4e5f6a7b8"
+PARENT_REVISION = "c3d4e5f6a7b8"
+SCOPED_REVISION = "e7f8a9b0c1d2"
 DOCUMENT_ID = UUID("00000000-0000-0000-0000-000000000697")
 SESSION_ID = UUID("00000000-0000-0000-0000-000000006697")
 OTHER_SESSION_ID = UUID("00000000-0000-0000-0000-000000016697")
@@ -111,7 +113,7 @@ def _seed_document_and_sessions(*, include_other_session: bool = False) -> None:
 def _seed_legacy_envelope(
     *,
     document_id: UUID | None,
-    metadata: dict[str, str],
+    metadata: dict[str, object],
 ) -> None:
     envelope_json = {
         "envelope_id": ENVELOPE_ID,
@@ -175,6 +177,10 @@ def test_scope_migration_repairs_unambiguous_owner_and_enforces_constraints(
         metadata={
             "source_adapter_key": "gene",
             "source_extraction_result_id": "extract-697",
+            "numeric_payload": {
+                "scientific": 1e-7,
+                "trailing_zero": 1.2300,
+            },
         },
     )
     _seed_candidate(
@@ -189,7 +195,7 @@ def test_scope_migration_repairs_unambiguous_owner_and_enforces_constraints(
         repaired = connection.execute(
             text(
                 """
-                SELECT document_id, session_id, adapter_key,
+                SELECT document_id, session_id, adapter_key, envelope_json,
                        source_extraction_result_id, source_payload_hash
                 FROM domain_envelopes
                 WHERE envelope_id = :envelope_id
@@ -201,7 +207,9 @@ def test_scope_migration_repairs_unambiguous_owner_and_enforces_constraints(
     assert repaired["session_id"] == SESSION_ID
     assert repaired["adapter_key"] == "gene"
     assert repaired["source_extraction_result_id"] == "extract-697"
-    assert len(repaired["source_payload_hash"]) == 64
+    assert repaired["source_payload_hash"] == domain_envelope_payload_hash(
+        DomainEnvelope.model_validate(repaired["envelope_json"])
+    )
 
     with pytest.raises(DBAPIError, match="identity scope is immutable"):
         with engine.begin() as connection:

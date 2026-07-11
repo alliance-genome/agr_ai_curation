@@ -398,8 +398,13 @@ def _bind_envelopes_to_review_session(
         if envelope_row.domain_pack_key != envelope_ref.domain_pack_id:
             mismatches.append("domain_pack_id")
         if (
-            str(envelope_row.source_extraction_result_id)
-            != envelope_ref.source_extraction_result_id
+            None
+            if envelope_row.source_extraction_result_id is None
+            else str(envelope_row.source_extraction_result_id)
+        ) != (
+            None
+            if envelope_ref.source_extraction_result_id is None
+            else str(envelope_ref.source_extraction_result_id)
         ):
             mismatches.append("source_extraction_result_id")
         if envelope_row.session_id not in (None, normalized_session_id):

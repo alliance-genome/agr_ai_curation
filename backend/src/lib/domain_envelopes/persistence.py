@@ -13,6 +13,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from src.lib.domain_envelope_payload_hash import canonical_domain_envelope_payload_hash
 from src.lib.curation_workspace.models import (
     DomainEnvelopeHistory,
     DomainEnvelopeModel,
@@ -249,32 +250,9 @@ def write_domain_envelope_checkpoint(
 
 
 def domain_envelope_payload_hash(envelope: DomainEnvelope) -> str:
-    """Return the PostgreSQL-JSONB canonical hash for the materialized source payload."""
+    """Return the canonical hash for the materialized source payload."""
 
-    payload = json.dumps(
-        _postgres_jsonb_key_order(envelope.model_dump(mode="json")),
-        ensure_ascii=False,
-        separators=(", ", ": "),
-    )
-    return sha256(payload.encode("utf-8")).hexdigest()
-
-
-def _postgres_jsonb_key_order(value: Any) -> Any:
-    """Mirror JSONB object-key ordering so Python and migration hashes agree."""
-
-    if isinstance(value, Mapping):
-        return {
-            key: _postgres_jsonb_key_order(value[key])
-            for key in sorted(value, key=_postgres_jsonb_sort_key)
-        }
-    if isinstance(value, list):
-        return [_postgres_jsonb_key_order(item) for item in value]
-    return value
-
-
-def _postgres_jsonb_sort_key(value: Any) -> tuple[int, bytes]:
-    encoded = str(value).encode("utf-8")
-    return len(encoded), encoded
+    return canonical_domain_envelope_payload_hash(envelope.model_dump(mode="json"))
 
 
 def _validate_checkpoint_scope(
