@@ -1,6 +1,7 @@
 """Unit tests for curation workspace prep endpoints."""
 
 import logging
+from unittest.mock import MagicMock
 
 import pytest
 from uuid import uuid4
@@ -39,6 +40,44 @@ from src.schemas.curation_workspace import (
     EvidenceLocatorQuality,
     EvidenceSupportsDecision,
 )
+
+
+class _TransactionSpy:
+    def __init__(self):
+        self.commit_calls = 0
+        self.rollback_calls = 0
+
+    def commit(self):
+        self.commit_calls += 1
+
+    def rollback(self):
+        self.rollback_calls += 1
+
+    def in_transaction(self):
+        return True
+
+
+def test_run_curation_mutation_commits_only_after_helper_succeeds():
+    db = _TransactionSpy()
+
+    result = module._run_curation_mutation(db, lambda: "ok")
+
+    assert result == "ok"
+    assert db.commit_calls == 1
+    assert db.rollback_calls == 0
+
+
+def test_run_curation_mutation_rolls_back_helper_failure():
+    db = _TransactionSpy()
+
+    with pytest.raises(RuntimeError, match="fault after checkpoint"):
+        module._run_curation_mutation(
+            db,
+            lambda: (_ for _ in ()).throw(RuntimeError("fault after checkpoint")),
+        )
+
+    assert db.commit_calls == 0
+    assert db.rollback_calls == 1
 
 
 def _anchor() -> EvidenceAnchor:
@@ -542,7 +581,7 @@ async def test_post_manual_candidate_delegates_to_service(monkeypatch):
         },
         evidence_anchors=[],
     )
-    db = object()
+    db = MagicMock()
     user = {"sub": "user-1", "email": "user-1@example.org"}
 
     response = await module.post_manual_candidate(
@@ -621,7 +660,7 @@ async def test_post_candidate_decision_delegates_to_service(monkeypatch):
         action="accept",
         advance_queue=True,
     )
-    db = object()
+    db = MagicMock()
     user = {"sub": "user-1", "email": "user-1@example.org"}
 
     response = await module.post_candidate_decision(
@@ -657,7 +696,7 @@ async def test_delete_review_candidate_delegates_to_service(monkeypatch):
 
     session_id = uuid4()
     candidate_id = uuid4()
-    db = object()
+    db = MagicMock()
     user = {"sub": "user-1", "email": "user-1@example.org"}
 
     response = await module.delete_review_candidate(
@@ -707,7 +746,7 @@ async def test_patch_review_candidate_draft_delegates_to_service(monkeypatch):
         ],
         autosave=True,
     )
-    db = object()
+    db = MagicMock()
     user = {"sub": "user-1", "email": "user-1@example.org"}
 
     response = await module.patch_review_candidate_draft(
@@ -754,7 +793,7 @@ async def test_patch_review_envelope_field_delegates_to_service(monkeypatch):
         value="abc-2",
         reason="Curator correction.",
     )
-    db = object()
+    db = MagicMock()
     user = {"sub": "user-1", "email": "user-1@example.org"}
 
     response = await module.patch_review_envelope_field(

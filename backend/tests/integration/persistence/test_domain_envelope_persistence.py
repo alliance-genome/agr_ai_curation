@@ -424,6 +424,28 @@ def test_checkpoint_insert_update_stale_rejection_and_index_regeneration(db_sess
 
 
 @pytest.mark.integration
+def test_checkpoint_flushes_without_committing_caller_session(db_session, monkeypatch):
+    commit_calls = 0
+
+    def _commit_spy():
+        nonlocal commit_calls
+        commit_calls += 1
+
+    monkeypatch.setattr(db_session, "commit", _commit_spy)
+
+    result = write_domain_envelope_checkpoint(
+        db_session,
+        _checkpoint_request(_envelope(), expected_revision=0),
+    )
+
+    assert result.revision == 1
+    assert commit_calls == 0
+    assert db_session.get(DomainEnvelopeModel, "env-persistence-test") is not None
+    db_session.rollback()
+    assert db_session.get(DomainEnvelopeModel, "env-persistence-test") is None
+
+
+@pytest.mark.integration
 def test_projection_uniqueness_rolls_back_checkpoint(db_session):
     envelope = _envelope(include_second_object=False)
     first_object = envelope.extracted_objects[0]
@@ -456,6 +478,7 @@ def test_projection_uniqueness_rolls_back_checkpoint(db_session):
             _checkpoint_request(envelope, expected_revision=0),
         )
 
+    db_session.rollback()
     assert db_session.get(DomainEnvelopeModel, "env-persistence-test") is None
 
 
@@ -487,6 +510,7 @@ def test_malformed_projection_metadata_rolls_back_checkpoint(db_session):
             _checkpoint_request(envelope, expected_revision=0),
         )
 
+    db_session.rollback()
     assert db_session.get(DomainEnvelopeModel, "env-persistence-test") is None
 
 
@@ -524,6 +548,7 @@ def test_projection_entries_require_projection_json(db_session):
             _checkpoint_request(envelope, expected_revision=0),
         )
 
+    db_session.rollback()
     assert db_session.get(DomainEnvelopeModel, "env-persistence-test") is None
 
 

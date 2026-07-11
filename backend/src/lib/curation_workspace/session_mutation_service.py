@@ -113,12 +113,17 @@ from src.schemas.domain_envelope import (
 _MISSING = object()
 
 
+class RejectedEnvelopeFieldPatchError(HTTPException):
+    """HTTP rejection whose audit checkpoint must be committed by the endpoint."""
+
+
 def update_session(
     db: Session,
     session_id: str | UUID,
     request: CurationSessionUpdateRequest,
     actor_claims: dict[str, Any],
 ) -> CurationSessionUpdateResponse:
+    """Apply a session mutation and flush without committing ``db``."""
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
     request_session_id = _normalize_uuid(request.session_id, field_name="session_id")
     if normalized_session_id != request_session_id:
@@ -199,7 +204,7 @@ def update_session(
         db.add(session)
         if action_log_row is not None:
             db.add(action_log_row)
-        db.commit()
+        db.flush()
 
     updated_sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
     updated_session = updated_sessions[0]
@@ -304,6 +309,7 @@ def create_manual_candidate(
     *,
     actor_claims: dict[str, Any],
 ) -> CurationManualCandidateCreateResponse:
+    """Create a candidate and flush without committing the caller's session."""
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
     request_session_id = _normalize_uuid(request.session_id, field_name="session_id")
     if normalized_session_id != request_session_id:
@@ -469,7 +475,7 @@ def create_manual_candidate(
         session=get_session_detail(db, session_row.id),
         action_log_entry=build_action_log_entry(action_log_row),
     )
-    db.commit()
+    db.flush()
     return response
 
 def update_candidate_draft(
@@ -479,6 +485,7 @@ def update_candidate_draft(
     request: CurationCandidateDraftUpdateRequest,
     actor_claims: dict[str, Any],
 ) -> CurationCandidateDraftUpdateResponse:
+    """Update a draft and flush without committing the caller's session."""
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
     normalized_candidate_id = _normalize_uuid(candidate_id, field_name="candidate_id")
     request_session_id = _normalize_uuid(request.session_id, field_name="session_id")
@@ -625,7 +632,7 @@ def update_candidate_draft(
     db.add(candidate.session)
     db.add(candidate)
     db.add(draft_row)
-    db.commit()
+    db.flush()
 
     updated_candidate = _load_candidate_for_write(
         db,
@@ -782,7 +789,7 @@ def patch_envelope_field(
     request: CurationEnvelopeFieldPatchRequest,
     actor_claims: dict[str, Any],
 ) -> CurationEnvelopeFieldPatchResponse:
-    """Patch the persisted envelope source of truth and refresh workspace projections."""
+    """Patch an envelope and projections without committing the supplied session."""
 
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
     request_session_id = _normalize_uuid(request.session_id, field_name="session_id")
@@ -865,8 +872,8 @@ def patch_envelope_field(
             actor_claims=actor_claims,
             envelope_revision=rejected_checkpoint_revision,
         )
-        db.commit()
-        raise HTTPException(
+        db.flush()
+        raise RejectedEnvelopeFieldPatchError(
             status_code=_rejected_patch_status_code(patch_result),
             detail="; ".join(patch_result.errors),
         )
@@ -927,7 +934,7 @@ def patch_envelope_field(
         envelope_revision=checkpoint_revision,
     )
     db.add(session_row)
-    db.commit()
+    db.flush()
 
     refreshed_candidates = load_projection_candidates_for_patch(
         db,
@@ -971,7 +978,7 @@ def waive_validation_finding(
     request: CurationValidationFindingWaiveRequest,
     actor_claims: dict[str, Any],
 ) -> CurationValidationFindingWaiveResponse:
-    """Apply a curator waiver to one envelope validation finding."""
+    """Apply a curator waiver and flush without committing the supplied session."""
 
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
     request_session_id = _normalize_uuid(request.session_id, field_name="session_id")
@@ -1105,7 +1112,7 @@ def waive_validation_finding(
     )
     db.add(session_row)
     db.add(action_log_row)
-    db.commit()
+    db.flush()
 
     refreshed_sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
     refreshed_session = refreshed_sessions[0]
@@ -1326,6 +1333,7 @@ def _checkpoint_patch_result(
                 object_model_ref_json=dict(envelope_row.object_model_ref_json or {}),
                 model_field_ref_json=dict(envelope_row.model_field_ref_json or {}),
             ),
+            manage_transaction=False,
         )
     except DomainEnvelopePersistenceError as exc:
         raise HTTPException(
@@ -1698,6 +1706,7 @@ def delete_candidate(
     *,
     actor_claims: dict[str, Any],
 ) -> CurationCandidateDeleteResponse:
+    """Delete a candidate and flush without committing the supplied session."""
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
     normalized_candidate_id = _normalize_uuid(candidate_id, field_name="candidate_id")
     sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
@@ -1783,7 +1792,7 @@ def delete_candidate(
     )
 
     db.add(action_log_row)
-    db.commit()
+    db.flush()
 
     action_log_entry = build_action_log_entry(action_log_row)
     db.expire_all()
@@ -1800,6 +1809,7 @@ def decide_candidate(
     request: CurationCandidateDecisionRequest,
     actor_claims: dict[str, Any],
 ) -> CurationCandidateDecisionResponse:
+    """Record a candidate decision without committing the supplied session."""
     normalized_candidate_id = _normalize_uuid(candidate_id, field_name="candidate_id")
     normalized_session_id = _normalize_uuid(request.session_id, field_name="session_id")
     sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
@@ -1905,7 +1915,7 @@ def decide_candidate(
         next_candidate_id=str(next_candidate_uuid) if next_candidate_uuid else None,
         action_log_entry=build_action_log_entry(action_log_row),
     )
-    db.commit()
+    db.flush()
     return response
 
 

@@ -103,7 +103,7 @@ class DomainEnvelopeCheckpointRequest:
 
 @dataclass(frozen=True)
 class DomainEnvelopeCheckpointResult:
-    """Summary returned after a successful checkpoint commit."""
+    """Summary returned after a successful checkpoint flush."""
 
     envelope_id: str
     revision: int
@@ -117,17 +117,16 @@ def write_domain_envelope_checkpoint(
     db: Session,
     request: DomainEnvelopeCheckpointRequest,
     *,
-    manage_transaction: bool = True,
+    manage_transaction: bool = False,
 ) -> DomainEnvelopeCheckpointResult:
     """Persist a completed envelope checkpoint and regenerate current indexes.
 
     The caller supplies the fully patched ``DomainEnvelope`` for the next
-    revision. By default this service commits exactly one transaction: it locks
-    the current envelope row, verifies the expected revision, writes the new
-    envelope JSON, regenerates object/finding/projection indexes from that
-    stored JSON, appends unseen history events by event_id, then commits.
-    Callers that are already composing a larger unit of work may pass
-    ``manage_transaction=False`` and commit or roll back themselves.
+    revision. It locks the current envelope row, verifies the expected revision,
+    writes the new envelope JSON, regenerates object/finding/projection indexes from that
+    stored JSON, and appends unseen history events by event_id. By default the
+    supplied session is only flushed so the caller owns the transaction. A
+    standalone outer unit of work may opt into ``manage_transaction=True``.
     """
 
     envelope = request.envelope
@@ -190,6 +189,7 @@ def write_domain_envelope_checkpoint(
 
         index_counts = _regenerate_indexes_for_row(db, envelope_row)
         inserted_history_event_count = _append_history_events_for_row(db, envelope_row)
+        db.flush()
         if manage_transaction:
             db.commit()
     except Exception:
@@ -233,7 +233,7 @@ def regenerate_domain_envelope_indexes(
     db: Session,
     envelope_id: str,
 ) -> DomainEnvelopeIndexCounts:
-    """Regenerate object/finding/projection indexes from stored envelope_json."""
+    """Regenerate indexes and flush without committing the supplied session."""
 
     normalized_envelope_id = _required_string(envelope_id, field_name="envelope_id")
     envelope_row = db.scalars(
@@ -246,12 +246,8 @@ def regenerate_domain_envelope_indexes(
             f"Domain envelope {normalized_envelope_id} was not found"
         )
 
-    try:
-        counts = _regenerate_indexes_for_row(db, envelope_row)
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
+    counts = _regenerate_indexes_for_row(db, envelope_row)
+    db.flush()
     return counts
 
 

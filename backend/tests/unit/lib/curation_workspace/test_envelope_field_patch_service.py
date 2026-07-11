@@ -459,6 +459,68 @@ def test_patch_envelope_field_refreshes_projection_without_legacy_payload(
     ]
 
 
+def test_failure_after_checkpoint_rolls_back_envelope_projection_and_audit(
+    db_session,
+    loaded_pack,
+    monkeypatch,
+):
+    session, candidate = _create_session_with_envelope_projection(db_session)
+
+    monkeypatch.setattr(
+        module,
+        "load_projection_candidates_for_patch",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("fault after checkpoint")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="fault after checkpoint"):
+        module.patch_envelope_field(
+            db_session,
+            session.id,
+            _request(session.id),
+            {"sub": "curator-1", "email": "curator@example.org"},
+        )
+
+    db_session.rollback()
+    db_session.expire_all()
+
+    envelope_row = db_session.get(DomainEnvelopeModel, "env-1")
+    assert envelope_row.revision == 1
+    assert envelope_row.envelope_json["extracted_objects"][0]["payload"]["gene"]["symbol"] == (
+        "abc-1"
+    )
+    assert db_session.get(CurationCandidate, candidate.id).envelope_revision == 1
+    assert db_session.get(CurationReviewSession, session.id).session_version == 1
+    assert db_session.scalars(select(CurationActionLogEntry)).all() == []
+
+
+def test_envelope_mutation_flushes_without_committing_caller_session(
+    db_session,
+    loaded_pack,
+    monkeypatch,
+):
+    session, _candidate = _create_session_with_envelope_projection(db_session)
+    commit_calls = 0
+
+    def _commit_spy():
+        nonlocal commit_calls
+        commit_calls += 1
+
+    monkeypatch.setattr(db_session, "commit", _commit_spy)
+
+    response = module.patch_envelope_field(
+        db_session,
+        session.id,
+        _request(session.id),
+        {"sub": "curator-1", "email": "curator@example.org"},
+    )
+
+    assert response.envelope_revision == 2
+    assert commit_calls == 0
+    db_session.rollback()
+
+
 def test_update_candidate_draft_materializes_envelope_backed_payload(
     db_session,
     loaded_pack,
