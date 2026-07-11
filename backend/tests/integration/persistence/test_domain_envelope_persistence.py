@@ -6,12 +6,13 @@ import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from alembic import command
 from alembic.config import Config
 import pytest
 from sqlalchemy import delete, select
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry,
@@ -29,6 +30,7 @@ from src.lib.domain_envelopes.persistence import (
     DomainEnvelopeCheckpointRequest,
     DomainEnvelopePersistenceError,
     StaleDomainEnvelopeRevisionError,
+    domain_envelope_payload_hash,
     load_domain_envelope,
     write_domain_envelope_checkpoint,
     _stable_object_id,
@@ -38,6 +40,8 @@ from src.models.sql.pdf_document import PDFDocument
 from src.schemas.curation_workspace import (
     CurationActionType,
     CurationActorType,
+    CurationCandidateSource,
+    CurationCandidateStatus,
     CurationSessionStatus,
 )
 from src.schemas.domain_envelope import (
@@ -57,6 +61,8 @@ from src.schemas.domain_envelope import (
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
+OWNER_DOCUMENT_ID = UUID("00000000-0000-0000-0000-000000000697")
+OWNER_SESSION_ID = UUID("00000000-0000-0000-0000-000000006697")
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -69,6 +75,12 @@ def migrated_database():
 def db_session():
     session = SessionLocal()
     _clean_domain_tables(session)
+    _create_review_session_for_action_log(
+        session,
+        session_id=OWNER_SESSION_ID,
+        document_id=OWNER_DOCUMENT_ID,
+    )
+    session.commit()
     try:
         yield session
     finally:
@@ -104,6 +116,9 @@ def _checkpoint_request(
         envelope=envelope,
         expected_revision=expected_revision,
         flow_run_id="flow-run-1290",
+        document_id=OWNER_DOCUMENT_ID,
+        session_id=OWNER_SESSION_ID,
+        adapter_key="fixture_adapter",
         object_model_ref_json={"registry": "domain-pack"},
         model_field_ref_json={"fields": "provider-neutral"},
     )
@@ -116,9 +131,14 @@ def _legacy_semantic_row_counts(session) -> dict[str, int]:
     }
 
 
-def _create_review_session_for_action_log(session) -> CurationReviewSession:
+def _create_review_session_for_action_log(
+    session,
+    *,
+    session_id: UUID | None = None,
+    document_id: UUID | None = None,
+) -> CurationReviewSession:
     document = PDFDocument(
-        id=uuid4(),
+        id=document_id or uuid4(),
         filename=f"field_patch_constraint_{uuid4()}.pdf",
         title="Field patch constraint paper",
         file_path=f"/tmp/field_patch_constraint_{uuid4()}.pdf",
@@ -133,7 +153,7 @@ def _create_review_session_for_action_log(session) -> CurationReviewSession:
     session.flush()
 
     review_session = CurationReviewSession(
-        id=uuid4(),
+        id=session_id or uuid4(),
         status=CurationSessionStatus.IN_PROGRESS,
         adapter_key="fixture_adapter",
         document_id=document.id,
@@ -343,6 +363,10 @@ def test_checkpoint_insert_update_stale_rejection_and_index_regeneration(db_sess
     assert envelope_row.revision == 1
     assert envelope_row.domain_pack_key == "fixture.core"
     assert envelope_row.schema_provider == "json-schema"
+    persisted_envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
+    assert envelope_row.source_payload_hash == domain_envelope_payload_hash(
+        persisted_envelope
+    )
     assert _legacy_semantic_row_counts(db_session) == legacy_counts_before
 
     object_rows = db_session.scalars(
@@ -423,6 +447,48 @@ def test_checkpoint_insert_update_stale_rejection_and_index_regeneration(db_sess
 
     with pytest.raises(DomainEnvelopePersistenceError):
         load_domain_envelope(db_session, "env-persistence-test", revision=1)
+
+
+@pytest.mark.integration
+def test_candidate_cannot_link_owned_envelope_to_another_session(db_session):
+    write_domain_envelope_checkpoint(
+        db_session,
+        _checkpoint_request(_envelope(), expected_revision=0),
+    )
+    other_session = _create_review_session_for_action_log(db_session)
+    candidate = CurationCandidate(
+        id=uuid4(),
+        session_id=other_session.id,
+        source=CurationCandidateSource.EXTRACTED,
+        status=CurationCandidateStatus.PENDING,
+        order=0,
+        adapter_key="fixture_adapter",
+        envelope_id="env-persistence-test",
+        object_id="gene-1",
+        envelope_revision=1,
+        normalized_payload={},
+        candidate_metadata={},
+    )
+    db_session.add(candidate)
+
+    with pytest.raises(IntegrityError, match="fk_curation_candidates_envelope_session_owner"):
+        db_session.commit()
+    db_session.rollback()
+
+
+@pytest.mark.integration
+def test_database_rejects_domain_envelope_scope_identity_changes(db_session):
+    write_domain_envelope_checkpoint(
+        db_session,
+        _checkpoint_request(_envelope(), expected_revision=0),
+    )
+    db_session.commit()
+    envelope_row = db_session.get(DomainEnvelopeModel, "env-persistence-test")
+    envelope_row.project_key = "different-project"
+
+    with pytest.raises(DBAPIError, match="identity scope is immutable"):
+        db_session.flush()
+    db_session.rollback()
 
 
 @pytest.mark.integration

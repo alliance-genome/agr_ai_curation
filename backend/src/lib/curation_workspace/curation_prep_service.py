@@ -18,6 +18,8 @@ from src.lib.curation_workspace.extraction_results import persist_extraction_res
 from src.lib.curation_workspace.models import DomainEnvelopeModel
 from src.lib.domain_envelopes.persistence import (
     DomainEnvelopeCheckpointRequest,
+    DomainEnvelopePersistenceError,
+    domain_envelope_payload_hash,
     write_domain_envelope_checkpoint,
 )
 from src.lib.domain_packs.materialization import DomainEnvelopeMaterializationError
@@ -409,21 +411,39 @@ def ensure_domain_envelope_materialization(
     owns_session = db is None
     session = db or SessionLocal()
     try:
+        project_key = _checkpoint_project_key(extraction_result, envelope)
+        adapter_key = resolve_extraction_adapter_key(extraction_result)
+        if adapter_key is None:
+            raise DomainEnvelopePersistenceError(
+                "Domain-envelope materialization requires an adapter_key"
+            )
+        source_payload_hash = domain_envelope_payload_hash(envelope)
         envelope_row = session.get(DomainEnvelopeModel, envelope.envelope_id)
         if envelope_row is None:
             checkpoint = write_domain_envelope_checkpoint(
                 session,
                 DomainEnvelopeCheckpointRequest(
-                    project_key=_checkpoint_project_key(extraction_result, envelope),
+                    project_key=project_key,
                     envelope=envelope,
                     expected_revision=0,
                     document_id=extraction_result.document_id,
                     flow_run_id=extraction_result.flow_run_id,
+                    adapter_key=adapter_key,
+                    source_extraction_result_id=extraction_result.extraction_result_id,
+                    source_payload_hash=source_payload_hash,
                 ),
             )
             envelope_revision = checkpoint.revision
             persisted_envelope = envelope
         else:
+            _validate_existing_materialization_scope(
+                envelope_row,
+                extraction_result=extraction_result,
+                envelope=envelope,
+                project_key=project_key,
+                adapter_key=adapter_key,
+                source_payload_hash=source_payload_hash,
+            )
             envelope_revision = envelope_row.revision
             persisted_envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
 
@@ -448,6 +468,57 @@ def ensure_domain_envelope_materialization(
     finally:
         if owns_session:
             session.close()
+
+
+def _validate_existing_materialization_scope(
+    envelope_row: DomainEnvelopeModel,
+    *,
+    extraction_result: CurationExtractionResultRecord,
+    envelope: DomainEnvelope,
+    project_key: str,
+    adapter_key: str,
+    source_payload_hash: str,
+) -> None:
+    """Reject caller-supplied IDs that collide with another persisted source scope."""
+
+    actual = {
+        "project_key": envelope_row.project_key,
+        "document_id": str(envelope_row.document_id),
+        "flow_run_id": envelope_row.flow_run_id,
+        "adapter_key": envelope_row.adapter_key,
+        "domain_pack_id": envelope_row.domain_pack_key,
+        "domain_pack_version": envelope_row.domain_pack_version,
+        "source_extraction_result_id": (
+            None
+            if envelope_row.source_extraction_result_id is None
+            else str(envelope_row.source_extraction_result_id)
+        ),
+        "source_payload_hash": envelope_row.source_payload_hash,
+    }
+    expected = {
+        "project_key": project_key,
+        "document_id": extraction_result.document_id,
+        "flow_run_id": extraction_result.flow_run_id,
+        "adapter_key": adapter_key,
+        "domain_pack_id": envelope.domain_pack_id,
+        "domain_pack_version": envelope.domain_pack_version,
+        "source_extraction_result_id": (
+            None
+            if extraction_result.extraction_result_id is None
+            else str(extraction_result.extraction_result_id)
+        ),
+        "source_payload_hash": source_payload_hash,
+    }
+    mismatches = [
+        field_name
+        for field_name, expected_value in expected.items()
+        if actual[field_name] != expected_value
+    ]
+    if mismatches:
+        raise DomainEnvelopePersistenceError(
+            f"Domain envelope {envelope.envelope_id} collides with a different persisted "
+            f"scope ({', '.join(mismatches)})"
+        )
 
 
 def _review_row_materializer_for_extraction_result(

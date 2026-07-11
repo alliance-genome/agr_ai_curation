@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -17,6 +18,10 @@ from src.schemas.curation_prep import CurationPrepEnvelopeRef, CurationPrepScope
 from src.schemas.curation_workspace import (
     CurationExtractionResultRecord,
     CurationExtractionSourceKind,
+)
+from src.lib.domain_envelopes.persistence import (
+    DomainEnvelopePersistenceError,
+    domain_envelope_payload_hash,
 )
 
 
@@ -284,6 +289,86 @@ def test_domain_envelope_normalizer_rejects_mixed_canonical_and_extractor_shapes
 
     with pytest.raises(ValueError, match="mixes DomainEnvelope.extracted_objects"):
         domain_envelope_from_extraction_result(mixed_result)
+
+
+def test_existing_envelope_id_rejects_cross_document_scope_collision():
+    extraction_result = _make_domain_envelope_extraction_result(document_id="document-2")
+    envelope = domain_envelope_from_extraction_result(extraction_result)
+    row = SimpleNamespace(
+        envelope_id=envelope.envelope_id,
+        project_key="agr",
+        document_id="document-1",
+        flow_run_id=None,
+        adapter_key="gene",
+        domain_pack_key=envelope.domain_pack_id,
+        domain_pack_version=envelope.domain_pack_version,
+        source_extraction_result_id="extract-domain-1",
+        source_payload_hash=domain_envelope_payload_hash(envelope),
+    )
+
+    with pytest.raises(DomainEnvelopePersistenceError, match="document_id"):
+        module._validate_existing_materialization_scope(
+            cast(module.DomainEnvelopeModel, row),
+            extraction_result=extraction_result,
+            envelope=envelope,
+            project_key="agr",
+            adapter_key="gene",
+            source_payload_hash=domain_envelope_payload_hash(envelope),
+        )
+
+
+def test_existing_envelope_id_rejects_changed_source_payload():
+    extraction_result = _make_domain_envelope_extraction_result()
+    envelope = domain_envelope_from_extraction_result(extraction_result)
+    row = SimpleNamespace(
+        envelope_id=envelope.envelope_id,
+        project_key="agr",
+        document_id="document-1",
+        flow_run_id=None,
+        adapter_key="gene",
+        domain_pack_key=envelope.domain_pack_id,
+        domain_pack_version=envelope.domain_pack_version,
+        source_extraction_result_id="extract-domain-1",
+        source_payload_hash="0" * 64,
+    )
+
+    with pytest.raises(DomainEnvelopePersistenceError, match="source_payload_hash"):
+        module._validate_existing_materialization_scope(
+            cast(module.DomainEnvelopeModel, row),
+            extraction_result=extraction_result,
+            envelope=envelope,
+            project_key="agr",
+            adapter_key="gene",
+            source_payload_hash=domain_envelope_payload_hash(envelope),
+        )
+
+
+def test_existing_envelope_id_accepts_identical_extraction_retry():
+    extraction_result = _make_domain_envelope_extraction_result()
+    first_envelope = domain_envelope_from_extraction_result(extraction_result)
+    retry_envelope = domain_envelope_from_extraction_result(extraction_result)
+    source_payload_hash = domain_envelope_payload_hash(first_envelope)
+    row = SimpleNamespace(
+        envelope_id=first_envelope.envelope_id,
+        project_key="agr",
+        document_id="document-1",
+        flow_run_id=None,
+        adapter_key="gene",
+        domain_pack_key=first_envelope.domain_pack_id,
+        domain_pack_version=first_envelope.domain_pack_version,
+        source_extraction_result_id="extract-domain-1",
+        source_payload_hash=source_payload_hash,
+    )
+
+    assert domain_envelope_payload_hash(retry_envelope) == source_payload_hash
+    module._validate_existing_materialization_scope(
+        cast(module.DomainEnvelopeModel, row),
+        extraction_result=extraction_result,
+        envelope=retry_envelope,
+        project_key="agr",
+        adapter_key="gene",
+        source_payload_hash=domain_envelope_payload_hash(retry_envelope),
+    )
 
 
 def test_normalized_optional_string_preserves_string_only_behavior():

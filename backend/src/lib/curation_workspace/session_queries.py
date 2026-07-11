@@ -783,6 +783,28 @@ def load_projection_candidates_for_patch(
     )
 
 
+def load_envelope_candidates_for_patch(
+    db: Session,
+    *,
+    session_id: str | UUID,
+    envelope_id: str,
+) -> list[CurationCandidate]:
+    """Return every candidate linked to an envelope within its owning session."""
+
+    normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
+    return list(
+        db.scalars(
+            select(CurationCandidate)
+            .where(CurationCandidate.session_id == normalized_session_id)
+            .where(CurationCandidate.envelope_id == envelope_id)
+            .options(*CANDIDATE_DETAIL_LOAD_OPTIONS)
+            .order_by(CurationCandidate.order.asc(), CurationCandidate.id.asc())
+        )
+        .unique()
+        .all()
+    )
+
+
 def get_session_stats(
     db: Session,
     request: CurationSessionStatsRequest,

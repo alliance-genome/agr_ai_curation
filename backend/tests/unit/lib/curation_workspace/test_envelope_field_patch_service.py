@@ -273,6 +273,7 @@ def _create_session_with_envelope_projection(db_session) -> tuple[CurationReview
             expected_revision=0,
             document_id=document.id,
             session_id=session.id,
+            adapter_key="fixture_adapter",
         ),
     )
     assert checkpoint.revision == 1
@@ -457,6 +458,58 @@ def test_patch_envelope_field_refreshes_projection_without_legacy_payload(
         HistoryEventKind.FIELD_UPDATED,
         HistoryEventKind.CURATOR_FIELD_PATCH_ACCEPTED,
     ]
+
+
+def test_patch_rejects_envelope_without_owning_session(db_session, loaded_pack):
+    session, _candidate = _create_session_with_envelope_projection(db_session)
+    envelope_row = db_session.get(DomainEnvelopeModel, "env-1")
+    envelope_row.source_extraction_result_id = str(uuid4())
+    envelope_row.session_id = None
+    db_session.flush()
+
+    with pytest.raises(HTTPException) as exc:
+        module.patch_envelope_field(
+            db_session,
+            session.id,
+            _request(session.id),
+            {"sub": "curator-1"},
+        )
+
+    assert exc.value.status_code == 400
+    assert "does not belong" in exc.value.detail
+
+
+def test_patch_refreshes_every_candidate_linked_to_owned_envelope(db_session, loaded_pack):
+    session, candidate = _create_session_with_envelope_projection(db_session)
+    sibling = CurationCandidate(
+        id=uuid4(),
+        session_id=session.id,
+        source=CurationCandidateSource.EXTRACTED,
+        status=CurationCandidateStatus.PENDING,
+        order=1,
+        adapter_key="fixture_adapter",
+        display_label="abc-1 duplicate projection",
+        envelope_id="env-1",
+        object_id="gene-1",
+        envelope_revision=1,
+        normalized_payload={"gene": {"symbol": "abc-1"}},
+        candidate_metadata={},
+        created_at=candidate.created_at,
+        updated_at=candidate.updated_at,
+    )
+    db_session.add(sibling)
+    db_session.flush()
+
+    response = module.patch_envelope_field(
+        db_session,
+        session.id,
+        _request(session.id),
+        {"sub": "curator-1"},
+    )
+
+    assert response.envelope_revision == 2
+    assert db_session.get(CurationCandidate, candidate.id).envelope_revision == 2
+    assert db_session.get(CurationCandidate, sibling.id).envelope_revision == 2
 
 
 def test_failure_after_checkpoint_rolls_back_envelope_projection_and_audit(

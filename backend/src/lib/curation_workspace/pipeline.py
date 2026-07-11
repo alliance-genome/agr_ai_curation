@@ -365,7 +365,58 @@ def _execute_pipeline_steps(
         ),
         manage_transaction=False,
     )
+    _bind_envelopes_to_review_session(
+        db,
+        request=request,
+        adapter_key=adapter_key,
+        review_session_id=persistence_result.session_id,
+    )
     return persistence_result, str(prep_extraction_result.id)
+
+
+def _bind_envelopes_to_review_session(
+    db: Session,
+    *,
+    request: PostCurationPipelineRequest,
+    adapter_key: str,
+    review_session_id: str,
+) -> None:
+    """Bind prepared envelope projections to their sole owning review session."""
+
+    normalized_session_id = UUID(review_session_id)
+    for envelope_ref in request.prep_output.envelope_refs:
+        envelope_row = db.get(DomainEnvelopeModel, envelope_ref.envelope_id)
+        if envelope_row is None:
+            raise ValueError(f"Domain envelope {envelope_ref.envelope_id} was not found")
+        mismatches = []
+        if str(envelope_row.document_id) != request.document_id:
+            mismatches.append("document_id")
+        if envelope_row.flow_run_id != request.flow_run_id:
+            mismatches.append("flow_run_id")
+        if envelope_row.adapter_key != adapter_key:
+            mismatches.append("adapter_key")
+        if envelope_row.domain_pack_key != envelope_ref.domain_pack_id:
+            mismatches.append("domain_pack_id")
+        if (
+            None
+            if envelope_row.source_extraction_result_id is None
+            else str(envelope_row.source_extraction_result_id)
+        ) != (
+            None
+            if envelope_ref.source_extraction_result_id is None
+            else str(envelope_ref.source_extraction_result_id)
+        ):
+            mismatches.append("source_extraction_result_id")
+        if envelope_row.session_id not in (None, normalized_session_id):
+            mismatches.append("session_id")
+        if mismatches:
+            raise ValueError(
+                f"Domain envelope {envelope_ref.envelope_id} cannot be associated with this "
+                f"review session ({', '.join(mismatches)})"
+            )
+        envelope_row.session_id = normalized_session_id
+        db.add(envelope_row)
+    db.flush()
 
 
 def _prepared_candidates_from_envelope_refs(

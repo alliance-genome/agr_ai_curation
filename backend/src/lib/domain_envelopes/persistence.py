@@ -13,6 +13,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from src.lib.domain_envelope_payload_hash import canonical_domain_envelope_payload_hash
 from src.lib.curation_workspace.models import (
     DomainEnvelopeHistory,
     DomainEnvelopeModel,
@@ -97,6 +98,9 @@ class DomainEnvelopeCheckpointRequest:
     document_id: str | UUID | None = None
     session_id: str | UUID | None = None
     flow_run_id: str | None = None
+    adapter_key: str | None = None
+    source_extraction_result_id: str | UUID | None = None
+    source_payload_hash: str | None = None
     object_model_ref_json: Mapping[str, Any] = field(default_factory=dict)
     model_field_ref_json: Mapping[str, Any] = field(default_factory=dict)
 
@@ -134,6 +138,7 @@ def write_domain_envelope_checkpoint(
     project_key = _required_string(request.project_key, field_name="project_key")
     flow_run_id = _optional_non_empty_string(request.flow_run_id, field_name="flow_run_id")
     envelope_json = envelope.model_dump(mode="json")
+    requested_source_payload_hash = request.source_payload_hash
     now = datetime.now(timezone.utc)
 
     envelope_row = db.scalars(
@@ -155,6 +160,26 @@ def write_domain_envelope_checkpoint(
             revision=next_revision,
             created_at=now,
         )
+        adapter_key = _required_string(request.adapter_key, field_name="adapter_key")
+        document_id = _optional_uuid(request.document_id, field_name="document_id")
+        if document_id is None:
+            raise DomainEnvelopePersistenceError("A new domain envelope requires document_id")
+        source_payload_hash = (
+            _required_string(requested_source_payload_hash, field_name="source_payload_hash")
+            if requested_source_payload_hash is not None
+            else domain_envelope_payload_hash(envelope)
+        )
+        source_extraction_result_id = _optional_non_empty_string(
+            None
+            if request.source_extraction_result_id is None
+            else str(request.source_extraction_result_id),
+            field_name="source_extraction_result_id",
+        )
+        session_id = _optional_uuid(request.session_id, field_name="session_id")
+        if source_extraction_result_id is None and session_id is None:
+            raise DomainEnvelopePersistenceError(
+                "A new domain envelope requires a source extraction result or review session"
+            )
         db.add(envelope_row)
     else:
         if envelope_row.revision != request.expected_revision:
@@ -163,6 +188,29 @@ def write_domain_envelope_checkpoint(
                 expected_revision=request.expected_revision,
                 actual_revision=envelope_row.revision,
             )
+        adapter_key = envelope_row.adapter_key
+        source_extraction_result_id = envelope_row.source_extraction_result_id
+        session_id = envelope_row.session_id
+        source_payload_hash = envelope_row.source_payload_hash
+        _validate_checkpoint_scope(
+            envelope_row,
+            project_key=project_key,
+            domain_pack_key=envelope.domain_pack_id,
+            domain_pack_version=envelope.domain_pack_version,
+            document_id=_optional_uuid(request.document_id, field_name="document_id"),
+            flow_run_id=flow_run_id,
+            adapter_key=request.adapter_key,
+            source_extraction_result_id=_optional_non_empty_string(
+                None
+                if request.source_extraction_result_id is None
+                else str(request.source_extraction_result_id),
+                field_name="source_extraction_result_id",
+            ),
+            session_id=_optional_uuid(request.session_id, field_name="session_id"),
+            source_payload_hash=requested_source_payload_hash,
+        )
+        if session_id is None and request.session_id is not None:
+            session_id = _optional_uuid(request.session_id, field_name="session_id")
         next_revision = envelope_row.revision + 1
         envelope_row.revision = next_revision
 
@@ -171,8 +219,11 @@ def write_domain_envelope_checkpoint(
     envelope_row.domain_pack_version = envelope.domain_pack_version
     envelope_row.status = envelope.status
     envelope_row.document_id = _optional_uuid(request.document_id, field_name="document_id")
-    envelope_row.session_id = _optional_uuid(request.session_id, field_name="session_id")
+    envelope_row.session_id = session_id
     envelope_row.flow_run_id = flow_run_id
+    envelope_row.adapter_key = adapter_key
+    envelope_row.source_extraction_result_id = source_extraction_result_id
+    envelope_row.source_payload_hash = source_payload_hash
     envelope_row.schema_provider = (
         envelope.schema_ref.provider if envelope.schema_ref is not None else None
     )
@@ -196,6 +247,50 @@ def write_domain_envelope_checkpoint(
         projection_count=index_counts.projection_count,
         inserted_history_event_count=inserted_history_event_count,
     )
+
+
+def domain_envelope_payload_hash(envelope: DomainEnvelope) -> str:
+    """Return the canonical hash for the materialized source payload."""
+
+    return canonical_domain_envelope_payload_hash(envelope.model_dump(mode="json"))
+
+
+def _validate_checkpoint_scope(
+    row: DomainEnvelopeModel,
+    *,
+    project_key: str,
+    domain_pack_key: str,
+    domain_pack_version: str | None,
+    document_id: UUID | None,
+    flow_run_id: str | None,
+    adapter_key: str | None,
+    source_extraction_result_id: str | None,
+    session_id: UUID | None,
+    source_payload_hash: str | None,
+) -> None:
+    expected = {
+        "project_key": project_key,
+        "domain_pack_key": domain_pack_key,
+        "domain_pack_version": domain_pack_version,
+        "document_id": document_id,
+        "flow_run_id": flow_run_id,
+    }
+    if adapter_key is not None:
+        expected["adapter_key"] = _required_string(adapter_key, field_name="adapter_key")
+    if source_extraction_result_id is not None:
+        expected["source_extraction_result_id"] = source_extraction_result_id
+    if source_payload_hash is not None:
+        expected["source_payload_hash"] = source_payload_hash
+    for field_name, expected_value in expected.items():
+        if getattr(row, field_name) != expected_value:
+            raise DomainEnvelopePersistenceError(
+                f"Domain envelope {row.envelope_id} cannot be reused with a different "
+                f"{field_name}"
+            )
+    if row.session_id is not None and session_id != row.session_id:
+        raise DomainEnvelopePersistenceError(
+            f"Domain envelope {row.envelope_id} belongs to a different review session"
+        )
 
 
 def load_domain_envelope(
@@ -738,6 +833,7 @@ __all__ = [
     "OBJECT_VALIDATION_STATE_INFO",
     "OBJECT_VALIDATION_STATE_WARNING",
     "StaleDomainEnvelopeRevisionError",
+    "domain_envelope_payload_hash",
     "load_domain_envelope",
     "regenerate_domain_envelope_indexes",
     "write_domain_envelope_checkpoint",

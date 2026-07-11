@@ -74,6 +74,7 @@ def domain_envelope_from_extraction_result(
                 event_type=HistoryEventKind.CREATED,
                 actor_type=HistoryActorType.SYSTEM,
                 actor_id=CURATION_PREP_AGENT_ID,
+                timestamp=extraction_result.created_at,
                 message=(
                     "Created persisted domain envelope from structured extraction result "
                     f"{extraction_result.extraction_result_id}."
