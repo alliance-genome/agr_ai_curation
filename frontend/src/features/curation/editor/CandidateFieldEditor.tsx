@@ -50,6 +50,7 @@ import {
 import {
   mergeSavedDraftIntoWorkspace,
   resolveEnvelopeFieldPath,
+  resolveEnvelopeFieldPathCandidates,
 } from '@/features/curation/workspace/workspaceState'
 import {
   fieldState,
@@ -228,42 +229,7 @@ function isTechnicalCurationField(field: CurationDraftField): boolean {
 }
 
 function fieldPathCandidates(field: CurationDraftField): Set<string> {
-  const candidates = new Set<string>()
-
-  addFieldPathCandidate(candidates, field.field_key)
-  addFieldPathCandidate(candidates, resolveEnvelopeFieldPath(field))
-
-  const materializesTo = field.metadata.materializes_to_field_paths
-  if (Array.isArray(materializesTo)) {
-    for (const rawPath of materializesTo) {
-      if (typeof rawPath === 'string') {
-        addFieldPathCandidate(candidates, rawPath)
-      }
-    }
-  }
-
-  return candidates
-}
-
-function addFieldPathCandidate(candidates: Set<string>, rawPath: string): void {
-  const path = rawPath.trim()
-  if (!path) {
-    return
-  }
-  candidates.add(path)
-
-  const selectorParentPath = parentSelectorFieldPath(path)
-  if (selectorParentPath) {
-    candidates.add(selectorParentPath)
-  }
-}
-
-function parentSelectorFieldPath(path: string): string | null {
-  const selectorLeafMatch = path.match(/\.(curie|name)$/)
-  if (!selectorLeafMatch) {
-    return null
-  }
-  return path.slice(0, -selectorLeafMatch[0].length)
+  return resolveEnvelopeFieldPathCandidates(field)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

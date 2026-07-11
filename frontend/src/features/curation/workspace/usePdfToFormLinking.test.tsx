@@ -10,6 +10,7 @@ import type {
 import { createEvidenceRecord } from '../evidence/testFactories'
 import {
   FIELD_ROW_DATA_ATTRIBUTE,
+  type PdfToFormEvidence,
   PDF_TO_FORM_HIGHLIGHT_CLASSNAME,
   PDF_TO_FORM_HIGHLIGHT_DURATION_MS,
   usePdfToFormLinking,
@@ -60,9 +61,13 @@ function buildCandidate(
 
 function buildEvidenceIndex(
   evidence: CurationEvidenceRecord[],
-): Record<string, CurationEvidenceRecord> {
-  return evidence.reduce<Record<string, CurationEvidenceRecord>>((index, record) => {
-    index[record.anchor_id] = record
+): Record<string, PdfToFormEvidence> {
+  return evidence.reduce<Record<string, PdfToFormEvidence>>((index, record) => {
+    index[record.anchor_id] = {
+      anchorId: record.anchor_id,
+      candidateId: record.candidate_id,
+      fieldPaths: record.field_keys,
+    }
     return index
   }, {})
 }
@@ -101,7 +106,9 @@ function LinkingHarness({
   usePdfToFormLinking({
     activeCandidateId,
     candidates,
+    documentId: 'document-1',
     evidenceByAnchorId: buildEvidenceIndex(evidence),
+    ownerToken: 'curation:session-1',
     setActiveCandidate: handleSetActiveCandidate,
   })
 
@@ -121,11 +128,11 @@ function LinkingHarness({
 
 describe('usePdfToFormLinking', () => {
   const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
-  let scrollIntoViewMock: ReturnType<typeof vi.fn>
+  let scrollIntoViewMock: ReturnType<typeof vi.fn<HTMLElement['scrollIntoView']>>
 
   beforeEach(() => {
     vi.useFakeTimers()
-    scrollIntoViewMock = vi.fn()
+    scrollIntoViewMock = vi.fn<HTMLElement['scrollIntoView']>()
     HTMLElement.prototype.scrollIntoView = scrollIntoViewMock
   })
 
@@ -150,7 +157,11 @@ describe('usePdfToFormLinking', () => {
     )
 
     act(() => {
-      dispatchPDFViewerEvidenceAnchorSelected('anchor-1')
+      dispatchPDFViewerEvidenceAnchorSelected(
+        'anchor-1',
+        'document-1',
+        'curation:session-1',
+      )
     })
 
     expect(scrollIntoViewMock).toHaveBeenCalledWith({
@@ -194,7 +205,11 @@ describe('usePdfToFormLinking', () => {
     )
 
     act(() => {
-      dispatchPDFViewerEvidenceAnchorSelected('anchor-2')
+      dispatchPDFViewerEvidenceAnchorSelected(
+        'anchor-2',
+        'document-1',
+        'curation:session-1',
+      )
     })
 
     expect(setActiveCandidate).toHaveBeenCalledWith('candidate-2')

@@ -1802,7 +1802,11 @@ export function PdfViewer({
     }
 
     const handleAnchorSelection = () => {
-      dispatchPDFViewerEvidenceAnchorSelected(evidenceHighlight.anchorId)
+      dispatchPDFViewerEvidenceAnchorSelected(
+        evidenceHighlight.anchorId,
+        activeDocument.documentId,
+        activeDocumentOwnerToken ?? null,
+      )
     }
     const primaryHighlightNode = selectedHighlights[0] ?? null
 
@@ -1839,7 +1843,13 @@ export function PdfViewer({
     })
 
     return cleanupNativeHighlights
-  }, [activeDocument?.documentId, evidenceHighlight, overlayRenderKey, status])
+  }, [
+    activeDocument?.documentId,
+    activeDocumentOwnerToken,
+    evidenceHighlight,
+    overlayRenderKey,
+    status,
+  ])
 
   useEffect(() => {
     const iframeDoc = iframeRef.current?.contentWindow?.document
@@ -1882,7 +1892,11 @@ export function PdfViewer({
     const rectStyles = getEvidenceHighlightRectStyles(evidenceHighlight, theme)
     const rectCleanupFns: Array<() => void> = []
     const handleAnchorSelection = () => {
-      dispatchPDFViewerEvidenceAnchorSelected(evidenceHighlight.anchorId)
+      dispatchPDFViewerEvidenceAnchorSelected(
+        evidenceHighlight.anchorId,
+        activeDocument.documentId,
+        activeDocumentOwnerToken ?? null,
+      )
     }
 
     rects.forEach((rect) => {
@@ -1929,7 +1943,14 @@ export function PdfViewer({
       rectCleanupFns.forEach((cleanup) => cleanup())
       highlightLayer.remove()
     }
-  }, [activeDocument?.documentId, evidenceHighlight, overlayRenderKey, status, theme])
+  }, [
+    activeDocument?.documentId,
+    activeDocumentOwnerToken,
+    evidenceHighlight,
+    overlayRenderKey,
+    status,
+    theme,
+  ])
 
   useEffect(() => {
     if (!activeDocument) return
