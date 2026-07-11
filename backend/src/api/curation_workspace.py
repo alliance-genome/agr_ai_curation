@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import logging
-from typing import Annotated
+from typing import Annotated, Callable, TypeVar
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -37,6 +37,7 @@ from src.lib.domain_packs.materialization import (
     materialize_persisted_envelope_review_rows,
 )
 from src.lib.curation_workspace.session_service import (
+    RejectedEnvelopeFieldPatchError,
     create_manual_candidate,
     delete_candidate,
     decide_candidate,
@@ -130,6 +131,32 @@ from src.services.user_service import set_global_user_from_cognito
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/curation-workspace", tags=["Curation Workspace"])
+_MutationResult = TypeVar("_MutationResult")
+
+
+def _run_curation_mutation(
+    db: Session,
+    mutation: Callable[[], _MutationResult],
+) -> _MutationResult:
+    """Own the HTTP transaction around a shared-session mutation helper."""
+
+    try:
+        result = mutation()
+        db.commit()
+        return result
+    except RejectedEnvelopeFieldPatchError:
+        # Rejected patches intentionally retain their checkpoint and audit row.
+        try:
+            db.commit()
+        except Exception:
+            if db.in_transaction():
+                db.rollback()
+            raise
+        raise
+    except Exception:
+        if db.in_transaction():
+            db.rollback()
+        raise
 
 
 def _date_range(from_at: datetime | None, to_at: datetime | None) -> CurationDateRange | None:
@@ -426,7 +453,10 @@ async def patch_review_session(
     db: Session = Depends(get_db),
 ) -> CurationSessionUpdateResponse:
     set_global_user_from_cognito(db, user)
-    return update_session(db, session_id, request, user)
+    return _run_curation_mutation(
+        db,
+        lambda: update_session(db, session_id, request, user),
+    )
 
 
 @router.post("/evidence/recompute", response_model=CurationEvidenceRecomputeResponse)
@@ -437,11 +467,14 @@ async def post_evidence_recompute(
 ) -> CurationEvidenceRecomputeResponse:
     set_global_user_from_cognito(db, user)
     user_id = _require_current_user_id(user)
-    return recompute_evidence(
-        request,
-        current_user_id=user_id,
-        actor_claims=user,
-        db=db,
+    return _run_curation_mutation(
+        db,
+        lambda: recompute_evidence(
+            request,
+            current_user_id=user_id,
+            actor_claims=user,
+            db=db,
+        ),
     )
 
 
@@ -453,10 +486,13 @@ async def post_manual_evidence(
 ) -> CurationManualEvidenceCreateResponse:
     set_global_user_from_cognito(db, user)
     _require_current_user_id(user)
-    return create_manual_evidence(
-        request,
-        actor_claims=user,
-        db=db,
+    return _run_curation_mutation(
+        db,
+        lambda: create_manual_evidence(
+            request,
+            actor_claims=user,
+            db=db,
+        ),
     )
 
 
@@ -468,10 +504,13 @@ async def post_evidence_resolve(
 ) -> CurationEvidenceResolveResponse:
     set_global_user_from_cognito(db, user)
     user_id = _require_current_user_id(user)
-    return resolve_evidence(
-        request,
-        current_user_id=user_id,
-        db=db,
+    return _run_curation_mutation(
+        db,
+        lambda: resolve_evidence(
+            request,
+            current_user_id=user_id,
+            db=db,
+        ),
     )
 
 
@@ -579,11 +618,14 @@ async def post_manual_candidate(
 ) -> CurationManualCandidateCreateResponse:
     set_global_user_from_cognito(db, user)
     _require_current_user_id(user)
-    return create_manual_candidate(
+    return _run_curation_mutation(
         db,
-        session_id,
-        request,
-        actor_claims=user,
+        lambda: create_manual_candidate(
+            db,
+            session_id,
+            request,
+            actor_claims=user,
+        ),
     )
 
 
@@ -599,12 +641,15 @@ async def patch_review_candidate_draft(
     db: Session = Depends(get_db),
 ) -> CurationCandidateDraftUpdateResponse:
     set_global_user_from_cognito(db, user)
-    return update_candidate_draft(
+    return _run_curation_mutation(
         db,
-        session_id,
-        candidate_id,
-        request,
-        user,
+        lambda: update_candidate_draft(
+            db,
+            session_id,
+            candidate_id,
+            request,
+            user,
+        ),
     )
 
 
@@ -625,11 +670,14 @@ async def patch_review_envelope_field(
             status_code=400,
             detail="Path envelope_id does not match request body envelope_id",
         )
-    return patch_envelope_field(
+    return _run_curation_mutation(
         db,
-        session_id,
-        request,
-        user,
+        lambda: patch_envelope_field(
+            db,
+            session_id,
+            request,
+            user,
+        ),
     )
 
 
@@ -656,11 +704,14 @@ async def post_review_validation_finding_waiver(
             status_code=400,
             detail="Path finding_id does not match request body finding_id",
         )
-    return waive_validation_finding(
+    return _run_curation_mutation(
         db,
-        session_id,
-        request,
-        user,
+        lambda: waive_validation_finding(
+            db,
+            session_id,
+            request,
+            user,
+        ),
     )
 
 
@@ -676,11 +727,14 @@ async def delete_review_candidate(
 ) -> CurationCandidateDeleteResponse:
     set_global_user_from_cognito(db, user)
     _require_current_user_id(user)
-    return delete_candidate(
+    return _run_curation_mutation(
         db,
-        session_id,
-        candidate_id,
-        actor_claims=user,
+        lambda: delete_candidate(
+            db,
+            session_id,
+            candidate_id,
+            actor_claims=user,
+        ),
     )
 
 
@@ -696,11 +750,14 @@ async def post_candidate_decision(
 ) -> CurationCandidateDecisionResponse:
     set_global_user_from_cognito(db, user)
     _require_current_user_id(user)
-    return decide_candidate(
+    return _run_curation_mutation(
         db,
-        candidate_id,
-        request,
-        user,
+        lambda: decide_candidate(
+            db,
+            candidate_id,
+            request,
+            user,
+        ),
     )
 
 
@@ -715,11 +772,14 @@ async def post_candidate_validation(
     db: Session = Depends(get_db),
 ) -> CurationCandidateValidationResponse:
     set_global_user_from_cognito(db, user)
-    return validate_candidate(
+    return _run_curation_mutation(
         db,
-        candidate_id,
-        request,
-        user_id=_current_user_id(user),
+        lambda: validate_candidate(
+            db,
+            candidate_id,
+            request,
+            user_id=_current_user_id(user),
+        ),
     )
 
 
@@ -734,11 +794,14 @@ async def post_session_validation(
     db: Session = Depends(get_db),
 ) -> CurationSessionValidationResponse:
     set_global_user_from_cognito(db, user)
-    return validate_session(
+    return _run_curation_mutation(
         db,
-        session_id,
-        request,
-        user_id=_current_user_id(user),
+        lambda: validate_session(
+            db,
+            session_id,
+            request,
+            user_id=_current_user_id(user),
+        ),
     )
 
 
@@ -753,7 +816,10 @@ async def post_submission_preview(
     db: Session = Depends(get_db),
 ) -> CurationSubmissionPreviewResponse:
     set_global_user_from_cognito(db, user)
-    return submission_preview(db, session_id, request)
+    return _run_curation_mutation(
+        db,
+        lambda: submission_preview(db, session_id, request),
+    )
 
 
 @router.post(
@@ -768,11 +834,14 @@ async def post_submission_execute(
 ) -> CurationSubmissionExecuteResponse:
     set_global_user_from_cognito(db, user)
     _require_current_user_id(user)
-    return execute_submission(
+    return _run_curation_mutation(
         db,
-        session_id,
-        request,
-        actor_claims=user,
+        lambda: execute_submission(
+            db,
+            session_id,
+            request,
+            actor_claims=user,
+        ),
     )
 
 
@@ -789,12 +858,15 @@ async def post_submission_retry(
 ) -> CurationSubmissionRetryResponse:
     set_global_user_from_cognito(db, user)
     _require_current_user_id(user)
-    return retry_submission(
+    return _run_curation_mutation(
         db,
-        session_id,
-        submission_id,
-        request,
-        actor_claims=user,
+        lambda: retry_submission(
+            db,
+            session_id,
+            submission_id,
+            request,
+            actor_claims=user,
+        ),
     )
 
 

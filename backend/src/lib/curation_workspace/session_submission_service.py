@@ -1882,6 +1882,8 @@ def _execute_direct_submission_attempt(
     action_type: CurationActionType,
     action_metadata: Mapping[str, Any] | None = None,
 ) -> tuple[CurationSubmissionRecord, CurationActionLogEntry]:
+    """Stage a direct submission attempt without completing the caller's transaction."""
+
     transport_adapter = _resolve_submission_transport_adapter(target_key)
     requested_at = datetime.now(timezone.utc)
     try:
@@ -1997,7 +1999,6 @@ def _execute_direct_submission_attempt(
         }
     )
 
-    db.commit()
     action_log_entry = _action_log_entry(action_log_row)
     if action_log_entry is None:
         raise HTTPException(
@@ -2132,6 +2133,8 @@ def execute_submission(
     request: CurationSubmissionExecuteRequest,
     actor_claims: dict[str, Any],
 ) -> CurationSubmissionExecuteResponse:
+    """Stage a direct submission; the caller owns commit and rollback."""
+
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
     request_session_id = _normalize_uuid(request.session_id, field_name="session_id")
     if normalized_session_id != request_session_id:
@@ -2238,6 +2241,8 @@ def retry_submission(
     request: CurationSubmissionRetryRequest,
     actor_claims: dict[str, Any],
 ) -> CurationSubmissionRetryResponse:
+    """Stage a direct-submission retry; the caller owns commit and rollback."""
+
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
     normalized_submission_id = _normalize_uuid(submission_id, field_name="submission_id")
     request_submission_id = _normalize_uuid(request.submission_id, field_name="submission_id")

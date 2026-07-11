@@ -85,9 +85,16 @@ async def run_curation_prep(
     db: Session | None = None,
     persistence_context: CurationPrepPersistenceContext | None = None,
 ) -> CurationPrepAgentOutput:
-    """Build deterministic prep candidates from persisted extraction results."""
+    """Build prep candidates in one transaction owned by the outermost caller.
+
+    A supplied session is flushed but never committed or rolled back here. If
+    no session is supplied, this function creates and completes one transaction
+    spanning every envelope materialization and the prep extraction record.
+    """
 
     persistence_context = persistence_context or CurationPrepPersistenceContext()
+    owns_session = db is None
+    session = db or SessionLocal()
     initial_document_id = (
         persistence_context.document_id
         or next(
@@ -135,10 +142,14 @@ async def run_curation_prep(
             prep_output = await _run_curation_prep_impl(
                 extraction_results,
                 scope_confirmation=scope_confirmation,
-                db=db,
+                db=session,
                 persistence_context=persistence_context,
             )
+            if owns_session:
+                session.commit()
         except Exception as exc:
+            if owns_session and session.in_transaction():
+                session.rollback()
             if sentry_span is not None:
                 set_sentry_span_status(
                     sentry_span,
@@ -159,6 +170,9 @@ async def run_curation_prep(
                     },
                 )
             raise
+        finally:
+            if owns_session:
+                session.close()
 
         if sentry_span is not None:
             set_sentry_span_status(sentry_span, "ok")
@@ -417,13 +431,20 @@ def ensure_domain_envelope_materialization(
             persisted_envelope,
             envelope_revision=envelope_revision,
         )
-        return CurationPrepEnvelopeRef(
+        result = CurationPrepEnvelopeRef(
             envelope_id=persisted_envelope.envelope_id,
             envelope_revision=envelope_revision,
             source_extraction_result_id=extraction_result.extraction_result_id,
             domain_pack_id=persisted_envelope.domain_pack_id,
             review_row_count=len(review_rows),
         )
+        if owns_session:
+            session.commit()
+        return result
+    except Exception:
+        if owns_session and session.in_transaction():
+            session.rollback()
+        raise
     finally:
         if owns_session:
             session.close()

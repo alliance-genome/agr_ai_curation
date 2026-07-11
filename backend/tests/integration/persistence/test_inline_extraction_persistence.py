@@ -30,6 +30,7 @@ from alembic.config import Config
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
+from src.lib.curation_workspace import extraction_results as extraction_results_module
 from src.lib.curation_workspace.extraction_results import (
     persist_inline_validated_extraction_result,
 )
@@ -287,6 +288,56 @@ def test_partial_unique_index_rejects_direct_duplicate_insert(db_session, docume
     ).all()
     assert len(rows) == 1
     assert str(rows[0].id) == result.extraction_result_id
+
+
+def test_idempotency_conflict_savepoint_preserves_unrelated_outer_work(
+    db_session,
+    document_id,
+    monkeypatch,
+):
+    payload = _canonical_gene_envelope()
+    session_id = f"inline-savepoint-session-{uuid4()}"
+    winner = _persist(
+        db_session,
+        document_id,
+        payload=payload,
+        origin_session_id=session_id,
+    )
+    db_session.commit()
+
+    document = db_session.get(PDFDocument, document_id)
+    document.title = "Unrelated outer transaction work"
+
+    original_lookup = extraction_results_module._load_extraction_result_by_idempotency_key
+    lookup_calls = 0
+
+    def _simulate_race(session, idempotency_key):
+        nonlocal lookup_calls
+        lookup_calls += 1
+        if lookup_calls == 1:
+            return None
+        return original_lookup(session, idempotency_key)
+
+    monkeypatch.setattr(
+        extraction_results_module,
+        "_load_extraction_result_by_idempotency_key",
+        _simulate_race,
+    )
+
+    race_loser = _persist(
+        db_session,
+        document_id,
+        payload=payload,
+        origin_session_id=session_id,
+    )
+    db_session.commit()
+    db_session.expire_all()
+
+    assert race_loser.created_new is False
+    assert race_loser.extraction_result_id == winner.extraction_result_id
+    assert db_session.get(PDFDocument, document_id).title == (
+        "Unrelated outer transaction work"
+    )
 
 
 def test_inline_persistence_retains_non_fatal_validator_finding(db_session, document_id):

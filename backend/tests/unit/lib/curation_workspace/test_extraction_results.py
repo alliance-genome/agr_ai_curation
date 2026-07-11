@@ -106,6 +106,14 @@ def _sample_persisted_domain_envelope_payload() -> dict:
     }
 
 
+class _NestedTransaction:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc, _traceback):
+        return False
+
+
 class _FakeSession:
     def __init__(
         self,
@@ -125,6 +133,7 @@ class _FakeSession:
         self.rollback_calls = 0
         self.closed = False
         self.execute_calls = 0
+        self.begin_nested_calls = 0
 
     def add(self, record):
         self.added = record
@@ -138,6 +147,10 @@ class _FakeSession:
         self.flush_calls += 1
         if self.fail_flush:
             raise RuntimeError("db write failed")
+
+    def begin_nested(self):
+        self.begin_nested_calls += 1
+        return _NestedTransaction()
 
     def commit(self):
         self.commit_calls += 1
@@ -175,6 +188,7 @@ class _RaceConflictSession:
         self.execute_calls = 0
         self.closed = False
         self._insert_conflict_raised = False
+        self.begin_nested_calls = 0
 
     def add(self, record):
         self.added = record
@@ -196,6 +210,10 @@ class _RaceConflictSession:
                 {},
                 Exception("duplicate key value violates unique constraint"),
             )
+
+    def begin_nested(self):
+        self.begin_nested_calls += 1
+        return _NestedTransaction()
 
     def commit(self):
         self.commit_calls += 1
@@ -640,7 +658,8 @@ def test_persist_extraction_result_writes_record_and_returns_schema():
     response = persist_extraction_result(request, db=session)
 
     assert session.added is not None
-    assert session.commit_calls == 1
+    assert session.commit_calls == 0
+    assert session.flush_calls == 1
     assert session.refresh_calls == 1
     assert session.rollback_calls == 0
     assert str(session.added.document_id) == request.document_id
@@ -698,8 +717,8 @@ def test_persist_extraction_result_sanitizes_nul_characters_before_persisting():
     assert response.extraction_result.metadata["evidence_preview"] == "AB"
 
 
-def test_persist_extraction_result_rolls_back_on_commit_error():
-    session = _FakeSession(fail_commit=True)
+def test_persist_extraction_result_leaves_flush_error_for_caller_rollback():
+    session = _FakeSession(fail_flush=True)
     request = CurationExtractionPersistenceRequest(
         document_id=str(uuid4()),
         adapter_key="gene",
@@ -711,8 +730,9 @@ def test_persist_extraction_result_rolls_back_on_commit_error():
     with pytest.raises(RuntimeError, match="db write failed"):
         persist_extraction_result(request, db=session)
 
-    assert session.commit_calls == 1
-    assert session.rollback_calls == 1
+    assert session.commit_calls == 0
+    assert session.flush_calls == 1
+    assert session.rollback_calls == 0
     assert session.refresh_calls == 0
 
 
@@ -743,6 +763,7 @@ def test_persist_inline_validated_extraction_result_creates_idempotent_row():
 
     assert len(session.added_records) == 1
     assert session.flush_calls == 1
+    assert session.begin_nested_calls == 1
     assert session.commit_calls == 0
     assert session.rollback_calls == 0
     assert session.added.idempotency_key == response.idempotency_key
@@ -909,11 +930,12 @@ def test_persist_inline_validated_extraction_result_reloads_after_insert_conflic
         db=session,
     )
 
-    # The race loser attempted exactly one insert, hit the conflict, rolled back,
-    # and did not insert a second time.
+    # The race loser attempted exactly one insert in a savepoint and did not
+    # roll back unrelated work in the caller's transaction.
     assert len(session.added_records) == 1
     assert session.flush_calls == 1
-    assert session.rollback_calls == 1
+    assert session.rollback_calls == 0
+    assert session.begin_nested_calls == 1
     assert session.refresh_calls == 0
     # Pre-check lookup (empty) + post-rollback reload (race winner) = 2 lookups.
     assert session.execute_calls == 2
@@ -1033,7 +1055,7 @@ def test_persist_extraction_results_commits_when_helper_owns_session(monkeypatch
     assert len(responses) == 2
 
 
-def test_persist_extraction_results_rolls_back_batch_on_shared_session_flush_error():
+def test_persist_extraction_results_leaves_shared_session_rollback_to_caller():
     session = _FakeSession(fail_flush=True)
     requests = [
         CurationExtractionPersistenceRequest(
@@ -1058,7 +1080,7 @@ def test_persist_extraction_results_rolls_back_batch_on_shared_session_flush_err
     assert len(session.added_records) == 2
     assert session.commit_calls == 0
     assert session.flush_calls == 1
-    assert session.rollback_calls == 1
+    assert session.rollback_calls == 0
     assert session.refresh_calls == 0
 
 

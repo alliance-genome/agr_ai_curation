@@ -515,7 +515,6 @@ def _refresh_domain_envelope_validation_for_ref(
             object_model_ref_json=envelope_row.object_model_ref_json or {},
             model_field_ref_json=envelope_row.model_field_ref_json or {},
         ),
-        manage_transaction=False,
     )
     return checkpoint.revision
 

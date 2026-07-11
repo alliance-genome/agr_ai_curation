@@ -1154,7 +1154,7 @@ def _link_session_candidates(
         candidate.envelope_revision = envelope_revision
         linked_count += 1
     if linked_count:
-        db.commit()
+        db.flush()
     return linked_count
 
 

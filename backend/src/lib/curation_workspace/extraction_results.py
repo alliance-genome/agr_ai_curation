@@ -226,7 +226,11 @@ def persist_extraction_result(
     *,
     db: Optional[Session] = None,
 ) -> CurationExtractionPersistenceResponse:
-    """Persist one structured extraction envelope and return its stored record."""
+    """Persist one extraction envelope without committing a caller-owned session.
+
+    When ``db`` is omitted, this helper owns and completes its transaction. A
+    supplied session is only flushed; its caller owns commit and rollback.
+    """
 
     owns_session = db is None
     session = db or SessionLocal()
@@ -234,14 +238,18 @@ def persist_extraction_result(
     try:
         record = _build_extraction_result_record(request)
         session.add(record)
-        session.commit()
+        if owns_session:
+            session.commit()
+        else:
+            session.flush()
         session.refresh(record)
 
         return CurationExtractionPersistenceResponse(
             extraction_result=_record_to_schema(record)
         )
     except Exception:
-        session.rollback()
+        if owns_session:
+            session.rollback()
         raise
     finally:
         if owns_session:
@@ -269,6 +277,10 @@ def persist_inline_validated_extraction_result(
     This helper is intentionally stricter than the candidate builder:
     builder-backed chat extractions must persist canonical ``extracted_objects`` envelopes
     only, never old row sources or prose-derived artifacts.
+
+    A supplied ``db`` remains caller-owned. The insert is isolated in a
+    savepoint so an idempotency conflict does not roll back unrelated work in
+    the caller's transaction.
     """
 
     canonical_payload = _validated_inline_domain_envelope_payload(payload_json)
@@ -330,15 +342,11 @@ def persist_inline_validated_extraction_result(
             metadata=persistence_metadata,
         )
         record = _build_extraction_result_record(request)
-        session.add(record)
-
         try:
-            if owns_session:
-                session.commit()
-            else:
+            with session.begin_nested():
+                session.add(record)
                 session.flush()
         except IntegrityError:
-            session.rollback()
             existing = _load_extraction_result_by_idempotency_key(
                 session,
                 idempotency_key,
@@ -352,6 +360,9 @@ def persist_inline_validated_extraction_result(
                 )
             raise
 
+        if owns_session:
+            session.commit()
+
         session.refresh(record)
         return _inline_persistence_result(
             record,
@@ -360,7 +371,8 @@ def persist_inline_validated_extraction_result(
             payload_hash=payload_hash,
         )
     except Exception:
-        session.rollback()
+        if owns_session:
+            session.rollback()
         raise
     finally:
         if owns_session:
@@ -372,7 +384,7 @@ def persist_extraction_results(
     *,
     db: Optional[Session] = None,
 ) -> list[CurationExtractionPersistenceResponse]:
-    """Persist extraction envelopes, reusing the caller transaction when provided."""
+    """Persist envelopes, flushing but never committing a supplied session."""
 
     if not requests:
         return []
@@ -402,7 +414,8 @@ def persist_extraction_results(
             for record in records
         ]
     except Exception:
-        session.rollback()
+        if owns_session:
+            session.rollback()
         raise
     finally:
         if owns_session:

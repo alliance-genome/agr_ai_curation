@@ -1946,7 +1946,7 @@ def test_decide_candidate_reset_reverts_draft_and_keeps_existing_audit_entries(d
     assert action_logs[1].action_type == CurationActionType.CANDIDATE_RESET
 
 
-def test_validate_candidate_only_refreshes_requested_field_subset(db_session):
+def test_validate_candidate_only_refreshes_requested_field_subset(db_session, monkeypatch):
     document = _create_document(db_session)
     session_row = _create_review_session(
         db_session,
@@ -2023,6 +2023,14 @@ def test_validate_candidate_only_refreshes_requested_field_subset(db_session):
     db_session.add(draft)
     db_session.commit()
 
+    commit_calls = 0
+
+    def _commit_spy():
+        nonlocal commit_calls
+        commit_calls += 1
+
+    monkeypatch.setattr(db_session, "commit", _commit_spy)
+
     response = module.validate_candidate(
         db_session,
         candidate.id,
@@ -2049,6 +2057,7 @@ def test_validate_candidate_only_refreshes_requested_field_subset(db_session):
     assert response.validation_snapshot.field_results["field_b"].status == "ambiguous"
     assert response.candidate.validation is not None
     assert response.candidate.validation.stale_field_keys == ["field_b"]
+    assert commit_calls == 0
 
 
 def test_validate_candidate_uses_envelope_findings_instead_of_dirty_draft_state(
@@ -2391,7 +2400,17 @@ def test_workspace_validation_passes_document_user_runtime_context(
     assert captured_contexts[0].document_id == str(session_row.document_id)
     assert captured_contexts[0].user_id == "curator-42"
 
+    # The caller completes the candidate-validation transaction before starting
+    # the next unit of work.
+    db_session.commit()
     captured_contexts.clear()
+    commit_calls = 0
+
+    def _commit_spy():
+        nonlocal commit_calls
+        commit_calls += 1
+
+    monkeypatch.setattr(db_session, "commit", _commit_spy)
     module.validate_session(
         db_session,
         seeded["session_id"],
@@ -2406,6 +2425,7 @@ def test_workspace_validation_passes_document_user_runtime_context(
     assert len(captured_contexts) == 1
     assert captured_contexts[0].document_id == str(session_row.document_id)
     assert captured_contexts[0].user_id == "curator-43"
+    assert commit_calls == 0
 
 
 def test_workspace_validation_runs_package_domain_envelope_validator_before_bindings(
@@ -4765,7 +4785,10 @@ def test_build_submission_execute_payload_sanitizes_adapter_errors(caplog, monke
     assert "payload builder exploded" in caplog.text.lower()
 
 
-def test_execute_submission_persists_submission_updates_session_and_logs_action(db_session):
+def test_execute_submission_stages_submission_updates_session_and_logs_action(
+    db_session,
+    monkeypatch,
+):
     seeded = _create_decision_session(
         db_session,
         first_candidate_status=CurationCandidateStatus.ACCEPTED,
@@ -4775,6 +4798,13 @@ def test_execute_submission_persists_submission_updates_session_and_logs_action(
     session_row.adapter_key = REFERENCE_ADAPTER_KEY
     db_session.add(session_row)
     db_session.commit()
+    commit_calls = 0
+
+    def _commit_spy():
+        nonlocal commit_calls
+        commit_calls += 1
+
+    monkeypatch.setattr(db_session, "commit", _commit_spy)
 
     response = module.execute_submission(
         db_session,
@@ -4805,6 +4835,7 @@ def test_execute_submission_persists_submission_updates_session_and_logs_action(
     assert response.action_log_entry.action_type == CurationActionType.SUBMISSION_EXECUTED
     assert response.action_log_entry.new_session_status == CurationSessionStatus.SUBMITTED
     assert response.action_log_entry.metadata["submitted_candidate_count"] == 1
+    assert commit_calls == 0
 
     persisted_submission = db_session.scalars(
         select(SubmissionModel).where(SubmissionModel.session_id == UUID(seeded["session_id"]))
@@ -5128,7 +5159,10 @@ def test_execute_submission_normalizes_transport_errors_to_failed_submission_rec
     )
 
 
-def test_retry_submission_creates_new_submission_row_and_logs_retry_action(db_session):
+def test_retry_submission_stages_new_submission_row_and_logs_retry_action(
+    db_session,
+    monkeypatch,
+):
     seeded = _create_decision_session(
         db_session,
         first_candidate_status=CurationCandidateStatus.ACCEPTED,
@@ -5172,6 +5206,13 @@ def test_retry_submission_creates_new_submission_row_and_logs_retry_action(db_se
     )
     db_session.add(original_submission)
     db_session.commit()
+    commit_calls = 0
+
+    def _commit_spy():
+        nonlocal commit_calls
+        commit_calls += 1
+
+    monkeypatch.setattr(db_session, "commit", _commit_spy)
 
     response = module.retry_submission(
         db_session,
@@ -5197,6 +5238,7 @@ def test_retry_submission_creates_new_submission_row_and_logs_retry_action(db_se
     assert response.action_log_entry.metadata["retry_reason"] == (
         "Retry after transient downstream failure."
     )
+    assert commit_calls == 0
 
     persisted_submissions = db_session.scalars(
         select(SubmissionModel)
