@@ -160,6 +160,7 @@ vi.mock('@mui/x-data-grid', async () => {
               {columns.map((column: any) => (
                 <th
                   key={column.field}
+                  style={{ minWidth: column.minWidth }}
                   aria-sort={
                     activeSort?.field === column.field && activeSort.sort
                       ? activeSort.sort === 'asc'
@@ -289,10 +290,15 @@ describe('DocumentList', () => {
     render(<DocumentList {...defaultProps} documents={docs} totalCount={2} />);
 
     expect(screen.getByText('Source')).toBeInTheDocument();
+    expect(screen.getByText('Source').closest('th')).toHaveStyle({ minWidth: '280px' });
     expect(screen.getByText('ABC Literature')).toBeInTheDocument();
     expect(screen.getByText('AGRKB:101')).toBeInTheDocument();
     expect(screen.getByText('Local PDF')).toBeInTheDocument();
     expect(screen.getByText('Uploaded PDF')).toBeInTheDocument();
+    expect(screen.getByText('ABC Literature').closest('.MuiChip-root')).toHaveStyle({
+      flexShrink: '0',
+    });
+    expect(screen.getByText('imported').closest('.MuiChip-root')).toHaveStyle({ flexShrink: '0' });
   });
 
   it('displays loading state', () => {
