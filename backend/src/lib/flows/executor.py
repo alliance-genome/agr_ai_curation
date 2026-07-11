@@ -709,6 +709,7 @@ def _make_flow_runtime_formatter_tool(
         name_override=tool_name,
         description_override=tool_description,
         strict_mode=False,
+        failure_error_function=None,
     )
     async def _runtime_formatter_tool(
         ctx: RunContextWrapper[Any],
@@ -758,6 +759,7 @@ def _make_flow_runtime_formatter_tool(
                 specialist_name=specialist_name,
                 inline_chat_persistence=False,
                 isolate_run_config=True,
+                propagate_errors=True,
             ),
         )
         tool_ctx = SimpleNamespace(
@@ -788,6 +790,7 @@ def _make_flow_chat_output_tool(
         name_override=tool_name,
         description_override=tool_description,
         strict_mode=False,
+        failure_error_function=None,
     )
     async def _chat_output_tool(query: str) -> str:
         _ = query
@@ -1157,6 +1160,7 @@ async def _run_custom_flow_validator_agent(
         # CHAT persistence must not fire here (would write a shadow CHAT-source row).
         inline_chat_persistence=False,
         isolate_run_config=True,
+        propagate_errors=True,
     )
     provider_payload = {
         "source_envelope": {
@@ -2392,7 +2396,11 @@ def get_all_agent_tools(
         # names (ask_ca_<uuid>_specialist) for TOOL_START/TOOL_COMPLETE labels.
         description_override = f"Ask the {specialist_label}"
 
-        @function_tool(name_override=tool_name, description_override=description_override)
+        @function_tool(
+            name_override=tool_name,
+            description_override=description_override,
+            failure_error_function=None,
+        )
         async def _ordered_tool(ctx: RunContextWrapper[Any], query: str) -> str:
             step_started_at = time.monotonic()
             phase_timings_ms: dict[str, int] = {}
@@ -2756,7 +2764,11 @@ def get_all_agent_tools(
                 current_step_goal: Optional[str],
                 current_custom_instructions: Optional[str],
             ):
-                @function_tool(name_override=tool_name, description_override=tool_description)
+                @function_tool(
+                    name_override=tool_name,
+                    description_override=tool_description,
+                    failure_error_function=None,
+                )
                 async def _curation_prep_tool(query: str) -> str:
                     _ = (current_step_goal, current_custom_instructions, query)
                     if not document_id or not user_id or not session_id:
@@ -2808,7 +2820,11 @@ def get_all_agent_tools(
                 current_step_goal: Optional[str],
                 current_custom_instructions: Optional[str],
             ):
-                @function_tool(name_override=tool_name, description_override=tool_description)
+                @function_tool(
+                    name_override=tool_name,
+                    description_override=tool_description,
+                    failure_error_function=None,
+                )
                 async def _curation_handoff_tool(query: str) -> str:
                     _ = (current_step_goal, current_custom_instructions, query)
                     if not document_id or not user_id or not session_id:
@@ -2935,6 +2951,7 @@ def get_all_agent_tools(
                     # CHAT-source row in addition to the FLOW-source row).
                     inline_chat_persistence=False,
                     isolate_run_config=True,
+                    propagate_errors=True,
                 )
 
         curation = entry.get("curation")

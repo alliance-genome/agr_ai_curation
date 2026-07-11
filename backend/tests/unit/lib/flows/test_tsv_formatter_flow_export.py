@@ -156,6 +156,7 @@ async def test_runtime_file_formatter_tool_binds_visible_agent_to_completed_bund
     assert "gene_symbol_export" in runtime_context
     assert captured["query"] == "Create the CSV export."
     assert captured["streaming"]["kwargs"]["inline_chat_persistence"] is False
+    assert captured["streaming"]["kwargs"]["propagate_errors"] is True
 
 
 @pytest.mark.asyncio
@@ -183,10 +184,11 @@ async def test_runtime_file_formatter_rejects_empty_bundle_before_agent(monkeypa
         node_data={},
     )
 
-    result = await _invoke_tool(tool, {"query": "Create TSV."})
-
-    assert "no completed structured artifacts" in result
-    assert "raw serializers or model-written file contents" in result
+    with pytest.raises(
+        executor.FlowTerminalOutputProjectionError,
+        match="no completed structured artifacts",
+    ):
+        await _invoke_tool(tool, {"query": "Create TSV."})
 
 
 @pytest.mark.asyncio

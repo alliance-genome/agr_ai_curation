@@ -124,6 +124,7 @@ async def test_flow_streaming_tool_uses_isolated_run_config_and_closes(monkeypat
         specialist_name="Flow Specialist",
         inline_chat_persistence=False,
         isolate_run_config=True,
+        propagate_errors=True,
     )
 
     output = await tool.on_invoke_tool(
@@ -189,14 +190,15 @@ async def test_flow_streaming_tool_closes_isolated_provider_after_error(monkeypa
         specialist_name="Flow Specialist",
         inline_chat_persistence=False,
         isolate_run_config=True,
+        propagate_errors=True,
     )
 
-    output = await tool.on_invoke_tool(
-        SimpleNamespace(tool_name="run_flow_specialist", run_config=parent_config),
-        json.dumps({"query": "extract this"}),
-    )
+    with pytest.raises(RuntimeError, match="specialist failed"):
+        await tool.on_invoke_tool(
+            SimpleNamespace(tool_name="run_flow_specialist", run_config=parent_config),
+            json.dumps({"query": "extract this"}),
+        )
 
-    assert "specialist failed" in output
     assert close_calls == [
         (provider, {"trace_id": "trace-1", "user_id": "user-1"}),
     ]
