@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Sequence
 
-from src.lib.flows.edge_roles import (
+from src.lib.flow_edge_roles import (
     CONTROL_FLOW_EDGE_ROLE,
     VALIDATION_ATTACHMENT_EDGE_ROLE,
 )

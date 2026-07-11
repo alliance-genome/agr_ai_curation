@@ -12,7 +12,7 @@ from src.lib.domain_packs.validation_registry import (
     ValidationAttachmentOption,
     validate_active_validator_agent_references,
 )
-from src.lib.flows.edge_roles import VALIDATION_ATTACHMENT_EDGE_ROLE
+from src.lib.flow_edge_roles import VALIDATION_ATTACHMENT_EDGE_ROLE
 from src.schemas.flows import (
     FlowDefinition,
     FlowValidationAttachmentGroup,

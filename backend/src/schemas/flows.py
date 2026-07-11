@@ -11,7 +11,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from src.lib.executable_flow_graph import project_executable_flow_graph
-from src.lib.flows.edge_roles import (
+from src.lib.flow_edge_roles import (
     CONTROL_FLOW_EDGE_ROLE,
     FlowEdgeRole,
     VALIDATION_ATTACHMENT_EDGE_ROLE,
