@@ -84,13 +84,9 @@ import re
 import sys
 
 repo_root = Path(sys.argv[1])
-doc_paths = (
-    repo_root / "docs/deployment/independent-deployment.md",
-    repo_root / "docs/deployment/modular-packages.md",
-    repo_root / "docs/developer/guides/ADDING_NEW_AGENT.md",
-    repo_root / "docs/developer/guides/ADDING_NEW_TOOL.md",
-    repo_root / "docs/developer/guides/CONFIG_DRIVEN_ARCHITECTURE.md",
-)
+doc_paths = [repo_root / "README.md"]
+for docs_root in (repo_root / "config", repo_root / "docs", repo_root / "packages"):
+    doc_paths.extend(docs_root.rglob("*.md"))
 for doc_path in doc_paths:
     text = doc_path.read_text(encoding="utf-8")
     for command_block in re.findall(r"```(?:bash|sh)\s*(.*?)```", text, re.DOTALL):

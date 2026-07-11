@@ -245,6 +245,7 @@ class TestLifespan:
         "WEAVIATE_HOST": "example",
         "WEAVIATE_PORT": "9090",
         "WEAVIATE_SCHEME": "https",
+        "WEAVIATE_API_KEY": "production-key",
     })
     async def test_uses_environment_configuration(self, mock_init, mock_conn_cls):
         connection, _ = make_connection()
@@ -253,7 +254,10 @@ class TestLifespan:
         app = FastAPI()
 
         async with _main_module().lifespan(app):
-            mock_conn_cls.assert_called_with(url="https://example:9090")
+            mock_conn_cls.assert_called_with(
+                url="https://example:9090",
+                api_key="production-key",
+            )
             mock_init.assert_awaited_once()
 
     @pytest.mark.asyncio

@@ -261,10 +261,11 @@ async def lifespan(app: FastAPI):
         weaviate_host = os.getenv("WEAVIATE_HOST", "localhost")
         weaviate_port = os.getenv("WEAVIATE_PORT", "8080")
         weaviate_scheme = os.getenv("WEAVIATE_SCHEME", "http")
+        weaviate_api_key = os.getenv("WEAVIATE_API_KEY")
         weaviate_url = f"{weaviate_scheme}://{weaviate_host}:{weaviate_port}"
 
         logger.info("Connecting to Weaviate at %s...", weaviate_url)
-        connection = WeaviateConnection(url=weaviate_url)
+        connection = WeaviateConnection(url=weaviate_url, api_key=weaviate_api_key)
         await connection.connect_to_weaviate()
         logger.info("Successfully connected to Weaviate")
 

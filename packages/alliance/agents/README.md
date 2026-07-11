@@ -131,11 +131,11 @@ content: |
 ### Step 3: Install and reload
 
 Copy the completed package directory into
-`~/.agr_ai_curation/runtime/packages/` and restart the backend:
+`~/.agr_ai_curation/runtime/packages/` and rerun the guarded production
+start-and-verify stage:
 
 ```bash
-docker compose --env-file ~/.agr_ai_curation/.env \
-  -f docker-compose.production.yml restart backend
+scripts/install/install.sh --from-stage 6
 ```
 
 ## Repo-local use in this checkout
