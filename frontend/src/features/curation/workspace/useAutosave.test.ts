@@ -1217,6 +1217,67 @@ describe('useAutosave', () => {
     expect(result.current.isDirty).toBe(true)
   })
 
+  it('uses an authoritative workspace replacement to unblock a draft conflict', async () => {
+    const authoritativeWorkspace = buildWorkspace()
+    authoritativeWorkspace.candidates[0] = {
+      ...authoritativeWorkspace.candidates[0],
+      draft: {
+        ...authoritativeWorkspace.candidates[0].draft,
+        version: 4,
+        fields: authoritativeWorkspace.candidates[0].draft.fields.map((field) => ({
+          ...field,
+          value: 'TP53',
+          seed_value: 'TP53',
+        })),
+      },
+    }
+    serviceMocks.autosaveCurationCandidateDraft
+      .mockRejectedValueOnce({ status: 409 })
+      .mockResolvedValueOnce(buildSavedWorkspaceResponse({ value: 'BRCA2', version: 5 }))
+    serviceMocks.fetchCurationWorkspace.mockRejectedValueOnce(
+      new Error('refresh unavailable'),
+    )
+
+    const { result } = renderHook(
+      () => ({
+        autosave: useAutosave({ debounceMs: 10 }),
+        context: useCurationWorkspaceContext(),
+      }),
+      { wrapper: createWrapper(buildWorkspace()) },
+    )
+
+    act(() => {
+      result.current.autosave.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA2',
+      })
+    })
+    await waitFor(() => {
+      expect(result.current.autosave.warning).toContain('latest version could not be loaded')
+    })
+
+    act(() => {
+      result.current.context.setWorkspace(authoritativeWorkspace)
+    })
+    await waitFor(() => {
+      expect(result.current.context.activeCandidate?.draft.version).toBe(4)
+      expect(result.current.context.activeCandidate?.draft.fields[0]).toMatchObject({
+        value: 'BRCA2',
+        dirty: true,
+      })
+    })
+    await act(async () => {
+      expect(await result.current.autosave.flush()).toBe(true)
+    })
+
+    expect(serviceMocks.fetchCurationWorkspace).toHaveBeenCalledTimes(1)
+    expect(serviceMocks.autosaveCurationCandidateDraft).toHaveBeenCalledTimes(2)
+    expect(serviceMocks.autosaveCurationCandidateDraft.mock.calls[1]?.[0]).toMatchObject({
+      expected_version: 4,
+      field_changes: [{ field_key: 'gene_symbol', value: 'BRCA2' }],
+    })
+  })
+
   it('refreshes an envelope conflict and preserves a newer local edit for a fresh revision', async () => {
     const initialWorkspace = buildEnvelopeWorkspace()
     const authoritativeRefresh = createDeferred<CurationWorkspace>()
@@ -1298,6 +1359,81 @@ describe('useAutosave', () => {
       expected_revision: 9,
       before: 'TP53',
       value: 'BRCA3',
+    })
+  })
+
+  it('uses an authoritative workspace replacement to unblock an envelope conflict', async () => {
+    const initialWorkspace = buildEnvelopeWorkspace()
+    const authoritativeWorkspace = buildEnvelopeWorkspace()
+    authoritativeWorkspace.candidates[0] = {
+      ...authoritativeWorkspace.candidates[0],
+      projection_ref: {
+        ...authoritativeWorkspace.candidates[0].projection_ref!,
+        envelope_revision: 9,
+      },
+      draft: {
+        ...authoritativeWorkspace.candidates[0].draft,
+        version: 9,
+        fields: authoritativeWorkspace.candidates[0].draft.fields.map((field) => ({
+          ...field,
+          value: 'TP53',
+          seed_value: 'TP53',
+        })),
+      },
+    }
+    serviceMocks.patchCurationEnvelopeField
+      .mockRejectedValueOnce({ status: 409 })
+      .mockResolvedValueOnce(
+        buildEnvelopePatchResponse({
+          workspace: authoritativeWorkspace,
+          value: 'BRCA2',
+          before: 'TP53',
+          previousRevision: 9,
+          envelopeRevision: 10,
+        }),
+      )
+    serviceMocks.fetchCurationWorkspace.mockRejectedValueOnce(
+      new Error('refresh unavailable'),
+    )
+
+    const { result } = renderHook(
+      () => ({
+        autosave: useAutosave({ debounceMs: 10 }),
+        context: useCurationWorkspaceContext(),
+      }),
+      { wrapper: createWrapper(initialWorkspace) },
+    )
+
+    act(() => {
+      result.current.autosave.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA2',
+      })
+    })
+    await waitFor(() => {
+      expect(result.current.autosave.warning).toContain('latest revision could not be loaded')
+    })
+
+    act(() => {
+      result.current.context.setWorkspace(authoritativeWorkspace)
+    })
+    await waitFor(() => {
+      expect(result.current.context.activeCandidate?.projection_ref?.envelope_revision).toBe(9)
+      expect(result.current.context.activeCandidate?.draft.fields[0]).toMatchObject({
+        value: 'BRCA2',
+        dirty: true,
+      })
+    })
+    await act(async () => {
+      expect(await result.current.autosave.flush()).toBe(true)
+    })
+
+    expect(serviceMocks.fetchCurationWorkspace).toHaveBeenCalledTimes(1)
+    expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledTimes(2)
+    expect(serviceMocks.patchCurationEnvelopeField.mock.calls[1]?.[0]).toMatchObject({
+      expected_revision: 9,
+      before: 'TP53',
+      value: 'BRCA2',
     })
   })
 

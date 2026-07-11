@@ -252,10 +252,12 @@ export function useAutosave(
   const pauseSessionRef = useRef<((options?: FlushOptions) => Promise<boolean>) | null>(null)
 
   useEffect(() => {
-    draftVersionsRef.current = new Map(
+    const previousDraftVersions = draftVersionsRef.current
+    const previousEnvelopeRevisions = envelopeRevisionsRef.current
+    const nextDraftVersions = new Map(
       workspace.candidates.map((candidate) => [candidate.candidate_id, candidate.draft.version]),
     )
-    envelopeRevisionsRef.current = new Map(
+    const nextEnvelopeRevisions = new Map(
       workspace.candidates
         .map((candidate) => candidate.projection_ref)
         .filter((projectionRef): projectionRef is NonNullable<typeof projectionRef> =>
@@ -265,7 +267,98 @@ export function useAutosave(
           projectionRef.envelope_revision,
         ]),
     )
-  }, [workspace.candidates])
+    draftVersionsRef.current = nextDraftVersions
+    envelopeRevisionsRef.current = nextEnvelopeRevisions
+
+    let rebasedWorkspace = workspace
+    let restoredLocalChanges = false
+
+    for (const candidate of workspace.candidates) {
+      const candidateId = candidate.candidate_id
+      const pendingDraft = pendingDraftsRef.current.get(candidateId)
+      if (
+        pendingDraft
+        && draftConflictsRef.current.has(candidateId)
+        && previousDraftVersions.get(candidateId) !== candidate.draft.version
+      ) {
+        const rebasedDraft = {
+          ...pendingDraft,
+          draftId: candidate.draft.draft_id,
+          expectedVersion: candidate.draft.version,
+        }
+        pendingDraftsRef.current.set(candidateId, rebasedDraft)
+        draftConflictsRef.current.delete(candidateId)
+        rebasedWorkspace = applyDraftFieldChangesToWorkspace(
+          rebasedWorkspace,
+          candidateId,
+          Array.from(rebasedDraft.fieldChanges.values()),
+        )
+        restoredLocalChanges = true
+      }
+
+      const projectionRef = candidate.projection_ref
+      const pendingEnvelope = pendingEnvelopesRef.current.get(candidateId)
+      if (
+        !projectionRef
+        || !pendingEnvelope
+        || !envelopeConflictsRef.current.has(candidateId)
+      ) {
+        continue
+      }
+      const previousRevision =
+        previousEnvelopeRevisions.get(pendingEnvelope.envelopeId)
+        ?? pendingEnvelope.expectedRevision
+      const authoritativeProjectionChanged =
+        projectionRef.envelope_id !== pendingEnvelope.envelopeId
+        || projectionRef.object_id !== pendingEnvelope.objectId
+        || projectionRef.envelope_revision !== previousRevision
+      if (!authoritativeProjectionChanged) {
+        continue
+      }
+
+      const rebasedPatches = new Map<string, PendingEnvelopeFieldPatch>()
+      let canRebase = true
+      for (const localPatch of pendingEnvelope.fieldPatches.values()) {
+        const authoritativeField = findCandidateField(candidate, localPatch.fieldKey)
+        if (!authoritativeField) {
+          canRebase = false
+          break
+        }
+        const fieldPath = resolveEnvelopeFieldPath(authoritativeField)
+        rebasedPatches.set(fieldPath, {
+          ...localPatch,
+          envelopeId: projectionRef.envelope_id,
+          objectId: projectionRef.object_id,
+          fieldPath,
+          expectedRevision: projectionRef.envelope_revision,
+          before: authoritativeField.value ?? null,
+        })
+      }
+      if (!canRebase) {
+        continue
+      }
+
+      const rebasedEnvelope = {
+        ...pendingEnvelope,
+        envelopeId: projectionRef.envelope_id,
+        objectId: projectionRef.object_id,
+        expectedRevision: projectionRef.envelope_revision,
+        fieldPatches: rebasedPatches,
+      }
+      pendingEnvelopesRef.current.set(candidateId, rebasedEnvelope)
+      envelopeConflictsRef.current.delete(candidateId)
+      rebasedWorkspace = applyDraftFieldChangesToWorkspace(
+        rebasedWorkspace,
+        candidateId,
+        envelopePatchesToDraftFieldChanges(Array.from(rebasedPatches.values())),
+      )
+      restoredLocalChanges = true
+    }
+
+    if (restoredLocalChanges) {
+      setWorkspace(rebasedWorkspace)
+    }
+  }, [setWorkspace, workspace])
 
   useEffect(() => {
     sessionStatusRef.current = session.status
