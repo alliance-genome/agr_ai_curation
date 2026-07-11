@@ -4,13 +4,17 @@ from datetime import datetime, timezone
 from typing import Optional, List
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from src.models.sql.batch import Batch, BatchDocument, BatchStatus, BatchDocumentStatus
 from src.models.sql.curation_flow import CurationFlow
 from src.models.sql.pdf_document import PDFDocument
 from src.schemas.batch import BatchResponse, BatchDocumentResponse
+from .status import (
+    require_batch_document_status_transition,
+    require_batch_status_transition,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +143,7 @@ class BatchService:
         """Update batch status and timestamps."""
         batch = self.db.query(Batch).filter(Batch.id == batch_id).first()
         if batch:
+            require_batch_status_transition(batch.status, status)
             batch.status = status
             if started_at:
                 batch.started_at = started_at
@@ -158,6 +163,7 @@ class BatchService:
         """Update a batch document's status and results."""
         batch_doc = self.db.query(BatchDocument).filter(BatchDocument.id == batch_doc_id).first()
         if batch_doc:
+            require_batch_document_status_transition(batch_doc.status, status)
             batch_doc.status = status
             if result_file_path:
                 batch_doc.result_file_path = result_file_path
@@ -188,6 +194,42 @@ class BatchService:
         batch = self.db.query(Batch).filter(Batch.id == batch_id).first()
         return batch is not None and batch.status == BatchStatus.CANCELLED
 
+    def claim_pending_batch(self, batch_id: UUID) -> Optional[Batch]:
+        """Atomically claim a pending batch for one worker.
+
+        The conditional update is the claim. A worker that loses to cancellation
+        or another worker receives ``None`` and must perform no processing work.
+        """
+        claimed_id = self.db.execute(
+            update(Batch)
+            .where(Batch.id == batch_id, Batch.status == BatchStatus.PENDING)
+            .values(status=BatchStatus.RUNNING, started_at=datetime.now(timezone.utc))
+            .returning(Batch.id)
+            .execution_options(synchronize_session=False)
+        ).scalar_one_or_none()
+        self.db.commit()
+
+        if claimed_id is None:
+            return None
+
+        return self.db.scalars(
+            select(Batch)
+            .where(Batch.id == claimed_id)
+            .options(selectinload(Batch.documents))
+        ).first()
+
+    def complete_running_batch(self, batch_id: UUID) -> bool:
+        """Atomically complete a running batch unless cancellation won first."""
+        completed_id = self.db.execute(
+            update(Batch)
+            .where(Batch.id == batch_id, Batch.status == BatchStatus.RUNNING)
+            .values(status=BatchStatus.COMPLETED, completed_at=datetime.now(timezone.utc))
+            .returning(Batch.id)
+            .execution_options(synchronize_session=False)
+        ).scalar_one_or_none()
+        self.db.commit()
+        return completed_id is not None
+
     def cancel_batch(self, batch_id: UUID, user_id: int) -> Optional[Batch]:
         """Cancel a batch if it's in a cancellable state.
 
@@ -201,23 +243,32 @@ class BatchService:
         Raises:
             ValueError: If batch is not in a cancellable state
         """
-        batch = self.get_batch(batch_id, user_id)
-        if not batch:
-            return None
+        now = datetime.now(timezone.utc)
+        cancelled_id = self.db.execute(
+            update(Batch)
+            .where(
+                Batch.id == batch_id,
+                Batch.user_id == user_id,
+                Batch.status.in_((BatchStatus.PENDING, BatchStatus.RUNNING)),
+            )
+            .values(status=BatchStatus.CANCELLED, completed_at=now)
+            .returning(Batch.id)
+            .execution_options(synchronize_session=False)
+        ).scalar_one_or_none()
 
-        # Check if batch can be cancelled
-        if batch.status not in (BatchStatus.PENDING, BatchStatus.RUNNING):
+        if cancelled_id is None:
+            batch = self.get_batch(batch_id, user_id)
+            if not batch:
+                self.db.rollback()
+                return None
+            self.db.rollback()
             raise ValueError(
                 f"Cannot cancel batch with status '{batch.status.value}'. "
                 "Only PENDING or RUNNING batches can be cancelled."
             )
 
-        logger.info("Cancelling batch: batch_id=%s, current_status=%s", batch_id, batch.status)
-
-        batch.status = BatchStatus.CANCELLED
-        batch.completed_at = datetime.now(timezone.utc)
         self.db.commit()
-        self.db.refresh(batch)
+        batch = self.get_batch(cancelled_id, user_id)
 
         logger.info("Batch cancelled: batch_id=%s", batch_id)
         return batch

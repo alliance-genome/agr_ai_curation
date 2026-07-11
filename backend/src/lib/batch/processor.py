@@ -20,8 +20,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from uuid import UUID
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
 from src.models.sql.database import SessionLocal
 from src.models.sql.batch import Batch, BatchDocument, BatchStatus, BatchDocumentStatus
@@ -30,6 +29,11 @@ from src.models.sql.user import User
 from src.models.sql.file_output import FileOutput
 from src.lib.observability.background_tasks import report_background_task_exception
 from .events import get_batch_broadcaster
+from .service import BatchService
+from .status import (
+    require_batch_document_status_transition,
+    require_batch_status_transition,
+)
 
 logger = logging.getLogger(__name__)
 _BACKEND_ONLY_EVENT_FIELDS = {"internal"}
@@ -41,6 +45,26 @@ class BatchFlowExecutionError(RuntimeError):
     def __init__(self, message: str, *, sentry_already_reported: bool = False) -> None:
         super().__init__(message)
         self.sentry_already_reported = sentry_already_reported
+
+
+class BatchCancelled(RuntimeError):
+    """Raised internally when persisted cancellation wins a checkpoint."""
+
+
+def _require_running_batch(
+    db: Session,
+    batch: Batch,
+    *,
+    lock_for_update: bool = False,
+) -> None:
+    """Refresh batch state and stop before the next processing side effect.
+
+    Write checkpoints lock the batch row until their immediate commit so a
+    concurrent cancellation cannot interleave between the check and counters.
+    """
+    db.refresh(batch, with_for_update=lock_for_update)
+    if batch.status != BatchStatus.RUNNING:
+        raise BatchCancelled(f"Batch {batch.id} is no longer running")
 
 
 def _validate_file_ownership(file_id: str, expected_curator_id: str) -> bool:
@@ -115,22 +139,22 @@ def process_batch_task(batch_id: UUID) -> None:
     logger.info("Starting batch processing: batch_id=%s", batch_id)
 
     with get_db_session() as db:
-        stmt = (
-            select(Batch)
-            .where(Batch.id == batch_id)
-            .options(selectinload(Batch.documents))
-        )
-        batch = db.scalars(stmt).first()
-
+        service = BatchService(db)
+        batch = service.claim_pending_batch(batch_id)
         if not batch:
-            logger.error("Batch not found: batch_id=%s", batch_id)
+            logger.info(
+                "Batch claim skipped because it is missing or no longer pending: batch_id=%s",
+                batch_id,
+            )
             return
 
         # Get the flow definition
         flow = db.query(CurationFlow).filter(CurationFlow.id == batch.flow_id).first()
         if not flow:
             logger.error("Flow not found: flow_id=%s, batch_id=%s", batch.flow_id, batch_id)
+            require_batch_status_transition(batch.status, BatchStatus.CANCELLED)
             batch.status = BatchStatus.CANCELLED
+            batch.completed_at = datetime.now(timezone.utc)
             db.commit()
             return
 
@@ -138,27 +162,30 @@ def process_batch_task(batch_id: UUID) -> None:
         user = db.query(User).filter(User.id == batch.user_id).first()
         if not user or not user.auth_sub:
             logger.error("User not found or missing auth_sub: user_id=%s, batch_id=%s", batch.user_id, batch_id)
+            require_batch_status_transition(batch.status, BatchStatus.CANCELLED)
             batch.status = BatchStatus.CANCELLED
+            batch.completed_at = datetime.now(timezone.utc)
             db.commit()
             return
         cognito_sub = user.auth_sub
 
-        # Mark batch as running
-        batch.status = BatchStatus.RUNNING
-        batch.started_at = datetime.now(timezone.utc)
-        db.commit()
         logger.info("Batch marked as running: batch_id=%s, flow=%s", batch_id, flow.name)
 
         # Process each document
         for batch_doc in batch.documents:
             # Check for cancellation before each document
-            db.refresh(batch)
-            if batch.status == BatchStatus.CANCELLED:
+            try:
+                _require_running_batch(db, batch)
+            except BatchCancelled:
                 logger.info("Batch cancelled, stopping: batch_id=%s", batch_id)
                 break
 
             try:
                 _process_single_document(db, batch, batch_doc, flow, cognito_sub)
+            except BatchCancelled:
+                db.rollback()
+                logger.info("Batch cancelled during document processing: batch_id=%s", batch_id)
+                break
             except Exception as e:
                 # CR-3: Explicit rollback before updating failure status
                 # If _process_single_document made partial changes, rollback ensures clean state
@@ -190,21 +217,37 @@ def process_batch_task(batch_id: UUID) -> None:
                 batch = db.query(Batch).filter(Batch.id == batch_id).first()
                 batch_doc = db.query(BatchDocument).filter(BatchDocument.id == batch_doc.id).first()
                 if batch_doc and batch:
+                    try:
+                        _require_running_batch(db, batch)
+                    except BatchCancelled:
+                        logger.info(
+                            "Skipping document failure update after cancellation: batch_id=%s",
+                            batch_id,
+                        )
+                        break
                     # _process_single_document already persists FAILED status for expected runtime errors.
                     # Only apply fallback persistence if the document is not already marked failed.
                     if batch_doc.status != BatchDocumentStatus.FAILED:
+                        try:
+                            _require_running_batch(db, batch, lock_for_update=True)
+                        except BatchCancelled:
+                            logger.info(
+                                "Skipping document failure update after cancellation: batch_id=%s",
+                                batch_id,
+                            )
+                            break
+                        require_batch_document_status_transition(
+                            batch_doc.status, BatchDocumentStatus.FAILED
+                        )
                         batch_doc.status = BatchDocumentStatus.FAILED
                         batch_doc.error_message = str(e)[:500]  # Limit error message length
                         batch_doc.processed_at = datetime.now(timezone.utc)
                         batch.failed_documents += 1
                         db.commit()
 
-        # Mark batch as completed (unless cancelled)
-        db.refresh(batch)
-        if batch.status != BatchStatus.CANCELLED:
-            batch.status = BatchStatus.COMPLETED
-            batch.completed_at = datetime.now(timezone.utc)
-            db.commit()
+        # The conditional transition prevents a late cancellation from being
+        # overwritten by completion.
+        if service.complete_running_batch(batch_id):
             logger.info(
                 "Batch completed: batch_id=%s, completed=%d, failed=%d",
                 batch_id, batch.completed_documents, batch.failed_documents
@@ -232,13 +275,18 @@ def _process_single_document(
         batch.id, batch_doc.document_id, batch_doc.position + 1, batch.total_documents
     )
 
-    # Mark as processing
+    # Check cancellation immediately before each document-side state change.
+    _require_running_batch(db, batch, lock_for_update=True)
+    require_batch_document_status_transition(
+        batch_doc.status, BatchDocumentStatus.PROCESSING
+    )
     batch_doc.status = BatchDocumentStatus.PROCESSING
     db.commit()
 
     start_time = time.time()
 
     try:
+        _require_running_batch(db, batch)
         # Execute the flow on this document
         # Use asyncio.run() since we're in a sync context
         result_file_path, review_session_ids = asyncio.run(
@@ -257,7 +305,10 @@ def _process_single_document(
         # Calculate processing time
         processing_time_ms = int((time.time() - start_time) * 1000)
 
-        # Mark as completed
+        _require_running_batch(db, batch, lock_for_update=True)
+        require_batch_document_status_transition(
+            batch_doc.status, BatchDocumentStatus.COMPLETED
+        )
         batch_doc.status = BatchDocumentStatus.COMPLETED
         batch_doc.result_file_path = result_file_path
         batch_doc.review_session_ids = review_session_ids or None
@@ -271,8 +322,17 @@ def _process_single_document(
             batch.id, batch_doc.document_id, processing_time_ms, result_file_path
         )
 
+    except BatchCancelled:
+        db.rollback()
+        raise
     except Exception as e:
+        db.rollback()
+        _require_running_batch(db, batch, lock_for_update=True)
+        db.refresh(batch_doc)
         processing_time_ms = int((time.time() - start_time) * 1000)
+        require_batch_document_status_transition(
+            batch_doc.status, BatchDocumentStatus.FAILED
+        )
         batch_doc.status = BatchDocumentStatus.FAILED
         batch_doc.result_file_path = None
         batch_doc.review_session_ids = None
