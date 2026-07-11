@@ -2405,28 +2405,10 @@ def get_all_agent_tools(
         description_override = f"Ask the {specialist_label}"
 
         async def _run_claimed_ordered_tool(
-            ctx: RunContextWrapper[Any], query: str
+            ctx: RunContextWrapper[Any], query: str, claimed_step_index: int
         ) -> str:
             step_started_at = time.monotonic()
             phase_timings_ms: dict[str, int] = {}
-            next_idx = execution_state["next_tool_index"]
-            if next_idx >= len(ordered_tool_names):
-                return (
-                    "All remaining flow steps are already complete. "
-                    "Summarize final output and stop."
-                )
-            expected_tool = ordered_tool_names[next_idx]
-            if tool_name != expected_tool:
-                logger.info(
-                    "[Flow Executor] Step order blocked tool '%s'; expected '%s' next",
-                    tool_name,
-                    expected_tool,
-                )
-                return (
-                    f"Flow step order is strict. The next required step tool is "
-                    f"'{expected_tool}'. Do not call '{tool_name}' yet."
-                )
-
             template_timestamp = _format_flow_template_timestamp()
             template_variables = _build_flow_builtin_template_variables(
                 document_name=document_name,
@@ -2637,7 +2619,7 @@ def get_all_agent_tools(
             if extraction_handoff_audit is not None:
                 completed_step["extraction_handoff_audit"] = extraction_handoff_audit
             execution_state["completed_steps"].append(completed_step)
-            execution_state["next_tool_index"] = next_idx + 1
+            execution_state["next_tool_index"] = claimed_step_index + 1
             phase_timings_ms["state_update_ms"] = _elapsed_ms(
                 state_update_started_at
             )
@@ -2751,7 +2733,7 @@ def get_all_agent_tools(
                 }
 
             try:
-                return await _run_claimed_ordered_tool(ctx, query)
+                return await _run_claimed_ordered_tool(ctx, query, next_idx)
             finally:
                 async with execution_state["step_claim_lock"]:
                     in_flight_step = execution_state["in_flight_step"]
