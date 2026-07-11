@@ -5,6 +5,7 @@ from typing import List
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
@@ -15,8 +16,17 @@ from src.lib.pdf_viewer.rapidfuzz_matcher import (
     match_quote_to_pdf_pages,
 )
 from src.lib.pdf_limits import MAX_PDF_FILE_SIZE_BYTES
+from src.config import get_pdf_storage_path
+from src.api.auth import get_auth_dependency
+from src.api.documents import validate_user_file_path
 from src.models.sql.database import get_db
 from src.models.sql.pdf_document import PDFDocument as PdfDocumentModel
+from src.services.document_access import (
+    owned_documents_select,
+    protected_pdf_url,
+    require_owned_document,
+)
+from src.services.user_service import principal_from_claims, provision_user
 
 router = APIRouter(prefix="/api/pdf-viewer", tags=["PDF Viewer"])
 
@@ -32,7 +42,10 @@ class PDFDocumentSummary(BaseModel):
         description="File size in bytes",
     )
     upload_timestamp: datetime
-    viewer_url: str | None = Field(..., pattern=r"^/uploads/.*")
+    viewer_url: str | None = Field(
+        ...,
+        pattern=r"^/api/pdf-viewer/documents/[0-9a-f-]+/content$",
+    )
     viewer_mode: str | None = None
 
 
@@ -42,7 +55,10 @@ class PDFDocumentDetail(PDFDocumentSummary):
 
 
 class ViewerURLResponse(BaseModel):
-    viewer_url: str | None = Field(..., pattern=r"^/uploads/.*")
+    viewer_url: str | None = Field(
+        ...,
+        pattern=r"^/api/pdf-viewer/documents/[0-9a-f-]+/content$",
+    )
     viewer_mode: str | None = None
 
 
@@ -97,12 +113,6 @@ class PdfViewerFuzzyMatchResponse(BaseModel):
     note: str
 
 
-def _viewer_url(file_path: str) -> str:
-    """Return a viewer URL rooted at /uploads/ for the stored file path."""
-    normalized = file_path.lstrip("/")
-    return f"/uploads/{normalized}"
-
-
 def _viewer_mode(record: PdfDocumentModel) -> str:
     return str(record.viewer_mode or "local_pdf").strip().lower() or "local_pdf"
 
@@ -110,11 +120,13 @@ def _viewer_mode(record: PdfDocumentModel) -> str:
 def _document_viewer_url(record: PdfDocumentModel) -> str | None:
     if _viewer_mode(record) == "text_only":
         return None
-    return _viewer_url(record.file_path)
+    return protected_pdf_url(record.id)
 
 
-def _document_select() -> Select[tuple[PdfDocumentModel]]:
-    return select(PdfDocumentModel).order_by(PdfDocumentModel.upload_timestamp.desc())
+def _document_select(owner_user_id: int) -> Select[tuple[PdfDocumentModel]]:
+    return owned_documents_select(owner_user_id).order_by(
+        PdfDocumentModel.upload_timestamp.desc()
+    )
 
 
 @router.get("/documents", response_model=DocumentListResponse)
@@ -122,11 +134,16 @@ def list_documents(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
+    user: dict = get_auth_dependency(),
 ) -> DocumentListResponse:
-    total = db.execute(select(func.count()).select_from(PdfDocumentModel)).scalar_one()
+    db_user = provision_user(db, principal_from_claims(user))
+    owner_filter = PdfDocumentModel.user_id == db_user.id
+    total = db.execute(
+        select(func.count()).select_from(PdfDocumentModel).where(owner_filter)
+    ).scalar_one()
 
     records = (
-        db.execute(_document_select().offset(offset).limit(limit))
+        db.execute(_document_select(db_user.id).offset(offset).limit(limit))
         .scalars()
         .all()
     )
@@ -152,22 +169,22 @@ def list_documents(
     )
 
 
-def _get_document(db: Session, document_id: UUID) -> PdfDocumentModel:
-    record = db.get(PdfDocumentModel, document_id)
-    if not record:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"PDF document {document_id} not found",
-        )
-    return record
+def _get_document(
+    db: Session,
+    document_id: UUID,
+    user: dict,
+) -> PdfDocumentModel:
+    db_user = provision_user(db, principal_from_claims(user))
+    return require_owned_document(db, document_id, db_user.id)
 
 
 @router.get("/documents/{document_id}", response_model=PDFDocumentDetail)
 def get_document_detail(
     document_id: UUID = Path(..., description="UUID of the PDF document"),
     db: Session = Depends(get_db),
+    user: dict = get_auth_dependency(),
 ) -> PDFDocumentDetail:
-    record = _get_document(db, document_id)
+    record = _get_document(db, document_id, user)
 
     record.last_accessed = datetime.now(timezone.utc)
     db.commit()
@@ -190,8 +207,9 @@ def get_document_detail(
 def get_document_viewer_url(
     document_id: UUID = Path(..., description="UUID of the PDF document"),
     db: Session = Depends(get_db),
+    user: dict = get_auth_dependency(),
 ) -> ViewerURLResponse:
-    record = _get_document(db, document_id)
+    record = _get_document(db, document_id, user)
 
     record.last_accessed = datetime.now(timezone.utc)
     db.commit()
@@ -199,6 +217,41 @@ def get_document_viewer_url(
     return ViewerURLResponse(
         viewer_url=_document_viewer_url(record),
         viewer_mode=_viewer_mode(record),
+    )
+
+
+@router.get("/documents/{document_id}/content", response_class=FileResponse)
+@router.head("/documents/{document_id}/content", include_in_schema=False)
+def get_document_pdf_content(
+    document_id: UUID = Path(..., description="UUID of the PDF document"),
+    db: Session = Depends(get_db),
+    user: dict = get_auth_dependency(),
+) -> FileResponse:
+    """Serve owned PDF bytes without exposing the tenant storage path."""
+    record = _get_document(db, document_id, user)
+    if _viewer_mode(record) == "text_only":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"PDF file not available for document {document_id}",
+        )
+
+    storage_root = get_pdf_storage_path()
+    file_path = validate_user_file_path(
+        storage_root / record.file_path,
+        storage_root,
+        user["sub"],
+    )
+    if not file_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"PDF file not available for document {document_id}",
+        )
+
+    return FileResponse(
+        path=file_path,
+        media_type="application/pdf",
+        filename=record.filename,
+        content_disposition_type="inline",
     )
 
 

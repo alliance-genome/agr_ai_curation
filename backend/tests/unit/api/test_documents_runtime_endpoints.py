@@ -46,6 +46,9 @@ class _FakeExecuteResult:
     def first(self):
         return self._doc
 
+    def scalar_one_or_none(self):
+        return self._doc
+
     def all(self):
         if self._doc is None:
             return []
@@ -105,7 +108,7 @@ def _patch_session_factory(monkeypatch, sessions):
 async def test_verify_document_ownership_returns_document(monkeypatch):
     doc_id = str(uuid4())
     owned_doc = SimpleNamespace(id=doc_id, user_id=10)
-    session = _FakeSession(query_doc=owned_doc)
+    session = _FakeSession(execute_doc=owned_doc)
     monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=10))
     monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user-1"))
 
@@ -117,7 +120,7 @@ async def test_verify_document_ownership_returns_document(monkeypatch):
 async def test_verify_document_ownership_rejects_cross_user(monkeypatch):
     doc_id = str(uuid4())
     foreign_doc = SimpleNamespace(id=doc_id, user_id=999)
-    session = _FakeSession(query_doc=foreign_doc)
+    session = _FakeSession(execute_doc=foreign_doc)
     monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=10))
     monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user-1"))
 
