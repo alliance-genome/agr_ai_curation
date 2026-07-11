@@ -11,6 +11,8 @@ interface ImportMetaEnv {
   readonly VITE_AI_CURATION_CHAT_MESSAGE_CACHE_MAX_ENTRIES: string;
   readonly VITE_AI_CURATION_CHAT_RENDER_CACHE_MAX_ENTRIES: string;
   readonly VITE_AI_CURATION_BATCH_AUDIT_CACHE_MAX_ENTRIES: string;
+  readonly VITE_AI_CURATION_DRAFT_AUTOSAVE_MAX_ATTEMPTS: string;
+  readonly VITE_AI_CURATION_DRAFT_AUTOSAVE_RETRY_DELAY_MS: string;
 }
 
 interface ImportMeta {

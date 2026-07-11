@@ -8,9 +8,11 @@ import type {
 } from '@/features/curation/types'
 import {
   autosaveCurationCandidateDraft,
+  fetchCurationWorkspace,
   patchCurationEnvelopeField,
   updateCurationSession,
 } from '@/features/curation/services/curationWorkspaceService'
+import { getEnvInt } from '@/utils/env'
 import { useCurationWorkspaceContext } from './CurationWorkspaceContext'
 import {
   applyDraftFieldChangesToWorkspace,
@@ -22,6 +24,28 @@ import {
 } from './workspaceState'
 
 const DEFAULT_AUTOSAVE_DEBOUNCE_MS = 2_500
+const DEFAULT_DRAFT_AUTOSAVE_MAX_ATTEMPTS = 2
+const DEFAULT_DRAFT_AUTOSAVE_RETRY_DELAY_MS = 0
+
+function getDraftAutosaveMaxAttempts(): number {
+  return Math.max(
+    1,
+    getEnvInt(
+      'VITE_AI_CURATION_DRAFT_AUTOSAVE_MAX_ATTEMPTS',
+      DEFAULT_DRAFT_AUTOSAVE_MAX_ATTEMPTS,
+    ),
+  )
+}
+
+function getDraftAutosaveRetryDelayMs(): number {
+  return Math.max(
+    0,
+    getEnvInt(
+      'VITE_AI_CURATION_DRAFT_AUTOSAVE_RETRY_DELAY_MS',
+      DEFAULT_DRAFT_AUTOSAVE_RETRY_DELAY_MS,
+    ),
+  )
+}
 
 interface PendingDraftAutosave {
   sessionId: string
@@ -138,6 +162,15 @@ function upsertPendingEnvelope(
   pendingEnvelopes.set(pendingEnvelope.candidateId, pendingEnvelope)
 }
 
+function isVersionConflict(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === 'object'
+    && 'status' in error
+    && error.status === 409,
+  )
+}
+
 function updatePendingEnvelopeRevision(
   pendingEnvelope: PendingEnvelopeAutosave,
   expectedRevision: number,
@@ -228,6 +261,8 @@ export function useAutosave(
   const inFlightEnvelopesRef = useRef<Map<string, PendingEnvelopeAutosave>>(new Map())
   const draftVersionsRef = useRef<Map<string, number | null>>(new Map())
   const envelopeRevisionsRef = useRef<Map<string, number>>(new Map())
+  const draftConflictsRef = useRef<Set<string>>(new Set())
+  const envelopeConflictsRef = useRef<Set<string>>(new Set())
   const previousActiveCandidateIdRef = useRef<string | null>(activeCandidateId)
   const mountedRef = useRef(true)
   const saveSequenceRef = useRef<Promise<boolean>>(Promise.resolve(true))
@@ -240,10 +275,12 @@ export function useAutosave(
   const pauseSessionRef = useRef<((options?: FlushOptions) => Promise<boolean>) | null>(null)
 
   useEffect(() => {
-    draftVersionsRef.current = new Map(
+    const previousDraftVersions = draftVersionsRef.current
+    const previousEnvelopeRevisions = envelopeRevisionsRef.current
+    const nextDraftVersions = new Map(
       workspace.candidates.map((candidate) => [candidate.candidate_id, candidate.draft.version]),
     )
-    envelopeRevisionsRef.current = new Map(
+    const nextEnvelopeRevisions = new Map(
       workspace.candidates
         .map((candidate) => candidate.projection_ref)
         .filter((projectionRef): projectionRef is NonNullable<typeof projectionRef> =>
@@ -253,7 +290,98 @@ export function useAutosave(
           projectionRef.envelope_revision,
         ]),
     )
-  }, [workspace.candidates])
+    draftVersionsRef.current = nextDraftVersions
+    envelopeRevisionsRef.current = nextEnvelopeRevisions
+
+    let rebasedWorkspace = workspace
+    let restoredLocalChanges = false
+
+    for (const candidate of workspace.candidates) {
+      const candidateId = candidate.candidate_id
+      const pendingDraft = pendingDraftsRef.current.get(candidateId)
+      if (
+        pendingDraft
+        && draftConflictsRef.current.has(candidateId)
+        && previousDraftVersions.get(candidateId) !== candidate.draft.version
+      ) {
+        const rebasedDraft = {
+          ...pendingDraft,
+          draftId: candidate.draft.draft_id,
+          expectedVersion: candidate.draft.version,
+        }
+        pendingDraftsRef.current.set(candidateId, rebasedDraft)
+        draftConflictsRef.current.delete(candidateId)
+        rebasedWorkspace = applyDraftFieldChangesToWorkspace(
+          rebasedWorkspace,
+          candidateId,
+          Array.from(rebasedDraft.fieldChanges.values()),
+        )
+        restoredLocalChanges = true
+      }
+
+      const projectionRef = candidate.projection_ref
+      const pendingEnvelope = pendingEnvelopesRef.current.get(candidateId)
+      if (
+        !projectionRef
+        || !pendingEnvelope
+        || !envelopeConflictsRef.current.has(candidateId)
+      ) {
+        continue
+      }
+      const previousRevision =
+        previousEnvelopeRevisions.get(pendingEnvelope.envelopeId)
+        ?? pendingEnvelope.expectedRevision
+      const authoritativeProjectionChanged =
+        projectionRef.envelope_id !== pendingEnvelope.envelopeId
+        || projectionRef.object_id !== pendingEnvelope.objectId
+        || projectionRef.envelope_revision !== previousRevision
+      if (!authoritativeProjectionChanged) {
+        continue
+      }
+
+      const rebasedPatches = new Map<string, PendingEnvelopeFieldPatch>()
+      let canRebase = true
+      for (const localPatch of pendingEnvelope.fieldPatches.values()) {
+        const authoritativeField = findCandidateField(candidate, localPatch.fieldKey)
+        if (!authoritativeField) {
+          canRebase = false
+          break
+        }
+        const fieldPath = resolveEnvelopeFieldPath(authoritativeField)
+        rebasedPatches.set(fieldPath, {
+          ...localPatch,
+          envelopeId: projectionRef.envelope_id,
+          objectId: projectionRef.object_id,
+          fieldPath,
+          expectedRevision: projectionRef.envelope_revision,
+          before: authoritativeField.value ?? null,
+        })
+      }
+      if (!canRebase) {
+        continue
+      }
+
+      const rebasedEnvelope = {
+        ...pendingEnvelope,
+        envelopeId: projectionRef.envelope_id,
+        objectId: projectionRef.object_id,
+        expectedRevision: projectionRef.envelope_revision,
+        fieldPatches: rebasedPatches,
+      }
+      pendingEnvelopesRef.current.set(candidateId, rebasedEnvelope)
+      envelopeConflictsRef.current.delete(candidateId)
+      rebasedWorkspace = applyDraftFieldChangesToWorkspace(
+        rebasedWorkspace,
+        candidateId,
+        envelopePatchesToDraftFieldChanges(Array.from(rebasedPatches.values())),
+      )
+      restoredLocalChanges = true
+    }
+
+    if (restoredLocalChanges) {
+      setWorkspace(rebasedWorkspace)
+    }
+  }, [setWorkspace, workspace])
 
   useEffect(() => {
     sessionStatusRef.current = session.status
@@ -275,14 +403,192 @@ export function useAutosave(
     [activeCandidate],
   )
 
+  const refreshAndRebaseDraft = useCallback(
+    async (
+      candidateId: string,
+      conflictedDraft: PendingDraftAutosave,
+      options?: FlushOptions,
+    ): Promise<boolean> => {
+      const nextPendingDraft = pendingDraftsRef.current.get(candidateId)
+      const localDraft = nextPendingDraft
+        ? mergePendingFieldChanges(
+            {
+              ...conflictedDraft,
+              draftId: nextPendingDraft.draftId,
+            },
+            Array.from(nextPendingDraft.fieldChanges.values()),
+          )
+        : conflictedDraft
+
+      pendingDraftsRef.current.set(candidateId, localDraft)
+      draftConflictsRef.current.add(candidateId)
+
+      try {
+        const authoritativeWorkspace = await fetchCurationWorkspace(localDraft.sessionId)
+        const authoritativeCandidate = authoritativeWorkspace.candidates.find(
+          (candidate) => candidate.candidate_id === candidateId,
+        )
+        if (!authoritativeCandidate) {
+          throw new Error('The conflicted draft candidate is no longer available.')
+        }
+
+        // Rebase policy: the server owns untouched fields, while the newest queued
+        // local change wins for each field the curator explicitly edited.
+        const queuedDuringRefresh = pendingDraftsRef.current.get(candidateId)
+        const latestLocalDraft = queuedDuringRefresh
+          ? mergePendingFieldChanges(
+              localDraft,
+              Array.from(queuedDuringRefresh.fieldChanges.values()),
+            )
+          : localDraft
+        const rebasedDraft: PendingDraftAutosave = {
+          ...latestLocalDraft,
+          draftId: authoritativeCandidate.draft.draft_id,
+          expectedVersion: authoritativeCandidate.draft.version,
+        }
+        pendingDraftsRef.current.set(candidateId, rebasedDraft)
+        draftVersionsRef.current.set(candidateId, authoritativeCandidate.draft.version)
+        draftConflictsRef.current.delete(candidateId)
+
+        if (options?.updateState !== false && mountedRef.current) {
+          setWorkspace(
+            applyDraftFieldChangesToWorkspace(
+              authoritativeWorkspace,
+              candidateId,
+              Array.from(rebasedDraft.fieldChanges.values()),
+            ),
+          )
+          setWarning(
+            'This draft changed on the server. Your local edits were rebased onto the latest version; save again to confirm them.',
+          )
+        }
+        return true
+      } catch {
+        if (options?.updateState !== false && mountedRef.current) {
+          setWarning(
+            'This draft changed on the server, but the latest version could not be loaded. Your local edits remain available; retry to refresh before saving.',
+          )
+        }
+        return false
+      }
+    },
+    [setWorkspace],
+  )
+
+  const refreshAndRebaseEnvelope = useCallback(
+    async (
+      candidateId: string,
+      conflictedEnvelope: PendingEnvelopeAutosave,
+      options?: FlushOptions,
+    ): Promise<boolean> => {
+      const nextPendingEnvelope = pendingEnvelopesRef.current.get(candidateId)
+      const localEnvelope = nextPendingEnvelope
+        ? mergePendingEnvelopePatches(
+            conflictedEnvelope,
+            Array.from(nextPendingEnvelope.fieldPatches.values()),
+          )
+        : conflictedEnvelope
+
+      pendingEnvelopesRef.current.set(candidateId, localEnvelope)
+      envelopeConflictsRef.current.add(candidateId)
+
+      try {
+        const authoritativeWorkspace = await fetchCurationWorkspace(localEnvelope.sessionId)
+        const authoritativeCandidate = authoritativeWorkspace.candidates.find(
+          (candidate) => candidate.candidate_id === candidateId,
+        )
+        const projectionRef = authoritativeCandidate?.projection_ref
+        if (!authoritativeCandidate || !projectionRef) {
+          throw new Error('The conflicted envelope candidate is no longer available.')
+        }
+
+        // Envelope rebases use the same field-level policy and also refresh each
+        // patch's `before` value so the next request carries a fresh precondition.
+        const queuedDuringRefresh = pendingEnvelopesRef.current.get(candidateId)
+        const latestLocalEnvelope = queuedDuringRefresh
+          ? mergePendingEnvelopePatches(
+              localEnvelope,
+              Array.from(queuedDuringRefresh.fieldPatches.values()),
+            )
+          : localEnvelope
+        const rebasedPatches = new Map<string, PendingEnvelopeFieldPatch>()
+        for (const localPatch of latestLocalEnvelope.fieldPatches.values()) {
+          const authoritativeField = findCandidateField(
+            authoritativeCandidate,
+            localPatch.fieldKey,
+          )
+          if (!authoritativeField) {
+            throw new Error(`The conflicted field ${localPatch.fieldKey} is no longer available.`)
+          }
+          const fieldPath = resolveEnvelopeFieldPath(authoritativeField)
+          rebasedPatches.set(fieldPath, {
+            ...localPatch,
+            envelopeId: projectionRef.envelope_id,
+            objectId: projectionRef.object_id,
+            fieldPath,
+            expectedRevision: projectionRef.envelope_revision,
+            before: authoritativeField.value ?? null,
+          })
+        }
+
+        const rebasedEnvelope: PendingEnvelopeAutosave = {
+          ...latestLocalEnvelope,
+          envelopeId: projectionRef.envelope_id,
+          objectId: projectionRef.object_id,
+          expectedRevision: projectionRef.envelope_revision,
+          fieldPatches: rebasedPatches,
+        }
+        pendingEnvelopesRef.current.set(candidateId, rebasedEnvelope)
+        envelopeRevisionsRef.current.set(
+          projectionRef.envelope_id,
+          projectionRef.envelope_revision,
+        )
+        envelopeConflictsRef.current.delete(candidateId)
+
+        if (options?.updateState !== false && mountedRef.current) {
+          setWorkspace(
+            applyDraftFieldChangesToWorkspace(
+              authoritativeWorkspace,
+              candidateId,
+              envelopePatchesToDraftFieldChanges(Array.from(rebasedPatches.values())),
+            ),
+          )
+          setWarning(
+            'This envelope changed on the server. Your local edits were rebased onto the latest revision; save again to confirm them.',
+          )
+        }
+        return true
+      } catch {
+        if (options?.updateState !== false && mountedRef.current) {
+          setWarning(
+            'This envelope changed on the server, but the latest revision could not be loaded. Your local edits remain available; retry to refresh before saving.',
+          )
+        }
+        return false
+      }
+    },
+    [setWorkspace],
+  )
+
   const flushPendingCandidate = useCallback(
     async (
       candidateId: string,
       options?: FlushOptions,
     ): Promise<boolean> => {
-      const pendingDraft = pendingDraftsRef.current.get(candidateId)
+      let pendingDraft = pendingDraftsRef.current.get(candidateId)
       if (!pendingDraft || pendingDraft.fieldChanges.size === 0) {
         return true
+      }
+
+      if (draftConflictsRef.current.has(candidateId)) {
+        const refreshed = await refreshAndRebaseDraft(candidateId, pendingDraft, options)
+        if (!refreshed) {
+          return false
+        }
+        pendingDraft = pendingDraftsRef.current.get(candidateId)
+        if (!pendingDraft) {
+          return true
+        }
       }
 
       pendingDraftsRef.current.delete(candidateId)
@@ -305,16 +611,28 @@ export function useAutosave(
       }
 
       try {
-        let response
+        let response: Awaited<ReturnType<typeof autosaveCurationCandidateDraft>> | undefined
+        const maxAttempts = getDraftAutosaveMaxAttempts()
 
-        try {
-          response = await autosaveCurationCandidateDraft(request, {
-            keepalive: options?.keepalive,
-          })
-        } catch {
-          response = await autosaveCurationCandidateDraft(request, {
-            keepalive: options?.keepalive,
-          })
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+          try {
+            response = await autosaveCurationCandidateDraft(request, {
+              keepalive: options?.keepalive,
+            })
+            break
+          } catch (error) {
+            if (isVersionConflict(error) || attempt === maxAttempts) {
+              throw error
+            }
+            const retryDelayMs = getDraftAutosaveRetryDelayMs()
+            if (retryDelayMs > 0) {
+              await new Promise<void>((resolve) => window.setTimeout(resolve, retryDelayMs))
+            }
+          }
+        }
+
+        if (!response) {
+          throw new Error('Draft autosave completed without a response.')
         }
 
         const nextPendingDraft = pendingDraftsRef.current.get(candidateId)
@@ -344,7 +662,12 @@ export function useAutosave(
         }
 
         return true
-      } catch {
+      } catch (error) {
+        if (isVersionConflict(error)) {
+          await refreshAndRebaseDraft(candidateId, pendingDraft, options)
+          return false
+        }
+
         const nextPendingDraft = pendingDraftsRef.current.get(candidateId)
         if (nextPendingDraft) {
           upsertPendingDraft(
@@ -375,7 +698,7 @@ export function useAutosave(
         }
       }
     },
-    [clearTimer, setWorkspace],
+    [clearTimer, refreshAndRebaseDraft, setWorkspace],
   )
 
   const flushPendingEnvelopeCandidate = useCallback(
@@ -383,9 +706,19 @@ export function useAutosave(
       candidateId: string,
       options?: FlushOptions,
     ): Promise<boolean> => {
-      const pendingEnvelope = pendingEnvelopesRef.current.get(candidateId)
+      let pendingEnvelope = pendingEnvelopesRef.current.get(candidateId)
       if (!pendingEnvelope || pendingEnvelope.fieldPatches.size === 0) {
         return true
+      }
+      if (envelopeConflictsRef.current.has(candidateId)) {
+        const refreshed = await refreshAndRebaseEnvelope(candidateId, pendingEnvelope, options)
+        if (!refreshed) {
+          return false
+        }
+        pendingEnvelope = pendingEnvelopesRef.current.get(candidateId)
+        if (!pendingEnvelope) {
+          return true
+        }
       }
 
       pendingEnvelopesRef.current.delete(candidateId)
@@ -467,7 +800,7 @@ export function useAutosave(
         }
 
         return true
-      } catch {
+      } catch (error) {
         const nextPendingEnvelope = pendingEnvelopesRef.current.get(candidateId)
         const envelopeToRequeue = updatePendingEnvelopeRevision(
           {
@@ -478,6 +811,11 @@ export function useAutosave(
           },
           latestRevision,
         )
+
+        if (isVersionConflict(error)) {
+          await refreshAndRebaseEnvelope(candidateId, envelopeToRequeue, options)
+          return false
+        }
 
         if (nextPendingEnvelope) {
           upsertPendingEnvelope(
@@ -505,7 +843,7 @@ export function useAutosave(
         }
       }
     },
-    [clearTimer, setWorkspace],
+    [clearTimer, refreshAndRebaseEnvelope, setWorkspace],
   )
 
   const flushPendingChanges = useCallback(
