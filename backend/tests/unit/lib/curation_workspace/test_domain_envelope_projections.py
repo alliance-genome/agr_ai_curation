@@ -585,6 +585,8 @@ def test_workspace_response_includes_domain_envelope_projections():
             project_key="alliance",
             domain_pack_key="fixture-pack",
             domain_pack_version=None,
+            adapter_key="gene",
+            source_payload_hash="0" * 64,
             status=DomainEnvelopeStatus.EXTRACTED,
             document_id=document.id,
             session_id=review_session.id,

@@ -542,11 +542,6 @@ def submission_e2e_context(client: TestClient, test_db):
             CurationCandidate.id.in_(candidate_ids)
         ).delete(synchronize_session=False)
 
-    if session_ids:
-        test_db.query(CurationReviewSession).filter(
-            CurationReviewSession.id.in_(session_ids)
-        ).delete(synchronize_session=False)
-
     envelope_ids = [
         row[0]
         for row in (
@@ -570,6 +565,11 @@ def submission_e2e_context(client: TestClient, test_db):
         ).delete(synchronize_session=False)
         test_db.query(DomainEnvelopeModel).filter(
             DomainEnvelopeModel.envelope_id.in_(envelope_ids)
+        ).delete(synchronize_session=False)
+
+    if session_ids:
+        test_db.query(CurationReviewSession).filter(
+            CurationReviewSession.id.in_(session_ids)
         ).delete(synchronize_session=False)
 
     test_db.query(CurationExtractionResultRecord).filter(

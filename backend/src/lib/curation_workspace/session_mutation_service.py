@@ -50,6 +50,7 @@ from src.lib.curation_workspace.session_queries import (
     _session_context_maps,
     get_candidate_detail,
     get_session_detail,
+    load_envelope_candidates_for_patch,
     load_domain_envelope_row_for_patch,
     load_projection_candidates_for_patch,
 )
@@ -680,7 +681,7 @@ def _materialize_candidate_draft_changes_into_envelope(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Domain envelope {envelope_id} not found",
         )
-    if envelope_row.session_id is not None and envelope_row.session_id != candidate.session_id:
+    if envelope_row.session_id != candidate.session_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Domain envelope does not belong to the candidate session",
@@ -781,6 +782,25 @@ def _materialize_candidate_draft_changes_into_envelope(
         changed_field_path=materialized_field_paths,
         updated_at=updated_at,
     )
+    for linked_candidate in load_envelope_candidates_for_patch(
+        db,
+        session_id=candidate.session_id,
+        envelope_id=envelope_id,
+    ):
+        if linked_candidate.id == candidate.id:
+            continue
+        if linked_candidate.object_id == object_id:
+            _refresh_candidate_projection_from_envelope(
+                linked_candidate,
+                updated_object,
+                envelope_revision=checkpoint_revision,
+                changed_field_path=materialized_field_paths,
+                updated_at=updated_at,
+            )
+        else:
+            linked_candidate.envelope_revision = checkpoint_revision
+            linked_candidate.updated_at = updated_at
+        db.add(linked_candidate)
 
 
 def patch_envelope_field(
@@ -813,10 +833,20 @@ def patch_envelope_field(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Domain envelope {request.envelope_id} not found",
         )
-    if envelope_row.session_id is not None and envelope_row.session_id != normalized_session_id:
+    if envelope_row.session_id != normalized_session_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Domain envelope does not belong to the requested session",
+        )
+    envelope_candidates = load_envelope_candidates_for_patch(
+        db,
+        session_id=normalized_session_id,
+        envelope_id=request.envelope_id,
+    )
+    if not envelope_candidates:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Domain envelope has no candidate linked to the requested session",
         )
 
     envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
@@ -872,6 +902,11 @@ def patch_envelope_field(
             actor_claims=actor_claims,
             envelope_revision=rejected_checkpoint_revision,
         )
+        now = datetime.now(timezone.utc)
+        for candidate in envelope_candidates:
+            candidate.envelope_revision = rejected_checkpoint_revision
+            candidate.updated_at = now
+            db.add(candidate)
         db.flush()
         raise RejectedEnvelopeFieldPatchError(
             status_code=_rejected_patch_status_code(patch_result),
@@ -896,22 +931,22 @@ def patch_envelope_field(
         )
 
     now = datetime.now(timezone.utc)
-    projection_candidates = load_projection_candidates_for_patch(
-        db,
-        session_id=normalized_session_id,
-        envelope_id=request.envelope_id,
-        object_id=request.object_id,
-    )
     projection_candidate_ids: list[str] = []
-    for candidate in projection_candidates:
+    projection_candidates: list[CurationCandidate] = []
+    for candidate in envelope_candidates:
         projection_candidate_ids.append(str(candidate.id))
-        _refresh_candidate_projection_from_envelope(
-            candidate,
-            updated_object,
-            envelope_revision=checkpoint_revision,
-            changed_field_path=request.field_path,
-            updated_at=now,
-        )
+        if candidate.object_id == request.object_id:
+            projection_candidates.append(candidate)
+            _refresh_candidate_projection_from_envelope(
+                candidate,
+                updated_object,
+                envelope_revision=checkpoint_revision,
+                changed_field_path=request.field_path,
+                updated_at=now,
+            )
+        else:
+            candidate.envelope_revision = checkpoint_revision
+            candidate.updated_at = now
         db.add(candidate)
         if candidate.draft is not None:
             db.add(candidate.draft)
@@ -1002,10 +1037,20 @@ def waive_validation_finding(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Domain envelope {request.envelope_id} not found",
         )
-    if envelope_row.session_id is not None and envelope_row.session_id != normalized_session_id:
+    if envelope_row.session_id != normalized_session_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Domain envelope does not belong to the requested session",
+        )
+    envelope_candidates = load_envelope_candidates_for_patch(
+        db,
+        session_id=normalized_session_id,
+        envelope_id=request.envelope_id,
+    )
+    if not envelope_candidates:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Domain envelope has no candidate linked to the requested session",
         )
     if envelope_row.revision != request.expected_revision:
         raise HTTPException(
@@ -1074,18 +1119,11 @@ def waive_validation_finding(
 
     now = datetime.now(timezone.utc)
     projection_candidate_ids: list[str] = []
-    if target["object_id"] is not None:
-        projection_candidates = load_projection_candidates_for_patch(
-            db,
-            session_id=normalized_session_id,
-            envelope_id=request.envelope_id,
-            object_id=target["object_id"],
-        )
-        for candidate in projection_candidates:
-            projection_candidate_ids.append(str(candidate.id))
-            candidate.envelope_revision = checkpoint_revision
-            candidate.updated_at = now
-            db.add(candidate)
+    for candidate in envelope_candidates:
+        projection_candidate_ids.append(str(candidate.id))
+        candidate.envelope_revision = checkpoint_revision
+        candidate.updated_at = now
+        db.add(candidate)
 
     session_row.session_version += 1
     session_row.updated_at = now

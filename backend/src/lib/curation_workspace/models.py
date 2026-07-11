@@ -12,6 +12,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -21,7 +22,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PostgresUUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, foreign, mapped_column, relationship
 
 from src.models.sql.database import Base
 from src.schemas.curation_workspace import (
@@ -305,14 +306,17 @@ class DomainEnvelopeModel(Base):
     project_key: Mapped[str] = mapped_column(String(), nullable=False)
     domain_pack_key: Mapped[str] = mapped_column(String(), nullable=False)
     domain_pack_version: Mapped[str | None] = mapped_column(String(), nullable=True)
+    adapter_key: Mapped[str] = mapped_column(String(), nullable=False)
+    source_extraction_result_id: Mapped[str | None] = mapped_column(String(), nullable=True)
+    source_payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[DomainEnvelopeStatus] = mapped_column(
         _enum_type(DomainEnvelopeStatus),
         nullable=False,
     )
-    document_id: Mapped[UUID | None] = mapped_column(
+    document_id: Mapped[UUID] = mapped_column(
         PostgresUUID(as_uuid=True),
         _fk("pdf_documents.id"),
-        nullable=True,
+        nullable=False,
     )
     session_id: Mapped[UUID | None] = mapped_column(
         PostgresUUID(as_uuid=True),
@@ -380,6 +384,15 @@ class DomainEnvelopeModel(Base):
 
     __table_args__ = (
         CheckConstraint("revision >= 1", name="ck_domain_envelopes_revision"),
+        CheckConstraint(
+            "session_id IS NOT NULL OR source_extraction_result_id IS NOT NULL",
+            name="ck_domain_envelopes_owner_association",
+        ),
+        UniqueConstraint(
+            "envelope_id",
+            "session_id",
+            name="uq_domain_envelopes_session_owner",
+        ),
         Index("ix_domain_envelopes_document", "document_id"),
         Index(
             "ix_domain_envelopes_session",
@@ -396,6 +409,14 @@ class DomainEnvelopeModel(Base):
             "project_key",
             "domain_pack_key",
             "status",
+        ),
+        Index(
+            "uq_domain_envelopes_source_scope",
+            "source_extraction_result_id",
+            "adapter_key",
+            "domain_pack_key",
+            unique=True,
+            postgresql_where=text("source_extraction_result_id IS NOT NULL"),
         ),
     )
 
@@ -736,7 +757,6 @@ class CurationCandidate(Base):
     )
     envelope_id: Mapped[str | None] = mapped_column(
         String(),
-        _fk("domain_envelopes.envelope_id"),
         nullable=True,
     )
     object_id: Mapped[str | None] = mapped_column(String(), nullable=True)
@@ -775,7 +795,12 @@ class CurationCandidate(Base):
         "CurationExtractionResultRecord",
         back_populates="candidates",
     )
-    domain_envelope: Mapped[DomainEnvelopeModel | None] = relationship("DomainEnvelopeModel")
+    domain_envelope: Mapped[DomainEnvelopeModel | None] = relationship(
+        "DomainEnvelopeModel",
+        primaryjoin=lambda: foreign(CurationCandidate.envelope_id)
+        == DomainEnvelopeModel.envelope_id,
+        viewonly=True,
+    )
     draft: Mapped["CurationDraft | None"] = relationship(
         "CurationDraft",
         back_populates="candidate",
@@ -798,6 +823,13 @@ class CurationCandidate(Base):
     )
 
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["envelope_id", "session_id"],
+            ["domain_envelopes.envelope_id", "domain_envelopes.session_id"],
+            name="fk_curation_candidates_envelope_session_owner",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
         CheckConstraint('"order" >= 0', name="ck_curation_candidates_order"),
         CheckConstraint(
             "(envelope_id IS NULL AND object_id IS NULL AND envelope_revision IS NULL) "
