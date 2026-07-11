@@ -73,7 +73,7 @@ def _principal(monkeypatch):
     monkeypatch.setattr(
         pdf_viewer,
         "provision_user",
-        lambda _db, _principal: SimpleNamespace(id=7),
+        lambda _db, principal: SimpleNamespace(id=7, auth_sub=principal["sub"]),
     )
 
 
@@ -168,6 +168,30 @@ def test_owned_pdf_content_uses_validated_tenant_path(monkeypatch, tmp_path):
     assert response.path == pdf_path
     assert response.media_type == "application/pdf"
     assert response.headers["content-disposition"].startswith("inline;")
+
+
+def test_owned_pdf_content_uses_canonical_provisioned_storage_identity(
+    monkeypatch,
+    tmp_path,
+):
+    pdf_path = tmp_path / "canonical-owner" / "pdf" / "paper.pdf"
+    pdf_path.parent.mkdir(parents=True)
+    pdf_path.write_bytes(b"%PDF-1.7\nowned")
+    db = _Db(_Result(record=_record(file_path="canonical-owner/pdf/paper.pdf")))
+    monkeypatch.setattr(pdf_viewer, "get_pdf_storage_path", lambda: tmp_path)
+    monkeypatch.setattr(
+        pdf_viewer,
+        "provision_user",
+        lambda _db, _principal: SimpleNamespace(id=7, auth_sub="canonical-owner"),
+    )
+
+    response = pdf_viewer.get_document_pdf_content(
+        document_id=DOCUMENT_ID,
+        db=db,
+        user={"sub": "claims-owner"},
+    )
+
+    assert response.path == pdf_path
 
 
 def test_text_only_document_never_exposes_pdf_bytes():

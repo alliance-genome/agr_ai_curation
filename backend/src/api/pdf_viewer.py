@@ -1,7 +1,7 @@
 """API endpoints for PDF viewer metadata, access, and evidence localization."""
 
 from datetime import datetime, timezone
-from typing import List
+from typing import List, NamedTuple
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
@@ -67,6 +67,11 @@ class DocumentListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class _OwnedDocumentAccess(NamedTuple):
+    record: PdfDocumentModel
+    owner_auth_sub: str
 
 
 class PdfViewerFuzzyMatchPage(BaseModel):
@@ -173,9 +178,12 @@ def _get_document(
     db: Session,
     document_id: UUID,
     user: dict,
-) -> PdfDocumentModel:
+) -> _OwnedDocumentAccess:
     db_user = provision_user(db, principal_from_claims(user))
-    return require_owned_document(db, document_id, db_user.id)
+    return _OwnedDocumentAccess(
+        record=require_owned_document(db, document_id, db_user.id),
+        owner_auth_sub=db_user.auth_sub,
+    )
 
 
 @router.get("/documents/{document_id}", response_model=PDFDocumentDetail)
@@ -184,7 +192,7 @@ def get_document_detail(
     db: Session = Depends(get_db),
     user: dict = get_auth_dependency(),
 ) -> PDFDocumentDetail:
-    record = _get_document(db, document_id, user)
+    record = _get_document(db, document_id, user).record
 
     record.last_accessed = datetime.now(timezone.utc)
     db.commit()
@@ -209,7 +217,7 @@ def get_document_viewer_url(
     db: Session = Depends(get_db),
     user: dict = get_auth_dependency(),
 ) -> ViewerURLResponse:
-    record = _get_document(db, document_id, user)
+    record = _get_document(db, document_id, user).record
 
     record.last_accessed = datetime.now(timezone.utc)
     db.commit()
@@ -228,7 +236,8 @@ def get_document_pdf_content(
     user: dict = get_auth_dependency(),
 ) -> FileResponse:
     """Serve owned PDF bytes without exposing the tenant storage path."""
-    record = _get_document(db, document_id, user)
+    access = _get_document(db, document_id, user)
+    record = access.record
     if _viewer_mode(record) == "text_only":
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -239,7 +248,7 @@ def get_document_pdf_content(
     file_path = validate_user_file_path(
         storage_root / record.file_path,
         storage_root,
-        user["sub"],
+        access.owner_auth_sub,
     )
     if not file_path.is_file():
         raise HTTPException(
